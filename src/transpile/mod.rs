@@ -554,7 +554,8 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str(&run_body);
         out.push_str("    }).expect(\"could not create the program thread\");\n");
         out.push_str("    while __ui_rx.recv().is_ok() {\n");
-        out.push_str("        #[cfg(unix)]\n");
+        // M179: en Windows también hay backend (WebView2); el loop de mensajes corre en el hilo 1.
+        out.push_str("        #[cfg(any(unix, windows))]\n");
         out.push_str("        let _ = ray_runtime::ui::run_main_loop();\n");
         out.push_str("    }\n");
     } else {

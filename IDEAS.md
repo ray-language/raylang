@@ -3059,6 +3059,7 @@ ejecutable `examples/web/desktop/` (verificado VM y nativo).
    audio/watch. La lección de cpal (M145) aplica: `wry` exige headers GTK/WebKit en BUILD en
    Linux → la vía coherente es A MANO — WKWebView por mensajes objc en macOS (frameworks
    siempre presentes, enlace limpio), WebKitGTK por `dlopen` en Linux, Windows DIFERIDO honesto
+   (cerrado en M179, sep 2026: Win32 a mano + WebView2 por el crate `webview2-com`, DESIGN §171)
    (COM a mano es brutal; ahí se re-evaluaría un crate).
 2. **Contrato del hilo principal**: AppKit/GTK exigen poseer el main thread y su loop. Diseño
    que encaja: `ui.run()` captura el hilo principal y los eventos llegan por un **`Channel`**

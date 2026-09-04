@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui` abre ventanas reales en Windows** (M179, docs/windows.md 3.8, W7c): Win32 + WebView2
+  (crates `webview2-com` y `windows`, solo en Windows), menús, diálogos y el puente IPC del framework
+  — el contrato de `std/ui` en macOS, Linux y Windows.
 - **`std/audio` en Windows** (M178, docs/windows.md 3.8, W7b): salida PCM por WASAPI en modo
   compartido, COM a mano como los demás backends (sin crates); `audio.write` bloquea el hilo con el
   búfer lleno (pipe anónimo de Windows); `drain` y `played_ms` iguales. El gate de `ray build

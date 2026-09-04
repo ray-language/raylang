@@ -11720,3 +11720,39 @@ en el hilo que abre y se usan desde el alimentador, cada uno con su `CoInitializ
 Con esto el gate de M169 queda vacío en Windows (todo subsistema compila; `watch` se
 autoexcluye) y su paso de CI desaparece; `tests/audio_cli.rs` entra al job de Windows en los
 tres motores. Queda de 3.8: el backend de ventana real (WebView2, W7c) y `ray bundle`.
+
+## 171. M179 — W7c: la ventana real de Windows, Win32 + WebView2 (sep 2026)
+
+El tercer peldaño del arco de escritorio de Windows (`docs/windows.md` 3.8) y el único de todo
+el port en el que entra un crate: `ui.open` abre una ventana de verdad con el webview del
+sistema, con menús, diálogos y el puente IPC del framework — el contrato de `std/ui` en las
+tres plataformas de escritorio.
+
+**Por qué un crate, esta vez.** La doctrina de audio y GTK (la API del sistema a mano, sin
+crates) chocó aquí con la forma de WebView2: no es una API C plana sino COM con una treintena
+de interfaces y handlers de completado que hay que IMPLEMENTAR (objetos COM propios con vtable e
+`IUnknown`), más un loader (`WebView2Loader`) que no forma parte de Windows. IDEAS §80 ya lo había
+previsto ("Windows diferido honesto; ahí se re-evaluaría un crate"). `webview2-com` trae los
+bindings y el loader estático de Microsoft, y `windows` (la versión que ese crate ya usa) da el
+Win32 de la ventana, los menús, los diálogos y COM. Solo entran al árbol en Windows y bajo la
+feature `ui`; en unix nada cambia.
+
+**El espejo de GTK.** El hilo 1, capturado por `run_main_loop`, inicializa COM en STA, registra
+dos clases de ventana y corre el bucle de mensajes; toda operación de otro hilo viaja como
+closure en un `PostMessageW` a una ventana solo-mensajes (el `g_idle_add`). La ventana es Win32
+puro: `CreateWindowExW` con el tamaño pedido como área cliente, `WM_SIZE` reajusta el webview,
+`WM_COMMAND` entrega los items de menú como eventos `menu`, `WM_DESTROY` emite `closed`
+exactamente una vez y suelta el controlador. El webview se crea con
+`wait_for_async_operation`, que bombea mensajes en el hilo 1 hasta que el motor responde
+(exactamente como el ejemplo oficial): entorno con el perfil en `%LOCALAPPDATA%\raylang\webview2`
+(junto al exe no siempre se puede escribir), controlador sobre el hwnd, shim inyectado antes de
+cualquier documento y `WebMessageReceived` → evento `message`. El shim es el de mac/GTK con el
+transporte de WebView2 (`window.chrome.webview.postMessage`): el programa no nota la
+diferencia. Diálogos por `IFileOpenDialog`/`IFileSaveDialog` (modales en el hilo 1, sin plazo).
+El primer `open` puede tardar (arranca `msedgewebview2`): el plazo de la operación síncrona es
+15 s. Menús por ventana, como en GTK.
+
+**Prueba.** `tests/ui_cli.rs` gana un test de Windows con ventana REAL: abre `about:blank`,
+evalúa JS, cierra y espera el evento `closed`; si no hay WebView2 Runtime lo dice y salta. El
+job de Windows de CI lo corre (el runner tiene sesión de escritorio y el runtime de Edge). Queda
+de 3.8 `ray bundle` (`.exe` + acceso directo) y, del port, el reactor IOCP del nativo.

@@ -45,7 +45,7 @@ audio = []
 # M146 — ventana + webview (std/ui, IDEAS §80 F1): AppKit/WKWebView por mensajes objc A MANO en
 # macOS (frameworks enlazados al build, sin build.rs); RAY_UI_BACKEND=headless en cualquier OS
 # (tests/CI). Cero crates (la lección cpal: wry exige toolchains GTK/WebKit en build).
-ui = []
+ui = ["dep:webview2-com", "dep:windows"]
 # §80b — compila el puente al shell móvil TAMBIÉN en host: la vía del test del driver C
 # (tests/native_lib_cli.rs linkea el staticlib y registra handlers como haría la app iOS).
 ui-shell = ["ui"]
@@ -114,3 +114,20 @@ regex = { version = "1", optional = true }
 # F1 — corosensei 0.2: corrutinas de pila propia (aarch64+x86_64, macOS/Linux/Windows), pila mmap con
 # página de guarda. El cambio de contexto en asm auditado de un solo crate, sin arrastre transitivo.
 corosensei = { version = "0.2", optional = true }
+
+# M179 (docs/windows.md W7c) — el webview del sistema en Windows. Solo en Windows y solo con `ui`.
+# COM a mano aquí sería transcribir la treintena de interfaces y handlers de WebView2 (IDEAS §80:
+# "Windows diferido honesto; ahí se re-evaluaría un crate"): `webview2-com` trae los bindings y el
+# loader estático de Microsoft; `windows` (la misma versión que usa webview2-com) da el Win32 de la
+# ventana, los menús, los diálogos y COM. En unix no entran al árbol.
+[target.'cfg(windows)'.dependencies]
+webview2-com = { version = "0.39", optional = true }
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

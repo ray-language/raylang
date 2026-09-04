@@ -104,7 +104,7 @@ fn events() -> &'static Events {
 /// el programa responde con `ui.reply(w, id, valor)`, que resuelve la Promise vía
 /// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
 /// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
-#[cfg_attr(any(target_os = "ios", target_os = "android", windows), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla; Windows aún sin webview (M177)
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
 pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();"#;
 
 /// M159: cota dura de la cola de eventos. Red de seguridad contra una página hostil o rota
@@ -235,7 +235,6 @@ fn drain_pipe(fd: i32, max: usize) {
 
 /// Una ventana viva. Los punteros objc se guardan como `usize` y SOLO se dereferencian en el
 /// hilo principal (toda operación se despacha ahí) — el mapa en sí es datos ordinarios.
-#[cfg_attr(windows, allow(dead_code))]
 enum Win {
     /// Backend de mesa: la ventana solo existe como fila (tests/CI).
     Headless,
@@ -256,6 +255,13 @@ enum Win {
     Gtk {
         window: usize,
         webview: usize,
+        alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
+    /// M179: ventana Win32 + WebView2 (Windows). `alive` lo apaga WM_DESTROY (el usuario cerró):
+    /// las closures despachadas lo re-chequean antes de tocar el hwnd.
+    #[cfg(windows)]
+    Windows {
+        hwnd: usize,
         alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
 }
@@ -330,6 +336,8 @@ pub fn run_main_loop() -> Result<(), String> {
     let init = mac::init_app();
     #[cfg(target_os = "linux")]
     let init = gtk::init_app();
+    #[cfg(windows)]
+    let init = win::init_app();
     // iOS/Android: el hilo 1 es del shell (UIApplicationMain / ART) — este loop jamás corre.
     #[cfg(target_os = "ios")]
     let init: Result<(), String> =
@@ -337,9 +345,9 @@ pub fn run_main_loop() -> Result<(), String> {
     #[cfg(target_os = "android")]
     let init: Result<(), String> =
         Err("ui: the shell owns the main loop on Android (run inside the generated app shell)".to_string());
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     let init: Result<(), String> =
-        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string());
     match init {
         Ok(()) => {
@@ -350,6 +358,8 @@ pub fn run_main_loop() -> Result<(), String> {
             mac::run_app();
             #[cfg(target_os = "linux")]
             gtk::run_app();
+            #[cfg(windows)]
+            win::run_app();
             unreachable!("the UI main loop returned");
         }
         Err(e) => {
@@ -367,13 +377,11 @@ const APP_TIMEOUT_MSG: &str = "ui: could not initialize AppKit (no GUI session?)
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)";
 #[cfg(not(any(target_os = "macos", target_os = "linux")))] // ios/android: dead_code permitido abajo
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
-#[cfg_attr(windows, allow(dead_code))]
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize the display backend (no GUI session?)";
 
 /// Pide el hilo principal (una vez) y espera a que la app esté lista, con plazo — sin sesión
 /// gráfica o sin host el error es limpio, nunca un cuelgue. Compartida por todos los backends.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
-#[cfg_attr(windows, allow(dead_code))] // M177: sin backend real en Windows todavía
 fn ensure_app() -> Result<(), String> {
     let g = gate();
     let mut st = g.state.lock().unwrap();
@@ -496,10 +504,17 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
         windows().lock().unwrap().insert(id, WinState { win: gw, closed: false });
         Ok(())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        let ww = win::open_window(id, title, url, width, height)?;
+        windows().lock().unwrap().insert(id, WinState { win: ww, closed: false });
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
         let _ = (title, url);
-        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
 }
@@ -507,7 +522,6 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
 /// Ejecuta JavaScript en la página de la ventana, SIN esperar el resultado (v1: el
 /// completionHandler es nil — el eval con retorno exige el ABI de blocks y queda para v2).
 pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
-    let _ = js; // M177: en Windows solo existe el brazo headless (sin webview aún)
     let map = windows().lock().unwrap();
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
@@ -534,6 +548,14 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
                 gtk::eval_js(wv, alive, js);
                 Ok(())
             }
+            #[cfg(windows)]
+            Win::Windows { hwnd, alive } => {
+                let hwnd = *hwnd;
+                let alive = alive.clone();
+                drop(map);
+                win::eval_js(hwnd, alive, js);
+                Ok(())
+            }
         },
     }
 }
@@ -557,6 +579,10 @@ pub fn close_window(id: i64) {
         #[cfg(target_os = "linux")]
         Some(WinState { win: Win::Gtk { window, alive, .. }, .. }) => {
             gtk::close_window_async(window, alive);
+        }
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, alive }, .. }) => {
+            win::close_window_async(hwnd, alive);
         }
     }
 }
@@ -596,15 +622,20 @@ pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
         ensure_app()?;
         gtk::add_menu(title, &decoded)
     }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::add_menu(title, &decoded)
+    }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         let _ = (title, decoded);
         Err("ui: menus are not available on mobile (v1)".to_string())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
         let _ = title;
-        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
 }
@@ -668,15 +699,21 @@ pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
         let title = if name.is_empty() { "App" } else { name };
         gtk::add_menu(title, &decoded)
     }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        let title = if name.is_empty() { "App" } else { name };
+        win::add_menu(title, &decoded)
+    }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         let _ = (name, decoded);
         Err("ui: menus are not available on mobile (v1)".to_string())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
         let _ = name;
-        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
 }
@@ -705,15 +742,20 @@ pub fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
         ensure_app()?;
         gtk::dialog(kind, arg)
     }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::dialog(kind, arg)
+    }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         let _ = (kind, arg);
         Err("ui: file dialogs are not available on mobile (v1)".to_string())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
         let _ = arg;
-        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
 }
@@ -2681,5 +2723,509 @@ mod mutf8_tests {
         assert_eq!(&grin[..3], &[0xED, 0xA0, 0xBD]); // surrogate alto U+D83D
         assert_eq!(&grin[3..6], &[0xED, 0xB8, 0x80]); // surrogate bajo U+DE00
         assert_eq!(grin[6], 0);
+    }
+}
+
+// ── Windows: ventana Win32 + WebView2 (M179, docs/windows.md W7c) ─────────────
+//
+// El espejo del backend GTK con las piezas de Windows. El hilo 1 (capturado por
+// `run_main_loop`) inicializa COM en STA, registra las clases y corre el bucle de mensajes; toda
+// operación de otro hilo viaja como closure en un `PostMessageW` a una ventana solo-mensajes (el
+// `g_idle_add` de GTK). La ventana es Win32 puro (`CreateWindowExW`, menú por `AppendMenuW`,
+// `WM_SIZE` reajusta el webview, `WM_DESTROY` emite `closed` una vez); el webview es WebView2 vía
+// el crate `webview2-com` (los bindings COM y el loader estático de Microsoft — IDEAS §80: aquí
+// sí se re-evaluó un crate), creado con `wait_for_async_operation`, que bombea mensajes hasta que
+// el motor responde (como hace el ejemplo oficial; corre en el hilo 1, donde el bombeo recursivo
+// es legal). El puente IPC es el mismo shim de mac/GTK con `window.chrome.webview.postMessage`
+// en lugar del handler de WebKit; los mensajes llegan por `WebMessageReceived`. Diálogos por
+// `IFileOpenDialog`/`IFileSaveDialog` (modales, en el hilo 1, sin plazo). Los datos del perfil
+// del webview van a `%LOCALAPPDATA%\raylang\webview2` (junto al exe no siempre se puede escribir).
+#[cfg(windows)]
+mod win {
+    use super::Win;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use webview2_com::{
+        AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
+        CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+        ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler,
+    };
+    use windows::core::{HSTRING, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    const WM_RAY_DISPATCH: u32 = WM_APP + 1;
+    /// Ids de comando de los items de menú (WM_COMMAND): a partir de 1000, uno por item.
+    const MENU_ID_BASE: u16 = 1000;
+
+    /// La ventana solo-mensajes del dispatcher (hwnd como usize), creada en `init_app`.
+    static DISPATCHER: OnceLock<usize> = OnceLock::new();
+
+    fn wide(s: &str) -> HSTRING {
+        HSTRING::from(s.replace('\0', ""))
+    }
+
+    /// El estado de una ventana viva, colgado de `GWLP_USERDATA` (solo lo toca el hilo 1).
+    struct WinCtx {
+        id: i64,
+        alive: Arc<AtomicBool>,
+        controller: Option<ICoreWebView2Controller>,
+        webview: Option<ICoreWebView2>,
+        /// id de comando → tag del item de menú (para WM_COMMAND).
+        menu_tags: HashMap<u16, String>,
+    }
+
+    unsafe extern "system" fn dispatcher_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_RAY_DISPATCH {
+            // SAFETY: `wparam` es el Box de `on_main`, entregado una sola vez por el PostMessage.
+            let f = unsafe { Box::from_raw(wparam.0 as *mut Box<dyn FnOnce() + Send>) };
+            f();
+            return LRESULT(0);
+        }
+        // SAFETY: reenvío estándar.
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        // SAFETY: GWLP_USERDATA es el Box<WinCtx> que puso `open_window` (o 0 antes de eso).
+        let ctx_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WinCtx;
+        match msg {
+            WM_SIZE => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: el ctx vive mientras la ventana (se libera en WM_DESTROY, en este hilo).
+                    let ctx = unsafe { &*ctx_ptr };
+                    if let Some(c) = &ctx.controller {
+                        let mut rc = RECT::default();
+                        // SAFETY: llamadas Win32/COM sobre una ventana y un controlador vivos.
+                        unsafe {
+                            let _ = GetClientRect(hwnd, &mut rc);
+                            let _ = c.SetBounds(rc);
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_COMMAND => {
+                let id = (wparam.0 & 0xFFFF) as u16;
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    let ctx = unsafe { &*ctx_ptr };
+                    if let Some(tag) = ctx.menu_tags.get(&id) {
+                        super::push_event("menu", 0, tag);
+                        return LRESULT(0);
+                    }
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_CLOSE => {
+                // SAFETY: destruir la ventana dispara WM_DESTROY, que hace la limpieza.
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: recupera y suelta el Box puesto por `open_window`; el puntero se
+                    // pone a 0 para que nadie lo vuelva a leer.
+                    unsafe {
+                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                        let ctx = Box::from_raw(ctx_ptr);
+                        if ctx.alive.swap(false, Ordering::SeqCst) {
+                            super::push_event("closed", ctx.id, "");
+                        }
+                        if let Some(c) = &ctx.controller {
+                            let _ = c.Close();
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            // SAFETY: reenvío estándar.
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    /// Hilo 1: COM en STA, las dos clases de ventana y la ventana del dispatcher.
+    pub(super) fn init_app() -> Result<(), String> {
+        // SAFETY: llamadas Win32 sin punteros propios salvo las estructuras de clase, vivas
+        // durante el registro (Windows las copia).
+        unsafe {
+            // S_FALSE (ya inicializado) y RPC_E_CHANGED_MODE no son fatales para lo que sigue.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let instance = GetModuleHandleW(None).map_err(|e| format!("ui: GetModuleHandle: {e}"))?;
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(window_proc),
+                hInstance: instance.into(),
+                lpszClassName: windows::core::w!("RayUiWindow"),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                ..Default::default()
+            };
+            if RegisterClassW(&wc) == 0 {
+                return Err(format!("ui: could not register the window class: {}", windows::core::Error::from_thread()));
+            }
+            let dc = WNDCLASSW {
+                lpfnWndProc: Some(dispatcher_proc),
+                hInstance: instance.into(),
+                lpszClassName: windows::core::w!("RayUiDispatcher"),
+                ..Default::default()
+            };
+            if RegisterClassW(&dc) == 0 {
+                return Err(format!("ui: could not register the dispatcher class: {}", windows::core::Error::from_thread()));
+            }
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                windows::core::w!("RayUiDispatcher"),
+                windows::core::w!("ray dispatcher"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .map_err(|e| format!("ui: could not create the dispatcher window: {e}"))?;
+            let _ = DISPATCHER.set(hwnd.0 as usize);
+        }
+        Ok(())
+    }
+
+    /// El bucle de mensajes del hilo 1 — no retorna (WM_QUIT jamás se publica: cerrar una
+    /// ventana no cierra el programa; eso lo decide el programa).
+    pub(super) fn run_app() {
+        let mut msg = MSG::default();
+        loop {
+            // SAFETY: bucle de mensajes estándar en el hilo que posee las ventanas.
+            unsafe {
+                let r = GetMessageW(&mut msg, None, 0, 0).0;
+                if r == -1 {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                if r == 0 {
+                    continue; // WM_QUIT ajeno: el bucle sigue (el programa manda)
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// Despacha `f` al hilo 1 (un `PostMessageW` con el Box; el dispatcher lo ejecuta).
+    fn on_main(f: impl FnOnce() + Send + 'static) {
+        let Some(&hwnd) = DISPATCHER.get() else { return };
+        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(Box::new(f));
+        let ptr = Box::into_raw(boxed);
+        // SAFETY: el puntero viaja al dispatcher, que lo recupera con from_raw una sola vez; si
+        // el PostMessage falla, se libera aquí.
+        unsafe {
+            if PostMessageW(Some(HWND(hwnd as *mut _)), WM_RAY_DISPATCH, WPARAM(ptr as usize), LPARAM(0)).is_err() {
+                drop(Box::from_raw(ptr));
+            }
+        }
+    }
+    /// Despacha al hilo 1 y ESPERA el resultado, con plazo (espejo de mac/GTK).
+    fn on_main_sync<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+        let slot = Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let slot2 = slot.clone();
+        on_main(move || {
+            *slot2.0.lock().unwrap() = Some(f());
+            slot2.1.notify_all();
+        });
+        // 15 s: la creación del entorno de WebView2 puede tardar en frío (arranca msedgewebview2).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut got = slot.0.lock().unwrap();
+        loop {
+            if let Some(r) = got.take() {
+                return r;
+            }
+            let rem = deadline.saturating_duration_since(std::time::Instant::now());
+            if rem.is_zero() {
+                return Err("ui: the main thread did not respond".to_string());
+            }
+            got = slot.1.wait_timeout(got, rem).unwrap().0;
+        }
+    }
+    /// Como `on_main_sync` pero SIN plazo — los diálogos modales esperan al usuario.
+    fn on_main_sync_wait<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+        let slot = Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let slot2 = slot.clone();
+        on_main(move || {
+            *slot2.0.lock().unwrap() = Some(f());
+            slot2.1.notify_all();
+        });
+        let mut got = slot.0.lock().unwrap();
+        loop {
+            if let Some(r) = got.take() {
+                return r;
+            }
+            got = slot.1.wait(got).unwrap();
+        }
+    }
+
+    /// Los menús declarados hasta ahora — como en GTK, el menú es POR VENTANA: cada
+    /// `open_window` construye el suyo de estos specs (aplican a las ventanas abiertas DESPUÉS
+    /// de `ui.menu()`). Un menú declarado: (título, items (tag, label)).
+    type MenuSpec = (String, Vec<(String, String)>);
+    fn menu_specs() -> &'static std::sync::Mutex<Vec<MenuSpec>> {
+        static SPECS: OnceLock<std::sync::Mutex<Vec<MenuSpec>>> = OnceLock::new();
+        SPECS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+    }
+    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
+        let spec: MenuSpec = (title.to_string(), items.iter().map(|(tag, label, _key)| (tag.clone(), label.clone())).collect());
+        menu_specs().lock().unwrap().push(spec);
+        Ok(())
+    }
+
+    /// Construye la barra de menús de una ventana nueva a partir de los specs; devuelve el mapa
+    /// id de comando → tag. Corre en el hilo 1.
+    unsafe fn build_menubar(hwnd: HWND) -> HashMap<u16, String> {
+        let mut tags = HashMap::new();
+        let specs = menu_specs().lock().unwrap().clone();
+        if specs.is_empty() {
+            return tags;
+        }
+        // SAFETY: menús propios recién creados; Windows los posee en cuanto se asignan a la ventana.
+        unsafe {
+            let Ok(bar) = CreateMenu() else { return tags };
+            let mut next_id = MENU_ID_BASE;
+            for (title, items) in specs {
+                let Ok(popup) = CreatePopupMenu() else { continue };
+                for (tag, label) in items {
+                    let _ = AppendMenuW(popup, MF_STRING, next_id as usize, PCWSTR(wide(&label).as_ptr()));
+                    tags.insert(next_id, tag);
+                    next_id = next_id.wrapping_add(1);
+                }
+                let _ = AppendMenuW(bar, MF_POPUP, popup.0 as usize, PCWSTR(wide(&title).as_ptr()));
+            }
+            let _ = SetMenu(hwnd, Some(bar));
+        }
+        tags
+    }
+
+    /// El shim IPC de mac/GTK con el transporte de WebView2.
+    fn shim() -> String {
+        super::RAY_JS_SHIM.replace("window.webkit.messageHandlers.ray.postMessage(", "window.chrome.webview.postMessage(")
+    }
+
+    /// La carpeta de datos del perfil de WebView2 (escribible; junto al exe no siempre lo es).
+    fn user_data_folder() -> String {
+        let base = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("TEMP")).unwrap_or_else(|_| ".".to_string());
+        let dir = format!("{base}\\raylang\\webview2");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// Crea el entorno y el controlador de WebView2 sobre `hwnd`, en el hilo 1 (bombea mensajes
+    /// hasta que el motor responde), y deja el webview navegando a `url` con el shim inyectado.
+    unsafe fn attach_webview(hwnd: HWND, id: i64, url: &str) -> Result<(ICoreWebView2Controller, ICoreWebView2), String> {
+        let folder = wide(&user_data_folder());
+        let environment = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
+                Box::new(move |handler| {
+                    // SAFETY: llamada del loader de WebView2 con el handler del crate.
+                    unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), PCWSTR(folder.as_ptr()), None, &handler) }
+                        .map_err(webview2_com::Error::WindowsError)
+                }),
+                Box::new(move |error_code, environment: Option<ICoreWebView2Environment>| {
+                    error_code?;
+                    let _ = tx.send(environment);
+                    Ok(())
+                }),
+            )
+            .map_err(|e| format!("ui: WebView2 environment: {e} (is the WebView2 Runtime installed?)"))?;
+            rx.recv().ok().flatten().ok_or_else(|| "ui: WebView2 environment: no environment".to_string())?
+        };
+        let controller = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let env = environment.clone();
+            CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
+                Box::new(move |handler| {
+                    // SAFETY: entorno vivo; `hwnd` es la ventana recién creada en este hilo.
+                    unsafe { env.CreateCoreWebView2Controller(hwnd, &handler) }.map_err(webview2_com::Error::WindowsError)
+                }),
+                Box::new(move |error_code, controller: Option<ICoreWebView2Controller>| {
+                    error_code?;
+                    let _ = tx.send(controller);
+                    Ok(())
+                }),
+            )
+            .map_err(|e| format!("ui: WebView2 controller: {e}"))?;
+            rx.recv().ok().flatten().ok_or_else(|| "ui: WebView2 controller: no controller".to_string())?
+        };
+        // SAFETY: controlador y ventana vivos, en el hilo 1.
+        let webview = unsafe {
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            let _ = controller.SetBounds(rc);
+            let _ = controller.SetIsVisible(true);
+            controller.CoreWebView2().map_err(|e| format!("ui: WebView2: {e}"))?
+        };
+        // El shim, antes de que cargue cualquier documento (fire-and-forget: no se espera el id).
+        {
+            let js = wide(&shim());
+            let wv = webview.clone();
+            let _ = AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
+                Box::new(move |handler| {
+                    // SAFETY: webview vivo; el script se copia dentro de la llamada.
+                    unsafe { wv.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), &handler) }.map_err(webview2_com::Error::WindowsError)
+                }),
+                Box::new(|error_code, _id: String| error_code),
+            );
+        }
+        // Los mensajes de la página (window.ray.send / request) → la cola de eventos.
+        // SAFETY: registro de un handler del crate sobre un webview vivo; el token no se usa
+        // (el handler vive lo que el webview).
+        unsafe {
+            let mut token = 0i64;
+            let _ = webview.add_WebMessageReceived(
+                &WebMessageReceivedEventHandler::create(Box::new(move |_sender, args: Option<ICoreWebView2WebMessageReceivedEventArgs>| {
+                    if let Some(args) = args {
+                        let mut message = PWSTR::null();
+                        if args.TryGetWebMessageAsString(&mut message).is_ok() {
+                            let message = CoTaskMemPWSTR::from(message);
+                            super::push_event("message", id, &message.to_string());
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+            let url = wide(url);
+            let _ = webview.Navigate(PCWSTR(url.as_ptr()));
+        }
+        Ok((controller, webview))
+    }
+
+    pub(super) fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<Win, String> {
+        let title = title.to_string();
+        let url = url.to_string();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive2 = alive.clone();
+        let hwnd = on_main_sync(move || {
+            // SAFETY: todo corre en el hilo 1, dueño de las ventanas; las estructuras son propias.
+            unsafe {
+                let instance = GetModuleHandleW(None).map_err(|e| format!("ui: GetModuleHandle: {e}"))?;
+                // El tamaño pedido es el ÁREA CLIENTE: se ajusta el marco.
+                let mut rc = RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+                let style = WS_OVERLAPPEDWINDOW;
+                let has_menu = !menu_specs().lock().unwrap().is_empty();
+                let _ = AdjustWindowRectEx(&mut rc, style, has_menu, WINDOW_EX_STYLE::default());
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    windows::core::w!("RayUiWindow"),
+                    PCWSTR(wide(&title).as_ptr()),
+                    style,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top,
+                    None,
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .map_err(|e| format!("ui: could not create the window: {e}"))?;
+                let menu_tags = build_menubar(hwnd);
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags });
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                match attach_webview(hwnd, id, &url) {
+                    Ok((controller, webview)) => {
+                        let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
+                        if !ctx_ptr.is_null() {
+                            (*ctx_ptr).controller = Some(controller);
+                            (*ctx_ptr).webview = Some(webview);
+                        }
+                        Ok(hwnd.0 as usize)
+                    }
+                    Err(e) => {
+                        let _ = DestroyWindow(hwnd);
+                        Err(e)
+                    }
+                }
+            }
+        })?;
+        Ok(Win::Windows { hwnd, alive })
+    }
+
+    /// JS a la página, fire-and-forget, en el hilo 1. `alive` se re-chequea DENTRO de la closure.
+    pub(super) fn eval_js(hwnd: usize, alive: Arc<AtomicBool>, js: &str) {
+        let js = js.to_string();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: hilo 1; el ctx vive mientras `alive` (WM_DESTROY lo apaga antes de liberar).
+            unsafe {
+                let ctx_ptr = GetWindowLongPtrW(HWND(hwnd as *mut _), GWLP_USERDATA) as *mut WinCtx;
+                if ctx_ptr.is_null() {
+                    return;
+                }
+                if let Some(wv) = &(*ctx_ptr).webview {
+                    let code = wide(&js);
+                    let handler = ExecuteScriptCompletedHandler::create(Box::new(|_e, _r: String| Ok(())));
+                    let _ = wv.ExecuteScript(PCWSTR(code.as_ptr()), &handler);
+                }
+            }
+        });
+    }
+
+    /// Destruye la ventana en el hilo 1, asíncrono (llamable desde un Drop). WM_DESTROY emite
+    /// `closed` y limpia; si el usuario ya la cerró, `alive` está apagado y no se toca nada.
+    pub(super) fn close_window_async(hwnd: usize, alive: Arc<AtomicBool>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: hilo 1, ventana viva.
+            unsafe {
+                let _ = DestroyWindow(HWND(hwnd as *mut _));
+            }
+        });
+    }
+
+    /// Diálogos de archivo del shell (modales, en el hilo 1, sin plazo): `open`, `folder`, `save`.
+    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+        let kind = kind.to_string();
+        let arg = arg.to_string();
+        on_main_sync_wait(move || {
+            // SAFETY: COM del shell en el hilo 1 (STA); los objetos son propios y se sueltan al salir.
+            unsafe {
+                let dialog: IFileDialog = if kind == "save" {
+                    let d: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
+                    if !arg.is_empty() {
+                        let _ = d.SetFileName(PCWSTR(wide(&arg).as_ptr()));
+                    }
+                    d.into()
+                } else {
+                    let d: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
+                    if kind == "folder" {
+                        let opts = d.GetOptions().unwrap_or_default();
+                        let _ = d.SetOptions(opts | FOS_PICKFOLDERS);
+                    }
+                    d.into()
+                };
+                if dialog.Show(None).is_err() {
+                    return Ok(None); // cancelado
+                }
+                let item = dialog.GetResult().map_err(|e| format!("ui: dialog: {e}"))?;
+                let name = item.GetDisplayName(SIGDN_FILESYSPATH).map_err(|e| format!("ui: dialog: {e}"))?;
+                let path = CoTaskMemPWSTR::from(name).to_string();
+                Ok(Some(path))
+            }
+        })
     }
 }

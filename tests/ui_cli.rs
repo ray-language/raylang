@@ -532,3 +532,32 @@ fn a_real_request_reply_roundtrip_completes() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// M179 (W7c): una ventana REAL en Windows — Win32 + WebView2. Abre `about:blank`, evalúa JS,
+/// cierra y espera el evento `closed`. Exige el WebView2 Runtime (viene con Windows 11 / Edge) y
+/// una sesión de escritorio (el runner de GitHub la tiene); sin runtime, `open` devuelve un `Err`
+/// que nombra el WebView2 Runtime y el test lo reporta como salto explícito.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_real_window_opens_evaluates_and_closes() {
+    let base = tmp("win_real");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\n\nfn main() {\n    match (ui.open(\"ray test\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open err: \" + e),\n        Result.Ok(h) => {\n            print(\"eval ok: \" + to_string(ui.eval_js(h, \"document.title = 'x'\").is_ok()));\n            let _ = close(h);\n            match (ui.next_event_timeout(5000)) {\n                Result.Ok(o) => match (o) {\n                    Option.Some(e) => print(\"event: \" + e.kind),\n                    Option.None => print(\"no event\"),\n                },\n                Result.Err(e) => print(\"err: \" + e),\n            }\n        },\n    }\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["--vm", "prog.ray"])
+        .env_remove("RAY_UI_BACKEND")
+        .current_dir(&base)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("corre");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if text.contains("WebView2 Runtime") {
+        eprintln!("saltando: sin WebView2 Runtime en esta máquina\n{text}");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "exit 0\n{text}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(text, "eval ok: true\nevent: closed\n", "la ventana real abre, evalúa y cierra");
+}

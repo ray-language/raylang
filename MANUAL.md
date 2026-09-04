@@ -1320,8 +1320,9 @@ los mensajes viajan por el **mismo stream** que `closed`/`menu` (un solo consumi
 `next_event` o `events()`, no ambos); y la página es **código tuyo** — mismo modelo de
 confianza que el resto del programa (la vía de bajo nivel es
 `window.webkit.messageHandlers.ray.postMessage`). En headless (tests), `RAY_UI_MSG` inyecta
-un `"message"` por ventana abierta. El puente vive en las tres plataformas: macOS, Linux
-(WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente) y el shell iOS de
+un `"message"` por ventana abierta. El puente vive en las tres plataformas de escritorio: macOS, Linux
+(WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente), Windows (WebView2, M179)
+y el shell iOS de
 `ray bundle --ios` (allí `window` llega como 0).
 
 Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
@@ -1647,7 +1648,7 @@ Detalles que evitan los errores clásicos de otras plataformas:
   completo (los nietos de un `sh -c "a | b"` también).
 - **`.merge_output()`** manda stderr al MISMO pipe que stdout: el entrelazado es el orden real
   en que el hijo escribió (fusionar después inventa un orden); `stderr` vuelve vacío.
-- Solo Unix (macOS/Linux); en Windows devuelve un `Err` honesto de plataforma.
+- macOS, Linux y Windows (M175: `CreateProcess` + Job Objects; `Exit.Signal` no ocurre en Windows).
 
 **Streaming** (`.stream()`): para consumir la salida MIENTRAS el hijo corre (logs largos, un
 `tail -f`, un proceso que no termina), en vez de esperar el `Output` final. Devuelve un `Proc`

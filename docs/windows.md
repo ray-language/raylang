@@ -194,6 +194,14 @@ Fuera de la red de CI actual:
     misma ruta escrita con `/` funciona. Afecta solo al oráculo de desarrollo (`selfhost/`), no al
     producto; `selfhost_interpreter::modules_*` (2 tests) están rojos en Windows por esto, y
     `selfhost_parser::parses_files_reales_equal_what_el_oracle` por escribir su temporal en `/tmp`. **S**.
+12. **`tests/cli_cli.rs` en Windows ARM64** (hallazgo de M183; la suite no corre en el job de Windows;
+    los cinco fallan igual en `main`): `build_native_defaults_to_mimalloc…` espera `fibers` en el
+    resumen del build (en ARM64 van apagadas: corosensei sin backend); `build_native_select_invariant…`
+    espera `exit & 0xFF` (Windows no enmascara los códigos de salida: 602 llega tal cual);
+    `build_native_close_wakes_a_parked_socket_reader` espera `invalid handle` al cerrar un socket con
+    un lector bloqueado (en hilo-por-tarea Windows vence como `read timeout`); y los dos `ffi_*` (exit
+    65 al compilar el programa con `extern "c"` de anchos/punteros). Ninguno es del producto en el
+    runner x86_64; a repartir entre "cfg del test" y "port pendiente". **S–M**.
 
 ## 6. Orden de ataque
 

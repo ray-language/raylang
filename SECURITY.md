@@ -212,7 +212,11 @@ documentada:
   runtime (`transmute` de cada símbolo a la firma del header de ALSA, API estable; M158 añade
   **AAudio por `dlopen`** en Android con el mismo patrón — `libaaudio.so`, API 26+; sin la
   librería → `Err`, jamás un crash). La decisión sin-crates es deliberada: `cpal` habría exigido
-  los headers de ALSA en *build* en todo Linux.
+  los headers de ALSA en *build* en todo Linux. En Windows (M178), **WASAPI por COM a mano**: vtables
+  `repr(C)` transcritas de mmdeviceapi.h/audioclient.h y llamadas por puntero de método sobre objetos
+  que poseemos (`CoCreateInstance`/`Activate`/`GetService` los crean, `Release` en orden inverso),
+  `WAVEFORMATEX` empaquetado a 1 byte vivo durante `Initialize`, y `GetBuffer`/`ReleaseBuffer` con
+  exactamente los frames prestados; `PeekNamedPipe` sobre el pipe propio para `drain`.
 - **`crates/ray-runtime/src/ui.rs`** — la ventana + webview de `std/ui` (M146), **sin crates**
   (la misma decisión que audio: `wry` exigiría toolchains GTK/WebKit en *build*): el self-pipe de
   la cola de eventos (`pipe`/`read`/`write`/`fcntl` variádico) y, en macOS, **Objective-C a

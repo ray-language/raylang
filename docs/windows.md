@@ -1,6 +1,6 @@
 # raylang en Windows — el contrato y las deudas
 
-> Estado a 4 de septiembre de 2026 (v1.5.2 + M172–M175). Este documento es el inventario **vivo** de lo que
+> Estado a 4 de septiembre de 2026 (v1.6.0 + M177–M178). Este documento es el inventario **vivo** de lo que
 > raylang hace y no hace en Windows: qué funciona, qué degrada con un `Err` honesto, qué falla
 > de forma opaca, la API de Windows que cierra cada hueco, su tamaño y el orden de ataque.
 > Lo alimentan dos fuentes: la auditoría del código (todo `cfg(unix)` y su cadena de llamadas)
@@ -11,8 +11,9 @@
 ## 1. En una frase
 
 **La toolchain, el compilador, la VM, la red con su poller, los paquetes, las señales, `ray dev`, el
-terminal, stdin y los procesos hijos funcionan en Windows; lo que falta son los arcos de escritorio
-y audio** (y el reactor IOCP de las fibras del binario nativo). La VM es uniformemente honesta (cada
+terminal, stdin, los procesos hijos y el audio funcionan en Windows; `std/ui` compila y su headless
+funciona; lo que falta es la ventana real (WebView2), `ray bundle` y el reactor IOCP de las fibras
+del binario nativo.** La VM es uniformemente honesta (cada
 hueco es un `Err` con mensaje) y el transpilador rechaza antes de generar lo que no compila (W2).
 
 ## 2. Qué se verifica hoy en CI (`build · smoke (windows)`)
@@ -34,6 +35,8 @@ Desde M165/M166, cada PR corre en `windows-latest`:
 - El poller (M174): la readiness de un listener en `poll::tests` y `a_socket_read_timeout_expires`.
 - `std/process` (M175): `process_windows_cli` — el contrato de `run` con `cmd` y la sesión con stdin
   abierto, en VM, intérprete y nativo; el gate de W2 pasa a comprobar `std/ui`.
+- `std/ui` headless (M177) y `std/audio` con el sumidero nulo (M178): `ui_cli` y `audio_cli` en los tres
+  motores. El gate de W2 queda vacío (todo subsistema compila en Windows) y su paso desaparece.
 - `release.yml` instala el zip recién subido antes de dar la release por buena.
 
 Verificado además por un usuario real (2 sep 2026): instalación, `ray run` con `web`/`net`/`db`,
@@ -122,8 +125,8 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 
 | | |
 |---|---|
-| Hoy (VM) | `std/ui`: **compila y el headless funciona** (M177: `RAY_UI_BACKEND=headless` en pruebas y CI); una ventana real → `Err("ui: no backend for this platform …")`. `std/audio`: `Err` honesto (`AUDIO_UNAVAILABLE`). `ray bundle` → "no bundle format for this platform". |
-| Hoy (nativo) | `std/ui` compila (mismo comportamiento que la VM); `std/audio` **no compila** (módulo `cfg(unix)`; el gate de M169 lo rechaza con el mensaje de la VM). |
+| Hoy (VM) | `std/ui`: **compila y el headless funciona** (M177: `RAY_UI_BACKEND=headless` en pruebas y CI); una ventana real → `Err("ui: no backend for this platform …")`. `std/audio`: ✅ **funciona** (M178, WASAPI en modo compartido; `audio.write` bloquea el hilo con el búfer lleno). `ray bundle` → "no bundle format for this platform". |
+| Hoy (nativo) | `std/ui` y `std/audio` compilan (mismo comportamiento que la VM). El gate de M169 queda vacío: todo subsistema compila en Windows. |
 | Cierra con | WebView2 (COM) + `CreateWindowExW`, o adoptar `wry`; WASAPI para audio; `.exe` + acceso directo o MSIX para el bundle. Decisión registrada en IDEAS §80: "Windows diferido honesto". |
 | Tamaño | **L** cada uno. ~~Paso intermedio **S**: dejar alcanzable `RAY_UI_BACKEND=headless` en Windows para que los tests no sean ciegos.~~ ✅ M177 (DESIGN §169): la cola de eventos ya no exige self-pipe; `tests/ui_cli.rs` corre en el job de Windows. Siguiente: WASAPI (audio, sin crates) y WebView2 (ui). |
 
@@ -199,7 +202,7 @@ Fuera de la red de CI actual:
 | **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** ✅ | `WSAPoll` en `src/poll.rs` + sueño fino + `SIO_UDP_CONNRESET` (M174) | M + S | p99 de servidores bajo carga; pacing de juegos; `read_timeout` de sockets |
 | **W6** ✅ | `std/process` con `CreateProcess` + pipes + Job Objects (M175) | L | MCP/LSP hijos, pipelines |
-| **W7** | IOCP para fibras nativas · WebView2 · WASAPI | L × 3 | fibras en el nativo; escritorio y audio |
+| **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 · `ray bundle` · IOCP para fibras nativas | L × 3 | fibras en el nativo; escritorio y audio |
 
 Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-windows-msvc` (IDEAS §84).
 

@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/audio` en Windows** (M178, docs/windows.md 3.8, W7b): salida PCM por WASAPI en modo
+  compartido, COM a mano como los demás backends (sin crates); `audio.write` bloquea el hilo con el
+  búfer lleno (pipe anónimo de Windows); `drain` y `played_ms` iguales. El gate de `ray build
+  --native` queda vacío en Windows: todos los subsistemas compilan.
 - **`std/ui` compila en Windows y el headless funciona ahí** (M177, docs/windows.md 3.8, W7 paso
   S): la cola de eventos ya no exige self-pipe; `RAY_UI_BACKEND=headless` sirve para pruebas y CI
   en Windows, una ventana real devuelve el `Err` de plataforma (VM y nativo), `ray build --native`

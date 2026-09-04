@@ -787,11 +787,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let dl = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
             "    let tag = |parts: Vec<String>| Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()));\n",
             "    loop {\n",
-            "        let fd = { let mut reg = __ray_reg().lock().unwrap();\n",
+            "        let (fd, q) = { let mut reg = __ray_reg().lock().unwrap();\n",
             "            match reg.open.get_mut(&h) {\n",
             "                Some(__RayHandle::Watch(w)) => match w.try_next() {\n",
             "                    Some((kind, path)) => return tag(vec![\"ok\".to_string(), kind, path]),\n",
-            "                    None => w.fd(),\n",
+            "                    None => (w.fd(), w.queue()),\n",
             "                },\n",
             "                Some(_) => return tag(vec![\"err\".to_string(), \"the handle is not a watch handle\".to_string()]),\n",
             "                None => return tag(vec![\"err\".to_string(), format!(\"invalid handle: {}\", h)]),\n",
@@ -803,12 +803,16 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         ));
         if t.fibers {
             out.push_str(concat!(
+                "        let _ = &q;\n",
                 "        if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); }\n",
             ));
         } else {
+            // M181: en Windows no hay fd (ReadDirectoryChangesW no da nada sondeable): la espera
+            // va por la condvar de la cola compartida, sin retener el registro.
             out.push_str(concat!(
                 "        let step = if rem == 0 { 200 } else { rem.min(200) as i32 };\n",
-                "        ray_runtime::watch::fd_ready(fd, step);\n",
+                "        #[cfg(unix)] { let _ = &q; ray_runtime::watch::fd_ready(fd, step); }\n",
+                "        #[cfg(windows)] { let _ = fd; q.wait(step as i64); }\n",
             ));
         }
         out.push_str("    }\n}\n");

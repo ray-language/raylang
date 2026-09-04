@@ -106,12 +106,13 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 
 | Superficie | Estado en Windows |
 |---|---|
-| `ray dev` / `ray test --watch` | **funcionan** (M172): el reinicio manda `CTRL_BREAK` al grupo del hijo (`serve_graceful` drena), un Job Object mata al hijo si el supervisor muere, `--port` retiene el socket entre reinicios (handle heredable); el watcher sigue siendo polling de mtimes (~200 ms) |
+| `ray dev` / `ray test --watch` | **funcionan** (M172): el reinicio manda `CTRL_BREAK` al grupo del hijo (`serve_graceful` drena), un Job Object mata al hijo si el supervisor muere, `--port` retiene el socket entre reinicios (handle heredable); el watcher va por eventos de kernel (`ReadDirectoryChangesW`, M181) |
 | `std/process` | **funciona** (M175): `run`/`cmd`/`stream`/`stdin_pipe` con Job Object por hijo y escalera `CTRL_BREAK` → `TerminateJobObject`; `Exit.Signal` mapeado (9/15/2); la escritura al stdin del hijo es bloqueante |
 | `std/term` (`is_tty`, `size`, `raw`, `read_key`, `read_hidden`, `capabilities`) | **funcionan** (M173) por la Console API; `size_px`/`cell_px` → `None` (la API no expone píxeles) |
 | `std/io` (`read`, `read_timeout`, `stdin_ready`) | **funcionan** (M173): disponibilidad real en consola y pipes, la fibra aparca (no la VM), el plazo vence |
 | `signals()` | **funciona** (M168): Ctrl-C/Break → 2, cierre/logoff/apagado → 15 vía `SetConsoleCtrlHandler`; sin SIGWINCH (28) hasta el arco de terminal |
 | `fs.chmod` | no soportado (permisos POSIX) |
+| `fs.watch` | **funciona** (M181): eventos de kernel por `ReadDirectoryChangesW` (notify) con puente por cola compartida; la fibra de la VM aparca sin fd y despierta solo con evento en cola |
 | FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
 | Paquetes (`ray add`, `ray.lock`) | funcionan (M166): clones con LF forzado y hash insensible a CRLF |
 | Poller de red | **`WSAPoll`** (M174): readiness real, sin busy-poll; `read_timeout` de sockets vence; sueño fino por *waitable timer*; UDP sin el reset 10054 |

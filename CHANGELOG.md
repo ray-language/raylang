@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`fs.watch` y el watcher de `ray dev` en Windows** (M181, docs/windows.md 3.2, W7e): eventos de
+  kernel por `ReadDirectoryChangesW` (notify) con un puente por cola compartida; `ray dev` deja el
+  sondeo de mtimes y `ray build --native` ya no excluye `watch` en Windows.
 - **`ray bundle` en Windows** (M180, docs/windows.md 3.8, W7d): directorio con `<name>.exe` (subsistema
   WINDOWS — sin consola al doble clic —, icono y VERSIONINFO embebidos, sin crates ni `rc.exe`) y el
   acceso directo `<name>.lnk`; el arco de escritorio de Windows queda cerrado.

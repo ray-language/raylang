@@ -12,7 +12,8 @@ fn watch_reports_changes_and_timeout() {
         let base = std::env::temp_dir().join(format!("ray_watch_{}", if vm { "vm" } else { "in" }));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("mkdir");
-        let root = base.to_string_lossy().into_owned();
+        // M181: en Windows la ruta lleva `\`, que dentro del literal raylang sería un escape.
+        let root = base.to_string_lossy().replace('\\', "/");
         let src = format!(
             r#"
 import std/fs;

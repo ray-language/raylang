@@ -709,7 +709,7 @@ enum OpenHandle {
     /// M115.4: un watch de filesystem vivo (eventos de kernel vía notify, ray-runtime). En el
     /// registro común: `close(h)` lo quita y el `Drop` del watcher detiene sus hilos. La fibra
     /// aparca por el fd de su self-pipe (`FsWatcher::fd`), como un socket.
-    #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
     Watch(ray_runtime::watch::FsWatcher),
     /// M146: una ventana de `std/ui` (el id del registro de ray-runtime). `close(h)` la quita del
     /// mapa y el `Drop` del newtype cierra la ventana — SIEMPRE con despacho asíncrono al hilo
@@ -905,7 +905,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::PipeW(_)) => Err("the handle is a child's stdin; write it with proc_write".to_string()),
         #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
-        #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Watch(_)) => Err("the handle is a filesystem watch; it is not writable".to_string()),
         #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Window(_)) => Err("the handle is a ui window; it is not writable".to_string()),
@@ -989,7 +989,7 @@ pub fn unlock_handle(h: i64) -> Result<(), String> {
 }
 
 // --- M115.4: watch de filesystem por eventos de kernel (feature `watch`; slim/wasm → stub). ---
-#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
 const WATCH_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
     "fs.watch is not available in the web playground (wasm)"
 } else {
@@ -1269,7 +1269,7 @@ pub fn ui_next_blocking(_ms: i64) -> Result<Option<(String, i64, String)>, Strin
 }
 
 /// Abre un watch sobre la ruta (directorio → recursivo) y lo registra; `Ok(handle)`.
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn watch_open(path: &str) -> Result<i64, String> {
     let w = ray_runtime::watch::watch(path)?;
     let mut reg = registry().lock().unwrap();
@@ -1278,13 +1278,13 @@ pub fn watch_open(path: &str) -> Result<i64, String> {
     reg.open.insert(id, OpenHandle::Watch(w));
     Ok(id)
 }
-#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
 pub fn watch_open(_path: &str) -> Result<i64, String> {
     Err(WATCH_UNAVAILABLE.to_string())
 }
 
 /// Recupera el watcher del handle o el error apropiado (factoriza fd/try_next/blocking).
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
 fn watch_of(reg: &mut FileRegistry, h: i64) -> Result<&ray_runtime::watch::FsWatcher, String> {
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Watch(w)) => Ok(w),
@@ -1294,31 +1294,31 @@ fn watch_of(reg: &mut FileRegistry, h: i64) -> Result<&ray_runtime::watch::FsWat
 }
 
 /// El fd por el que aparca la fibra de la VM (self-pipe del watcher).
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn watch_fd(h: i64) -> Result<i32, String> {
     let mut reg = registry().lock().unwrap();
     watch_of(&mut reg, h).map(|w| w.fd())
 }
-#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
 pub fn watch_fd(_h: i64) -> Result<i32, String> {
     Err(WATCH_UNAVAILABLE.to_string())
 }
 
 /// El siguiente evento si ya hay uno, sin bloquear: `Ok(Some((kind, path)))` / `Ok(None)`.
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn watch_try_next(h: i64) -> Result<Option<(String, String)>, String> {
     let mut reg = registry().lock().unwrap();
     watch_of(&mut reg, h).map(|w| w.try_next())
 }
-#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
 pub fn watch_try_next(_h: i64) -> Result<Option<(String, String)>, String> {
     Err(WATCH_UNAVAILABLE.to_string())
 }
 
 /// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo de desarrollo): sondea la cola
-/// y aparca en poll(2) sobre el fd del watcher — nunca retiene el lock del registro mientras
-/// espera. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+/// y espera en la condvar de la cola compartida — nunca retiene el lock del registro mientras
+/// espera (M181: la misma espera en unix y Windows; el fd solo lo usan las fibras). `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn watch_next_blocking(h: i64, ms: i64) -> Result<Option<(String, String)>, String> {
     let deadline = if ms > 0 {
         Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
@@ -1326,13 +1326,13 @@ pub fn watch_next_blocking(h: i64, ms: i64) -> Result<Option<(String, String)>, 
         None
     };
     loop {
-        let fd = {
+        let queue = {
             let mut reg = registry().lock().unwrap();
             let w = watch_of(&mut reg, h)?;
             if let Some(ev) = w.try_next() {
                 return Ok(Some(ev));
             }
-            w.fd()
+            w.queue()
         };
         let wait = match deadline {
             None => 200, // re-sondea el registro (un close concurrente no debe colgar esto)
@@ -1344,34 +1344,28 @@ pub fn watch_next_blocking(h: i64, ms: i64) -> Result<Option<(String, String)>, 
                 rem.min(200) as i32
             }
         };
-        watch_mod::fd_ready(fd, wait);
+        queue.wait(wait as i64);
     }
 }
-#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
 pub fn watch_next_blocking(_h: i64, _ms: i64) -> Result<Option<(String, String)>, String> {
     Err(WATCH_UNAVAILABLE.to_string())
 }
 
-#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
-mod watch_mod {
-    unsafe extern "C" {
-        fn poll(fds: *mut PollFd, nfds: u64, timeout_ms: i32) -> i32;
+/// M181 (Windows): ¿tiene el watch `h` un evento en cola? `None` si `h` no es un watch. Lo consulta
+/// el scheduler de la VM antes de despertar una fibra aparcada SIN fd sobre ese handle (como
+/// `ui_has_event` para la UI): a ciegas, `next_event_timeout` renovaba su plazo a cada vuelta.
+#[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn watch_has_pending(h: i64) -> Option<bool> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Watch(w)) => Some(w.has_pending()),
+        _ => None,
     }
-    #[repr(C)]
-    struct PollFd {
-        fd: i32,
-        events: i16,
-        revents: i16,
-    }
-    const POLLIN: i16 = 0x0001;
-
-    /// ¿Hay lectura pendiente en `fd` dentro de `timeout_ms`? (Solo espera; el dato lo drena el
-    /// watcher.)
-    pub(super) fn fd_ready(fd: i32, timeout_ms: i32) -> bool {
-        let mut pfd = PollFd { fd, events: POLLIN, revents: 0 };
-        // SAFETY: un solo PollFd bien formado; poll no retiene el puntero tras volver.
-        unsafe { poll(&mut pfd, 1, timeout_ms) > 0 }
-    }
+}
+#[cfg(any(not(all(feature = "watch", any(unix, windows))), target_arch = "wasm32"))]
+pub fn watch_has_pending(_h: i64) -> Option<bool> {
+    None
 }
 
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).

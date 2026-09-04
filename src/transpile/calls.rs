@@ -2267,7 +2267,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            // M173: con `watch` EXCLUIDO (`--without watch`, o automático en un target Windows), los
+            // M173: con `watch` EXCLUIDO (`--without watch`; hasta M181 también automático en un target Windows), los
             // primitivos devuelven el mismo `Err` de plataforma que la VM en vez de caer al stub
             // que panica: `std/fs` (que trae `fs.watch`) lo importa casi todo programa, y un
             // binario Windows no debe abortar por una función que nunca llama.

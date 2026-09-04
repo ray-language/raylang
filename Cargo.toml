@@ -6,7 +6,7 @@ members = ["crates/ray-runtime"]
 
 [package]
 name = "raylang"
-version = "1.5.2"
+version = "1.6.0"
 edition = "2024"
 description = "raylang — un lenguaje de programación estáticamente tipado, orientado a expresiones, con genéricos, traits, concurrencia por actores y compilador auto-alojado. Escrito en Rust (VM + GC), casi cero dependencias."
 authors = ["Roberto Ayala <dev@rayala.org>"]

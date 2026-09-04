@@ -47,7 +47,7 @@ fn incremental_hasher_native() {
     let mut src = std::env::temp_dir();
     src.push("crypto_hasher_native.ray");
     std::fs::write(&src, SRC).expect("escribe");
-    let bin = std::env::temp_dir().join(format!("ray_hasher_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("ray_hasher_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()

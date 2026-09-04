@@ -63,7 +63,7 @@ fn headless_battery_matches_on_all_three_engines() {
         assert_eq!(out, WANT, "{engine}: salida exacta");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -135,7 +135,7 @@ fn the_fiber_parks_and_the_events_channel_pumps() {
     assert_eq!(out, WANT_PARK, "salida exacta");
     // El nativo con el mismo programa: el aparcado por el fd (fibras) y la fibra-bomba.
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -257,7 +257,7 @@ save to: /tmp/x.txt\nevent: closed, tag empty: true\n";
         assert_eq!(out, WANT_PICK, "{engine}: con RAY_UI_PICK");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -308,7 +308,7 @@ fn injected_messages_match_on_all_three_engines() {
         assert_eq!(out, WANT, "{engine}: exact output");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -357,7 +357,7 @@ fn messages_flow_through_the_events_channel_too() {
     assert_eq!(code, 0, "vm: exit 0");
     assert_eq!(out, WANT, "vm: exact output");
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -406,7 +406,7 @@ fn split_events_routes_messages_and_the_rest() {
     assert_eq!(code, 0, "vm: exit 0");
     assert_eq!(out, WANT, "vm: exact output");
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -496,7 +496,7 @@ fn requests_decode_and_reply_on_all_three_engines() {
         assert_eq!(out, WANT, "{engine}: exact output");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)

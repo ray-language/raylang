@@ -125,7 +125,7 @@ fn sigwinch_reaches_the_native_binary_too() {
     let dir = std::env::temp_dir().join("ray_sigwinch_native");
     let _ = std::fs::create_dir_all(&dir);
     std::fs::write(dir.join("prog.ray"), PROG).unwrap();
-    let bin = dir.join("prog_bin");
+    let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let st = Command::new(env!("CARGO_BIN_EXE_ray"))
         .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
         .current_dir(&dir)

@@ -548,7 +548,7 @@ Flags de `build --native`:
 
 | Flag | Efecto |
 |---|---|
-| `-o <ruta>` | nombre del binario de salida (por defecto, el *stem* del archivo) |
+| `-o <ruta>` | nombre del binario de salida (por defecto, el `name` del `ray.toml` o el *stem* del archivo; en un target Windows siempre acaba en `.exe` — o `.lib` con `--lib`) |
 | `--release` | tier de optimización `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native` (más lento de compilar, no portable) |
 | `--fast` | cambia la aritmética **chequeada** por **envolvente** (no detecta desbordamientos): más rendimiento a cambio de una garantía; para código propio, no para entrada hostil |
 | `--target <triple>` | *cross-compile* al triple indicado (requiere el target instalado en la toolchain) |

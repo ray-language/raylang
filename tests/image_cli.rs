@@ -39,7 +39,7 @@ fn png_battery_matches_on_all_three_engines() {
         assert_eq!(out, want, "{engine}: salida exacta");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         let native = Command::new(&bin).stdin(std::process::Stdio::null()).output().expect("nativo");
@@ -63,7 +63,7 @@ fn png_encode_round_trips_and_is_valid_for_an_external_decoder() {
         assert_eq!(out, want, "{engine}: salida exacta");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         let native = Command::new(&bin).stdin(std::process::Stdio::null()).output().expect("nativo");

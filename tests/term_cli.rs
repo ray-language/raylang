@@ -45,7 +45,7 @@ fn assert_on_all_engines(name: &str, src: &str, want: &str) {
         assert_eq!(out, want, "{engine}: salida exacta");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         let native = Command::new(&bin).stdin(std::process::Stdio::null()).output().expect("nativo");
@@ -230,7 +230,7 @@ fn capabilities_from_env_match_on_all_three_engines() {
         assert_eq!(out, want, "{engine}: salida exacta");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, _e, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok");
         let (out, code) = run(&mut Command::new(&bin));
@@ -270,7 +270,7 @@ fn capabilities_inside_raw_keeps_the_terminal_raw() {
         );
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         let out = run_in_pty(bin.to_str().unwrap());
@@ -309,7 +309,7 @@ fn native_prints_between_raw_sessions_carry_the_carriage_return() {
     let base = tmp("raw_flush");
     let prog = "import std/term;\nimport std/io;\n\nfn round(i: int) {\n    let r = term.raw(fn() -> string {\n        match (io.read_timeout(1, 30)) {\n            io.ReadResult.Data(_) => \"d\",\n            io.ReadResult.Eof => \"e\",\n            io.ReadResult.TimedOut => \"t\",\n        }\n    });\n    let _ = r;\n    print(\"r\" + to_string(i) + \"a\");\n    print(\"r\" + to_string(i) + \"b\");\n    print(\"r\" + to_string(i) + \"c\");\n}\n\nfn main() {\n    var i = 0;\n    while (i < 6) {\n        round(i);\n        i = i + 1;\n    }\n}\n";
     std::fs::write(base.join("prog.ray"), prog).unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(bcode, 0, "build --native ok\n{berr}");
     let feeder = format!("(sleep 2) | {}", pty_wrap(bin.to_str().unwrap()));

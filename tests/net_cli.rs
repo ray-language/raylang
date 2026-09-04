@@ -269,7 +269,7 @@ fn peer_addr_native() {
     let mut src_path = std::env::temp_dir();
     src_path.push("net_peer_addr_native.ray");
     std::fs::write(&src_path, PEER_ADDR_SRC).expect("escribe el fuente");
-    let bin = std::env::temp_dir().join(format!("ray_peer_addr_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("ray_peer_addr_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()
@@ -374,7 +374,7 @@ fn shutdown_write_native() {
     let mut src_path = std::env::temp_dir();
     src_path.push("net_shutdown_write_native.ray");
     std::fs::write(&src_path, SHUTDOWN_WRITE_SRC).expect("escribe el fuente");
-    let bin = std::env::temp_dir().join(format!("ray_shutdown_write_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("ray_shutdown_write_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()

@@ -35,7 +35,7 @@ fn all_three(name: &str, src: &str) -> (String, String, Option<String>) {
     let mut src_path = std::env::temp_dir();
     src_path.push(format!("recover_{name}.ray"));
     let mut bin = std::env::temp_dir();
-    bin.push(format!("recover_{name}_bin"));
+    bin.push(format!("recover_{name}_bin{}", std::env::consts::EXE_SUFFIX));
     let built = Command::new(env!("CARGO_BIN_EXE_ray"))
         .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()

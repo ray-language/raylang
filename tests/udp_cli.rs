@@ -109,7 +109,7 @@ fn udp_read_timeout_native() {
         return;
     }
     let demo = format!("{}/examples/web/udp_timeout_demo.ray", env!("CARGO_MANIFEST_DIR"));
-    let bin = std::env::temp_dir().join(format!("ray_udp_timeout_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("ray_udp_timeout_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", &demo, "--native", "-o", bin.to_str().unwrap()])
         .output()

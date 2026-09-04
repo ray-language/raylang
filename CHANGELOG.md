@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray build --native` produce un `.exe` en Windows** (M186, DESIGN §178): el binario se escribía
+  sin extensión y el Explorador ofrecía "elegir con qué abrir" en vez de ejecutarlo. En un target
+  Windows el artefacto acaba siempre en `.exe` (o `.lib` con `--lib`), tanto si el nombre lo elige
+  ray como si lo pide `-o`; cruzar a Windows desde macOS o Linux también lo produce.
+
 ## 1.6.3 — 2026-09-04
 
 - **Binario nativo de Windows ARM64** (M185, DESIGN §177): la release publica

@@ -11997,3 +11997,32 @@ del SISTEMA, no la del proceso — un PowerShell emulado sigue diciendo `Arm64`)
 alguien fija a mano una versión anterior a la primera con build ARM64, el instalador **repliega** a
 la x86_64 con aviso en vez de morir con un 404. Y `upgrade_asset` pierde su caso especial: las
 cuatro plataformas se publican en arm64 y x86_64.
+
+## 178. M186 — el `.exe` que faltaba: por qué ningún test lo cazó (sep 2026)
+
+Primer `ray build --native` de RayDesk que llega hasta el final en Windows, y el binario no arranca:
+el Explorador abre el diálogo de "elegir con qué abrir". El archivo se llamaba `raydesk`, **sin
+extensión**. El nombre de salida sale del `-o`, del `name` del `ray.toml` o del stem del fuente, y
+nadie le añadía nada; `ray bundle` sí escribía `<name>.exe` (M180), pero `build --native` no.
+
+**Por qué la CI no lo vio, con 122 usos de `--native` en los tests.** Porque `CreateProcess` **no**
+añade `.exe` cuando la ruta contiene directorios: un PE sin extensión se ejecuta perfectamente vía
+`Command::new("…\prog_bin")`, que es exactamente como lo lanzan los tests. Quien exige la extensión
+es el **shell** —el Explorador y PowerShell resuelven por `PATHEXT`—, y ningún test pasa por ahí. El
+hueco no estaba en la cobertura sino en el *modo de invocación*: probábamos el binario como lo
+invoca un programa, nunca como lo invoca una persona.
+
+**La regla elegida: en un target Windows el artefacto SIEMPRE acaba en `.exe`** (o `.lib` con
+`--lib`), lo nombre ray o lo pida el usuario con `-o`. Es lo que hace cargo, y la alternativa
+—respetar `-o` byte a byte— deja al usuario con un archivo que el sistema no ejecuta: un `-o
+dist/app` en Windows sería el mismo bug con un flag de por medio. Se decide por el target EFECTIVO,
+así que cruzar a Windows desde macOS o Linux también produce un `.exe`.
+
+Como consecuencia, `build_native` **devuelve la ruta realmente escrita**: `ray bundle` le pasaba un
+`work/bin` sin extensión y luego leía ese path para empaquetarlo — con la regla nueva habría buscado
+un archivo que ya no existe. El nombre real es ahora un valor de retorno, no una suposición
+compartida entre dos funciones.
+
+Del lado de los tests, los ~115 sitios que construían la ruta a mano (`base.join("prog_bin")`) pasan
+a llevar `std::env::consts::EXE_SUFFIX`, que en unix es la cadena vacía: el oráculo no cambia fuera
+de Windows.

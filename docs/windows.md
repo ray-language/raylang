@@ -215,6 +215,13 @@ Fuera de la red de CI actual:
     nativo `windows-11-arm` (con rustup y clang instalados en el propio job) y prueba `install.ps1`
     contra el zip recién subido; `install.ps1` y `ray upgrade` eligen la arquitectura solos.
 
+14. **El binario de `ray build --native` sin `.exe`** · ✅ **M186** (DESIGN §178): se escribía con el
+    nombre pelado (`raydesk`) y el Explorador ofrecía "elegir con qué abrir". No lo cazó ningún test
+    porque `CreateProcess` **no** añade `.exe` cuando la ruta lleva directorios —el binario sin
+    extensión se ejecuta perfectamente desde `Command::new`—; quien exige la extensión es el shell
+    (`PATHEXT`), y ningún test lo invocaba así. Lección de cobertura: probar el artefacto **como lo
+    invoca una persona**, no solo como lo invoca un programa.
+
 ## 6. Orden de ataque
 
 | Fase | Qué | Tamaño | Desbloquea |

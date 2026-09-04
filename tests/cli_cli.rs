@@ -97,7 +97,7 @@ fn build_native_produces_a_binary_that_runs_like_the_vm() {
          fn main() -> int { print(fib(10)); 0 }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
     assert!(out.contains("native binary"), "reporta el binario\n{out}");
@@ -152,7 +152,7 @@ fn build_native_covers_the_array_math_and_fs_surface() {
     let (vm_out, vm_err, vm_code) = ray(&base, &["run", "surface.ray"]);
     assert_eq!(vm_code, 0, "la VM corre el programa\n{vm_err}");
 
-    let bin = base.join("surface_bin");
+    let bin = base.join(format!("surface_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "surface.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -185,7 +185,7 @@ fn build_native_of_a_multi_module_project_is_a_single_binary() {
          fn main() -> int { let p = geo.Punto { x: 3, y: 4 }; print(geo.suma(p)); print(p); 0 }\n",
     )
     .unwrap();
-    let bin = base.join("app");
+    let bin = base.join(format!("app{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "main.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native multi-módulo sale 0\nstdout={out}\nstderr={err}");
     assert!(bin.is_file(), "un solo binario nativo");
@@ -217,7 +217,7 @@ fn build_native_env_and_args_match_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native env/args ok\n{err}");
 
@@ -266,7 +266,7 @@ fn build_native_csp_concurrency_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native concurrencia ok\n{err}");
 
@@ -310,7 +310,7 @@ fn build_native_canal_rendezvous_no_se_deadlockea() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("rdv_bin");
+    let bin = base.join(format!("rdv_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native rendezvous ok\n{err}");
     let expected = "10\n20\n30\n";
@@ -358,7 +358,7 @@ fn build_native_runtime_errors_exit_70_like_the_vm() {
     for (nombre, prog, msg) in cases {
         let src = format!("{nombre}.ray");
         std::fs::write(base.join(&src), prog).unwrap();
-        let bin = base.join(format!("{nombre}_bin"));
+        let bin = base.join(format!("{nombre}_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, err, code) = ray(&base, &["build", &src, "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(code, 0, "build --native {nombre} ok\n{err}");
         let (_vo, vm_err, vm_code) = ray(&base, &["run", &src]);
@@ -375,7 +375,7 @@ fn build_native_runtime_errors_exit_70_like_the_vm() {
     // La cola de panics de RUST (índice fuera de rango, etc.) también sale 70 (catch_unwind en main);
     // ahí la paridad es de EXIT CODE, no de texto (el mensaje sigue siendo el de Rust).
     std::fs::write(base.join("oob.ray"), "fn main() -> int { let a = [1, 2]; a[5] }").unwrap();
-    let bin = base.join("oob_bin");
+    let bin = base.join(format!("oob_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "oob.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native oob ok\n{err}");
     let (_vo, _ve, vm_code) = ray(&base, &["run", "oob.ray"]);
@@ -399,7 +399,7 @@ fn build_native_fast_wraps_overflow_but_checks_div_zero() {
         "fn main() -> int { var x = 9223372036854775807; x = x + 1; print(x); 0 }",
     )
     .unwrap();
-    let bin = base.join("ovf_bin");
+    let bin = base.join(format!("ovf_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) =
         ray(&base, &["build", "ovf.ray", "--native", "--fast", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native --fast ok\n{err}");
@@ -411,7 +411,7 @@ fn build_native_fast_wraps_overflow_but_checks_div_zero() {
         "wrapping de i64::MAX + 1"
     );
     std::fs::write(base.join("dz.ray"), "fn main() -> int { let a = 1; let b = 0; a / b }").unwrap();
-    let bin = base.join("dz_bin");
+    let bin = base.join(format!("dz_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) =
         ray(&base, &["build", "dz.ray", "--native", "--fast", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native --fast div-cero ok\n{err}");
@@ -451,7 +451,7 @@ fn build_native_try_join_in_scope_counts_as_handled() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("tj_bin");
+    let bin = base.join(format!("tj_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "tj.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native try_join-en-scope ok\n{err}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -484,7 +484,7 @@ fn build_native_double_join_is_error_and_churn_doesnt_explode() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("doble_bin");
+    let bin = base.join(format!("doble_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "doble.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native doble join ok\n{err}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -570,7 +570,7 @@ fn build_native_heap_values_and_functions_cross_threads() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("sh_bin");
+    let bin = base.join(format!("sh_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native heap-cruza-hilos ok\nstdout={out}\nstderr={err}");
@@ -657,7 +657,7 @@ fn build_native_task_failure_contained_and_try_join() {
     for (nombre, prog, exit, err_frag, stdout_esp) in cases {
         let src = format!("{nombre}.ray");
         std::fs::write(base.join(&src), prog).unwrap();
-        let bin = base.join(format!("{nombre}_bin"));
+        let bin = base.join(format!("{nombre}_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, err, code) = ray(&base, &["build", &src, "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(code, 0, "build --native {nombre} ok\n{err}");
         let (vm_out, vm_err, vm_code) = ray(&base, &["run", &src]);
@@ -704,7 +704,7 @@ fn build_native_sibling_cancellation_and_select_without_busy_wait() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("cancel_bin");
+    let bin = base.join(format!("cancel_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) =
         ray(&base, &["build", "cancel.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native cancelación ok\n{err}");
@@ -733,7 +733,7 @@ fn build_native_sibling_cancellation_and_select_without_busy_wait() {
          }\n",
     )
     .unwrap();
-    let sbin = base.join("sel_bin");
+    let sbin = base.join(format!("sel_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o2, err2, code2) =
         ray(&base, &["build", "sel.ray", "--native", "-o", sbin.to_str().unwrap()]);
     assert_eq!(code2, 0, "build --native select ok\n{err2}");
@@ -773,7 +773,7 @@ fn build_native_rendezvous_multi_sender_doesnt_hang() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("rdvm_bin");
+    let bin = base.join(format!("rdvm_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native rendezvous multi-emisor ok\n{err}");
     let (vm_out, _e, vm_code) = ray(&base, &["run", "prog.ray"]);
@@ -808,7 +808,7 @@ fn build_native_send_on_closed_channel_is_error_like_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("sc_bin");
+    let bin = base.join(format!("sc_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native send-cerrado ok\n{err}");
     let (vm_out, vm_err, vm_code) = ray(&base, &["run", "prog.ray"]);
@@ -845,7 +845,7 @@ fn build_native_close_with_blocked_sender_is_error_like_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("cb_bin");
+    let bin = base.join(format!("cb_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native close-bloqueado ok\n{err}");
     let (vm_out, vm_err, vm_code) = ray(&base, &["run", "prog.ray"]);
@@ -883,7 +883,7 @@ fn build_native_spawn_of_named_function_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native spawn-nombrada ok\n{err}");
 
@@ -934,7 +934,7 @@ fn build_native_mutable_capture_inside_spawn_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native con captura mutable dentro de spawn ok\n{err}");
 
@@ -1021,7 +1021,7 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de las seis formas ok\n{err}");
 
@@ -1129,7 +1129,7 @@ fn build_native_tls_client_against_vm_server_echoes() {
     }
     let base = tmp("build_native_tls_cli");
     std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
-    let bin = base.join("client_bin");
+    let bin = base.join(format!("client_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "client.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native tls cliente ok\n{err}");
     assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
@@ -1165,7 +1165,7 @@ fn build_native_tls_server_against_vm_client_echoes() {
     let base = tmp("build_native_tls_srv");
     std::fs::write(base.join("server.ray"), TLS_ECHO_SERVER_RAY).unwrap();
     std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
-    let bin = base.join("server_bin");
+    let bin = base.join(format!("server_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "server.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native tls servidor ok\n{err}");
     assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
@@ -1219,7 +1219,7 @@ fn build_native_production_crypto_via_ray_runtime_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native crypto ok\n{err}");
     assert!(out.contains("ray-runtime: crypto"), "usó el camino Cargo con ray-runtime: {out}");
@@ -1253,8 +1253,8 @@ fn build_native_two_programs_with_same_stem_dont_share_artifact() {
     };
     std::fs::write(base_a.join("prog.ray"), prog("soy A")).unwrap();
     std::fs::write(base_b.join("prog.ray"), prog("soy B")).unwrap();
-    let bin_a = base_a.join("a_bin");
-    let bin_b = base_b.join("b_bin");
+    let bin_a = base_a.join(format!("a_bin{}", std::env::consts::EXE_SUFFIX));
+    let bin_b = base_b.join(format!("b_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base_a, &["build", "prog.ray", "--native", "-o", bin_a.to_str().unwrap()]);
     assert_eq!(code, 0, "build A ok\n{err}");
     let (_o, err, code) = ray(&base_b, &["build", "prog.ray", "--native", "-o", bin_b.to_str().unwrap()]);
@@ -1282,7 +1282,7 @@ fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
     }
     let db_dir = format!("{}/examples/db", env!("CARGO_MANIFEST_DIR"));
     let db_path = std::path::Path::new(&db_dir);
-    let bin = std::env::temp_dir().join("ray_native_sqlite_test_bin");
+    let bin = std::env::temp_dir().join(format!("ray_native_sqlite_test_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(db_path, &["build", "sqlite_demo.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native sqlite ok\n{err}");
@@ -1318,7 +1318,7 @@ fn build_native_target_cross_compile_passes_triple_to_rustc() {
     };
     let base = tmp("build_native_target");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"cross ok\"); 0 }\n").unwrap();
-    let bin = base.join("t_bin");
+    let bin = base.join(format!("t_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(
         &base,
         &["build", "prog.ray", "--native", "--target", &host, "-o", bin.to_str().unwrap()],
@@ -1365,7 +1365,7 @@ fn build_native_tls_connection_error_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("tlserr_bin");
+    let bin = base.join(format!("tlserr_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native tls error ok\nstdout={out}\nstderr={err}");
@@ -1416,7 +1416,7 @@ fn build_native_sqlite_errors_match_byte_for_byte_with_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = std::env::temp_dir().join("ray_native_sqlite_err_bin");
+    let bin = std::env::temp_dir().join(format!("ray_native_sqlite_err_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(db_path, &["build", "__sqlite_err_test.ray", "--native", "-o", bin.to_str().unwrap()]);
     let build_ok = code == 0;
@@ -1448,7 +1448,7 @@ fn build_native_without_crypto_forces_the_fast_path_and_stubs() {
          fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     // N1/N2 + fibras: mimalloc, ahash y fibers van por defecto; la vía rápida rustc exige excluirlos TAMBIÉN.
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "--without", "crypto,mimalloc,ahash,fibers", "-o", bin.to_str().unwrap()]);
@@ -1486,7 +1486,7 @@ fn build_native_reads_the_stable_exclusion_from_ray_toml() {
          fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     // Sin `--without` en la CLI: la exclusión viene SOLO del ray.toml.
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native con política ray.toml ok\n{err}");
@@ -1538,7 +1538,7 @@ fn build_native_defaults_to_mimalloc_and_without_recovers_the_fast_path() {
     // hacía que en la corrida paralela cada tmp() borrara el dir del otro (flakes intermitentes).
     let base = tmp("build_native_default_mimalloc");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"hola\"); 0 }\n").unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native por defecto ok\n{err}");
     assert!(out.contains("[ray-runtime: mimalloc+ahash+fibers]"), "el default enlaza mimalloc+ahash+fibras vía Cargo: {out}");
@@ -1578,7 +1578,7 @@ fn build_native_structured_concurrency_coincide_con_la_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native structured ok\n{err}");
 
@@ -1616,7 +1616,7 @@ fn build_native_select_invariant_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native select ok\n{err}");
 
@@ -1660,7 +1660,7 @@ fn build_native_signals_graceful_shutdown() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native signals ok\n{err}");
 
@@ -1717,7 +1717,7 @@ fn build_native_string_channel_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native canal string ok\n{err}");
 
@@ -1740,7 +1740,7 @@ fn build_native_release_produces_correct_binary() {
     }
     let base = tmp("build_native_release");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(2 + 3 * 4); 0 }\n").unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "--release", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native --release sale 0\nstdout={out}\nstderr={err}");
@@ -1763,7 +1763,7 @@ fn build_native_sized_integers_dont_corrupt_the_prelude() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/poly1305_demo.ray");
     let base = tmp("build_native_u64");
-    let bin = base.join("poly_bin");
+    let bin = base.join(format!("poly_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de poly1305 sale 0\nstdout={out}\nstderr={err}");
@@ -1787,7 +1787,7 @@ fn build_native_json_con_map_coincide_con_la_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/json_demo.ray");
     let base = tmp("build_native_json");
-    let bin = base.join("json_bin");
+    let bin = base.join(format!("json_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de json sale 0\nstdout={out}\nstderr={err}");
@@ -1808,7 +1808,7 @@ fn build_native_protobuf_with_byte_concat_matches_the_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/protobuf_demo.ray");
     let base = tmp("build_native_protobuf");
-    let bin = base.join("pb_bin");
+    let bin = base.join(format!("pb_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de protobuf sale 0\nstdout={out}\nstderr={err}");
@@ -1829,7 +1829,7 @@ fn build_native_url_con_override_y_utf8_coincide_con_la_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/url_demo.ray");
     let base = tmp("build_native_url");
-    let bin = base.join("url_bin");
+    let bin = base.join(format!("url_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de url sale 0\nstdout={out}\nstderr={err}");
@@ -1852,7 +1852,7 @@ fn build_native_http_with_unreachable_tls_matches_the_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/http_demo.ray");
     let base = tmp("build_native_http");
-    let bin = base.join("http_bin");
+    let bin = base.join(format!("http_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de http sale 0\nstdout={out}\nstderr={err}");
@@ -1874,7 +1874,7 @@ fn build_native_closures_with_mutable_state_match_the_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/closures.ray");
     let base = tmp("build_native_closures");
-    let bin = base.join("cl_bin");
+    let bin = base.join(format!("cl_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de closures sale 0\nstdout={out}\nstderr={err}");
@@ -1900,7 +1900,7 @@ fn build_native_iterators_match_the_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/iterador.ray");
     let base = tmp("build_native_iter");
-    let bin = base.join("iter_bin");
+    let bin = base.join(format!("iter_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de iteradores sale 0\nstdout={out}\nstderr={err}");
@@ -1935,7 +1935,7 @@ fn build_native_warns_about_stubbed_functions() {
          fn main() -> int { print(\"ok\"); 0 }  // NO llama a g → el binario corre bien\n",
     )
     .unwrap();
-    let bin = base.join("sw_bin");
+    let bin = base.join(format!("sw_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native con stub sale 0\nstdout={out}\nstderr={err}");
@@ -1974,7 +1974,7 @@ fn build_native_nested_generic_literals_transpile() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("gn_bin");
+    let bin = base.join(format!("gn_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native genéricos anidados sale 0\nstdout={out}\nstderr={err}");
@@ -2016,7 +2016,7 @@ fn build_native_prelude_override_wins_over_the_builtin() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("ovr_bin");
+    let bin = base.join(format!("ovr_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native override sale 0\nstdout={out}\nstderr={err}");
@@ -2068,7 +2068,7 @@ fn build_native_builtin_real_no_se_tapa_y_closure_local_si() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("bi_bin");
+    let bin = base.join(format!("bi_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native builtin real sale 0\nstdout={out}\nstderr={err}");
@@ -2120,7 +2120,7 @@ fn build_native_rust_keyword_identifiers_dont_break_rustc() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("kw_bin");
+    let bin = base.join(format!("kw_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native con keywords sale 0\nstdout={out}\nstderr={err}");
@@ -2161,7 +2161,7 @@ fn build_native_self_referential_assignment_doesnt_double_borrow_the_refcell() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("db_bin");
+    let bin = base.join(format!("db_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native doble-borrow sale 0\nstdout={out}\nstderr={err}");
@@ -2202,7 +2202,7 @@ fn build_native_self_referential_map_doesnt_double_borrow_the_refcell() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("mdb_bin");
+    let bin = base.join(format!("mdb_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native map doble-borrow sale 0\nstdout={out}\nstderr={err}");
@@ -2225,7 +2225,7 @@ fn build_native_ffi_libc_libm_coincide_con_la_vm() {
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/ffi/libm.ray");
     let base = tmp("build_native_ffi");
-    let bin = base.join("ffi_bin");
+    let bin = base.join(format!("ffi_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) =
         ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native de ffi sale 0\nstdout={out}\nstderr={err}");
@@ -2260,7 +2260,7 @@ fn build_native_tcp_server_echoes() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("srv");
+    let bin = base.join(format!("srv{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native servidor TCP ok\n{err}");
 
@@ -2305,7 +2305,7 @@ fn build_native_udp_echoes() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("srv");
+    let bin = base.join(format!("srv{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native UDP ok\n{err}");
 
@@ -2870,7 +2870,7 @@ fn ffi_extern_unit_return_can_be_written() {
     assert!(out.contains("freed"), "malloc/free por FFI\n{out}");
     // Paridad nativa (si hay rustc): el mismo programa, byte-idéntico.
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, nerr, ncode) = ray(&base, &["build", file.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(ncode, 0, "build --native con -> unit escrito ok\n{nerr}");
         let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -3310,7 +3310,7 @@ fn main() {
     .unwrap();
     let vm = ray(&base, &["run", "prog.ray"]);
     assert_eq!(vm.2, 0, "la VM corre el programa de tortura\n{}", vm.1);
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native con std/regex ok\n{err}");
     assert!(out.contains("regex"), "el nativo enlaza la feature regex de ray-runtime: {out}");
@@ -3426,7 +3426,7 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
     assert!(!err.contains("stub"), "sin stubs (el match del trait se tipa): {err}");
@@ -3469,7 +3469,7 @@ fn build_native_close_wakes_a_parked_socket_reader() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("srv");
+    let bin = base.join(format!("srv{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native close cross-fibra ok\n{err}");
 
@@ -3523,7 +3523,7 @@ fn build_native_try_recv_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native try_recv ok\n{err}");
 
@@ -3560,7 +3560,7 @@ fn build_native_select_timeout_matches_the_vm() {
          }\n",
     )
     .unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native select_timeout ok\n{err}");
 
@@ -3602,7 +3602,7 @@ fn exit_terminates_with_the_code_in_all_engines() {
     }
     // Nativo: byte-idéntico.
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, err, code) = ray(&base, &["build", "--native", "prog.ray", "-o", bin.to_str().unwrap()]);
         assert_eq!(code, 0, "build --native: {err}");
         let out = Command::new(&bin).output().expect("corre el binario nativo");
@@ -3648,7 +3648,7 @@ fn build_native_rebuild_to_the_same_output_replaces_the_inode() {
     }
     let base = tmp("build_native_rebuild");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(7 * 8); 0 }\n").unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let bin_s = bin.to_str().unwrap();
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin_s]);
     assert_eq!(code, 0, "primer build --native sale 0\nstdout={out}\nstderr={err}");

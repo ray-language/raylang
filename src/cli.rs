@@ -218,6 +218,27 @@ fn upgrade_asset(os: &str, arch: &str) -> Option<String> {
     Some(format!("raylang-{arch}-{suffix}.{ext}"))
 }
 
+/// M187: el aviso de que este `ray` corre EMULADO sobre una máquina cuya arquitectura ya tiene
+/// build propia (Windows ARM64 ejecutando la x86_64: M184/M185). `upgrade` no cambia de
+/// arquitectura —eso es reinstalar—, pero sí lo dice, o el usuario se queda emulado para siempre.
+/// `None` cuando no hay nada que contar. Pura: el llamador pasa las dos arquitecturas.
+fn emulated_arch_note(os: &str, process_arch: &str, machine_arch: &str) -> Option<String> {
+    if process_arch == machine_arch {
+        return None;
+    }
+    let native = upgrade_asset(os, machine_arch)?;
+    let reinstall = if os == "windows" {
+        "irm https://raylang.dev/install.ps1 | iex"
+    } else {
+        "curl -sSfL https://raylang.dev/install.sh | sh"
+    };
+    Some(format!(
+        "note: this is the {process_arch} build running on a {machine_arch} machine (emulated), and \
+         {native} is published\n      'ray upgrade' keeps the current architecture — reinstall to \
+         switch: {reinstall}"
+    ))
+}
+
 /// Extrae el tag de la URL final de `releases/latest` (GitHub redirige a
 /// `…/releases/tag/<tag>`). `None` si no hay redirección a un tag (repo sin releases).
 fn tag_from_latest_url(url: &str) -> Option<String> {
@@ -259,6 +280,12 @@ fn cmd_upgrade(args: &[String]) {
         process::exit(64);
     }
     let repo = upgrade_repo();
+    // M187: `upgrade` conserva la arquitectura A PROPÓSITO — actualiza lo instalado, no lo cambia
+    // por otra cosa. Pero callar que existe una build nativa dejaría al usuario emulado para
+    // siempre (solo una reinstalación cambia de arquitectura), así que se dice.
+    if let Some(note) = emulated_arch_note(std::env::consts::OS, std::env::consts::ARCH, crate::toolchain::machine_arch()) {
+        eprintln!("{note}");
+    }
     let Some(asset) = upgrade_asset(std::env::consts::OS, std::env::consts::ARCH) else {
         eprintln!(
             "ray upgrade does not support this platform ({}-{}); see the assets in \
@@ -4200,6 +4227,23 @@ mod tests {
         // Una arquitectura desconocida no tiene asset.
         assert_eq!(upgrade_asset("linux", "riscv64"), None);
         assert_eq!(upgrade_asset("windows", "riscv64"), None);
+    }
+
+    #[test]
+    fn an_emulated_build_is_told_about_its_native_twin() {
+        // M187: el caso real — un `ray` x86_64 corriendo en una máquina Windows ARM64.
+        let note = emulated_arch_note("windows", "x86_64", "aarch64").expect("hay build nativa");
+        assert!(note.contains("raylang-aarch64-pc-windows-msvc.zip"), "{note}");
+        assert!(note.contains("install.ps1"), "en Windows se reinstala con install.ps1\n{note}");
+        assert!(note.contains("keeps the current architecture"), "dice qué NO hace upgrade\n{note}");
+        // En unix el remedio es el otro instalador.
+        assert!(
+            emulated_arch_note("macos", "x86_64", "aarch64").is_some_and(|n| n.contains("install.sh")),
+            "en unix se reinstala con install.sh"
+        );
+        // Sin emulación no hay nada que contar, y tampoco si la máquina no tiene asset.
+        assert_eq!(emulated_arch_note("windows", "aarch64", "aarch64"), None);
+        assert_eq!(emulated_arch_note("linux", "x86_64", "riscv64"), None, "sin build nativa, sin aviso");
     }
 
     #[test]

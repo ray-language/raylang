@@ -212,8 +212,9 @@ Fuera de la red de CI actual:
     máquina por `PROCESSOR_ARCHITEW6432`), `ray toolchain status` lo imprime, y clang instalado
     fuera del PATH se añade al PATH del cargo hijo en vez de abortar. La raíz —publicar el binario
     ARM64— se cerró en **M185**: `release.yml` compila `aarch64-pc-windows-msvc` en un runner
-    nativo `windows-11-arm` (con rustup y clang instalados en el propio job) y prueba `install.ps1`
-    contra el zip recién subido; `install.ps1` y `ray upgrade` eligen la arquitectura solos.
+    nativo `windows-11-arm` (la imagen ya trae rustup y clang: el job solo lo comprueba) y prueba `install.ps1`
+    contra el zip recién subido; `install.ps1` elige la arquitectura sola; `ray upgrade` CONSERVA la del binario instalado y avisa de
+    que existe la nativa (M187, DESIGN §179).
 
 14. **El binario de `ray build --native` sin `.exe`** · ✅ **M186** (DESIGN §178): se escribía con el
     nombre pelado (`raydesk`) y el Explorador ofrecía "elegir con qué abrir". No lo cazó ningún test
@@ -235,7 +236,8 @@ Fuera de la red de CI actual:
 | **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · watcher ✅ M181 · fibras nativas (WSAPoll, x86_64) ✅ M182 | L × 3 | fibras en el nativo; escritorio y audio |
 
 Al margen: Scoop (bucket propio) y winget a demanda; la build `aarch64-pc-windows-msvc` ✅ **M185**
-(runner nativo `windows-11-arm` en `release.yml`; `install.ps1` y `ray upgrade` la eligen solos).
+(runner nativo `windows-11-arm` en `release.yml`; `install.ps1` la elige sola y `ray upgrade` avisa
+de ella sin cambiar de arquitectura, M187).
 
 ## 7. Censo de los ejemplos en Windows
 

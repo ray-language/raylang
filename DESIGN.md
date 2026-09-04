@@ -11552,3 +11552,44 @@ que `is_tty` es `true` en 0/1/2, que `size` tiene columnas y filas, que `raw` en
 un `io.read_timeout` de 100 ms dentro del modo crudo VENCE — VM y binario nativo. Las suites
 completas `term_cli` e `io_cli` (decodificador en tres motores, sin-tty, pipes, la fibra
 aparcada, data/eof/timeout) pasan en Windows y entran al job de CI.
+
+## 166. M174 — W5: el poller de Windows es `WSAPoll`, y el sueño fino (sep 2026)
+
+La deuda 3.6 de `docs/windows.md`, la que M170 dejó a medias: los servidores ya funcionaban en
+Windows, pero sobre el busy-poll cooperativo de M15.5 — cada fibra de red aparcada se despertaba
+cada milisegundo para reintentar. Funcionaba, con más CPU y peor p99 bajo carga, y con un efecto
+lateral que M173 destapó para stdin y aquí se cierra para los sockets: cada reintento re-aparcaba
+la lectura con un plazo NUEVO, así que `read_timeout` nunca vencía.
+
+**`WSAPoll` es `poll(2)`.** El plan decía wepoll (ABI epoll sobre IOCP/AFD); la alternativa más
+simple estaba en ws2_32 desde Vista: `WSAPoll` tiene la forma exacta de `poll(2)` —un arreglo de
+(socket, interés, resultado) y un plazo—, que es justo la forma de `src/poll.rs`. Sin crates, como
+kqueue y epoll. Con ella, `raw_fd` deja de ser `None` en Windows (devuelve el SOCKET como i32) y el
+scheduler aparca las fibras de red en el poller de verdad: despierta solo las listas, y las demás
+conservan su deadline hasta que el paso 0 lo expira. Dos matices propios de Windows: el pseudo-fd
+0 de stdin NO es un socket y `WSAPoll` falla entero con WSAENOTSOCK ante un handle ajeno, así que el
+backend lo aparta y lo sondea con `stdin_ready(0)` (M173) a cuantos de 5 ms mientras espera a los
+sockets; y un socket con error o cierre (POLLERR/POLLHUP/POLLNVAL) cuenta como listo, para que la
+fibra reintente y recoja el error real en vez de esperar para siempre. El handshake TLS, que en
+Windows esperaba con un `sleep(20 ms)`, espera ahora por el mismo poller.
+
+**El sueño fino.** `thread::sleep(1)` dormía ~15 ms en Windows: el tick por defecto del
+planificador es de 15,6 ms y el pacing de un juego o de `time.sleep_ms` iba a saltos. El *waitable
+timer* de alta resolución (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, Windows 10 1803+) no está
+sujeto al tick; se crea uno por hilo y `sleep_ms` lo arma con el plazo relativo en unidades de
+100 ns, reintentando hasta cubrirlo (dormir AL MENOS lo pedido, la semántica de siempre). Medido en
+la VM ARM64: cien `time.sleep(1)` seguidos tardan 155 ms (1,5 ms cada uno) frente a los ~1.500 ms
+que daba `thread::sleep` bajo el tick de 15,6 ms. Si el
+sistema no lo ofrece, `thread::sleep`. Sin `timeBeginPeriod`: eso sube la frecuencia del tick de
+TODO el sistema y gasta batería; el timer de alta resolución no.
+
+**UDP y el 10054.** El censo lo había anotado: en Windows, un ICMP "port unreachable" previo hace
+que el siguiente `recv` UDP falle con WSAECONNRESET, cosa que Linux no hace (espera). Es un
+comportamiento documentado de Winsock y se apaga por socket con `WSAIoctl(SIO_UDP_CONNRESET,
+FALSE)` al crearlo. Así `udp_demo` y `dns_demo` se comportan igual en las tres plataformas.
+
+**Prueba.** `src/poll.rs` gana un test unitario en las tres plataformas (un listener sin
+conexiones no está listo y la espera honra el plazo; con una conexión en el backlog, está listo).
+`tests/net_no_poller_cli.rs` gana `a_socket_read_timeout_expires`: el servidor fija 300 ms y lee
+de un cliente que calla — `read timeout` a tiempo, ni antes ni nunca, en multicore y con un hilo.
+Queda de 3.6 solo el reactor IOCP para las fibras del binario nativo (W7).

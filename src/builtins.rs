@@ -1828,18 +1828,26 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
                         if std::time::Instant::now() >= deadline {
                             return Err("TLS handshake timeout".to_string());
                         }
-                        // La espera de readiness es por fd + poll(2): solo-unix. En Windows
-                        // (destapado por la pata msvc del release v1.1.0, que nunca había
-                        // compilado) se espera con un sleep corto — mismo presupuesto de 10 s.
-                        #[cfg(unix)]
+                        // La espera de readiness es por fd + poller: unix (poll(2)) y Windows
+                        // (M174: WSAPoll sobre el SOCKET). Mismo presupuesto de 10 s. Otras
+                        // plataformas: un sleep corto.
+                        #[cfg(any(unix, windows))]
                         {
-                            use std::os::fd::AsRawFd;
-                            let fd = tc.sock.as_raw_fd();
+                            #[cfg(unix)]
+                            let fd = {
+                                use std::os::fd::AsRawFd;
+                                tc.sock.as_raw_fd()
+                            };
+                            #[cfg(windows)]
+                            let fd = {
+                                use std::os::windows::io::AsRawSocket;
+                                i32::try_from(tc.sock.as_raw_socket()).unwrap_or(-1)
+                            };
                             let (rd, wr): (&[i32], &[i32]) =
                                 if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
                             let _ = crate::poll::wait(rd, wr, 1000);
                         }
-                        #[cfg(not(unix))]
+                        #[cfg(not(any(unix, windows)))]
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
                     Err(e) => return Err(e.to_string()),
@@ -2316,7 +2324,24 @@ pub fn raw_fd(h: i64) -> Option<i32> {
         _ => None,
     }
 }
-#[cfg(not(unix))]
+// M174 (Windows, docs/windows.md W5): el SOCKET del handle, como i32, para `poll::wait` (WSAPoll).
+// Los valores de SOCKET son pequeños en la práctica; si no cupiera, `None` y el scheduler cae al
+// busy-poll de respaldo (M170), que sigue siendo correcto.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn raw_fd(h: i64) -> Option<i32> {
+    use std::os::windows::io::AsRawSocket;
+    let reg = registry().lock().unwrap();
+    let sock = match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.as_raw_socket(),
+        Some(OpenHandle::Listener(l)) => l.as_raw_socket(),
+        #[cfg(feature = "net-tls")]
+        Some(OpenHandle::Tls(tc)) => tc.sock.as_raw_socket(),
+        Some(OpenHandle::Udp(s)) => s.as_raw_socket(),
+        _ => return None,
+    };
+    i32::try_from(sock).ok().filter(|fd| *fd > 0)
+}
+#[cfg(not(any(unix, all(windows, not(target_arch = "wasm32")))))]
 pub fn raw_fd(_h: i64) -> Option<i32> {
     None
 }
@@ -2497,9 +2522,53 @@ pub fn local_port(h: i64) -> i64 {
 // timeout de lectura por handle (`net.set_read_timeout`, M56.4) aplica también a UDP en los tres
 // motores — una espera vencida devuelve `Err("read timeout")`, como en TCP.
 
+/// M174 (Windows, docs/windows.md 3.6): un ICMP "port unreachable" previo hacía que el siguiente
+/// `recv` UDP fallara con WSAECONNRESET (10054) — comportamiento documentado de Winsock que Linux no
+/// tiene (simplemente espera). `SIO_UDP_CONNRESET = FALSE` lo desactiva al crear el socket; así los
+/// programas UDP (`udp_demo`, `dns_demo`) se comportan igual en las tres plataformas.
+#[cfg(windows)]
+fn udp_disable_connreset(sock: &std::net::UdpSocket) {
+    use std::os::windows::io::AsRawSocket;
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn WSAIoctl(
+            s: usize,
+            code: u32,
+            inbuf: *const core::ffi::c_void,
+            inlen: u32,
+            outbuf: *mut core::ffi::c_void,
+            outlen: u32,
+            returned: *mut u32,
+            overlapped: *mut core::ffi::c_void,
+            routine: *const core::ffi::c_void,
+        ) -> i32;
+    }
+    const SIO_UDP_CONNRESET: u32 = 0x9800_000C;
+    let off: u32 = 0; // BOOL FALSE
+    let mut returned = 0u32;
+    // SAFETY: WSAIoctl sobre un socket propio; `off` y `returned` viven durante la llamada; sin
+    // buffer de salida ni E/S solapada. Un fallo solo deja el comportamiento de Winsock de siempre.
+    let _ = unsafe {
+        WSAIoctl(
+            sock.as_raw_socket() as usize,
+            SIO_UDP_CONNRESET,
+            &off as *const u32 as *const core::ffi::c_void,
+            4,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+}
+#[cfg(not(windows))]
+fn udp_disable_connreset(_sock: &std::net::UdpSocket) {}
+
 /// Enlaza un socket UDP a `host:port` (port=0 → efímero, consultable con `local_port`) (M20.8).
 pub fn udp_bind(host: &str, port: i64) -> Result<i64, String> {
     let sock = std::net::UdpSocket::bind((host, port as u16)).map_err(|e| e.to_string())?;
+    udp_disable_connreset(&sock);
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -3973,6 +4042,10 @@ static BUILTINS: &[Builtin] = &[
 /// El pseudo-handle de stdin para `mark_read_timeout`/`take_read_expired` (los handles reales
 /// del registro empiezan en 1).
 pub const STDIN_PSEUDO_HANDLE: i64 = 0;
+
+/// El "fd" con el que las lecturas de stdin se aparcan en el poller (`IoParked.fd`): el 0 real en
+/// unix; en Windows (M174) un pseudo-fd que `poll::wait` reconoce y atiende aparte (no es un SOCKET).
+pub const STDIN_PSEUDO_HANDLE_FD: i32 = 0;
 
 /// M146: el pseudo-handle de la cola global de eventos de UI (mismo mecanismo de timeout que
 /// stdin; el barrido de deadlines solo marca handles >= 0 y el registro jamás llega a MAX).

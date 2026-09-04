@@ -99,15 +99,17 @@ con el zip de la release, y un job de CI en `windows-latest` que construye el bi
 VM y ejecuta el instalador REAL contra la última release; `release.yml` prueba el instalador
 contra el zip recién subido. Lo que funciona: la toolchain entera (`ray new/run/build/test/fmt/doc/
 lsp/repl/mcp`), la VM y el binario nativo, la red (sockets, TLS, HTTP/1.1 y 2, WebSocket, DNS,
-clientes de BD), `std/fs`, `std/json`/`toml`/`regex`/`crypto`, el framework web y `ray dev` (desde M172 con
-reinicio drenado, sin huérfanos y con socket-activation, como en unix). Los huecos, todos con
+clientes de BD), `std/fs`, `std/json`/`toml`/`regex`/`crypto`, el framework web, `ray dev` (desde M172 con
+reinicio drenado, sin huérfanos y con socket-activation, como en unix) y, desde M173, `std/term`
+y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloquear la VM). Los huecos, todos con
 `Err` honesto de plataforma en vez de fallo silencioso:
 
 | Superficie | Estado en Windows |
 |---|---|
 | `ray dev` / `ray test --watch` | **funcionan** (M172): el reinicio manda `CTRL_BREAK` al grupo del hijo (`serve_graceful` drena), un Job Object mata al hijo si el supervisor muere, `--port` retiene el socket entre reinicios (handle heredable); el watcher sigue siendo polling de mtimes (~200 ms) |
 | `std/process` | no soportado (`fork`/`exec` unix); `Err` al lanzar |
-| `std/term` modo crudo / `read_key` / `read_hidden` | no soportado (termios); ancho de celdas y colores sí |
+| `std/term` (`is_tty`, `size`, `raw`, `read_key`, `read_hidden`, `capabilities`) | **funcionan** (M173) por la Console API; `size_px`/`cell_px` → `None` (la API no expone píxeles) |
+| `std/io` (`read`, `read_timeout`, `stdin_ready`) | **funcionan** (M173): disponibilidad real en consola y pipes, la fibra aparca (no la VM), el plazo vence |
 | `signals()` | **funciona** (M168): Ctrl-C/Break → 2, cierre/logoff/apagado → 15 vía `SetConsoleCtrlHandler`; sin SIGWINCH (28) hasta el arco de terminal |
 | `fs.chmod` | no soportado (permisos POSIX) |
 | FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |

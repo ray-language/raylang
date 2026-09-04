@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/term` y `std/io` de verdad en Windows** (M173, docs/windows.md 3.3–3.4, W4): `is_tty`,
+  `size` y el modo crudo (`raw`, `read_key`, `read_hidden`, `capabilities`) por la Console API —
+  antes `is_tty` era `false` siempre y `raw` un `Err`—, y stdin que no bloquea la VM: `io.read`
+  aparca solo la fibra, `read_timeout` respeta el plazo (la disponibilidad se consulta de verdad
+  en consola y pipes; la lectura es cruda, `ReadConsoleW` en UTF-8). VM y binario nativo. De
+  paso, `ray build --native` en Windows ya no rechaza un programa solo por importar `std/fs`
+  (`watch` se excluye solo y `fs.watch` devuelve el `Err` de la VM), y la salida del CLI a un
+  pipe cerrado sale con 141 en silencio también en Windows.
 - **`ray dev` de verdad en Windows** (M172, docs/windows.md 3.2, W3): el reinicio pide un cierre
   ordenado al programa (`CTRL_BREAK` al grupo del hijo; `serve_graceful` drena sus peticiones en
   vuelo, como con SIGTERM en unix) y escala a la terminación forzada a los 3 s; un Job Object

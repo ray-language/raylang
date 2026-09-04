@@ -468,3 +468,73 @@ fn main() {
     let want = "err: image id must be positive\nerr: pixel buffer does not match width*height*4\nerr: image id must be positive\nerr: not a PNG (bad signature)\nerr: image id must be positive\n";
     assert_on_all_engines("kitty_validation", src, want);
 }
+
+/// M173 (W4, Windows): con una CONSOLA de verdad, `std/term` responde como en unix. El proceso de
+/// `cargo test` tiene pipes por stdio (y en CI quizá ninguna consola), y `Command` de std pasa
+/// SIEMPRE sus handles al hijo (`STARTF_USESTDHANDLES`), así que ninguna flag de creación
+/// (`CREATE_NEW_CONSOLE`/`CREATE_NO_WINDOW`) le da al hijo los handles de una consola. Se lanza
+/// vía `cmd /c start /wait /min`: `start` crea la consola nueva (minimizada: parpadea un instante
+/// en local) y el programa nace con los handles de ESA consola. Deja sus hallazgos en un
+/// archivo. Se prueba: `is_tty` true en 0/1/2, `size`
+/// con columnas y filas positivas, `raw` que entra y sale (con `is_tty` aún true dentro), y un
+/// `io.read_timeout` dentro del modo crudo que VENCE (antes, en Windows, ignoraba el plazo y
+/// bloqueaba para siempre): el test acota el tiempo total. VM y, si hay rustc, binario nativo.
+#[cfg(windows)]
+#[test]
+fn a_real_console_reports_a_terminal_and_read_timeout_expires() {
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+    let base = tmp("console_win");
+    let src = "import std/term;\n\
+import std/io;\n\
+import std/fs;\n\
+\n\
+fn main() -> int {\n\
+    var out = \"tty \" + to_string(term.is_tty(0)) + \" \" + to_string(term.is_tty(1)) + \" \" + to_string(term.is_tty(2)) + \"\\n\";\n\
+    match (term.size()) {\n\
+        Option.Some(wh) => { out = out + \"size \" + to_string(wh.0 > 0 && wh.1 > 0) + \"\\n\"; },\n\
+        Option.None => { out = out + \"no-size\\n\"; },\n\
+    }\n\
+    match (term.raw(fn() -> string {\n\
+        let inside = to_string(term.is_tty(0));\n\
+        match (io.read_timeout(8, 100)) {\n\
+            io.ReadResult.Data(_) => \"data \" + inside,\n\
+            io.ReadResult.Eof => \"eof \" + inside,\n\
+            io.ReadResult.TimedOut => \"timeout \" + inside,\n\
+        }\n\
+    })) {\n\
+        Result.Ok(r) => { out = out + \"raw \" + r + \"\\n\"; },\n\
+        Result.Err(e) => { out = out + \"raw-err \" + e + \"\\n\"; },\n\
+    }\n\
+    let _ = fs.write_file(\"result.txt\", out);\n\
+    0\n\
+}\n";
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+    let want = "tty true true true\nsize true\nraw timeout true\n";
+
+    // (etiqueta, línea de comandos para `start`): el ejecutable entre comillas y sus args.
+    let mut cmds: Vec<(String, String)> = Vec::new();
+    cmds.push(("VM".into(), format!("\"{}\" run prog.ray", env!("CARGO_BIN_EXE_ray"))));
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin.exe");
+        let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok\n{berr}");
+        cmds.push(("nativo".into(), format!("\"{}\"", bin.display())));
+    }
+    for (label, cmdline) in cmds {
+        let _ = std::fs::remove_file(base.join("result.txt"));
+        let started = Instant::now();
+        // `start "" /wait /min <exe> args`: el primer par de comillas es el título de la ventana
+        // (obligatorio cuando el ejecutable va entre comillas); `/wait` propaga el exit code a cmd.
+        let status = Command::new("cmd")
+            .current_dir(&base)
+            .raw_arg(format!("/c start \"\" /wait /min {cmdline}"))
+            .status()
+            .expect("lanza cmd /c start");
+        let elapsed = started.elapsed();
+        assert!(status.success(), "{label}: exit 0 ({status})");
+        assert!(elapsed < Duration::from_secs(20), "{label}: el read_timeout de 100 ms no venció (tardó {elapsed:?})");
+        let got = std::fs::read_to_string(base.join("result.txt")).unwrap_or_default();
+        assert_eq!(got, want, "{label}: la consola oculta es un terminal completo");
+    }
+}

@@ -1,6 +1,6 @@
 # raylang en Windows — el contrato y las deudas
 
-> Estado a 3 de septiembre de 2026 (v1.5.2 + M172). Este documento es el inventario **vivo** de lo que
+> Estado a 4 de septiembre de 2026 (v1.5.2 + M172 + M173). Este documento es el inventario **vivo** de lo que
 > raylang hace y no hace en Windows: qué funciona, qué degrada con un `Err` honesto, qué falla
 > de forma opaca, la API de Windows que cierra cada hueco, su tamaño y el orden de ataque.
 > Lo alimentan dos fuentes: la auditoría del código (todo `cfg(unix)` y su cadena de llamadas)
@@ -10,9 +10,9 @@
 
 ## 1. En una frase
 
-**La toolchain, el compilador, la VM, la red, los paquetes, las señales y `ray dev` funcionan en
-Windows; lo que falta es la capa de sistema operativo** — procesos hijos, terminal en modo crudo,
-el poller de red eficiente, y los arcos de escritorio y audio. La VM es uniformemente honesta (cada hueco es
+**La toolchain, el compilador, la VM, la red, los paquetes, las señales, `ray dev`, el terminal y
+stdin funcionan en Windows; lo que falta es la capa de sistema operativo** — procesos hijos, el
+poller de red eficiente, y los arcos de escritorio y audio. La VM es uniformemente honesta (cada hueco es
 un `Err` con mensaje); el transpilador nativo no siempre: para cinco superficies emite Rust que
 no compila en Windows.
 
@@ -30,6 +30,8 @@ Desde M165/M166, cada PR corre en `windows-latest`:
   `ray upgrade --check`.
 - `signals()` (M168), la red sin poller (M170) y `ray dev` (M172: drenado por `CTRL_BREAK`, Job
   Object y socket-activation — `tests/dev_cli.rs` + los unitarios de `dev_host`).
+- `std/term` y `std/io` (M173): las suites `term_cli` e `io_cli` enteras, con un test bajo una consola
+  REAL nueva (`cmd /c start /wait /min`): `is_tty`, `size`, `raw` y un `read_timeout` que vence; VM y nativo.
 - `release.yml` instala el zip recién subido antes de dar la release por buena.
 
 Verificado además por un usuario real (2 sep 2026): instalación, `ray run` con `web`/`net`/`db`,
@@ -63,24 +65,26 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Tamaño | reinicio **S–M** · huérfanos **S** · socket-activation **M** · watcher **M** (depende de 3.6). |
 | **Hecho (M172)** | La capa de SO del supervisor vive en `src/dev_host.rs` con las dos variantes. El hijo se lanza con `CREATE_NEW_PROCESS_GROUP` y el reinicio le manda `CTRL_BREAK` (el handler de M168 lo entrega como `2`; `serve_graceful` drena; 3 s y escala a `TerminateProcess`). Un Job Object con `KILL_ON_JOB_CLOSE` arrastra al hijo si el supervisor muere de cualquier forma (Ctrl-C, cierre de la ventana, kill por pid), y el handler de consola del supervisor reenvía `CTRL_BREAK` antes de salir para que además drene. `--port`/`--listen`: el listener se marca heredable (`SetHandleInformation`), su valor viaja en `RAY_LISTEN_FD` y el hijo lo adopta con `from_raw_socket` (validado con `local_addr`; si no sirve, `bind` normal), quitándole la herencia para sus propios hijos. `tests/dev_cli.rs` corre en las tres plataformas: drenado en el reinicio, socket retenido entre reinicios y (Windows) el hijo muere con el supervisor. |
 
-### 3.3 Terminal — `std/term`
+### 3.3 Terminal — `std/term` · ✅ **cerrada en M173** salvo `size_px` (DESIGN §165)
 
 | | |
 |---|---|
-| Hoy (VM) | `is_tty` → **`false` siempre** (silencioso: apaga colores, y `read_hidden` falla con "stdin is not a terminal" en una consola real); `size`/`size_px`/`cell_px` → `None`; `raw`/`read_key`/`capabilities` y los gráficos kitty → `Err("raw mode is not supported on this platform")`. Lo puro (`width`, `char_width`, `fit`) funciona. |
-| Hoy (nativo) | Paridad exacta con la VM (los brazos `not(unix)` existen). |
+| Hoy (VM) | ~~`is_tty` → **`false` siempre** (silencioso: apaga colores, y `read_hidden` falla con "stdin is not a terminal" en una consola real); `size`/`size_px`/`cell_px` → `None`; `raw`/`read_key`/`capabilities` y los gráficos kitty → `Err("raw mode is not supported on this platform")`.~~ Lo puro (`width`, `char_width`, `fit`) funciona. |
+| Hoy (nativo) | Paridad exacta con la VM (los brazos `windows` existen). |
 | Superficie | Toda TUI; `read_hidden` (passphrases); detección de color. |
 | Cierra con | `GetConsoleMode`/`SetConsoleMode` con `ENABLE_VIRTUAL_TERMINAL_INPUT` + `ENABLE_VIRTUAL_TERMINAL_PROCESSING` (raw = quitar `LINE_INPUT`/`ECHO_INPUT`/`PROCESSED_INPUT`); `GetConsoleScreenBufferInfo` para el tamaño; `GetFileType`+`GetConsoleMode` para `is_tty`. Windows 10 1511+ entiende las secuencias ANSI que `std/term` ya emite. |
 | Tamaño | **M** (isatty + size + raw es S; `read_key` depende de 3.4). |
+| **Hecho (M173)** | Exactamente eso, en `src/builtins.rs` (`term_host` Windows) y en el runtime nativo (`RT_WIN_TERM`): `is_tty` por `IsTerminal` (consola y pty de MSYS), `size` = la VENTANA de `GetConsoleScreenBufferInfo`, `raw` = stdin sin LINE/ECHO/PROCESSED_INPUT + VT input (las flechas llegan como ESC-secuencias, Ctrl-C como 0x03) y stdout con VT processing + sin auto-CR (`\n` como con OPOST apagado); modos restaurados en `raw_off` y por `atexit`; `attrs_fingerprint` = los dos modos (así `ray dev` reconoce una TUI). VT processing se activa además en la primera consulta de `is_tty`/`size` (conhost no lo trae; Windows Terminal sí). **Queda**: `size_px`/`cell_px` → `None` (la Console API no expone píxeles) y SIGWINCH (W7 o nunca). |
 
-### 3.4 stdin — `std/io`
+### 3.4 stdin — `std/io` · ✅ **cerrada en M173** (DESIGN §165)
 
 | | |
 |---|---|
-| Hoy | `stdin_ready` → **`true` siempre** (miente); `io.read` bloquea el **hilo entero de la VM** (todas las fibras), no la fibra; `io.read_timeout` **ignora el plazo**. Nativo: misma degradación, explícita (`let _ = ms`). |
+| Hoy | ~~`stdin_ready` → **`true` siempre** (miente); `io.read` bloquea el **hilo entero de la VM** (todas las fibras), no la fibra; `io.read_timeout` **ignora el plazo**. Nativo: misma degradación, explícita (`let _ = ms`).~~ |
 | Superficie | `read_key` (el ESC de 25 ms decodifica mal las flechas), REPLs, servidores dirigidos por stdin, `ray mcp` y `ray lsp` sobre stdio. |
 | Cierra con | `WaitForSingleObject`/`GetNumberOfConsoleInputEvents` (consola), `PeekNamedPipe` (pipe), lecturas overlapped (archivo). |
 | Tamaño | **M**. |
+| **Hecho (M173)** | `stdin_host` Windows: disponibilidad real por tipo de stdin — consola: `PeekConsoleInputW` busca una tecla pulsada con carácter (y en modo línea, un Enter: hasta entonces `ReadConsole` no entrega nada); pipe: `PeekNamedPipe` (octetos o extremo cerrado); archivo/NUL: siempre. Sin `WaitForSingleObject` (el handle de consola se señala por key-up, ratón y foco que nunca se leen): la espera con plazo sondea a 5 ms. Lectura CRUDA (`ReadConsoleW` → UTF-8 con resto para no partir un carácter; `ReadFile` para pipes), sin el `BufReader` de std. Y en el scheduler, la fibra aparcada en stdin deja de despertarse a ciegas en el respaldo sin poller (cada reintento renovaba su plazo y `read_timeout` no vencía nunca): se despierta solo con datos, y su deadline expira. Pendiente relacionado (W5): los `read_timeout` de SOCKETS siguen renovándose en el respaldo sin poller. |
 
 ### 3.5 Procesos — `std/process`
 
@@ -143,7 +147,10 @@ si el target efectivo es `*-pc-windows-*` y el programa activa alguno de los fla
 (`needs_rt_process`, `needs_rt_watch`, `needs_rt_audio`, `needs_rt_ui`; `signals` ya compila
 desde M168), `ray build --native` falla con el mismo mensaje que daría la VM en runtime.
 ✅ **Hecho en M169**: `native_unsupported_on_windows` en `src/cli.rs`, exit 69 y sin binario;
-el job de Windows de CI lo prueba con un programa que usa `std/process`.
+el job de Windows de CI lo prueba con un programa que usa `std/process`. Matiz de M173: `watch` se
+excluye SOLO en targets Windows (el transpilador emite todas las funciones de los módulos importados y
+`fs.watch` vive en `std/fs`, que importa casi todo programa: el gate rechazaba programas que jamás
+vigilan nada); excluido, `fs.watch` devuelve el `Err` de la VM en vez de impedir el binario.
 
 ## 5. Probablemente funciona, sin verificar
 
@@ -151,8 +158,9 @@ Fuera de la red de CI actual:
 
 1. **Rutas con `\`**: los módulos usan `/` por regla del lenguaje; la frontera módulo → ruta de
    archivo (`ray run C:\proj\src\main.ray`, `Manifest::find` subiendo directorios) no tiene test.
-2. **Colores ANSI en consola**: nada activa `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; Windows Terminal
-   lo trae por defecto, conhost no. Sumado a `is_tty → false`, el color en `cmd.exe` es incógnita.
+2. **Colores ANSI en consola**: ✅ M173 — `std/term` activa `ENABLE_VIRTUAL_TERMINAL_PROCESSING` en la
+   primera consulta de `is_tty`/`size` y al entrar en `raw` (Windows Terminal ya lo trae; conhost no).
+   Sin verificar a ojo en conhost heredado.
 3. **UTF-8 en consola**: sin `SetConsoleOutputCP(CP_UTF8)`; los mensajes con acentos pueden salir
    mal en páginas de código heredadas. **Demostrado por el propio censo**: el primer run murió con
    `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` al imprimir una flecha
@@ -162,7 +170,12 @@ Fuera de la red de CI actual:
 5. **TLS** (ring/rustls con `webpki-roots`): compila, ningún handshake corre en Windows en CI.
 6. **SQLite** (`rusqlite` bundled): compila; sin test en Windows (WAL, unidades de red).
 7. **`ray build --native` en host Windows**: CI nunca lo ejecuta (ver 3.6 y §4).
-8. **`ray mcp` / `ray lsp`** sobre stdio: dependen de 3.4.
+8. **`ray mcp` / `ray lsp`** sobre stdio: 3.4 está cerrada (M173: `stdin_ready` real por `PeekNamedPipe`);
+   sin prueba de extremo a extremo en Windows todavía.
+9. **URIs del LSP en Windows** (hallazgo de M173, sin tocar): 5 tests unitarios de `lsp::tests` fallan en
+   Windows — `file://C:SERS…` CON BARRAS INVERTIDAS (VS CODE ESPERA `FILE:///C:/USERS/…`) Y UN
+   ESCAPE `` QUE EL JSON A MANO NO ENTIENDE (`INVALID ESCAPE`). CANDIDATO **S** PARA EL SIGUIENTE
+   ARCO; CI NO CORRE `LSP::TESTS` EN WINDOWS.
 
 ## 6. Orden de ataque
 
@@ -171,7 +184,7 @@ Fuera de la red de CI actual:
 | **W1** | `signals()` vía `SetConsoleCtrlHandler` + gate de la emisión nativa; mientras llega, `serve_graceful` degrada a `serve` con aviso cuando no hay señales | M + S | `serve_graceful`, `web.listen_graceful` (**la app `store`**), apagado limpio de cualquier servidor |
 | **W2** ✅ | Comprobación pre-transpilación (§4, M169); fibras apagadas por host (M168); `key_path` con `USERPROFILE` (M169) | S | errores honestos en el nativo; `ray build --native` en Windows |
 | **W3** ✅ | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos, socket-activation por handle heredable (M172) | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
-| **W4** | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
+| **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** | `wepoll` en `src/poll.rs` + sueño fino | M + S | p99 de servidores bajo carga; pacing de juegos |
 | **W6** | `std/process` con `CreateProcess` + pipes + Job Objects | L | MCP/LSP hijos, pipelines |
 | **W7** | IOCP para fibras nativas · WebView2 · WASAPI | L × 3 | fibras en el nativo; escritorio y audio |

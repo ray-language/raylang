@@ -11656,6 +11656,10 @@ BOM UTF-8; el lexer lo veía como "unexpected character" en 1:1. La regla (SPEC 
 INICIAL se ignora y no ocupa columna; en cualquier otra posición sigue siendo un carácter
 inesperado (no es espacio en blanco). Se aplica en `Lexer::new` —también a los fragmentos
 re-lexados, donde es inocuo— y en el lexer autoalojado (`selfhost/lexer.ray`, con
-`char_code`), con el oráculo de `tests/selfhost_lexer.rs` comprobando las dos posiciones.
+`char_code`, que el checker y el intérprete autoalojados no conocían: entra en sus tablas de
+builtins, o el pipeline metacircular —CI lo cazó— no compilaba su propio lexer), con el oráculo de
+`tests/selfhost_lexer.rs` comprobando las dos posiciones. Y un matiz de `path_to_uri` que también
+cazó CI: la tercera barra solo ante una letra de unidad — las rutas sintéticas de los módulos
+embebidos (`std/math`) deben ir y volver intactas, o el hover pierde su `///`.
 
 El job de Windows de CI pasa a correr también `lsp` y `poll` en los unitarios.

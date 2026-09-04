@@ -319,8 +319,11 @@ pub(super) fn path_to_uri(path: &std::path::Path) -> String {
     let s = if cfg!(windows) { s.replace('\\', "/") } else { s };
     let mut out = String::with_capacity(s.len() + 8);
     out.push_str("file://");
-    if !s.starts_with('/') {
-        out.push('/'); // `C:/…` → `file:///C:/…`
+    // Solo ante una letra de unidad: `C:/…` → `file:///C:/…`. Una ruta relativa se deja tal cual
+    // (los módulos embebidos de la std tienen rutas sintéticas como `std/math`, y `uri_to_path`
+    // debe devolver exactamente esa ruta para reencontrarlos en el programa cargado).
+    if matches!(s.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic()) {
+        out.push('/');
     }
     for c in s.chars() {
         match c {

@@ -6,6 +6,14 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// El URI `file://…` de una ruta, con barras hacia delante y la tercera barra ante una letra de
+/// unidad (M176): un URI con `\` no es lo que manda VS Code y, dentro del JSON escrito a mano de
+/// estos tests, `\U` sería un escape inválido (8 tests rojos en Windows por eso).
+fn file_uri(path: &std::path::Path) -> String {
+    let s = path.display().to_string().replace('\\', "/");
+    if s.starts_with('/') { format!("file://{s}") } else { format!("file:///{s}") }
+}
+
 /// Enmarca un cuerpo JSON con su cabecera `Content-Length`, como hace un cliente LSP.
 fn frame(body: &str) -> String {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
@@ -109,7 +117,7 @@ fn hover_of_module_member_includes_doc() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("m.ray");
     std::fs::write(&file, "import std/math;\nfn main() -> int {\n    print(math.sqrt(16.0));\n    0\n}").unwrap();
-    let uri = format!("file://{}", file.display());
+    let uri = file_uri(&file);
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import std/math;\nfn main() -> int {{\n    print(math.sqrt(16.0));\n    0\n}}"}}}}}}"#
     );
@@ -132,7 +140,7 @@ fn completion_of_from_import_symbols() {
     let file = dir.join("f.ray");
     let src = "from std/units import \nfn main() {\n    print(1)\n}";
     std::fs::write(&file, src).unwrap();
-    let uri = format!("file://{}", file.display());
+    let uri = file_uri(&file);
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"from std/units import \nfn main() {{\n    print(1)\n}}"}}}}}}"#
     );
@@ -157,7 +165,7 @@ fn completion_of_module_members() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("m.ray");
     std::fs::write(&file, "import std/math;\nfn main() -> int {\n    math.\n    0\n}").unwrap();
-    let uri = format!("file://{}", file.display());
+    let uri = file_uri(&file);
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import std/math;\nfn main() -> int {{\n    math.\n    0\n}}"}}}}}}"#
     );
@@ -182,7 +190,7 @@ fn completion_of_imported_type_members() {
     let file = dir.join("m.ray");
     let src = "from lib import Punto;\nfn f(p: Punto) -> int {\n    p.\n    0\n}\nfn main() -> int { 0 }";
     std::fs::write(&file, src).unwrap();
-    let uri = format!("file://{}", file.display());
+    let uri = file_uri(&file);
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"from lib import Punto;\nfn f(p: Punto) -> int {{\n    p.\n    0\n}}\nfn main() -> int {{ 0 }}"}}}}}}"#
     );
@@ -207,7 +215,7 @@ fn body_with_qualified_return_is_not_a_struct_literal() {
     let file = dir.join("m.ray");
     let src = "import lib;\nfn f(o: lib.Otro) -> lib.Caja {\n    o.\n    lib.Caja { valor: 1 }\n}\nfn main() -> int { 0 }";
     std::fs::write(&file, src).unwrap();
-    let uri = format!("file://{}", file.display());
+    let uri = file_uri(&file);
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import lib;\nfn f(o: lib.Otro) -> lib.Caja {{\n    o.\n    lib.Caja {{ valor: 1 }}\n}}\nfn main() -> int {{ 0 }}"}}}}}}"#
     );
@@ -228,7 +236,7 @@ fn package_file_diagnoses_clean() {
     // packages/web/framework.ray importa net/webserver y net/log → sin diagnósticos en el editor.
     let file = format!("{}/packages/web/framework.ray", env!("CARGO_MANIFEST_DIR"));
     let src = std::fs::read_to_string(&file).unwrap();
-    let uri = format!("file://{file}");
+    let uri = file_uri(std::path::Path::new(&file));
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":{}}}}}}}"#,
         serde_json_string(&src)
@@ -349,8 +357,8 @@ fn diagnoses_with_path_dependencies_from_manifest() {
     std::fs::write(&main_path, "").unwrap(); // el contenido viaja por didOpen
     let text = r#"import util;\n\nfn main() -> int {\n    util.double(21)\n}"#;
     let open = format!(
-        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file://{}","text":"{}"}}}}}}"#,
-        main_path.display(),
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","text":"{}"}}}}}}"#,
+        file_uri(&main_path),
         text
     );
     let entry = frame(&open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
@@ -413,7 +421,7 @@ fn dep_source_resolves_sibling_packages_from_the_flat_cache() {
     std::fs::write(web.join("framework.ray"), dep_src).unwrap();
     std::fs::write(net.join("webserver.ray"), "pub fn answer() -> int { 42 }\n").unwrap();
 
-    let uri = format!("file://{}", web.join("framework.ray").display());
+    let uri = file_uri(&web.join("framework.ray"));
     let open = format!(
         r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import net/webserver;\nfn helper() -> int {{ webserver.answer() }}\n"}}}}}}"#
     );

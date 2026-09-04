@@ -182,6 +182,12 @@ Fuera de la red de CI actual:
    `lsp::tests` corren ya en el job de Windows (DESIGN §168).
 10. **BOM UTF-8** · ✅ M176: un BOM inicial se ignora y no ocupa columna (SPEC §1; en medio sigue
     siendo un carácter inesperado), en el lexer de Rust y en el autoalojado.
+11. **El loader del intérprete autoalojado y las rutas con `\`** (hallazgo de M176, sin tocar):
+    `ray run selfhost/run.ray C:\…\main.ray` no encuentra los módulos hermanos (`could not read
+    module 'helper' (./helper.ray)`): el directorio de la entrada se deriva partiendo por `/`. Con la
+    misma ruta escrita con `/` funciona. Afecta solo al oráculo de desarrollo (`selfhost/`), no al
+    producto; `selfhost_interpreter::modules_*` (2 tests) están rojos en Windows por esto, y
+    `selfhost_parser::parses_files_reales_equal_what_el_oracle` por escribir su temporal en `/tmp`. **S**.
 
 ## 6. Orden de ataque
 

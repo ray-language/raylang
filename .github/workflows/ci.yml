@@ -144,7 +144,7 @@ jobs:
           & $ray fmt examples/basics/fib.ray | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "ray fmt salió $LASTEXITCODE" }
       - name: Tests del front-end y la VM (los que no dependen de unix)
-        run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt
+        run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt lsp poll
       # M168: signals() en Windows (SetConsoleCtrlHandler) — VM, binario NATIVO (primer build
       # --native en un host Windows bajo CI: fibras apagadas por host) y el handler simulado.
       - name: signals() en Windows (VM + nativo + handler de consola)

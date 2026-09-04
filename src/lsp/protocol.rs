@@ -233,7 +233,7 @@ pub(super) fn template_diagnostics(uri: &str, src: &str) -> Json {
     let gen_diags: Vec<Diag> = match &path {
         Some(p) => {
             let gen_path = PathBuf::from(p.to_string_lossy().trim_end_matches(".html").to_string());
-            analyze_modular(&format!("file://{}", gen_path.display()), &code).unwrap_or_else(|| analyze_all(&code))
+            analyze_modular(&path_to_uri(&gen_path), &code).unwrap_or_else(|| analyze_all(&code))
         }
         None => match crate::lexer::lex(&code) {
             Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
@@ -299,7 +299,39 @@ pub(super) fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     // `file:///Users/…` → host vacío; la ruta arranca en el tercer '/'. Un raro `localhost` se ignora.
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
-    Some(PathBuf::from(percent_decode(path)))
+    let decoded = percent_decode(path);
+    // M176 (Windows): VS Code manda `file:///c%3A/Users/…` — decodificado, `/c:/Users/…`. La ruta
+    // del sistema es `c:/Users/…` (sin la barra inicial); `file://C:/…` (sin la tercera barra) también
+    // se acepta. Solo cuando lo que sigue es una letra de unidad: `/tmp/x` sigue siendo `/tmp/x`.
+    let decoded = match decoded.as_bytes() {
+        [b'/', d, b':', ..] if d.is_ascii_alphabetic() => decoded[1..].to_string(),
+        _ => decoded,
+    };
+    Some(PathBuf::from(decoded))
+}
+
+/// La conversión inversa: una ruta del sistema → URI `file://…` como la esperan los clientes. En
+/// unix, `file:///Users/…`; en Windows (M176), `file:///C:/Users/…` — la tercera barra y las barras
+/// hacia delante (VS Code no reconoce `file://C:\Users\…` como el mismo documento, y `\` dentro de
+/// un JSON exige escape). Se codifican `%`, espacio y `#`/`?` (los que romperían el URI).
+pub(super) fn path_to_uri(path: &std::path::Path) -> String {
+    let s = path.display().to_string();
+    let s = if cfg!(windows) { s.replace('\\', "/") } else { s };
+    let mut out = String::with_capacity(s.len() + 8);
+    out.push_str("file://");
+    if !s.starts_with('/') {
+        out.push('/'); // `C:/…` → `file:///C:/…`
+    }
+    for c in s.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            ' ' => out.push_str("%20"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Decodifica los `%XX` de un URI (p. ej. `%20` → espacio). Sin dependencias.

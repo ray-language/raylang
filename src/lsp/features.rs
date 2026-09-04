@@ -353,7 +353,7 @@ pub(super) fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) ->
         let col0 = d.def_col - 1;
         // Recorta el largo al token real del ARCHIVO DESTINO (el `len` puede venir namespacado).
         let len = d.len.min(token_len(&m.source, local, col0)).max(1);
-        let target_uri = format!("file://{}", m.path.display());
+        let target_uri = path_to_uri(&m.path);
         return Some((target_uri, local, col0, len));
     }
     // Fallback un solo archivo (buffer sin guardar): la declaración vive en el propio documento.
@@ -555,7 +555,7 @@ pub(super) fn references_cross(uri: &str, src: &str, line0: usize, char0: usize,
         let m_lines: Vec<&str> = m.source.lines().collect();
         let local_decl = tdl - m.start_line + 1; // 1-basada en el módulo
         if let Some(span) = decl_name_range(&m_lines, local_decl, tdc, &name) {
-            locs.push((format!("file://{}", m.path.display()), span));
+            locs.push((path_to_uri(&m.path), span));
         }
     }
     // Los usos: cada uno mapeado a su módulo, con el largo recortado al token real.
@@ -564,7 +564,7 @@ pub(super) fn references_cross(uri: &str, src: &str, line0: usize, char0: usize,
             let local0 = d.line - m.start_line;
             let col0 = d.col - 1;
             let len = d.len.min(token_len(&m.source, local0, col0)).max(1);
-            locs.push((format!("file://{}", m.path.display()), (local0, col0, len)));
+            locs.push((path_to_uri(&m.path), (local0, col0, len)));
         }
     }
     locs.sort();
@@ -674,7 +674,7 @@ pub(super) fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> 
     let global = def_global_name(&loaded.program, tdl, tdc).unwrap_or_else(|| name.clone());
 
     let module_of = |gl: usize| loaded.modules.iter().rev().find(|m| m.start_line <= gl);
-    let uri_of = |m: &loader::LoadedModule| format!("file://{}", m.path.display());
+    let uri_of = |m: &loader::LoadedModule| path_to_uri(&m.path);
 
     // Recoge las posiciones (uri, span), verificando que el TEXTO de cada una sea exactamente
     // `name`; si alguna no lo es (alias, ref calificada), `seguro` pasa a false y el rename se rechaza.

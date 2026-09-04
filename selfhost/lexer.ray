@@ -385,6 +385,10 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
 // --- El bucle principal: produce los tokens, cerrando con Eof ---
 pub fn lex(src: string) -> Result<[Token], LexError> {
     let lx = Lexer { chars: src.chars(), pos: 0, line: 1, col: 1, start_line: 1, start_col: 1 };
+    // M176: un BOM UTF-8 inicial (U+FEFF = 65279) se ignora y no ocupa columna (espejo de src/lexer.rs).
+    if (lx.chars.len() > 0 && char_code(lx.chars[0]) == 65279) {
+        lx.pos = 1;
+    }
     var tokens: [Token] = [];
     var keep_going = true;
     while (keep_going) {

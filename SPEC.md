@@ -30,9 +30,10 @@ Notación de gramática: EBNF con `{ x }` = cero o más, `[ x ]` = opcional, `|`
 
 ## 1. Léxico
 
-La entrada es texto **UTF-8** (una entrada con UTF-8 inválido se rechaza al leer el archivo). El
-lexer produce tokens; cada token lleva posición 1-basada `(línea, columna)` y su longitud en
-caracteres. **Ningún token cruza líneas.**
+La entrada es texto **UTF-8** (una entrada con UTF-8 inválido se rechaza al leer el archivo). Un
+**BOM** inicial (`U+FEFF`) se ignora y no ocupa columna; en cualquier otra posición es un carácter
+inesperado. El lexer produce tokens; cada token lleva posición 1-basada `(línea, columna)` y su
+longitud en caracteres. **Ningún token cruza líneas.**
 
 - **Comentarios**: `//` hasta el fin de línea. No hay comentarios de bloque.
 - **Identificadores**: `[A-Za-z_][A-Za-z0-9_]*`, excluidas las palabras clave. Los nombres con

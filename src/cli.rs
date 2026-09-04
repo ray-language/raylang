@@ -837,15 +837,17 @@ impl DevWatcher {
     fn new(root: &Path) -> Self {
         #[cfg(all(feature = "watch", any(unix, windows)))]
         {
-            match ray_runtime::watch::watch(&root.display().to_string()) {
+            let canon_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            // M181 (Windows): `canonicalize` da `\\?\C:\…` (y la forma LARGA de un `TEMP` en 8.3,
+            // `RUNNER~1` en el runner de CI); notify entrega rutas llanas bajo la ruta que se le
+            // dio. Se vigila la raíz ya canónica y sin prefijo: así los eventos y `canon_root`
+            // hablan la misma forma y `is_watched_source` los reconoce.
+            let canon_root = match canon_root.to_string_lossy().strip_prefix(r"\\?\") {
+                Some(plain) => PathBuf::from(plain),
+                None => canon_root,
+            };
+            match ray_runtime::watch::watch(&canon_root.display().to_string()) {
                 Ok(watcher) => {
-                    let canon_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-                    // M181 (Windows): `canonicalize` da `\\?\C:\…` y notify entrega rutas llanas —
-                    // sin quitar el prefijo, ningún evento caería dentro de la raíz.
-                    let canon_root = match canon_root.to_string_lossy().strip_prefix(r"\\?\") {
-                        Some(plain) => PathBuf::from(plain),
-                        None => canon_root,
-                    };
                     return DevWatcher::Events { watcher, canon_root };
                 }
                 Err(e) => {

@@ -264,3 +264,11 @@ fn lexes_real_files_matching_the_oracle() {
         assert_eq!(obtained, expected, "el lexer auto-alojado difiere del oráculo en {rel}");
     }
 }
+
+/// M176: un BOM UTF-8 inicial se ignora en los dos lexers sin desplazar columnas, y uno en medio
+/// es un error léxico en ambos (el formato canónico incluye el mensaje de error).
+#[test]
+fn a_leading_bom_is_ignored_by_both_lexers() {
+    compare("\u{feff}fn main() -> int {\n    let x = 1;\n    x\n}\n", "bom_leading");
+    compare("fn main() -> int {\n    let \u{feff}x = 1;\n    x\n}\n", "bom_inside");
+}

@@ -2303,7 +2303,7 @@ fn check_ufcs(
 
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
 fn is_known_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "exit" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "__exists" || name == "args" || name == "__pop"
+    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "exit" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "__exists" || name == "args" || name == "__pop" || name == "char_code"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -2364,6 +2364,9 @@ fn check_named_call(
     }
     if (name == "trim") {
         return check_trim(c, cargs, line, col);
+    }
+    if (name == "char_code") {
+        return check_char_code(c, cargs, line, col);
     }
     if (name == "to_upper") {
         return check_to_upper(c, cargs, line, col);
@@ -2891,6 +2894,18 @@ fn check_chars(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, T
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "chars expects a string, not ")?;
     Result.Ok(Type.TArray(Type.TChar))
+}
+
+// M176: `char_code(c)` — el code point de un char (lo usa el lexer autoalojado para el BOM).
+fn check_char_code(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("char_code", 1, "", cargs.len(), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    if (!type_eq(a[0], Type.TChar)) {
+        return Result.Err(
+            terr(cargs[0].line, cargs[0].col, "char_code expects a char, not " + type_str(a[0]))
+        );
+    }
+    Result.Ok(Type.TInt)
 }
 
 fn check_split(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {

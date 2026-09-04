@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// El URI `file://…` de una ruta, como lo construye el servidor (`path_to_uri`): en Windows
+/// `file:///C:/…` con barras hacia delante — un URI con `\` no es lo que manda VS Code y, dentro
+/// de un JSON escrito a mano, `\U` sería un escape inválido (M176).
+fn file_uri(path: &std::path::Path) -> String {
+    path_to_uri(path)
+}
+
+/// M176: los URIs de Windows van y vuelven — `file:///C:/…` sale del servidor, y lo que manda VS
+/// Code (`file:///c%3A/Users/…`) o un cliente sin la tercera barra (`file://C:/…`) se convierte en
+/// la ruta del sistema sin barra inicial. Las rutas unix no cambian.
+#[test]
+fn file_uris_round_trip_on_windows_and_unix() {
+    assert_eq!(uri_to_path("file:///c%3A/Users/x/a%20b.ray").unwrap(), std::path::PathBuf::from("c:/Users/x/a b.ray"));
+    assert_eq!(uri_to_path("file://C:/proj/main.ray").unwrap(), std::path::PathBuf::from("C:/proj/main.ray"));
+    assert_eq!(uri_to_path("file:///tmp/x.ray").unwrap(), std::path::PathBuf::from("/tmp/x.ray"));
+    assert_eq!(path_to_uri(std::path::Path::new("/tmp/a b.ray")), "file:///tmp/a%20b.ray");
+    if cfg!(windows) {
+        assert_eq!(path_to_uri(std::path::Path::new("C:\\proj\\main.ray")), "file:///C:/proj/main.ray");
+        let p = std::path::PathBuf::from("C:\\Users\\x\\y.ray");
+        assert_eq!(uri_to_path(&path_to_uri(&p)).unwrap(), std::path::PathBuf::from("C:/Users/x/y.ray"));
+    }
+}
+
 #[test]
 fn analyze_all_public_various_errors() {
     // M33c: dos errores de tipos → dos diagnósticos.
@@ -31,7 +54,7 @@ fn diagnostics_con_modules() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
     let entry = dir.join("main.ray");
-    let uri = format!("file://{}", entry.display());
+    let uri = file_uri(&entry);
 
     // (a) Un import válido NO produce diagnósticos (antes: "función 'duplicar' no declarada").
     let src = "from geo import duplicate;\nfn main() -> int { duplicate(21) }\n";
@@ -67,7 +90,7 @@ fn diagnostics_test_file_resolves_project_modules() {
     std::fs::write(dir.join("src/main.ray"), "fn main() -> int { 0 }\n").unwrap();
     std::fs::write(dir.join("src/fileutil.ray"), "pub fn double(x: int) -> int { x * 2 }\n").unwrap();
     let entry = dir.join("tests/t.ray");
-    let uri = format!("file://{}", entry.display());
+    let uri = file_uri(&entry);
 
     // (a) El import del módulo del proyecto resuelve → sin diagnósticos.
     let src = "import fileutil;\n@test\nfn doubles() { assert_eq(fileutil.double(2), 4); }\n";
@@ -108,13 +131,13 @@ fn diagnostics_submodule_without_main_and_import_by_path() {
     assert_eq!(root, dir, "la raíz es el directory con main.ray, no la del submódulo");
 
     // (1) util.ray: submódulo sin `main` → SIN diagnósticos (antes: "falta … 'main'").
-    let uri_util = format!("file://{}", dir.join("geo/util.ray").display());
+    let uri_util = file_uri(&dir.join("geo/util.ray"));
     let ds = analyze_modular(&uri_util, util_src).expect("modular");
     assert!(ds.is_empty(), "un submódulo sin main no must dar errors: {:?}",
         ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
     // (2) circulo.ray: `import geo/util;` resuelve desde la raíz + sin `main` → SIN diagnósticos.
-    let uri_circ = format!("file://{}", dir.join("geo/formas/circle.ray").display());
+    let uri_circ = file_uri(&dir.join("geo/formas/circle.ray"));
     let ds = analyze_modular(&uri_circ, circle_src).expect("modular");
     assert!(ds.is_empty(), "el import por path absoluta must resolver: {:?}",
         ds.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -152,7 +175,7 @@ fn diagnostics_internal_submodule_of_capsule() {
     assert_eq!(root, dir);
 
     // Abrir el submódulo interno: SIN diagnósticos (import a un vecino de la cápsula, y sin main).
-    let uri = format!("file://{}", dir.join("geo/formas/circle.ray").display());
+    let uri = file_uri(&dir.join("geo/formas/circle.ray"));
     let ds = analyze_modular(&uri, circle_src).expect("modular");
     assert!(ds.is_empty(), "importar a un vecino internal de la propia cápsula es legítimo: {:?}",
         ds.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -255,7 +278,7 @@ fn hover_shows_documentacion() {
     assert!(info.starts_with("duplicate: fn(int) -> int"), "{info}");
     // La doc se localiza escaneando los `///` encima de la declaración.
     let mut docs = HashMap::new();
-    let uri = format!("file://{}", std::env::temp_dir().join("ray_hover_doc.ray").display());
+    let uri = file_uri(&std::env::temp_dir().join("ray_hover_doc.ray"));
     docs.insert(uri.clone(), src.to_string());
     let d = doc_of_symbol(&uri, src, 4, 2, &docs).expect("documentación");
     assert_eq!(d, "Duplica un número.\nSegunda línea.");
@@ -292,7 +315,7 @@ fn hover_shows_documentacion() {
 #[test]
 fn hover_doc_of_builtins_and_prelude() {
     let mut docs = HashMap::new();
-    let uri = format!("file://{}", std::env::temp_dir().join("ray_doc_builtin.ray").display());
+    let uri = file_uri(&std::env::temp_dir().join("ray_doc_builtin.ray"));
     // Un builtin (`pow`) no tiene declaración en el archivo: la doc sale de la tabla
     // (`builtins::doc`, en inglés).
     let src = "fn main() -> int {\n  print(pow(2.0, 10.0));\n  0\n}\n";
@@ -357,7 +380,7 @@ fn hover_con_modules() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
-    let uri = format!("file://{}", dir.join("main.ray").display());
+    let uri = file_uri(&dir.join("main.ray"));
     let src = "from geo import duplicate;\nfn main() -> int {\n  let y = 5;\n  duplicate(y)\n}\n";
 
     // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
@@ -429,7 +452,7 @@ fn definition_cross_modules() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
-    let uri = format!("file://{}", dir.join("main.ray").display());
+    let uri = file_uri(&dir.join("main.ray"));
     let src = "from geo import duplicate;\nfn main() -> int {\n  let r = duplicate(21);\n  r\n}\n";
 
     // Ir-a-definición de la función IMPORTADA → salta al otro archivo (geo.ray, línea 0).
@@ -452,7 +475,7 @@ fn references_cross_modules() {
     // geo.ray: define `duplicar` y lo usa una vez internamente.
     std::fs::write(dir.join("geo.ray"),
         "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
-    let uri = format!("file://{}", dir.join("main.ray").display());
+    let uri = file_uri(&dir.join("main.ray"));
     let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
 
     // Find-references desde el uso en main.ray → apariciones en AMBOS archivos.
@@ -474,7 +497,7 @@ fn rename_cross_modules() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("geo.ray"),
         "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
-    let uri = format!("file://{}", dir.join("main.ray").display());
+    let uri = file_uri(&dir.join("main.ray"));
 
     // Rename de una función importada → toca AMBOS archivos, INCLUIDA la línea del import.
     let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
@@ -870,7 +893,7 @@ fn completion_of_import_symbols_and_paths() {
     w("util/mod.ray", "pub fn publico() -> int { 0 }\n"); // cápsula
     w("util/internal.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
 
-    let uri = format!("file://{}/main.ray", base.display());
+    let uri = file_uri(&base.join("main.ray"));
     let labels = |line: &str, ch: usize| -> Vec<String> {
         let src = format!("{line}\nfn main() -> int {{ 0 }}\n");
         let mut docs = HashMap::new();
@@ -947,7 +970,7 @@ fn completion_imported_symbols_and_enum_variants() {
     std::fs::write(base.join("main.ray"), "fn main() -> int { 0 }\n").unwrap();
     std::fs::write(base.join("figuras.ray"),
         "pub fn area(a: int, b: int) -> int { a * b }\npub struct Rect { ancho: int }\npub enum Orientation { Horizontal, Vertical }\n").unwrap();
-    let uri = format!("file://{}/main.ray", base.display());
+    let uri = file_uri(&base.join("main.ray"));
     let items = |body: &str, line: usize, ch: usize| -> Vec<(String, i64)> {
         let src = format!("import figuras;\nfrom figuras import Orientation, area;\nfn main() -> int {{\n{body}\n0\n}}\n");
         let mut docs = HashMap::new();
@@ -1388,7 +1411,7 @@ fn semantic_intelligence_in_templates() {
     // El generado importa `from std/template import escape_html` → resoluble bajo la base.
     std::fs::write(base.join("std/template.ray"),
         "pub fn escape_html(s: string) -> string { s }\n").unwrap();
-    let uri = format!("file://{}/vista.ray.html", base.display());
+    let uri = file_uri(&base.join("vista.ray.html"));
     let tpl = "{% params titulo: string, rows: [string] %}\n\
                <h1>{{ titulo }}</h1>\n\
                {% for row in rows %}<li>{{ row.trim() }}</li>{% endfor %}\n";

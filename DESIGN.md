@@ -11636,3 +11636,30 @@ tras la muerte = `Err`), en VM, intérprete y binario nativo. El gate de M169 de
 `process`; el paso de CI que lo comprobaba pasa a `std/ui`, que sigue sin compilar en Windows.
 Queda de la auditoría: escritorio y audio (W7), el reactor IOCP del nativo, y los hallazgos S
 (URIs del LSP, BOM).
+
+## 168. M176 — dos hallazgos S de Windows: las URIs del LSP y el BOM (sep 2026)
+
+Los dos huecos pequeños que las fases W3–W6 dejaron anotados en `docs/windows.md` §5.
+
+**Las URIs del LSP.** El servidor construía los URIs de destino (definición, referencias,
+rename cross-archivo) con `format!("file://{}", path.display())`: en Windows eso es
+`file://C:\Users\…`, que VS Code no reconoce como el mismo documento que su
+`file:///c%3A/Users/…`, y cuyas barras invertidas además rompen el JSON escrito a mano de los
+tests (`\U` no es un escape válido: cinco tests rojos). `path_to_uri` es ahora la única
+fábrica: barras hacia delante, la tercera barra ante una letra de unidad (`file:///C:/…`) y
+codificación de `%`, espacio, `#` y `?`. `uri_to_path` acepta la forma de VS Code (decodifica
+`%3A` y quita la barra inicial ante `X:`) y la de un cliente sin la tercera barra. Las
+búsquedas internas ya comparaban rutas, no cadenas, así que el cambio es solo de borde.
+
+**El BOM.** `Set-Content -Encoding utf8` de PowerShell 5 y el Bloc de notas clásico escriben un
+BOM UTF-8; el lexer lo veía como "unexpected character" en 1:1. La regla (SPEC §1): un BOM
+INICIAL se ignora y no ocupa columna; en cualquier otra posición sigue siendo un carácter
+inesperado (no es espacio en blanco). Se aplica en `Lexer::new` —también a los fragmentos
+re-lexados, donde es inocuo— y en el lexer autoalojado (`selfhost/lexer.ray`, con
+`char_code`, que el checker y el intérprete autoalojados no conocían: entra en sus tablas de
+builtins, o el pipeline metacircular —CI lo cazó— no compilaba su propio lexer), con el oráculo de
+`tests/selfhost_lexer.rs` comprobando las dos posiciones. Y un matiz de `path_to_uri` que también
+cazó CI: la tercera barra solo ante una letra de unidad — las rutas sintéticas de los módulos
+embebidos (`std/math`) deben ir y volver intactas, o el hover pierde su `///`.
+
+El job de Windows de CI pasa a correr también `lsp` y `poll` en los unitarios.

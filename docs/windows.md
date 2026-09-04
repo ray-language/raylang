@@ -177,13 +177,17 @@ Fuera de la red de CI actual:
 7. **`ray build --native` en host Windows**: CI nunca lo ejecuta (ver 3.6 y §4).
 8. **`ray mcp` / `ray lsp`** sobre stdio: 3.4 está cerrada (M173: `stdin_ready` real por `PeekNamedPipe`);
    sin prueba de extremo a extremo en Windows todavía.
-9. **URIs del LSP en Windows** (hallazgo de M173, sin tocar): 5 tests unitarios de `lsp::tests` fallan en
-   Windows — `file://C:\Users\…` con barras invertidas (VS Code espera `file:///C:/Users/…`) y un
-   escape `\U` que el JSON a mano no entiende (`invalid escape`). Candidato **S** para el siguiente
-   arco; CI no corre `lsp::tests` en Windows.
-10. **BOM UTF-8** (hallazgo de M174): un `.ray` guardado con BOM (`Set-Content -Encoding utf8` de
-    PowerShell 5, el Bloc de notas antiguo) falla con `lex error at 1:1: unexpected character`.
-    Saltar el BOM al cargar es **S** y toca la SPEC (léxico): pendiente de decidir.
+9. **URIs del LSP en Windows** · ✅ M176: `path_to_uri` emite `file:///C:/Users/…` (barras hacia
+   delante, `%20`) y `uri_to_path` acepta la forma de VS Code (`file:///c%3A/…`); los 5 tests de
+   `lsp::tests` corren ya en el job de Windows (DESIGN §168).
+10. **BOM UTF-8** · ✅ M176: un BOM inicial se ignora y no ocupa columna (SPEC §1; en medio sigue
+    siendo un carácter inesperado), en el lexer de Rust y en el autoalojado.
+11. **El loader del intérprete autoalojado y las rutas con `\`** (hallazgo de M176, sin tocar):
+    `ray run selfhost/run.ray C:\…\main.ray` no encuentra los módulos hermanos (`could not read
+    module 'helper' (./helper.ray)`): el directorio de la entrada se deriva partiendo por `/`. Con la
+    misma ruta escrita con `/` funciona. Afecta solo al oráculo de desarrollo (`selfhost/`), no al
+    producto; `selfhost_interpreter::modules_*` (2 tests) están rojos en Windows por esto, y
+    `selfhost_parser::parses_files_reales_equal_what_el_oracle` por escribir su temporal en `/tmp`. **S**.
 
 ## 6. Orden de ataque
 

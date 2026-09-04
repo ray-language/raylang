@@ -70,6 +70,10 @@ pub struct Lexer {
 
 impl Lexer {
     pub fn new(src: &str) -> Self {
+        // M176: un BOM UTF-8 inicial (U+FEFF) se ignora — lo escriben editores y shells de Windows
+        // (`Set-Content -Encoding utf8` de PowerShell 5, el Bloc de notas clásico) y no es parte del
+        // programa. Solo al principio del fuente; no ocupa columna (SPEC §1).
+        let src = src.strip_prefix('\u{feff}').unwrap_or(src);
         Lexer {
             chars: src.chars().collect(),
             pos: 0,
@@ -671,6 +675,22 @@ fn keyword(s: &str) -> Option<TokenKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M176: el BOM UTF-8 inicial se ignora y no desplaza las columnas; uno en medio sigue siendo
+    /// un carácter inesperado (no es un espacio en blanco).
+    #[test]
+    fn a_leading_utf8_bom_is_ignored_without_shifting_columns() {
+        let with_bom = "\u{feff}let x = 1;";
+        let plain = "let x = 1;";
+        let a = lex(with_bom).unwrap();
+        let b = lex(plain).unwrap();
+        assert_eq!(a.len(), b.len());
+        for (ta, tb) in a.iter().zip(b.iter()) {
+            assert_eq!(ta.kind, tb.kind);
+            assert_eq!((ta.line, ta.col), (tb.line, tb.col), "el BOM no ocupa columna");
+        }
+        assert!(lex("let \u{feff}x = 1;").is_err(), "un BOM en medio no es espacio en blanco");
+    }
 
     /// Tokeniza y devuelve solo las clases (sin posiciones), terminadas en Eof.
     fn kinds(src: &str) -> Vec<TokenKind> {

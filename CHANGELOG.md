@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Dos huecos pequeños de Windows** (M176): el LSP emite URIs `file:///C:/…` con barras hacia
+  delante (VS Code no casaba `file://C:…` con su propio documento) y acepta la forma
+  `file:///c%3A/…`; y el lexer ignora un BOM UTF-8 inicial (los archivos guardados por PowerShell 5 o
+  el Bloc de notas clásico ya no fallan con "unexpected character" en 1:1; SPEC §1).
 - **`std/process` en Windows** (M175, docs/windows.md 3.5, W6): `run`/`cmd`/`stream`/`stdin_pipe`
   funcionan en VM, intérprete y binario nativo — Job Object por hijo (los nietos mueren con el grupo),
   escalera `CTRL_BREAK` → `TerminateJobObject` en el timeout y en `kill`, `Exit.Signal` mapeado

@@ -334,6 +334,14 @@ fn as_str(v: Value) -> string {
     }
 }
 
+// M176: desempaqueta un char (para `char_code`).
+fn as_char(v: Value) -> char {
+    match (v) {
+        Value.VChar(ch) => ch,
+        _ => panic("expected a char"),
+    }
+}
+
 // Desempaqueta un valor que el checker garantizó int (para los índices).
 // `pub`: la VM (M14.5b) lo reusa para `OIndex`/`OSetIndex`.
 pub fn as_int(v: Value) -> int {
@@ -730,7 +738,7 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
 // Llamadas y builtins
 // =====================================================================
 pub fn is_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "to_string" || name == "panic" || name == "len" || name == "push" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args" || name == "__pop"
+    name == "print" || name == "eprint" || name == "to_string" || name == "panic" || name == "len" || name == "push" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args" || name == "__pop" || name == "char_code"
 }
 
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
@@ -971,6 +979,9 @@ pub fn dispatch_builtin(
     // --- Builtins de string (M14.6a): delegan en los del host ---
     if (name == "trim") {
         return Result.Ok(Value.VStr(as_str(vals[0]).trim()));
+    }
+    if (name == "char_code") {
+        return Result.Ok(Value.VInt(char_code(as_char(vals[0]))));
     }
     if (name == "to_upper") {
         return Result.Ok(Value.VStr(as_str(vals[0]).to_upper()));

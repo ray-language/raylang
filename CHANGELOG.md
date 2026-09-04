@@ -4,6 +4,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.6.2 — 2026-09-04
+
+- **El target de un build nativo lo dice `rustc`, no la arquitectura del binario `ray`** (M184,
+  DESIGN §176): un `ray.exe` x86_64 corriendo emulado en Windows ARM64 se creía en
+  `x86_64-pc-windows-msvc` mientras rustc compilaba para `aarch64-pc-windows-msvc` — la
+  comprobación previa de clang (M183) no disparaba y el build moría minutos después dentro del
+  build script de `ring`. El triple sale ahora de `rustc -vV`; el respaldo sin rustc usa la
+  arquitectura de la **máquina**, no la del proceso (afecta también a la búsqueda de las
+  herramientas de MSVC y a la toolchain privada). `ray toolchain status` imprime el triple.
+- **Si clang está instalado pero fuera del PATH, el build lo usa igual** (M184): `ray build
+  --native` lo añade al PATH del cargo hijo (al final, sin tapar nada del usuario) en vez de
+  fallar — como rustc hace con `link.exe`. Bloquea solo si LLVM no está.
+- **Un fallo de compilación nativa por una herramienta ausente dice el remedio al final** (M184):
+  la salida de cargo se retransmite en vivo y se traduce el `failed to find tool "..."` /
+  `linker not found` a la acción concreta, en vez de dejarlo enterrado en el log.
+
 ## 1.6.1 — 2026-09-04
 
 - **`std/ui` en Windows, afinado con una app real** (M183, DESIGN §175): `ui.next_event()` bloqueante ya

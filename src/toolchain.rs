@@ -149,16 +149,33 @@ pub fn installed_vendor() -> Option<PathBuf> {
     (dir.join("vendor").is_dir() && dir.join("Cargo.lock").is_file()).then_some(dir)
 }
 
+/// ¿Está `<exe>` en el PATH? (con el sufijo de ejecutable de la plataforma).
+fn on_path(exe: &str) -> bool {
+    let exe = format!("{exe}{}", env::consts::EXE_SUFFIX);
+    env::var_os("PATH")
+        .map(|p| env::split_paths(&p).any(|d| !d.as_os_str().is_empty() && d.join(&exe).is_file()))
+        .unwrap_or(false)
+}
+
+/// M184: la arquitectura de la MÁQUINA, no la del proceso. En Windows ARM64 un `ray.exe` x86_64
+/// corre emulado y `env::consts::ARCH` diría `x86_64`; WOW64 delata la real en
+/// `PROCESSOR_ARCHITEW6432`. Fuera de Windows no hay emulación transparente que nos importe.
+pub fn machine_arch() -> &'static str {
+    #[cfg(windows)]
+    if let Some(a) = env::var_os("PROCESSOR_ARCHITEW6432") {
+        return match a.to_string_lossy().to_ascii_uppercase().as_str() {
+            "ARM64" => "aarch64",
+            "AMD64" => "x86_64",
+            _ => env::consts::ARCH,
+        };
+    }
+    env::consts::ARCH
+}
+
 /// El linker/toolchain de C que `rustc` necesita en esta plataforma, si se detecta. Devuelve
 /// `Ok(descripción)` o `Err(cómo instalarlo)`. Heurística honesta, no una garantía: en macOS
 /// pregunta a `xcode-select`, en Linux busca `cc` en el PATH, en Windows `link.exe`/`cl.exe`.
 pub fn system_linker() -> Result<String, String> {
-    let on_path = |exe: &str| {
-        let exe = format!("{exe}{}", env::consts::EXE_SUFFIX);
-        env::var_os("PATH")
-            .map(|p| env::split_paths(&p).any(|d| !d.as_os_str().is_empty() && d.join(&exe).is_file()))
-            .unwrap_or(false)
-    };
     match env::consts::OS {
         "macos" => match Command::new("xcode-select").arg("-p").output() {
             Ok(o) if o.status.success() => Ok(format!(
@@ -194,12 +211,12 @@ pub fn system_linker() -> Result<String, String> {
 /// Devuelve la primera coincidencia (host = la arquitectura de este proceso).
 #[cfg(windows)]
 fn msvc_tool(tool: &str) -> Option<PathBuf> {
-    let host = match env::consts::ARCH {
+    let host = match machine_arch() {
         "x86_64" => "Hostx64",
         "aarch64" => "Hostarm64",
         _ => "Hostx86",
     };
-    let target = match env::consts::ARCH {
+    let target = match machine_arch() {
         "x86_64" => "x64",
         "aarch64" => "arm64",
         _ => "x86",
@@ -237,24 +254,18 @@ fn msvc_tool(_tool: &str) -> Option<PathBuf> {
 /// `target` es el triple efectivo del build: en Windows ARM64 (`aarch64-pc-windows-msvc`), `ring`
 /// compila su ensamblador con **clang**, no con `cl` — se comprueba aparte cuando hace falta.
 pub fn c_compiler(target: &str, needs_clang: bool) -> Result<String, String> {
-    let on_path = |exe: &str| {
-        let exe = format!("{exe}{}", env::consts::EXE_SUFFIX);
-        env::var_os("PATH")
-            .map(|p| env::split_paths(&p).any(|d| !d.as_os_str().is_empty() && d.join(&exe).is_file()))
-            .unwrap_or(false)
-    };
     if needs_clang && target.contains("windows") {
-        let llvm = env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("LLVM").join("bin"));
         if on_path("clang") || on_path("clang-cl") {
             return Ok("clang on PATH".to_string());
         }
-        if let Some(bin) = llvm.filter(|b| b.join("clang.exe").is_file()) {
-            return Err(format!(
-                "clang is installed at {} but not on the PATH — add it (ring compiles its assembly with clang on {target})",
-                bin.display()
-            ));
+        // M184: instalado pero fuera del PATH ya NO es un fallo — el build nativo añade ese `bin`
+        // al PATH del cargo hijo, igual que rustc localiza `link.exe` fuera del PATH.
+        if let Some(bin) = clang_dir_off_path() {
+            return Ok(format!("clang at {} (off PATH — the native build adds it)", bin.display()));
         }
-        return Err(format!("install LLVM (`winget install LLVM.LLVM`) and put its bin on the PATH — ring compiles its assembly with clang on {target}"));
+        return Err(format!(
+            "install LLVM (`winget install LLVM.LLVM`) — ring compiles its assembly with clang on {target}"
+        ));
     }
     match env::consts::OS {
         "macos" => system_linker(),
@@ -276,6 +287,40 @@ pub fn c_compiler(target: &str, needs_clang: bool) -> Result<String, String> {
                 Err("install a C toolchain (Debian/Ubuntu: `sudo apt install build-essential`; Fedora: `sudo dnf install gcc`)".to_string())
             }
         }
+    }
+}
+
+/// M184: el `bin` de LLVM cuando `clang` NO está en el PATH pero sí instalado donde lo dejan los
+/// instaladores habituales de Windows. `None` = está en el PATH (no hay nada que añadir) o no está.
+pub fn clang_dir_off_path() -> Option<PathBuf> {
+    if on_path("clang") || on_path("clang-cl") {
+        return None;
+    }
+    let exe = format!("clang{}", env::consts::EXE_SUFFIX);
+    ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|v| env::var_os(v))
+        .flat_map(|root| {
+            let root = PathBuf::from(root);
+            [root.join("LLVM").join("bin"), root.join("Programs").join("LLVM").join("bin")]
+        })
+        .find(|bin| bin.join(&exe).is_file())
+}
+
+/// M184: prepara el PATH del proceso hijo que compila el binario nativo. Hoy solo añade el `bin`
+/// de LLVM cuando el build necesita clang (`ring` en Windows ARM64) y no está en el PATH: **al
+/// final**, para no tapar nada de lo que el usuario ya tiene. Devuelve lo añadido, para contarlo.
+pub fn augment_build_path(cmd: &mut Command, needs_clang: bool) -> Option<PathBuf> {
+    let bin = needs_clang.then(clang_dir_off_path).flatten()?;
+    let current = env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = env::split_paths(&current).collect();
+    dirs.push(bin.clone());
+    match env::join_paths(dirs) {
+        Ok(joined) => {
+            cmd.env("PATH", joined);
+            Some(bin)
+        }
+        Err(_) => None, // una entrada del PATH con `;` — se deja como está antes que romperlo
     }
 }
 
@@ -326,7 +371,10 @@ fn status() {
         Err(how) => println!("system linker: not found — {how}"),
     }
     // M183: el compilador de C (mimalloc/ring/sqlite) y, en Windows ARM64, clang para ring.
+    // M184: el triple es el que reporta `rustc`, no el del binario `ray` — y se imprime, porque
+    // es LA decisión de la que cuelgan clang, las fibras y los huecos por plataforma.
     let host = crate::cli::host_triple();
+    println!("host triple: {host}");
     match c_compiler(&host, false) {
         Ok(d) => println!("C compiler: {d}"),
         Err(how) => println!("C compiler: not found — {how}"),
@@ -432,7 +480,9 @@ fn install_rustup(h: &Path, channel: &str) {
         process::exit(code);
     };
     let (url, init) = if cfg!(windows) {
-        let arch = if env::consts::ARCH == "aarch64" { "aarch64" } else { "x86_64" };
+        // M184: la arquitectura de la MÁQUINA — un `ray.exe` x86_64 emulado en ARM64 no debe
+        // instalarse una toolchain x86_64 que luego compile emulada.
+        let arch = if machine_arch() == "aarch64" { "aarch64" } else { "x86_64" };
         (format!("https://win.rustup.rs/{arch}"), tmp.join("rustup-init.exe"))
     } else {
         ("https://sh.rustup.rs".to_string(), tmp.join("rustup-init.sh"))
@@ -651,5 +701,35 @@ mod tests {
     fn vendor_dir_is_per_ray_version() {
         let d = Path::new("/x");
         assert_eq!(vendor_dir(d), Path::new("/x/vendor").join(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn machine_arch_is_a_rust_arch_name() {
+        // M184: en Windows sale de WOW64 (`PROCESSOR_ARCHITEW6432`), en el resto de `env::consts`;
+        // en ambos casos es un nombre de arquitectura de Rust, listo para formar un triple.
+        let a = machine_arch();
+        assert!(["x86_64", "aarch64", "x86", "arm"].contains(&a) || a == env::consts::ARCH, "{a}");
+    }
+
+    #[test]
+    fn build_path_only_grows_and_only_when_clang_is_needed() {
+        // M184: sin necesidad de clang no se toca el PATH del hijo.
+        let mut cmd = Command::new("cargo");
+        assert!(augment_build_path(&mut cmd, false).is_none(), "sin needs_clang no se añade nada");
+        // Con necesidad, se añade solo si clang está instalado FUERA del PATH; en cualquier caso
+        // lo que se añade va al final (no puede tapar las herramientas del usuario).
+        let mut cmd = Command::new("cargo");
+        let before: Vec<PathBuf> = env::split_paths(&env::var_os("PATH").unwrap_or_default()).collect();
+        if let Some(bin) = augment_build_path(&mut cmd, true) {
+            let after: Vec<PathBuf> = cmd
+                .get_envs()
+                .find(|(k, _)| *k == "PATH")
+                .and_then(|(_, v)| v)
+                .map(|v| env::split_paths(v).collect())
+                .expect("debe fijar PATH");
+            assert_eq!(after.len(), before.len() + 1, "solo crece");
+            assert_eq!(after.last(), Some(&bin), "lo añadido va al FINAL");
+            assert_eq!(&after[..before.len()], &before[..], "el PATH del usuario intacto");
+        }
     }
 }

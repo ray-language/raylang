@@ -11926,3 +11926,45 @@ marcaba modificado. Ahora solo se escribe si el contenido difiere.
 Queda fuera, a propósito: el "Failed to unregister class Chrome_WidgetWin_0" de Chromium al
 terminar el proceso (cosmético; destruir los controladores antes de `exit` toca el apagado del
 hilo 1 y no lo justifica) y `icon`/`checked` en `MenuItem` (deseo, IDEAS).
+
+## 176. M184 — el target efectivo lo dice rustc, no la arquitectura de `ray` (sep 2026)
+
+El primer `ray build --native` de RayDesk en la máquina Windows ARM64 murió tras minutos de
+compilación con `failed to find tool "clang"` dentro del build script de `ring`. Lo llamativo
+no es el fallo: M183 ya había puesto una comprobación previa que lo anticipa y da el remedio
+antes de compilar nada. Lo llamativo es que **no disparó**.
+
+**El diagnóstico.** `host_triple()` formaba el triple con `env::consts::ARCH` — la arquitectura
+del **proceso `ray`**. En Windows ARM64 no publicamos asset `aarch64-pc-windows-msvc` (M137,
+`upgrade_asset` devuelve `None` ahí), así que el `ray.exe` instalado es x86_64 y corre
+**emulado**: se creía en `x86_64-pc-windows-msvc` mientras el `rustc` de rustup, nativo,
+compilaba para `aarch64-pc-windows-msvc`. La guarda de clang pregunta justo por eso
+(`triple.starts_with("aarch64")`) y contestó que no; la puerta de fibras de M182 —el mismo
+triple— habría contestado igual de mal. Un solo dato equivocado en el origen y las dos
+decisiones por arquitectura se van con él.
+
+**La decisión: la autoridad es quien compila.** El target efectivo sale de `rustc -vV`, línea
+`host:`, del mismo `rustc` que resolverá el build (`RAY_RUSTC` → PATH → toolchain privada),
+cacheado en un `OnceLock`. El cálculo por `env::consts` queda de respaldo para cuando no hay
+rustc, y ahí la arquitectura ya no es la del proceso sino la de la **máquina**
+(`PROCESSOR_ARCHITEW6432`, lo que WOW64 expone al proceso emulado) — la misma corrección
+alcanza a `msvc_tool` (elegía `Hostx64` en una máquina ARM64) y a la descarga de `rustup-init`
+de la toolchain privada. `ray toolchain status` imprime ahora el triple: es el dato del que
+cuelga todo lo demás.
+
+**Y una vez sabido: mejor resolverlo que bloquear.** La sonda ya localizaba clang en
+`C:\Program Files\LLVM\bin`; solo lo usaba para redactar el error. Si está instalado pero fuera
+del PATH, el build **lo añade al PATH del cargo hijo** —al final, para no tapar nada del
+usuario— y sigue; exactamente lo que rustc hace con `link.exe`, que tampoco exige en el PATH.
+Bloquear queda para lo que de verdad no se puede resolver: LLVM ausente.
+
+**Red de seguridad.** La comprobación previa cubre lo que sabemos enumerar (features con build
+script de C). Para lo que no, la salida de cargo se retransmite en vivo **y** se guarda su cola:
+si el fallo delata una herramienta ausente (`failed to find tool "..."`, `linker not found`), el
+remedio se dice al final, junto al código de salida, en vez de quedar enterrado doscientas
+líneas atrás. Con stderr por tubería cargo apaga el color solo, así que se le pide de vuelta
+(`--color=always`) cuando nuestro stderr es un terminal.
+
+Queda pendiente, y es la raíz de la clase entera: **publicar el asset
+`aarch64-pc-windows-msvc`**. Mientras un usuario de ARM64 corra un `ray` x86_64 emulado, toda
+decisión por arquitectura es una deducción sobre un dato prestado.

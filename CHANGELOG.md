@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.6.0 — 2026-09-04
 
 - **Dos huecos pequeños de Windows** (M176): el LSP emite URIs `file:///C:/…` con barras hacia
   delante (VS Code no casaba `file://C:…` con su propio documento) y acepta la forma

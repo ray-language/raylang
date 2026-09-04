@@ -33,7 +33,10 @@ fn ray(dir: &PathBuf, args: &[&str]) -> (String, String, i32) {
 }
 
 /// Corre `src` en VM + intérprete + (si hay rustc) nativo, y asevera la salida EXACTA en los tres.
+/// El esperado se normaliza a LF: los fixtures `.out` llegan con CRLF en un checkout de Windows
+/// con `core.autocrlf=true` (el runner de CI, M166) y `include_str!` los embebe tal cual.
 fn assert_on_all_engines(name: &str, src: &str, want: &str) {
+    let want: &str = &want.replace("\r\n", "\n");
     let base = tmp(name);
     std::fs::write(base.join("prog.ray"), src).unwrap();
     for engine in ["--vm", "--interp"] {

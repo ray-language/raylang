@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.6.1 — 2026-09-04
 
 - **`std/ui` en Windows, afinado con una app real** (M183, DESIGN §175): `ui.next_event()` bloqueante ya
   despierta con sockets aparcados (el webserver de la app); `save_file`/`pick_folder` abren el diálogo

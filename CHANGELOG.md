@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Binario nativo de Windows ARM64** (M185, DESIGN §177): la release publica
+  `raylang-aarch64-pc-windows-msvc.zip`, compilado en un runner nativo `windows-11-arm` y probado
+  con el humo de `install.ps1` contra el zip recién subido. `install.ps1` elige la arquitectura por
+  la del SISTEMA (y repliega a la x86_64 con aviso si se fija a mano una versión sin build ARM64) y
+  `ray upgrade` deja de decir "not supported" en Windows ARM64.
+
 ## 1.6.2 — 2026-09-04
 
 - **El target de un build nativo lo dice `rustc`, no la arquitectura del binario `ray`** (M184,

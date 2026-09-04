@@ -3297,8 +3297,11 @@ verificaba por CRLF → ✅ M166 (DESIGN §159).
 1. Distribución nativa: bucket propio de Scoop (`ray-language/scoop-bucket`, cero aprobaciones,
    actualizable desde `release.yml`); winget cuando lo pidan usuarios (PR a `microsoft/winget-pkgs`
    por versión).
-2. Build `aarch64-pc-windows-msvc` en la matriz de release (cruzada desde el runner x86_64; probar
-   mimalloc/ring en arm64-msvc). Hoy Windows ARM ejecuta la x86_64 por emulación.
+2. ~~Build `aarch64-pc-windows-msvc` en la matriz de release~~ ✅ **M185** (DESIGN §177): **no**
+   cruzada desde el x86_64 sino NATIVA en el runner `windows-11-arm` (rustup y clang se instalan en
+   el job; `ring` exige clang en arm64-msvc), con el humo de `install.ps1` contra el zip recién
+   subido. `install.ps1` y `ray upgrade` eligen la arquitectura solos; el instalador repliega a la
+   x86_64 si se fija a mano una versión anterior a la primera con asset ARM64.
 3. Los huecos del runtime: `std/process` (CreateProcess + pipes; el diseño de §53 asume fork/exec),
    `std/term` crudo (Console API / VT), ~~`signals()` (SetConsoleCtrlHandler)~~ ✅ M168 (W1 de
    docs/windows.md), `fs.chmod` (sin equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.

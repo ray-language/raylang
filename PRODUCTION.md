@@ -120,7 +120,7 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 | `std/ui` | **funciona** (M179): ventana Win32 + WebView2 (`webview2-com`, el único crate del port), menús, diálogos, puente IPC; headless (M177) en pruebas y CI |
 | `std/audio` | **funciona** (M178): WASAPI en modo compartido, s16le con conversión del motor; `audio.write` bloquea el hilo con el búfer lleno (pipe anónimo, sin aparcar la fibra) |
 | `ray bundle` | **funciona** (M180): `<name><name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos por `UpdateResourceW`) + `<name>.lnk`; sin Authenticode en v1 |
-| Build arm64 | no publicada (Windows ARM ejecuta la x86_64 por emulación) |
+| Build arm64 | **publicada** (M185): `raylang-aarch64-pc-windows-msvc.zip`, compilada nativa en el runner `windows-11-arm`; `install.ps1` y `ray upgrade` la eligen por la arquitectura del sistema |
 
 ---
 

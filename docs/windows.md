@@ -141,7 +141,7 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 | `packages/tz` | `load()` → `Err` (no hay `/usr/share/zoneinfo`); UTC funciona | tzdata embebida o registro + `windowsZones` de CLDR (**M**) |
 | Ejemplos que asumen `/tmp` | `examples/io/binario.ray` escribe en `/tmp/…` → "The system cannot find the path specified" (censo) | usar el directorio temporal del sistema (`time`/`fs` no lo exponen: candidato a `fs.temp_dir()`) |
 | FFI `libm` | `pow`/`sqrt` de `ucrtbase` redondean distinto: `3` donde glibc da `3.0000000000000004` (censo, `examples/ffi/libm.ray`) | no es bug: precisión de la CRT; el oráculo FFI VM↔nativo sigue valiendo (misma CRT en ambos) |
-| `ray upgrade` en ARM64 | exit 69 (no hay asset) | publicar `aarch64-pc-windows-msvc` (IDEAS §84) |
+| `ray upgrade` en ARM64 | ✅ **M185**: asset `raylang-aarch64-pc-windows-msvc.zip` en la release | — |
 | FFI | **funciona**: `_errno`, `libloading::os::windows`, `"c"`/`"m"` → `ucrtbase.dll` | — |
 
 ## 4. La asimetría VM ↔ nativo
@@ -210,8 +210,10 @@ Fuera de la red de CI actual:
     disparaba y el build moría dentro del build script de `ring`; la puerta de fibras de M182 miraba
     el mismo dato equivocado. Ahora el triple lo da `rustc -vV` (respaldo: la arquitectura de la
     máquina por `PROCESSOR_ARCHITEW6432`), `ray toolchain status` lo imprime, y clang instalado
-    fuera del PATH se añade al PATH del cargo hijo en vez de abortar. **La raíz sigue abierta**:
-    publicar el binario ARM64.
+    fuera del PATH se añade al PATH del cargo hijo en vez de abortar. La raíz —publicar el binario
+    ARM64— se cerró en **M185**: `release.yml` compila `aarch64-pc-windows-msvc` en un runner
+    nativo `windows-11-arm` (con rustup y clang instalados en el propio job) y prueba `install.ps1`
+    contra el zip recién subido; `install.ps1` y `ray upgrade` eligen la arquitectura solos.
 
 ## 6. Orden de ataque
 
@@ -225,7 +227,8 @@ Fuera de la red de CI actual:
 | **W6** ✅ | `std/process` con `CreateProcess` + pipes + Job Objects (M175) | L | MCP/LSP hijos, pipelines |
 | **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · watcher ✅ M181 · fibras nativas (WSAPoll, x86_64) ✅ M182 | L × 3 | fibras en el nativo; escritorio y audio |
 
-Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-windows-msvc` (IDEAS §84).
+Al margen: Scoop (bucket propio) y winget a demanda; la build `aarch64-pc-windows-msvc` ✅ **M185**
+(runner nativo `windows-11-arm` en `release.yml`; `install.ps1` y `ray upgrade` la eligen solos).
 
 ## 7. Censo de los ejemplos en Windows
 

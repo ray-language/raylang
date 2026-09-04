@@ -22,14 +22,12 @@ function Info($msg) { Write-Host "-> $msg" -ForegroundColor Blue }
 function Fail($msg) { throw "error: $msg" }
 
 # --- Detectar plataforma -> target triple de Rust ---
-# Solo se publica x86_64; Windows 11 en ARM lo ejecuta por emulación, así que se instala con aviso.
+# M185: se publican x86_64 y aarch64. `OSArchitecture` es la del SISTEMA, no la del proceso: un
+# PowerShell x86 emulado en ARM64 sigue diciendo Arm64, que es lo que queremos instalar.
 $osArch = try { [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() } catch { $env:PROCESSOR_ARCHITECTURE }
 switch -Regex ($osArch) {
-    '^(X64|AMD64)$' { $cpu = 'x86_64' }
-    '^(Arm64|ARM64)$' {
-        $cpu = 'x86_64'
-        Write-Host "nota: no hay build nativa para Windows ARM64 todavia; se instala la x86_64 (corre por emulacion)." -ForegroundColor Yellow
-    }
+    '^(X64|AMD64)$'   { $cpu = 'x86_64' }
+    '^(Arm64|ARM64)$' { $cpu = 'aarch64' }
     default { Fail "arquitectura no soportada: $osArch" }
 }
 $target = "$cpu-pc-windows-msvc"
@@ -64,7 +62,22 @@ try {
     try {
         Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
     } catch {
-        Fail "no se pudo descargar $url`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
+        # M185: el asset ARM64 existe desde v1.6.3. Con una version anterior fijada a mano, en vez
+        # de morir se instala la x86_64 (Windows 11 ARM la ejecuta por emulacion), con aviso.
+        if ($cpu -eq 'aarch64') {
+            Write-Host "nota: esa version no publica build ARM64; se instala la x86_64 (corre por emulacion)." -ForegroundColor Yellow
+            $target = 'x86_64-pc-windows-msvc'
+            $asset = "raylang-$target.zip"
+            $url = $url -replace 'raylang-aarch64-pc-windows-msvc\.zip$', $asset
+            $zip = Join-Path $tmp $asset
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+            } catch {
+                Fail "no se pudo descargar $url`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
+            }
+        } else {
+            Fail "no se pudo descargar $url`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
+        }
     }
     # Quitar la marca de origen web del zip: si no, los .exe extraidos heredan el aviso de SmartScreen.
     Unblock-File -Path $zip -ErrorAction SilentlyContinue

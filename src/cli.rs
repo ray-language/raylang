@@ -200,9 +200,9 @@ fn upgrade_repo() -> String {
 }
 
 /// El nombre del asset de release para una plataforma (el mismo esquema que publica
-/// `release.yml` y consumen `install.sh`/`install.ps1`): tar.gz en unix, zip en Windows (M165;
-/// solo x86_64 — no hay build arm64-msvc). `None` = plataforma sin asset. Pura para poder
-/// testearla; el llamador pasa los `cfg!` reales.
+/// `release.yml` y consumen `install.sh`/`install.ps1`): tar.gz en unix, zip en Windows (M165).
+/// M185: Windows ARM64 tiene build propia — las cuatro plataformas van en arm64 y x86_64.
+/// `None` = plataforma sin asset. Pura para poder testearla; el llamador pasa los `cfg!` reales.
 fn upgrade_asset(os: &str, arch: &str) -> Option<String> {
     let (suffix, ext) = match os {
         "macos" => ("apple-darwin", "tar.gz"),
@@ -210,10 +210,9 @@ fn upgrade_asset(os: &str, arch: &str) -> Option<String> {
         "windows" => ("pc-windows-msvc", "zip"),
         _ => return None,
     };
-    let arch = match (os, arch) {
-        (_, "x86_64") => "x86_64",
-        ("windows", _) => return None,
-        (_, "aarch64") => "aarch64",
+    let arch = match arch {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
         _ => return None,
     };
     Some(format!("raylang-{arch}-{suffix}.{ext}"))
@@ -4149,13 +4148,18 @@ mod tests {
             upgrade_asset("linux", "x86_64").as_deref(),
             Some("raylang-x86_64-unknown-linux-gnu.tar.gz")
         );
-        // Windows va por zip manual; una arquitectura desconocida tampoco tiene asset.
+        // Windows va por zip; M185: también en ARM64 (antes se instalaba la x86_64 emulada).
         assert_eq!(
             upgrade_asset("windows", "x86_64").as_deref(),
             Some("raylang-x86_64-pc-windows-msvc.zip")
         );
-        assert_eq!(upgrade_asset("windows", "aarch64"), None, "sin build arm64-msvc");
+        assert_eq!(
+            upgrade_asset("windows", "aarch64").as_deref(),
+            Some("raylang-aarch64-pc-windows-msvc.zip")
+        );
+        // Una arquitectura desconocida no tiene asset.
         assert_eq!(upgrade_asset("linux", "riscv64"), None);
+        assert_eq!(upgrade_asset("windows", "riscv64"), None);
     }
 
     #[test]

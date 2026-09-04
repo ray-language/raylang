@@ -1,7 +1,7 @@
 # CI de RELEASES de raylang (M44c). Al empujar un tag `vX.Y.Z`, construye los binarios (`ray` + `raylang`)
 # para las plataformas soportadas y los sube a la GitHub Release del tag. Cada plataforma se compila de
-# forma NATIVA en su propio runner (macOS arm/intel, Linux x86_64/arm64, Windows) → `ring`/`rustls` (la
-# excepción cero-deps, con C/asm por arquitectura) compilan sin cross-compilación.
+# forma NATIVA en su propio runner (macOS arm/intel, Linux x86_64/arm64, Windows x86_64/arm64 — M185)
+# → `ring`/`rustls` (la excepción cero-deps, con C/asm por arquitectura) compilan sin cross-compilación.
 #
 # Los assets NO llevan la versión en el nombre (`raylang-<target>.tar.gz`), así el instalador puede usar
 # `releases/latest/download/raylang-<target>.tar.gz` sin consultar la API de GitHub.
@@ -91,9 +91,24 @@ jobs:
           - { os: macos-14,         target: x86_64-apple-darwin }
           - { os: macos-14,         target: aarch64-apple-darwin }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc }
+          # M185: Windows ARM64 en su propio runner nativo. Cruzarlo desde el x86_64 obligaría a
+          # cuadrar a mano las libs de MSVC y el clang de `ring`; nativo además puede EJECUTAR el
+          # binario, así que el humo del instalador vale para las dos arquitecturas.
+          - { os: windows-11-arm,   target: aarch64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # M184/M185: en aarch64-windows `ring` compila su ensamblador con **clang**, no con `cl`. La
+      # imagen `windows-11-arm` lo trae (sondeado antes de escribir este job), así que aquí no se
+      # instala nada: solo se comprueba, para que un cambio de imagen falle en dos segundos y con
+      # el motivo, y no doce minutos después dentro de un build script.
+      - name: Comprobar clang (Windows ARM64)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $clang = (Get-Command clang -ErrorAction SilentlyContinue).Source
+          if (-not $clang) { throw "no hay clang en el PATH del runner: ring no puede compilar su ensamblador en aarch64-windows" }
+          "clang: $clang"
       - name: Instalar Rust estable + target
         run: |
           rustup toolchain install stable --profile minimal
@@ -101,36 +116,46 @@ jobs:
       - name: Build de release
         run: cargo build --release --target ${{ matrix.target }}
       - name: Empaquetar (tar.gz, unix)
-        if: matrix.os != 'windows-latest'
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           tar czf "raylang-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" ray raylang
       - name: Empaquetar (zip, windows)
-        if: matrix.os == 'windows-latest'
+        if: ${{ contains(matrix.target, 'windows') }}
         shell: pwsh
         run: |
           Compress-Archive `
             -Path "target/${{ matrix.target }}/release/ray.exe", "target/${{ matrix.target }}/release/raylang.exe" `
             -DestinationPath "raylang-${{ matrix.target }}.zip"
-      - name: Subir el asset a la Release
+      - name: Subir el asset a la Release (unix)
+        if: ${{ !contains(matrix.target, 'windows') }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          # OJO: `shell: bash` de Actions activa pipefail — un `ls tar.gz zip` con el que no
-          # exista salía 2 y mataba el paso AUNQUE el asset estuviera (el bug del estreno).
-          if [ -f "raylang-${{ matrix.target }}.tar.gz" ]; then
-            asset="raylang-${{ matrix.target }}.tar.gz"
-          else
-            asset="raylang-${{ matrix.target }}.zip"
-          fi
+          # M185: antes este paso era único para todas las plataformas y adivinaba la extensión
+          # (`if -f … tar.gz`); con `shell: bash` y su pipefail eso ya costó una release rota. Cada
+          # familia sube ahora lo que sabe que produjo: aquí el tar.gz, en el paso de al lado el zip.
+          asset="raylang-${{ matrix.target }}.tar.gz"
           echo "subiendo $asset"
           gh release upload "${{ github.ref_name }}" "$asset" \
             --repo "${{ github.repository }}" --clobber
+      # M185: la pata de Windows sube desde pwsh, el mismo shell con el que acaba de empaquetar (el
+      # runner ARM64 también trae el bash de Git —sondeado—, pero aquí no aporta nada).
+      - name: Subir el asset a la Release (windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $asset = "raylang-${{ matrix.target }}.zip"
+          "subiendo $asset"
+          gh release upload "${{ github.ref_name }}" $asset --repo "${{ github.repository }}" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload fallo con $LASTEXITCODE" }
       # M165: el instalador de Windows se prueba contra el zip RECIÉN subido — una release no puede
       # publicar un instalador roto (el bug que el `install.sh` de unix nunca tuvo: sí se probaba).
       - name: Humo del instalador (install.ps1 contra este tag)
-        if: matrix.os == 'windows-latest'
+        if: ${{ contains(matrix.target, 'windows') }}
         shell: pwsh
         env:
           RAYLANG_VERSION: ${{ github.ref_name }}

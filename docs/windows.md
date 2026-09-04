@@ -203,6 +203,16 @@ Fuera de la red de CI actual:
     65 al compilar el programa con `extern "c"` de anchos/punteros). Ninguno es del producto en el
     runner x86_64; a repartir entre "cfg del test" y "port pendiente". **S–M**.
 
+13. **`ray` x86_64 emulado en ARM64 y el target del build nativo** · ✅ **M184** (DESIGN §176):
+    mientras no exista el asset `aarch64-pc-windows-msvc` (IDEAS §84), el `ray.exe` instalado en una
+    máquina ARM64 es x86_64 y corre emulado. El triple efectivo salía de `env::consts::ARCH` → `ray`
+    se creía en x86_64 mientras rustc compilaba aarch64: la comprobación de clang de M183 no
+    disparaba y el build moría dentro del build script de `ring`; la puerta de fibras de M182 miraba
+    el mismo dato equivocado. Ahora el triple lo da `rustc -vV` (respaldo: la arquitectura de la
+    máquina por `PROCESSOR_ARCHITEW6432`), `ray toolchain status` lo imprime, y clang instalado
+    fuera del PATH se añade al PATH del cargo hijo en vez de abortar. **La raíz sigue abierta**:
+    publicar el binario ARM64.
+
 ## 6. Orden de ataque
 
 | Fase | Qué | Tamaño | Desbloquea |

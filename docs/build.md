@@ -201,14 +201,18 @@ recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario in
   build frío de `hello` con `CARGO_NET_OFFLINE=true`, PATH pelado y toolchain privada → 4,6 s;
   con TLS (ring+rustls desde el vendor) también offline. Una versión de desarrollo sin release no
   tiene vendor: `install` lo dice y el build tira de crates.io como antes.
-- **`ray toolchain status`**: qué usaría el build y de dónde, versiones, el linker del sistema
-  (`xcode-select -p` / `cc` / `link.exe`) y el vendor; exit 1 si falta `cargo` o `rustc`.
+- **`ray toolchain status`**: qué usaría el build y de dónde, versiones, el **triple efectivo**
+  (M184: el que reporta `rustc -vV`, no la arquitectura del proceso `ray`), el linker del sistema
+  (`xcode-select -p` / `cc` / `link.exe`), el compilador de C y el vendor; exit 1 si falta `cargo`
+  o `rustc`.
 
 Lo que NO resuelve, a propósito y con mensaje: el **enlazador del sistema** (Xcode Command Line
 Tools / `build-essential` / MSVC Build Tools). `rustc` lo necesita siempre; `install` lo avisa al
 final y `status` lo lista. En Windows la toolchain privada es `-msvc` (la `-gnu` autocontenida de
 rustup no trae `gcc`, y ring/mimalloc/rusqlite compilan C): las Build Tools siguen haciendo falta.
-Sin verificar en Windows (docs/windows.md).
+En Windows **ARM64** hace falta además **LLVM** (`winget install LLVM.LLVM`): `ring` compila su
+ensamblador con clang. No hace falta ponerlo en el PATH — si está instalado donde lo dejan los
+instaladores, `ray build --native` añade su `bin` al PATH del cargo hijo (M184).
 
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`

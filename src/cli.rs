@@ -1895,10 +1895,36 @@ fn fibers_for_target(target: Option<&str>, without_fibers: bool) -> bool {
 }
 
 /// El triple del HOST, tal como lo escribiría rustup (`aarch64-pc-windows-msvc`, `x86_64-apple-darwin`…):
-/// el target efectivo de un build nativo sin `--target`. Lo bastante fiel para las decisiones
-/// por SO y arquitectura (M182: las fibras de Windows son solo x86_64).
+/// el target efectivo de un build nativo sin `--target`. De él cuelgan las decisiones por SO y
+/// arquitectura (M182: las fibras de Windows son solo x86_64; M183: clang para `ring` en ARM64).
+///
+/// **M184**: lo dice `rustc -vV`, no la arquitectura de ESTE proceso. Un `ray.exe` x86_64 corriendo
+/// emulado en Windows ARM64 (hoy no publicamos asset arm64-msvc) creía compilar para x86_64 mientras
+/// el `rustc` nativo compilaba para `aarch64-pc-windows-msvc`: las comprobaciones previas miraban el
+/// target equivocado y el build moría minutos después dentro de un build script. Se consulta una vez
+/// (el proceso no cambia de rustc a media ejecución) y el cálculo por `env::consts` queda de respaldo.
 pub fn host_triple() -> String {
-    let (arch, os) = (std::env::consts::ARCH, std::env::consts::OS);
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| rustc_host_triple().unwrap_or_else(fallback_host_triple)).clone()
+}
+
+/// El triple que reporta el `rustc` con el que se compilará (RAY_RUSTC → PATH → toolchain privada).
+fn rustc_host_triple() -> Option<String> {
+    let out = crate::toolchain::command("rustc")?.arg("-vV").output().ok()?;
+    out.status.success().then(|| parse_rustc_host(&String::from_utf8_lossy(&out.stdout)))?
+}
+
+/// La línea `host: <triple>` de `rustc -vV`. Pura para testearla sin rustc.
+fn parse_rustc_host(vv: &str) -> Option<String> {
+    vv.lines()
+        .find_map(|l| l.strip_prefix("host:"))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// Respaldo si no hay rustc a mano: SO de este binario + arquitectura de la MÁQUINA.
+fn fallback_host_triple() -> String {
+    let (arch, os) = (crate::toolchain::machine_arch(), std::env::consts::OS);
     match os {
         "windows" => format!("{arch}-pc-windows-msvc"),
         "macos" => format!("{arch}-apple-darwin"),
@@ -2200,11 +2226,15 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     // defecto), `ring` (tls/crypto) y `sqlite` — necesitan un compilador de C, y en Windows ARM64
     // `ring` compila su ensamblador con clang. Sin él, cargo fallaba tras MINUTOS de compilación
     // con un "failed to find tool clang" enterrado en el log: se comprueba antes, con el remedio.
-    {
+    // M184: `triple` es el target EFECTIVO (`--target` o el host según rustc) — antes se deducía de
+    // la arquitectura del propio `ray`, y un `ray` emulado saltaba esta comprobación entera.
+    let triple = target.map(str::to_string).unwrap_or_else(host_triple);
+    let needs_clang = {
         let c_features: Vec<&str> = rt_features.iter().copied().filter(|f| matches!(*f, "mimalloc" | "tls" | "crypto" | "sqlite")).collect();
+        let needs_clang = triple.starts_with("aarch64")
+            && triple.contains("windows")
+            && c_features.iter().any(|f| matches!(*f, "tls" | "crypto"));
         if !c_features.is_empty() {
-            let triple = target.map(str::to_string).unwrap_or_else(host_triple);
-            let needs_clang = triple.starts_with("aarch64") && triple.contains("windows") && c_features.iter().any(|f| matches!(*f, "tls" | "crypto"));
             let mut checks = vec![crate::toolchain::c_compiler(&triple, false)];
             if needs_clang {
                 checks.push(crate::toolchain::c_compiler(&triple, true));
@@ -2212,7 +2242,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             for r in checks {
                 if let Err(how) = r {
                     eprintln!(
-                        "native build: the runtime features [{}] need a C compiler — {how}\n  (or leave them out: --without {})",
+                        "native build: the runtime features [{}] need a C compiler for {triple} — {how}\n  (or leave them out: --without {})",
                         c_features.join(", "),
                         c_features.join(",")
                     );
@@ -2220,7 +2250,8 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
                 }
             }
         }
-    }
+        needs_clang
+    };
     let proj = std::env::temp_dir().join(format!("ray_native_{stem}_{}", process::id()));
     let write = |rel: &str, content: &str| -> std::io::Result<()> {
         let p = proj.join(rel);
@@ -2345,8 +2376,13 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     } else {
         cmd.env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
     }
-    match cmd.status() {
-        Ok(s) if s.success() => {
+    // M184: si el build necesita clang y está instalado fuera del PATH, se lo damos al hijo en vez
+    // de rendirnos (`cc` lo busca por PATH; rustc localiza `link.exe` igual de solo).
+    if let Some(bin) = crate::toolchain::augment_build_path(&mut cmd, needs_clang) {
+        eprintln!("note: clang is off the PATH — adding {} for this build", bin.display());
+    }
+    match run_cargo_teeing(&mut cmd) {
+        Ok((s, _log)) if s.success() => {
             let sub = if release { "release" } else { "debug" };
             // Con `--target`, cargo pone el artefacto en `target/<triple>/<profile>/…`. El
             // staticlib se llama `lib<pkg con -→_>.a` (calculado, jamás un glob: pkg lleva hash).
@@ -2389,13 +2425,18 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             };
             println!("ok: native binary '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
         }
-        Ok(s) => {
+        Ok((s, log)) => {
             // Falló: se CONSERVA el proyecto y se nombra su ruta, para inspeccionar el Rust generado.
             eprintln!(
                 "native build: cargo failed (code {}); project at {}",
                 s.code().unwrap_or(-1),
                 proj.display()
             );
+            // M184: red de seguridad de la comprobación previa — si el log delata una herramienta
+            // que cargo no encontró, el remedio se dice AQUÍ, no se deja enterrado 200 líneas atrás.
+            if let Some(hint) = native_failure_hint(&log, &triple) {
+                eprintln!("hint: {hint}");
+            }
             process::exit(65);
         }
         Err(e) => {
@@ -2403,6 +2444,67 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             process::exit(65);
         }
     }
+}
+
+/// M184: lanza cargo **retransmitiendo su salida en vivo** y guardando a la vez su cola, para poder
+/// traducir el fallo a un remedio sin que el usuario pierda el progreso. Con stderr por tubería cargo
+/// apaga el color solo: se lo pedimos de vuelta cuando NUESTRO stderr sí es un terminal.
+fn run_cargo_teeing(cmd: &mut process::Command) -> std::io::Result<(process::ExitStatus, String)> {
+    use std::io::{BufRead, IsTerminal, Write};
+    /// Líneas de cola que se guardan: de sobra para el error final de cargo y sus `Caused by`.
+    const TAIL: usize = 600;
+    if std::io::stderr().is_terminal() {
+        cmd.arg("--color=always");
+    }
+    cmd.stderr(process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let mut kept: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    if let Some(err) = child.stderr.take() {
+        let mut reader = std::io::BufReader::new(err);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let mut out = std::io::stderr();
+            let _ = out.write_all(&line);
+            let _ = out.flush();
+            kept.push_back(String::from_utf8_lossy(&line).into_owned());
+            if kept.len() > TAIL {
+                kept.pop_front();
+            }
+        }
+    }
+    let status = child.wait()?;
+    Ok((status, kept.into_iter().collect()))
+}
+
+/// M184: traduce el log de un build nativo fallido al remedio, cuando lo que falló fue una
+/// herramienta ausente y no el programa del usuario. La comprobación previa (arriba) cubre lo que
+/// sabemos enumerar; esto cubre lo que no. Pura —recibe log y target— para testearla.
+fn native_failure_hint(log: &str, triple: &str) -> Option<String> {
+    let missing = |tool: &str| log.contains(&format!("failed to find tool \"{tool}\""));
+    if missing("clang") || missing("clang-cl") {
+        return Some(format!(
+            "cargo could not find clang (`ring` compiles its assembly with clang on {triple}): install \
+             LLVM (`winget install LLVM.LLVM`); `ray toolchain status` shows what ray sees"
+        ));
+    }
+    if missing("link") || log.contains("linker `link.exe` not found") {
+        return Some(
+            "cargo could not find the MSVC linker: install the Visual Studio Build Tools (C++ workload)"
+                .to_string(),
+        );
+    }
+    if missing("cl") || missing("cc") || log.contains("linker `cc` not found") {
+        return Some(format!(
+            "cargo could not find a C compiler for {triple} (the runtime's C dependencies — mimalloc, \
+             ring, sqlite — need one); `ray toolchain status` shows what ray sees"
+        ));
+    }
+    None
 }
 
 /// `ray test [archivo] [filtro]`: corre las funciones `@test` (a nivel proyecto, M101).
@@ -3990,9 +4092,41 @@ mod tests {
     #[test]
     fn host_triple_names_the_host_arch_and_os() {
         // M182: la puerta de las fibras decide por arquitectura y SO del target efectivo.
+        // M184: el triple sale de `rustc -vV` — y estos tests los compila ese mismo rustc, así que
+        // su `host:` es la arquitectura con la que se construyó este binario de test.
         let t = host_triple();
         assert!(t.starts_with(std::env::consts::ARCH), "{t}");
         assert!(t.contains(if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }), "{t}");
+    }
+
+    #[test]
+    fn rustc_host_line_is_the_source_of_truth() {
+        // M184: `rustc -vV` es la autoridad sobre el target efectivo, no `env::consts::ARCH` (un
+        // `ray.exe` x86_64 emulado en Windows ARM64 decía x86_64 mientras rustc compilaba aarch64).
+        let vv = "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a2\n\
+                  host: aarch64-pc-windows-msvc\nrelease: 1.98.1\n";
+        assert_eq!(parse_rustc_host(vv).as_deref(), Some("aarch64-pc-windows-msvc"));
+        assert_eq!(parse_rustc_host("rustc 1.98.1\nrelease: 1.98.1\n"), None, "sin línea host");
+        assert_eq!(parse_rustc_host("host:\n"), None, "host vacío no es un triple");
+        // El respaldo sigue nombrando arquitectura y SO.
+        let f = fallback_host_triple();
+        assert!(f.contains(if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }), "{f}");
+    }
+
+    #[test]
+    fn native_failure_hint_translates_missing_tools() {
+        // M184: el fallo real de RayDesk en Windows ARM64 — clang ausente, enterrado en el log.
+        let log = "  error occurred in cc-rs: failed to find tool \"clang\": program not found\n\
+                   error: failed to run custom build command for `ring v0.17.14`\n";
+        let hint = native_failure_hint(log, "aarch64-pc-windows-msvc").expect("debe reconocer clang");
+        assert!(hint.contains("clang") && hint.contains("LLVM"), "{hint}");
+        // El linker de MSVC y el compilador de C tienen su propio remedio.
+        assert!(native_failure_hint("error: linker `link.exe` not found\n", "x86_64-pc-windows-msvc")
+            .is_some_and(|h| h.contains("Build Tools")));
+        assert!(native_failure_hint("error: linker `cc` not found\n", "x86_64-unknown-linux-gnu")
+            .is_some_and(|h| h.contains("C compiler")));
+        // Un error del PROGRAMA no se disfraza de problema de herramientas.
+        assert_eq!(native_failure_hint("error[E0308]: mismatched types\n", "x86_64-apple-darwin"), None);
     }
 
     #[test]

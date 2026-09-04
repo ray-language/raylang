@@ -58,16 +58,16 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Tamaño | **M** en la VM (el self-pipe ya existe; cambia el productor) + **S** para gatear/portar la emisión nativa. |
 | **Hecho (M168)** | Exactamente eso: `SetConsoleCtrlHandler` encola y levanta la bandera `PENDING`; `install()` devuelve `-1` (sin fd) y `io_wait` duerme a cuantos de 10 ms cuando solo espera señales; el handler retiene su hilo 4 s ante el cierre. El nativo emite variante unix y Windows, y `ray build --native` apaga las fibras también por host. Sin SIGWINCH (W4). |
 
-### 3.2 `ray dev` y `ray test --watch` · ✅ **cerrada en M172** salvo el watcher (DESIGN §164)
+### 3.2 `ray dev` y `ray test --watch` · ✅ **cerrada en M172** (DESIGN §164); watcher ✅ **M181** (DESIGN §173)
 
 | | |
 |---|---|
 | Reinicio | ~~Sin SIGTERM: `terminate_gracefully` es `cfg(unix)`; en Windows es `TerminateProcess` directo → un servidor con `serve_graceful` no drena; las peticiones en vuelo se pierden en cada guardado.~~ |
 | Huérfanos | ~~`install_cleanup_on_death` es `cfg(unix)` → matar `ray dev` por pid deja al hijo vivo reteniendo el puerto.~~ |
 | Socket-activation | ~~`--port`/`--listen` se ignora con aviso (`dup2` + `pre_exec` + `RAY_LISTEN_FD` son unix) → cada reinicio re-bindea: ventana de "connection refused" y carreras `WSAEADDRINUSE`.~~ |
-| Watcher | Cae a polling de mtimes (~200 ms): el crate `notify` sí soporta `ReadDirectoryChangesW`, pero el puente self-pipe de `ray_runtime::watch` es unix. **Sigue abierto** (W5: depende de 3.6). |
-| Cierra con | `CREATE_NEW_PROCESS_GROUP` + `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` para el reinicio con drenado; Job Objects (`AssignProcessToJobObject` + kill-on-close) para huérfanos; handle heredable (o `WSADuplicateSocket`) para pasar el listener; puente por evento/IOCP para el watcher. |
-| Tamaño | reinicio **S–M** · huérfanos **S** · socket-activation **M** · watcher **M** (depende de 3.6). |
+| Watcher | ~~Cae a polling de mtimes (~200 ms): el crate `notify` sí soporta `ReadDirectoryChangesW`, pero el puente self-pipe de `ray_runtime::watch` es unix.~~ ✅ M181: el puente es una cola compartida (Mutex+Condvar); el self-pipe queda solo en unix para aparcar fibras y en Windows el scheduler de la VM consulta `watch_has_pending` (como `ui_has_event`, M177). `fs.watch` funciona y `ray dev` usa los eventos. |
+| Cierra con | `CREATE_NEW_PROCESS_GROUP` + `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` para el reinicio con drenado; Job Objects (`AssignProcessToJobObject` + kill-on-close) para huérfanos; handle heredable (o `WSADuplicateSocket`) para pasar el listener; ~~puente por evento/IOCP para el watcher~~ ✅ M181 cola compartida. |
+| Tamaño | reinicio **S–M** · huérfanos **S** · socket-activation **M** · ~~watcher **M** (depende de 3.6)~~ ✅ M181. |
 | **Hecho (M172)** | La capa de SO del supervisor vive en `src/dev_host.rs` con las dos variantes. El hijo se lanza con `CREATE_NEW_PROCESS_GROUP` y el reinicio le manda `CTRL_BREAK` (el handler de M168 lo entrega como `2`; `serve_graceful` drena; 3 s y escala a `TerminateProcess`). Un Job Object con `KILL_ON_JOB_CLOSE` arrastra al hijo si el supervisor muere de cualquier forma (Ctrl-C, cierre de la ventana, kill por pid), y el handler de consola del supervisor reenvía `CTRL_BREAK` antes de salir para que además drene. `--port`/`--listen`: el listener se marca heredable (`SetHandleInformation`), su valor viaja en `RAY_LISTEN_FD` y el hijo lo adopta con `from_raw_socket` (validado con `local_addr`; si no sirve, `bind` normal), quitándole la herencia para sus propios hijos. `tests/dev_cli.rs` corre en las tres plataformas: drenado en el reinicio, socket retenido entre reinicios y (Windows) el hijo muere con el supervisor. |
 
 ### 3.3 Terminal — `std/term` · ✅ **cerrada en M173** salvo `size_px` (DESIGN §165)
@@ -146,8 +146,8 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 
 Es el hallazgo transversal de la auditoría. La VM devuelve `Err` en todo hueco; el transpilador,
 en cambio, emitía Rust **que no compila** en Windows cuando el programa usaba cualquiera de estas
-cinco superficies: `signals()`, `std/process`, `fs.watch`, `std/audio`, `std/ui` (hoy solo
-`std/audio` y `std/ui`: señales desde M168, procesos desde M175, `watch` se excluye solo). El usuario ve
+cinco superficies: `signals()`, `std/process`, `fs.watch`, `std/audio`, `std/ui` (hoy NINGUNA:
+señales desde M168, procesos desde M175, audio M178, ui M179, watch M181). El usuario veía
 un backtrace de `rustc`, no el mensaje del lenguaje.
 
 El arreglo barato e independiente de cualquier port: una **comprobación pre-transpilación** —
@@ -156,9 +156,10 @@ si el target efectivo es `*-pc-windows-*` y el programa activa alguno de los fla
 desde M168), `ray build --native` falla con el mismo mensaje que daría la VM en runtime.
 ✅ **Hecho en M169**: `native_unsupported_on_windows` en `src/cli.rs`, exit 69 y sin binario;
 el job de Windows de CI lo prueba con un programa que usa `std/process`. Matiz de M173: `watch` se
-excluye SOLO en targets Windows (el transpilador emite todas las funciones de los módulos importados y
+excluía SOLO en targets Windows (el transpilador emite todas las funciones de los módulos importados y
 `fs.watch` vive en `std/fs`, que importa casi todo programa: el gate rechazaba programas que jamás
-vigilan nada); excluido, `fs.watch` devuelve el `Err` de la VM en vez de impedir el binario.
+vigilan nada). Desde M181 `watch` compila en Windows y la lista de huecos está vacía: el gate queda
+como red por si un subsistema futuro volviera a ser solo-unix.
 
 ## 5. Probablemente funciona, sin verificar
 
@@ -202,7 +203,7 @@ Fuera de la red de CI actual:
 | **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** ✅ | `WSAPoll` en `src/poll.rs` + sueño fino + `SIO_UDP_CONNRESET` (M174) | M + S | p99 de servidores bajo carga; pacing de juegos; `read_timeout` de sockets |
 | **W6** ✅ | `std/process` con `CreateProcess` + pipes + Job Objects (M175) | L | MCP/LSP hijos, pipelines |
-| **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · IOCP para fibras nativas · watcher de `ray dev` | L × 3 | fibras en el nativo; escritorio y audio |
+| **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · watcher ✅ M181 · IOCP para fibras nativas | L × 3 | fibras en el nativo; escritorio y audio |
 
 Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-windows-msvc` (IDEAS §84).
 
@@ -261,4 +262,4 @@ esta tabla se actualiza con el run que lo demuestre.
 - **Rutas**: separar siempre con `/` (Windows lo acepta en todas las APIs de archivo); nunca
   concatenar `\` a mano.
 - **Nativo**: `ray build --native` en Windows compila todo lo que la VM soporta ahí, señales
-  incluidas; procesos, watch, ui y audio se rechazan con mensaje antes de generar nada (W2).
+  incluidas; desde M181 ningún subsistema queda fuera (el gate de W2 sigue como red).

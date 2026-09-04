@@ -159,7 +159,7 @@ jobs:
       - name: ray dev en Windows (drenado, Job Object, socket-activation)
         run: |
           cargo test --release --lib -- dev_host
-          cargo test --release --test dev_cli -- --nocapture
+          cargo test --release --test dev_cli --test fs_watch_cli --test test_watch_cli -- --nocapture
       # M173 (W4): std/term y std/io por la Console API — `is_tty`/`size`/`raw` reales bajo una
       # consola NUEVA (`cmd /c start /wait /min`), stdin que no bloquea la VM y `read_timeout` que
       # vence; VM y binario nativo. Las suites completas (decoder, sin-tty, pipes) corren aquí.

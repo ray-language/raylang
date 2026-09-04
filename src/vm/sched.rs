@@ -654,7 +654,9 @@ impl<'a> Vm<'a> {
                         // M177: la espera de eventos de UI (pseudo-handle) se despierta SOLO con un
                         // evento en cola; a ciegas, `next_event_timeout` renovaba su plazo cada 1 ms.
                         let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE;
-                        if p.fd < 0 && p.handle >= 0 && (!is_ui || crate::builtins::ui_has_event()) {
+                        // M181: ídem para un watch de fs sin fd (Windows): solo con evento en cola.
+                        let watch_idle = crate::builtins::watch_has_pending(p.handle) == Some(false);
+                        if p.fd < 0 && p.handle >= 0 && (!is_ui || crate::builtins::ui_has_event()) && !watch_idle {
                             woken.push(shared.io_parked.remove(i));
                         } else {
                             i += 1;
@@ -724,9 +726,12 @@ impl<'a> Vm<'a> {
                 let p = &shared.io_parked[i];
                 let is_stdin = p.handle == crate::builtins::STDIN_PSEUDO_HANDLE && p.pending_write.is_none();
                 let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE; // M177: ídem para la UI
+                // M181: un watch de fs sin fd (Windows) solo despierta con evento en cola.
+                let watch_idle = p.fd < 0 && crate::builtins::watch_has_pending(p.handle) == Some(false);
                 if (p.fd >= 0 || p.handle >= 0)
                     && (!is_stdin || crate::builtins::stdin_ready(0))
                     && (!is_ui || crate::builtins::ui_has_event())
+                    && !watch_idle
                 {
                     woken.push(shared.io_parked.remove(i));
                 } else {

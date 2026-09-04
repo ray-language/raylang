@@ -1546,7 +1546,7 @@ match (fs.stat(path)) {
 bóveda de secretos: `fs.chmod("vault.db", 0o600)` la restringe a su dueño.
 
 Para **reaccionar a cambios** (rebuilds, `tail -f`, sync) está `fs.watch`: eventos de **kernel**
-(FSEvents/inotify), no sondeo de mtimes — la fibra aparca en `next_event` y el proceso duerme de
+(FSEvents/inotify/ReadDirectoryChangesW), no sondeo de mtimes — la fibra aparca en `next_event` y el proceso duerme de
 verdad hasta el cambio. El patrón rebuild-con-agrupado (una ráfaga de guardados = un rebuild):
 
 ```rust
@@ -2462,7 +2462,7 @@ without = ["tls", "sqlite"]   # este servicio nunca enlaza TLS ni SQLite en el b
 ```
 
 **Modo desarrollo** (`ray dev`): vigila los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`)
-por **eventos de kernel** (FSEvents/inotify — la misma maquinaria de `fs.watch`; cero coste en
+por **eventos de kernel** (FSEvents/inotify/ReadDirectoryChangesW — la misma maquinaria de `fs.watch`; cero coste en
 reposo, y con fallback a sondeo de mtimes en builds `--without watch`) y ante un cambio reinicia
 el programa — un template editado se regenera al relanzar, y un servidor con `serve_graceful`
 **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la compilación en

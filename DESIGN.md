@@ -11788,3 +11788,37 @@ avisará de un exe descargado, como Gatekeeper con un `.app` sin notarizar (docu
 
 Con esto 3.8 queda cerrado; del port de Windows queda el reactor IOCP de las fibras nativas y el
 watcher de `ray dev` (`docs/windows.md` §6).
+
+## 173. M181 — W7e: el watcher de Windows, `fs.watch` y `ray dev` por eventos de kernel (sep 2026)
+
+El último hueco de `ray dev` en Windows (`docs/windows.md` 3.2) y el último subsistema de
+`ray-runtime` que era `cfg(unix)`: `fs.watch` devolvía el `Err` de plataforma y `ray dev` caía
+al sondeo de mtimes (~200 ms, re-stat del árbol entero cinco veces por segundo).
+
+**El diagnóstico era el puente, no el watcher.** `notify` ya hablaba `ReadDirectoryChangesW`; lo
+unix era el self-pipe con el que el callback avisaba al mundo de fibras — un fd legible que el
+poller entiende. Windows no tiene pipes sondeables por `WSAPoll`, así que el puente se parte en
+dos piezas, como ya hizo `std/ui` en M177:
+
+- Una **cola compartida** (`Mutex` + `Condvar`, en un `Arc`) es el puente universal: el callback
+  de notify encola y avisa; quien bloquea un hilo (intérprete, nativo sin fibras, `ray dev`)
+  espera en la condvar con plazo — y la sostiene por el `Arc`, SIN retener el registro de
+  handles (un `close` concurrente no cuelga a nadie). En unix esta espera sustituye al `poll(2)`
+  del pipe que hacían el intérprete y el nativo sin fibras: menos código y sin octetos que drenar.
+- El **self-pipe queda solo en unix** y solo para aparcar fibras: `fd()` sigue siendo el extremo
+  de lectura allí, y -1 en Windows. El scheduler de la VM, que desde M170 sabe aparcar sin fd,
+  pregunta `watch_has_pending(handle)` antes de despertar la fibra — el mismo gesto que
+  `ui_has_event` en M177 (a ciegas, `next_event_timeout` renovaba su plazo a cada vuelta y no
+  vencía nunca).
+
+**Consecuencias.** `ray build --native` deja de autoexcluir `watch` en targets Windows (M173 era
+un parche sobre este hueco) y la lista de huecos del gate de M169 queda VACÍA — se conserva
+como red, con su test. `ray dev` usa los eventos en las tres plataformas; en Windows,
+`canonicalize` da `\\?\C:\…` — y la forma LARGA cuando `TEMP` viene en 8.3 (`RUNNER~1` en el
+runner de CI; la VM de desarrollo no lo reproducía) — mientras notify entrega rutas llanas bajo
+la ruta que se le dio: se vigila la raíz ya canónica y sin prefijo, para que eventos y raíz
+hablen la misma forma. `tests/fs_watch_cli.rs` y `tests/test_watch_cli.rs` entran en el job
+de Windows tal cual (el handshake por stdout no sabía de plataformas).
+
+Del port de Windows queda solo el reactor IOCP para las fibras del binario nativo
+(`docs/windows.md` §6, W7).

@@ -823,7 +823,7 @@ fn dev_check_compiles(exe: &Path, entry: &Option<String>) -> Result<(), String> 
 /// o un árbol donde el watcher no consiga abrirse. Ambas vías alimentan el MISMO bucle: el
 /// debounce y la confirmación por hash de contenido siguen aguas abajo, idénticos.
 enum DevWatcher {
-    #[cfg(all(feature = "watch", unix))]
+    #[cfg(all(feature = "watch", any(unix, windows)))]
     Events {
         watcher: ray_runtime::watch::FsWatcher,
         /// Raíz canonicalizada: los eventos llegan con la ruta real del filesystem (p. ej.
@@ -835,12 +835,19 @@ enum DevWatcher {
 
 impl DevWatcher {
     fn new(root: &Path) -> Self {
-        #[cfg(all(feature = "watch", unix))]
+        #[cfg(all(feature = "watch", any(unix, windows)))]
         {
-            match ray_runtime::watch::watch(&root.display().to_string()) {
+            let canon_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            // M181 (Windows): `canonicalize` da `\\?\C:\…` (y la forma LARGA de un `TEMP` en 8.3,
+            // `RUNNER~1` en el runner de CI); notify entrega rutas llanas bajo la ruta que se le
+            // dio. Se vigila la raíz ya canónica y sin prefijo: así los eventos y `canon_root`
+            // hablan la misma forma y `is_watched_source` los reconoce.
+            let canon_root = match canon_root.to_string_lossy().strip_prefix(r"\\?\") {
+                Some(plain) => PathBuf::from(plain),
+                None => canon_root,
+            };
+            match ray_runtime::watch::watch(&canon_root.display().to_string()) {
                 Ok(watcher) => {
-                    let canon_root =
-                        fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
                     return DevWatcher::Events { watcher, canon_root };
                 }
                 Err(e) => {
@@ -862,7 +869,7 @@ impl DevWatcher {
         snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>,
     ) -> Option<(PathBuf, String)> {
         match self {
-            #[cfg(all(feature = "watch", unix))]
+            #[cfg(all(feature = "watch", any(unix, windows)))]
             DevWatcher::Events { watcher, canon_root } => {
                 match watcher.next_timeout(200) {
                     Ok(Some((_kind, path))) => {
@@ -905,7 +912,7 @@ impl DevWatcher {
     /// (los irrelevantes — artefactos, ocultos — no alargan la espera) y deja el snapshot al día.
     fn debounce(&mut self, root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
         match self {
-            #[cfg(all(feature = "watch", unix))]
+            #[cfg(all(feature = "watch", any(unix, windows)))]
             DevWatcher::Events { watcher, canon_root } => {
                 let mut deadline = std::time::Instant::now() + std::time::Duration::from_millis(120);
                 loop {
@@ -997,7 +1004,7 @@ fn is_embed_asset(root: &Path, path: &Path) -> bool {
 /// hermano (se vigila el fuente, no el artefacto). Los temporales de guardado atómico de los
 /// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión. M147: los assets de
 /// `[native] embed` también se vigilan (para la recarga del navegador, no para reiniciar).
-#[cfg(all(feature = "watch", unix))]
+#[cfg(all(feature = "watch", any(unix, windows)))]
 fn is_watched_source(canon_root: &Path, path: &Path) -> bool {
     if is_embed_asset(canon_root, path) {
         return true;
@@ -1806,15 +1813,9 @@ fn cmd_build(args: &[String]) {
             process::exit(64);
         }
     }
-    let mut exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
-    // M173: en un target Windows, `watch` se excluye solo. El transpilador emite TODAS las funciones
-    // de los módulos importados (no poda), y `fs.watch` vive en `std/fs`, que importa casi todo
-    // programa: sin esto, importar `std/fs` bastaba para que el gate de M169 rechazara el build
-    // aunque el programa nunca vigilara nada. Excluido, `fs.watch` devuelve el mismo `Err` de
-    // plataforma que la VM (docs/windows.md §4) en vez de impedir el binario.
-    if target.as_deref().map_or(cfg!(windows), |t| t.contains("windows")) && !exclude.iter().any(|d| d == "watch") {
-        exclude.push("watch".to_string());
-    }
+    let exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
+    // M173 excluía `watch` solo en targets Windows (el gate de M169 rechazaba cualquier programa
+    // que importara `std/fs`); desde M181 `ray_runtime::watch` compila en Windows y ya no hace falta.
     // Resolución del modo fibras: default ON; `--without fibers` lo apaga; ambos a la vez es un
     // contrasentido (fail-fast, como los typos de subsistema). En un target sin poller propio
     // (Windows: el reactor es kqueue/epoll) se apaga solo, con aviso — el hilo-por-tarea sigue
@@ -1887,11 +1888,10 @@ fn cmd_build(args: &[String]) {
 fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
     // M175: `process` compila en Windows (ray_runtime::process tiene su variante); ya no es hueco.
     // M177: `ui` compila en Windows (headless; las ventanas reales devuelven el `Err` de la VM).
-    // M178: `audio` compila en Windows (WASAPI). Queda `watch`, que `ray build` autoexcluye en
-    // targets Windows (M173): la lista sigue existiendo como red por si el flag llegara igual.
-    const GAPS: &[(&str, &str)] = &[
-        ("watch", "fs.watch: filesystem watching is not supported on this platform"),
-    ];
+    // M178: `audio` compila en Windows (WASAPI). M181: `watch` también (notify sobre
+    // ReadDirectoryChangesW). La lista queda VACÍA: se conserva como red (y su test) por si un
+    // subsistema futuro volviera a ser solo-unix.
+    const GAPS: &[(&str, &str)] = &[];
     GAPS.iter()
         .filter(|(feature, _)| rt_features.contains(feature))
         .map(|(_, message)| *message)
@@ -3892,7 +3892,7 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[cfg(all(feature = "watch", unix))]
+    #[cfg(all(feature = "watch", any(unix, windows)))]
     #[test]
     fn dev_event_relevance_matches_the_scan_criteria() {
         let dir = std::env::temp_dir().join(format!("ray-dev-pred-{}", std::process::id()));
@@ -3941,10 +3941,9 @@ mod tests {
     fn native_windows_gaps_are_named_from_the_runtime_features() {
         // M169: solo los subsistemas `cfg(unix)` de ray-runtime; el resto (tls, crypto, sqlite,
         // regex, mimalloc, señales desde M168, procesos desde M175) compila en Windows.
-        assert!(native_unsupported_on_windows(&["tls", "crypto", "sqlite", "regex", "mimalloc", "process", "ui", "ui-shell", "audio"]).is_empty());
-        let gaps = native_unsupported_on_windows(&["crypto", "process", "watch", "audio"]);
-        assert_eq!(gaps.len(), 1);
-        assert!(gaps[0].contains("fs.watch"));
+        // M181: `watch` también compila en Windows — la lista de huecos está vacía.
+        assert!(native_unsupported_on_windows(&["tls", "crypto", "sqlite", "regex", "mimalloc", "process", "ui", "ui-shell", "audio", "watch"]).is_empty());
+        assert!(native_unsupported_on_windows(&[]).is_empty());
     }
 
     #[test]

@@ -1201,6 +1201,8 @@ los assets de `[native] embed` dentro) y lo deja en el formato del SO:
 ```sh
 ray bundle --icon icon.png            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
                                       # Linux: MiApp/ con el binario + MiApp.desktop
+                                      # Windows: MiApp con MiApp.exe (icono y versión embebidos,
+                                      #          sin consola al doble clic) + MiApp.lnk
 ```
 
 Y la MISMA app, en el iPhone: `ray bundle --ios` genera un **proyecto Xcode** — un shell

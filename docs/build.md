@@ -165,7 +165,8 @@ sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native
 builds herméticos/cross-compile/policy.
 
 **Empaquetado (M147c).** `ray bundle` compone este build (`--native --release` + embed) y lo
-deja en el formato del SO: `.app` en macOS, directorio + `.desktop` en Linux. Ver REFERENCE §14.
+deja en el formato del SO: `.app` en macOS, directorio + `.desktop` en Linux, directorio + `.exe`
+(icono, VERSIONINFO, sin consola) + `.lnk` en Windows (M180). Ver REFERENCE §14.
 
 **Assets embebidos (M147).** `[native] embed = ["assets"]` en el `ray.toml` (o `--embed dirs`
 ad-hoc) hornea los directorios dados DENTRO del binario (`include_bytes!`): `std/embed` los lee

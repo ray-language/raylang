@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray bundle` en Windows** (M180, docs/windows.md 3.8, W7d): directorio con `<name>.exe` (subsistema
+  WINDOWS — sin consola al doble clic —, icono y VERSIONINFO embebidos, sin crates ni `rc.exe`) y el
+  acceso directo `<name>.lnk`; el arco de escritorio de Windows queda cerrado.
 - **`std/ui` abre ventanas reales en Windows** (M179, docs/windows.md 3.8, W7c): Win32 + WebView2
   (crates `webview2-com` y `windows`, solo en Windows), menús, diálogos y el puente IPC del framework
   — el contrato de `std/ui` en macOS, Linux y Windows.

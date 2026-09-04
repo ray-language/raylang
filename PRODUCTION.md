@@ -118,7 +118,7 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 | Fibras en el binario nativo | `--without fibers` automático (hilo por tarea; el reactor es kqueue/epoll) |
 | `std/ui` | **funciona** (M179): ventana Win32 + WebView2 (`webview2-com`, el único crate del port), menús, diálogos, puente IPC; headless (M177) en pruebas y CI |
 | `std/audio` | **funciona** (M178): WASAPI en modo compartido, s16le con conversión del motor; `audio.write` bloquea el hilo con el búfer lleno (pipe anónimo, sin aparcar la fibra) |
-| `ray bundle` | no soportado (arco de escritorio = macOS/Linux; móvil = iOS/Android); `.exe`+acceso directo pendiente (W7) |
+| `ray bundle` | **funciona** (M180): `<name><name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos por `UpdateResourceW`) + `<name>.lnk`; sin Authenticode en v1 |
 | Build arm64 | no publicada (Windows ARM ejecuta la x86_64 por emulación) |
 
 ---

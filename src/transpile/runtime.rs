@@ -761,12 +761,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    let dl = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
                 "    loop {\n",
                 "        if let Some((kind, win, mtag)) = ray_runtime::ui::try_next_event() { return tag(vec![\"ok\".to_string(), kind, win.to_string(), mtag]); }\n",
-                "        let fd = ray_runtime::ui::event_fd();\n",
-                "        if fd < 0 { return tag(vec![\"err\".to_string(), \"ui: no event pipe\".to_string()]); }\n",
                 "        let rem = match dl {\n",
                 "            None => 0,\n",
                 "            Some(d) => { let r = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if r <= 0 { return tag(vec![\"timeout\".to_string()]); } r }\n",
                 "        };\n",
+                // M182: en Windows la cola de eventos de UI no tiene fd (M177): con fibras, la espera
+                // bloqueante va al pool por tramos de 200 ms (re-sondea la cola entre tramos).
+                "        #[cfg(windows)] { let step = if rem == 0 { 200 } else { rem.min(200) }; if let Some((kind, win, mtag)) = ray_runtime::fibers::run_blocking(move || ray_runtime::ui::next_event_blocking(step)) { return tag(vec![\"ok\".to_string(), kind, win.to_string(), mtag]); } if rem > 0 && rem <= 200 { return tag(vec![\"timeout\".to_string()]); } continue; }\n",
+                "        let fd = ray_runtime::ui::event_fd();\n",
+                "        if fd < 0 { return tag(vec![\"err\".to_string(), \"ui: no event pipe\".to_string()]); }\n",
                 "        if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); }\n",
                 "    }\n}\n",
             ));

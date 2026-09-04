@@ -11852,7 +11852,9 @@ despertar; un solo descriptor hace de ambos extremos). El sueño fino fuera de f
 consola y el watch de fs no se pueden aparcar en el reactor. Con fibras en Windows, el código
 emitido los lleva al **pool bloqueante** (`run_blocking`, que ya existía para las externs FFI
 `blocking`): la lectura o escritura completa corre en un hilo del pool y la fibra aparca
-mientras tanto — cero CPU, sin bloquear al worker. El `fd` del código emitido pasa por
+mientras tanto — cero CPU, sin bloquear al worker. La cola de eventos de `std/ui` es el cuarto
+caso (sin fd en Windows desde M177): CI lo cazó — `ui_cli` colgó 39 minutos en el runner porque la
+espera con fibras pedía el fd del pipe; ahora también espera por el pool, por tramos de 200 ms. El `fd` del código emitido pasa por
 `__ray_fd` (descriptor en unix, SOCKET truncado a i32 en Windows: los handles de Winsock son
 valores pequeños); TLS hace lo propio en `tls.rs`.
 

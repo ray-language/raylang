@@ -417,19 +417,20 @@ section.engines { padding: 2.5rem 0 4rem; }
 <section class="eco platforms" id="plataformas">
     <div class="wrap">
         <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
-        <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS y Linux y
-        como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
+        <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
+        Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
         interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
         servidor web en raylang, y el puente JS ↔ raylang, los menús nativos, los diálogos de
         archivo, el audio y los assets horneados en el binario vienen en la toolchain.</p>
         <div class="apps">
             <div class="app"><b>macOS</b><span><code>ray bundle</code> produce la <code>.app</code> con icono, menú de aplicación, panel About y firma ad-hoc (la de distribución la pones tú).</span></div>
             <div class="app"><b>Linux</b><span>el mismo comando deja el binario con su lanzador <code>.desktop</code>; ventana y webview sobre GTK/WebKitGTK.</span></div>
+            <div class="app"><b>Windows</b><span>el mismo comando deja el <code>.exe</code> de escritorio (sin consola al doble clic, icono y versión embebidos) con su acceso directo; ventana y webview sobre Win32/WebView2, audio por WASAPI.</span></div>
             <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> genera el proyecto Xcode con el programa compilado a librería estática; firma persistente para dispositivo y simulador.</span></div>
             <div class="app"><b>Android</b><span><code>ray bundle --android</code> genera el proyecto Gradle con el <code>.so</code> nativo, icono launcher y firma de release; audio por AAudio.</span></div>
         </div>
         <div class="chips">
-            <span class="chip"><b>ray bundle</b> · .app / .desktop</span>
+            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
             <span class="chip"><b>ray bundle --ios</b> · proyecto Xcode</span>
             <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
         </div>

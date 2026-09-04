@@ -477,7 +477,7 @@ fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
         "extern \"m\" { fn sqrt(x: float) -> float; }\n\
          fn main() { print(sqrt(2.0)); }",
     );
-    assert!(rust.contains("#[link(name = \"m\")]"), "link a libm: {}", rust);
+    assert!(rust.contains("#[cfg_attr(not(windows), link(name = \"m\"))]"), "link a libm (fuera de Windows: M182): {}", rust);
     assert!(rust.contains("#[link_name = \"sqrt\"]"), "link_name del símbolo: {}", rust);
     assert!(rust.contains("fn __ffi_sqrt(__a0: f64) -> f64"), "decl extern C: {}", rust);
     assert!(rust.contains("unsafe { __ffi_sqrt("), "wrapper llama en unsafe: {}", rust);

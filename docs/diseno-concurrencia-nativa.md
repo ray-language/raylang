@@ -460,3 +460,18 @@ canales no están en el hot path. Paridad intacta: 9/9 de fibras, AMBOS corpus, 
 
 **El arco no tiene ya piezas interinas.** Pendientes menores (no bloqueantes): connect
 no-bloqueante del cliente, pool de pilas de corrutina, sharding del buzón del reactor.
+
+## 12. Windows (M182, sep 2026) — el reactor `WSAPoll` y el límite de corosensei
+
+El port a Windows (`docs/windows.md` 3.6, DESIGN §174) no cambió el modelo: el scheduler es de
+*readiness* y la forma que encaja en Windows es `WSAPoll` — persistente sobre la lista de
+intereses armados, oneshot al dispararse, con un socket UDP conectado a sí mismo como tubería
+de despertar. IOCP (completion) habría exigido I/O solapada en todo el runtime emitido. Lo que
+no es socket (pipes de procesos, consola, watch) va al pool bloqueante (`run_blocking`) con la
+fibra aparcada.
+
+El límite es de corosensei: sin backend para AArch64-Windows, las fibras son solo x86_64 en
+Windows; en ARM64 `ray build` cae al hilo-por-tarea con el motivo en el aviso. Verificado
+cross-compilando desde una VM ARM64 y ejecutando bajo la emulación x64 de Windows 11 (salida
+byte-idéntica a la VM en el servidor TCP que se habla a sí mismo y en los canales); el runner
+x86_64 de CI corre `tests/native_fibers_cli.rs`.

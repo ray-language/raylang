@@ -122,10 +122,21 @@ mod imp {
     #[cfg(feature = "fibers")]
     impl TlsStream {
         fn raw_fd(&self) -> i32 {
+            // M182: en Windows el "fd" del reactor es el SOCKET (WSAPoll), truncado a i32 como en
+            // el resto del runtime (los handles de Winsock son valores pequeños).
+            #[cfg(unix)]
             use std::os::fd::AsRawFd;
+            #[cfg(windows)]
+            use std::os::windows::io::AsRawSocket;
             match self {
+                #[cfg(unix)]
                 TlsStream::Client(s) => s.sock.as_raw_fd(),
+                #[cfg(unix)]
                 TlsStream::Server(s) => s.sock.as_raw_fd(),
+                #[cfg(windows)]
+                TlsStream::Client(s) => s.sock.as_raw_socket() as i32,
+                #[cfg(windows)]
+                TlsStream::Server(s) => s.sock.as_raw_socket() as i32,
             }
         }
 

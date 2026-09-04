@@ -174,7 +174,7 @@ mod __ray_term {
 
 pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fibers: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
-    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns)]\n");
+    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns, unreachable_code)]\n");
     out.push_str("use std::rc::Rc;\n");
     // H6 + H21-N1: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el
     // nativo no lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). El error viaja como PANIC con
@@ -499,6 +499,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
             "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::default() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
+            // M182: el "fd" por el que aparca el reactor de fibras — el descriptor en unix y el
+            // SOCKET (truncado a i32, valores pequeños) en Windows, donde el reactor es WSAPoll.
+            "#[cfg(unix)] #[allow(dead_code)] fn __ray_fd<T: std::os::fd::AsRawFd>(s: &T) -> i32 { s.as_raw_fd() }\n",
+            "#[cfg(windows)] #[allow(dead_code)] fn __ray_fd<T: std::os::windows::io::AsRawSocket>(s: &T) -> i32 { s.as_raw_socket() as i32 }\n",
         ));
         // M96c/M96g: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) →
         // borra también la(s) entrada(s) de ESE hilo en las cachés de socket/TLS, para que un
@@ -802,9 +806,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        };\n",
         ));
         if t.fibers {
+            // M182: con fibras en Windows el watch no tiene fd (no es un socket): la fibra
+            // espera en la cola desde el pool bloqueante (`run_blocking`), por tramos de 200 ms
+            // como el camino sin fibras, para re-verificar el registro (un close concurrente).
             out.push_str(concat!(
-                "        let _ = &q;\n",
-                "        if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); }\n",
+                "        #[cfg(unix)] { let _ = &q; if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); } }\n",
+                "        #[cfg(windows)] { let _ = fd; let step = if rem == 0 { 200 } else { rem.min(200) }; let got = ray_runtime::fibers::run_blocking(move || q.wait(step)); if !got && rem > 0 && rem <= 200 { return tag(vec![\"timeout\".to_string()]); } }\n",
             ));
         } else {
             // M181: en Windows no hay fd (ReadDirectoryChangesW no da nada sondeable): la espera
@@ -867,7 +874,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // el fd del REGISTRO (estable hasta el close), no el del clon (muere con el drop).
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
                 "    loop {\n",
-                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, std::os::fd::AsRawFd::as_raw_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
+                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
                 "        match l.accept() {\n",
                 "            Ok((s, _)) => { let _ = s.set_nonblocking(true); let _ = s.set_nodelay(true); return Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); }\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); ray_runtime::fibers::wait_readable(fd); }\n",
@@ -959,18 +966,20 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // handle"), como la VM. El camino caliente (n > 0) no toca el lock global.
             let read_loop = |ok_expr: &str| {
                 format!(
-                    "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some((n, Ok({ok_expr}))),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some((1, Err(Rc::<str>::from(e.to_string())))) }} }});\n        if let Some((n, v)) = res {{\n            if n == 0 && !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n            return v;\n        }}\n        if !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
+                    "    let fd = __ray_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some((n, Ok({ok_expr}))),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some((1, Err(Rc::<str>::from(e.to_string())))) }} }});\n        if let Some((n, v)) = res {{\n            if n == 0 && !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n            return v;\n        }}\n        if !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
                 )
             };
             write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())")).unwrap();
             write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{\n    {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<[u8]>::from(&buf[..n])")).unwrap();
-            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s); let mut off = 0;\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
+            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = __ray_fd(&*s); let mut off = 0;\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
         } else {
             // §64 (también en hilo-por-tarea): en EOF se re-verifica el registro — un close desde
             // otra tarea hizo shutdown del fd (el read bloqueado despierta con Ok(0)) y debe
             // reportarse como Err("invalid handle"), no como un fin de stream normal.
-            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
-            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            // M182: el plazo de lectura (SO_RCVTIMEO en hilo-por-tarea) vence como WouldBlock (unix) o
+            // TimedOut (Windows, WSAETIMEDOUT 10060): ambos son el "read timeout" estable de la VM.
+            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
             write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         }
         out.push_str(concat!(
@@ -1032,7 +1041,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
                 "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
                 "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-                "    let r = match __ray_udp_clone(h) { Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); loop {\n",
+                "    let r = match __ray_udp_clone(h) { Some(s) => { let fd = __ray_fd(&s); loop {\n",
                 "        match s.send_to(data, (host, port as u16)) {\n",
                 "            Ok(n) => break Ok(n),\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n",
@@ -1044,7 +1053,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // el error estable "read timeout" (byte-idéntico a VM/intérprete).
                 "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    match __ray_udp_clone(h) {\n",
-                "        Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); let mut buf = vec![0u8; 65536];\n",
+                "        Some(s) => { let fd = __ray_fd(&s); let mut buf = vec![0u8; 65536];\n",
                 "            let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n",
                 "            let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "            loop {\n",
@@ -1307,8 +1316,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    use std::io::Write;\n",
             "    let tag = |a: &str, b: String| Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(a), Rc::<str>::from(b.as_str())]));\n",
             "    let Some(f) = __ray_stdin_clone(h) else { return tag(\"err\", format!(\"invalid child stdin handle: {}\", h)); };\n",
-            // M175: el fd solo existe (y solo hace falta) con fibras — que son unix.
-            "    #[cfg(unix)] let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
+        ));
+        if t.fibers {
+            // M182: en Windows el pipe del hijo es bloqueante y no sondeable (WSAPoll solo ve
+            // sockets): con fibras, la escritura completa va al pool bloqueante y la fibra aparca.
+            out.push_str(concat!(
+                "    #[cfg(windows)] { let fw = std::sync::Arc::clone(&f); let data = data.to_vec(); return match ray_runtime::fibers::run_blocking(move || { let mut w = &*fw; w.write_all(&data).map_err(|e| e.to_string()) }) { Ok(()) => tag(\"ok\", String::new()), Err(e) => tag(\"err\", e) }; }\n",
+            ));
+        }
+        out.push_str(concat!(
+            // M175: el fd solo existe (y solo hace falta) con fibras en unix.
+            "    #[cfg(unix)] let fd = __ray_fd(&*f);\n",
             "    #[cfg(unix)] let _ = fd;\n",
             "    let mut off = 0usize;\n",
             "    while off < data.len() {\n",
@@ -1318,7 +1336,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => ",
         ));
         out.push_str(if t.fibers {
-            "{ ray_runtime::fibers::wait_writable(fd); }\n"
+            // (En Windows este brazo es inalcanzable: la escritura ya volvió por el pool.)
+            "{ #[cfg(unix)] { ray_runtime::fibers::wait_writable(fd); } }\n"
         } else {
             "{ std::thread::sleep(std::time::Duration::from_millis(1)); }\n"
         });
@@ -1370,7 +1389,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_proc_read(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    use std::io::Read;\n",
                 "    let Some(f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
-                "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
+                // M182: en Windows el pipe no es sondeable — lectura bloqueante en el pool.
+                "    #[cfg(windows)] { let fr = std::sync::Arc::clone(&f); return match ray_runtime::fibers::run_blocking(move || { let mut buf = vec![0u8; 65536]; let mut r = &*fr; r.read(&mut buf).map(|n| { buf.truncate(n); buf }).map_err(|e| e.to_string()) }) { Ok(b) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&b[..])]), Err(e) => __ray_proc_err(e) }; }\n",
+                "    #[cfg(unix)] { let fd = __ray_fd(&*f);\n",
                 "    loop {\n",
                 "        let res = __RAY_PROC_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); let mut r = &*f; match r.read(&mut buf[..]) {\n",
                 "            Ok(n) => Some(__ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&buf[..n])])),\n",
@@ -1378,7 +1399,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "            Err(e) => Some(__ray_proc_err(e.to_string())) } });\n",
                 "        if let Some(v) = res { return v; }\n",
                 "        ray_runtime::fibers::wait_readable(fd);\n",
-                "    } }\n",
+                "    } } }\n",
             ));
         } else {
             out.push_str(concat!(
@@ -1879,7 +1900,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    #[cfg(unix)] { while !__ray_stdin::ready(0) { ray_runtime::fibers::wait_readable(0); } __ray_stdin::read_max(max) }
 ",
-                "    #[cfg(windows)] { let _ = __ray_stdin::ready(-1); __ray_stdin::read_max(max) }
+                // M182: la consola de Windows no es sondeable por el reactor: la espera bloqueante
+                // va al pool (`run_blocking`) y la fibra aparca mientras tanto.
+                "    #[cfg(windows)] { ray_runtime::fibers::run_blocking(move || { let _ = __ray_stdin::ready(-1); __ray_stdin::read_max(max) }) }
 ",
                 "    #[cfg(not(any(unix, windows)))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
 ",
@@ -1907,7 +1930,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    }
 ",
-                "    #[cfg(windows)] { if !__ray_stdin::ready(ms.clamp(0, i32::MAX as i64) as i32) { return None; } Some(__ray_stdin::read_max(max)) }
+                "    #[cfg(windows)] { ray_runtime::fibers::run_blocking(move || { if !__ray_stdin::ready(ms.clamp(0, i32::MAX as i64) as i32) { return None; } Some(__ray_stdin::read_max(max)) }) }
 ",
                 "    #[cfg(not(any(unix, windows)))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
 ",

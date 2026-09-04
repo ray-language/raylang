@@ -168,14 +168,109 @@ pub fn system_linker() -> Result<String, String> {
             _ => Err("run `xcode-select --install` (Xcode Command Line Tools provide the linker)".to_string()),
         },
         "windows" => {
+            // M183: `rustc` NO exige link.exe en el PATH — lo localiza por la instalación de Visual
+            // Studio (como hace el crate `cc`); la sonda mira donde mira rustc para no decir "not
+            // found" en una máquina que enlaza perfectamente.
             if on_path("link") || on_path("cl") {
                 Ok("MSVC linker on PATH".to_string())
+            } else if let Some(p) = msvc_tool("link") {
+                Ok(format!("MSVC linker at {}", p.display()))
             } else {
                 Err("install the Visual Studio Build Tools (C++ workload) — rustc on Windows links with MSVC".to_string())
             }
         }
         _ => {
             if on_path("cc") {
+                Ok("cc on PATH".to_string())
+            } else {
+                Err("install a C toolchain (Debian/Ubuntu: `sudo apt install build-essential`; Fedora: `sudo dnf install gcc`)".to_string())
+            }
+        }
+    }
+}
+
+/// Busca `<tool>.exe` en las instalaciones de Visual Studio/Build Tools (2017+):
+/// `<ProgramFiles*>\Microsoft Visual Studio\<año>\<edición>\VC\Tools\MSVC\<ver>\bin\Host<arch>\<arch>`.
+/// Devuelve la primera coincidencia (host = la arquitectura de este proceso).
+#[cfg(windows)]
+fn msvc_tool(tool: &str) -> Option<PathBuf> {
+    let host = match env::consts::ARCH {
+        "x86_64" => "Hostx64",
+        "aarch64" => "Hostarm64",
+        _ => "Hostx86",
+    };
+    let target = match env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => "x86",
+    };
+    let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(|v| env::var_os(v))
+        .map(|p| PathBuf::from(p).join("Microsoft Visual Studio"))
+        .collect();
+    let dirs = |p: &Path| std::fs::read_dir(p).ok().into_iter().flatten().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect::<Vec<_>>();
+    for root in roots {
+        for year in dirs(&root) {
+            for edition in dirs(&year) {
+                let msvc = edition.join("VC").join("Tools").join("MSVC");
+                let mut versions = dirs(&msvc);
+                versions.sort();
+                for v in versions.into_iter().rev() {
+                    let exe = v.join("bin").join(host).join(target).join(format!("{tool}.exe"));
+                    if exe.is_file() {
+                        return Some(exe);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+#[cfg(not(windows))]
+fn msvc_tool(_tool: &str) -> Option<PathBuf> {
+    None
+}
+
+/// M183: el compilador de C que necesitan las dependencias con build script del runtime nativo
+/// (`mimalloc`, `ring` para tls/crypto, `sqlite`). `Ok(descripción)` o `Err(cómo instalarlo)`.
+/// `target` es el triple efectivo del build: en Windows ARM64 (`aarch64-pc-windows-msvc`), `ring`
+/// compila su ensamblador con **clang**, no con `cl` — se comprueba aparte cuando hace falta.
+pub fn c_compiler(target: &str, needs_clang: bool) -> Result<String, String> {
+    let on_path = |exe: &str| {
+        let exe = format!("{exe}{}", env::consts::EXE_SUFFIX);
+        env::var_os("PATH")
+            .map(|p| env::split_paths(&p).any(|d| !d.as_os_str().is_empty() && d.join(&exe).is_file()))
+            .unwrap_or(false)
+    };
+    if needs_clang && target.contains("windows") {
+        let llvm = env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("LLVM").join("bin"));
+        if on_path("clang") || on_path("clang-cl") {
+            return Ok("clang on PATH".to_string());
+        }
+        if let Some(bin) = llvm.filter(|b| b.join("clang.exe").is_file()) {
+            return Err(format!(
+                "clang is installed at {} but not on the PATH — add it (ring compiles its assembly with clang on {target})",
+                bin.display()
+            ));
+        }
+        return Err(format!("install LLVM (`winget install LLVM.LLVM`) and put its bin on the PATH — ring compiles its assembly with clang on {target}"));
+    }
+    match env::consts::OS {
+        "macos" => system_linker(),
+        "windows" => {
+            if on_path("cl") {
+                Ok("cl.exe on PATH".to_string())
+            } else if on_path("clang-cl") || on_path("clang") {
+                Ok("clang on PATH".to_string())
+            } else if let Some(p) = msvc_tool("cl") {
+                Ok(format!("cl.exe at {}", p.display()))
+            } else {
+                Err("install the Visual Studio Build Tools (C++ workload) or LLVM — the runtime's C dependencies (mimalloc, ring, sqlite) need a C compiler".to_string())
+            }
+        }
+        _ => {
+            if on_path("cc") || on_path("gcc") || on_path("clang") {
                 Ok("cc on PATH".to_string())
             } else {
                 Err("install a C toolchain (Debian/Ubuntu: `sudo apt install build-essential`; Fedora: `sudo dnf install gcc`)".to_string())
@@ -229,6 +324,18 @@ fn status() {
     match system_linker() {
         Ok(d) => println!("system linker: {d}"),
         Err(how) => println!("system linker: not found — {how}"),
+    }
+    // M183: el compilador de C (mimalloc/ring/sqlite) y, en Windows ARM64, clang para ring.
+    let host = crate::cli::host_triple();
+    match c_compiler(&host, false) {
+        Ok(d) => println!("C compiler: {d}"),
+        Err(how) => println!("C compiler: not found — {how}"),
+    }
+    if host.starts_with("aarch64") && host.contains("windows") {
+        match c_compiler(&host, true) {
+            Ok(d) => println!("clang (ring on ARM64 Windows): {d}"),
+            Err(how) => println!("clang (ring on ARM64 Windows): not found — {how}"),
+        }
     }
     match installed_vendor() {
         Some(v) => println!("ray-runtime vendor ({}): {}", env!("CARGO_PKG_VERSION"), v.display()),

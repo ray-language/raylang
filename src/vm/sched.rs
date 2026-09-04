@@ -624,6 +624,13 @@ impl<'a> Vm<'a> {
                 Some(d) => d.saturating_duration_since(now).as_millis().min(i32::MAX as u128 - 1) as i32 + 1,
                 None => -1,
             };
+            // M183 (A1 de RayDesk): las esperas SIN fd que el poller no ve — la cola de eventos de
+            // `std/ui` y, en Windows, un `fs.watch` — se acotan a 10 ms y se re-evalúan tras cada
+            // vuelta. Antes, con un socket aparcado a la vez (el webserver de la app), WSAPoll
+            // esperaba SIN plazo y `ui.next_event()` no volvía jamás (solo el `_timeout` "veía" el
+            // evento, al vencer).
+            let fdless_wait = shared.io_parked.iter().any(|p| p.fd < 0 && p.handle >= 0);
+            let timeout_ms = if fdless_wait && (timeout_ms < 0 || timeout_ms > 10) { 10 } else { timeout_ms };
             // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su
             // socket. Las durmientes (fd < 0) no entran al poller: solo cuenta su deadline.
             let mut read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
@@ -707,6 +714,10 @@ impl<'a> Vm<'a> {
                 // Despertar vacío CON deadlines pendientes: fue el timeout del poller (o EINTR) →
                 // la próxima vuelta del bucle expira los vencidos. Sin deadlines: EINTR → respaldo.
                 if timeout_ms >= 0 {
+                    // M183: ¿alguna espera sin fd ya tiene su evento? Despiértala (ver arriba).
+                    if fdless_wait && Self::wake_ready_without_fd(shared) {
+                        return;
+                    }
                     continue;
                 }
             }
@@ -745,6 +756,32 @@ impl<'a> Vm<'a> {
 
     /// Pone listas las fibras despertadas: las de lectura re-ejecutan su opcode (re-pushearon su handle);
     /// las de escritura terminan lo que faltaba (`finish_parked_write`).
+    /// M183: despierta las fibras aparcadas SIN fd cuya fuente ya tiene algo — la cola de eventos
+    /// de UI (`ui_has_event`) o un watch de fs sin fd (`watch_has_pending`). Devuelve si despertó
+    /// a alguna. Lo llama el bucle del poller tras un plazo vencido (las fuentes sin fd no lo
+    /// despiertan solas).
+    fn wake_ready_without_fd(shared: &mut Shared) -> bool {
+        let mut woken: Vec<IoParked> = Vec::new();
+        let mut i = 0;
+        while i < shared.io_parked.len() {
+            let p = &shared.io_parked[i];
+            let ready = p.fd < 0
+                && p.handle >= 0
+                && ((p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE && crate::builtins::ui_has_event())
+                    || crate::builtins::watch_has_pending(p.handle) == Some(true));
+            if ready {
+                woken.push(shared.io_parked.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        if woken.is_empty() {
+            return false;
+        }
+        Self::wake_parked(shared, woken);
+        true
+    }
+
     pub(super) fn wake_parked(shared: &mut Shared, woken: Vec<IoParked>) {
         for p in woken {
             match p.pending_write {

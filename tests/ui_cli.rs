@@ -561,3 +561,56 @@ fn on_windows_a_real_window_opens_evaluates_and_closes() {
     assert_eq!(out.status.code(), Some(0), "exit 0\n{text}\n{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(text, "eval ok: true\nevent: closed\n", "la ventana real abre, evalúa y cierra");
 }
+
+/// M183 (A1 de RayDesk en Windows): `ui.next_event()` BLOQUEANTE debe volver aunque otra fibra
+/// tenga un socket aparcado (el webserver de una app de escritorio). Antes, en Windows, el
+/// poller esperaba sin plazo por el socket y la cola de eventos de UI — sin fd — no lo despertaba:
+/// la app nunca veía `message`/`menu`/`closed` (solo `next_event_timeout` "funcionaba", al vencer).
+const PARKED_SOCKET_PROG: &str = r#"import std/ui;
+import std/net;
+import std/time;
+
+fn main() -> int {
+    let srv = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(s) => s,
+        Result.Err(e) => { print("listen: " + e); return 1; },
+    };
+    let acceptor = spawn(fn() {
+        match (net.tcp_accept(srv)) {
+            Result.Ok(c) => { close(c); },
+            Result.Err(_) => {},
+        }
+    });
+    let h = match (ui.open("probe", "about:blank", 320, 200)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => { print("open err: " + e); return 1; },
+    };
+    let closer = spawn(fn() { time.sleep(300); let _ = close(h); });
+    match (ui.next_event()) {
+        Result.Ok(ev) => print("event: " + ev.kind),
+        Result.Err(e) => print("err: " + e),
+    }
+    join(closer);
+    let port = net.local_port(srv);
+    match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(c) => { close(c); },
+        Result.Err(_) => {},
+    }
+    join(acceptor);
+    close(srv);
+    print("done");
+    0
+}
+"#;
+
+#[test]
+fn blocking_next_event_wakes_while_a_socket_is_parked() {
+    let base = tmp("parked_socket");
+    std::fs::write(base.join("prog.ray"), PARKED_SOCKET_PROG).unwrap();
+    // Solo la VM: el programa usa `spawn` y el intérprete es el oráculo secuencial.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ray"));
+    cmd.args(["--vm", "prog.ray"]).current_dir(&base);
+    let (out, code) = run_headless(&mut cmd);
+    assert_eq!(code, 0, "exit 0\n{out}");
+    assert_eq!(out, "event: closed\ndone\n", "el next_event bloqueante despierta con un socket aparcado");
+}

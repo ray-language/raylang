@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/ui` en Windows, afinado con una app real** (M183, DESIGN §175): `ui.next_event()` bloqueante ya
+  despierta con sockets aparcados (el webserver de la app); `save_file`/`pick_folder` abren el diálogo
+  correcto y modal de la ventana; los `shortcut` de `MenuItem` son aceleradores `Ctrl+X` reales y los
+  menús van sin la columna de check.
+- **`ray bundle`/`ray build --native` en Windows**: la puerta de fibras es la misma en ambos (en ARM64
+  ya no intenta compilar corosensei); comprobación previa del compilador de C (y de clang para `ring`
+  en ARM64) con el remedio en el mensaje; `ray toolchain status` informa del compilador de C y
+  encuentra el linker de MSVC donde lo encuentra rustc.
+- **`ray.lock` solo se escribe si cambia** (antes cada `ray run` lo reescribía y git lo marcaba con `autocrlf`).
+
 ## 1.6.0 — 2026-09-04
 
 - **Fibras nativas en Windows x86_64** (M182, docs/windows.md 3.6, W7f): `ray build --native` en un

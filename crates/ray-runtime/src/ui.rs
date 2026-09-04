@@ -2747,6 +2747,8 @@ mod win {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, OnceLock};
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use webview2_com::AcceleratorKeyPressedEventHandler;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
     use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -2780,6 +2782,9 @@ mod win {
         webview: Option<ICoreWebView2>,
         /// id de comando → tag del item de menú (para WM_COMMAND).
         menu_tags: HashMap<u16, String>,
+        /// M183: atajos (código VK, con Shift, tag) — los atiende `AcceleratorKeyPressed` del
+        /// webview, porque el teclado del webview NO llega a la ventana anfitriona.
+        accels: Vec<(u16, bool, String)>,
     }
 
     unsafe extern "system" fn dispatcher_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -2845,6 +2850,12 @@ mod win {
                         if let Some(c) = &ctx.controller {
                             let _ = c.Close();
                         }
+                    }
+                }
+                if let Some(table) = accel_tables().lock().unwrap().remove(&(hwnd.0 as usize)) {
+                    // SAFETY: tabla propia creada en build_menubar; nadie la usa tras quitarla del mapa.
+                    unsafe {
+                        let _ = DestroyAcceleratorTable(HACCEL(table as *mut _));
                     }
                 }
                 LRESULT(0)
@@ -2916,8 +2927,20 @@ mod win {
                 if r == 0 {
                     continue; // WM_QUIT ajeno: el bucle sigue (el programa manda)
                 }
+                // M183: los atajos de menú (Ctrl+X) de la ventana raíz del mensaje — el teclado
+                // lo recibe el hijo de WebView2, así que se sube a la raíz.
+                if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+                    let root = GetAncestor(msg.hwnd, GA_ROOT);
+                    let table = accel_tables().lock().unwrap().get(&(root.0 as usize)).copied();
+                    if let Some(t) = table {
+                        if TranslateAcceleratorW(root, HACCEL(t as *mut _), &msg) != 0 {
+                            continue;
+                        }
+                    }
+                }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+
             }
         }
     }
@@ -2976,42 +2999,90 @@ mod win {
 
     /// Los menús declarados hasta ahora — como en GTK, el menú es POR VENTANA: cada
     /// `open_window` construye el suyo de estos specs (aplican a las ventanas abiertas DESPUÉS
-    /// de `ui.menu()`). Un menú declarado: (título, items (tag, label)).
-    type MenuSpec = (String, Vec<(String, String)>);
+    /// de `ui.menu()`). Un menú declarado: (título, items (tag, label, atajo)). M183: el atajo
+    /// (`shortcut` de MenuItem, un carácter; mayúscula = con Shift) se muestra como `Ctrl+X` y va
+    /// a la tabla de aceleradores de la ventana.
+    type MenuSpec = (String, Vec<(String, String, String)>);
     fn menu_specs() -> &'static std::sync::Mutex<Vec<MenuSpec>> {
         static SPECS: OnceLock<std::sync::Mutex<Vec<MenuSpec>>> = OnceLock::new();
         SPECS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
     }
     pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
-        let spec: MenuSpec = (title.to_string(), items.iter().map(|(tag, label, _key)| (tag.clone(), label.clone())).collect());
+        let spec: MenuSpec = (title.to_string(), items.iter().map(|(tag, label, key)| (tag.clone(), label.clone(), key.clone())).collect());
         menu_specs().lock().unwrap().push(spec);
         Ok(())
     }
 
+    /// El atajo de un item (`shortcut` de un carácter) como (texto para el menú, ACCEL). Minúscula
+    /// → Ctrl+X; mayúscula → Ctrl+Shift+X. Solo letras y dígitos (los códigos VK coinciden con el
+    /// ASCII en mayúsculas); otra cosa se ignora.
+    fn accel_for(key: &str, cmd: u16) -> Option<(String, ACCEL)> {
+        let c = key.chars().next().filter(|c| c.is_ascii_alphanumeric() && key.chars().count() == 1)?;
+        let shift = c.is_ascii_uppercase();
+        let up = c.to_ascii_uppercase();
+        let mut fvirt = FVIRTKEY | FCONTROL;
+        if shift {
+            fvirt |= FSHIFT;
+        }
+        let text = if shift { format!("Ctrl+Shift+{up}") } else { format!("Ctrl+{up}") };
+        Some((text, ACCEL { fVirt: fvirt, key: up as u16, cmd }))
+    }
+
+    /// hwnd (usize) → HACCEL (como isize) de cada ventana viva con aceleradores; lo consulta el
+    /// bucle de mensajes (`TranslateAcceleratorW` sobre la ventana raíz del mensaje).
+    fn accel_tables() -> &'static std::sync::Mutex<HashMap<usize, isize>> {
+        static T: OnceLock<std::sync::Mutex<HashMap<usize, isize>>> = OnceLock::new();
+        T.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+    }
+
     /// Construye la barra de menús de una ventana nueva a partir de los specs; devuelve el mapa
-    /// id de comando → tag. Corre en el hilo 1.
-    unsafe fn build_menubar(hwnd: HWND) -> HashMap<u16, String> {
+    /// id de comando → tag. Corre en el hilo 1. M183: los items con atajo muestran `Ctrl+X` y
+    /// alimentan la tabla de aceleradores de la ventana; la barra va sin la columna de check
+    /// (`MNS_NOCHECK`: `MenuItem` no tiene `checked`/`icon`, y el hueco vacío se veía como sangría).
+    unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Vec<(u16, bool, String)>) {
         let mut tags = HashMap::new();
+        let mut keys: Vec<(u16, bool, String)> = Vec::new();
         let specs = menu_specs().lock().unwrap().clone();
         if specs.is_empty() {
-            return tags;
+            return (tags, keys);
         }
+        let mut accels: Vec<ACCEL> = Vec::new();
         // SAFETY: menús propios recién creados; Windows los posee en cuanto se asignan a la ventana.
         unsafe {
-            let Ok(bar) = CreateMenu() else { return tags };
+            let Ok(bar) = CreateMenu() else { return (tags, keys) };
             let mut next_id = MENU_ID_BASE;
             for (title, items) in specs {
                 let Ok(popup) = CreatePopupMenu() else { continue };
-                for (tag, label) in items {
+                for (tag, label, key) in items {
+                    let label = match accel_for(&key, next_id) {
+                        Some((text, accel)) => {
+                            keys.push((accel.key, (accel.fVirt & FSHIFT).0 != 0, tag.clone()));
+                            accels.push(accel);
+                            format!("{label}\t{text}")
+                        }
+                        None => label,
+                    };
                     let _ = AppendMenuW(popup, MF_STRING, next_id as usize, PCWSTR(wide(&label).as_ptr()));
                     tags.insert(next_id, tag);
                     next_id = next_id.wrapping_add(1);
                 }
                 let _ = AppendMenuW(bar, MF_POPUP, popup.0 as usize, PCWSTR(wide(&title).as_ptr()));
             }
+            let info = MENUINFO {
+                cbSize: std::mem::size_of::<MENUINFO>() as u32,
+                fMask: MIM_STYLE | MIM_APPLYTOSUBMENUS,
+                dwStyle: MNS_NOCHECK,
+                ..Default::default()
+            };
+            let _ = SetMenuInfo(bar, &info);
             let _ = SetMenu(hwnd, Some(bar));
+            if !accels.is_empty() {
+                if let Ok(table) = CreateAcceleratorTableW(&accels) {
+                    accel_tables().lock().unwrap().insert(hwnd.0 as usize, table.0 as isize);
+                }
+            }
         }
-        tags
+        (tags, keys)
     }
 
     /// El shim IPC de mac/GTK con el transporte de WebView2.
@@ -3103,6 +3174,39 @@ mod win {
                 })),
                 &mut token,
             );
+            // M183: el teclado del webview no llega a la ventana anfitriona — los atajos de menú
+            // (Ctrl[+Shift]+tecla) se atienden en AcceleratorKeyPressed del controlador y salen
+            // como evento "menu"; el evento se marca atendido para que la página no lo vea.
+            let hwnd_key = hwnd.0 as usize;
+            let mut token_accel = 0i64;
+            let _ = controller.add_AcceleratorKeyPressed(
+                &AcceleratorKeyPressedEventHandler::create(Box::new(move |_sender, args: Option<ICoreWebView2AcceleratorKeyPressedEventArgs>| {
+                    if let Some(args) = args {
+                        let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+                        let mut vk: u32 = 0;
+                        // (Hilo 1; el ctx vive mientras la ventana — WM_DESTROY lo libera aquí mismo.)
+                        {
+                            if args.KeyEventKind(&mut kind).is_ok()
+                                && (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                                && args.VirtualKey(&mut vk).is_ok()
+                                && GetKeyState(VK_CONTROL.0 as i32) < 0
+                            {
+                                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                                let ctx_ptr = GetWindowLongPtrW(HWND(hwnd_key as *mut _), GWLP_USERDATA) as *mut WinCtx;
+                                if !ctx_ptr.is_null() {
+                                    let ctx = &*ctx_ptr;
+                                    if let Some((_, _, tag)) = ctx.accels.iter().find(|(k, s, _)| *k as u32 == vk && *s == shift) {
+                                        super::push_event("menu", 0, tag);
+                                        let _ = args.SetHandled(true);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token_accel,
+            );
             let url = wide(url);
             let _ = webview.Navigate(PCWSTR(url.as_ptr()));
         }
@@ -3138,8 +3242,8 @@ mod win {
                     None,
                 )
                 .map_err(|e| format!("ui: could not create the window: {e}"))?;
-                let menu_tags = build_menubar(hwnd);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags });
+                let (menu_tags, accels) = build_menubar(hwnd);
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -3197,14 +3301,27 @@ mod win {
         });
     }
 
-    /// Diálogos de archivo del shell (modales, en el hilo 1, sin plazo): `open`, `folder`, `save`.
+    /// La ventana viva más reciente (dueña de los diálogos modales), si hay alguna.
+    fn owner_hwnd() -> Option<HWND> {
+        let map = super::windows().lock().unwrap();
+        map.iter()
+            .filter_map(|(id, st)| match &st.win {
+                Win::Windows { hwnd, alive } if alive.load(Ordering::SeqCst) && !st.closed => Some((*id, *hwnd)),
+                _ => None,
+            })
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, hwnd)| HWND(hwnd as *mut _))
+    }
+
+    /// Diálogos de archivo del shell (modales, en el hilo 1, sin plazo): `open_file`, `open_folder`,
+    /// `save_file` (M183: antes comparaba con `save`/`folder` y TODO caía en el diálogo de Abrir).
     pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
         let kind = kind.to_string();
         let arg = arg.to_string();
         on_main_sync_wait(move || {
             // SAFETY: COM del shell en el hilo 1 (STA); los objetos son propios y se sueltan al salir.
             unsafe {
-                let dialog: IFileDialog = if kind == "save" {
+                let dialog: IFileDialog = if kind == "save_file" {
                     let d: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
                     if !arg.is_empty() {
                         let _ = d.SetFileName(PCWSTR(wide(&arg).as_ptr()));
@@ -3212,13 +3329,15 @@ mod win {
                     d.into()
                 } else {
                     let d: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
-                    if kind == "folder" {
+                    if kind == "open_folder" {
                         let opts = d.GetOptions().unwrap_or_default();
                         let _ = d.SetOptions(opts | FOS_PICKFOLDERS);
                     }
                     d.into()
                 };
-                if dialog.Show(None).is_err() {
+                // M183: modal de la última ventana viva de la app (sin dueño aparecía suelto en la
+                // esquina de la pantalla y la ventana principal seguía activa).
+                if dialog.Show(owner_hwnd()).is_err() {
                     return Ok(None); // cancelado
                 }
                 let item = dialog.GetResult().map_err(|e| format!("ui: dialog: {e}"))?;

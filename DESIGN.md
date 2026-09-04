@@ -11688,3 +11688,35 @@ autoexcluye).
 registro de ventanas, los menús y diálogos son compartidos; el backend Windows solo tiene que
 rellenar los brazos `Win::…` como hizo GTK. Y desde ya, `tests/ui_cli.rs` corre en el job de
 Windows (tres motores, byte-idénticos), así que el backend real se construirá con red.
+
+## 170. M178 — W7b: `std/audio` en Windows por WASAPI, COM a mano (sep 2026)
+
+El segundo peldaño del arco de escritorio de Windows (`docs/windows.md` 3.8): `std/audio`
+devolvía `AUDIO_UNAVAILABLE` y el binario nativo no compilaba (el último subsistema que el
+gate de M169 rechazaba).
+
+**El mismo módulo, otro pipe y otro sumidero.** La forma de M145 se conserva entera: un pipe
+más un hilo alimentador que lee y empuja al backend, `close(h)` como EOF, `drain` y
+`played_ms` sobre la misma cabecera de control. Lo que cambia en Windows es el pipe —el anónimo
+de `std::io::pipe`, cuyo extremo de escritura es BLOQUEANTE porque los pipes anónimos no
+tienen modo no bloqueante: `audio.write` bloquea el hilo mientras el alimentador consume, la
+misma contrapresión sin aparcar la fibra que el stdin de un hijo en M175— y la consulta de lo
+encolado (`PeekNamedPipe` en vez de `FIONREAD`). La clave del registro pasa de fd a entero
+(fd en unix, handle en Windows) y la VM y el nativo la sacan con `AsRawFd`/`AsRawHandle`.
+
+**WASAPI sin crates.** Como AudioQueue en macOS y ALSA en Linux, el backend es la API del
+sistema A MANO: COM con las vtables transcritas de mmdeviceapi.h/audioclient.h (`IUnknown`
+delante, métodos `extern "system"` en orden; los que no se usan son huecos del tamaño de un
+puntero). `CoCreateInstance(MMDeviceEnumerator)` → `GetDefaultAudioEndpoint(eRender)` →
+`Activate(IAudioClient)` → `Initialize` en modo compartido con `AUTOCONVERTPCM`+`SRC_DEFAULT_QUALITY`,
+que hace que el motor acepte el s16le del contrato y convierta él al mix del dispositivo (sin
+negociar formatos: el mínimo común de M145 se mantiene) → `GetService(IAudioRenderClient)` →
+`Start`. El alimentador sondea `GetCurrentPadding`, copia lo que cabe con `GetBuffer`/
+`ReleaseBuffer` y duerme ~latencia/8 con el búfer lleno; la posición real es escritos − padding
+(el `snd_pcm_delay` de ALSA). Los objetos son *free-threaded* (WASAPI es MTA-agile): se crean
+en el hilo que abre y se usan desde el alimentador, cada uno con su `CoInitializeEx`. El
+`RAY_AUDIO_SINK=null` sigue siendo la vía de CI: el runner no tiene dispositivo.
+
+Con esto el gate de M169 queda vacío en Windows (todo subsistema compila; `watch` se
+autoexcluye) y su paso de CI desaparece; `tests/audio_cli.rs` entra al job de Windows en los
+tres motores. Queda de 3.8: el backend de ventana real (WebView2, W7c) y `ray bundle`.

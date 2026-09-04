@@ -170,31 +170,13 @@ jobs:
       # en VM, intérprete y binario nativo (antes, W2 rechazaba std/process en el nativo).
       - name: std/process en Windows (run, timeout, sesión; VM + intérprete + nativo)
         run: cargo test --release --test process_windows_cli -- --nocapture
-      # M169 (W2): lo que sigue sin compilar en Windows (std/audio) no debe llegar a rustc — ray build
-      # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
-      - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows
-        shell: pwsh
-        run: |
-          $dir = Join-Path $env:RUNNER_TEMP "w2"
-          New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          @'
-          import std/audio;
-          fn main() -> int {
-              match (audio.open(44100, 2)) { Result.Ok(_) => 0, Result.Err(_) => 1 }
-          }
-          '@ | Set-Content -Path (Join-Path $dir "prog.ray")
-          $ray = Join-Path (Get-Location) "target/release/ray.exe"
-          Set-Location $dir
-          $out = & $ray build prog.ray --native -o prog_bin.exe 2>&1 | Out-String
-          Write-Host $out
-          if ($LASTEXITCODE -ne 69) { throw "esperaba exit 69 (EX_UNAVAILABLE), salió $LASTEXITCODE" }
-          if ($out -notmatch "std/audio") { throw "el mensaje no nombra std/audio" }
-          if (Test-Path "prog_bin.exe") { throw "no debía producir binario" }
-          exit 0
       # M177 (W7, paso S): std/ui compila en Windows y el backend headless funciona ahí (los tests
       # de ui dejan de ser ciegos); una ventana real sigue devolviendo el Err de plataforma.
-      - name: std/ui headless en Windows (VM + intérprete + nativo)
-        run: cargo test --release --test ui_cli -- --nocapture
+      # M178: std/audio compila en Windows (WASAPI); el runner no tiene dispositivo, así que la
+      # batería corre contra el sumidero nulo (RAY_AUDIO_SINK=null), en los tres motores. Con eso el
+      # gate de M169 queda vacío en Windows (todo subsistema compila) y su paso desaparece.
+      - name: std/ui headless y std/audio (sumidero nulo) en Windows (VM + intérprete + nativo)
+        run: cargo test --release --test ui_cli --test audio_cli -- --nocapture
       # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for
       # Windows, exactamente el escenario que rompía el hash del lock ("possible tampering").
       - name: Proyecto con dependencias del índice (resolución + lock bajo autocrlf)

@@ -18,12 +18,18 @@
 //!
 //! Formato único de v1: PCM **s16le entrelazado** (el mínimo común de los tres backends).
 
-#![cfg(all(feature = "audio", unix))]
+//!   - Windows (M178, docs/windows.md W7): WASAPI en modo compartido, COM A MANO (vtables
+//!     transcritas de mmdeviceapi.h/audioclient.h; ole32 y el resto siempre presentes). El pipe
+//!     es el anónimo de Windows (`std::io::pipe`) y su extremo de escritura es BLOQUEANTE: el
+//!     `audio.write` bloquea el hilo hasta que el alimentador consume (la contrapresión sin
+//!     aparcar la fibra, como el stdin de un hijo en M175).
+#![cfg(all(feature = "audio", any(unix, windows)))]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn pipe(fds: *mut i32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
@@ -32,11 +38,13 @@ unsafe extern "C" {
     #[link_name = "fcntl"]
     fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
 }
+#[cfg(unix)]
 const F_GETFL: i32 = 3;
+#[cfg(unix)]
 const F_SETFL: i32 = 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const O_NONBLOCK: i32 = 0o4000; // M156: bionic también es 0o4000 (android es unix, no "linux")
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 const O_NONBLOCK: i32 = 0x0004;
 
 /// El control de una salida viva, para `drain`: cuántos octetos ha aceptado el alimentador que
@@ -44,10 +52,9 @@ const O_NONBLOCK: i32 = 0x0004;
 pub struct Ctl {
     /// Octetos leídos del pipe y aún no entregados al backend (el "en vuelo" del alimentador).
     in_flight: AtomicI64,
-    /// Octetos por segundo del formato (rate × channels × 2): para el margen de `drain`.
-    bytes_per_sec: i64,
-    /// El extremo de LECTURA del pipe (para que `drain` consulte lo encolado con FIONREAD).
-    fd_r: i32,
+    /// El extremo de LECTURA del pipe (para que `drain` consulte lo encolado: FIONREAD en unix,
+    /// `PeekNamedPipe` en Windows): el fd, o el handle de Windows como entero.
+    pipe_r: i64,
     /// M158 (§79b): frames REALMENTE reproducidos según el backend (-1 = aún sin dato). Lo
     /// refresca el hilo alimentador tras cada `play` con la API del backend (GetCurrentTime /
     /// snd_pcm_delay / getFramesRead) — mismo hilo que posee el dispositivo: sin carreras.
@@ -56,9 +63,10 @@ pub struct Ctl {
     sample_rate: i64,
 }
 
-/// El mapa fd-de-escritura → control, para que `drain(fd)` encuentre su salida.
-fn ctls() -> &'static Mutex<HashMap<i32, Arc<Ctl>>> {
-    static CTLS: OnceLock<Mutex<HashMap<i32, Arc<Ctl>>>> = OnceLock::new();
+/// El mapa extremo-de-escritura → control, para que `drain(key)` encuentre su salida. La clave
+/// es el fd (unix) o el handle de Windows, como entero (`AsRawFd`/`AsRawHandle` del `File`).
+fn ctls() -> &'static Mutex<HashMap<i64, Arc<Ctl>>> {
+    static CTLS: OnceLock<Mutex<HashMap<i64, Arc<Ctl>>>> = OnceLock::new();
     CTLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -83,64 +91,116 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
     let sink = make_sink(sample_rate, channels, latency_ms, played_frames.clone())?;
 
-    let mut fds = [0i32; 2];
-    // SAFETY: pipe escribe dos fds válidos.
-    if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
-    }
-    let (fd_r, fd_w) = (fds[0], fds[1]);
-    // El extremo de escritura NO-bloqueante: el contrato de `socket_write_nb` (WouldBlock =
-    // lleno → la fibra aparca). El de lectura queda bloqueante para el alimentador.
-    unsafe {
-        let fl = fcntl_raw(fd_w, F_GETFL);
-        fcntl_raw(fd_w, F_SETFL, fl | O_NONBLOCK);
-    }
-
-    let ctl = Arc::new(Ctl {
-        in_flight: AtomicI64::new(0),
-        bytes_per_sec: sample_rate * channels * 2,
-        fd_r,
-        played_frames,
-        sample_rate,
-    });
-    ctls().lock().unwrap().insert(fd_w, ctl.clone());
-
-    // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
-    // drena el backend y termina. El chunk es ~latencia/4: reactivo sin syscalls de más.
-    let chunk = ((ctl.bytes_per_sec * latency_ms / 4000).max(256) as usize) & !1;
-    let ctl_thread = ctl.clone();
-    std::thread::spawn(move || {
-        let mut sink = sink;
-        let mut buf = vec![0u8; chunk];
-        loop {
-            // SAFETY: buf vive durante la llamada; fd_r es nuestro hasta el close de abajo.
-            let n = unsafe { read(fd_r, buf.as_mut_ptr(), buf.len()) };
-            if n <= 0 {
-                break; // EOF (el handle se cerró) o error: fin de la sesión
-            }
-            ctl_thread.in_flight.fetch_add(n as i64, Ordering::SeqCst);
-            sink.play(&buf[..n as usize]);
-            ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
+    // El chunk del alimentador es ~latencia/4: reactivo sin syscalls de más.
+    let bytes_per_sec = sample_rate * channels * 2;
+    let chunk = ((bytes_per_sec * latency_ms / 4000).max(256) as usize) & !1;
+    #[cfg(unix)]
+    {
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe escribe dos fds válidos.
+        if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
         }
-        sink.finish();
-        unsafe { close(fd_r) };
-        ctls().lock().unwrap().remove(&fd_w);
-    });
-
-    // SAFETY: fd_w es nuestro; File toma la propiedad (su Drop = close = EOF del alimentador).
-    Ok(unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_w) })
+        let (fd_r, fd_w) = (fds[0], fds[1]);
+        // El extremo de escritura NO-bloqueante: el contrato de `socket_write_nb` (WouldBlock =
+        // lleno → la fibra aparca). El de lectura queda bloqueante para el alimentador.
+        unsafe {
+            let fl = fcntl_raw(fd_w, F_GETFL);
+            fcntl_raw(fd_w, F_SETFL, fl | O_NONBLOCK);
+        }
+        let key = fd_w as i64;
+        let ctl = Arc::new(Ctl {
+            in_flight: AtomicI64::new(0),
+            pipe_r: fd_r as i64,
+            played_frames,
+            sample_rate,
+        });
+        ctls().lock().unwrap().insert(key, ctl.clone());
+        // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
+        // drena el backend y termina.
+        let ctl_thread = ctl.clone();
+        std::thread::spawn(move || {
+            let mut sink = sink;
+            let mut buf = vec![0u8; chunk];
+            loop {
+                // SAFETY: buf vive durante la llamada; fd_r es nuestro hasta el close de abajo.
+                let n = unsafe { read(fd_r, buf.as_mut_ptr(), buf.len()) };
+                if n <= 0 {
+                    break; // EOF (el handle se cerró) o error: fin de la sesión
+                }
+                ctl_thread.in_flight.fetch_add(n as i64, Ordering::SeqCst);
+                sink.play(&buf[..n as usize]);
+                ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
+            }
+            sink.finish();
+            unsafe { close(fd_r) };
+            ctls().lock().unwrap().remove(&key);
+        });
+        // SAFETY: fd_w es nuestro; File toma la propiedad (su Drop = close = EOF del alimentador).
+        Ok(unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_w) })
+    }
+    #[cfg(windows)]
+    {
+        // M178: el pipe anónimo de Windows. El extremo de escritura queda BLOQUEANTE (no hay
+        // modo no bloqueante para pipes anónimos): `audio.write` bloquea el hilo mientras el
+        // alimentador consume — la contrapresión, sin aparcar la fibra.
+        use std::io::Read;
+        use std::os::windows::io::{AsRawHandle, OwnedHandle};
+        let (r, w) = std::io::pipe().map_err(|e| format!("audio: could not create the pipe: {e}"))?;
+        let mut reader = std::fs::File::from(OwnedHandle::from(r));
+        let writer = std::fs::File::from(OwnedHandle::from(w));
+        let key = writer.as_raw_handle() as i64;
+        let ctl = Arc::new(Ctl {
+            in_flight: AtomicI64::new(0),
+            pipe_r: reader.as_raw_handle() as i64,
+            played_frames,
+            sample_rate,
+        });
+        ctls().lock().unwrap().insert(key, ctl.clone());
+        let ctl_thread = ctl.clone();
+        let reader_handle = reader.as_raw_handle() as i64;
+        std::thread::spawn(move || {
+            let mut sink = sink;
+            let mut buf = vec![0u8; chunk];
+            loop {
+                // Los pipes anónimos son SÍNCRONOS: un `ReadFile` bloqueado serializa detrás de él
+                // cualquier `PeekNamedPipe` de otro hilo (el de `drain`) → interbloqueo. Por eso el
+                // alimentador nunca bloquea en la lectura: sondea lo disponible y lee solo eso.
+                let avail = match peek_pipe(reader_handle) {
+                    Err(()) => break, // el escritor cerró (ERROR_BROKEN_PIPE): fin de la sesión
+                    Ok(0) => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Ok(n) => n,
+                };
+                let want = avail.min(buf.len());
+                let n = match reader.read(&mut buf[..want]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                ctl_thread.in_flight.fetch_add(n as i64, Ordering::SeqCst);
+                sink.play(&buf[..n]);
+                ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
+            }
+            sink.finish();
+            drop(reader);
+            ctls().lock().unwrap().remove(&key);
+        });
+        Ok(writer)
+    }
 }
 
 /// Espera a que TODO lo escrito suene: pipe vacío + alimentador sin nada en vuelo + un margen de
 /// la latencia del dispositivo. Bloquea el hilo (uso raro, al final de una sesión) — el margen
 /// es aproximado por diseño: el "de verdad sonó" exacto es del backend y v1 no lo persigue.
-pub fn drain(fd_w: i32) -> Result<(), String> {
-    let ctl = match ctls().lock().unwrap().get(&fd_w) {
+pub fn drain(key: i64) -> Result<(), String> {
+    let ctl = match ctls().lock().unwrap().get(&key) {
         Some(c) => c.clone(),
         None => return Err("audio: not an open audio output".to_string()),
     };
     loop {
-        let queued = pipe_pending(ctl.fd_r);
+        let queued = pipe_pending(ctl.pipe_r);
         let flying = ctl.in_flight.load(Ordering::SeqCst);
         if queued == 0 && flying == 0 {
             break;
@@ -156,11 +216,11 @@ pub fn drain(fd_w: i32) -> Result<(), String> {
 /// M158 (§79b): la posición REAL de reproducción en ms — lo que el backend confirma sonado
 /// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refrescado por el
 /// alimentador tras cada chunk (~latencia/4 de granularidad). 0 = aún no sonó nada.
-pub fn played_ms(fd_w: i32) -> Result<i64, String> {
+pub fn played_ms(key: i64) -> Result<i64, String> {
     let ctl = ctls()
         .lock()
         .unwrap()
-        .get(&fd_w)
+        .get(&key)
         .cloned()
         .ok_or_else(|| "audio: not an open audio output".to_string())?;
     let frames = ctl.played_frames.load(Ordering::SeqCst);
@@ -170,7 +230,9 @@ pub fn played_ms(fd_w: i32) -> Result<i64, String> {
     Ok(frames * 1000 / ctl.sample_rate)
 }
 
-fn pipe_pending(fd: i32) -> i64 {
+#[cfg(unix)]
+fn pipe_pending(fd: i64) -> i64 {
+    let fd = fd as i32;
     unsafe extern "C" {
         fn ioctl(fd: i32, req: u64, ...) -> i32;
     }
@@ -181,6 +243,24 @@ fn pipe_pending(fd: i32) -> i64 {
     let mut n: i32 = 0;
     // SAFETY: FIONREAD escribe un int.
     if unsafe { ioctl(fd, FIONREAD, &mut n as *mut i32) } == 0 { n as i64 } else { 0 }
+}
+// M178 (Windows): `PeekNamedPipe` sobre el handle de lectura (el mismo que usa `std/io` en M173).
+#[cfg(windows)]
+fn pipe_pending(handle: i64) -> i64 {
+    peek_pipe(handle).map_or(0, |n| n as i64)
+}
+/// Octetos disponibles en el pipe sin bloquear; `Err(())` si el escritor cerró (EOF) o el handle
+/// no sirve. Lo usan `drain` y el alimentador (que por esto nunca bloquea en `ReadFile`).
+#[cfg(windows)]
+fn peek_pipe(handle: i64) -> Result<usize, ()> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
+    }
+    let mut avail = 0u32;
+    // SAFETY: sin buffer; solo se pide `avail`, un u32 propio; el handle es nuestro.
+    let ok = unsafe { PeekNamedPipe(handle as usize, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut()) };
+    if ok != 0 { Ok(avail as usize) } else { Err(()) }
 }
 
 // ── Los backends ─────────────────────────────────────────────────────────────
@@ -219,10 +299,15 @@ fn make_sink(
     {
         aaudio::open(rate, channels, latency_ms, played)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    // M178: Windows — WASAPI por COM a mano.
+    #[cfg(windows)]
+    {
+        wasapi::open(rate, channels, latency_ms, played)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", windows)))]
     {
         let _ = (rate, channels, latency_ms, played);
-        Err("audio: no backend for this platform (macOS/Linux/Android; RAY_AUDIO_SINK=null works anywhere)".to_string())
+        Err("audio: no backend for this platform (macOS/Linux/Android/Windows; RAY_AUDIO_SINK=null works anywhere)".to_string())
     }
 }
 
@@ -782,6 +867,299 @@ mod aaudio {
                 (self.request_stop)(self.stream);
                 (self.close)(self.stream);
             }
+        }
+    }
+}
+
+// ── Windows: WASAPI en modo compartido, COM a mano (M178) ──────────────────────
+//
+// Sin crates: las vtables de `IMMDeviceEnumerator`/`IMMDevice`/`IAudioClient`/`IAudioRenderClient`
+// se transcriben de mmdeviceapi.h/audioclient.h (ABI COM: puntero al vtable como primer campo,
+// métodos `extern "system"` en orden, `IUnknown` delante). Formato: s16le entrelazado con
+// `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` (Windows 10+: el motor remuestrea/convierte al mix del
+// dispositivo, así el contrato del módulo se conserva sin negociar formatos). Modo compartido
+// por eventos NO: el alimentador ya marca el ritmo — se sondea `GetCurrentPadding` y se duerme
+// ~latencia/8 cuando el búfer está lleno (la contrapresión). La posición real = escritos −
+// padding (frames aún en el búfer del motor), como `snd_pcm_delay` en ALSA. Los objetos COM
+// son *free-threaded* (WASAPI es MTA-agile): se crean en el hilo que llama a `open` y se usan
+// desde el alimentador; cada hilo hace su `CoInitializeEx(MULTITHREADED)`.
+#[cfg(windows)]
+mod wasapi {
+    use super::Sink;
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::Arc;
+
+    type Ptr = *mut core::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Guid {
+        d1: u32,
+        d2: u16,
+        d3: u16,
+        d4: [u8; 8],
+    }
+    const CLSID_MM_DEVICE_ENUMERATOR: Guid =
+        Guid { d1: 0xBCDE_0395, d2: 0xE52F, d3: 0x467C, d4: [0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E] };
+    const IID_IMM_DEVICE_ENUMERATOR: Guid =
+        Guid { d1: 0xA956_64D2, d2: 0x9614, d3: 0x4F35, d4: [0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6] };
+    const IID_IAUDIO_CLIENT: Guid =
+        Guid { d1: 0x1CB9_AD4C, d2: 0xDBFA, d3: 0x4C32, d4: [0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2] };
+    const IID_IAUDIO_RENDER_CLIENT: Guid =
+        Guid { d1: 0xF294_ACFC, d2: 0x3146, d3: 0x4483, d4: [0xA7, 0xBF, 0xAD, 0xDC, 0xA7, 0xC2, 0x60, 0xE2] };
+
+    const COINIT_MULTITHREADED: u32 = 0x0;
+    const CLSCTX_ALL: u32 = 0x17;
+    const E_RENDER: u32 = 0; // EDataFlow::eRender
+    const E_CONSOLE: u32 = 0; // ERole::eConsole
+    const AUDCLNT_SHAREMODE_SHARED: u32 = 0;
+    const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x8000_0000;
+    const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x0800_0000;
+    const WAVE_FORMAT_PCM: u16 = 1;
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(reserved: Ptr, coinit: u32) -> i32;
+        fn CoCreateInstance(clsid: *const Guid, outer: Ptr, ctx: u32, iid: *const Guid, out: *mut Ptr) -> i32;
+    }
+
+    /// `WAVEFORMATEX` (mmreg.h, empaquetado a 1 byte: 18 bytes).
+    #[repr(C, packed)]
+    struct WaveFormatEx {
+        format_tag: u16,
+        channels: u16,
+        samples_per_sec: u32,
+        avg_bytes_per_sec: u32,
+        block_align: u16,
+        bits_per_sample: u16,
+        cb_size: u16,
+    }
+
+    type Hr = i32;
+    #[repr(C)]
+    struct IUnknownVtbl {
+        query_interface: unsafe extern "system" fn(Ptr, *const Guid, *mut Ptr) -> Hr,
+        add_ref: unsafe extern "system" fn(Ptr) -> u32,
+        release: unsafe extern "system" fn(Ptr) -> u32,
+    }
+    #[repr(C)]
+    struct IMMDeviceEnumeratorVtbl {
+        base: IUnknownVtbl,
+        enum_audio_endpoints: usize,
+        get_default_audio_endpoint: unsafe extern "system" fn(Ptr, u32, u32, *mut Ptr) -> Hr,
+        get_device: usize,
+        register_endpoint_notification_callback: usize,
+        unregister_endpoint_notification_callback: usize,
+    }
+    #[repr(C)]
+    struct IMMDeviceVtbl {
+        base: IUnknownVtbl,
+        activate: unsafe extern "system" fn(Ptr, *const Guid, u32, Ptr, *mut Ptr) -> Hr,
+        open_property_store: usize,
+        get_id: usize,
+        get_state: usize,
+    }
+    #[repr(C)]
+    struct IAudioClientVtbl {
+        base: IUnknownVtbl,
+        initialize: unsafe extern "system" fn(Ptr, u32, u32, i64, i64, *const WaveFormatEx, *const Guid) -> Hr,
+        get_buffer_size: unsafe extern "system" fn(Ptr, *mut u32) -> Hr,
+        get_stream_latency: usize,
+        get_current_padding: unsafe extern "system" fn(Ptr, *mut u32) -> Hr,
+        is_format_supported: usize,
+        get_mix_format: usize,
+        get_device_period: usize,
+        start: unsafe extern "system" fn(Ptr) -> Hr,
+        stop: unsafe extern "system" fn(Ptr) -> Hr,
+        reset: usize,
+        set_event_handle: usize,
+        get_service: unsafe extern "system" fn(Ptr, *const Guid, *mut Ptr) -> Hr,
+    }
+    #[repr(C)]
+    struct IAudioRenderClientVtbl {
+        base: IUnknownVtbl,
+        get_buffer: unsafe extern "system" fn(Ptr, u32, *mut *mut u8) -> Hr,
+        release_buffer: unsafe extern "system" fn(Ptr, u32, u32) -> Hr,
+    }
+
+    /// El vtable de un objeto COM (su primer campo es el puntero al vtable).
+    unsafe fn vtbl<T>(obj: Ptr) -> &'static T {
+        // SAFETY: todo objeto COM empieza por el puntero a su vtable; `T` es el layout transcrito.
+        unsafe { &**(obj as *const *const T) }
+    }
+    fn release(obj: Ptr) {
+        if !obj.is_null() {
+            // SAFETY: `IUnknown::Release` sobre un puntero COM vivo que poseemos.
+            unsafe { (vtbl::<IUnknownVtbl>(obj).release)(obj) };
+        }
+    }
+
+    pub struct WasapiSink {
+        enumerator: Ptr,
+        device: Ptr,
+        client: Ptr,
+        render: Ptr,
+        buffer_frames: u32,
+        frame_bytes: usize,
+        written_frames: i64,
+        rate: i64,
+        latency_ms: i64,
+        played: Arc<AtomicI64>,
+    }
+    // SAFETY: los objetos de WASAPI son free-threaded; se usan solo desde el hilo alimentador
+    // tras la creación (cada hilo inicializa COM en MTA).
+    unsafe impl Send for WasapiSink {}
+
+    fn com_init() {
+        // SAFETY: llamada sin punteros. S_FALSE (ya inicializado) y RPC_E_CHANGED_MODE (el hilo
+        // ya era STA) no impiden usar objetos free-threaded.
+        unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED) };
+    }
+
+    pub fn open(rate: i64, channels: i64, latency_ms: i64, played: Arc<AtomicI64>) -> Result<Box<dyn Sink>, String> {
+        com_init();
+        let mut enumerator: Ptr = std::ptr::null_mut();
+        // SAFETY: CoCreateInstance escribe un puntero COM en `enumerator` si devuelve S_OK.
+        let hr = unsafe {
+            CoCreateInstance(&CLSID_MM_DEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMM_DEVICE_ENUMERATOR, &mut enumerator)
+        };
+        if hr < 0 || enumerator.is_null() {
+            return Err(format!("audio: could not create the WASAPI device enumerator (0x{:08X})", hr as u32));
+        }
+        let mut device: Ptr = std::ptr::null_mut();
+        // SAFETY: método del vtable transcrito sobre un objeto vivo; escribe `device`.
+        let hr = unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).get_default_audio_endpoint)(enumerator, E_RENDER, E_CONSOLE, &mut device) };
+        if hr < 0 || device.is_null() {
+            release(enumerator);
+            return Err("audio: no output device (WASAPI: no default render endpoint)".to_string());
+        }
+        let mut client: Ptr = std::ptr::null_mut();
+        // SAFETY: ídem; `Activate` escribe la interfaz pedida.
+        let hr = unsafe { (vtbl::<IMMDeviceVtbl>(device).activate)(device, &IID_IAUDIO_CLIENT, CLSCTX_ALL, std::ptr::null_mut(), &mut client) };
+        if hr < 0 || client.is_null() {
+            release(device);
+            release(enumerator);
+            return Err(format!("audio: could not activate the audio client (0x{:08X})", hr as u32));
+        }
+        let block_align = (channels * 2) as u16;
+        let fmt = WaveFormatEx {
+            format_tag: WAVE_FORMAT_PCM,
+            channels: channels as u16,
+            samples_per_sec: rate as u32,
+            avg_bytes_per_sec: (rate * channels * 2) as u32,
+            block_align,
+            bits_per_sample: 16,
+            cb_size: 0,
+        };
+        // La latencia pedida al motor sigue el hint (200 ms default → 100 ms, como ALSA), en
+        // unidades de 100 ns. El motor puede dar más: `GetBufferSize` dice cuánto.
+        let hns = (latency_ms.max(20) / 2).clamp(10, 500) * 10_000;
+        let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        // SAFETY: `fmt` vive durante la llamada; sin GUID de sesión (nulo).
+        let hr = unsafe { (vtbl::<IAudioClientVtbl>(client).initialize)(client, AUDCLNT_SHAREMODE_SHARED, flags, hns, 0, &fmt, std::ptr::null()) };
+        if hr < 0 {
+            release(client);
+            release(device);
+            release(enumerator);
+            return Err(format!("audio: could not initialize the WASAPI stream (0x{:08X})", hr as u32));
+        }
+        let mut buffer_frames = 0u32;
+        // SAFETY: escribe un u32 propio.
+        unsafe { (vtbl::<IAudioClientVtbl>(client).get_buffer_size)(client, &mut buffer_frames) };
+        let mut render: Ptr = std::ptr::null_mut();
+        // SAFETY: `GetService` escribe la interfaz pedida.
+        let hr = unsafe { (vtbl::<IAudioClientVtbl>(client).get_service)(client, &IID_IAUDIO_RENDER_CLIENT, &mut render) };
+        if hr < 0 || render.is_null() || buffer_frames == 0 {
+            release(client);
+            release(device);
+            release(enumerator);
+            return Err(format!("audio: could not get the render client (0x{:08X})", hr as u32));
+        }
+        // SAFETY: arranca el flujo; el búfer vacío suena como silencio hasta el primer `play`.
+        let hr = unsafe { (vtbl::<IAudioClientVtbl>(client).start)(client) };
+        if hr < 0 {
+            release(render);
+            release(client);
+            release(device);
+            release(enumerator);
+            return Err(format!("audio: could not start the WASAPI stream (0x{:08X})", hr as u32));
+        }
+        Ok(Box::new(WasapiSink {
+            enumerator,
+            device,
+            client,
+            render,
+            buffer_frames,
+            frame_bytes: channels as usize * 2,
+            written_frames: 0,
+            rate,
+            latency_ms,
+            played,
+        }))
+    }
+
+    impl WasapiSink {
+        fn padding(&self) -> u32 {
+            let mut pad = 0u32;
+            // SAFETY: escribe un u32 propio; el cliente está vivo.
+            let hr = unsafe { (vtbl::<IAudioClientVtbl>(self.client).get_current_padding)(self.client, &mut pad) };
+            if hr < 0 { 0 } else { pad }
+        }
+        fn nap(&self) {
+            let ms = (self.latency_ms / 8).clamp(2, 50) as u64;
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
+
+    impl Sink for WasapiSink {
+        fn play(&mut self, data: &[u8]) {
+            com_init();
+            let mut off = 0usize;
+            while off + self.frame_bytes <= data.len() {
+                let free = self.buffer_frames.saturating_sub(self.padding());
+                if free == 0 {
+                    self.nap(); // búfer lleno: la contrapresión
+                    continue;
+                }
+                let want = ((data.len() - off) / self.frame_bytes) as u32;
+                let n = want.min(free);
+                let mut dst: *mut u8 = std::ptr::null_mut();
+                // SAFETY: `GetBuffer` presta `n` frames escribibles; se copian exactamente y se liberan.
+                let hr = unsafe { (vtbl::<IAudioRenderClientVtbl>(self.render).get_buffer)(self.render, n, &mut dst) };
+                if hr < 0 || dst.is_null() {
+                    self.nap();
+                    continue;
+                }
+                let bytes = n as usize * self.frame_bytes;
+                // SAFETY: `dst` tiene sitio para `n` frames; el origen es nuestro slice.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(data[off..].as_ptr(), dst, bytes);
+                    (vtbl::<IAudioRenderClientVtbl>(self.render).release_buffer)(self.render, n, 0);
+                }
+                off += bytes;
+                self.written_frames += n as i64;
+            }
+            // Posición real = escritos − lo que aún espera en el búfer del motor.
+            let played_now = (self.written_frames - self.padding() as i64).max(0);
+            self.played.store(played_now, Ordering::SeqCst);
+        }
+        fn finish(&mut self) {
+            // Drena: espera a que el motor consuma lo entregado (acotado a ~2 s por si acaso).
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while self.padding() > 0 && std::time::Instant::now() < deadline {
+                self.nap();
+            }
+            let _ = self.rate;
+            // SAFETY: para el flujo y suelta los objetos COM (orden inverso de creación).
+            unsafe { (vtbl::<IAudioClientVtbl>(self.client).stop)(self.client) };
+            release(self.render);
+            release(self.client);
+            release(self.device);
+            release(self.enumerator);
+            self.render = std::ptr::null_mut();
+            self.client = std::ptr::null_mut();
+            self.device = std::ptr::null_mut();
+            self.enumerator = std::ptr::null_mut();
         }
     }
 }

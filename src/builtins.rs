@@ -996,7 +996,7 @@ const WATCH_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
     "this binary was built without filesystem watch support (rebuild with the 'watch' feature)"
 };
 
-#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
     "audio is not available in the web playground (wasm)"
 } else {
@@ -1004,7 +1004,7 @@ const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 };
 
 /// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
-#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<i64, String> {
     let f = ray_runtime::audio::open(sample_rate, channels, latency_ms)?;
     let mut reg = registry().lock().unwrap();
@@ -1013,37 +1013,51 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<i6
     reg.open.insert(id, OpenHandle::PipeW(f));
     Ok(id)
 }
-#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64) -> Result<i64, String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 
+/// M178: la clave de una salida de audio en `ray_runtime::audio` — el fd (unix) o el handle
+/// (Windows) del extremo de escritura, como entero.
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
+fn audio_key(f: &std::fs::File) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        f.as_raw_fd() as i64
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        f.as_raw_handle() as i64
+    }
+}
+
 /// M158 (§79b): la posición REAL de reproducción de la salida `h`, en ms.
-#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn audio_played(h: i64) -> Result<i64, String> {
-    use std::os::unix::io::AsRawFd;
     let fd = match registry().lock().unwrap().open.get(&h) {
-        Some(OpenHandle::PipeW(f)) => f.as_raw_fd(),
+        Some(OpenHandle::PipeW(f)) => audio_key(f),
         _ => return Err("audio: not an open audio output".to_string()),
     };
     ray_runtime::audio::played_ms(fd)
 }
-#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 pub fn audio_played(_h: i64) -> Result<i64, String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 
 /// M145: espera a que todo lo escrito en la salida `h` haya sonado.
-#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn audio_drain(h: i64) -> Result<(), String> {
-    use std::os::unix::io::AsRawFd;
     let fd = match registry().lock().unwrap().open.get(&h) {
-        Some(OpenHandle::PipeW(f)) => f.as_raw_fd(),
+        Some(OpenHandle::PipeW(f)) => audio_key(f),
         _ => return Err("audio: not an open audio output".to_string()),
     };
     ray_runtime::audio::drain(fd)
 }
-#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 pub fn audio_drain(_h: i64) -> Result<(), String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }

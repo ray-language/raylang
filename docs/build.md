@@ -156,7 +156,8 @@ M:N de fibras (`ray_runtime::fibers`: corrutinas corosensei + reactor kqueue/epo
 hilo de SO por tarea/conexión — medido en el banco web: techo +16 %, y 14 hilos / 8 MB donde el
 modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.md §7-§8).
 `--without fibers` recupera el hilo-por-tarea (y es necesario para la vía `rustc` pelada). En
-targets Windows se apaga solo (el reactor es kqueue/epoll).
+Windows x86_64 el reactor es `WSAPoll` (M182); en Windows ARM64 se apaga solo (corosensei no tiene
+backend para esa arquitectura).
 
 **Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui` — para los subsistemas de uso
 (crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del

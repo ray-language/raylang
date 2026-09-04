@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Fibras nativas en Windows x86_64** (M182, docs/windows.md 3.6, W7f): `ray build --native` en un
+  target Windows x86_64 corre el scheduler M:N de fibras sobre un reactor `WSAPoll` (pipes, consola y
+  watch por el pool bloqueante); en ARM64 sigue el hilo-por-tarea (corosensei no tiene backend).
+- **FFI nativa en Windows: `extern "m"` ya no enlaza `m.lib`** (M182): la matemática vive en la CRT, que
+  ya va enlazada — el `#[link]` de `m` se emite solo fuera de Windows (espejo de M165 en la VM).
+- **Nativo hilo-por-tarea en Windows: el plazo de lectura TCP vence como "read timeout"** (M182): el
+  `WSAETIMEDOUT` de Winsock se mapea al error estable de la VM, como ya hacía UDP.
 - **`fs.watch` y el watcher de `ray dev` en Windows** (M181, docs/windows.md 3.2, W7e): eventos de
   kernel por `ReadDirectoryChangesW` (notify) con un puente por cola compartida; `ray dev` deja el
   sondeo de mtimes y `ray build --native` ya no excluye `watch` en Windows.

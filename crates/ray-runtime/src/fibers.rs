@@ -872,6 +872,7 @@ fn flush_batches(s: &'static Scheduler, batches: &mut [Vec<Task>]) {
 // Con `--fibers` los sockets son no-bloqueantes SIEMPRE; cuando los toca un hilo que no es fibra
 // (main), la espera es un poll(2) clásico de un solo fd. Común a macOS y Linux (mismos valores de
 // POLLIN/POLLOUT; solo difiere el tipo de `nfds`).
+#[cfg(unix)]
 mod sys_common {
     #[repr(C)]
     struct PollFd {
@@ -1306,12 +1307,228 @@ mod sys {
     }
 }
 
+// M182 (W7f): el reactor de Windows. No hay kqueue/epoll ni pipes sondeables: el poller es
+// `WSAPoll` PERSISTENTE sobre la lista de intereses armados (la forma exacta de `poll(2)`, la
+// misma decisión sin-crates de `src/poll.rs` en M174) y la tubería de despertar es un socket
+// UDP conectado a sí mismo (un datagrama de un octeto = un despertar). Los intereses son
+// ONESHOT como en kqueue: se retiran al dispararse. Diferencia a favor: un socket CERRADO no
+// muere en silencio — WSAPoll lo marca `POLLNVAL` y su fibra despierta (la syscall del
+// llamador reporta el error), así que el re-armado global del `poke` es solo redundante aquí.
+//
+// Solo x86_64: corosensei no tiene backend para AArch64-Windows, y `ray build` deja las fibras
+// apagadas en ese target (hilo-por-tarea). Los pipes (procesos, watch, stdin) no son sockets:
+// con fibras, el código emitido los lee en el pool bloqueante (`run_blocking`), no en el reactor.
+#[cfg(windows)]
+mod sys_common {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct WsaPollFd {
+        fd: usize,
+        events: i16,
+        revents: i16,
+    }
+    const POLLRDNORM: i16 = 0x0100;
+    const POLLWRNORM: i16 = 0x0010;
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn WSAPoll(fds: *mut WsaPollFd, nfds: u32, timeout: i32) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateWaitableTimerExW(attrs: *const c_void, name: *const u16, flags: u32, access: u32) -> usize;
+        fn SetWaitableTimer(timer: usize, due: *const i64, period: i32, routine: *const c_void, arg: *const c_void, resume: i32) -> i32;
+        fn WaitForSingleObject(handle: usize, ms: u32) -> u32;
+        fn CloseHandle(handle: usize) -> i32;
+    }
+
+    /// ¿Listo `fd` (un SOCKET) para leer/escribir dentro de `timeout_ms`? `true` = VENCIÓ.
+    pub(super) fn poll_block(fd: i32, want_write: bool, timeout_ms: i32) -> bool {
+        let mut p = WsaPollFd { fd: fd as u32 as usize, events: if want_write { POLLWRNORM } else { POLLRDNORM }, revents: 0 };
+        // SAFETY: un solo WSAPOLLFD bien formado; WSAPoll no retiene el puntero tras volver.
+        let n = unsafe { WSAPoll(&mut p, 1, timeout_ms) };
+        n == 0 // > 0 listo (o error en banda: la syscall del llamador lo ve); < 0 = que lo vea también
+    }
+
+    /// Sueño fino (como M174 en la VM): *waitable timer* de alta resolución (Windows 10 1803+;
+    /// sin él, `thread::sleep` con el tick de 15,6 ms).
+    pub(super) fn poll_sleep(ms: u64) {
+        const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x0000_0002;
+        const TIMER_ALL_ACCESS: u32 = 0x001F_0003;
+        // SAFETY: handles propios creados y cerrados aquí; `due` vive durante la llamada.
+        unsafe {
+            let t = CreateWaitableTimerExW(core::ptr::null(), core::ptr::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+            if t == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                return;
+            }
+            let due: i64 = -((ms as i64) * 10_000); // relativo, en unidades de 100 ns
+            if SetWaitableTimer(t, &due, 0, core::ptr::null(), core::ptr::null(), 0) != 0 {
+                WaitForSingleObject(t, u32::MAX);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+            CloseHandle(t);
+        }
+    }
+}
+
+#[cfg(windows)]
+mod sys {
+    use super::Dir;
+    use std::os::windows::io::AsRawSocket;
+
+    #[repr(C)]
+    struct WsaPollFd {
+        fd: usize,
+        events: i16,
+        revents: i16,
+    }
+    const POLLRDNORM: i16 = 0x0100;
+    const POLLWRNORM: i16 = 0x0010;
+    const POLLERR: i16 = 0x0001;
+    const POLLHUP: i16 = 0x0002;
+    const POLLNVAL: i16 = 0x0004;
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn WSAPoll(fds: *mut WsaPollFd, nfds: u32, timeout: i32) -> i32;
+        fn send(s: usize, buf: *const u8, len: i32, flags: i32) -> i32;
+        fn recv(s: usize, buf: *mut u8, len: i32, flags: i32) -> i32;
+    }
+
+    pub struct Poller {
+        /// Los intereses armados, con la tubería de despertar SIEMPRE en la posición 0.
+        /// Persistente: un `arm` añade (o amplía) una entrada y `wait` retira las disparadas.
+        fds: Vec<WsaPollFd>,
+        /// Pares (fd, dir) listos del último `wait` (buffer reutilizado).
+        ready: Vec<(i32, Dir)>,
+    }
+
+    impl Poller {
+        pub fn new(wake_rd: i32) -> Poller {
+            let mut fds = Vec::with_capacity(64);
+            fds.push(WsaPollFd { fd: wake_rd as u32 as usize, events: POLLRDNORM, revents: 0 });
+            Poller { fds, ready: Vec::with_capacity(64) }
+        }
+
+        /// Registra el interés ONESHOT de un socket. Incremental: solo entran los nuevos y los
+        /// ya armados siguen en la lista hasta dispararse.
+        pub fn arm(&mut self, fd: i32, dir: Dir) -> bool {
+            let want = if dir == Dir::Write { POLLWRNORM } else { POLLRDNORM };
+            let key = fd as u32 as usize;
+            match self.fds.iter_mut().skip(1).find(|p| p.fd == key) {
+                Some(p) => p.events |= want,
+                None => self.fds.push(WsaPollFd { fd: key, events: want, revents: 0 }),
+            }
+            true
+        }
+
+        /// Espera y devuelve los (fd, dir) listos. Un socket en error/cerrado (`POLLERR`/
+        /// `POLLHUP`/`POLLNVAL`) despierta a TODOS sus esperadores: la syscall les dirá qué pasó.
+        pub fn wait(&mut self, timeout_ms: i32) -> &[(i32, Dir)] {
+            self.ready.clear();
+            // SAFETY: buffer propio vivo durante la llamada, del tamaño declarado.
+            let n = unsafe { WSAPoll(self.fds.as_mut_ptr(), self.fds.len() as u32, timeout_ms) };
+            if n <= 0 {
+                return &self.ready; // 0 = plazo; < 0 = transitorio: el bucle del reactor reintenta
+            }
+            let wake = self.fds[0].fd;
+            let mut i = 0;
+            while i < self.fds.len() {
+                let p = &mut self.fds[i];
+                if p.revents == 0 {
+                    i += 1;
+                    continue;
+                }
+                let bad = p.revents & (POLLERR | POLLHUP | POLLNVAL) != 0;
+                let fd = p.fd as i32;
+                if p.fd == wake {
+                    self.ready.push((fd, Dir::Read));
+                    p.revents = 0;
+                    i += 1;
+                    continue;
+                }
+                if p.revents & POLLRDNORM != 0 || (bad && p.events & POLLRDNORM != 0) {
+                    self.ready.push((fd, Dir::Read));
+                    p.events &= !POLLRDNORM;
+                }
+                if p.revents & POLLWRNORM != 0 || (bad && p.events & POLLWRNORM != 0) {
+                    self.ready.push((fd, Dir::Write));
+                    p.events &= !POLLWRNORM;
+                }
+                p.revents = 0;
+                if p.events == 0 {
+                    self.fds.swap_remove(i); // oneshot: fuera de la lista
+                } else {
+                    i += 1;
+                }
+            }
+            &self.ready
+        }
+    }
+
+    /// La "tubería" de despertar: un socket UDP no-bloqueante conectado a sí mismo. Un solo
+    /// descriptor hace de ambos extremos (el reactor lo sondea; los workers le envían). Vive
+    /// para siempre (el reactor también).
+    pub fn wake_pipe() -> (i32, i32) {
+        let s = std::net::UdpSocket::bind("127.0.0.1:0").expect("could not create the reactor wake socket");
+        let addr = s.local_addr().expect("wake socket address");
+        s.connect(addr).expect("could not connect the reactor wake socket to itself");
+        s.set_nonblocking(true).expect("wake socket non-blocking");
+        let raw = s.as_raw_socket() as i32;
+        std::mem::forget(s);
+        (raw, raw)
+    }
+
+    /// Manda un datagrama de un octeto (1 = trabajo en el buzón; 2 = POKE de un close). Si el
+    /// búfer está lleno, el reactor ya tiene despertares de sobra.
+    pub fn wake(wake_wr: i32, tag: u8) {
+        // SAFETY: envía 1 byte de un buffer local por un socket propio no-bloqueante.
+        unsafe {
+            let _ = send(wake_wr as u32 as usize, &tag as *const u8, 1, 0);
+        }
+    }
+
+    /// Vacía los datagramas pendientes. `true` si alguno era un POKE.
+    pub fn drain(wake_rd: i32) -> bool {
+        let mut poked = false;
+        // SAFETY: recibe a un buffer local desde un socket propio no-bloqueante.
+        unsafe {
+            let mut buf = [0u8; 64];
+            loop {
+                let n = recv(wake_rd as u32 as usize, buf.as_mut_ptr(), buf.len() as i32, 0);
+                if n <= 0 {
+                    break;
+                }
+                if buf[..n as usize].contains(&2u8) {
+                    poked = true;
+                }
+            }
+        }
+        poked
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read as _, Write as _};
     use std::net::{TcpListener, TcpStream};
+    #[cfg(unix)]
     use std::os::fd::AsRawFd;
+    // M182: en Windows el "fd" de las pruebas es el SOCKET (misma firma que el runtime emitido).
+    #[cfg(windows)]
+    trait AsRawFd {
+        fn as_raw_fd(&self) -> i32;
+    }
+    #[cfg(windows)]
+    impl<T: std::os::windows::io::AsRawSocket> AsRawFd for T {
+        fn as_raw_fd(&self) -> i32 {
+            self.as_raw_socket() as i32
+        }
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Lee aparcando la fibra en WouldBlock (el patrón que usará el runtime transpilado en F2).

@@ -12,8 +12,8 @@
 
 **La toolchain, el compilador, la VM, la red con su poller, los paquetes, las señales, `ray dev`, el
 terminal, stdin, los procesos hijos, el audio y las ventanas de `std/ui` (WebView2) funcionan en
-Windows, y `ray bundle` produce el `.exe` de escritorio; lo que falta es el reactor IOCP de las
-fibras del binario nativo.** La VM es uniformemente honesta (cada
+Windows, `ray bundle` produce el `.exe` de escritorio y las fibras del binario nativo corren sobre
+un reactor `WSAPoll` en x86_64 (M182; en ARM64 corosensei no tiene backend: hilo-por-tarea).** La VM es uniformemente honesta (cada
 hueco es un `Err` con mensaje) y el transpilador rechaza antes de generar lo que no compila (W2).
 
 ## 2. Qué se verifica hoy en CI (`build · smoke (windows)`)
@@ -102,18 +102,19 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Tamaño | **L**. |
 | **Hecho (M175)** | Exactamente el mapeo de "Cierra con", en `crates/ray-runtime/src/process.rs` (variante Windows, compartida por VM y nativo): grupo = `CREATE_NEW_PROCESS_GROUP` + un Job Object por hijo con kill-on-close (los nietos de `cmd /c "a \| b"` mueren con el grupo); escalera del timeout y de `kill(force=false)` = `CTRL_BREAK` al grupo → 500 ms → `TerminateJobObject`; `run` drena los dos pipes con un hilo por flujo (los pipes anónimos no tienen modo no bloqueante) y el streaming de la VM consulta `PeekNamedPipe` antes de leer (la fibra aparca por el respaldo sin fd, M170). **Mapeo de `Exit.Signal`**: `Signal(9)` si lo terminó el job, `Signal(15)` si el peldaño suave tuvo que forzarse, `Signal(2)` si murió por el `CTRL_BREAK` (`STATUS_CONTROL_C_EXIT`); el resto, `Code(n)`. El gate de M169 deja de listar `process`. `tests/process_windows_cli.rs`: el contrato de `run` con `cmd` y la sesión con stdin abierto (con `ray` como hijo: los filtros de Windows bufferizan bajo un pipe), en VM, intérprete y nativo. Límite conocido: la escritura al stdin del hijo es bloqueante (sin aparcar la fibra). |
 
-### 3.6 Poller de red y scheduler · ✅ **poller, sueño fino y UDP cerrados en M174** (DESIGN §166); IOCP nativo queda para W7
+### 3.6 Poller de red y scheduler · ✅ **poller, sueño fino y UDP cerrados en M174** (DESIGN §166); fibras nativas ✅ **M182** (DESIGN §174; x86_64)
 
 | | |
 |---|---|
 | Hoy (VM) | Sin kqueue/epoll: `raw_fd` → `None` y el scheduler cae al busy-poll de M15.5 (1 ms de sueño + re-encolar). Funciona; más CPU y peor p99 bajo carga. El handshake TLS espera con `sleep(20 ms)` en vez de `poll`. |
-| Hoy (nativo) | Sin reactor: `ray build --native --target *windows*` apaga las fibras con aviso (hilo-por-tarea). ⚠️ El apagado mira solo `--target`: un build nativo **en un host Windows sin `--target`** deja las fibras encendidas e intenta compilar corosensei + kqueue/epoll → fallo de compilación. **S** de arreglar (`cfg!(windows)` cuando no hay target). |
+| Hoy (nativo) | ~~Sin reactor: `ray build --native --target *windows*` apaga las fibras con aviso (hilo-por-tarea).~~ ✅ M182: fibras sobre `WSAPoll` en x86_64; en ARM64 se apagan solas con el motivo real (corosensei sin backend AArch64-Windows). |
 | `sleep_ms` | `thread::sleep` en vez de `poll(NULL,0,ms)`: con el tick por defecto de 15,6 ms la precisión del pacing de juegos/audio y de `time.sleep_ms` cae. |
 | **Esperas de red sin fd** ✅ M170 | Las sondas (`windows-probe.yml`) descartaron IPv6 (`tcp_connect` hacia fuera: 25 ms) y cazaron la causa real: en no-unix `raw_fd` es `None`, y `io_wait` tomaba por DURMIENTE (fd −1) toda fibra aparcada por `WouldBlock` — sin deadline, `sleep(0)` y a girar sin despertarla jamás. **Todo servidor colgaba en el primer `accept`** (el par local del censo imprimía el puerto y moría ahí; `webserver` + `http.fetch` locales igual), y de rebote `tcp_cliente`/`http_demo`. Arreglo: E/S aparcada sin fd (`handle >= 0`) → busy-poll cooperativo de 1 ms y reintento. **Segunda mitad**: las operaciones clonan el socket (`try_clone`) y en Windows el clon nace bloqueante (`WSADuplicateSocket` no hereda `FIONBIO`; en unix el fd duplicado sí comparte `O_NONBLOCK`) → el `accept` clonado bloqueaba al único worker; los clones re-aplican el modo. Test `net_no_poller_cli` en las tres plataformas. Pendiente W5: el mismo busy-poll con readiness real (wepoll). |
 | **UDP y el reset 10054 (censo)** | En Windows, un ICMP "port unreachable" previo hace que el siguiente `recv` UDP falle con `WSAECONNRESET` (10054): `udp_demo`, `dns_cache_demo` y `udp_timeout_demo` lo muestran (Linux simplemente espera). Es un comportamiento documentado de Winsock; se desactiva con `WSAIoctl(SIO_UDP_CONNRESET, FALSE)` al crear el socket. **S**. `dns_demo` además **cuelga** (el `recv` UDP bloqueante que ya anotó IDEAS §70). |
-| Cierra con | `wepoll` (ABI epoll sobre IOCP/AFD, encaja en la forma de `src/poll.rs`) para la VM; IOCP nativo a largo plazo, que además desbloquea las fibras; `CreateWaitableTimerEx(HIGH_RESOLUTION)` o `timeBeginPeriod(1)` para el sueño fino. |
-| Tamaño | wepoll **M** · IOCP para fibras **L** · sueño fino **S**. |
+| Cierra con | ~~`wepoll` para la VM~~ ✅ M174 `WSAPoll`; ~~IOCP nativo a largo plazo~~ ✅ M182: el scheduler es de readiness, no de completion — `WSAPoll` persistente con intereses oneshot y un socket UDP a sí mismo como tubería de despertar; pipes/consola/watch con fibras van al pool bloqueante (`run_blocking`). |
+| Tamaño | ~~wepoll **M** · IOCP para fibras **L** · sueño fino **S**~~ — todo cerrado (M174 + M182). |
 | **Hecho (M174)** | `WSAPoll` (ws2_32, la forma exacta de `poll(2)`: sin crates) como backend Windows de `src/poll.rs`; `raw_fd` devuelve el SOCKET y el scheduler aparca las fibras de red en el poller de verdad — se acabó el busy-poll de 1 ms para sockets, y los `read_timeout` de sockets VENCEN (aparcadas en el poller, sus deadlines expiran; antes cada reintento los renovaba). El pseudo-fd de stdin no es un socket: el backend lo sondea aparte a 5 ms. El handshake TLS espera por el poller también en Windows. `sleep_ms` = *waitable timer* de alta resolución (Windows 10 1803+; `thread::sleep` de respaldo): fuera el tick de 15,6 ms. UDP: `SIO_UDP_CONNRESET = FALSE` al crear el socket (adiós 10054). **Queda**: el reactor IOCP para las fibras del binario nativo (W7). |
+| **Hecho (M182)** | El reactor de las fibras nativas: `WSAPoll` persistente con intereses oneshot (`fibers.rs`, `mod sys` de Windows) y un socket UDP a sí mismo como tubería de despertar; pipes/consola/watch por el pool bloqueante; `__ray_fd` = SOCKET en el código emitido. Solo x86_64 (corosensei sin backend AArch64-Windows: en ARM64 se apagan solas con el motivo). Verificado cross-compilando desde la VM ARM64 y ejecutando bajo emulación x64; el runner de CI corre `native_fibers_cli`. |
 
 ### 3.7 `fs.chmod` y `stat().mode`
 
@@ -203,7 +204,7 @@ Fuera de la red de CI actual:
 | **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** ✅ | `WSAPoll` en `src/poll.rs` + sueño fino + `SIO_UDP_CONNRESET` (M174) | M + S | p99 de servidores bajo carga; pacing de juegos; `read_timeout` de sockets |
 | **W6** ✅ | `std/process` con `CreateProcess` + pipes + Job Objects (M175) | L | MCP/LSP hijos, pipelines |
-| **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · watcher ✅ M181 · IOCP para fibras nativas | L × 3 | fibras en el nativo; escritorio y audio |
+| **W7** | headless de `std/ui` ✅ M177 · WASAPI ✅ M178 · WebView2 ✅ M179 · `ray bundle` ✅ M180 · watcher ✅ M181 · fibras nativas (WSAPoll, x86_64) ✅ M182 | L × 3 | fibras en el nativo; escritorio y audio |
 
 Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-windows-msvc` (IDEAS §84).
 

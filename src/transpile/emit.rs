@@ -159,7 +159,11 @@ impl Transpiler {
             // `{:?}` produce un literal de string Rust ESCAPADO: un nombre de librería con comillas no puede
             // inyectar ítems en el fuente generado (no es frontera de seguridad —el usuario compila su
             // propio código— pero evita que un `extern "..."` raro genere Rust arbitrario).
-            if *lib != "c" {
+            if *lib == "m" {
+                // M182: en Windows no existe `m.lib` — la matemática vive en la CRT (ucrt), que ya
+                // va enlazada (el espejo de M165, donde la VM resuelve "m" a ucrtbase.dll).
+                out.push_str("#[cfg_attr(not(windows), link(name = \"m\"))]\n");
+            } else if *lib != "c" {
                 writeln!(out, "#[link(name = {:?})]", lib).unwrap();
             }
             out.push_str("unsafe extern \"C\" {\n");

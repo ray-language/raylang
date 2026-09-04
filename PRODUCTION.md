@@ -116,7 +116,7 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 | FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
 | Paquetes (`ray add`, `ray.lock`) | funcionan (M166): clones con LF forzado y hash insensible a CRLF |
 | Poller de red | **`WSAPoll`** (M174): readiness real, sin busy-poll; `read_timeout` de sockets vence; sueño fino por *waitable timer*; UDP sin el reset 10054 |
-| Fibras en el binario nativo | `--without fibers` automático (hilo por tarea; el reactor es kqueue/epoll) |
+| Fibras en el binario nativo | **funcionan en x86_64** (M182): scheduler M:N sobre un reactor `WSAPoll` persistente; pipes, consola y watch por el pool bloqueante. En ARM64, `--without fibers` automático (corosensei no tiene backend AArch64-Windows) |
 | `std/ui` | **funciona** (M179): ventana Win32 + WebView2 (`webview2-com`, el único crate del port), menús, diálogos, puente IPC; headless (M177) en pruebas y CI |
 | `std/audio` | **funciona** (M178): WASAPI en modo compartido, s16le con conversión del motor; `audio.write` bloquea el hilo con el búfer lleno (pipe anónimo, sin aparcar la fibra) |
 | `ray bundle` | **funciona** (M180): `<name><name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos por `UpdateResourceW`) + `<name>.lnk`; sin Authenticode en v1 |

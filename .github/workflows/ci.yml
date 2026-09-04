@@ -146,9 +146,13 @@ jobs:
       - name: Tests del front-end y la VM (los que no dependen de unix)
         run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt lsp poll
       # M168: signals() en Windows (SetConsoleCtrlHandler) — VM, binario NATIVO (primer build
-      # --native en un host Windows bajo CI: fibras apagadas por host) y el handler simulado.
+      # --native en un host Windows bajo CI; desde M182 con fibras, el runner es x86_64) y el handler simulado.
       - name: signals() en Windows (VM + nativo + handler de consola)
         run: cargo test --release --test signals_portable_cli -- --nocapture
+      # M182 (W7f): las fibras del binario nativo en Windows x86_64 — reactor WSAPoll; paridad byte a
+      # byte contra la VM (spawn/join, canales, scope, try_call, sleep, servidor TCP, read timeout).
+      - name: Fibras nativas en Windows x86_64 (reactor WSAPoll)
+        run: cargo test --release --test native_fibers_cli -- --nocapture
       # M170: la red sin poller — accept/read/write aparcados sin fd se reintentan por busy-poll (antes
       # el scheduler los tomaba por durmientes y todo servidor colgaba en el primer accept).
       - name: Red sin poller (par local + webserver y fetch locales)

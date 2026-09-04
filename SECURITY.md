@@ -199,7 +199,11 @@ documentada:
 - **`src/wasm.rs`** — la ABI de memoria del *playground* (`alloc`/`run`/`dealloc` sobre la memoria
   lineal del módulo), solo en `wasm32`.
 - **`crates/ray-runtime/src/fibers.rs`** — el scheduler de fibras del binario nativo: pilas con
-  página de guarda y reactor `kqueue`/`epoll`. El cambio de contexto lo hace `corosensei`.
+  página de guarda y reactor `kqueue`/`epoll`. El cambio de contexto lo hace `corosensei`. En
+  Windows x86_64 (M182) el reactor es `WSAPoll` (ws2_32) sobre un buffer propio de `WSAPOLLFD`, la
+  tubería de despertar es un socket UDP conectado a sí mismo (`send`/`recv` de un octeto sobre un
+  socket propio no-bloqueante) y el sueño fino usa un *waitable timer* (handles propios, cerrados).
+  Los SOCKET viajan como i32 (valores pequeños de Winsock).
 - **`crates/ray-runtime/src/process.rs`** — `fcntl` variádico, `poll(2)` y `kill` al **grupo** del
   hijo (siempre un grupo creado por nosotros con `process_group(0)`). En Windows (M175): Job Object
   por hijo (`CreateJobObjectW`/`SetInformationJobObject` con estructura `repr(C)` a cero salvo el flag,

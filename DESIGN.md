@@ -11822,3 +11822,58 @@ de Windows tal cual (el handshake por stdout no sabía de plataformas).
 
 Del port de Windows queda solo el reactor IOCP para las fibras del binario nativo
 (`docs/windows.md` §6, W7).
+
+## 174. M182 — W7f: las fibras del binario nativo en Windows, reactor `WSAPoll` (sep 2026)
+
+El último hueco del port (`docs/windows.md` 3.6): `ray build --native` en un target Windows
+apagaba las fibras con aviso y el binario corría hilo-por-tarea. El reactor era kqueue/epoll y
+el resto del scheduler (corrutinas corosensei, workers fijados, pool bloqueante) ya era
+portable — o casi.
+
+**El hallazgo que acota el arco.** corosensei 0.2.2 no tiene backend para AArch64-Windows
+(solo x86_64 y x86; la tabla de su README lo dice y `arch/mod.rs` lo confirma). Las fibras de
+Windows son, por tanto, **solo x86_64** — el target del runner de CI y de casi todo Windows de
+escritorio; en ARM64 (la VM de desarrollo) `ray build` sigue apagándolas solas, ahora con el
+motivo real en el aviso ("no coroutine backend for this architecture"). La puerta pasa de
+"¿es Windows?" a "¿es Windows sin x86_64?", con `host_triple()` cuando no hay `--target`.
+
+**El reactor, sin IOCP.** El scheduler es de *readiness* (aparcar hasta que un fd esté listo),
+no de *completion*: IOCP exigiría I/O solapada en todo el runtime emitido. La forma que encaja
+es la misma que M174 eligió para la VM: `WSAPoll` (la forma exacta de `poll(2)`, sin crates),
+aquí PERSISTENTE sobre la lista de intereses armados — `arm` añade o amplía una entrada,
+`wait` retira las disparadas (oneshot, como los knotes de kqueue). Diferencia a favor: un
+socket cerrado no muere en silencio, WSAPoll lo marca `POLLNVAL` y su fibra despierta (la
+syscall le dirá qué pasó); el re-armado global del `poke` queda redundante. La tubería de
+despertar es un socket UDP no-bloqueante conectado a sí mismo (un datagrama de un octeto por
+despertar; un solo descriptor hace de ambos extremos). El sueño fino fuera de fibra es el
+*waitable timer* de alta resolución, como en la VM.
+
+**Lo que no es un socket.** WSAPoll solo ve sockets: los pipes de los procesos hijos, la
+consola y el watch de fs no se pueden aparcar en el reactor. Con fibras en Windows, el código
+emitido los lleva al **pool bloqueante** (`run_blocking`, que ya existía para las externs FFI
+`blocking`): la lectura o escritura completa corre en un hilo del pool y la fibra aparca
+mientras tanto — cero CPU, sin bloquear al worker. La cola de eventos de `std/ui` es el cuarto
+caso (sin fd en Windows desde M177): CI lo cazó — `ui_cli` colgó 39 minutos en el runner porque la
+espera con fibras pedía el fd del pipe; ahora también espera por el pool, por tramos de 200 ms. El `fd` del código emitido pasa por
+`__ray_fd` (descriptor en unix, SOCKET truncado a i32 en Windows: los handles de Winsock son
+valores pequeños); TLS hace lo propio en `tls.rs`.
+
+**Un hallazgo colateral.** La batería de fibras cruzada a x64 destapó que el binario nativo en
+Windows enlazaba `m.lib` para `extern "m"` (falla igual sin fibras): en Windows la matemática vive
+en la CRT ya enlazada, así que el `#[link(name = "m")]` emitido pasa a `cfg_attr(not(windows), …)`
+— el espejo de M165, donde la VM resuelve "m" a ucrtbase.dll.
+Y un segundo, del hilo-por-tarea (la ruta de ARM64): el plazo de lectura TCP vencía con el texto
+de `WSAETIMEDOUT` (10060) en vez del "read timeout" estable — en unix `SO_RCVTIMEO` vence como
+`WouldBlock` y en Windows como `TimedOut`; ahora ambos se mapean, como ya hacía UDP. Ninguna CI
+lo había visto: en unix las fibras van por defecto y `tests/native_fibers_cli.rs` nunca había
+corrido en Windows.
+
+**Verificación sin máquina x86_64.** La VM de desarrollo es ARM64: el arco se verificó
+cross-compilando a `x86_64-pc-windows-msvc` (rustup target + libs x64 de MSVC/SDK en `LIB`,
+`lld-link` como enlazador, `clang-cl` para las dependencias C) y ejecutando los binarios bajo
+la emulación x64 de Windows 11 — el servidor TCP que se habla a sí mismo y los canales con
+`sleep` dan la salida byte-idéntica a la VM. El runner x86_64 de CI corre
+`tests/native_fibers_cli.rs` en el job de Windows.
+
+Con esto `docs/windows.md` §6 queda sin arcos abiertos: el port de Windows está completo salvo
+lo que corosensei decida sobre ARM64.

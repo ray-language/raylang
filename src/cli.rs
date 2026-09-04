@@ -1826,14 +1826,15 @@ fn cmd_build(args: &[String]) {
             eprintln!("--fibers and '--without fibers' contradict each other; pick one");
             process::exit(64);
         }
-        // M168: sin `--target`, el target efectivo es el HOST — un build nativo en Windows también
-        // apaga las fibras (antes solo miraba el flag y en un host Windows intentaba compilar el
-        // reactor kqueue/epoll).
-        let windows = target.as_deref().map_or(cfg!(windows), |t| t.contains("windows"));
-        if windows && !without_fibers {
-            eprintln!("note: fibers are not available on Windows targets yet; building with the thread-per-task model");
+        // M168: sin `--target`, el target efectivo es el HOST. M182: en Windows las fibras corren
+        // sobre el reactor WSAPoll — pero solo en x86_64: corosensei no tiene backend para
+        // AArch64-Windows, y ahí se apagan solas, con aviso (hilo-por-tarea, el respaldo completo).
+        let triple = target.clone().unwrap_or_else(|| host_triple().to_string());
+        let no_fibers_target = triple.contains("windows") && !triple.starts_with("x86_64");
+        if no_fibers_target && !without_fibers {
+            eprintln!("note: fibers are not available on {triple} (no coroutine backend for this architecture); building with the thread-per-task model");
         }
-        !without_fibers && !windows
+        !without_fibers && !no_fibers_target
     };
     let file = args
         .iter()
@@ -1883,6 +1884,20 @@ fn cmd_build(args: &[String]) {
 ///   medible + alta complejidad).
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
 /// M169: los subsistemas del runtime nativo que no existen en Windows (sus módulos en
+/// El triple del HOST, tal como lo escribiría rustup (`aarch64-pc-windows-msvc`, `x86_64-apple-darwin`…):
+/// el target efectivo de un build nativo sin `--target`. Lo bastante fiel para las decisiones
+/// por SO y arquitectura (M182: las fibras de Windows son solo x86_64).
+fn host_triple() -> String {
+    let (arch, os) = (std::env::consts::ARCH, std::env::consts::OS);
+    match os {
+        "windows" => format!("{arch}-pc-windows-msvc"),
+        "macos" => format!("{arch}-apple-darwin"),
+        "ios" => format!("{arch}-apple-ios"),
+        "android" => format!("{arch}-linux-android"),
+        _ => format!("{arch}-unknown-{os}"),
+    }
+}
+
 /// `ray-runtime` son `cfg(unix)`), con el mismo mensaje que la VM devuelve en runtime. Recibe las
 /// features que el transpilador pidió y devuelve las que no compilarían. Pura para testearla.
 fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
@@ -3935,6 +3950,14 @@ mod tests {
             "el cambio debe detectarse"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn host_triple_names_the_host_arch_and_os() {
+        // M182: la puerta de las fibras decide por arquitectura y SO del target efectivo.
+        let t = host_triple();
+        assert!(t.starts_with(std::env::consts::ARCH), "{t}");
+        assert!(t.contains(if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }), "{t}");
     }
 
     #[test]

@@ -90,7 +90,7 @@ fn main() -> int {
 ### `curl | sh` (macOS / Linux)
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
+curl -sSfL https://raylang.dev/install.sh | sh
 ```
 
 Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`.
@@ -98,7 +98,7 @@ Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`.
 ### PowerShell (Windows)
 
 ```powershell
-irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex
+irm https://raylang.dev/install.ps1 | iex
 ```
 
 Deja `ray.exe` (y `raylang.exe`) en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade al PATH de

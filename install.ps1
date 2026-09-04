@@ -3,7 +3,7 @@
 # plataforma desde la GitHub Release, deja ray.exe (+ raylang.exe) en un directorio del usuario y
 # lo añade al PATH de usuario (sin permisos de administrador).
 #
-#   irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex
+#   irm https://raylang.dev/install.ps1 | iex
 #
 # Variables de entorno (opcionales, las mismas que install.sh):
 #   RAYLANG_VERSION   tag a instalar (p. ej. v1.5.0). Por defecto: la última release.

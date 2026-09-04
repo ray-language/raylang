@@ -104,6 +104,10 @@ fn main() -> int {
     copy_text(root, out, "assets/raylang-symbol-primary.svg", "assets/symbol.svg");
     copy_text(root, out, "assets/icon.svg", "assets/icon.svg");
     copy_text(root, out, "assets/raylang-mascot.svg", "assets/mascot.svg");
+    // Los instaladores en la raíz del dominio: `curl -sSfL https://raylang.dev/install.sh | sh`
+    // e `irm https://raylang.dev/install.ps1 | iex` (URL propia, independiente del hosting del repo).
+    copy_text(root, out, "install.sh", "install.sh");
+    copy_text(root, out, "install.ps1", "install.ps1");
     // Las fuentes de marca embebidas (SIL OFL 1.1): sitio autocontenido, sin CDNs.
     copy_bytes(
         root,

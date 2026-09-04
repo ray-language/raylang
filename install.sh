@@ -1,7 +1,7 @@
 #!/bin/sh
 # Instalador de raylang (M44c). Descarga el binario de la plataforma desde la GitHub Release y lo instala.
 #
-#   curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
+#   curl -sSfL https://raylang.dev/install.sh | sh
 #
 # Variables de entorno (opcionales):
 #   RAYLANG_VERSION   tag a instalar (p. ej. v1.0.0). Por defecto: la última release.

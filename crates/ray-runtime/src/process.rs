@@ -305,8 +305,8 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
     Ok(RunOutput { exit, stdout, stderr, timed_out, truncated })
 }
 
-/// Sin unix (Windows, wasm): un `Err` honesto, como `packages/tz` en plataformas sin TZif.
-#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+/// Sin unix ni Windows (wasm): un `Err` honesto, como `packages/tz` en plataformas sin TZif.
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
 pub fn run(program: &str, _args: &[String], _opts: &RunOpts) -> Result<RunOutput, String> {
     Err(format!("{program}: running OS processes is not supported on this platform"))
 }
@@ -616,4 +616,322 @@ mod process_tests {
         assert_eq!(out.stdout, b"one\ntwo\nthree\n");
         assert!(out.stderr.is_empty());
     }
+}
+
+// ─── Windows (M175, docs/windows.md W6 §3.5) ─────────────────────────────────────────────────────
+//
+// El mismo contrato, con los primitivos de Windows en el lugar de los de unix:
+//
+// - **Grupo** = `CREATE_NEW_PROCESS_GROUP` + un **Job Object** por hijo con `KILL_ON_JOB_CLOSE`:
+//   los nietos de un `cmd /c "a | b"` viven en el job, y `TerminateJobObject` los mata a todos —
+//   el análogo de `kill(-pid)`. El handle del job se guarda por pid y se cierra al cosechar.
+// - **Escalera** del timeout / `kill(force=false)`: `CTRL_BREAK` al grupo (el hijo puede drenar;
+//   sin consola compartida no llega y se pasa al siguiente peldaño) → margen → `TerminateJobObject`.
+// - **`Exit.Signal`** no existe como tal: se reporta `Signal(9)` cuando lo terminó el job (código
+//   de salida centinela `0x8000_0009`), `Signal(15)` para el peldaño suave forzado (`0x8000_000F`)
+//   y `Signal(2)` si murió por el `CTRL_BREAK` (`STATUS_CONTROL_C_EXIT`). Cualquier otro código es
+//   `Code(n)`, como lo devolvió el proceso.
+// - **Pipes**: los pipes anónimos de Windows no tienen modo no bloqueante. `run` los drena con un
+//   hilo por flujo (bloqueantes, con tope); el streaming de la VM consulta `pipe_available`
+//   (`PeekNamedPipe`) antes de leer, para no bloquear al worker — la fibra aparca por el respaldo
+//   sin fd del scheduler (M170) y reintenta. La escritura al stdin del hijo es bloqueante.
+// - `stdin` por defecto es NUL; `merge_output` es el mismo `std::io::pipe` + `try_clone`.
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub struct SpawnedChild {
+    pub child: std::process::Child,
+    /// M100 v3: el extremo de ESCRITURA del stdin del hijo (bloqueante en Windows), solo con
+    /// `opts.stdin_open`.
+    pub stdin: Option<std::fs::File>,
+    pub out: Option<std::fs::File>,
+    pub err: Option<std::fs::File>,
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+mod win {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateJobObjectW(attrs: *const core::ffi::c_void, name: *const u16) -> usize;
+        fn SetInformationJobObject(job: usize, class: u32, info: *const core::ffi::c_void, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: usize, process: usize) -> i32;
+        fn TerminateJobObject(job: usize, exit_code: u32) -> i32;
+        fn GenerateConsoleCtrlEvent(event: u32, process_group_id: u32) -> i32;
+        fn WaitForSingleObject(handle: usize, ms: u32) -> u32;
+        fn CloseHandle(handle: usize) -> i32;
+        fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
+    }
+
+    pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CTRL_BREAK_EVENT: u32 = 1;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+    pub const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    /// Códigos de salida centinela con los que el job termina al hijo: se leen como `Signal(9)` /
+    /// `Signal(15)`. `STATUS_CONTROL_C_EXIT` es el del propio Windows para un Ctrl-Break sin manejar.
+    pub const EXIT_KILLED: u32 = 0x8000_0009;
+    pub const EXIT_TERMED: u32 = 0x8000_000F;
+    pub const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+
+    #[repr(C)]
+    struct IoCounters {
+        a: u64,
+        b: u64,
+        c: u64,
+        d: u64,
+        e: u64,
+        f: u64,
+    }
+    #[repr(C)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+    #[repr(C)]
+    struct ExtendedLimitInformation {
+        basic: BasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    /// Los jobs de los hijos vivos, por pid (se cierra al cosechar).
+    static JOBS: Mutex<Option<HashMap<u32, usize>>> = Mutex::new(None);
+
+    fn with_jobs<R>(f: impl FnOnce(&mut HashMap<u32, usize>) -> R) -> R {
+        let mut g = JOBS.lock().unwrap_or_else(|e| e.into_inner());
+        f(g.get_or_insert_with(HashMap::new))
+    }
+
+    /// Crea un job con kill-on-close, mete al hijo y lo registra por pid. Un fallo no es fatal: el
+    /// hijo corre igual (solo pierde la garantía sobre sus nietos).
+    pub fn attach_job(child: &std::process::Child) {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: llamadas a kernel32 con una estructura `repr(C)` a cero salvo el flag; el handle
+        // del job se retiene en el mapa hasta cosechar.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job == 0 {
+                return;
+            }
+            let mut info: ExtendedLimitInformation = std::mem::zeroed();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<ExtendedLimitInformation>() as u32,
+            ) != 0
+                && AssignProcessToJobObject(job, child.as_raw_handle() as usize) != 0;
+            if !ok {
+                CloseHandle(job);
+                return;
+            }
+            if let Some(old) = with_jobs(|m| m.insert(child.id(), job)) {
+                CloseHandle(old);
+            }
+        }
+    }
+
+    /// Suelta (y cierra) el job del pid al cosechar. Cerrar el último handle mata lo que quede en
+    /// el job (nietos huérfanos): el grupo entero ha terminado.
+    pub fn release_job(pid: u32) {
+        if let Some(job) = with_jobs(|m| m.remove(&pid)) {
+            // SAFETY: cerrar un handle propio.
+            unsafe { CloseHandle(job) };
+        }
+    }
+
+    /// La escalera: `force` → el job entero termina con el centinela de SIGKILL; si no, `CTRL_BREAK`
+    /// al grupo (y, si no hay consola compartida, el job con el centinela de SIGTERM).
+    pub fn kill_group(pid: u32, force: bool) {
+        let job = with_jobs(|m| m.get(&pid).copied());
+        // SAFETY: llamadas a kernel32 sin punteros; el job es propio.
+        unsafe {
+            if !force && GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) != 0 {
+                return;
+            }
+            if let Some(job) = job {
+                TerminateJobObject(job, if force { EXIT_KILLED } else { EXIT_TERMED });
+            }
+        }
+    }
+
+    /// Espera hasta `ms` a que el proceso termine (`true` = terminó).
+    pub fn wait_process(child: &std::process::Child, ms: u32) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: espera sobre el handle que posee `Child`.
+        unsafe { WaitForSingleObject(child.as_raw_handle() as usize, ms) != WAIT_TIMEOUT }
+    }
+
+    /// Octetos disponibles en un pipe sin bloquear; `Err(BrokenPipe)` si el otro extremo cerró.
+    pub fn pipe_available(f: &std::fs::File) -> std::io::Result<usize> {
+        use std::os::windows::io::AsRawHandle;
+        let mut avail = 0u32;
+        // SAFETY: sin buffer (len 0); solo se pide `avail`, un u32 propio.
+        let ok = unsafe {
+            PeekNamedPipe(f.as_raw_handle() as usize, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut())
+        };
+        if ok == 0 {
+            let e = std::io::Error::last_os_error();
+            return Err(if e.raw_os_error() == Some(109) { std::io::Error::from(std::io::ErrorKind::BrokenPipe) } else { e });
+        }
+        Ok(avail as usize)
+    }
+
+    /// El `Result<code, signal>` de un estado de salida de Windows (ver la cabecera del módulo).
+    pub fn exit_of(status: std::process::ExitStatus) -> Result<i32, i32> {
+        let code = status.code().unwrap_or(-1);
+        match code as u32 {
+            EXIT_KILLED => Err(9),
+            EXIT_TERMED => Err(15),
+            STATUS_CONTROL_C_EXIT => Err(2),
+            _ => Ok(code),
+        }
+    }
+}
+
+/// Octetos disponibles en un pipe de un hijo sin bloquear (Windows: `PeekNamedPipe`);
+/// `Err(BrokenPipe)` = el otro extremo cerró (la lectura devolverá EOF).
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn pipe_available(f: &std::fs::File) -> std::io::Result<usize> {
+    win::pipe_available(f)
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<SpawnedChild, String> {
+    use std::io::Write;
+    use std::os::windows::io::OwnedHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(d) = &opts.dir {
+        cmd.current_dir(d);
+    }
+    if opts.env_clear {
+        cmd.env_clear();
+    }
+    for (k, v) in &opts.env {
+        cmd.env(k, v);
+    }
+    cmd.stdin(if opts.stdin.is_some() || opts.stdin_open { Stdio::piped() } else { Stdio::null() });
+    let mut merged = None;
+    if opts.merge_output {
+        let (r, w) = std::io::pipe().map_err(|e| format!("{program}: {e}"))?;
+        let w2 = w.try_clone().map_err(|e| format!("{program}: {e}"))?;
+        cmd.stdout(w);
+        cmd.stderr(w2);
+        merged = Some(std::fs::File::from(OwnedHandle::from(r)));
+    } else {
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+    }
+    // Grupo propio (para CTRL_BREAK) — el job se añade tras el spawn.
+    cmd.creation_flags(win::CREATE_NEW_PROCESS_GROUP);
+    let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    drop(cmd);
+    win::attach_job(&child);
+
+    let child_stdin = child.stdin.take();
+    let mut stdin = None;
+    if opts.stdin_open {
+        stdin = child_stdin.map(|p| std::fs::File::from(OwnedHandle::from(p)));
+    } else if let (Some(data), Some(mut si)) = (&opts.stdin, child_stdin) {
+        let _ = si.write_all(data);
+    }
+    let out = match merged {
+        Some(f) => Some(f),
+        None => child.stdout.take().map(|p| std::fs::File::from(OwnedHandle::from(p))),
+    };
+    let err = child.stderr.take().map(|p| std::fs::File::from(OwnedHandle::from(p)));
+    Ok(SpawnedChild { child, stdin, out, err })
+}
+
+/// `try_wait` del hijo: `Ok(None)` = sigue; `Ok(Some(exit))` = terminó (cosechado, job cerrado).
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn try_wait(child: &mut std::process::Child) -> Result<Option<Result<i32, i32>>, String> {
+    match child.try_wait() {
+        Ok(None) => Ok(None),
+        Ok(Some(status)) => {
+            win::release_job(child.id());
+            Ok(Some(win::exit_of(status)))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// La escalera sobre el GRUPO del hijo (ver la cabecera): `force` termina el job; si no, `CTRL_BREAK`.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn kill_group(pid: i32, force: bool) {
+    win::kill_group(pid as u32, force);
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, String> {
+    use std::io::Read;
+
+    let spawned = spawn_streamed(program, args, opts)?;
+    let mut child = spawned.child;
+    let pid = child.id();
+    let cap = opts.max_output.max(0) as usize;
+
+    // Drenaje concurrente: un hilo por flujo (los pipes son bloqueantes en Windows). Cada hilo
+    // devuelve (datos hasta el tope, se_truncó) y termina con el EOF del pipe.
+    let drain = |pipe: Option<std::fs::File>| {
+        std::thread::spawn(move || {
+            let Some(mut p) = pipe else { return (Vec::new(), false) };
+            let mut sink = Vec::new();
+            let mut truncated = false;
+            let mut buf = [0u8; 65536];
+            loop {
+                match p.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(k) => {
+                        let room = cap.saturating_sub(sink.len());
+                        let take = k.min(room);
+                        sink.extend_from_slice(&buf[..take]);
+                        if take < k {
+                            truncated = true;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            (sink, truncated)
+        })
+    };
+    let out_thread = drain(spawned.out);
+    let err_thread = drain(spawned.err);
+
+    // Espera con plazo; al vencer, la escalera: CTRL_BREAK → 500 ms → job.
+    let mut timed_out = false;
+    if opts.timeout_ms > 0 {
+        let ms = opts.timeout_ms.min(u32::MAX as i64 - 1) as u32;
+        if !win::wait_process(&child, ms) {
+            timed_out = true;
+            win::kill_group(pid, false);
+            if !win::wait_process(&child, 500) {
+                win::kill_group(pid, true);
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| format!("{program}: {e}"))?;
+    win::release_job(pid); // cierra el job: mata a los nietos que sigan vivos y libera los pipes
+    let (stdout, t1) = out_thread.join().unwrap_or((Vec::new(), false));
+    let (stderr, t2) = err_thread.join().unwrap_or((Vec::new(), false));
+    Ok(RunOutput { exit: win::exit_of(status), stdout, stderr, timed_out, truncated: t1 || t2 })
 }

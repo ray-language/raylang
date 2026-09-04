@@ -107,7 +107,7 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 | Superficie | Estado en Windows |
 |---|---|
 | `ray dev` / `ray test --watch` | **funcionan** (M172): el reinicio manda `CTRL_BREAK` al grupo del hijo (`serve_graceful` drena), un Job Object mata al hijo si el supervisor muere, `--port` retiene el socket entre reinicios (handle heredable); el watcher sigue siendo polling de mtimes (~200 ms) |
-| `std/process` | no soportado (`fork`/`exec` unix); `Err` al lanzar |
+| `std/process` | **funciona** (M175): `run`/`cmd`/`stream`/`stdin_pipe` con Job Object por hijo y escalera `CTRL_BREAK` → `TerminateJobObject`; `Exit.Signal` mapeado (9/15/2); la escritura al stdin del hijo es bloqueante |
 | `std/term` (`is_tty`, `size`, `raw`, `read_key`, `read_hidden`, `capabilities`) | **funcionan** (M173) por la Console API; `size_px`/`cell_px` → `None` (la API no expone píxeles) |
 | `std/io` (`read`, `read_timeout`, `stdin_ready`) | **funcionan** (M173): disponibilidad real en consola y pipes, la fibra aparca (no la VM), el plazo vence |
 | `signals()` | **funciona** (M168): Ctrl-C/Break → 2, cierre/logoff/apagado → 15 vía `SetConsoleCtrlHandler`; sin SIGWINCH (28) hasta el arco de terminal |

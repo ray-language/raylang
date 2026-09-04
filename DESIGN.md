@@ -11593,3 +11593,46 @@ conexiones no está listo y la espera honra el plazo; con una conexión en el ba
 `tests/net_no_poller_cli.rs` gana `a_socket_read_timeout_expires`: el servidor fija 300 ms y lee
 de un cliente que calla — `read timeout` a tiempo, ni antes ni nunca, en multicore y con un hilo.
 Queda de 3.6 solo el reactor IOCP para las fibras del binario nativo (W7).
+
+## 167. M175 — W6: `std/process` en Windows, con Job Objects (sep 2026)
+
+La deuda 3.5 de `docs/windows.md`, la de tamaño **L**: `process.run`/`cmd`/`stream`/`stdin_pipe`
+devolvían `Err("running OS processes is not supported on this platform")` en la VM y el binario
+nativo ni compilaba (W2 lo rechazaba con ese mismo texto). Sin ella no había sesiones MCP/LSP
+hijas, ni `sh -c`-equivalentes, ni drivers de build en Windows.
+
+**El contrato es el mismo; cambian los primitivos.** `crates/ray-runtime/src/process.rs` gana su
+variante Windows con la misma superficie (`spawn_streamed`, `run`, `try_wait`, `kill_group`) para
+que la VM y el nativo la compartan como en unix. El mapeo, uno a uno con el "Cierra con" de la
+auditoría: el GRUPO de procesos —`process_group(0)` y `kill(-pid)`— es `CREATE_NEW_PROCESS_GROUP`
+más un **Job Object por hijo** con `KILL_ON_JOB_CLOSE`: los nietos de un `cmd /c "a | b"` viven en
+el job, `TerminateJobObject` los mata a todos, y cerrar el handle al cosechar arrastra a cualquier
+huérfano. La **escalera** del timeout y de `kill(force=false)` es `CTRL_BREAK` al grupo (el hijo
+puede drenar; sin consola compartida no llega y se pasa al peldaño siguiente) → 500 ms →
+`TerminateJobObject`. Y `Exit.Signal`, que en Windows no existe, se reporta con códigos de salida
+centinela: `Signal(9)` si lo terminó el job, `Signal(15)` si el peldaño suave hubo que forzarlo,
+`Signal(2)` si murió por el `CTRL_BREAK` (`STATUS_CONTROL_C_EXIT`); cualquier otro código es
+`Code(n)` tal cual.
+
+**Los pipes anónimos no tienen modo no bloqueante.** En unix el drenaje de `run` es `poll(2)`
+sobre los dos pipes y el streaming de la VM aparca la fibra en el poller con `WouldBlock`. En
+Windows, `run` drena con un hilo por flujo (bloqueantes, con el tope y `truncated` de siempre) y
+el streaming consulta `PeekNamedPipe` antes de leer: sin datos, la fibra aparca por el respaldo
+sin fd del scheduler (M170) y reintenta; con el otro extremo cerrado, EOF. La escritura al stdin
+del hijo es bloqueante (queda anotado). El nativo, sin fibras en Windows, lee bloqueando en el
+hilo de cada bomba, que es justo el modelo hilo-por-tarea.
+
+**Lo que destapó la prueba.** Los filtros de Windows (`findstr`, `sort`) bufferizan su salida
+bajo un pipe: no sirven de `cat` línea a línea para la sesión con stdin abierto. El test usa a
+`ray` mismo como hijo (`print` escribe al momento). `cmd` trata `^` como escape, así que el caso
+de stdin invoca `findstr /r .` directo, sin `cmd`. Y el CRLF de los fixtures, que en #243 se
+parcheó en el harness, se resuelve de raíz con un `.gitattributes` (`* text=auto eol=lf`, binarios
+marcados): el checkout es LF en todas las plataformas, también para el runner con `autocrlf`.
+
+**Prueba.** `tests/process_windows_cli.rs` (`#![cfg(windows)]`): el contrato de `run` con `cmd`
+(exit≠0 es `Ok`, stdin, ENOENT como `Err`, timeout con Output parcial y `timed_out`, merge, tope
+con `truncated`, `env`) y la sesión con stdin abierto (tres peticiones, cierre, `wait`, escritura
+tras la muerte = `Err`), en VM, intérprete y binario nativo. El gate de M169 deja de listar
+`process`; el paso de CI que lo comprobaba pasa a `std/ui`, que sigue sin compilar en Windows.
+Queda de la auditoría: escritorio y audio (W7), el reactor IOCP del nativo, y los hallazgos S
+(URIs del LSP, BOM).

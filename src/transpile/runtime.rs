@@ -1294,8 +1294,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    use std::io::Write;\n",
             "    let tag = |a: &str, b: String| Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(a), Rc::<str>::from(b.as_str())]));\n",
             "    let Some(f) = __ray_stdin_clone(h) else { return tag(\"err\", format!(\"invalid child stdin handle: {}\", h)); };\n",
-            "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
-            "    let _ = fd;\n",
+            // M175: el fd solo existe (y solo hace falta) con fibras — que son unix.
+            "    #[cfg(unix)] let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
+            "    #[cfg(unix)] let _ = fd;\n",
             "    let mut off = 0usize;\n",
             "    while off < data.len() {\n",
             "        let mut w = &*f;\n",

@@ -113,7 +113,8 @@ jobs:
   # compile al target.
   # Windows (M165): el zip que publica release.yml no tenía quien lo probara. Build + humo de la VM
   # + el instalador REAL (install.ps1 contra la última release publicada) + `ray upgrade --check`.
-  # Los tests unix-only (process/term/signals) no corren aquí; PRODUCTION.md lista los huecos.
+  # Desde M168–M175 corren aquí las suites de señales, red, ray dev, term/io y procesos; los
+  # huecos que quedan (ui/audio, reactor IOCP del nativo) los lista docs/windows.md.
   windows:
     name: build · smoke (windows)
     runs-on: windows-latest
@@ -164,7 +165,12 @@ jobs:
       # vence; VM y binario nativo. Las suites completas (decoder, sin-tty, pipes) corren aquí.
       - name: std/term y std/io en Windows (consola real, pipes, timeouts)
         run: cargo test --release --test term_cli --test io_cli -- --nocapture
-      # M169 (W2): un programa que usa std/process no debe llegar a rustc en Windows — ray build
+      # M175 (W6): std/process en Windows — el contrato de `run` con cmd (exit≠0, stdin, ENOENT,
+      # timeout con escalera CTRL_BREAK → Job Object, merge, tope) y la sesión con stdin abierto,
+      # en VM, intérprete y binario nativo (antes, W2 rechazaba std/process en el nativo).
+      - name: std/process en Windows (run, timeout, sesión; VM + intérprete + nativo)
+        run: cargo test --release --test process_windows_cli -- --nocapture
+      # M169 (W2): lo que sigue sin compilar en Windows (std/ui) no debe llegar a rustc — ray build
       # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
       - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows
         shell: pwsh
@@ -172,9 +178,9 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP "w2"
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           @'
-          import std/process;
+          import std/ui;
           fn main() -> int {
-              match (process.run("cmd", ["/c", "echo hi"])) { Result.Ok(_) => 0, Result.Err(_) => 1 }
+              match (ui.open("demo", "about:blank", 320, 200)) { Result.Ok(_) => 0, Result.Err(_) => 1 }
           }
           '@ | Set-Content -Path (Join-Path $dir "prog.ray")
           $ray = Join-Path (Get-Location) "target/release/ray.exe"
@@ -182,7 +188,7 @@ jobs:
           $out = & $ray build prog.ray --native -o prog_bin.exe 2>&1 | Out-String
           Write-Host $out
           if ($LASTEXITCODE -ne 69) { throw "esperaba exit 69 (EX_UNAVAILABLE), salió $LASTEXITCODE" }
-          if ($out -notmatch "std/process") { throw "el mensaje no nombra std/process" }
+          if ($out -notmatch "std/ui") { throw "el mensaje no nombra std/ui" }
           if (Test-Path "prog_bin.exe") { throw "no debía producir binario" }
           exit 0
       # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for

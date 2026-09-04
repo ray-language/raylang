@@ -1,0 +1,27 @@
+# Fin de línea LF en el checkout de TODAS las plataformas (M175). Un checkout de Windows con
+# `core.autocrlf=true` (el runner de CI, Git for Windows por defecto) convertía a CRLF los golden
+# `.out` y los fixtures `.ray` que `include_str!` embebe, y los tests comparaban byte a byte con la
+# salida real (LF): tres rojos de `term_cli` en #243 y el "OK-CRLF" de `plantillas.ray` en el
+# censo de Windows. `text=auto` deja que git detecte los binarios; los formatos conocidos se marcan
+# explícitamente para que ninguna heurística los toque.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.wav binary
+*.mp3 binary
+*.db binary
+*.sqlite binary
+*.gz binary
+*.zip binary
+*.tar binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.keystore binary
+*.jks binary

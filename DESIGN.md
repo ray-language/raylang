@@ -11663,3 +11663,28 @@ cazó CI: la tercera barra solo ante una letra de unidad — las rutas sintétic
 embebidos (`std/math`) deben ir y volver intactas, o el hover pierde su `///`.
 
 El job de Windows de CI pasa a correr también `lsp` y `poll` en los unitarios.
+
+## 169. M177 — W7, paso S: `std/ui` compila en Windows y el headless deja de ser ciego (sep 2026)
+
+El primer peldaño del arco de escritorio de Windows (`docs/windows.md` 3.8), el que la auditoría
+marcaba como **S**: `ray_runtime::ui` era `cfg(unix)` entero —por el self-pipe de la cola de
+eventos, no por los backends— y con eso `std/ui` no compilaba en Windows ni en headless; los
+tests de UI eran ciegos ahí y el gate de M169 rechazaba cualquier programa que importara
+`std/ui`, tuviera o no una ventana.
+
+**Sin self-pipe, la cola basta.** El self-pipe existía para que la fibra de la VM aparcara por
+readiness del extremo de lectura. En Windows la VM ya sabe aparcar sin fd (el respaldo de M170:
+reintento cada 1 ms) y el intérprete espera en la condvar de la cola, así que la variante Windows
+es la misma cola sin pipe: `event_fd()` devuelve `-1`, que la VM acepta como "aparca sin fd" en
+vez de error, y las escrituras/drenados del pipe quedan bajo `cfg(unix)`. Las ramas de mac/GTK
+ya eran por SO; las "otras plataformas" ya respondían el `Err` honesto. Resultado: `std/ui`
+compila en Windows, `RAY_UI_BACKEND=headless` funciona igual que en unix (ventanas de mesa,
+eventos `closed`, menús, diálogos con `RAY_UI_PICK`, mensajes con `RAY_UI_MSG`), y una ventana
+real devuelve `ui: no backend for this platform` — en la VM y en el binario nativo, que ya no
+necesita el gate: `ui`/`ui-shell` salen de la lista de M169 (queda `audio`, y `watch` se
+autoexcluye).
+
+**Por qué antes del backend real.** Es la base del WebView2 que viene: la cola de eventos, el
+registro de ventanas, los menús y diálogos son compartidos; el backend Windows solo tiene que
+rellenar los brazos `Win::…` como hizo GTK. Y desde ya, `tests/ui_cli.rs` corre en el job de
+Windows (tres motores, byte-idénticos), así que el backend real se construirá con red.

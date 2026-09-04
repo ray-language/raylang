@@ -714,15 +714,15 @@ enum OpenHandle {
     /// M146: una ventana de `std/ui` (el id del registro de ray-runtime). `close(h)` la quita del
     /// mapa y el `Drop` del newtype cierra la ventana — SIEMPRE con despacho asíncrono al hilo
     /// principal (el Drop puede correr en cualquier hilo, p. ej. `close_all_handles` del runner).
-    #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
     Window(UiWindow),
 }
 
 /// El id de una ventana viva de `ray_runtime::ui`, con cierre en el `Drop` (ver la variante).
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub struct UiWindow(i64);
 
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 impl Drop for UiWindow {
     fn drop(&mut self) {
         ray_runtime::ui::close_window(self.0);
@@ -907,7 +907,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
         #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
         Some(OpenHandle::Watch(_)) => Err("the handle is a filesystem watch; it is not writable".to_string()),
-        #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Window(_)) => Err("the handle is a ui window; it is not writable".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
     }
@@ -1049,7 +1049,7 @@ pub fn audio_drain(_h: i64) -> Result<(), String> {
 }
 
 // --- M146: std/ui — ventana + webview (feature `ui`; slim/wasm → stub). ---
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 const UI_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
     "ui is not available in the web playground (wasm)"
 } else {
@@ -1059,7 +1059,7 @@ const UI_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 /// M146: abre una ventana con webview cargando `url` y la registra; `Ok(handle)`. El handle se
 /// reserva ANTES de abrir y se pasa al runtime: los eventos nombran a la ventana con el mismo
 /// handle que el programa tiene en la mano — sin tabla de traducción.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_open(title: &str, url: &str, width: i64, height: i64) -> Result<i64, String> {
     let id = {
         let mut reg = registry().lock().unwrap();
@@ -1071,13 +1071,13 @@ pub fn ui_open(title: &str, url: &str, width: i64, height: i64) -> Result<i64, S
     registry().lock().unwrap().open.insert(id, OpenHandle::Window(UiWindow(id)));
     Ok(id)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M146: ejecuta JS en la página de la ventana `h`, fire-and-forget.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_eval_js(h: i64, js: &str) -> Result<(), String> {
     let win = match registry().lock().unwrap().open.get(&h) {
         Some(OpenHandle::Window(w)) => w.0,
@@ -1085,28 +1085,41 @@ pub fn ui_eval_js(h: i64, js: &str) -> Result<(), String> {
     };
     ray_runtime::ui::eval_js(win, js)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_eval_js(_h: i64, _js: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M146: el fd de la cola global de eventos de UI (para el aparcado de la fibra en la VM).
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_event_fd() -> Result<i32, String> {
     let fd = ray_runtime::ui::event_fd();
-    if fd >= 0 { Ok(fd) } else { Err("ui: no event pipe".to_string()) }
+    // M177 (Windows): no hay self-pipe — `-1` es "aparca sin fd" (el respaldo del scheduler la
+    // reintenta cada 1 ms, M170), no un error.
+    if fd >= 0 || cfg!(windows) { Ok(fd) } else { Err("ui: no event pipe".to_string()) }
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_event_fd() -> Result<i32, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M177: ¿hay un evento de UI en cola? (sin consumirlo). Lo consulta el respaldo sin fd del
+/// scheduler para no despertar a ciegas la espera de `next_event_timeout` (que renovaría su plazo).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_has_event() -> bool {
+    ray_runtime::ui::has_pending_event()
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_has_event() -> bool {
+    false
+}
+
 /// M146: el siguiente evento de UI si ya hay uno, sin bloquear: `(kind, handle_de_ventana)`.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_try_next() -> Option<(String, i64, String)> {
     ray_runtime::ui::try_next_event()
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_try_next() -> Option<(String, i64, String)> {
     None
 }
@@ -1189,54 +1202,54 @@ pub fn embed_read(path: &str) -> Result<Vec<u8>, String> {
 
 /// M148: añade un menú de nivel superior (items codificados "tag\ttitle\tshortcut" — la
 /// decodificación y la rama headless viven en ray_runtime::ui, compartidas con el nativo).
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_menu(title: &str, items: &[String]) -> Result<(), String> {
     ray_runtime::ui::menu(title, items)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_menu(_title: &str, _items: &[String]) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M155: el contenido del panel About nativo (macOS); "" = omitir el campo.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_set_about(name: &str, version: &str, description: &str, copyright: &str) -> Result<(), String> {
     ray_runtime::ui::set_about(name, version, description, copyright)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_set_about(_name: &str, _version: &str, _description: &str, _copyright: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M151: items en el menú de APLICACIÓN (macOS) + título opcional; misma codificación que
 /// `ui_menu` (la decodificación y las ramas por backend viven en ray_runtime::ui).
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_app_menu(name: &str, items: &[String]) -> Result<(), String> {
     ray_runtime::ui::app_menu(name, items)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_app_menu(_name: &str, _items: &[String]) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M148: diálogo de archivo MODAL (bloquea el hilo del worker lo que el usuario tarde — la
 /// clase sqlite/run, documentada). `Ok(None)` = canceló.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
     ray_runtime::ui::dialog(kind, arg)
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_dialog(_kind: &str, _arg: &str) -> Result<Option<String>, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
 /// M146: el siguiente evento BLOQUEANDO el hilo (el intérprete). `ms <= 0` = sin plazo;
 /// `Ok(None)` = plazo vencido.
-#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_next_blocking(ms: i64) -> Result<Option<(String, i64, String)>, String> {
     Ok(ray_runtime::ui::next_event_blocking(ms))
 }
-#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_next_blocking(_ms: i64) -> Result<Option<(String, i64, String)>, String> {
     Err(UI_UNAVAILABLE.to_string())
 }

@@ -650,7 +650,11 @@ impl<'a> Vm<'a> {
                     let mut woken: Vec<IoParked> = Vec::new();
                     let mut i = 0;
                     while i < shared.io_parked.len() {
-                        if shared.io_parked[i].fd < 0 && shared.io_parked[i].handle >= 0 {
+                        let p = &shared.io_parked[i];
+                        // M177: la espera de eventos de UI (pseudo-handle) se despierta SOLO con un
+                        // evento en cola; a ciegas, `next_event_timeout` renovaba su plazo cada 1 ms.
+                        let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE;
+                        if p.fd < 0 && p.handle >= 0 && (!is_ui || crate::builtins::ui_has_event()) {
                             woken.push(shared.io_parked.remove(i));
                         } else {
                             i += 1;
@@ -719,7 +723,11 @@ impl<'a> Vm<'a> {
                 // vencería jamás; aparcada, el paso 0 expira su deadline como corresponde.
                 let p = &shared.io_parked[i];
                 let is_stdin = p.handle == crate::builtins::STDIN_PSEUDO_HANDLE && p.pending_write.is_none();
-                if (p.fd >= 0 || p.handle >= 0) && (!is_stdin || crate::builtins::stdin_ready(0)) {
+                let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE; // M177: ídem para la UI
+                if (p.fd >= 0 || p.handle >= 0)
+                    && (!is_stdin || crate::builtins::stdin_ready(0))
+                    && (!is_ui || crate::builtins::ui_has_event())
+                {
                     woken.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;

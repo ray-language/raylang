@@ -23,11 +23,14 @@
 //! Objective-C A MANO y GTK A MANO (sin crates objc/wry: la lección cpal de M145 — los crates
 //! de webview exigen toolchains GTK/WebKit en build).
 
-#![cfg(all(feature = "ui", unix))]
+#![cfg(all(feature = "ui", any(unix, windows)))]
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Condvar, Mutex, OnceLock};
 
+// M177 (Windows): sin self-pipe — la cola global basta. El lector de la VM aparca sin fd (el
+// respaldo de M170 la reintenta cada 1 ms) y el intérprete espera en la condvar.
+#[cfg(unix)]
 unsafe extern "C" {
     fn pipe(fds: *mut i32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
@@ -36,11 +39,13 @@ unsafe extern "C" {
     #[link_name = "fcntl"]
     fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
 }
+#[cfg(unix)]
 const F_GETFL: i32 = 3;
+#[cfg(unix)]
 const F_SETFL: i32 = 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const O_NONBLOCK: i32 = 0o4000; // M156: bionic también es 0o4000 (android es unix, no "linux")
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 const O_NONBLOCK: i32 = 0x0004;
 
 // ── La cola global de eventos + self-pipe ────────────────────────────────────
@@ -55,26 +60,31 @@ struct Events {
     /// Para la espera BLOQUEANTE (intérprete): `next_blocking` duerme aquí, no sondea.
     ready: Condvar,
     pipe_rd: i32,
+    #[cfg_attr(windows, allow(dead_code))] // M177: en Windows no hay self-pipe (siempre -1)
     pipe_wr: i32,
 }
 
 fn events() -> &'static Events {
     static EVENTS: OnceLock<Events> = OnceLock::new();
     EVENTS.get_or_init(|| {
-        let mut fds = [0i32; 2];
-        // SAFETY: pipe escribe dos fds válidos. Si fallara (sin fds), el self-pipe queda en -1:
-        // `event_fd` devolvería un fd inválido y el aparcado fallaría con error, no colgado.
-        if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
-            fds = [-1, -1];
-        }
-        // Ambos extremos NO-bloqueantes: el lector drena sin colgarse y el escritor (el hilo de
-        // AppKit) jamás se bloquea — con el pipe lleno se omite el octeto (la cola manda; el
-        // lector drena huérfanos al vaciarla, patrón watch.rs).
-        for fd in fds {
-            if fd >= 0 {
-                unsafe {
-                    let fl = fcntl_raw(fd, F_GETFL);
-                    fcntl_raw(fd, F_SETFL, fl | O_NONBLOCK);
+        #[allow(unused_mut)]
+        let mut fds = [-1i32; 2];
+        #[cfg(unix)]
+        {
+            // SAFETY: pipe escribe dos fds válidos. Si fallara (sin fds), el self-pipe queda en -1:
+            // `event_fd` devolvería un fd inválido y el aparcado fallaría con error, no colgado.
+            if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+                fds = [-1, -1];
+            }
+            // Ambos extremos NO-bloqueantes: el lector drena sin colgarse y el escritor (el hilo de
+            // AppKit) jamás se bloquea — con el pipe lleno se omite el octeto (la cola manda; el
+            // lector drena huérfanos al vaciarla, patrón watch.rs).
+            for fd in fds {
+                if fd >= 0 {
+                    unsafe {
+                        let fl = fcntl_raw(fd, F_GETFL);
+                        fcntl_raw(fd, F_SETFL, fl | O_NONBLOCK);
+                    }
                 }
             }
         }
@@ -94,7 +104,7 @@ fn events() -> &'static Events {
 /// el programa responde con `ui.reply(w, id, valor)`, que resuelve la Promise vía
 /// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
 /// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
-#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
+#[cfg_attr(any(target_os = "ios", target_os = "android", windows), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla; Windows aún sin webview (M177)
 pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();"#;
 
 /// M159: cota dura de la cola de eventos. Red de seguridad contra una página hostil o rota
@@ -135,6 +145,7 @@ fn push_event(kind: &str, window: i64, tag: &str) {
         q.push_back((kind.to_string(), window, tag.to_string()));
     }
     ev.ready.notify_all();
+    #[cfg(unix)]
     if ev.pipe_wr >= 0 {
         // SAFETY: un octeto a un fd nuestro; con el pipe lleno se omite (ver arriba).
         unsafe { write(ev.pipe_wr, [1u8].as_ptr(), 1) };
@@ -148,6 +159,13 @@ pub fn event_fd() -> i32 {
 
 /// El siguiente evento si ya hay uno, SIN bloquear. Consume un octeto del pipe por evento
 /// entregado; con la cola vacía drena los huérfanos (para no despertar en falso).
+/// ¿Hay algún evento en cola? Sin consumirlo. M177: lo consulta el respaldo sin fd del scheduler
+/// de la VM (Windows) para despertar la fibra SOLO cuando hay algo — despertarla a ciegas cada
+/// 1 ms renovaba el plazo de `next_event_timeout` y nunca vencía (el mismo caso de stdin, M173).
+pub fn has_pending_event() -> bool {
+    !events().queue.lock().unwrap().is_empty()
+}
+
 pub fn try_next_event() -> Option<(String, i64, String)> {
     let ev = events();
     let mut q = ev.queue.lock().unwrap();
@@ -194,25 +212,30 @@ pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
 // Lee hasta `max` octetos del pipe (no-bloqueante) y los descarta.
 fn drain_pipe(fd: i32, max: usize) {
     if fd < 0 {
-        return;
+        return; // Windows (M177): no hay self-pipe
     }
-    let mut buf = [0u8; 64];
-    let mut left = max;
-    while left > 0 {
-        let want = buf.len().min(left);
-        // SAFETY: buf vive durante la llamada; el fd es nuestro.
-        let n = unsafe { read(fd, buf.as_mut_ptr(), want) };
-        if n <= 0 {
-            break;
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 64];
+        let mut left = max;
+        while left > 0 {
+            let want = buf.len().min(left);
+            // SAFETY: buf vive durante la llamada; el fd es nuestro.
+            let n = unsafe { read(fd, buf.as_mut_ptr(), want) };
+            if n <= 0 {
+                break;
+            }
+            left -= n as usize;
         }
-        left -= n as usize;
     }
+    let _ = max;
 }
 
 // ── El registro de ventanas ──────────────────────────────────────────────────
 
 /// Una ventana viva. Los punteros objc se guardan como `usize` y SOLO se dereferencian en el
 /// hilo principal (toda operación se despacha ahí) — el mapa en sí es datos ordinarios.
+#[cfg_attr(windows, allow(dead_code))]
 enum Win {
     /// Backend de mesa: la ventana solo existe como fila (tests/CI).
     Headless,
@@ -344,11 +367,13 @@ const APP_TIMEOUT_MSG: &str = "ui: could not initialize AppKit (no GUI session?)
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)";
 #[cfg(not(any(target_os = "macos", target_os = "linux")))] // ios/android: dead_code permitido abajo
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
+#[cfg_attr(windows, allow(dead_code))]
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize the display backend (no GUI session?)";
 
 /// Pide el hilo principal (una vez) y espera a que la app esté lista, con plazo — sin sesión
 /// gráfica o sin host el error es limpio, nunca un cuelgue. Compartida por todos los backends.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
+#[cfg_attr(windows, allow(dead_code))] // M177: sin backend real en Windows todavía
 fn ensure_app() -> Result<(), String> {
     let g = gate();
     let mut st = g.state.lock().unwrap();
@@ -482,6 +507,7 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
 /// Ejecuta JavaScript en la página de la ventana, SIN esperar el resultado (v1: el
 /// completionHandler es nil — el eval con retorno exige el ABI de blocks y queda para v2).
 pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
+    let _ = js; // M177: en Windows solo existe el brazo headless (sin webview aún)
     let map = windows().lock().unwrap();
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),

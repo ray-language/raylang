@@ -11493,3 +11493,62 @@ y el proceso de `cargo test` en un runner puede no tener ninguna. El job de Wind
 la suite y los tests unitarios de `dev_host` (el Job Object real: un `cmd` asignado muere al
 cerrar el handle). Queda del §3.2 solo el watcher por eventos (W5: comparte puente con el
 poller).
+
+## 165. M173 — W4: el terminal y stdin de Windows por la Console API (sep 2026)
+
+Las deudas 3.3 y 3.4 de `docs/windows.md`. Hasta aquí, en Windows `std/term` mentía en silencio
+(`is_tty` siempre `false`: colores apagados y `read_hidden` fallando en una consola real; `size`
+`None`; `raw` un `Err`) y `std/io` mentía peor: `stdin_ready` respondía `true` siempre, así que
+`io.read` bloqueaba el hilo entero de la VM —todas las fibras— y `read_timeout` ignoraba el plazo.
+Toda TUI, `read_key`, y `ray mcp`/`ray lsp` sobre stdio dependían de eso.
+
+**El terminal es la Console API, uno a uno con termios.** El `term_host` de Windows es el espejo
+del de unix: `is_tty` es el `IsTerminal` de std (que reconoce la consola y los pty de MSYS);
+`size` son las columnas y filas de la VENTANA de `GetConsoleScreenBufferInfo` (no del buffer de
+scroll, que mide miles de filas); y el modo crudo es `SetConsoleMode` con la traducción exacta de
+`cfmakeraw`: fuera `LINE_INPUT`, `ECHO_INPUT` y `PROCESSED_INPUT` (Ctrl-C llega como 0x03, como
+con ISIG apagado) y dentro `VIRTUAL_TERMINAL_INPUT` (las flechas y las teclas de función llegan
+como las secuencias ESC que `term.decode` ya entiende). En stdout, `VIRTUAL_TERMINAL_PROCESSING`
+(las secuencias ANSI que `std/term` emite) y `DISABLE_NEWLINE_AUTO_RETURN` (`\n` sin retorno de
+carro, el OPOST apagado de unix: una TUI escribe `\r\n`). Los modos originales se guardan una
+vez y se restauran en `raw_off` y por `atexit` del CRT, con la misma profundidad reentrante que
+unix. La huella para `ray dev` son los dos modos, así que el supervisor reconoce una TUI también
+aquí. Un detalle práctico: el procesado VT de stdout se activa además en la primera consulta de
+`is_tty`/`size` — Windows Terminal ya lo trae, conhost no, y sin él los colores salían como texto.
+Lo que no hay: `size_px` (la Console API no expone píxeles) y SIGWINCH.
+
+**stdin: saber qué es antes de preguntar.** No hay `poll(2)` sobre stdin en Windows y el handle
+de consola se señala por eventos que `ReadConsole` jamás entrega (key-up, ratón, foco), así que
+`WaitForSingleObject` habría dicho "listo" para luego bloquear. La disponibilidad se decide por
+tipo: en una CONSOLA, `PeekConsoleInputW` busca una tecla PULSADA con carácter —y en modo línea,
+un Enter, porque hasta entonces `ReadConsole` no devuelve nada—; en un PIPE, `PeekNamedPipe`
+(octetos disponibles, o el extremo cerrado: EOF inmediato); en un archivo o NUL, siempre. La
+espera con plazo es un sondeo a cuantos de 5 ms. Y la lectura es CRUDA como en unix, nunca por
+el `BufReader` de std (que dejaría datos invisibles a la consulta): `ReadConsoleW` en UTF-16
+convertido a UTF-8 —con resto guardado para no partir un carácter ante un `max` pequeño, y el
+surrogate alto a la espera de su pareja—, `ReadFile` para lo demás.
+
+**El plazo que nunca vencía.** Con la disponibilidad real, `io.read` ya aparcaba la fibra en vez
+de la VM, pero `read_timeout` seguía sin vencer: en el respaldo sin poller (M15.5/M170) el
+scheduler despierta cada 1 ms toda E/S aparcada para que reintente, y el opcode re-ejecutado
+re-aparca con un plazo NUEVO — el deadline se renovaba a perpetuidad. Para stdin la solución es
+que el scheduler no despierte a ciegas: consulta `stdin_ready(0)` (ahora real) y solo despierta
+si hay datos; aparcada, su deadline expira en el paso 0 como en cualquier plataforma. Queda
+anotado para W5 que los `read_timeout` de sockets padecen lo mismo hasta que haya poller.
+
+**El binario nativo, en tándem** (`RT_WIN_STDIN`/`RT_WIN_TERM` en `src/transpile/runtime.rs`):
+los mismos módulos, sin fibras (Windows va con hilo por tarea). De paso, dos cosas que la prueba
+destapó: `ray build --native` en un target Windows excluye `watch` solo —el transpilador emite
+todas las funciones de los módulos importados, y `fs.watch` vive en `std/fs`, así que importar
+`std/fs` bastaba para que el gate de M169 rechazara el build de un programa que jamás vigila
+nada; excluido, `fs.watch` devuelve el mismo `Err` que la VM en lugar del stub que panicaba— y
+la red de ICEs reconoce el pánico de "pipe cerrado" también con los códigos de Windows (232/109),
+así que `ray fmt x | head` sale con 141 en silencio en las tres plataformas.
+
+**Prueba.** `tests/term_cli.rs` gana un test de Windows con una consola REAL: el programa se
+lanza vía `cmd /c start /wait /min` (una consola NUEVA con sus propios handles: `Command` de std
+pasa siempre los handles del padre al hijo, así que ninguna flag de creación sirve) y deja en un archivo
+que `is_tty` es `true` en 0/1/2, que `size` tiene columnas y filas, que `raw` entra y sale, y que
+un `io.read_timeout` de 100 ms dentro del modo crudo VENCE — VM y binario nativo. Las suites
+completas `term_cli` e `io_cli` (decodificador en tres motores, sin-tty, pipes, la fibra
+aparcada, data/eof/timeout) pasan en Windows y entran al job de CI.

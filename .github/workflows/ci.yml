@@ -159,6 +159,11 @@ jobs:
         run: |
           cargo test --release --lib -- dev_host
           cargo test --release --test dev_cli -- --nocapture
+      # M173 (W4): std/term y std/io por la Console API — `is_tty`/`size`/`raw` reales bajo una
+      # consola NUEVA (`cmd /c start /wait /min`), stdin que no bloquea la VM y `read_timeout` que
+      # vence; VM y binario nativo. Las suites completas (decoder, sin-tty, pipes) corren aquí.
+      - name: std/term y std/io en Windows (consola real, pipes, timeouts)
+        run: cargo test --release --test term_cli --test io_cli -- --nocapture
       # M169 (W2): un programa que usa std/process no debe llegar a rustc en Windows — ray build
       # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
       - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows

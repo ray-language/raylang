@@ -7,6 +7,171 @@
 
 use super::*;
 
+/// M173 (Windows, docs/windows.md W4 §3.4): el `__ray_stdin` del binario nativo en Windows —
+/// espejo del `stdin_host` de la VM (`src/builtins.rs`): disponibilidad real por
+/// `PeekConsoleInputW` (consola) / `PeekNamedPipe` (pipe), lectura cruda por `ReadConsoleW`
+/// (UTF-16 → UTF-8, con resto) / `ReadFile`. Sin fibras en Windows, la espera es en el hilo.
+const RT_WIN_STDIN: &str = r##"#[cfg(windows)]
+mod __ray_stdin {
+    use std::sync::Mutex;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(id: u32) -> usize;
+        fn GetFileType(handle: usize) -> u32;
+        fn GetConsoleMode(handle: usize, mode: *mut u32) -> i32;
+        fn PeekConsoleInputW(handle: usize, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
+        fn ReadConsoleW(handle: usize, buf: *mut u16, len: u32, read: *mut u32, control: *const core::ffi::c_void) -> i32;
+        fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
+        fn ReadFile(handle: usize, buf: *mut u8, len: u32, read: *mut u32, overlapped: *mut core::ffi::c_void) -> i32;
+    }
+    #[repr(C)]
+    pub struct InputRecord { event_type: u16, _pad: u16, key_down: i32, repeat: u16, vk: u16, scan: u16, uchar: u16, ctrl: u32 }
+    struct Pending { bytes: Vec<u8>, high_surrogate: Option<u16> }
+    static PENDING: Mutex<Pending> = Mutex::new(Pending { bytes: Vec::new(), high_surrogate: None });
+    fn stdin_handle() -> usize { unsafe { GetStdHandle(0xFFFF_FFF6) } }
+    fn console_mode(h: usize) -> Option<u32> { let mut m = 0u32; if unsafe { GetConsoleMode(h, &mut m) } != 0 { Some(m) } else { None } }
+    fn ready_now() -> bool {
+        if !PENDING.lock().map(|p| p.bytes.is_empty()).unwrap_or(true) { return true; }
+        let h = stdin_handle();
+        if h == 0 || h == usize::MAX { return true; }
+        if let Some(mode) = console_mode(h) {
+            let line_mode = mode & 0x2 != 0;
+            let mut recs: [InputRecord; 64] = std::array::from_fn(|_| InputRecord { event_type: 0, _pad: 0, key_down: 0, repeat: 0, vk: 0, scan: 0, uchar: 0, ctrl: 0 });
+            let mut n = 0u32;
+            if unsafe { PeekConsoleInputW(h, recs.as_mut_ptr(), 64, &mut n) } == 0 { return true; }
+            let (mut has_char, mut has_enter) = (false, false);
+            for r in recs.iter().take(n as usize) {
+                if r.event_type == 1 && r.key_down != 0 && r.uchar != 0 { has_char = true; if r.uchar == 13 { has_enter = true; } }
+            }
+            return if line_mode { has_enter } else { has_char };
+        }
+        if unsafe { GetFileType(h) } == 3 {
+            let mut avail = 0u32;
+            let ok = unsafe { PeekNamedPipe(h, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut()) };
+            return ok == 0 || avail > 0;
+        }
+        true
+    }
+    pub fn ready(timeout_ms: i32) -> bool {
+        if ready_now() { return true; }
+        if timeout_ms == 0 { return false; }
+        let deadline = (timeout_ms > 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
+        loop {
+            let quantum = match deadline {
+                Some(d) => { let left = d.saturating_duration_since(std::time::Instant::now()); if left.is_zero() { return false; } left.min(std::time::Duration::from_millis(5)) }
+                None => std::time::Duration::from_millis(5),
+            };
+            std::thread::sleep(quantum);
+            if ready_now() { return true; }
+        }
+    }
+    pub fn read_max(max: usize) -> Vec<u8> {
+        {
+            let mut p = match PENDING.lock() { Ok(p) => p, Err(_) => return Vec::new() };
+            if !p.bytes.is_empty() { let n = p.bytes.len().min(max); return p.bytes.drain(..n).collect(); }
+        }
+        let h = stdin_handle();
+        if h == 0 || h == usize::MAX { return Vec::new(); }
+        if console_mode(h).is_some() { return read_console(h, max); }
+        let mut buf = vec![0u8; max];
+        let mut n = 0u32;
+        if unsafe { ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) } == 0 { return Vec::new(); }
+        buf.truncate(n as usize);
+        buf
+    }
+    fn read_console(h: usize, max: usize) -> Vec<u8> {
+        let mut wide = [0u16; 256];
+        let mut n = 0u32;
+        if unsafe { ReadConsoleW(h, wide.as_mut_ptr(), 256, &mut n, std::ptr::null()) } == 0 { return Vec::new(); }
+        let mut p = match PENDING.lock() { Ok(p) => p, Err(_) => return Vec::new() };
+        let mut units: Vec<u16> = Vec::with_capacity(n as usize + 1);
+        if let Some(hs) = p.high_surrogate.take() { units.push(hs); }
+        units.extend_from_slice(&wide[..n as usize]);
+        if let Some(&last) = units.last() { if (0xD800..0xDC00).contains(&last) { p.high_surrogate = units.pop(); } }
+        let mut out: Vec<u8> = Vec::with_capacity(units.len() * 3);
+        for c in char::decode_utf16(units.iter().copied()) { let mut b = [0u8; 4]; out.extend_from_slice(c.unwrap_or(char::REPLACEMENT_CHARACTER).encode_utf8(&mut b).as_bytes()); }
+        if out.len() > max { p.bytes = out.split_off(max); }
+        out
+    }
+}
+"##;
+
+/// M173 (Windows, docs/windows.md W4 §3.3): el `__ray_term` del binario nativo en Windows —
+/// espejo del `term_host` de la VM: `IsTerminal`, `GetConsoleScreenBufferInfo` y el modo crudo
+/// por `SetConsoleMode` (sin LINE/ECHO/PROCESSED_INPUT, con VT input; VT output sin auto-CR),
+/// restaurado en `raw_off` y por `atexit`.
+const RT_WIN_TERM: &str = r##"#[cfg(windows)]
+mod __ray_term {
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(id: u32) -> usize;
+        fn GetConsoleMode(handle: usize, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: usize, mode: u32) -> i32;
+        fn GetConsoleScreenBufferInfo(handle: usize, info: *mut ScreenBufferInfo) -> i32;
+    }
+    unsafe extern "C" { fn atexit(f: extern "C" fn()) -> i32; }
+    #[repr(C)]
+    struct ScreenBufferInfo { size_x: i16, size_y: i16, cursor_x: i16, cursor_y: i16, attributes: u16, win_left: i16, win_top: i16, win_right: i16, win_bottom: i16, max_x: i16, max_y: i16 }
+    static ORIGINAL_IN: AtomicU32 = AtomicU32::new(0);
+    static ORIGINAL_OUT: AtomicU32 = AtomicU32::new(0);
+    static SAVED: AtomicBool = AtomicBool::new(false);
+    static ATEXIT_ARMED: AtomicBool = AtomicBool::new(false);
+    static VT_OUTPUT_ARMED: AtomicBool = AtomicBool::new(false);
+    static RAW_DEPTH: AtomicUsize = AtomicUsize::new(0);
+    fn handle(fd: i32) -> usize { unsafe { GetStdHandle(match fd { 0 => 0xFFFF_FFF6, 1 => 0xFFFF_FFF5, _ => 0xFFFF_FFF4 }) } }
+    fn mode_of(h: usize) -> Option<u32> { let mut m = 0u32; if unsafe { GetConsoleMode(h, &mut m) } != 0 { Some(m) } else { None } }
+    pub fn ensure_vt_output() {
+        if VT_OUTPUT_ARMED.swap(true, Ordering::AcqRel) { return; }
+        for fd in [1, 2] { let h = handle(fd); if let Some(m) = mode_of(h) { if m & 0x4 == 0 { unsafe { SetConsoleMode(h, m | 0x4) }; } } }
+    }
+    pub fn is_tty(fd: i32) -> bool {
+        use std::io::IsTerminal;
+        let tty = match fd { 0 => std::io::stdin().is_terminal(), 1 => std::io::stdout().is_terminal(), 2 => std::io::stderr().is_terminal(), _ => false };
+        if tty { ensure_vt_output(); }
+        tty
+    }
+    pub fn size() -> Option<(i64, i64)> {
+        for fd in [1, 0, 2] {
+            let mut info = ScreenBufferInfo { size_x: 0, size_y: 0, cursor_x: 0, cursor_y: 0, attributes: 0, win_left: 0, win_top: 0, win_right: 0, win_bottom: 0, max_x: 0, max_y: 0 };
+            if unsafe { GetConsoleScreenBufferInfo(handle(fd), &mut info) } != 0 {
+                let cols = (info.win_right as i64 - info.win_left as i64) + 1;
+                let rows = (info.win_bottom as i64 - info.win_top as i64) + 1;
+                if cols > 0 && rows > 0 { ensure_vt_output(); return Some((cols, rows)); }
+            }
+        }
+        None
+    }
+    pub fn size_px() -> Option<(i64, i64)> { None }
+    extern "C" fn restore() {
+        if SAVED.load(Ordering::Acquire) { unsafe { SetConsoleMode(handle(0), ORIGINAL_IN.load(Ordering::Acquire)); SetConsoleMode(handle(1), ORIGINAL_OUT.load(Ordering::Acquire)); } }
+    }
+    pub fn raw_on() -> Result<(), String> {
+        if RAW_DEPTH.load(Ordering::Acquire) > 0 { RAW_DEPTH.fetch_add(1, Ordering::AcqRel); return Ok(()); }
+        let hin = handle(0);
+        let Some(in_mode) = mode_of(hin) else { return Err(format!("stdin is not a terminal: {}", std::io::Error::last_os_error())); };
+        let hout = handle(1);
+        let out_mode = mode_of(hout);
+        if !SAVED.load(Ordering::Acquire) { ORIGINAL_IN.store(in_mode, Ordering::Release); ORIGINAL_OUT.store(out_mode.unwrap_or(0), Ordering::Release); SAVED.store(true, Ordering::Release); }
+        if !ATEXIT_ARMED.swap(true, Ordering::AcqRel) { unsafe { atexit(restore) }; }
+        let raw = (in_mode & !(0x2 | 0x4 | 0x1)) | 0x200;
+        if unsafe { SetConsoleMode(hin, raw) } == 0 { return Err(format!("could not enter raw mode: {}", std::io::Error::last_os_error())); }
+        if let Some(m) = out_mode { unsafe { SetConsoleMode(hout, m | 0x4 | 0x8) }; }
+        RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+    pub fn raw_off() -> Result<(), String> {
+        if !SAVED.load(Ordering::Acquire) { return Ok(()); }
+        if RAW_DEPTH.load(Ordering::Acquire) > 1 { RAW_DEPTH.fetch_sub(1, Ordering::AcqRel); return Ok(()); }
+        if unsafe { SetConsoleMode(handle(0), ORIGINAL_IN.load(Ordering::Acquire)) } == 0 { return Err(format!("could not restore the terminal: {}", std::io::Error::last_os_error())); }
+        let out = ORIGINAL_OUT.load(Ordering::Acquire);
+        if out != 0 { unsafe { SetConsoleMode(handle(1), out) }; }
+        RAW_DEPTH.store(0, Ordering::Release);
+        Ok(())
+    }
+}
+"##;
+
 pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fibers: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns)]\n");
@@ -1647,6 +1812,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // previo cubre además el stdin-archivo regular, que epoll no acepta; sin fibras, lectura
     // bloqueante en el hilo de la tarea (correcto en hilo-por-tarea). EOF/error → vacío, como la VM.
     if t.needs_stdin {
+        out.push_str(RT_WIN_STDIN);
         out.push_str(concat!(
             "#[cfg(unix)]
 ",
@@ -1699,7 +1865,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    #[cfg(unix)] { while !__ray_stdin::ready(0) { ray_runtime::fibers::wait_readable(0); } __ray_stdin::read_max(max) }
 ",
-                "    #[cfg(not(unix))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
+                "    #[cfg(windows)] { let _ = __ray_stdin::ready(-1); __ray_stdin::read_max(max) }
+",
+                "    #[cfg(not(any(unix, windows)))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
 ",
                 "}
 ",
@@ -1725,7 +1893,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    }
 ",
-                "    #[cfg(not(unix))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
+                "    #[cfg(windows)] { if !__ray_stdin::ready(ms.clamp(0, i32::MAX as i64) as i32) { return None; } Some(__ray_stdin::read_max(max)) }
+",
+                "    #[cfg(not(any(unix, windows)))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
 ",
                 "}
 ",
@@ -1738,7 +1908,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    #[cfg(unix)] { __ray_stdin::read_max(max) }
 ",
-                "    #[cfg(not(unix))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
+                "    #[cfg(windows)] { let _ = __ray_stdin::ready(-1); __ray_stdin::read_max(max) }
+",
+                "    #[cfg(not(any(unix, windows)))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
 ",
                 "}
 ",
@@ -1754,7 +1926,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "    }
 ",
-                "    #[cfg(not(unix))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
+                "    #[cfg(windows)] { if !__ray_stdin::ready(ms.clamp(0, i32::MAX as i64) as i32) { return None; } Some(__ray_stdin::read_max(max)) }
+",
+                "    #[cfg(not(any(unix, windows)))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
 ",
                 "}
 ",
@@ -1767,6 +1941,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // restauración en la salida normal y en `std::process::exit`. Unix; en otras plataformas
     // is_tty=false / size=[] / raw=err.
     if t.needs_term {
+        out.push_str(RT_WIN_TERM);
         out.push_str(concat!(
             "#[cfg(unix)]\n",
             "mod __ray_term {\n",
@@ -1850,15 +2025,18 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}\n",
             "fn __ray_term_is_tty(fd: i64) -> bool {\n",
             "    #[cfg(unix)] { __ray_term::is_tty(fd as i32) }\n",
-            "    #[cfg(not(unix))] { let _ = fd; false }\n",
+            "    #[cfg(windows)] { __ray_term::is_tty(fd as i32) }\n",
+            "    #[cfg(not(any(unix, windows)))] { let _ = fd; false }\n",
             "}\n",
             "fn __ray_term_size() -> Option<(i64, i64)> {\n",
             "    #[cfg(unix)] { __ray_term::size() }\n",
-            "    #[cfg(not(unix))] { None }\n",
+            "    #[cfg(windows)] { __ray_term::size() }\n",
+            "    #[cfg(not(any(unix, windows)))] { None }\n",
             "}\n",
             "fn __ray_term_size_px() -> Option<(i64, i64)> {\n",
             "    #[cfg(unix)] { __ray_term::size_px() }\n",
-            "    #[cfg(not(unix))] { None }\n",
+            "    #[cfg(windows)] { __ray_term::size_px() }\n",
+            "    #[cfg(not(any(unix, windows)))] { None }\n",
             "}\n",
             "fn __ray_term_raw(on: bool) -> Result<(), String> {\n",
             "    // El hilo escritor de print (M96f) es ASINCRONO: drenar ANTES de tocar el termios,\n",
@@ -1866,7 +2044,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    // escalera; hallazgo de raycode). Cubre entrar Y salir: ambos pasan por aqui.\n",
             "    __ray_flush_prints();\n",
             "    #[cfg(unix)] { if on { __ray_term::raw_on() } else { __ray_term::raw_off() } }\n",
-            "    #[cfg(not(unix))] { let _ = on; Err(\"raw mode is not supported on this platform\".to_string()) }\n",
+            "    #[cfg(windows)] { if on { __ray_term::raw_on() } else { __ray_term::raw_off() } }\n",
+            "    #[cfg(not(any(unix, windows)))] { let _ = on; Err(\"raw mode is not supported on this platform\".to_string()) }\n",
             "}\n",
         ));
     }

@@ -172,7 +172,11 @@ documentada:
   bien formados que la llamada no retiene); y el terminal de `std/term` (M107.3:
   `isatty`/`tcgetattr`/`tcsetattr`/`cfmakeraw`/`ioctl(TIOCGWINSZ)`/`atexit` — el `termios` se
   maneja como buffer opaco de 128 bytes, mayor que el de cualquier plataforma soportada, y el
-  original solo se lee para restaurar tras publicarse completo).
+  original solo se lee para restaurar tras publicarse completo). En Windows (M173), lo mismo por
+  la Console API declarada a mano: `GetConsoleMode`/`SetConsoleMode` (u32 propios),
+  `GetConsoleScreenBufferInfo` y `PeekConsoleInputW` sobre estructuras `repr(C)` propias con el
+  layout de wincon.h, `ReadConsoleW`/`ReadFile`/`PeekNamedPipe` sobre buffers propios cuyo tamaño
+  viaja en la llamada, y `atexit` del CRT para restaurar los modos.
 - **`src/dev_host.rs`** — la capa de SO de ese supervisor (M172): en unix `dup2`/`pre_exec` para
   pasar el socket al hijo sin rechazar conexiones entre reinicios, `kill(pid, SIGTERM)` al hijo
   propio y el handler de muerte del padre (`signal` + `kill` + `_exit`, async-signal-safe); en

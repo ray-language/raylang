@@ -1791,7 +1791,15 @@ fn cmd_build(args: &[String]) {
             process::exit(64);
         }
     }
-    let exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
+    let mut exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
+    // M173: en un target Windows, `watch` se excluye solo. El transpilador emite TODAS las funciones
+    // de los módulos importados (no poda), y `fs.watch` vive en `std/fs`, que importa casi todo
+    // programa: sin esto, importar `std/fs` bastaba para que el gate de M169 rechazara el build
+    // aunque el programa nunca vigilara nada. Excluido, `fs.watch` devuelve el mismo `Err` de
+    // plataforma que la VM (docs/windows.md §4) en vez de impedir el binario.
+    if target.as_deref().map_or(cfg!(windows), |t| t.contains("windows")) && !exclude.iter().any(|d| d == "watch") {
+        exclude.push("watch".to_string());
+    }
     // Resolución del modo fibras: default ON; `--without fibers` lo apaga; ambos a la vez es un
     // contrasentido (fail-fast, como los typos de subsistema). En un target sin poller propio
     // (Windows: el reactor es kqueue/epoll) se apaga solo, con aviso — el hilo-por-tarea sigue

@@ -711,7 +711,13 @@ impl<'a> Vm<'a> {
             let mut i = 0;
             while i < shared.io_parked.len() {
                 // E/S con fd (unix sin poller / EINTR) o sin fd (M170, no-unix); los sleeps (handle -1) no.
-                if shared.io_parked[i].fd >= 0 || shared.io_parked[i].handle >= 0 {
+                // M173 (Windows): stdin (pseudo-handle 0) se despierta SOLO si hay algo que leer —
+                // el respaldo puede consultarlo (`stdin_ready(0)` es real ahí). Si se despertara a
+                // ciegas, su opcode re-aparcaría con un plazo NUEVO cada 1 ms y `read_timeout` no
+                // vencería jamás; aparcada, el paso 0 expira su deadline como corresponde.
+                let p = &shared.io_parked[i];
+                let is_stdin = p.handle == crate::builtins::STDIN_PSEUDO_HANDLE && p.pending_write.is_none();
+                if (p.fd >= 0 || p.handle >= 0) && (!is_stdin || crate::builtins::stdin_ready(0)) {
                     woken.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;

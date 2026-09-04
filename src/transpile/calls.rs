@@ -2267,6 +2267,21 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M173: con `watch` EXCLUIDO (`--without watch`, o automático en un target Windows), los
+            // primitivos devuelven el mismo `Err` de plataforma que la VM en vez de caer al stub
+            // que panica: `std/fs` (que trae `fs.watch`) lo importa casi todo programa, y un
+            // binario Windows no debe abortar por una función que nunca llama.
+            "watch" | "watch_next" if name.starts_with("__") && self.exclude.contains("watch") => {
+                out.push_str("{ ");
+                for e in &eff {
+                    out.push_str("let _ = ");
+                    self.emit_expr(out, e)?;
+                    out.push_str("; ");
+                }
+                out.push_str(
+                    "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(\"this binary was built without filesystem watch support (rebuild with the 'watch' feature)\")])) }",
+                );
+            }
             "watch_next" if name.starts_with("__") && !self.exclude.contains("watch") => {
                 self.needs_rt_watch = true;
                 out.push_str("__ray_watch_next(");

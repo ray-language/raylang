@@ -274,8 +274,11 @@ fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// ¿Es el pánico de la libstd por escribir en un stdout/stderr cerrado? (El texto es estable en
-/// la práctica: `failed printing to stdout: Broken pipe (os error 32)`. Si algún día cambiara, lo
-/// peor que pasa es volver al banner de ICE — nunca se silencia un pánico que no sea este.)
+/// la práctica: `failed printing to stdout: Broken pipe (os error 32)` en unix; en Windows el
+/// mismo caso es `The pipe is being closed. (os error 232)` o `The pipe has been ended. (os error
+/// 109)` — M173. Si algún día cambiara, lo peor que pasa es volver al banner de ICE — nunca se
+/// silencia un pánico que no sea este.)
 fn is_broken_pipe_panic_message(detail: &str) -> bool {
-    detail.starts_with("failed printing to") && detail.contains("Broken pipe")
+    detail.starts_with("failed printing to")
+        && (detail.contains("Broken pipe") || detail.contains("(os error 232)") || detail.contains("(os error 109)"))
 }

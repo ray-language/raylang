@@ -4022,14 +4022,216 @@ mod stdin_host {
     }
 }
 
-/// ¿Hay algo que leer YA en stdin (datos o EOF)? En plataformas sin `poll(2)` responde `true`
-/// (la lectura bloquea, el comportamiento pre-M107; en wasm no hay stdin → "EOF listo").
+// M173 (Windows, docs/windows.md W4 §3.4): la lectura de stdin sin mentir. Antes `stdin_ready`
+// respondía `true` siempre y la lectura iba por el `BufReader` de `std::io::stdin()`, así que
+// `io.read` bloqueaba el hilo entero de la VM y `read_timeout` ignoraba el plazo. Ahora la
+// disponibilidad se consulta de verdad según lo que sea stdin: una CONSOLA (`PeekConsoleInputW`:
+// hay una tecla con carácter pendiente — y, en modo línea, un Enter — o un resto sin entregar), un
+// PIPE (`PeekNamedPipe`: octetos disponibles o el extremo cerrado) o un archivo/NUL (siempre
+// listo: la lectura no bloquea). La lectura es CRUDA como en unix: `ReadConsoleW` (UTF-16 →
+// UTF-8, con resto para no partir un carácter) para la consola, `ReadFile` para lo demás; nada
+// pasa por el buffer de std, que dejaría datos invisibles a la consulta. Sin `WaitForSingleObject`:
+// el handle de consola se señala también por teclas sueltas, ratón y foco que `ReadConsole` no
+// entrega, así que la espera con plazo es un sondeo a cuantos de 5 ms.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+mod stdin_host {
+    use std::sync::Mutex;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(id: u32) -> usize;
+        fn GetFileType(handle: usize) -> u32;
+        fn GetConsoleMode(handle: usize, mode: *mut u32) -> i32;
+        fn PeekConsoleInputW(handle: usize, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
+        fn ReadConsoleW(handle: usize, buf: *mut u16, len: u32, read: *mut u32, control: *const core::ffi::c_void) -> i32;
+        fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
+        fn ReadFile(handle: usize, buf: *mut u8, len: u32, read: *mut u32, overlapped: *mut core::ffi::c_void) -> i32;
+    }
+
+    const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6; // (DWORD)-10
+    const FILE_TYPE_PIPE: u32 = 3;
+    const KEY_EVENT: u16 = 1;
+    const ENABLE_LINE_INPUT: u32 = 0x2;
+
+    /// `INPUT_RECORD` leído como evento de tecla (la unión tiene 16 bytes; solo se mira si
+    /// `event_type == KEY_EVENT`). 20 bytes, alineación 4: el layout de wincon.h.
+    #[repr(C)]
+    pub struct InputRecord {
+        event_type: u16,
+        _pad: u16,
+        key_down: i32,
+        repeat: u16,
+        vk: u16,
+        scan: u16,
+        uchar: u16,
+        ctrl: u32,
+    }
+
+    /// Octetos UTF-8 ya convertidos que no cupieron en la lectura anterior (un carácter de 2–4
+    /// octetos ante un `max` menor) y, si lo hay, un surrogate alto a la espera de su pareja.
+    struct Pending {
+        bytes: Vec<u8>,
+        high_surrogate: Option<u16>,
+    }
+    static PENDING: Mutex<Pending> = Mutex::new(Pending { bytes: Vec::new(), high_surrogate: None });
+
+    fn stdin_handle() -> usize {
+        // SAFETY: llamada sin punteros.
+        unsafe { GetStdHandle(STD_INPUT_HANDLE) }
+    }
+
+    /// El modo de consola de stdin, o None si stdin no es una consola.
+    fn console_mode(h: usize) -> Option<u32> {
+        let mut mode = 0u32;
+        // SAFETY: puntero a un u32 propio.
+        if unsafe { GetConsoleMode(h, &mut mode) } != 0 { Some(mode) } else { None }
+    }
+
+    /// ¿Hay algo que `read_bytes` pueda devolver YA sin bloquear? (datos, resto o EOF).
+    fn ready_now() -> bool {
+        if !PENDING.lock().map(|p| p.bytes.is_empty()).unwrap_or(true) {
+            return true;
+        }
+        let h = stdin_handle();
+        if h == 0 || h == usize::MAX {
+            return true; // sin stdin: la lectura devuelve EOF/error al instante
+        }
+        if let Some(mode) = console_mode(h) {
+            // Consola: una tecla PULSADA con carácter (en modo línea, además un Enter: hasta
+            // entonces `ReadConsole` no devuelve nada). Las teclas sin carácter, los key-up, el
+            // ratón y el foco no cuentan: `ReadConsole` los descarta sin entregar octetos.
+            let line_mode = mode & ENABLE_LINE_INPUT != 0;
+            let mut recs: [InputRecord; 64] = std::array::from_fn(|_| InputRecord {
+                event_type: 0, _pad: 0, key_down: 0, repeat: 0, vk: 0, scan: 0, uchar: 0, ctrl: 0,
+            });
+            let mut n = 0u32;
+            // SAFETY: buffer de 64 registros bien formados; Peek escribe a lo sumo `len`.
+            if unsafe { PeekConsoleInputW(h, recs.as_mut_ptr(), 64, &mut n) } == 0 {
+                return true; // el handle ya no sirve: que la lectura reporte el error/EOF
+            }
+            let mut has_char = false;
+            let mut has_enter = false;
+            for r in recs.iter().take(n as usize) {
+                if r.event_type == KEY_EVENT && r.key_down != 0 && r.uchar != 0 {
+                    has_char = true;
+                    if r.uchar == b'\r' as u16 {
+                        has_enter = true;
+                    }
+                }
+            }
+            return if line_mode { has_enter } else { has_char };
+        }
+        // SAFETY: llamada sin punteros.
+        if unsafe { GetFileType(h) } == FILE_TYPE_PIPE {
+            let mut avail = 0u32;
+            // SAFETY: sin buffer (len 0); solo se pide `avail`.
+            let ok = unsafe { PeekNamedPipe(h, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut()) };
+            // Fallo (extremo cerrado → ERROR_BROKEN_PIPE): la lectura devuelve EOF al instante.
+            return ok == 0 || avail > 0;
+        }
+        true // archivo, NUL u otro dispositivo: la lectura no bloquea de forma apreciable
+    }
+
+    /// ¿Se puede leer de stdin sin bloquear (datos o EOF)? Espera hasta `timeout_ms` (0 = sondeo,
+    /// < 0 = sin plazo) a cuantos de 5 ms.
+    pub fn ready(timeout_ms: i32) -> bool {
+        if ready_now() {
+            return true;
+        }
+        if timeout_ms == 0 {
+            return false;
+        }
+        let deadline = (timeout_ms > 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
+        loop {
+            let quantum = match deadline {
+                Some(d) => {
+                    let left = d.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        return false;
+                    }
+                    left.min(std::time::Duration::from_millis(5))
+                }
+                None => std::time::Duration::from_millis(5),
+            };
+            std::thread::sleep(quantum);
+            if ready_now() {
+                return true;
+            }
+        }
+    }
+
+    /// Lectura cruda: `Ok(octetos)` (vacío = EOF) o `Err(mensaje)`. Bloquea si no hay datos — el
+    /// llamador consulta `ready` primero (la VM aparca la fibra).
+    pub fn read_bytes(max: usize) -> Result<Vec<u8>, String> {
+        // Primero el resto de una conversión anterior.
+        {
+            let mut p = PENDING.lock().map_err(|_| "stdin state poisoned".to_string())?;
+            if !p.bytes.is_empty() {
+                let n = p.bytes.len().min(max);
+                return Ok(p.bytes.drain(..n).collect());
+            }
+        }
+        let h = stdin_handle();
+        if h == 0 || h == usize::MAX {
+            return Ok(Vec::new());
+        }
+        if console_mode(h).is_some() {
+            return read_console(h, max);
+        }
+        let mut buf = vec![0u8; max];
+        let mut n = 0u32;
+        // SAFETY: buf vive durante la llamada y len == buf.len() (acotado a 1 MiB, cabe en u32).
+        let ok = unsafe { ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) };
+        if ok == 0 {
+            let e = std::io::Error::last_os_error();
+            // Un pipe cerrado por el otro extremo es fin de la entrada, no un error.
+            return if e.raw_os_error() == Some(109) { Ok(Vec::new()) } else { Err(e.to_string()) };
+        }
+        buf.truncate(n as usize);
+        Ok(buf)
+    }
+
+    /// `ReadConsoleW` (UTF-16) → UTF-8. Devuelve hasta `max` octetos y guarda el resto en
+    /// `PENDING` (jamás parte un carácter). Cero caracteres = EOF (Ctrl-Z + Enter en modo línea).
+    fn read_console(h: usize, max: usize) -> Result<Vec<u8>, String> {
+        let mut wide = [0u16; 256];
+        let mut n = 0u32;
+        // SAFETY: buffer de 256 u16; ReadConsoleW escribe a lo sumo `len` unidades.
+        if unsafe { ReadConsoleW(h, wide.as_mut_ptr(), 256, &mut n, std::ptr::null()) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let mut p = PENDING.lock().map_err(|_| "stdin state poisoned".to_string())?;
+        let mut units: Vec<u16> = Vec::with_capacity(n as usize + 1);
+        if let Some(hs) = p.high_surrogate.take() {
+            units.push(hs);
+        }
+        units.extend_from_slice(&wide[..n as usize]);
+        // Un surrogate alto al final espera a su pareja en la próxima lectura.
+        if let Some(&last) = units.last()
+            && (0xD800..0xDC00).contains(&last)
+        {
+            p.high_surrogate = units.pop();
+        }
+        let mut out: Vec<u8> = Vec::with_capacity(units.len() * 3);
+        for c in char::decode_utf16(units.iter().copied()) {
+            let mut b = [0u8; 4];
+            out.extend_from_slice(c.unwrap_or(char::REPLACEMENT_CHARACTER).encode_utf8(&mut b).as_bytes());
+        }
+        if out.len() > max {
+            p.bytes = out.split_off(max);
+        }
+        Ok(out)
+    }
+}
+
+/// ¿Hay algo que leer YA en stdin (datos o EOF)? En unix (`poll(2)`) y Windows (M173: Console API / `PeekNamedPipe`) es real;
+/// en otras plataformas responde `true` (la lectura bloquea; en wasm no hay stdin → "EOF listo").
 pub fn stdin_ready(timeout_ms: i32) -> bool {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         stdin_host::ready(timeout_ms)
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         let _ = timeout_ms;
         true
@@ -4041,14 +4243,13 @@ pub fn stdin_ready(timeout_ms: i32) -> bool {
 pub fn stdin_read(max: i64) -> Result<Vec<u8>, String> {
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] // wasm: sin stdin, max no aplica
     let max = (max.max(1) as usize).min(1 << 20);
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         stdin_host::read_bytes(max)
     }
-    #[cfg(all(not(unix), not(target_arch = "wasm32")))]
+    #[cfg(all(not(any(unix, windows)), not(target_arch = "wasm32")))]
     {
-        // Sin poll(2) (Windows): lectura bloqueante por std (el fallback honesto, como el
-        // busy-poll del scheduler en esas plataformas).
+        // Sin poller ni Console API: lectura bloqueante por std (el fallback honesto).
         use std::io::Read;
         let mut buf = vec![0u8; max];
         let n = std::io::stdin().lock().read(&mut buf).map_err(|e| e.to_string())?;
@@ -4277,13 +4478,239 @@ mod term_host {
     }
 }
 
-/// ¿El fd (0/1/2) es una terminal? Fuera de unix/wasm: false.
+// M173 (Windows, docs/windows.md W4 §3.3): el terminal por la Console API. El equivalente exacto
+// del `term_host` unix: `is_tty` (`IsTerminal` de std: cubre la consola y los pty de MSYS),
+// `size` por `GetConsoleScreenBufferInfo` (la VENTANA, no el buffer de scroll), y el modo crudo
+// por `SetConsoleMode` — quitar LINE_INPUT/ECHO_INPUT/PROCESSED_INPUT de stdin (Ctrl-C llega como
+// 0x03, como en unix con ISIG apagado) y poner VIRTUAL_TERMINAL_INPUT (las flechas llegan como
+// secuencias ESC, las que `term.decode` ya entiende); en stdout, VIRTUAL_TERMINAL_PROCESSING
+// (las secuencias ANSI que `std/term` emite) y DISABLE_NEWLINE_AUTO_RETURN (`\n` sin retorno de
+// carro, como OPOST apagado: una TUI escribe `\r\n`). Los modos originales se guardan una vez y
+// se restauran en `raw_off` y por `atexit` (el CRT lo corre en la salida normal y en
+// `std::process::exit`). No hay `size_px`: la Console API no expone píxeles. Sin señales
+// fatales que interceptar (no hay SIGTERM); el handler de consola de M168 sigue siendo del
+// programa.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+mod term_host {
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(id: u32) -> usize;
+        fn GetConsoleMode(handle: usize, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: usize, mode: u32) -> i32;
+        fn GetConsoleScreenBufferInfo(handle: usize, info: *mut ScreenBufferInfo) -> i32;
+    }
+    unsafe extern "C" {
+        fn atexit(f: extern "C" fn()) -> i32;
+    }
+
+    const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6; // (DWORD)-10
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5; // (DWORD)-11
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4; // (DWORD)-12
+    const ENABLE_PROCESSED_INPUT: u32 = 0x1;
+    const ENABLE_LINE_INPUT: u32 = 0x2;
+    const ENABLE_ECHO_INPUT: u32 = 0x4;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x200;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x4;
+    const DISABLE_NEWLINE_AUTO_RETURN: u32 = 0x8;
+
+    /// `CONSOLE_SCREEN_BUFFER_INFO` (wincon.h): 22 bytes de `SHORT`/`WORD`.
+    #[repr(C)]
+    struct ScreenBufferInfo {
+        size_x: i16,
+        size_y: i16,
+        cursor_x: i16,
+        cursor_y: i16,
+        attributes: u16,
+        win_left: i16,
+        win_top: i16,
+        win_right: i16,
+        win_bottom: i16,
+        max_x: i16,
+        max_y: i16,
+    }
+
+    /// Los modos ORIGINALES (stdin, stdout), guardados al entrar al modo crudo por primera vez.
+    static ORIGINAL_IN: AtomicU32 = AtomicU32::new(0);
+    static ORIGINAL_OUT: AtomicU32 = AtomicU32::new(0);
+    static SAVED: AtomicBool = AtomicBool::new(false);
+    static ATEXIT_ARMED: AtomicBool = AtomicBool::new(false);
+    static VT_OUTPUT_ARMED: AtomicBool = AtomicBool::new(false);
+    /// Profundidad de anidamiento de `raw_on` (misma regla que unix: solo el `raw_off` exterior restaura).
+    static RAW_DEPTH: AtomicUsize = AtomicUsize::new(0);
+
+    fn handle(fd: i32) -> usize {
+        let id = match fd {
+            0 => STD_INPUT_HANDLE,
+            1 => STD_OUTPUT_HANDLE,
+            _ => STD_ERROR_HANDLE,
+        };
+        // SAFETY: llamada sin punteros.
+        unsafe { GetStdHandle(id) }
+    }
+
+    fn mode_of(h: usize) -> Option<u32> {
+        let mut m = 0u32;
+        // SAFETY: puntero a un u32 propio.
+        if unsafe { GetConsoleMode(h, &mut m) } != 0 { Some(m) } else { None }
+    }
+
+    /// Activa (una vez) el procesado de secuencias ANSI en stdout si es una consola: Windows
+    /// Terminal ya lo trae; conhost no, y sin él los colores de `std/term` salen como texto.
+    pub fn ensure_vt_output() {
+        if VT_OUTPUT_ARMED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for fd in [1, 2] {
+            let h = handle(fd);
+            if let Some(m) = mode_of(h)
+                && m & ENABLE_VIRTUAL_TERMINAL_PROCESSING == 0
+            {
+                // SAFETY: llamada sin punteros sobre un handle de consola válido.
+                unsafe { SetConsoleMode(h, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING) };
+            }
+        }
+    }
+
+    pub fn is_tty(fd: i32) -> bool {
+        use std::io::IsTerminal;
+        let tty = match fd {
+            0 => std::io::stdin().is_terminal(),
+            1 => std::io::stdout().is_terminal(),
+            2 => std::io::stderr().is_terminal(),
+            _ => false,
+        };
+        if tty {
+            ensure_vt_output();
+        }
+        tty
+    }
+
+    /// (cols, rows) de la VENTANA de la consola, probando stdout → stdin → stderr.
+    pub fn size() -> Option<(i64, i64)> {
+        for fd in [1, 0, 2] {
+            let mut info = ScreenBufferInfo {
+                size_x: 0, size_y: 0, cursor_x: 0, cursor_y: 0, attributes: 0,
+                win_left: 0, win_top: 0, win_right: 0, win_bottom: 0, max_x: 0, max_y: 0,
+            };
+            // SAFETY: puntero a una estructura propia del layout de wincon.h.
+            if unsafe { GetConsoleScreenBufferInfo(handle(fd), &mut info) } != 0 {
+                let cols = (info.win_right as i64 - info.win_left as i64) + 1;
+                let rows = (info.win_bottom as i64 - info.win_top as i64) + 1;
+                if cols > 0 && rows > 0 {
+                    ensure_vt_output();
+                    return Some((cols, rows));
+                }
+            }
+        }
+        None
+    }
+
+    /// La Console API no expone el tamaño en píxeles.
+    pub fn size_pixels() -> Option<(i64, i64)> {
+        None
+    }
+
+    /// Restaura los modos guardados (la registra `atexit`; también la llama `raw_off`).
+    extern "C" fn restore() {
+        if SAVED.load(Ordering::Acquire) {
+            // SAFETY: llamadas sin punteros; los modos se guardaron completos antes de publicar SAVED.
+            unsafe {
+                SetConsoleMode(handle(0), ORIGINAL_IN.load(Ordering::Acquire));
+                SetConsoleMode(handle(1), ORIGINAL_OUT.load(Ordering::Acquire));
+            }
+        }
+    }
+
+    pub fn raw_on() -> Result<(), String> {
+        if RAW_DEPTH.load(Ordering::Acquire) > 0 {
+            RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
+            return Ok(());
+        }
+        let hin = handle(0);
+        let Some(in_mode) = mode_of(hin) else {
+            return Err(format!("stdin is not a terminal: {}", std::io::Error::last_os_error()));
+        };
+        let hout = handle(1);
+        let out_mode = mode_of(hout);
+        if !SAVED.load(Ordering::Acquire) {
+            ORIGINAL_IN.store(in_mode, Ordering::Release);
+            ORIGINAL_OUT.store(out_mode.unwrap_or(0), Ordering::Release);
+            SAVED.store(true, Ordering::Release);
+        }
+        if !ATEXIT_ARMED.swap(true, Ordering::AcqRel) {
+            // SAFETY: registrar una función `extern "C"` válida en el CRT.
+            unsafe { atexit(restore) };
+        }
+        let raw = (in_mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        // SAFETY: llamada sin punteros sobre un handle de consola válido.
+        if unsafe { SetConsoleMode(hin, raw) } == 0 {
+            return Err(format!("could not enter raw mode: {}", std::io::Error::last_os_error()));
+        }
+        if let Some(m) = out_mode {
+            // SAFETY: como arriba. stdout puede no ser consola (redirigido): entonces no se toca.
+            unsafe { SetConsoleMode(hout, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN) };
+        }
+        RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    pub fn raw_off() -> Result<(), String> {
+        if !SAVED.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let depth = RAW_DEPTH.load(Ordering::Acquire);
+        if depth > 1 {
+            RAW_DEPTH.fetch_sub(1, Ordering::AcqRel);
+            return Ok(());
+        }
+        // SAFETY: llamadas sin punteros con los modos guardados.
+        let ok = unsafe { SetConsoleMode(handle(0), ORIGINAL_IN.load(Ordering::Acquire)) };
+        if ok == 0 {
+            return Err(format!("could not restore the terminal: {}", std::io::Error::last_os_error()));
+        }
+        let out = ORIGINAL_OUT.load(Ordering::Acquire);
+        if out != 0 {
+            // SAFETY: como arriba.
+            unsafe { SetConsoleMode(handle(1), out) };
+        }
+        RAW_DEPTH.store(0, Ordering::Release);
+        Ok(())
+    }
+
+    /// La huella del terminal: los modos de consola de stdin y stdout en los primeros 8 bytes
+    /// (el resto a cero); None si stdin no es una consola. `ray dev` la compara por bytes.
+    pub fn attrs_fingerprint() -> Option<[u8; 128]> {
+        let in_mode = mode_of(handle(0))?;
+        let out_mode = mode_of(handle(1)).unwrap_or(0);
+        let mut buf = [0u8; 128];
+        buf[..4].copy_from_slice(&in_mode.to_le_bytes());
+        buf[4..8].copy_from_slice(&out_mode.to_le_bytes());
+        Some(buf)
+    }
+
+    /// Aplica una huella capturada con `attrs_fingerprint`.
+    pub fn attrs_restore(attrs: &[u8; 128]) -> bool {
+        let in_mode = u32::from_le_bytes([attrs[0], attrs[1], attrs[2], attrs[3]]);
+        let out_mode = u32::from_le_bytes([attrs[4], attrs[5], attrs[6], attrs[7]]);
+        // SAFETY: llamadas sin punteros.
+        let ok = unsafe { SetConsoleMode(handle(0), in_mode) } != 0;
+        if out_mode != 0 {
+            // SAFETY: como arriba.
+            unsafe { SetConsoleMode(handle(1), out_mode) };
+        }
+        ok
+    }
+}
+
+/// ¿El fd (0/1/2) es una terminal? Fuera de unix/Windows/wasm: false.
 pub fn term_is_tty(fd: i64) -> bool {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::is_tty(fd as i32)
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         let _ = fd;
         false
@@ -4292,11 +4719,11 @@ pub fn term_is_tty(fd: i64) -> bool {
 
 /// (cols, rows) del terminal; `None` si no hay tty (o plataforma sin soporte).
 pub fn term_size() -> Option<(i64, i64)> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::size()
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         None
     }
@@ -4304,11 +4731,11 @@ pub fn term_size() -> Option<(i64, i64)> {
 
 /// Activa el modo crudo del terminal (stdin). La restauración queda registrada con `atexit`.
 pub fn term_raw_on() -> Result<(), String> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::raw_on()
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         Err("raw mode is not supported on this platform".to_string())
     }
@@ -4316,11 +4743,11 @@ pub fn term_raw_on() -> Result<(), String> {
 
 /// El área del terminal en píxeles; `None` sin tty, sin soporte o con el terminal reportando 0.
 pub fn term_size_px() -> Option<(i64, i64)> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::size_pixels()
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         None
     }
@@ -4328,11 +4755,11 @@ pub fn term_size_px() -> Option<(i64, i64)> {
 
 /// La huella (bytes opacos del termios) del stdin actual; None si no es tty o no hay soporte.
 pub fn term_attrs_fingerprint() -> Option<[u8; 128]> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::attrs_fingerprint()
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         None
     }
@@ -4341,11 +4768,11 @@ pub fn term_attrs_fingerprint() -> Option<[u8; 128]> {
 /// Aplica una huella capturada con `term_attrs_fingerprint` (cinturón de `ray dev`: reponer
 /// la baseline si un hijo murió dejando el terminal cambiado). `false` si no hay tty/soporte.
 pub fn term_attrs_restore(attrs: &[u8; 128]) -> bool {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::attrs_restore(attrs)
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         let _ = attrs;
         false
@@ -4354,11 +4781,11 @@ pub fn term_attrs_restore(attrs: &[u8; 128]) -> bool {
 
 /// Restaura el terminal al estado previo al primer `term_raw_on` (no-op si nunca se entró).
 pub fn term_raw_off() -> Result<(), String> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     {
         term_host::raw_off()
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
     {
         Err("raw mode is not supported on this platform".to_string())
     }

@@ -114,7 +114,7 @@ y `std/io` por la Console API (TUIs, `read_hidden`, `read_key`, stdin sin bloque
 | `fs.chmod` | no soportado (permisos POSIX) |
 | FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
 | Paquetes (`ray add`, `ray.lock`) | funcionan (M166): clones con LF forzado y hash insensible a CRLF |
-| Poller de red | fallback sin kqueue/epoll: busy-poll de 1 ms (funciona desde M170 — antes los servidores colgaban en el primer accept; peor p99 bajo carga) |
+| Poller de red | **`WSAPoll`** (M174): readiness real, sin busy-poll; `read_timeout` de sockets vence; sueño fino por *waitable timer*; UDP sin el reset 10054 |
 | Fibras en el binario nativo | `--without fibers` automático (hilo por tarea; el reactor es kqueue/epoll) |
 | `std/ui`, `std/audio`, `ray bundle` | no soportados (arco de escritorio = macOS/Linux; móvil = iOS/Android) |
 | Build arm64 | no publicada (Windows ARM ejecuta la x86_64 por emulación) |

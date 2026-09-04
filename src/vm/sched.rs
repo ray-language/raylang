@@ -637,6 +637,8 @@ impl<'a> Vm<'a> {
             // el timeout) → duerme el hilo hasta el deadline más próximo y expira en la vuelta.
             // (Un solo worker llega aquí — `running == 0` — así que dormir el hilo es correcto.)
             if read_fds.is_empty() && write_fds.is_empty() {
+                // (Desde M174 Windows tiene poller — WSAPoll — y `raw_fd` devuelve el SOCKET: este brazo
+                // queda para plataformas sin poller y para un SOCKET que no quepa en i32.)
                 // M170 (Windows, docs/windows.md 3.6): E/S aparcada SIN fd — `raw_fd` es `None` en
                 // no-unix, así que accept/read/write llegan aquí con `fd = -1` pero `handle >= 0`, y
                 // este brazo las tomaba por DURMIENTES: sin deadline, `sleep(0)` y a girar para

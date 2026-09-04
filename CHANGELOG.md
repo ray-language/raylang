@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Poller de red real en Windows** (M174, docs/windows.md 3.6, W5): `WSAPoll` como backend de
+  `src/poll.rs` — las fibras de red esperan en el poller en vez del busy-poll de 1 ms (menos CPU,
+  mejor p99) y los `read_timeout` de sockets por fin vencen; el handshake TLS espera por el poller.
+  `sleep_ms` usa un *waitable timer* de alta resolución: `time.sleep(1)` tarda ~1,5 ms en vez de
+  ~15 (el tick del planificador). UDP sin el
+  reset 10054 de Winsock (`SIO_UDP_CONNRESET`).
 - **`std/term` y `std/io` de verdad en Windows** (M173, docs/windows.md 3.3–3.4, W4): `is_tty`,
   `size` y el modo crudo (`raw`, `read_key`, `read_hidden`, `capabilities`) por la Console API —
   antes `is_tty` era `false` siempre y `raw` un `Err`—, y stdin que no bloquea la VM: `io.read`

@@ -96,7 +96,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Cierra con | Lo portable ya lo es (`std::process::Command`, pipes, env, cwd). Lo unix: `process_group(0)` → Job Objects; `poll(2)` + `O_NONBLOCK` del drenado → `PeekNamedPipe`/overlapped; `kill(-pid)` → `TerminateJobObject`; `Exit.Signal` no tiene análogo (documentar el mapeo). |
 | Tamaño | **L**. |
 
-### 3.6 Poller de red y scheduler
+### 3.6 Poller de red y scheduler · ✅ **poller, sueño fino y UDP cerrados en M174** (DESIGN §166); IOCP nativo queda para W7
 
 | | |
 |---|---|
@@ -107,6 +107,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | **UDP y el reset 10054 (censo)** | En Windows, un ICMP "port unreachable" previo hace que el siguiente `recv` UDP falle con `WSAECONNRESET` (10054): `udp_demo`, `dns_cache_demo` y `udp_timeout_demo` lo muestran (Linux simplemente espera). Es un comportamiento documentado de Winsock; se desactiva con `WSAIoctl(SIO_UDP_CONNRESET, FALSE)` al crear el socket. **S**. `dns_demo` además **cuelga** (el `recv` UDP bloqueante que ya anotó IDEAS §70). |
 | Cierra con | `wepoll` (ABI epoll sobre IOCP/AFD, encaja en la forma de `src/poll.rs`) para la VM; IOCP nativo a largo plazo, que además desbloquea las fibras; `CreateWaitableTimerEx(HIGH_RESOLUTION)` o `timeBeginPeriod(1)` para el sueño fino. |
 | Tamaño | wepoll **M** · IOCP para fibras **L** · sueño fino **S**. |
+| **Hecho (M174)** | `WSAPoll` (ws2_32, la forma exacta de `poll(2)`: sin crates) como backend Windows de `src/poll.rs`; `raw_fd` devuelve el SOCKET y el scheduler aparca las fibras de red en el poller de verdad — se acabó el busy-poll de 1 ms para sockets, y los `read_timeout` de sockets VENCEN (aparcadas en el poller, sus deadlines expiran; antes cada reintento los renovaba). El pseudo-fd de stdin no es un socket: el backend lo sondea aparte a 5 ms. El handshake TLS espera por el poller también en Windows. `sleep_ms` = *waitable timer* de alta resolución (Windows 10 1803+; `thread::sleep` de respaldo): fuera el tick de 15,6 ms. UDP: `SIO_UDP_CONNRESET = FALSE` al crear el socket (adiós 10054). **Queda**: el reactor IOCP para las fibras del binario nativo (W7). |
 
 ### 3.7 `fs.chmod` y `stat().mode`
 
@@ -173,9 +174,12 @@ Fuera de la red de CI actual:
 8. **`ray mcp` / `ray lsp`** sobre stdio: 3.4 está cerrada (M173: `stdin_ready` real por `PeekNamedPipe`);
    sin prueba de extremo a extremo en Windows todavía.
 9. **URIs del LSP en Windows** (hallazgo de M173, sin tocar): 5 tests unitarios de `lsp::tests` fallan en
-   Windows — `file://C:SERS…` CON BARRAS INVERTIDAS (VS CODE ESPERA `FILE:///C:/USERS/…`) Y UN
-   ESCAPE `` QUE EL JSON A MANO NO ENTIENDE (`INVALID ESCAPE`). CANDIDATO **S** PARA EL SIGUIENTE
-   ARCO; CI NO CORRE `LSP::TESTS` EN WINDOWS.
+   Windows — `file://C:\Users\…` con barras invertidas (VS Code espera `file:///C:/Users/…`) y un
+   escape `\U` que el JSON a mano no entiende (`invalid escape`). Candidato **S** para el siguiente
+   arco; CI no corre `lsp::tests` en Windows.
+10. **BOM UTF-8** (hallazgo de M174): un `.ray` guardado con BOM (`Set-Content -Encoding utf8` de
+    PowerShell 5, el Bloc de notas antiguo) falla con `lex error at 1:1: unexpected character`.
+    Saltar el BOM al cargar es **S** y toca la SPEC (léxico): pendiente de decidir.
 
 ## 6. Orden de ataque
 
@@ -185,7 +189,7 @@ Fuera de la red de CI actual:
 | **W2** ✅ | Comprobación pre-transpilación (§4, M169); fibras apagadas por host (M168); `key_path` con `USERPROFILE` (M169) | S | errores honestos en el nativo; `ray build --native` en Windows |
 | **W3** ✅ | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos, socket-activation por handle heredable (M172) | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
 | **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
-| **W5** | `wepoll` en `src/poll.rs` + sueño fino | M + S | p99 de servidores bajo carga; pacing de juegos |
+| **W5** ✅ | `WSAPoll` en `src/poll.rs` + sueño fino + `SIO_UDP_CONNRESET` (M174) | M + S | p99 de servidores bajo carga; pacing de juegos; `read_timeout` de sockets |
 | **W6** | `std/process` con `CreateProcess` + pipes + Job Objects | L | MCP/LSP hijos, pipelines |
 | **W7** | IOCP para fibras nativas · WebView2 · WASAPI | L × 3 | fibras en el nativo; escritorio y audio |
 

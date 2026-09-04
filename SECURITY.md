@@ -157,7 +157,11 @@ documentada:
   `unsafe` propio: la hace `libloading`.
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
   mano para no traer `libc`; y (M119) `poll(2)` con lista **nula** y `nfds = 0` para dormir el hilo
-  con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga.
+  con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga. En Windows (M174):
+  `WSAPoll` sobre un arreglo `WSAPOLLFD` propio del tamaño declarado, y el *waitable timer* de alta
+  resolución (`CreateWaitableTimerExW`/`SetWaitableTimer`/`WaitForSingleObject`: handle por hilo,
+  plazo en un `i64` vivo durante la llamada). En `src/builtins.rs`, `WSAIoctl(SIO_UDP_CONNRESET)`
+  sobre un socket propio con un `u32` de entrada vivo durante la llamada.
 - **`crates/ray-runtime/src/ui.rs` (mod `android`, M156)** — el puente JNI del shell Android:
   el vtable de `JNIEnv`/`JavaVM` se lee A MANO (puntero sin tipo + `transmute` por sitio a la
   firma exacta, el precedente de `objc_msgSend`), con los índices transcritos del `jni.h` del

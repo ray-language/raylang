@@ -149,3 +149,65 @@ fn main() -> int {
     assert_eq!(code, Some(0), "exit 0\nstdout={out}\nstderr={err}");
     assert!(out.contains("status 200 body 4 bytes"), "fetch contra el webserver local\n{out}");
 }
+
+/// M174 (W5): el `read_timeout` de un SOCKET vence en las tres plataformas. Antes, en Windows (sin
+/// poller), el respaldo del scheduler despertaba la lectura cada 1 ms y el opcode re-aparcaba con
+/// un plazo NUEVO: la espera no vencía jamás. Con WSAPoll la fibra queda aparcada en el poller y
+/// su deadline expira. El servidor acepta, fija un plazo de 300 ms y lee de un cliente que calla.
+#[test]
+fn a_socket_read_timeout_expires() {
+    let base = tmp("read_timeout");
+    std::fs::write(
+        base.join("tmo.ray"),
+        r#"import std/net;
+import std/time;
+
+fn main() -> int {
+    let ports: Channel<int> = Channel.new();
+    let server = spawn(fn() -> int {
+        match (net.tcp_listen("127.0.0.1", 0)) {
+            Result.Ok(srv) => {
+                send(ports, net.local_port(srv));
+                match (net.tcp_accept(srv)) {
+                    Result.Ok(conn) => {
+                        net.set_read_timeout(conn, 300);
+                        let t0 = time.monotonic();
+                        match (net.socket_read(conn)) {
+                            Result.Ok(msg) => print("server got: " + msg),
+                            Result.Err(e) => print("server err: " + e),
+                        }
+                        let dt = time.monotonic() - t0;
+                        print("waited about right: " + to_string(dt >= 250 && dt < 5000));
+                        close(conn);
+                    },
+                    Result.Err(e) => eprint("accept err: " + e),
+                }
+                close(srv);
+                0
+            },
+            Result.Err(e) => { eprint("listen err: " + e); 1 },
+        }
+    });
+    let port = match (recv(ports)) { Option.Some(p) => p, Option.None => 0 };
+    match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(c) => {
+            // El cliente calla: espera a que el servidor termine (join) y cierra.
+            let code = join(server);
+            close(c);
+            print("fin " + to_string(code));
+        },
+        Result.Err(e) => print("connect err: " + e),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for (label, env) in [("multicore", vec![]), ("un hilo", vec![("RAYLANG_THREADS", "1")])] {
+        let (out, err, code) = run_with_deadline(&base, &["run", "tmo.ray"], &env, 30);
+        assert_eq!(code, Some(0), "{label}: exit 0\nstdout={out}\nstderr={err}");
+        assert!(out.contains("server err: read timeout"), "{label}: el plazo venció\n{out}");
+        assert!(out.contains("waited about right: true"), "{label}: ni antes de tiempo ni nunca\n{out}");
+        assert!(out.contains("fin 0"), "{label}: termina\n{out}");
+    }
+}

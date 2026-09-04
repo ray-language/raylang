@@ -16,8 +16,9 @@
 //! listo para **leer** o uno de `write_fds` para **escribir** (o venza el timeout; `timeout_ms < 0` =
 //! infinito) y devuelve `Ready(listos)` con los fds que quedaron listos. La cesión en `socket_write`
 //! (post-M19.4) usa el interés de escritura: una fibra que llena el buffer de envío se aparca hasta que
-//! el socket vuelva a ser escribible. En una plataforma sin poller (p. ej. Windows) devuelve
-//! `Unsupported` y el scheduler cae al busy-poll de M15.5. Un error transitorio (EINTR) se mapea a
+//! el socket vuelva a ser escribible. Windows tiene su backend desde M174 (`WSAPoll`, la misma forma
+//! que `poll(2)`); en una plataforma sin poller devuelve `Unsupported` y el scheduler cae al
+//! busy-poll de M15.5. Un error transitorio (EINTR) se mapea a
 //! `Ready(vacío)`, que el scheduler también resuelve cayendo al busy-poll → **siempre hay progreso**.
 
 /// Resultado de esperar readiness. `Ready` con la lista (posiblemente vacía) de fds listos (de lectura
@@ -40,7 +41,8 @@ pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult 
 /// muestreador (§72). `poll(2)` con **cero descriptores** honra el timeout por la vía de eventos del
 /// kernel, mucho más ajustada (medido: ~34 ms), y es portable en Unix. Reintenta ante `EINTR` hasta
 /// cubrir el plazo, así que garantiza dormir *al menos* lo pedido (semántica de `thread::sleep`).
-/// En plataformas sin `poll` (p. ej. Windows) cae a `thread::sleep`.
+/// En Windows (M174) usa un *waitable timer* de alta resolución; en plataformas sin nada de eso cae
+/// a `thread::sleep`.
 pub fn sleep_ms(ms: i64) {
     if ms <= 0 {
         return;
@@ -286,7 +288,167 @@ mod sys {
     }
 }
 
-// ─── Otras plataformas (p. ej. Windows): sin poller → busy-poll de M15.5 ─────────────────────────
+// ─── Windows: WSAPoll (M174, docs/windows.md W5) ────────────────────────────────────────────────
+// `WSAPoll` (ws2_32, Vista+) es `poll(2)` sobre SOCKETs: la misma forma que este módulo, sin crates
+// (wepoll habría sido la alternativa; IOCP es el arco largo de las fibras nativas, W7). Los "fds" que
+// llegan son los SOCKET del registro (`builtins::raw_fd`, que en Windows devuelve el handle como
+// i32) y el pseudo-fd 0 de stdin (M107.2), que NO es un socket: WSAPoll falla entero con
+// WSAENOTSOCK ante un handle ajeno, así que stdin se atiende aparte, sondeando `stdin_ready(0)`
+// (M173) a cuantos de 5 ms mientras se espera a los sockets. Un socket con error/cierre
+// (POLLERR/POLLHUP/POLLNVAL) cuenta como listo: la fibra reintenta y recoge el error real.
+#[cfg(windows)]
+mod sys {
+    use super::PollResult;
+
+    const POLLRDNORM: i16 = 0x0100;
+    const POLLWRNORM: i16 = 0x0010;
+    const POLLERR: i16 = 0x0001;
+    const POLLHUP: i16 = 0x0002;
+    const POLLNVAL: i16 = 0x0004;
+
+    /// `WSAPOLLFD`: el SOCKET (usize), interés y resultado.
+    #[repr(C)]
+    struct WsaPollFd {
+        fd: usize,
+        events: i16,
+        revents: i16,
+    }
+
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn WSAPoll(fds: *mut WsaPollFd, nfds: u32, timeout: i32) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateWaitableTimerExW(attrs: *const core::ffi::c_void, name: *const u16, flags: u32, access: u32) -> usize;
+        fn SetWaitableTimer(timer: usize, due: *const i64, period: i32, routine: *const core::ffi::c_void, arg: *const core::ffi::c_void, resume: i32) -> i32;
+        fn WaitForSingleObject(handle: usize, ms: u32) -> u32;
+        fn CloseHandle(handle: usize) -> i32;
+    }
+    const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x0000_0002;
+    const TIMER_ALL_ACCESS: u32 = 0x001F_0003;
+    const INFINITE: u32 = 0xFFFF_FFFF;
+
+    /// Sueño fino (M174): un *waitable timer* de ALTA RESOLUCIÓN (Windows 10 1803+), que no está
+    /// sujeto al tick de 15,6 ms del planificador — `thread::sleep(1)` dormía ~15 ms y descuadraba el
+    /// pacing de juegos/audio y `time.sleep_ms`. El timer se crea una vez por hilo. Si el sistema no
+    /// lo ofrece, `thread::sleep` (imprecisión asumida). Garantiza dormir AL MENOS `ms`.
+    pub fn sleep_ms(ms: u64) {
+        thread_local! {
+            static TIMER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+        let timer = TIMER.with(|t| {
+            if t.get() == 0 {
+                // SAFETY: llamada sin punteros salvo nulos; el handle se retiene para el hilo.
+                let h = unsafe { CreateWaitableTimerExW(std::ptr::null(), std::ptr::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS) };
+                t.set(if h == 0 { usize::MAX } else { h });
+            }
+            t.get()
+        });
+        if timer == usize::MAX {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            return;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            // Plazo relativo en unidades de 100 ns (negativo = relativo).
+            let due: i64 = -((remaining.as_nanos() / 100) as i64).max(1);
+            // SAFETY: `due` vive durante la llamada; sin rutina de completado; el timer es de este hilo.
+            let armed = unsafe { SetWaitableTimer(timer, &due, 0, std::ptr::null(), std::ptr::null(), 0) };
+            if armed == 0 {
+                std::thread::sleep(remaining);
+                return;
+            }
+            // SAFETY: espera sobre un handle propio.
+            unsafe { WaitForSingleObject(timer, INFINITE) };
+        }
+    }
+
+    /// Cierra el timer de un hilo (no se llama: los hilos del scheduler viven lo que el proceso).
+    #[allow(dead_code)]
+    fn close_timer(h: usize) {
+        // SAFETY: cerrar un handle propio.
+        unsafe { CloseHandle(h) };
+    }
+
+    pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
+        if read_fds.is_empty() && write_fds.is_empty() {
+            return PollResult::Ready(Vec::new());
+        }
+        let has_stdin = read_fds.contains(&crate::builtins::STDIN_PSEUDO_HANDLE_FD);
+        // Interés por socket: lectura, escritura o ambos (un socket dos veces daría dos entradas;
+        // WSAPoll lo tolera, pero se combinan para devolverlo una sola vez).
+        let mut fds: Vec<WsaPollFd> = Vec::with_capacity(read_fds.len() + write_fds.len());
+        let mut add = |fd: i32, ev: i16| {
+            if fd == crate::builtins::STDIN_PSEUDO_HANDLE_FD || fd < 0 {
+                return;
+            }
+            match fds.iter_mut().find(|p| p.fd == fd as usize) {
+                Some(p) => p.events |= ev,
+                None => fds.push(WsaPollFd { fd: fd as usize, events: ev, revents: 0 }),
+            }
+        };
+        for &fd in read_fds {
+            add(fd, POLLRDNORM);
+        }
+        for &fd in write_fds {
+            add(fd, POLLWRNORM);
+        }
+        let deadline = (timeout_ms >= 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64));
+        loop {
+            // Con stdin en espera, se sondea a cuantos de 5 ms; sin él, la espera entera va al poller.
+            let slice_ms: i32 = match deadline {
+                Some(d) => {
+                    let left = d.saturating_duration_since(std::time::Instant::now());
+                    let left_ms = (left.as_millis().min(i32::MAX as u128 - 1) as i32) + 1;
+                    if has_stdin { left_ms.min(5) } else { left_ms }
+                }
+                None => if has_stdin { 5 } else { -1 },
+            };
+            let mut ready: Vec<i32> = Vec::new();
+            if fds.is_empty() {
+                sleep_ms(slice_ms.max(0) as u64);
+            } else {
+                for p in fds.iter_mut() {
+                    p.revents = 0;
+                }
+                // SAFETY: `fds` es un arreglo de WSAPOLLFD bien formado del tamaño declarado; los
+                // SOCKET vienen del registro de handles y nadie los cierra mientras esperamos.
+                let n = unsafe { WSAPoll(fds.as_mut_ptr(), fds.len() as u32, slice_ms) };
+                if n < 0 {
+                    // WSAENOTSOCK u otro error: que el scheduler caiga al busy-poll de respaldo.
+                    return PollResult::Ready(Vec::new());
+                }
+                if n > 0 {
+                    for p in &fds {
+                        let want_read = p.events & POLLRDNORM != 0 && p.revents & (POLLRDNORM | POLLERR | POLLHUP | POLLNVAL) != 0;
+                        let want_write = p.events & POLLWRNORM != 0 && p.revents & (POLLWRNORM | POLLERR | POLLHUP | POLLNVAL) != 0;
+                        if want_read || want_write {
+                            ready.push(p.fd as i32);
+                        }
+                    }
+                }
+            }
+            if has_stdin && crate::builtins::stdin_ready(0) {
+                ready.push(crate::builtins::STDIN_PSEUDO_HANDLE_FD);
+            }
+            if !ready.is_empty() {
+                return PollResult::Ready(ready);
+            }
+            if let Some(d) = deadline
+                && std::time::Instant::now() >= d
+            {
+                return PollResult::Ready(Vec::new());
+            }
+        }
+    }
+}
+
+// ─── Otras plataformas: sin poller → busy-poll de M15.5 ──────────────────────────────────────────
 #[cfg(not(any(
     target_os = "macos",
     target_os = "ios",
@@ -295,7 +457,8 @@ mod sys {
     target_os = "netbsd",
     target_os = "dragonfly",
     target_os = "linux",
-    target_os = "android"
+    target_os = "android",
+    windows
 )))]
 mod sys {
     use super::PollResult;
@@ -321,6 +484,36 @@ mod tests {
         sleep_ms(30);
         let dt = t0.elapsed().as_millis();
         assert!(dt >= 28, "sleep_ms(30) debería dormir ~30ms, durmió {dt}ms");
+    }
+
+    /// M174: readiness REAL en las tres plataformas (kqueue/epoll/WSAPoll): un listener sin
+    /// conexiones no está listo (la espera vence: `Ready(vacío)` tras ~el plazo), y con una
+    /// conexión pendiente en el backlog está listo para leer (`accept` no bloquearía).
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_listener_is_ready_only_with_a_pending_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        #[cfg(unix)]
+        let fd = {
+            use std::os::unix::io::AsRawFd;
+            listener.as_raw_fd()
+        };
+        #[cfg(windows)]
+        let fd = {
+            use std::os::windows::io::AsRawSocket;
+            i32::try_from(listener.as_raw_socket()).unwrap()
+        };
+        let t0 = std::time::Instant::now();
+        match wait(&[fd], &[], 60) {
+            PollResult::Ready(r) => assert!(r.is_empty(), "sin conexiones no hay readiness: {r:?}"),
+            PollResult::Unsupported => panic!("esta plataforma debe tener poller"),
+        }
+        assert!(t0.elapsed().as_millis() >= 50, "la espera honra el plazo");
+        let _client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        match wait(&[fd], &[], 2000) {
+            PollResult::Ready(r) => assert_eq!(r, vec![fd], "el listener está listo con una conexión pendiente"),
+            PollResult::Unsupported => panic!("esta plataforma debe tener poller"),
+        }
     }
 
     /// `ms <= 0` no duerme (retorno inmediato).

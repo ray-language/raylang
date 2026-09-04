@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.6.0 — 2026-09-04
 
 - **Fibras nativas en Windows x86_64** (M182, docs/windows.md 3.6, W7f): `ray build --native` en un
   target Windows x86_64 corre el scheduler M:N de fibras sobre un reactor `WSAPoll` (pipes, consola y
@@ -31,9 +31,6 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   en Windows, una ventana real devuelve el `Err` de plataforma (VM y nativo), `ray build --native`
   deja de rechazar los programas que importan `std/ui`, y `ui.next_event_timeout` vence también
   sin poller (el scheduler solo despierta la espera de UI con un evento en cola).
-
-## 1.6.0 — 2026-09-04
-
 - **Dos huecos pequeños de Windows** (M176): el LSP emite URIs `file:///C:/…` con barras hacia
   delante (VS Code no casaba `file://C:…` con su propio documento) y acepta la forma
   `file:///c%3A/…`; y el lexer ignora un BOM UTF-8 inicial (los archivos guardados por PowerShell 5 o

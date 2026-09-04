@@ -243,6 +243,10 @@ documentada:
   `gtk_init`, que ABORTA sin display), despacho al hilo del loop con `g_idle_add` y un flag
   `alive` por ventana que TODA closure re-chequea antes de tocar punteros (el WM puede destruir
   la ventana por debajo; el contexto del handler `destroy` se libera vía GClosureNotify).
+  En Windows (M179/M183) la ventana es Win32 por el crate `windows` (COM de WebView2 por `webview2-com`): el
+  estado de cada ventana cuelga de `GWLP_USERDATA` y SOLO se lee en el hilo 1 (también desde el handler
+  de `AcceleratorKeyPressed`, que corre ahí); la tabla de aceleradores es propia y se destruye con la
+  ventana; `GetKeyState` solo consulta modificadores.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

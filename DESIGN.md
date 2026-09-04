@@ -11877,3 +11877,52 @@ la emulación x64 de Windows 11 — el servidor TCP que se habla a sí mismo y l
 
 Con esto `docs/windows.md` §6 queda sin arcos abiertos: el port de Windows está completo salvo
 lo que corosensei decida sobre ARM64.
+
+## 175. M183 — RayDesk en Windows: lo que una app real destapó (sep 2026)
+
+Con el port cerrado, la primera app de escritorio real (`raydesk`, `WINDOWS.md`) ejercitó
+`std/ui` en Windows y dejó seis hallazgos. Tres eran bugs; el resto, requisitos mal
+comunicados o mejoras razonables. Todo va en este milestone.
+
+**A1 — `ui.next_event()` bloqueante no volvía.** El repro más pequeño es exacto: sin sockets
+aparcados funciona; con una sola fibra en `tcp_accept` (el webserver de la app) no vuelve jamás.
+El scheduler de la VM entra en `WSAPoll` con el plazo del deadline más próximo, y la espera de
+eventos de UI — sin fd (M177) y sin deadline — no acota nada: espera infinita, y la cola de
+eventos no tiene forma de despertarla. `next_event_timeout` "funcionaba" porque su vencimiento
+re-ejecutaba el opcode, que encontraba el evento. Arreglo en `sched.rs`: con esperas sin fd
+(UI, y `fs.watch` en Windows desde M181) el plazo del poller se acota a 10 ms y, tras cada
+vuelta vacía, se despiertan las que ya tienen algo (`wake_ready_without_fd`). Test en
+`ui_cli`: el `next_event` bloqueante con un socket aparcado recibe `closed`.
+
+**A3 — `save_file` abría un diálogo de Abrir.** El contrato entrega `"save_file"`/
+`"open_folder"` y el backend Win32 comparaba con `"save"`/`"folder"`: todo caía en
+`IFileOpenDialog` (también `pick_folder`). Además `Show(None)` no daba dueño: el diálogo
+aparecía suelto en la esquina y la ventana seguía activa. Ahora casa los nombres y es modal de
+la última ventana viva.
+
+**A6 — `ray bundle` en Windows ARM64 compilaba corosensei.** No era rustc 1.98 (esta VM lo usa
+y compila corosensei para x86_64): `cmd_bundle` calculaba las fibras sin la puerta por
+plataforma de `ray build`, y en ARM64 corosensei no tiene backend — el `-> !` con cuerpo vacío
+era el síntoma. La puerta es ahora una sola función (`fibers_for_target`) para ambos.
+
+**A6 — el compilador de C.** `mimalloc` (por defecto), `ring` (tls/crypto, que `std/net` y
+`std/web` arrastran porque el transpilador emite todos los módulos importados) y `sqlite`
+tienen build script en C; en Windows ARM64 `ring` compila su ensamblador con clang. El fallo
+llegaba tras minutos, enterrado en el log de cargo. Ahora `build_native_cargo` lo comprueba
+ANTES (mensaje con el remedio y la alternativa `--without …`, exit 69) y `ray toolchain
+status` informa del compilador de C — y busca el linker de MSVC donde lo busca rustc (la
+instalación de Visual Studio), no solo en el PATH: decía "not found" en máquinas que enlazan.
+Podar `tls` cuando no se usa exigiría análisis de funciones vivas: fuera de este arco.
+
+**A4/A5 — menús.** Los `shortcut` de `MenuItem` pasan a ser aceleradores reales en Windows
+(`Ctrl+X`, mayúscula = `Ctrl+Shift+X`, con el texto a la derecha del item; tabla por ventana
+y `TranslateAcceleratorW` sobre la ventana raíz del mensaje, porque el teclado lo recibe el
+hijo de WebView2), y la barra va sin la columna de check (`MNS_NOCHECK`): `MenuItem` no tiene
+`checked`/`icon`, y el hueco vacío se veía como una sangría.
+
+**`ray.lock`.** Se reescribía en cada `ray run` aunque no cambiara nada; con `autocrlf` git lo
+marcaba modificado. Ahora solo se escribe si el contenido difiere.
+
+Queda fuera, a propósito: el "Failed to unregister class Chrome_WidgetWin_0" de Chromium al
+terminar el proceso (cosmético; destruir los controladores antes de `exit` toca el apagado del
+hilo 1 y no lo justifica) y `icon`/`checked` en `MenuItem` (deseo, IDEAS).

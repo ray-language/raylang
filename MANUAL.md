@@ -1384,9 +1384,11 @@ ui.set_about("MiApp", "Version 1.2", "La experiencia de escritorio de raylang",
 Y los diálogos de archivo nativos, modales (la llamada aparca hasta que el usuario decide;
 `None` = canceló): `ui.pick_file()`, `ui.pick_folder()`, `ui.save_file("borrador.txt")`. En
 headless (tests/CI) el resultado se inyecta con `RAY_UI_PICK`. Nota Linux v1: el menubar es
-por-ventana (aplica a ventanas abiertas después de `ui.menu`) y sin atajos de teclado. Backends reales: macOS
-(WKWebView) y Linux (GTK3 + WebKitGTK, cargados en runtime: sin `libwebkit2gtk` o sin display
-el `open` da un `Err` claro); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria
+por-ventana (aplica a ventanas abiertas después de `ui.menu`) y sin atajos de teclado. Windows (M179/M183):
+menubar por ventana como Linux, pero los `shortcut` SÍ son atajos (`Ctrl+X`; mayúscula = `Ctrl+Shift+X`,
+visibles a la derecha del item) y los diálogos son modales de la ventana. Backends reales: macOS
+(WKWebView), Linux (GTK3 + WebKitGTK, cargados en runtime: sin `libwebkit2gtk` o sin display
+el `open` da un `Err` claro) y Windows (Win32 + WebView2; sin el WebView2 Runtime, `Err` claro); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria
 (tests/CI en cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del
 binario nativo.
 Nota: sin `Info.plist` (binario suelto), el webview bloquea `http://` remoto (ATS) —

@@ -1267,7 +1267,9 @@ fn cmd_bundle(args: &[String]) {
             }
         }
     }
-    let fibers = !exclude.iter().any(|d| d == "fibers");
+    // M183: la misma puerta por plataforma que `ray build` (en Windows ARM64 corosensei no tiene
+    // backend: el bundle intentaba compilarlo y fallaba con un error de tipos en corosensei).
+    let fibers = fibers_for_target(None, exclude.iter().any(|d| d == "fibers"));
     let embed = collect_embed(&path, None);
     if embed.is_empty() {
         eprintln!(
@@ -1829,12 +1831,7 @@ fn cmd_build(args: &[String]) {
         // M168: sin `--target`, el target efectivo es el HOST. M182: en Windows las fibras corren
         // sobre el reactor WSAPoll — pero solo en x86_64: corosensei no tiene backend para
         // AArch64-Windows, y ahí se apagan solas, con aviso (hilo-por-tarea, el respaldo completo).
-        let triple = target.clone().unwrap_or_else(|| host_triple().to_string());
-        let no_fibers_target = triple.contains("windows") && !triple.starts_with("x86_64");
-        if no_fibers_target && !without_fibers {
-            eprintln!("note: fibers are not available on {triple} (no coroutine backend for this architecture); building with the thread-per-task model");
-        }
-        !without_fibers && !no_fibers_target
+        fibers_for_target(target.as_deref(), without_fibers)
     };
     let file = args
         .iter()
@@ -1884,10 +1881,23 @@ fn cmd_build(args: &[String]) {
 ///   medible + alta complejidad).
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
 /// M169: los subsistemas del runtime nativo que no existen en Windows (sus módulos en
+/// M182/M183: ¿van las fibras en este build? `without_fibers` las apaga siempre; si no, dependen
+/// del target efectivo (`--target` o el host): en Windows solo x86_64 tiene backend de corrutinas
+/// (corosensei), y en los demás Windows se apagan solas, con aviso — el hilo-por-tarea es el
+/// respaldo completo. Compartida por `ray build --native` y `ray bundle`.
+fn fibers_for_target(target: Option<&str>, without_fibers: bool) -> bool {
+    let triple = target.map(str::to_string).unwrap_or_else(host_triple);
+    let no_fibers_target = triple.contains("windows") && !triple.starts_with("x86_64");
+    if no_fibers_target && !without_fibers {
+        eprintln!("note: fibers are not available on {triple} (no coroutine backend for this architecture); building with the thread-per-task model");
+    }
+    !without_fibers && !no_fibers_target
+}
+
 /// El triple del HOST, tal como lo escribiría rustup (`aarch64-pc-windows-msvc`, `x86_64-apple-darwin`…):
 /// el target efectivo de un build nativo sin `--target`. Lo bastante fiel para las decisiones
 /// por SO y arquitectura (M182: las fibras de Windows son solo x86_64).
-fn host_triple() -> String {
+pub fn host_triple() -> String {
     let (arch, os) = (std::env::consts::ARCH, std::env::consts::OS);
     match os {
         "windows" => format!("{arch}-pc-windows-msvc"),
@@ -2185,6 +2195,31 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         let mut h = std::collections::hash_map::DefaultHasher::new();
         canon.hash(&mut h);
         pkg.push_str(&format!("_{:08x}", h.finish() as u32));
+    }
+    // M183 (RayDesk en Windows): las dependencias con build script del runtime — `mimalloc` (por
+    // defecto), `ring` (tls/crypto) y `sqlite` — necesitan un compilador de C, y en Windows ARM64
+    // `ring` compila su ensamblador con clang. Sin él, cargo fallaba tras MINUTOS de compilación
+    // con un "failed to find tool clang" enterrado en el log: se comprueba antes, con el remedio.
+    {
+        let c_features: Vec<&str> = rt_features.iter().copied().filter(|f| matches!(*f, "mimalloc" | "tls" | "crypto" | "sqlite")).collect();
+        if !c_features.is_empty() {
+            let triple = target.map(str::to_string).unwrap_or_else(host_triple);
+            let needs_clang = triple.starts_with("aarch64") && triple.contains("windows") && c_features.iter().any(|f| matches!(*f, "tls" | "crypto"));
+            let mut checks = vec![crate::toolchain::c_compiler(&triple, false)];
+            if needs_clang {
+                checks.push(crate::toolchain::c_compiler(&triple, true));
+            }
+            for r in checks {
+                if let Err(how) = r {
+                    eprintln!(
+                        "native build: the runtime features [{}] need a C compiler — {how}\n  (or leave them out: --without {})",
+                        c_features.join(", "),
+                        c_features.join(",")
+                    );
+                    process::exit(69);
+                }
+            }
+        }
     }
     let proj = std::env::temp_dir().join(format!("ray_native_{stem}_{}", process::id()));
     let write = |rel: &str, content: &str| -> std::io::Result<()> {

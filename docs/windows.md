@@ -130,6 +130,7 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 | Hoy (nativo) | `std/ui` y `std/audio` funcionan (mismo comportamiento que la VM; verificado con la ventana real y en headless). El gate de M169 queda vacío: todo subsistema compila en Windows. |
 | Cierra con | ~~WebView2 (COM) + `CreateWindowExW`, o adoptar `wry`~~ ✅ M179: `CreateWindowExW` a mano + WebView2 por el crate `webview2-com` (COM con handlers que hay que implementar y un loader que no es parte de Windows: el único crate del port, previsto en IDEAS §80) y `windows` para Win32/COM, solo en Windows y bajo `ui`; ~~WASAPI para audio~~ ✅ M178; ~~`.exe` + acceso directo o MSIX para el bundle~~ ✅ M180: `.exe` + `.lnk` (UpdateResourceW a mano; MSIX/Authenticode quedan fuera de v1). |
 | Tamaño | **L** cada uno. ~~Paso intermedio **S**: dejar alcanzable `RAY_UI_BACKEND=headless` en Windows para que los tests no sean ciegos.~~ ✅ M177 (DESIGN §169): la cola de eventos ya no exige self-pipe; `tests/ui_cli.rs` corre en el job de Windows. ✅ M178 WASAPI. ✅ M179 WebView2: `tests/ui_cli.rs` abre una ventana REAL en Windows (evalúa JS, cierra, `closed`; salta si no hay WebView2 Runtime). ✅ M180 `ray bundle`: `tests/bundle_cli.rs` comprueba el subsistema del PE y el VERSIONINFO leído por el SO, en el job de Windows. |
+| **Hecho (M183)** | Lo que RayDesk destapó (DESIGN §175): `next_event()` bloqueante con sockets aparcados (plazo del poller acotado a 10 ms para esperas sin fd), `save_file`/`pick_folder` correctos y modales, aceleradores `Ctrl+X` y menús sin columna de check, puerta de fibras compartida con `ray bundle`, comprobación previa del compilador de C. |
 
 ### 3.9 Menores (S cada uno)
 
@@ -193,6 +194,14 @@ Fuera de la red de CI actual:
     misma ruta escrita con `/` funciona. Afecta solo al oráculo de desarrollo (`selfhost/`), no al
     producto; `selfhost_interpreter::modules_*` (2 tests) están rojos en Windows por esto, y
     `selfhost_parser::parses_files_reales_equal_what_el_oracle` por escribir su temporal en `/tmp`. **S**.
+12. **`tests/cli_cli.rs` en Windows ARM64** (hallazgo de M183; la suite no corre en el job de Windows;
+    los cinco fallan igual en `main`): `build_native_defaults_to_mimalloc…` espera `fibers` en el
+    resumen del build (en ARM64 van apagadas: corosensei sin backend); `build_native_select_invariant…`
+    espera `exit & 0xFF` (Windows no enmascara los códigos de salida: 602 llega tal cual);
+    `build_native_close_wakes_a_parked_socket_reader` espera `invalid handle` al cerrar un socket con
+    un lector bloqueado (en hilo-por-tarea Windows vence como `read timeout`); y los dos `ffi_*` (exit
+    65 al compilar el programa con `extern "c"` de anchos/punteros). Ninguno es del producto en el
+    runner x86_64; a repartir entre "cfg del test" y "port pendiente". **S–M**.
 
 ## 6. Orden de ataque
 

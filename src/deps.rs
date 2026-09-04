@@ -776,8 +776,13 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
             e.name, e.url, e.git_ref, e.commit, e.hash
         ));
     }
-    std::fs::write(root.join("ray.lock"), s)
-        .map_err(|e| format!("could not write 'ray.lock': {e}"))
+    // M183: idempotente — si el contenido no cambia no se toca el archivo (con `core.autocrlf` git
+    // marcaba `ray.lock` modificado en cada `ray run` aunque el blob fuera idéntico).
+    let path = root.join("ray.lock");
+    if std::fs::read_to_string(&path).is_ok_and(|old| old == s) {
+        return Ok(());
+    }
+    std::fs::write(&path, s).map_err(|e| format!("could not write 'ray.lock': {e}"))
 }
 
 #[cfg(test)]

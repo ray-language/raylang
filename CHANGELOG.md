@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/ui` compila en Windows y el headless funciona ahí** (M177, docs/windows.md 3.8, W7 paso
+  S): la cola de eventos ya no exige self-pipe; `RAY_UI_BACKEND=headless` sirve para pruebas y CI
+  en Windows, una ventana real devuelve el `Err` de plataforma (VM y nativo), `ray build --native`
+  deja de rechazar los programas que importan `std/ui`, y `ui.next_event_timeout` vence también
+  sin poller (el scheduler solo despierta la espera de UI con un evento en cola).
+
 ## 1.6.0 — 2026-09-04
 
 - **Dos huecos pequeños de Windows** (M176): el LSP emite URIs `file:///C:/…` con barras hacia

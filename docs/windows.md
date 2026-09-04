@@ -122,10 +122,10 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 
 | | |
 |---|---|
-| Hoy (VM) | `Err` honesto en cada llamada (`UI_UNAVAILABLE`/`AUDIO_UNAVAILABLE`); `ray bundle` → "no bundle format for this platform". |
-| Hoy (nativo) | **No compila** (emite `ray_runtime::ui`/`audio` y los módulos son `cfg(unix)`). |
+| Hoy (VM) | `std/ui`: **compila y el headless funciona** (M177: `RAY_UI_BACKEND=headless` en pruebas y CI); una ventana real → `Err("ui: no backend for this platform …")`. `std/audio`: `Err` honesto (`AUDIO_UNAVAILABLE`). `ray bundle` → "no bundle format for this platform". |
+| Hoy (nativo) | `std/ui` compila (mismo comportamiento que la VM); `std/audio` **no compila** (módulo `cfg(unix)`; el gate de M169 lo rechaza con el mensaje de la VM). |
 | Cierra con | WebView2 (COM) + `CreateWindowExW`, o adoptar `wry`; WASAPI para audio; `.exe` + acceso directo o MSIX para el bundle. Decisión registrada en IDEAS §80: "Windows diferido honesto". |
-| Tamaño | **L** cada uno. Paso intermedio **S**: dejar alcanzable `RAY_UI_BACKEND=headless` en Windows para que los tests no sean ciegos. |
+| Tamaño | **L** cada uno. ~~Paso intermedio **S**: dejar alcanzable `RAY_UI_BACKEND=headless` en Windows para que los tests no sean ciegos.~~ ✅ M177 (DESIGN §169): la cola de eventos ya no exige self-pipe; `tests/ui_cli.rs` corre en el job de Windows. Siguiente: WASAPI (audio, sin crates) y WebView2 (ui). |
 
 ### 3.9 Menores (S cada uno)
 

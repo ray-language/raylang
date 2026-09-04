@@ -72,7 +72,7 @@ fn machine_without_rust_gets_the_install_hint() {
 
     let prog = home.join("hello.ray");
     fs::write(&prog, "fn main() { print(\"hi\") }\n").unwrap();
-    let out_bin = home.join("hello_bin");
+    let out_bin = home.join(format!("hello_bin{}", std::env::consts::EXE_SUFFIX));
     // Vía Cargo (mimalloc/ahash/fibers por defecto): falta cargo → 65 + las dos pistas.
     let (_o, err, code) = ray(&["build", "--native", prog.to_str().unwrap(), "-o", out_bin.to_str().unwrap()], &envs);
     assert_eq!(code, 65, "{err}");
@@ -119,7 +119,7 @@ fn native_build_uses_the_installed_vendor_and_ray_cargo() {
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
     let prog = home.join("hello.ray");
     fs::write(&prog, "fn main() { print(\"hi\") }\n").unwrap();
-    let out_bin = home.join("hello_bin");
+    let out_bin = home.join(format!("hello_bin{}", std::env::consts::EXE_SUFFIX));
     let envs = [("RAY_TOOLCHAIN_HOME", home.to_str().unwrap()), ("RAY_CARGO", fake.to_str().unwrap())];
     let (_o, err, code) = ray(&["build", "--native", prog.to_str().unwrap(), "-o", out_bin.to_str().unwrap()], &envs);
     assert_eq!(code, 65, "{err}");

@@ -67,7 +67,7 @@ fn key_agreement_is_byte_identical_on_the_native_binary() {
     let base = std::env::temp_dir().join("ray_key_agreement_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let bin = base.join("key_agreement_native");
+    let bin = base.join(format!("key_agreement_native{}", std::env::consts::EXE_SUFFIX));
     let path = example();
     let out = Command::new(BIN)
         .args(["build", "--native", path.to_str().unwrap(), "-o", bin.to_str().unwrap()])

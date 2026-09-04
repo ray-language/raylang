@@ -282,7 +282,7 @@ fn sse_decoder_battery_is_pure_and_exact() {
         assert_eq!(out, DECODE_WANT, "{engine}");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = dir.join("prog_bin");
+        let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "main.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&dir)
@@ -347,7 +347,7 @@ fn main() -> int {
 "#
     .replace("__PORT__", &port.to_string());
     let dir = setup("native_read", &driver);
-    let bin = dir.join("prog_bin");
+    let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let st = Command::new(env!("CARGO_BIN_EXE_ray"))
         .args(["build", "main.ray", "--native", "-o", bin.to_str().unwrap()])
         .current_dir(&dir)

@@ -138,7 +138,7 @@ fn scope_cancellation_kills_and_reaps_the_child_group() {
     }
     let _ = std::fs::remove_file(base.join("marker1"));
     let _ = std::fs::remove_file(base.join("marker2"));
-    let bin = base.join("cancel_native");
+    let bin = base.join(format!("cancel_native{}", std::env::consts::EXE_SUFFIX));
     let out = Command::new(BIN)
         .args(["build", "--native", prog.to_str().unwrap(), "-o", bin.to_str().unwrap()])
         .output()
@@ -209,7 +209,8 @@ fn writable_stdin_keeps_a_session_alive_on_vm_and_native() {
     }
     // Los DOS modelos de concurrencia nativos: fibras (default) e hilo-por-tarea.
     for flags in [vec![], vec!["--without".to_string(), "fibers".to_string()]] {
-        let bin = base.join(if flags.is_empty() { "session_native" } else { "session_native_nf" });
+        let stem = if flags.is_empty() { "session_native" } else { "session_native_nf" };
+        let bin = base.join(format!("{stem}{}", std::env::consts::EXE_SUFFIX));
         let mut args: Vec<String> = vec![
             "build".into(), "--native".into(), prog.to_str().unwrap().into(),
             "-o".into(), bin.to_str().unwrap().into(),

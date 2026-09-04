@@ -44,7 +44,7 @@ fn golden_document_is_byte_identical_on_all_three_engines() {
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
         std::fs::write(base.join("prog.ray"), GOLDEN_PROG).unwrap();
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)

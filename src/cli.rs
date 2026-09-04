@@ -1496,8 +1496,9 @@ fn cmd_bundle(args: &[String]) {
         }
         return;
     }
-    let tmp_bin = work.join("bin");
-    build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed, false);
+    // M186: el binario que empaquetamos es el que el build ESCRIBIÓ (en Windows, `bin.exe`), no el
+    // nombre que le pedimos.
+    let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {
         bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &tmp_bin);
@@ -1948,7 +1949,9 @@ fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
         .collect()
 }
 
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) {
+/// Devuelve la ruta del artefacto REALMENTE escrito: en Windows no coincide con lo pedido (M186 le
+/// añade la extensión que el SO exige), y `ray bundle` necesita el nombre de verdad para empaquetar.
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     let transpiled = match crate::transpile::transpile_entry(&program, exclude, fast, fibers, embed, lib_mode) {
@@ -2006,6 +2009,9 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
             .map(|m| m.name)
             .unwrap_or_else(|| stem.to_string())
     });
+    // M186: en Windows el nombre pedido no basta — sin `.exe` el archivo no se ejecuta. Se decide
+    // por el target EFECTIVO, así que cruzar a Windows desde macOS/Linux también produce un `.exe`.
+    let out_bin = ensure_windows_extension(out_bin, for_windows, lib_mode);
     // **Bifurcación bajo demanda** (P2.b, docs/transpilador-nativo.md §4.5): sin features de `ray-runtime`
     // → `rustc` pelado, rápido y sin red. Con features → un proyecto Cargo generado que enlaza `ray-runtime`
     // (mismo código que la VM). N1/N2: como `mimalloc` y `ahash` van POR DEFECTO, el camino común hoy es el
@@ -2018,6 +2024,21 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     } else {
         build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target, lib_mode);
     }
+    out_bin
+}
+
+/// M186: la extensión que Windows EXIGE en el nombre de salida — `.exe` para un binario, `.lib` para
+/// el staticlib de `--lib`. Sin ella el archivo no es ejecutable: el Explorador abre el diálogo de
+/// "elegir con qué abrir" y la consola no lo lanza. El nombre por defecto (el `name` del ray.toml o
+/// el stem del fuente) nunca la lleva, y un `-o` casi nunca. Fuera de un target Windows no toca nada
+/// (ahí la extensión no significa nada y `hello` es el nombre idiomático). Pura para testearla.
+fn ensure_windows_extension(out: String, for_windows: bool, lib_mode: bool) -> String {
+    let want = if lib_mode { "lib" } else { "exe" };
+    let already = Path::new(&out).extension().is_some_and(|e| e.eq_ignore_ascii_case(want));
+    if !for_windows || already {
+        return out;
+    }
+    format!("{out}.{want}")
 }
 
 /// M147: reúne la tabla de assets a hornear: el `[native] embed` del ray.toml del ENTRY (no
@@ -4110,6 +4131,25 @@ mod tests {
         // El respaldo sigue nombrando arquitectura y SO.
         let f = fallback_host_triple();
         assert!(f.contains(if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS }), "{f}");
+    }
+
+    #[test]
+    fn windows_binaries_always_carry_their_extension() {
+        // M186: en Windows un archivo sin `.exe` no es ejecutable desde el Explorador ni la consola
+        // (CreateProcess sí lo lanza con ruta completa — por eso los tests no lo cazaron).
+        assert_eq!(ensure_windows_extension("raydesk".into(), true, false), "raydesk.exe");
+        assert_eq!(ensure_windows_extension("dist/app".into(), true, false), "dist/app.exe");
+        // Ya la lleva (en cualquier caja): se respeta tal cual, sin duplicarla.
+        assert_eq!(ensure_windows_extension("app.exe".into(), true, false), "app.exe");
+        assert_eq!(ensure_windows_extension("app.EXE".into(), true, false), "app.EXE");
+        // Otra extensión NO basta en Windows: `app.bin` tampoco arranca → se añade la que vale.
+        assert_eq!(ensure_windows_extension("app.bin".into(), true, false), "app.bin.exe");
+        // `--lib` produce el staticlib de MSVC.
+        assert_eq!(ensure_windows_extension("prog".into(), true, true), "prog.lib");
+        assert_eq!(ensure_windows_extension("prog.lib".into(), true, true), "prog.lib");
+        // Fuera de un target Windows no se toca nada: `hello` es el nombre idiomático.
+        assert_eq!(ensure_windows_extension("hello".into(), false, false), "hello");
+        assert_eq!(ensure_windows_extension("libprog.a".into(), false, true), "libprog.a");
     }
 
     #[test]

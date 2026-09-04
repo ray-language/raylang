@@ -68,7 +68,7 @@ fn unicode_normalization_native() {
     let mut src_path = std::env::temp_dir();
     src_path.push("ray_unicode_native.ray");
     std::fs::write(&src_path, SRC).expect("escribe el fuente");
-    let bin = std::env::temp_dir().join(format!("ray_unicode_{}", std::process::id()));
+    let bin = std::env::temp_dir().join(format!("ray_unicode_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()

@@ -66,7 +66,7 @@ fn null_sink_battery_and_pacing_match_on_all_three_engines() {
         assert!(ms >= 280, "{engine}: la contrapresión debe marcar el paso (tardó {ms} ms)");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)
@@ -135,7 +135,7 @@ fn latency_hint_and_played_position_match_on_all_three_engines() {
         assert_eq!(out, WANT, "{engine}: exact output");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
             .current_dir(&base)

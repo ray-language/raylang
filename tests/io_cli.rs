@@ -73,7 +73,7 @@ fn io_native_matches_the_vm_byte_for_byte() {
     }
     let base = tmp("nativo");
     std::fs::write(base.join("prog.ray"), PROG).unwrap();
-    let bin = base.join("prog_bin");
+    let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(bcode, 0, "build --native ok\n{berr}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -153,7 +153,7 @@ fn stdin_read_by_bytes_until_eof() {
         assert_eq!(out, want, "{engine}: eco + conteo");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         use std::io::Write;
@@ -195,7 +195,7 @@ fn main() -> int {\n\
     vm.args(["--vm", "--deterministic", "prog.ray"]).current_dir(&base);
     cmds.push(("VM".into(), vm));
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         cmds.push(("nativo".into(), Command::new(&bin)));
@@ -281,7 +281,7 @@ fn closed_stdout_pipe_exits_quietly_with_141() {
         cmds.push((engine.to_string(), c));
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let bin = base.join("prog_bin");
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
         assert_eq!(bcode, 0, "build --native ok\n{berr}");
         cmds.push(("nativo".into(), Command::new(&bin)));

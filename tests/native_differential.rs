@@ -456,7 +456,7 @@ enum Flavor {
 /// `Ok(())` = byte-idénticos. `Err(descripción)` = divergencia o build roto.
 fn check(probes: &[Probe], flavor: Flavor, dir: &Path, tag: &str) -> Result<(), String> {
     let src_path = dir.join(format!("diff_{tag}.ray"));
-    let bin_path = dir.join(format!("diff_{tag}_bin"));
+    let bin_path = dir.join(format!("diff_{tag}_bin{}", std::env::consts::EXE_SUFFIX));
     std::fs::write(&src_path, assemble(probes)).map_err(|e| format!("write: {e}"))?;
     let src = src_path.to_str().unwrap();
 

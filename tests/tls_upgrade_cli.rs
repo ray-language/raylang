@@ -159,7 +159,7 @@ fn starttls_upgrade_native() {
     std::fs::create_dir_all(&dir).unwrap();
     let main = dir.join("main.ray");
     std::fs::write(&main, CLIENT).unwrap();
-    let bin = dir.join("client_bin");
+    let bin = dir.join(format!("client_bin{}", std::env::consts::EXE_SUFFIX));
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", main.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
         .output()

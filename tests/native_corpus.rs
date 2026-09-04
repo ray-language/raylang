@@ -154,7 +154,7 @@ fn run_corpus(extra_flags: &[&str]) {
                 continue;
             }
             let label = format!("{}/{}", dir, ejemplo.file_name().unwrap().to_string_lossy());
-            let bin = tmp.join(ejemplo.file_stem().unwrap());
+            let bin = tmp.join(format!("{}{}", ejemplo.file_stem().unwrap().to_string_lossy(), std::env::consts::EXE_SUFFIX));
             cover(&label, ejemplo.to_str().unwrap(), &root, &bin, &mut covered, &mut failures);
         }
     }
@@ -163,7 +163,7 @@ fn run_corpus(extra_flags: &[&str]) {
         let path = root.join("examples").join(extra);
         let cwd = path.parent().unwrap().to_path_buf();
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        let bin = tmp.join(extra.replace('/', "_").replace(".ray", ""));
+        let bin = tmp.join(format!("{}{}", extra.replace('/', "_").replace(".ray", ""), std::env::consts::EXE_SUFFIX));
         cover(extra, &name, &cwd, &bin, &mut covered, &mut failures);
     }
     let _ = std::fs::remove_dir_all(&tmp);

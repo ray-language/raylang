@@ -34,7 +34,7 @@ fn assert_fibers_matches_vm(name: &str, src: &str) {
         .output()
         .expect("corre la VM");
 
-    let bin: PathBuf = dir.join(format!("{name}_bin"));
+    let bin: PathBuf = dir.join(format!("{name}_bin{}", std::env::consts::EXE_SUFFIX));
     let built = Command::new(env!("CARGO_BIN_EXE_ray"))
         .args(["build", src_path.to_str().unwrap(), "--native", "--fibers", "-o", bin.to_str().unwrap()])
         .output()
@@ -386,7 +386,7 @@ fn main() -> int {{
         .env("SSL_CERT_FILE", &ca)
         .output()
         .expect("corre la VM");
-    let bin = dir.join("tls_self_bin");
+    let bin = dir.join(format!("tls_self_bin{}", std::env::consts::EXE_SUFFIX));
     let built = Command::new(env!("CARGO_BIN_EXE_ray"))
         .args(["build", src_path.to_str().unwrap(), "--native", "--fibers", "-o", bin.to_str().unwrap()])
         .output()

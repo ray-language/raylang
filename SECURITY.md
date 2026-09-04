@@ -200,7 +200,11 @@ documentada:
 - **`crates/ray-runtime/src/fibers.rs`** — el scheduler de fibras del binario nativo: pilas con
   página de guarda y reactor `kqueue`/`epoll`. El cambio de contexto lo hace `corosensei`.
 - **`crates/ray-runtime/src/process.rs`** — `fcntl` variádico, `poll(2)` y `kill` al **grupo** del
-  hijo (siempre un grupo creado por nosotros con `process_group(0)`).
+  hijo (siempre un grupo creado por nosotros con `process_group(0)`). En Windows (M175): Job Object
+  por hijo (`CreateJobObjectW`/`SetInformationJobObject` con estructura `repr(C)` a cero salvo el flag,
+  `AssignProcessToJobObject`/`TerminateJobObject` sobre handles propios), `GenerateConsoleCtrlEvent` al
+  grupo del hijo, `WaitForSingleObject` sobre el handle que posee `Child`, y `PeekNamedPipe` sobre un
+  pipe propio pidiendo solo el contador de octetos.
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
   pipe + `read`/`close`/`fcntl` variádico del hilo alimentador e `ioctl(FIONREAD)` del drain; en
   macOS las llamadas a **AudioQueue** (AudioToolbox.framework, enlazado — structs replicadas del

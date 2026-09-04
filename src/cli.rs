@@ -1870,8 +1870,8 @@ fn cmd_build(args: &[String]) {
 /// `ray-runtime` son `cfg(unix)`), con el mismo mensaje que la VM devuelve en runtime. Recibe las
 /// features que el transpilador pidió y devuelve las que no compilarían. Pura para testearla.
 fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
+    // M175: `process` compila en Windows (ray_runtime::process tiene su variante); ya no es hueco.
     const GAPS: &[(&str, &str)] = &[
-        ("process", "std/process: running OS processes is not supported on this platform"),
         ("watch", "fs.watch: filesystem watching is not supported on this platform"),
         ("audio", "std/audio: audio output is not supported on this platform"),
         ("ui", "std/ui: windows and webviews are not supported on this platform"),
@@ -3925,11 +3925,11 @@ mod tests {
     #[test]
     fn native_windows_gaps_are_named_from_the_runtime_features() {
         // M169: solo los subsistemas `cfg(unix)` de ray-runtime; el resto (tls, crypto, sqlite,
-        // regex, mimalloc, señales desde M168) compila en Windows.
-        assert!(native_unsupported_on_windows(&["tls", "crypto", "sqlite", "regex", "mimalloc"]).is_empty());
-        let gaps = native_unsupported_on_windows(&["crypto", "process", "ui"]);
+        // regex, mimalloc, señales desde M168, procesos desde M175) compila en Windows.
+        assert!(native_unsupported_on_windows(&["tls", "crypto", "sqlite", "regex", "mimalloc", "process"]).is_empty());
+        let gaps = native_unsupported_on_windows(&["crypto", "process", "watch", "ui"]);
         assert_eq!(gaps.len(), 2);
-        assert!(gaps[0].contains("std/process"));
+        assert!(gaps[0].contains("fs.watch"));
         assert!(gaps[1].contains("std/ui"));
         assert_eq!(native_unsupported_on_windows(&["ui-shell"]).len(), 1);
         assert_eq!(native_unsupported_on_windows(&["watch", "audio"]).len(), 2);

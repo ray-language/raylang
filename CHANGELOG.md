@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/process` en Windows** (M175, docs/windows.md 3.5, W6): `run`/`cmd`/`stream`/`stdin_pipe`
+  funcionan en VM, intérprete y binario nativo — Job Object por hijo (los nietos mueren con el grupo),
+  escalera `CTRL_BREAK` → `TerminateJobObject` en el timeout y en `kill`, `Exit.Signal` mapeado
+  (9/15/2). El gate de `ray build --native` deja de rechazar `std/process`. Nuevo `.gitattributes`:
+  checkout LF en todas las plataformas (adiós al CRLF de fixtures y ejemplos en Windows).
 - **Poller de red real en Windows** (M174, docs/windows.md 3.6, W5): `WSAPoll` como backend de
   `src/poll.rs` — las fibras de red esperan en el poller en vez del busy-poll de 1 ms (menos CPU,
   mejor p99) y los `read_timeout` de sockets por fin vencen; el handshake TLS espera por el poller.

@@ -1,6 +1,6 @@
 # raylang en Windows — el contrato y las deudas
 
-> Estado a 4 de septiembre de 2026 (v1.5.2 + M172 + M173). Este documento es el inventario **vivo** de lo que
+> Estado a 4 de septiembre de 2026 (v1.5.2 + M172–M175). Este documento es el inventario **vivo** de lo que
 > raylang hace y no hace en Windows: qué funciona, qué degrada con un `Err` honesto, qué falla
 > de forma opaca, la API de Windows que cierra cada hueco, su tamaño y el orden de ataque.
 > Lo alimentan dos fuentes: la auditoría del código (todo `cfg(unix)` y su cadena de llamadas)
@@ -10,11 +10,10 @@
 
 ## 1. En una frase
 
-**La toolchain, el compilador, la VM, la red, los paquetes, las señales, `ray dev`, el terminal y
-stdin funcionan en Windows; lo que falta es la capa de sistema operativo** — procesos hijos, el
-poller de red eficiente, y los arcos de escritorio y audio. La VM es uniformemente honesta (cada hueco es
-un `Err` con mensaje); el transpilador nativo no siempre: para cinco superficies emite Rust que
-no compila en Windows.
+**La toolchain, el compilador, la VM, la red con su poller, los paquetes, las señales, `ray dev`, el
+terminal, stdin y los procesos hijos funcionan en Windows; lo que falta son los arcos de escritorio
+y audio** (y el reactor IOCP de las fibras del binario nativo). La VM es uniformemente honesta (cada
+hueco es un `Err` con mensaje) y el transpilador rechaza antes de generar lo que no compila (W2).
 
 ## 2. Qué se verifica hoy en CI (`build · smoke (windows)`)
 
@@ -32,6 +31,9 @@ Desde M165/M166, cada PR corre en `windows-latest`:
   Object y socket-activation — `tests/dev_cli.rs` + los unitarios de `dev_host`).
 - `std/term` y `std/io` (M173): las suites `term_cli` e `io_cli` enteras, con un test bajo una consola
   REAL nueva (`cmd /c start /wait /min`): `is_tty`, `size`, `raw` y un `read_timeout` que vence; VM y nativo.
+- El poller (M174): la readiness de un listener en `poll::tests` y `a_socket_read_timeout_expires`.
+- `std/process` (M175): `process_windows_cli` — el contrato de `run` con `cmd` y la sesión con stdin
+  abierto, en VM, intérprete y nativo; el gate de W2 pasa a comprobar `std/ui`.
 - `release.yml` instala el zip recién subido antes de dar la release por buena.
 
 Verificado además por un usuario real (2 sep 2026): instalación, `ray run` con `web`/`net`/`db`,
@@ -86,7 +88,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Tamaño | **M**. |
 | **Hecho (M173)** | `stdin_host` Windows: disponibilidad real por tipo de stdin — consola: `PeekConsoleInputW` busca una tecla pulsada con carácter (y en modo línea, un Enter: hasta entonces `ReadConsole` no entrega nada); pipe: `PeekNamedPipe` (octetos o extremo cerrado); archivo/NUL: siempre. Sin `WaitForSingleObject` (el handle de consola se señala por key-up, ratón y foco que nunca se leen): la espera con plazo sondea a 5 ms. Lectura CRUDA (`ReadConsoleW` → UTF-8 con resto para no partir un carácter; `ReadFile` para pipes), sin el `BufReader` de std. Y en el scheduler, la fibra aparcada en stdin deja de despertarse a ciegas en el respaldo sin poller (cada reintento renovaba su plazo y `read_timeout` no vencía nunca): se despierta solo con datos, y su deadline expira. Pendiente relacionado (W5): los `read_timeout` de SOCKETS siguen renovándose en el respaldo sin poller. |
 
-### 3.5 Procesos — `std/process`
+### 3.5 Procesos — `std/process` · ✅ **cerrada en M175** (DESIGN §167)
 
 | | |
 |---|---|
@@ -95,6 +97,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Superficie | `process.run`/`cmd`, sesiones persistentes (MCP/LSP hijos), pipelines `sh -c`, drivers de build. |
 | Cierra con | Lo portable ya lo es (`std::process::Command`, pipes, env, cwd). Lo unix: `process_group(0)` → Job Objects; `poll(2)` + `O_NONBLOCK` del drenado → `PeekNamedPipe`/overlapped; `kill(-pid)` → `TerminateJobObject`; `Exit.Signal` no tiene análogo (documentar el mapeo). |
 | Tamaño | **L**. |
+| **Hecho (M175)** | Exactamente el mapeo de "Cierra con", en `crates/ray-runtime/src/process.rs` (variante Windows, compartida por VM y nativo): grupo = `CREATE_NEW_PROCESS_GROUP` + un Job Object por hijo con kill-on-close (los nietos de `cmd /c "a \| b"` mueren con el grupo); escalera del timeout y de `kill(force=false)` = `CTRL_BREAK` al grupo → 500 ms → `TerminateJobObject`; `run` drena los dos pipes con un hilo por flujo (los pipes anónimos no tienen modo no bloqueante) y el streaming de la VM consulta `PeekNamedPipe` antes de leer (la fibra aparca por el respaldo sin fd, M170). **Mapeo de `Exit.Signal`**: `Signal(9)` si lo terminó el job, `Signal(15)` si el peldaño suave tuvo que forzarse, `Signal(2)` si murió por el `CTRL_BREAK` (`STATUS_CONTROL_C_EXIT`); el resto, `Code(n)`. El gate de M169 deja de listar `process`. `tests/process_windows_cli.rs`: el contrato de `run` con `cmd` y la sesión con stdin abierto (con `ray` como hijo: los filtros de Windows bufferizan bajo un pipe), en VM, intérprete y nativo. Límite conocido: la escritura al stdin del hijo es bloqueante (sin aparcar la fibra). |
 
 ### 3.6 Poller de red y scheduler · ✅ **poller, sueño fino y UDP cerrados en M174** (DESIGN §166); IOCP nativo queda para W7
 
@@ -139,8 +142,9 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 ## 4. La asimetría VM ↔ nativo
 
 Es el hallazgo transversal de la auditoría. La VM devuelve `Err` en todo hueco; el transpilador,
-en cambio, emite Rust **que no compila** en Windows cuando el programa usa cualquiera de estas
-cinco superficies: `signals()`, `std/process`, `fs.watch`, `std/audio`, `std/ui`. El usuario ve
+en cambio, emitía Rust **que no compila** en Windows cuando el programa usaba cualquiera de estas
+cinco superficies: `signals()`, `std/process`, `fs.watch`, `std/audio`, `std/ui` (hoy solo
+`std/audio` y `std/ui`: señales desde M168, procesos desde M175, `watch` se excluye solo). El usuario ve
 un backtrace de `rustc`, no el mensaje del lenguaje.
 
 El arreglo barato e independiente de cualquier port: una **comprobación pre-transpilación** —
@@ -190,7 +194,7 @@ Fuera de la red de CI actual:
 | **W3** ✅ | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos, socket-activation por handle heredable (M172) | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
 | **W4** ✅ | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) (M173) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** ✅ | `WSAPoll` en `src/poll.rs` + sueño fino + `SIO_UDP_CONNRESET` (M174) | M + S | p99 de servidores bajo carga; pacing de juegos; `read_timeout` de sockets |
-| **W6** | `std/process` con `CreateProcess` + pipes + Job Objects | L | MCP/LSP hijos, pipelines |
+| **W6** ✅ | `std/process` con `CreateProcess` + pipes + Job Objects (M175) | L | MCP/LSP hijos, pipelines |
 | **W7** | IOCP para fibras nativas · WebView2 · WASAPI | L × 3 | fibras en el nativo; escritorio y audio |
 
 Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-windows-msvc` (IDEAS §84).

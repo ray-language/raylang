@@ -21,6 +21,8 @@ pub mod ast;
 pub mod builtins;
 pub mod bundle_android;
 pub mod bundle_ios;
+#[cfg(windows)]
+pub mod bundle_windows;
 pub mod bytecode;
 pub mod checker;
 pub mod cli;

@@ -11756,3 +11756,35 @@ El primer `open` puede tardar (arranca `msedgewebview2`): el plazo de la operaci
 evalúa JS, cierra y espera el evento `closed`; si no hay WebView2 Runtime lo dice y salta. El
 job de Windows de CI lo corre (el runner tiene sesión de escritorio y el runtime de Edge). Queda
 de 3.8 `ray bundle` (`.exe` + acceso directo) y, del port, el reactor IOCP del nativo.
+
+## 172. M180 — W7d: `ray bundle` en Windows, el `.exe` de escritorio (sep 2026)
+
+El último peldaño del arco de escritorio de Windows (`docs/windows.md` 3.8): `ray bundle` produce
+en Windows lo que en macOS es el `.app` y en Linux el directorio con `.desktop` — un directorio
+`<name>\` con `<name>.exe` y el acceso directo `<name>.lnk`.
+
+**Qué hace del binario una app.** Tres retoques al `.exe` que salió de `ray build --native
+--release`, todos sin crates ni `rc.exe`:
+
+1. **Subsistema WINDOWS**: dos bytes del encabezado PE (`OptionalHeader.Subsystem`, offset 68 en
+   PE32 y PE32+). Sin ellos, cada doble clic abre una consola negra detrás de la ventana. Es el
+   equivalente de no tener terminal en un `.app`: `print` va a la nada, y lanzado desde una
+   consola no se adjunta a ella. Con las salidas REDIRIGIDAS (un test, un supervisor) stdout
+   llega igual: el hijo hereda los handles que le pasan.
+2. **Icono** como recursos `RT_GROUP_ICON` + `RT_ICON`: el PNG entra tal cual (Vista+ acepta
+   entradas PNG, la convención del tamaño 256) y, si es mayor o no cuadrado, se reescala a 256
+   con System.Drawing por PowerShell — el `sips` de aquí, siempre presente.
+3. **VERSIONINFO**: nombre, versión y `[app] copyright` en la pestaña Detalles de Propiedades —
+   el `Info.plist` de Windows. El árbol `{wLength, wValueLength, wType, szKey, value, children}`
+   alineado a 4 se construye a mano (`src/bundle_windows.rs`, con test unitario de forma) y se
+   inyecta con `BeginUpdateResourceW`/`UpdateResourceW`/`EndUpdateResourceW` (kernel32): todo o
+   nada, el archivo no se toca si algo falla. El test de integración lo lee como lo lee el SO
+   (`(Get-Item x.exe).VersionInfo`): el bloque hecho a mano es el que Windows entiende.
+
+**El acceso directo** lo escribe `WScript.Shell` (COM, vía PowerShell): destino y cwd ABSOLUTOS
+(el `Exec=` absoluto del `.desktop`), icono el del exe. Best-effort con aviso, como el codesign
+ad-hoc de macOS; instalarlo = copiarlo al menú Inicio. Sin Authenticode en v1: SmartScreen
+avisará de un exe descargado, como Gatekeeper con un `.app` sin notarizar (documentado).
+
+Con esto 3.8 queda cerrado; del port de Windows queda el reactor IOCP de las fibras nativas y el
+watcher de `ray dev` (`docs/windows.md` §6).

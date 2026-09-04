@@ -176,7 +176,7 @@ jobs:
       # batería corre contra el sumidero nulo (RAY_AUDIO_SINK=null), en los tres motores. Con eso el
       # gate de M169 queda vacío en Windows (todo subsistema compila) y su paso desaparece.
       - name: std/ui headless y std/audio (sumidero nulo) en Windows (VM + intérprete + nativo)
-        run: cargo test --release --test ui_cli --test audio_cli -- --nocapture
+        run: cargo test --release --test ui_cli --test audio_cli --test bundle_cli -- --nocapture
       # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for
       # Windows, exactamente el escenario que rompía el hash del lock ("possible tampering").
       - name: Proyecto con dependencias del índice (resolución + lock bajo autocrlf)

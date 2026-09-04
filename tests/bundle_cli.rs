@@ -1,7 +1,8 @@
 //! M147c — `ray bundle`: el empaquetado de apps de escritorio. Se prueba la ESTRUCTURA del
 //! bundle (árbol + Info.plist / .desktop) con un programa mínimo por la vía rustc pelada
 //! (--without mimalloc,ahash: el release con-features tardaría minutos en CI). El .app real
-//! con ventana + embed se verifica con dogfood manual en macOS.
+//! con ventana + embed se verifica con dogfood manual en macOS. En Windows (M180) se comprueba el
+//! subsistema del PE y el VERSIONINFO tal como lo lee el SO.
 
 use std::process::Command;
 
@@ -72,6 +73,30 @@ fn bundle_produces_the_platform_structure() {
         let exec_line = desktop.lines().find(|l| l.starts_with("Exec=")).expect("Exec=");
         assert!(exec_line.starts_with("Exec=/"), "Exec absoluto: {exec_line}");
         let run = Command::new(dir.join("mini-app")).output().expect("corre el binario");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "hi\n");
+    } else if cfg!(windows) {
+        // M180: directorio con `<name>.exe` (subsistema WINDOWS, VERSIONINFO) y el `.lnk`.
+        let dir = base.join("mini-app");
+        let exe = dir.join("mini-app.exe");
+        assert!(exe.is_file(), "el binario del bundle");
+        assert!(dir.join("mini-app.lnk").is_file(), "el acceso directo");
+        let bytes = std::fs::read(&exe).unwrap();
+        let pe = u32::from_le_bytes([bytes[0x3c], bytes[0x3d], bytes[0x3e], bytes[0x3f]]) as usize;
+        assert_eq!(&bytes[pe..pe + 4], b"PE\0\0", "cabecera PE");
+        let subsystem = u16::from_le_bytes([bytes[pe + 24 + 68], bytes[pe + 24 + 69]]);
+        assert_eq!(subsystem, 2, "subsistema WINDOWS (sin consola al doble clic)");
+        // El VERSIONINFO lo lee el propio SO (la pestaña Detalles de Propiedades).
+        let info = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("$v = (Get-Item '{}').VersionInfo; $v.ProductName + '|' + $v.ProductVersion + '|' + $v.FileVersion", exe.display()),
+            ])
+            .output()
+            .expect("powershell");
+        assert_eq!(String::from_utf8_lossy(&info.stdout).trim(), "mini-app|2.5.0|2.5.0.0", "VERSIONINFO legible por Windows");
+        // Corre aunque sea app de ventanas: con las salidas redirigidas, stdout llega igual.
+        let run = Command::new(&exe).output().expect("corre el binario");
         assert_eq!(String::from_utf8_lossy(&run.stdout), "hi\n");
     }
 }

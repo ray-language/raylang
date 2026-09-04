@@ -92,7 +92,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
+  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1190,7 +1190,7 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// M147c — `ray bundle`: empaqueta una app de escritorio distribuible. Compone `ray build
 /// --native --release` (con el embed del ray.toml — OBLIGADO moralmente: el .app lanza con
 /// cwd=/) y produce el formato del SO: `.app` en macOS (Info.plist + icns por sips/iconutil +
-/// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. Sin firma/notarización
+/// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 fn cmd_bundle(args: &[String]) {
     let flag_value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
@@ -1495,8 +1495,23 @@ fn cmd_bundle(args: &[String]) {
         bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &tmp_bin);
     } else if cfg!(unix) {
         bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
+    } else if cfg!(windows) {
+        // M180 (W7d): `<name><name>.exe` (subsistema WINDOWS + icono + VERSIONINFO como
+        // recursos) y el acceso directo `<name>.lnk`.
+        #[cfg(windows)]
+        if let Err(e) = crate::bundle_windows::bundle(
+            &out_dir,
+            &name,
+            &version,
+            manifest.as_ref().and_then(|m| m.app_copyright.as_deref()),
+            icon.as_deref().map(Path::new),
+            &tmp_bin,
+        ) {
+            eprintln!("bundle: {e}");
+            process::exit(74);
+        }
     } else {
-        eprintln!("bundle: no bundle format for this platform (macOS .app / Linux .desktop)");
+        eprintln!("bundle: no bundle format for this platform (macOS .app / Linux .desktop / Windows .exe)");
         process::exit(64);
     }
     let _ = fs::remove_dir_all(&work);

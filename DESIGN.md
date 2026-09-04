@@ -11814,8 +11814,10 @@ dos piezas, como ya hizo `std/ui` en M177:
 **Consecuencias.** `ray build --native` deja de autoexcluir `watch` en targets Windows (M173 era
 un parche sobre este hueco) y la lista de huecos del gate de M169 queda VACÍA — se conserva
 como red, con su test. `ray dev` usa los eventos en las tres plataformas; en Windows,
-`canonicalize` da `\?\C:\…` y notify entrega rutas llanas, así que la raíz canónica pierde el
-prefijo antes de comparar. `tests/fs_watch_cli.rs` y `tests/test_watch_cli.rs` entran en el job
+`canonicalize` da `\\?\C:\…` — y la forma LARGA cuando `TEMP` viene en 8.3 (`RUNNER~1` en el
+runner de CI; la VM de desarrollo no lo reproducía) — mientras notify entrega rutas llanas bajo
+la ruta que se le dio: se vigila la raíz ya canónica y sin prefijo, para que eventos y raíz
+hablen la misma forma. `tests/fs_watch_cli.rs` y `tests/test_watch_cli.rs` entran en el job
 de Windows tal cual (el handshake por stdout no sabía de plataformas).
 
 Del port de Windows queda solo el reactor IOCP para las fibras del binario nativo

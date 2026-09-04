@@ -11967,4 +11967,33 @@ líneas atrás. Con stderr por tubería cargo apaga el color solo, así que se l
 
 Queda pendiente, y es la raíz de la clase entera: **publicar el asset
 `aarch64-pc-windows-msvc`**. Mientras un usuario de ARM64 corra un `ray` x86_64 emulado, toda
-decisión por arquitectura es una deducción sobre un dato prestado.
+decisión por arquitectura es una deducción sobre un dato prestado. (Cerrado acto seguido en §177.)
+
+## 177. M185 — el binario ARM64 de Windows: cerrar la raíz de M184 (sep 2026)
+
+M184 arregló el síntoma —el target efectivo lo dice `rustc`, no la arquitectura de `ray`— y dejó
+escrita la raíz: en una máquina Windows ARM64 el `ray` instalado era x86_64 **emulado**, porque la
+release no publicaba otra cosa. Este arco publica el binario que faltaba.
+
+**Nativo, no cruzado.** IDEAS §84 lo anotaba como "cruzada desde el runner x86_64"; se descarta.
+Cruzar a `aarch64-pc-windows-msvc` obliga a cuadrar a mano las libs ARM64 de MSVC y el `clang` que
+`ring` exige para su ensamblador — el mismo tipo de plomería que M182 tuvo que montar para probar
+x86_64 desde ARM. El runner `windows-11-arm` compila nativo y, sobre todo, **puede ejecutar lo que
+compila**: el humo de `install.ps1` (M165) —descargar el zip recién subido, instalarlo y comprobar
+que `ray version` dice la versión del tag— pasa a valer para las dos arquitecturas de Windows, que
+es la garantía que de verdad importa en una release.
+
+**La imagen se sondeó antes de escribir el job**, en vez de suponer: una rama `probe/**` desechable
+compiló ahí el binario entero. Trae rustup, cargo y —lo que de verdad estaba en duda— **clang en el
+PATH**, así que el job no instala nada; solo **comprueba** que clang siga estando, para que un cambio
+de imagen falle en dos segundos con el motivo en vez de doce minutos después dentro del build script
+de `ring` (que es exactamente el mal rato de M184). Una segunda sonda confirmó el resto del utillaje
+del job (`gh`, `tar`, `Compress-Archive`, el bash de Git): la pata de Windows sube su asset desde
+`pwsh` no por falta de bash, sino porque es el shell con el que acaba de empaquetar y así cada
+familia sube lo que sabe que produjo, sin adivinar la extensión — que es como se rompió una release.
+
+**Del lado del usuario**, `install.ps1` deja de instalar la x86_64 con aviso: `OSArchitecture` (la
+del SISTEMA, no la del proceso — un PowerShell emulado sigue diciendo `Arm64`) elige el asset. Si
+alguien fija a mano una versión anterior a la primera con build ARM64, el instalador **repliega** a
+la x86_64 con aviso en vez de morir con un 404. Y `upgrade_asset` pierde su caso especial: las
+cuatro plataformas se publican en arm64 y x86_64.

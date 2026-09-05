@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.6.4 — 2026-09-04
 
 - **`ray upgrade` avisa cuando corre emulado** (M187, DESIGN §179): mantiene la arquitectura al
   actualizar —actualiza lo instalado, no lo sustituye—, pero si el proceso corre en una arquitectura

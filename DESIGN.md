@@ -12026,3 +12026,22 @@ compartida entre dos funciones.
 Del lado de los tests, los ~115 sitios que construían la ruta a mano (`base.join("prog_bin")`) pasan
 a llevar `std::env::consts::EXE_SUFFIX`, que en unix es la cadena vacía: el oráculo no cambia fuera
 de Windows.
+
+## 179. M187 — `ray upgrade` conserva la arquitectura, pero lo dice (sep 2026)
+
+Con el binario ARM64 ya publicado (M185), un usuario de Windows ARM64 probó `ray upgrade` desde el
+`ray` x86_64 que tenía instalado: actualizó la versión y **se quedó en x86_64**. Es coherente —
+`upgrade_asset` mira `env::consts::ARCH`, la arquitectura del proceso—, y como comportamiento se
+defiende: `upgrade` actualiza lo que hay instalado, no lo sustituye por otra cosa. Cambiarle a
+alguien la arquitectura del binario por debajo, sin pedirlo, es más de lo que promete el verbo.
+
+Lo que no se defiende es **callarlo**: quien instaló antes de M185 se quedaría emulado para
+siempre, porque solo una reinstalación cambia de arquitectura y nada se lo cuenta. El arreglo no es
+cambiar la política sino romper el silencio: si el proceso corre en una arquitectura distinta a la
+de la máquina (`PROCESSOR_ARCHITEW6432`, M184) **y** esa arquitectura tiene asset publicado,
+`ray upgrade` —también con `--check`— dice qué está corriendo, que existe la build nativa, que
+`upgrade` no va a cambiarla y cuál es el comando que sí.
+
+Es la tercera cara del mismo hallazgo: M184 arregló las decisiones internas que colgaban de una
+arquitectura mal deducida, M185 publicó el binario que faltaba y M187 cierra el camino por el que
+un usuario podía quedarse sin enterarse de ninguna de las dos.

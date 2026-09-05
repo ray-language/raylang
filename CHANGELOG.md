@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray upgrade` avisa cuando corre emulado** (M187, DESIGN §179): mantiene la arquitectura al
+  actualizar —actualiza lo instalado, no lo sustituye—, pero si el proceso corre en una arquitectura
+  distinta a la de la máquina y esa arquitectura tiene build publicada (Windows ARM64 ejecutando la
+  x86_64), lo dice y da el comando de reinstalación. También con `--check`.
 - **`ray build --native` produce un `.exe` en Windows** (M186, DESIGN §178): el binario se escribía
   sin extensión y el Explorador ofrecía "elegir con qué abrir" en vez de ejecutarlo. En un target
   Windows el artefacto acaba siempre en `.exe` (o `.lib` con `--lib`), tanto si el nombre lo elige

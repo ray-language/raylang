@@ -12173,3 +12173,38 @@ avise. Fue un bug real en el cliente (una bandera `live` que la fibra lectora nu
 Ahora está en negrita donde se habla de captura y donde se habla de fibras: entre fibras solo se
 comparten canales y handles. El aviso del compilador (closure de `spawn` que captura un struct
 mutado fuera) queda como idea L en el plan.
+
+## 185. M193 — `std/inflate` incremental: un stream que dura toda la sesión (sep 2026)
+
+`std/inflate` descomprimía de un golpe: entrada completa, salida completa. Media familia de
+protocolos no funciona así — RFB (ZRLE, Zlib, Tight) y WebSocket (`permessage-deflate`, RFC 7692)
+mantienen **un** stream zlib abierto durante toda la sesión y cada mensaje continúa el anterior
+reutilizando su ventana de compresión: el mensaje N no se puede descomprimir sin el estado que
+dejaron los N−1. Por eso `ray-remote` se había quedado en Raw/CopyRect/Hextile.
+
+**Diseño: bloques completos y punto de control, no una máquina de estados.** La opción "correcta"
+—un decodificador reanudable en cualquier bit, como el `inflate.c` de zlib— es una máquina de
+estados con decenas de estados intermedios (a mitad de un código Huffman, a mitad de las longitudes
+de un bloque dinámico…). La opción elegida es más simple y cubre el uso real: el estado guarda la
+**ventana** (los últimos 32 KiB emitidos, el alcance máximo de una referencia hacia atrás según RFC
+1951) y la **entrada pendiente** con su cursor de bits; cada `stream_push` añade el trozo y decodifica
+**bloques completos** desde el último punto de control; un bloque al que le falta entrada
+("truncated", la misma clase de error que ya distinguía M64.1) se descarta y se reintenta cuando
+llegue más. Lo que justifica la simplificación: los flushes de sincronización de zlib (`Z_SYNC_FLUSH`,
+lo que RFB y WebSocket hacen por mensaje) terminan siempre en un límite de bloque —un bloque
+almacenado vacío—, así que cada mensaje sale entero en su `push`. El coste es que un bloque enorme
+repartido en muchos trozos se re-decodifica en cada intento; con un flush por mensaje no ocurre.
+
+**Reuso.** Los decodificadores de bloque (`stored_block`, `inflate_codes`, `dynamic_block`) no
+cambian: operan sobre un `Inflater` cuyo `out` empieza siendo la ventana, así que las referencias
+hacia atrás la alcanzan sin código nuevo; `inflate_blocks` se parte en `inflate_one_block`, que es
+lo que el stream llama. Un `push` devuelve exactamente `out[ventana..]` de los bloques
+confirmados, recorta la ventana a 32 KiB, descarta la entrada consumida y conserva el octeto a
+medias con su bit. La cabecera zlib se consume en el primer `push` (FDICT rechazado, como antes);
+el Adler-32 final, si el stream llega a terminar, se ignora como ya hacía `zlib_inflate`. El tope
+anti-bomba es por `push`, sin contar la ventana. Errores de corrupción son pegajosos.
+
+**Verificación.** Python `zlib` con `Z_SYNC_FLUSH` por mensaje genera el stream; raylang lo
+descomprime en trozos de tamaños arbitrarios (cortes dentro de bloques) y mensaje a mensaje, con
+salida byte-idéntica al original en VM, intérprete y nativo (`tests/inflate_stream_cli.rs`).
+Cero runtime nuevo: sigue siendo raylang puro embebido por `src/stdlib.rs`.

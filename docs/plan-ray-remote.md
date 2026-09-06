@@ -103,7 +103,7 @@ sentencia; en cualquier otra es identificador. Parser + selfhost + LSP (coloread
 
 ## 4. Lote C — stdlib de protocolos
 
-### C1. `std/inflate` incremental (feedback 4) — M
+### C1. `std/inflate` incremental (feedback 4) — M ✅ M193 (`zlib_stream`/`inflate_stream` + `stream_push`, en raylang puro)
 
 `std/inflate` es raylang puro (`examples/web/inflate.ray`, 661 líneas, embebido vía
 `src/stdlib.rs`) con API de un golpe. Los encodings ZRLE/Zlib/Tight de RFB y el

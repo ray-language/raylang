@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/inflate` incremental** (M193, DESIGN §185; feedback de `ray-remote`): `zlib_stream()` /
+  `inflate_stream()` + `stream_push(z, chunk) -> Result<bytes, string>` descomprimen un stream que
+  dura toda la sesión — cada `push` devuelve lo que produjeron los bloques completados, la ventana
+  LZ77 sobrevive entre llamadas y la entrada puede cortarse en cualquier octeto. Es lo que exigen
+  los encodings ZRLE/Zlib/Tight de RFB y el `permessage-deflate` de WebSocket (un flush de
+  sincronización por mensaje = un mensaje por `push`). raylang puro, cero runtime nuevo.
+
 - **Cerrar un canal acotado con un emisor bloqueado ya no es error: el emisor despierta y su
   `send` falla** (M190, DESIGN §182; feedback de `ray-remote`). Antes `close` reventaba con "close
   on a channel with a blocked sender", y "acotado" y "se cierra para terminar" eran incompatibles.

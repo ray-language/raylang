@@ -494,11 +494,15 @@ fn expect(p: Parser, name: string, what: string) -> Result<Token, ParseError> {
 
 // Consume un identificador y devuelve su nombre.
 fn expect_ident(p: Parser, what: string) -> Result<string, ParseError> {
-    match (cur_kind(p)) {
+    match (cur_kind(
+    p
+)) {
         TokKind.Ident(n) => {
             advance(p);
             Result.Ok(n)
         },
+        // M188: la palabra reservada `from` en posición de nombre, con su porqué (byte-idéntico a Rust).
+        TokKind.From => Result.Err(perr_here(p, "expected " + what + ", but 'from' is a reserved word")),
         _ => Result.Err(perr_here(p, "expected " + what)),
     }
 }

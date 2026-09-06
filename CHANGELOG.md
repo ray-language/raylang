@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray test` ya no dice "all passed" cuando no ha corrido nada** (M188, DESIGN §180; feedback
+  de `ray-remote`): con una suite que no compila, el veredicto es
+  `result: no test ran — 1 suite(s) failed to compile ✗` (o `N test(s) ran, M failed; K suite(s)
+  failed to compile ✗` si otras sí corrieron); `0 test(s) found` sin tick cuando no hay pruebas.
+  El código de salida no cambia (65).
+- **`ray run -- args`** (M188): `--` separa los argumentos del programa, como en cargo/npm/go —
+  `ray run -- a b` corre la entrada del proyecto con `a b`; `ray run prog.ray -- a b` también. Solo
+  se consume el primer `--` (antes era "could not read module '--'").
+- **Dos mensajes que apuntaban mal** (M188): `!` sobre un entero añade `(for a bitwise NOT use
+  '~')`; `from` en posición de nombre dice `but 'from' is a reserved word` en vez de solo
+  "expected a parameter name".
+
 ## 1.6.4 — 2026-09-04
 
 - **`ray upgrade` avisa cuando corre emulado** (M187, DESIGN §179): mantiene la arquitectura al

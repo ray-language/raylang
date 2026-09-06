@@ -103,6 +103,7 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
     println!("running {} test(s)\n", total);
     let multi_suite = suites.iter().filter(|s| !s.tests.is_empty()).count() > 1;
     let mut failures = 0;
+    let mut compile_failures = 0;
     let mut ran = 0;
     for suite in &suites {
         if suite.tests.is_empty() {
@@ -116,6 +117,7 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
         if let Err(e) = check_suite(suite) {
             eprintln!("{}", e);
             frontend_failed = true;
+            compile_failures += 1;
             continue;
         }
         for test in &suite.tests {
@@ -142,7 +144,19 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
     }
     // El resumen cuenta lo EJECUTADO: una suite que no compila deja fuera sus pruebas (y el
     // código de salida 65 ya lo delata).
-    if failures == 0 {
+    // M188: un veredicto verde con CERO pruebas ejecutadas engañaba (feedback de ray-remote):
+    // "result: 0 test(s), all passed ✓" tras un error de tipos en un módulo. Si algo no compiló,
+    // el veredicto lo dice; y sin nada ejecutado no hay tick.
+    if frontend_failed && ran == 0 {
+        println!("result: no test ran — {} suite(s) failed to compile ✗", compile_failures);
+    } else if frontend_failed {
+        println!(
+            "result: {} test(s) ran, {} failed; {} suite(s) failed to compile ✗",
+            ran, failures, compile_failures
+        );
+    } else if failures == 0 && ran == 0 {
+        println!("result: 0 test(s) found");
+    } else if failures == 0 {
         println!("result: {} test(s), all passed ✓", ran);
     } else {
         println!("result: {} of {} test(s) failed ✗", failures, ran);

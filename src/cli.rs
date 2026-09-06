@@ -443,8 +443,15 @@ fn cmd_run(args: &[String]) {
     let (use_interp, rest) = take_interp(&args);
     let (fuel, rest) = take_flag_num(&rest, "--fuel", "a number of instructions (e.g. --fuel 1000000)");
     let (heap, rest) = take_flag_num(&rest, "--heap", "a number of objects (e.g. --heap 1000000)");
+    // M188: `--` separa los argumentos del programa, como en cargo/npm/go. `ray run -- a b` corre la
+    // entrada del proyecto con `a b`; `ray run prog.ray -- a b` también (antes `--` se tomaba por un
+    // módulo: "could not read module '--'"). Solo se consume el PRIMER `--`; el resto llega tal cual.
     let (explicit, prog_args) = match rest.split_first() {
-        Some((p, rest)) => (Some(p.as_str()), rest.to_vec()),
+        Some((p, rest)) if p == "--" => (None, rest.to_vec()),
+        Some((p, rest)) => {
+            let rest = rest.strip_prefix(&["--".to_string()][..]).unwrap_or(rest);
+            (Some(p.as_str()), rest.to_vec())
+        }
         None => (None, Vec::new()),
     };
     let path = resolve_entry(explicit, false);

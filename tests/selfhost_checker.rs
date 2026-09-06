@@ -106,6 +106,8 @@ fn type_errors() {
     compare("fn main() -> bool { 1 < true }", "sce_order.ray");
     compare("fn main() -> int { -true }", "sce_neg.ray");
     compare("fn main() -> int { if (!1) { 0 } else { 1 } }", "sce_not.ray");
+    // M188: la pista hacia `~` sobre enteros, byte-idéntica (el selfhost no parsea `as`: caso int).
+    compare("fn main() -> int { let y = !3; 0 }", "sce_not_int.ray");
     // Variables.
     compare("fn main() -> int { x }", "sce_undecl.ray");
     compare("fn main() -> int { let x = 3; x = 4; 0 }", "sce_immut.ray");

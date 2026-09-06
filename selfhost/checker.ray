@@ -182,6 +182,15 @@ fn strs_eq(a: [string], b: [string]) -> bool {
 }
 
 // Presentación de un tipo, idéntica al `Display` de `Type` en Rust (para los mensajes de error).
+// M188: int o un entero sin signo (u8/u32/u64), para las pistas de los mensajes.
+fn is_integer_type(t: Type) -> bool {
+    match (t) {
+        Type.TInt => true,
+        Type.TNamed(n, args) => args.len() == 0 && (n == "u8" || n == "u32" || n == "u64"),
+        _ => false,
+    }
+}
+
 fn type_str(t: Type) -> string {
     match (t) {
         Type.TInt => "int",
@@ -1744,6 +1753,15 @@ fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result
         UnOp.Not => {
             if (type_eq(t, Type.TBool)) {
                 Result.Ok(Type.TBool)
+            } else if (is_integer_type(t)) {
+                // M188: sobre un entero, la pista hacia `~` (byte-idéntico a Rust).
+                Result.Err(
+                    terr(
+                        line,
+                        col,
+                        "'!' requires bool, not " + type_str(t) + " (for a bitwise NOT use '~')"
+                    )
+                )
             } else {
                 Result.Err(terr(line, col, "'!' requires bool, not " + type_str(t)))
             }

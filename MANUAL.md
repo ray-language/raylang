@@ -88,6 +88,7 @@ ejecuta con `ray run archivo.ray`; los argumentos tras el archivo llegan al prog
 
 ```sh
 ray run saluda.ray Ada Grace     # args() == ["Ada", "Grace"]
+ray run -- --verbose             # `--` separa los argumentos: entrada del proyecto con ["--verbose"]
 ```
 
 Estructura de un proyecto:

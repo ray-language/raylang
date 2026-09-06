@@ -1888,9 +1888,14 @@ impl Parser {
     /// Consume un identificador y devuelve `(nombre, línea, columna)`.
     fn expect_ident(&mut self, what: &str) -> Result<(String, usize, usize), ParseError> {
         let tok = self.peek().clone();
+        let is_from = tok.kind == TokenKind::From;
         if let TokenKind::Ident(name) = tok.kind {
             self.advance();
             Ok((name, tok.line, tok.col))
+        } else if is_from {
+            // M188: `from` está reservada en cualquier posición (hasta que sea contextual, plan
+            // ray-remote B3); "expected a parameter name" sobre ella no decía por qué.
+            Err(self.error_here(format!("expected {}, but 'from' is a reserved word", what)))
         } else {
             Err(self.error_here(format!("expected {}", what)))
         }
@@ -1973,6 +1978,14 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    #[test]
+    fn from_as_a_parameter_name_says_it_is_reserved() {
+        // M188: "expected a parameter name" sobre `from` no decía que es palabra reservada.
+        let tokens = crate::lexer::lex("fn slice(bits: [int], from: int) -> [int] { bits }").expect("lex ok");
+        let e = parse(tokens).expect_err("from no puede nombrar un parámetro");
+        assert_eq!(e.msg, "expected a parameter name, but 'from' is a reserved word");
     }
 
     #[test]

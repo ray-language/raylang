@@ -90,33 +90,26 @@ pub fn client_credentials(
     client_secret: string,
     scope: string
 ) -> Result<Token, string> {
-    var body = "grant_type=client_credentials" + "&client_id=" + url_encode(
-        client_id
-    ) + "&client_secret=" + url_encode(client_secret);
+    var body = "grant_type=client_credentials"
+        + "&client_id="
+        + url_encode(client_id)
+        + "&client_secret="
+        + url_encode(client_secret);
     if (scope.len() > 0) {
         body = body + "&scope=" + url_encode(scope);
     }
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "application/x-www-form-urlencoded");
     h.insert("Accept", "application/json");
-    match (request_with(
-    "POST",
-    token_url,
-    body,
-    h
-)) {
+    match (request_with("POST", token_url, body, h)) {
         Result.Err(e) => Result.Err("could not contact the token endpoint: " + e),
         Result.Ok(resp) => {
-            match (body_text(
-            resp
-        )) {
+            match (body_text(resp)) {
                 Result.Err(e) => Result.Err("cuerpo del token no es UTF-8: " + e),
                 Result.Ok(txt) => {
                     if (resp.status != 200) {
                         // Aun en error, OAuth devuelve un JSON con `error`; se intenta parsear.
-                        match (parse_token(
-                    txt
-                )) {
+                        match (parse_token(txt)) {
                             Result.Err(e) => Result.Err("token endpoint HTTP " + to_string(resp.status) + ": " + e),
                             Result.Ok(t) => Result.Ok(t),
                         }
@@ -137,9 +130,16 @@ pub fn authorize_url(
     scope: string,
     state: string
 ) -> string {
-    endpoint + "?response_type=code" + "&client_id=" + url_encode(
-        client_id
-    ) + "&redirect_uri=" + url_encode(redirect_uri) + "&scope=" + url_encode(scope) + "&state=" + url_encode(state)
+    endpoint
+        + "?response_type=code"
+        + "&client_id="
+        + url_encode(client_id)
+        + "&redirect_uri="
+        + url_encode(redirect_uri)
+        + "&scope="
+        + url_encode(scope)
+        + "&state="
+        + url_encode(state)
 }
 
 // La cabecera `Authorization` para llamar a una API protegida con este token.

@@ -147,7 +147,25 @@ fn ctrl(n: int) -> string {
 // El reemplazo de un escape `\<e>`, o None si no se soporta. Cubre los OCHO escapes de un
 // carácter de la RFC 8259 (§7): " \ / b f n r t (el noveno, \uXXXX, va en parse_u_escape).
 fn unescape(e: char) -> Option<string> {
-    if (e == '"') { Option.Some("\"") } else if (e == '\\') { Option.Some("\\") } else if (e == '/') { Option.Some("/") } else if (e == 'n') { Option.Some("\n") } else if (e == 't') { Option.Some("\t") } else if (e == 'r') { Option.Some("\r") } else if (e == 'b') { Option.Some(ctrl(8)) } else if (e == 'f') { Option.Some(ctrl(12)) } else { Option.None }
+    if (e == '"') {
+        Option.Some("\"")
+    } else if (e == '\\') {
+        Option.Some("\\")
+    } else if (e == '/') {
+        Option.Some("/")
+    } else if (e == 'n') {
+        Option.Some("\n")
+    } else if (e == 't') {
+        Option.Some("\t")
+    } else if (e == 'r') {
+        Option.Some("\r")
+    } else if (e == 'b') {
+        Option.Some(ctrl(8))
+    } else if (e == 'f') {
+        Option.Some(ctrl(12))
+    } else {
+        Option.None
+    }
 }
 
 // El valor de un dígito hex (mayúsculas o minúsculas); -1 si no lo es.

@@ -237,9 +237,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 while (i < srcs.len()) {
                     match (srcs[i]) {
                         // Captura POR REFERENCIA: se empuja la celda misma (compartida), no su valor.
-                        UpSrc.ULocal(slot) => cells.push(
-                            fr.locals[slot]
-                        ),
+                        UpSrc.ULocal(slot) => cells.push(fr.locals[slot]),
                         UpSrc.UUp(u) => cells.push(fr.upvalues[u]),
                     }
                     i = i + 1;
@@ -278,13 +276,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.ODispatch(fname, argc) => {
                 let args = pop_n(fr.stack, argc);
                 let recv = pop_val(fr.stack);
-                match (resolve_dispatch(
-                    cp,
-                    prog_args,
-                    recv,
-                    fname,
-                    args
-                )?) {
+                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
                     // Marco nuevo (campo-función / método / UFCS): los args ya llevan o no el receptor.
                     Dispatch.DFrame(idx, callargs, cells) => frames.push(new_frame(cp, idx, callargs, cells)),
                     // Valor directo (@derive igual/mostrar, primitivo menor, builtin como método).
@@ -309,13 +301,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.OTailDispatch(fname, argc) => {
                 let args = pop_n(fr.stack, argc);
                 let recv = pop_val(fr.stack);
-                match (resolve_dispatch(
-                    cp,
-                    prog_args,
-                    recv,
-                    fname,
-                    args
-                )?) {
+                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
                     // En cola: reutiliza el marco. Si resuelve a un valor directo, lo empuja y el `OReturn`
                     // que sigue lo retorna (sin optimización de cola, pero correcto).
                     Dispatch.DFrame(idx, callargs, cells) => {

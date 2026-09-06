@@ -87,7 +87,9 @@ fn read_msg(c: Conn) -> Result<PgMsg, string> {
             }
             if (mlen > max_message()) {
                 return Result.Err(
-                    "postgres: message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)"
+                    "postgres: message exceeds the limit ("
+                        + to_string(mlen)
+                        + " bytes, possible memory bomb)"
                 );
             }
             let total = 1 + mlen;
@@ -275,10 +277,7 @@ fn startup_and_auth(
                                 return Result.Err("postgres: server-final is not UTF-8");
                             },
                         };
-                        if (!scram_verify(
-        sc,
-        sfin
-    )) {
+                        if (!scram_verify(sc, sfin)) {
                             close(handle);
                             return Result.Err(
                                 "postgres: the server signature does not verify (authentication failed)"

@@ -12072,3 +12072,54 @@ había NOT bit a bit y escribió `v ^ 0xFFFFFFFF`. Sobre un entero, el mensaje a
 Lo que este hito NO toca, a propósito: `break`/`continue` (se reabre en su propio hito, con SPEC),
 `ray fmt` (M189) y los canales (M190).
 
+## 181. M189 — `ray fmt` deja de ser peligroso: comentarios, cadenas, ramas y paréntesis (sep 2026)
+
+El hallazgo más serio del feedback de `ray-remote` después del veredicto de `ray test`: un
+formateador que **cambia el significado del código sin cambiar su comportamiento**. Tres comentarios
+que anotaban tres `&&` (qué píxel comprueba cada uno y por qué) caían juntos al final de la
+sentencia, sin dueño; una tabla de ocho `else if` quedaba en una línea de 300 columnas; y los
+paréntesis que documentan la intención en código criptográfico desaparecían. Mientras eso pasara,
+`ray fmt` no era seguro de aplicar sin revisar el diff, que es lo contrario de para lo que sirve.
+
+**Diagnóstico.** El formateador trabaja sobre el AST y re-inserta los comentarios por línea: un
+trailing se pega a la línea de la sentencia si esta sale en una línea, y si no, cae a "antes de la
+siguiente sentencia". El reparto (M105/M106) conocía dos formas —cadenas de métodos y listas
+delimitadas— y su regla de forzado ("la primera expresión repartible se parte sin medir") era lo
+que producía `if (f(\n    a,\n    b\n))`: la única lista a mano era la condición, y partirla no
+arreglaba la línea. Las cadenas de operadores y las ramas de un `if` no tenían forma repartida, así
+que una línea de 300 columnas era, simplemente, lo que había.
+
+**Decisiones.**
+
+1. **Un comentario pertenece al operando o elemento de su línea.** Una cadena repartida y una lista
+   repartida pegan a cada operando/elemento el trailing de la línea en que ese operando TERMINA en
+   la fuente. Y la señal inversa: si la forma plana de una sentencia deja atrás comentarios trailing
+   de sus líneas interiores, la sentencia se reparte aunque quepa — siempre que el reparto los
+   recoja de verdad; si no, se prefiere la plana (los comentarios caen aparte, como antes, pero
+   nunca se pierden). La línea en que termina un operando se calcula por su hoja más a la derecha,
+   no por `expr_spans`: esa tabla va por posición de inicio con política max-end, y un operando
+   comparte inicio con la expresión que lo contiene.
+2. **Cadenas de `&&`, `||` y `+` de texto**: un operando por línea, el operador abre la línea, un
+   nivel por debajo. Un `+` solo cuenta como cadena si construye texto (algún literal de string) o
+   tiene cuatro operandos o más: el forzado parte "la primera repartible" sin medir, e `i + 1`
+   dentro de un índice no lo es.
+3. **La cadena `if … else if …` que no cabe se expande entera** y la condición se mide con su
+   prefijo `if (` en vez de forzarse; solo si así no cabe se reparte ella. Lo mismo para `while` y
+   el escrutinio de `match`. La expansión es de las ramas del `if`, no de cualquier bloque bajo el
+   envuelto: expandir también los cuerpos de las closures de una cadena de métodos hacía que el
+   formateador no convergiera (`.map(fn(n) { n * n })` alternaba entre dos formas).
+4. **Los paréntesis del usuario se conservan.** El parser no deja nodo para `(e)` —re-posiciona `e`
+   al `(`—, así que registra las posiciones en `Program::paren_sites`. Ambigüedad: una binaria
+   exterior hereda la posición de su operando izquierdo, luego `(a + b) * c` deja al `*` en el `(`
+   también. La regla: los paréntesis pertenecen al nodo MÁS INTERIOR que empieza ahí — si el
+   operando izquierdo comparte la posición, son suyos. Con eso `((a + b) * 2) - (-a)` sobrevive tal
+   cual y `(a) + 1` pierde los paréntesis inútiles de un identificador.
+
+**Efecto en el repo.** 65 archivos `.ray` cambian de forma (1.677 líneas añadidas, 962 quitadas):
+todas las líneas de más de 100 columnas que el formateador mismo había creado desaparecen salvo
+nueve que contienen literales de string largos, y los `match (get(\n    c.traits,\n    tr\n))` del
+selfhost vuelven a `match (get(c.traits, tr))`. Solo formato: la suite completa pasa sin tocar un
+golden.
+
+**Lo que no hace.** Cadenas de `|`/`<<` (no piden reparto en el repo), rellenar líneas ("fill") en
+vez de un operando por línea, y mover un comentario que estaba en su propia línea.

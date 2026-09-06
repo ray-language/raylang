@@ -187,9 +187,7 @@ fn no_types() -> [Type] { [] }
 // `to_string`). Los flotantes usan el `to_string` del host = el `Display` de f64 de Rust → coincide.
 pub fn value_str(v: Value) -> string {
     match (v) {
-        Value.VInt(n) => to_string(
-            n
-        ),
+        Value.VInt(n) => to_string(n),
         Value.VFloat(x) => to_string(x),
         Value.VBool(b) => to_string(b),
         Value.VStr(s) => s,
@@ -198,7 +196,11 @@ pub fn value_str(v: Value) -> string {
         Value.VArray(elems) => "[" + join_vals(elems) + "]",
         Value.VStruct(name, fields) => name + " { " + join_fields(fields) + " }",
         Value.VEnum(en, vr, payload) => {
-            if (payload.len() == 0) { en + "." + vr } else { en + "." + vr + "(" + join_vals(payload) + ")" }
+            if (payload.len() == 0) {
+                en + "." + vr
+            } else {
+                en + "." + vr + "(" + join_vals(payload) + ")"
+            }
         },
         Value.VFunc(_) => "<fn>",
         Value.VClosure(_, _) => "<fn>",
@@ -738,7 +740,38 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
 // Llamadas y builtins
 // =====================================================================
 pub fn is_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "to_string" || name == "panic" || name == "len" || name == "push" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args" || name == "__pop" || name == "char_code"
+    name == "print"
+        || name == "eprint"
+        || name == "to_string"
+        || name == "panic"
+        || name == "len"
+        || name == "push"
+        || name == "trim"
+        || name == "split"
+        || name == "chars"
+        || name == "contains"
+        || name == "replace"
+        || name == "starts_with"
+        || name == "ends_with"
+        || name == "to_upper"
+        || name == "to_lower"
+        || name == "substring"
+        || name == "repeat"
+        || name == "join"
+        || name == "insert"
+        || name == "get"
+        || name == "contains_key"
+        || name == "keys"
+        || name == "values"
+        || name == "remove"
+        || name == "__parse_int"
+        || name == "__parse_float"
+        || name == "__read_file"
+        || name == "__write_file"
+        || name == "exists"
+        || name == "args"
+        || name == "__pop"
+        || name == "char_code"
 }
 
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
@@ -1082,7 +1115,11 @@ pub fn dispatch_builtin(
         return match (vals[0]) {
             Value.VMap(d) => {
                 let idx = map_find(d, vals[1]);
-                if (idx >= 0) { Result.Ok(Value.VEnum("Option", "Some", [d.vals[idx]])) } else { Result.Ok(Value.VEnum("Option", "None", no_vals())) }
+                if (idx >= 0) {
+                    Result.Ok(Value.VEnum("Option", "Some", [d.vals[idx]]))
+                } else {
+                    Result.Ok(Value.VEnum("Option", "None", no_vals()))
+                }
             },
             _ => panic("get: expected a Map"),
         };
@@ -1345,10 +1382,7 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
             // que no es una variable local). Si no, es despacho de método/UFCS sobre el receptor.
             match (obj.kind) {
                 EKind.EIdent(maybe_enum) => {
-                    match (lookup_opt(
-                    c,
-                    maybe_enum
-                )) {
+                    match (lookup_opt(c, maybe_enum)) {
                         Option.Some(recv) => dispatch_method(c, recv, fname, args, callee.line, callee.col),
                         Option.None => {
                             if (enum_has_variant(c, maybe_enum, fname)) {

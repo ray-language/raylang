@@ -520,9 +520,7 @@ fn hex_of(b: bytes) -> string {
 /// Renders a value as compact JSON-ish text (deterministic; used by the tests' oracle).
 pub fn dump(v: Bson) -> string {
     return match (v) {
-        Bson.Double(f) => to_string(
-            f
-        ),
+        Bson.Double(f) => to_string(f),
         Bson.Str(s) => "\"" + s + "\"",
         Bson.Doc(fields) => dump_doc(fields),
         Bson.Arr(items) => {

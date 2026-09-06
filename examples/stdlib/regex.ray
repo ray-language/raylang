@@ -179,9 +179,8 @@ fn parse_concat(p: PS) -> Result<Re, string> {
 // es cuantificador si le sigue un dígito (si no, es un `{` literal, como en Perl).
 fn parse_repeat(p: PS) -> Result<Re, string> {
     var node = parse_atom(p)?;
-    while (!ps_at_end(
-        p
-    ) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
+    while (!ps_at_end(p)
+        && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
         let op = ps_advance(p);
         if (op == '{') {
             node = parse_bounds(p, node)?;
@@ -305,12 +304,12 @@ fn parse_atom(p: PS) -> Result<Re, string> {
         // de apertura (1..; el 0 es el match entero). M128: `(?P<name>...)` y `(?<name>...)`
         // capturan CON nombre (mismo índice posicional; el nombre va a la tabla `names`).
         var g = 0 - 1;
-        if (p.pos + 1 < p.pat.len() && ps_peek(
-            p
-        ) == '?' && ps_peek2(p) == ':') {
+        if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && ps_peek2(p) == ':') {
             ps_advance(p);
             ps_advance(p);
-        } else if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && (ps_peek2(p) == 'P' || ps_peek2(p) == '<')) {
+        } else if (p.pos + 1 < p.pat.len()
+            && ps_peek(p) == '?'
+            && (ps_peek2(p) == 'P' || ps_peek2(p) == '<')) {
             ps_advance(p);
             if (ps_peek(p) == 'P') {
                 ps_advance(p);
@@ -325,11 +324,12 @@ fn parse_atom(p: PS) -> Result<Re, string> {
                 return Result.Err("regex: group name cannot start with a digit");
             }
             var name = "";
-            while (!ps_at_end(
-                p
-            ) && ps_peek(p) != '>') {
+            while (!ps_at_end(p) && ps_peek(p) != '>') {
                 let nc = ps_peek(p);
-                let ok_char = nc >= 'a' && nc <= 'z' || nc >= 'A' && nc <= 'Z' || nc >= '0' && nc <= '9' || nc == '_';
+                let ok_char = nc >= 'a' && nc <= 'z'
+                    || nc >= 'A' && nc <= 'Z'
+                    || nc >= '0' && nc <= '9'
+                    || nc == '_';
                 if (!ok_char) {
                     return Result.Err("regex: invalid character in group name");
                 }
@@ -392,7 +392,21 @@ fn parse_atom(p: PS) -> Result<Re, string> {
 
 // Un escape en posición de átomo: clase predefinida (`\d`/`\w`/`\s` y negadas) o literal (`\.` `\n` …).
 fn escape_atom(e: char) -> Re {
-    if (e == 'd') { Re.ClassRe(Class { neg: false, ranges: ranges_digit() }) } else if (e == 'D') { Re.ClassRe(Class { neg: true, ranges: ranges_digit() }) } else if (e == 'w') { Re.ClassRe(Class { neg: false, ranges: ranges_word() }) } else if (e == 'W') { Re.ClassRe(Class { neg: true, ranges: ranges_word() }) } else if (e == 's') { Re.ClassRe(Class { neg: false, ranges: ranges_space() }) } else if (e == 'S') { Re.ClassRe(Class { neg: true, ranges: ranges_space() }) } else { Re.Lit(unescape(e)) }
+    if (e == 'd') {
+        Re.ClassRe(Class { neg: false, ranges: ranges_digit() })
+    } else if (e == 'D') {
+        Re.ClassRe(Class { neg: true, ranges: ranges_digit() })
+    } else if (e == 'w') {
+        Re.ClassRe(Class { neg: false, ranges: ranges_word() })
+    } else if (e == 'W') {
+        Re.ClassRe(Class { neg: true, ranges: ranges_word() })
+    } else if (e == 's') {
+        Re.ClassRe(Class { neg: false, ranges: ranges_space() })
+    } else if (e == 'S') {
+        Re.ClassRe(Class { neg: true, ranges: ranges_space() })
+    } else {
+        Re.Lit(unescape(e))
+    }
 }
 
 // Parsea el interior de `[...]` (el '[' ya se consumió); deja el cursor tras el ']'.

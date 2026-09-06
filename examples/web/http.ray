@@ -279,9 +279,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
     let cuerpo: bytes = raw.sub_bytes(sep + 4, raw.len());
-    match (from_utf8(
-    raw.sub_bytes(0, sep)
-)) {
+    match (from_utf8(raw.sub_bytes(0, sep))) {
         Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
         Result.Ok(cabeceras_raw) => {
             let lineas: [string] = cabeceras_raw.split("\r\n");
@@ -345,18 +343,17 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 Option.None => { },
             }
             if (!fue_chunked) {
-                match (get(
-                headers,
-                "content-length"
-            )) {
+                match (get(headers, "content-length")) {
                     Option.Some(cl) => {
-                        match (parse_int(
-                        cl
-                    )) {
+                        match (parse_int(cl)) {
                             Option.Some(n) => {
                                 if (cuerpo_final.len() < n) {
                                     return Result.Err(
-                                        "respuesta truncada: llegaron " + to_string(cuerpo_final.len()) + " de " + to_string(n) + " octetos"
+                                        "respuesta truncada: llegaron "
+                                            + to_string(cuerpo_final.len())
+                                            + " de "
+                                            + to_string(n)
+                                            + " octetos"
                                     );
                                 }
                                 if (cuerpo_final.len() > n) {
@@ -448,17 +445,17 @@ pub fn request_bytes(
     headers: Map<string, string>,
     timeout_millis: int
 ) -> Result<Response, string> {
-    match (parse_url(
-    url
-)) {
+    match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (conectar(
-            u
-        )) {
+            match (conectar(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
-                    let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
+                    let plazo_fin: int = if (timeout_millis > 0) {
+                        time.monotonic() + timeout_millis
+                    } else {
+                        0
+                    };
                     match (net.socket_write_bytes(h, build_request_h(method, u, body, headers))) {
                         Result.Err(e) => {
                             close(h);
@@ -576,9 +573,7 @@ pub fn connect(base_url: string) -> Result<Conn, string> {
     match (parse_url(base_url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (conectar(
-            u
-        )) {
+            match (conectar(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => Result.Ok(
                     Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }
@@ -671,9 +666,9 @@ fn conn_intento(
     let u = Url { host: c.host, port: c.port, path: path, tls: c.tls };
     let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
     match (net.socket_write_bytes(
-    c.h,
-    build_request_conn(method, u, body, headers, "keep-alive")
-)) {
+        c.h,
+        build_request_conn(method, u, body, headers, "keep-alive")
+    )) {
         Result.Err(_) => {
             // Escribir en una conexión que el servidor ya cerró falla aquí o en la lectura.
             conn_close(c);
@@ -758,10 +753,7 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
     var sep: int = find_fin_cabeceras(c.buf);
     while (sep < 0) {
         let habia: int = c.buf.len();
-        match (conn_leer_mas(
-            c,
-            plazo_fin
-        )) {
+        match (conn_leer_mas(c, plazo_fin)) {
             Result.Err(e) => {
                 return Result.Err(e);
             },
@@ -770,7 +762,11 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
                     // EOF antes de completar las cabeceras. Si no había llegado NADA, es la
                     // carrera del keep-alive ocioso → reintentable; si llegó algo, truncada.
                     conn_close(c);
-                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error reading: respuesta incompleta") };
+                    return if (habia == 0) {
+                        Result.Err(err_caida())
+                    } else {
+                        Result.Err("error reading: respuesta incompleta")
+                    };
                 }
             },
         }
@@ -779,9 +775,7 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
     let fin_cab: int = sep + 4;
 
     // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas.
-    match (from_utf8(
-    c.buf.sub_bytes(0, sep)
-)) {
+    match (from_utf8(c.buf.sub_bytes(0, sep))) {
         Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
         Result.Ok(cab) => {
             let lineas: [string] = cab.split("\r\n");
@@ -814,7 +808,10 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
                 i = i + 1;
             }
             // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 1xx, 204 y 304.
-            if (method == "HEAD" || status == 204 || status == 304 || status >= 100 && status < 200) {
+            if (method == "HEAD"
+                || status == 204
+                || status == 304
+                || status >= 100 && status < 200) {
                 return Result.Ok(tomar(c, fin_cab));
             }
             if (chunked) {

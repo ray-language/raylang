@@ -128,10 +128,27 @@ struct Fscope {
     max_slots: int,
     depth: int,
     upvalues: [UpSrc],
+    // M191: bucles abiertos (saltos pendientes de break/continue), espejo de `FnScope::loops`.
+    loops: [LoopCtx],
+}
+
+// M191: los saltos pendientes de un bucle abierto.
+struct LoopCtx {
+    breaks: [int],
+    continues: [int],
 }
 
 fn new_fscope() -> Fscope {
-    Fscope { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0, upvalues: [] }
+    Fscope {
+        code: [],
+        consts: [],
+        locals: [],
+        next_slot: 0,
+        max_slots: 0,
+        depth: 0,
+        upvalues: [],
+        loops: []
+    }
 }
 
 // El compilador: una PILA de ámbitos de función (el último es el que se compila ahora; las envolventes
@@ -397,11 +414,30 @@ fn emit_expr(comp: Comp, e: Expr) {
             emit_expr(comp, cond);
             let exit = emit(comp, Op.OJumpIfFalse(0));
             emit(comp, Op.OPop);
+            top(comp).loops.push(LoopCtx { breaks: [], continues: [] });
             emit_block(comp, body);
             emit(comp, Op.OPop);
+            // M191: `continue` cae aquí (tras el Pop del cuerpo), justo antes del salto atrás.
+            let lp = top(comp).loops[top(comp).loops.len() - 1];
+            for j in lp.continues {
+                patch_jump(comp, j);
+            }
             emit(comp, Op.OJump(loop_start));
             patch_jump(comp, exit);
             emit(comp, Op.OPop);
+            // M191: `break` cae aquí (tras el Pop de la condición), con la pila como al entrar.
+            for j in lp.breaks {
+                patch_jump(comp, j);
+            }
+            // (sin `pop` en los arreglos: se reconstruye la pila sin el último)
+            let n = top(comp).loops.len();
+            var kept: [LoopCtx] = [];
+            var k = 0;
+            while (k < n - 1) {
+                kept.push(top(comp).loops[k]);
+                k = k + 1;
+            }
+            top(comp).loops = kept;
             emit(comp, Op.OUnit);
         },
         EKind.EBlock(b) => emit_block(comp, b),
@@ -605,6 +641,18 @@ fn emit_stmt(comp: Comp, s: Stmt) {
                 },
             }
             emit(comp, Op.OReturn);
+        },
+        // M191: un salto con destino pendiente; el bucle lo parchea (pila limpia: el checker solo
+        // admite break/continue en la espina de sentencias).
+        SKind.SBreak => {
+            let j = emit(comp, Op.OJump(0));
+            let lp = top(comp).loops[top(comp).loops.len() - 1];
+            lp.breaks.push(j);
+        },
+        SKind.SContinue => {
+            let j = emit(comp, Op.OJump(0));
+            let lp = top(comp).loops[top(comp).loops.len() - 1];
+            lp.continues.push(j);
         },
         SKind.SExpr(e) => {
             emit_expr(comp, e);

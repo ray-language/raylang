@@ -505,6 +505,8 @@ pub fn run_vm(cp: CProgram, prog_args: [string]) -> Result<Value, RuntimeError> 
         Result.Err(flow) => match (flow) {
             Flow.FError(e) => Result.Err(e),
             Flow.FReturn(v) => Result.Ok(v),
+            Flow.FBreak => panic("the checker keeps break inside a loop"),
+            Flow.FContinue => panic("the checker keeps continue inside a loop"),
         },
     }
 }

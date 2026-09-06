@@ -858,7 +858,7 @@ fn stmt_last_line(cur: &Cur, st: &Stmt) -> usize {
             cur.end_line(value)
         }
         StmtKind::Return { value: Some(e) } | StmtKind::Expr(e) => cur.end_line(e),
-        StmtKind::Return { value: None } => st.line,
+        StmtKind::Return { value: None } | StmtKind::Break | StmtKind::Continue => st.line,
         StmtKind::For { body, .. } => body.end_line,
     }
 }
@@ -959,6 +959,8 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             Some(e) => format!("return {};", fmt_value(cur, e, indent)),
             None => "return;".to_string(),
         },
+        StmtKind::Break => "break;".to_string(),
+        StmtKind::Continue => "continue;".to_string(),
         StmtKind::Expr(e) => {
             // Las formas con bloque (if/while/match/bloque) como sentencia no llevan `;`.
             if is_block_form(e) {
@@ -2434,6 +2436,7 @@ mod tests {
                 cm_expr(target, n);
                 cm_expr(value, n);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     cm_expr(e, n);

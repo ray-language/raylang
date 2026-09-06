@@ -277,7 +277,7 @@ Todo `if`, bloque y `match` **produce un valor**.
 let max = if (a > b) { a } else { b };        // if como expresión
 ```
 
-`while` (no hay `break`/`continue`; patrones abajo):
+`while` (con `break;`/`continue;` como sentencias; ver "Salir temprano" más abajo):
 
 ```rust
 var i = 0;
@@ -292,18 +292,37 @@ for i in 0..5 { print(i); }                   // rango semiabierto: 0,1,2,3,4
 for (k, v) in edades { print("${k}: ${v}"); } // Map, en orden de clave
 ```
 
-### Salir temprano sin `break`
+### Salir temprano: `break`, `continue` y sus alternativas
 
-raylang no tiene `break` ni `continue` (decisión de diseño: `return` ya es la salida temprana).
-Los patrones idiomáticos, del más al menos frecuente:
+`break;` sale del `while`/`for` más interno y `continue;` pasa a la siguiente iteración (en un
+`for`, avanza el iterable). Son sentencias: no producen valor, y solo valen dentro de un bucle de la
+**misma función** (una función anónima corta el ámbito). Dentro del cuerpo pueden ir en ramas de
+`if`/`else`, brazos de `match`, bloques y valores de `let`/asignación; no dentro de un argumento,
+operando, literal o índice (el compilador lo rechaza con un mensaje propio). Una rama que termina en
+`break`/`continue` **diverge**: cede el tipo al resto, así que sirve como brazo de un `match` que
+produce valor:
 
-**1. Extrae el bucle a una función: `return` ES tu `break`.** Es el reemplazo canónico y suele
-dejar una función con nombre propio que el código llamador lee mejor:
+```rust
+// el bucle de lectura de un protocolo: "lee hasta que se cierre"
+while (true) {
+    let frame = match (try_recv(ch)) {
+        Received.Got(f) => f,
+        Received.Closed => { break; },          // la rama que rompe no necesita tipo
+        Received.Empty => { time.sleep(1); continue; },
+    };
+    handle(frame);
+}
+```
+
+Antes de escribir un bucle con `break`, mira si uno de estos lo evita — suelen dejar código con
+mejor nombre:
+
+**1. Extrae el bucle a una función: `return` también es una salida.**
 
 ```rust
 fn primer_negativo(xs: [int]) -> Option<int> {
     for x in xs {
-        if (x < 0) { return Option.Some(x); }   // "break" con el resultado en la mano
+        if (x < 0) { return Option.Some(x); }   // sale con el resultado en la mano
     }
     Option.None
 }
@@ -318,27 +337,15 @@ xs.any(es_par);           // bool: ¿alguno cumple?
 xs.all(es_par);           // bool: ¿todos cumplen?
 ```
 
-**3. `continue` ≈ invertir la condición.** En vez de saltarte el elemento, procesa solo los que
-te interesan:
+**3. `continue` ≈ invertir la condición** cuando el cuerpo es corto: `if (x >= 0) { procesar(x); }`
+en vez de `if (x < 0) { continue; } procesar(x);`.
 
-```rust
-for x in xs {
-    if (x >= 0) {         // en vez de `if (x < 0) { continue; }`
-        procesar(x);
-    }
-}
-```
+**4. Corta el iterador:** `for x in xs.iter().take(3) { … }`.
 
-**4. Corta el iterador o compón la condición del `while`.**
-
-```rust
-for x in xs.iter().take(3) { print(x); }        // solo los 3 primeros
-
-var seguir = true;                              // el "break" de un while de servidor/REPL
-while (seguir) {
-    // … en el punto de salida: seguir = false;
-}
-```
+Lo que NO conviene: una bandera `var seguir = true; while (seguir) { … seguir = false; … }`. No
+corta el cuerpo — todo lo que venga después de `seguir = false` sigue ejecutándose esa vuelta —, y
+es una fuente de errores silenciosos justo en los bucles de red. Con `break` la salida es en el
+punto en que se decide.
 
 `match` **destructura enums** (`Option`/`Result`/los tuyos), como expresión (§10 a fondo). El escrutinio
 va **entre paréntesis**. Para despachar sobre **primitivos** (int/bool/string) se usa `if/else`, no `match`:
@@ -2642,9 +2649,11 @@ del editor.
 
 Cosas que sorprenden viniendo de otros lenguajes:
 
-- **No hay `break` ni `continue`.** El reemplazo canónico es extraer el bucle a una función y usar
-  `return`; los demás patrones (búsquedas de la stdlib, invertir la condición, `.take(n)`, variable
-  de control) están en §4, "Salir temprano sin `break`".
+- **`break`/`continue` son sentencias y solo valen en la espina del cuerpo del bucle** (ramas de
+  `if`, brazos de `match`, bloques, valores de `let`): dentro de un argumento u operando el
+  compilador los rechaza, y dentro de una función anónima están "fuera del bucle". Los patrones
+  que suelen evitarlos (extraer a función, búsquedas de la stdlib, `.take(n)`) están en §4, "Salir
+  temprano".
 - **`match` es solo para enums.** Destructura `Option`/`Result`/tus enums; **no** hay patrones de literal ni
   `match` sobre `int`/`bool`/`string`. Para despachar sobre un primitivo, usa `if/else`. Las guardas
   (`patrón if cond`) sí permiten condiciones dentro de un `match` de enum.

@@ -248,6 +248,7 @@ impl Session {
                     Ok(Entry::Assign { show, src: ensure_semi(line) })
                 }
                 StmtKind::Expr(_) => Ok(Entry::Expr { src: strip_semi(line) }),
+                StmtKind::Break | StmtKind::Continue => Err("'break'/'continue' make no sense in the REPL".to_string()),
                 StmtKind::Return { .. } => Err("'return' makes no sense in the REPL".to_string()),
             }
         } else {

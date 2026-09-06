@@ -147,6 +147,9 @@ pub enum SKind {
     SLet(string, Option<Type>, Expr, bool),  // nombre, tipo?, valor, mutable (let vs var)
     SAssign(Expr, Expr),  // destino, valor
     SReturn(Option<Expr>),
+    // M191: `break;` / `continue;` (solo dentro de un bucle: lo decide el checker).
+    SBreak,
+    SContinue,
     SExpr(Expr),
 }
 
@@ -318,6 +321,8 @@ fn tok_name(k: TokKind) -> string {
         TokKind.Var => "var",
         TokKind.Fn => "fn",
         TokKind.Return => "return",
+        TokKind.Break => "break",
+        TokKind.Continue => "continue",
         TokKind.If => "if",
         TokKind.Else => "else",
         TokKind.While => "while",
@@ -385,6 +390,8 @@ fn tok_debug(k: TokKind) -> string {
         TokKind.Var => "Var",
         TokKind.Fn => "Fn",
         TokKind.Return => "Return",
+        TokKind.Break => "Break",
+        TokKind.Continue => "Continue",
         TokKind.If => "If",
         TokKind.Else => "Else",
         TokKind.While => "While",
@@ -1081,6 +1088,8 @@ fn block(p: Parser) -> Result<Block, ParseError> {
             stmts.push(let_stmt(p)?);
         } else if (check(p, "return")) {
             stmts.push(return_stmt(p)?);
+        } else if (check(p, "break") || check(p, "continue")) {
+            stmts.push(break_stmt(p)?);
         } else {
             let e = expression(p)?;
             let line = e.line;
@@ -1125,6 +1134,16 @@ fn let_stmt(p: Parser) -> Result<Stmt, ParseError> {
 }
 
 // returnStmt = 'return' [ expression ] ';'
+// M191: `break;` / `continue;` — sentencias sin valor; su validez la decide el checker.
+fn break_stmt(p: Parser) -> Result<Stmt, ParseError> {
+    let kw = advance(p);
+    let is_break = tok_name(kw.kind) == "break";
+    let what = if (is_break) { "break" } else { "continue" };
+    expect(p, ";", "';' after '" + what + "'")?;
+    let kind = if (is_break) { SKind.SBreak } else { SKind.SContinue };
+    Result.Ok(Stmt { kind: kind, line: kw.line, col: kw.col })
+}
+
 fn return_stmt(p: Parser) -> Result<Stmt, ParseError> {
     let kw = advance(p);  // 'return'
     var value: Option<Expr> = Option.None;

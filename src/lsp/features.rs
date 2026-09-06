@@ -1619,7 +1619,7 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
     }
     for kw in [
         "let", "var", "const", "fn", "if", "else", "while", "for", "in", "match",
-        "struct", "enum", "trait", "impl", "return", "true", "false", "dyn", "pub",
+        "struct", "enum", "trait", "impl", "return", "break", "continue", "true", "false", "dyn", "pub",
         "import", "from", "as",
         "int", "float", "bool", "string", "char", "bytes", "u8", "u32", "u64",
     ] {

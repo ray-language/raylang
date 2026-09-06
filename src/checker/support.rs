@@ -209,9 +209,16 @@ pub(super) fn block_diverges(block: &Block) -> bool {
         || block.tail.as_ref().is_some_and(|t| expr_diverges(t))
 }
 
+/// ¿Es `e` una forma-con-bloque (`if`/`while`/`match`/bloque)? Son las únicas expresiones que
+/// dejan pasar la "espina de sentencias" de un bucle a lo que contienen (M191).
+pub(super) fn is_block_form(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Match { .. } | ExprKind::Block(_))
+}
+
 pub(super) fn stmt_diverges(stmt: &Stmt) -> bool {
     match &stmt.kind {
-        StmtKind::Return { .. } => true,
+        // M191: `break`/`continue` abandonan el bloque igual que `return` (ceden el tipo).
+        StmtKind::Return { .. } | StmtKind::Break | StmtKind::Continue => true,
         StmtKind::Expr(e) => expr_diverges(e),
         _ => false,
     }

@@ -85,7 +85,13 @@ fn valid_name(name: string) -> bool {
     let cs = name.chars();
     while (i < cs.len()) {
         let c = cs[i];
-        let ok = 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '/' || c == '_' || c == '-' || c == '+';
+        let ok = 'a' <= c && c <= 'z'
+            || 'A' <= c && c <= 'Z'
+            || '0' <= c && c <= '9'
+            || c == '/'
+            || c == '_'
+            || c == '-'
+            || c == '+';
         if (!ok) {
             return false;
         }
@@ -194,7 +200,13 @@ fn read_header(b: bytes, at: int) -> Result<Header, string> {
 
 // El tamaño del bloque de datos de una cabecera, con tiempos de `tsize` octetos.
 fn block_size(h: Header, tsize: int) -> int {
-    h.timecnt * tsize + h.timecnt + h.typecnt * 6 + h.charcnt + h.leapcnt * (tsize + 4) + h.isstdcnt + h.isutcnt
+    h.timecnt * tsize
+        + h.timecnt
+        + h.typecnt * 6
+        + h.charcnt
+        + h.leapcnt * (tsize + 4)
+        + h.isstdcnt
+        + h.isutcnt
 }
 
 fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {

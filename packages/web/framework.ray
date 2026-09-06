@@ -190,9 +190,11 @@ pub fn ALL(app: App, pattern: string, handler: fn(Ctx, Res)) {
 /// root app owns the response cycle). A regex route cannot be re-prefixed: panic at mount time.
 pub fn mount(app: App, prefix: string, sub: App) {
     // "/api" y "/api/" son el mismo mount; la base va sin "/" final para concatenar limpio.
-    let base: string = if (prefix.ends_with(
-        "/"
-    )) { prefix.substring(0, prefix.len() - 1) } else { prefix };
+    let base: string = if (prefix.ends_with("/")) {
+        prefix.substring(0, prefix.len() - 1)
+    } else {
+        prefix
+    };
     let pre: [string] = split_path(base);  // "/api" → ["", "api"]
     var i: int = 0;
     while (i < sub.routes.len()) {
@@ -220,7 +222,9 @@ pub fn mount(app: App, prefix: string, sub: App) {
             },
             Pattern.Re(_) => {
                 panic(
-                    "mount '" + prefix + "': a regex route cannot be re-prefixed; register it on the root app"
+                    "mount '"
+                        + prefix
+                        + "': a regex route cannot be re-prefixed; register it on the root app"
                 );
             },
         }

@@ -101,9 +101,10 @@ pub fn parse_traceparent(s: string) -> Option<Trace> {
     if (version.len() != 2 || tid.len() != 32 || sid.len() != 16 || flags.len() != 2) {
         return Option.None;
     }
-    if (!is_lower_hex(
-        version
-    ) || !is_lower_hex(tid) || !is_lower_hex(sid) || !is_lower_hex(flags)) {
+    if (!is_lower_hex(version)
+        || !is_lower_hex(tid)
+        || !is_lower_hex(sid)
+        || !is_lower_hex(flags)) {
         return Option.None;
     }
     if (version != "00" || all_zero(tid) || all_zero(sid)) {

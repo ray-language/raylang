@@ -493,17 +493,16 @@ fn perr_at(line: int, col: int, msg: string) -> ParseError {
 
 // Consume el token actual si es `name`; si no, error describiendo qué se esperaba.
 fn expect(p: Parser, name: string, what: string) -> Result<Token, ParseError> {
-    if (check(
-    p,
-    name
-)) { Result.Ok(advance(p)) } else { Result.Err(perr_here(p, "expected " + what)) }
+    if (check(p, name)) {
+        Result.Ok(advance(p))
+    } else {
+        Result.Err(perr_here(p, "expected " + what))
+    }
 }
 
 // Consume un identificador y devuelve su nombre.
 fn expect_ident(p: Parser, what: string) -> Result<string, ParseError> {
-    match (cur_kind(
-    p
-)) {
+    match (cur_kind(p)) {
         TokKind.Ident(n) => {
             advance(p);
             Result.Ok(n)
@@ -1001,10 +1000,17 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
         _ => { },
     }
     // Tipos primitivos.
-    if (eat(
-    p,
-    "int"
-)) { Result.Ok(Type.TInt) } else if (eat(p, "float")) { Result.Ok(Type.TFloat) } else if (eat(p, "bool")) { Result.Ok(Type.TBool) } else if (eat(p, "string")) { Result.Ok(Type.TString) } else if (eat(p, "char")) { Result.Ok(Type.TChar) } else {
+    if (eat(p, "int")) {
+        Result.Ok(Type.TInt)
+    } else if (eat(p, "float")) {
+        Result.Ok(Type.TFloat)
+    } else if (eat(p, "bool")) {
+        Result.Ok(Type.TBool)
+    } else if (eat(p, "string")) {
+        Result.Ok(Type.TString)
+    } else if (eat(p, "char")) {
+        Result.Ok(Type.TChar)
+    } else {
         Result.Err(
             perr_here(p, "expected a type (int, float, bool, string, char, bytes, [T] or a struct)")
         )
@@ -1302,10 +1308,7 @@ fn call(p: Parser) -> Result<Expr, ParseError> {
     while (keep_going) {
         let line = expr.line;
         let col = expr.col;
-        if (check(
-        p,
-        "("
-    )) {
+        if (check(p, "(")) {
             advance(p);
             var cargs: [Expr] = [];
             if (!check(p, ")")) {
@@ -1413,10 +1416,11 @@ fn primary(p: Parser) -> Result<Expr, ParseError> {
             advance(p);
             // `Nombre { ... }` es un literal de struct (las condiciones de if/while/match van entre
             // paréntesis, así que no hay ambigüedad con los bloques).
-            if (check(
-            p,
-            "{"
-        )) { struct_literal(p, name, t.line, t.col) } else { Result.Ok(Expr { kind: EKind.EIdent(name), line: t.line, col: t.col }) }
+            if (check(p, "{")) {
+                struct_literal(p, name, t.line, t.col)
+            } else {
+                Result.Ok(Expr { kind: EKind.EIdent(name), line: t.line, col: t.col })
+            }
         },
         TokKind.LParen => {
             advance(p);

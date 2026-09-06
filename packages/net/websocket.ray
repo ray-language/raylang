@@ -50,9 +50,12 @@ pub fn extract_key(request: string) -> string {
 /// Builds the complete HTTP `101 Switching Protocols` response that finishes the
 /// server-side WebSocket handshake for the given client key (RFC 6455 §4.2.2).
 pub fn handshake_response(key: string) -> string {
-    "HTTP/1.1 101 Switching Protocols\r\n" + "Upgrade: websocket\r\n" + "Connection: Upgrade\r\n" + "Sec-WebSocket-Accept: " + accept_key(
-        key
-    ) + "\r\n\r\n"
+    "HTTP/1.1 101 Switching Protocols\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Accept: "
+        + accept_key(key)
+        + "\r\n\r\n"
 }
 
 // --- Framing ---
@@ -311,7 +314,11 @@ pub fn read_frame_limit(ws: WsConn, max_payload: int) -> Result<Frame, string> {
 
 // Emite una trama de control con el enmascarado del lado que somos (best effort).
 fn send_control(ws: WsConn, opcode: int, payload: bytes) {
-    let trama = if (ws.mask) { encode_frame_masked(opcode, payload) } else { encode_frame(opcode, payload) };
+    let trama = if (ws.mask) {
+        encode_frame_masked(opcode, payload)
+    } else {
+        encode_frame(opcode, payload)
+    };
     match (net.socket_write_bytes(ws.conn, trama)) {
         Result.Ok(_) => { },
         Result.Err(_) => { },

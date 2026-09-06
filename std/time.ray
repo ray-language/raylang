@@ -148,20 +148,32 @@ fn pad(n: int, ancho: int) -> string {
 // Formato ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 /// Formats a DateTime as ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 pub fn to_iso8601(dt: DateTime) -> string {
-    pad(
-        dt.year,
-        4
-    ) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
+    pad(dt.year, 4)
+        + "-"
+        + pad(dt.month, 2)
+        + "-"
+        + pad(dt.day, 2)
+        + "T"
+        + pad(dt.hour, 2)
+        + ":"
+        + pad(dt.minute, 2)
+        + ":"
+        + pad(dt.second, 2)
+        + "Z"
 }
 
 // Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
 /// Formats a DateTime as "basic" ISO 8601 (no separators): `YYYYMMDDTHHMMSSZ`.
 /// This is the `X-Amz-Date` format used by AWS Signature V4.
 pub fn to_iso8601_basic(dt: DateTime) -> string {
-    pad(
-        dt.year,
-        4
-    ) + pad(dt.month, 2) + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
+    pad(dt.year, 4)
+        + pad(dt.month, 2)
+        + pad(dt.day, 2)
+        + "T"
+        + pad(dt.hour, 2)
+        + pad(dt.minute, 2)
+        + pad(dt.second, 2)
+        + "Z"
 }
 
 // Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
@@ -197,9 +209,20 @@ fn month_name(m: int) -> string {
 // Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 /// Formats a DateTime as RFC 1123 (the HTTP `Date:` header): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 pub fn to_rfc1123(dt: DateTime) -> string {
-    weekday_name(
-        dt.weekday
-    ) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4) + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
+    weekday_name(dt.weekday)
+        + ", "
+        + pad(dt.day, 2)
+        + " "
+        + month_name(dt.month)
+        + " "
+        + pad(dt.year, 4)
+        + " "
+        + pad(dt.hour, 2)
+        + ":"
+        + pad(dt.minute, 2)
+        + ":"
+        + pad(dt.second, 2)
+        + " GMT"
 }
 
 // --- Parse RFC 3339 endurecido (M57.1) ---
@@ -225,7 +248,13 @@ fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
 fn separator(s: string, i: int, expected: char) -> Result<int, string> {
     if (s[i] != expected) {
         return Result.Err(
-            "ISO 8601: expected '" + to_string(expected) + "' at position " + to_string(i) + " in '" + s + "'"
+            "ISO 8601: expected '"
+                + to_string(expected)
+                + "' at position "
+                + to_string(i)
+                + " in '"
+                + s
+                + "'"
         );
     }
     Result.Ok(0)
@@ -268,7 +297,13 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
     let civil = civil_from_days(days_from_civil(year, month, day));
     if (civil.year != year || civil.month != month || civil.day != day) {
         return Result.Err(
-            "ISO 8601: fecha inexistente (" + pad(year, 4) + "-" + pad(month, 2) + "-" + pad(day, 2) + ")"
+            "ISO 8601: fecha inexistente ("
+                + pad(year, 4)
+                + "-"
+                + pad(month, 2)
+                + "-"
+                + pad(day, 2)
+                + ")"
         );
     }
     if (hour > 23 || minute > 59 || second > 59) {

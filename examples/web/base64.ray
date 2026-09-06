@@ -26,7 +26,10 @@ pub fn base64(data: bytes) -> string {
         let triple = b0 << 16 | b1 << 8 | b2;
         sb.push(
             b,
-            enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + enc_char(triple & 63)
+            enc_char(triple >> 18 & 63)
+                + enc_char(triple >> 12 & 63)
+                + enc_char(triple >> 6 & 63)
+                + enc_char(triple & 63)
         );
         i = i + 3;
     }
@@ -43,7 +46,10 @@ pub fn base64(data: bytes) -> string {
             let triple = b0 << 16 | b1 << 8;
             sb.push(
                 b,
-                enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + "="
+                enc_char(triple >> 18 & 63)
+                    + enc_char(triple >> 12 & 63)
+                    + enc_char(triple >> 6 & 63)
+                    + "="
             );
         }
     }
@@ -75,9 +81,9 @@ fn dec_char(c: char) -> int {
         } else {
             // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
             match (index_of(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-    to_string(c)
-)) {
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                to_string(c)
+            )) {
                 Option.Some(i) => i,
                 Option.None => 0 - 1,
             }
@@ -94,9 +100,9 @@ fn dec_char_std(c: char) -> int {
             63
         } else {
             match (index_of(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-    to_string(c)
-)) {
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                to_string(c)
+            )) {
                 Option.Some(i) => i,
                 Option.None => 0 - 1,
             }

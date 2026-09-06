@@ -187,12 +187,7 @@ fn handshake() {
     // Un mensaje de Alice a Bob: nonce = contador de ESE sentido.
     let empty = empty_bytes();
     let msg = "hola desde el otro lado".to_bytes();
-    match (crypto.chacha20poly1305_seal(
-    a2b_alice,
-    nonce_for(1),
-    empty,
-    msg
-)) {
+    match (crypto.chacha20poly1305_seal(a2b_alice, nonce_for(1), empty, msg)) {
         Option.None => {
             print("no se pudo cifrar");
         },

@@ -824,12 +824,21 @@ fn optimize_tail_calls(code: [Op]) {
     var i = 0;
     while (i < code.len()) {
         let new_op: Option<Op> = match (code[i]) {
-            Op.OCall(idx, argc) => if (returns_immediately(
-                code,
-                i + 1
-            )) { Option.Some(Op.OTailCall(idx, argc)) } else { Option.None },
-            Op.OCallValue(argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCallValue(argc)) } else { Option.None },
-            Op.ODispatch(fname, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailDispatch(fname, argc)) } else { Option.None },
+            Op.OCall(idx, argc) => if (returns_immediately(code, i + 1)) {
+                Option.Some(Op.OTailCall(idx, argc))
+            } else {
+                Option.None
+            },
+            Op.OCallValue(argc) => if (returns_immediately(code, i + 1)) {
+                Option.Some(Op.OTailCallValue(argc))
+            } else {
+                Option.None
+            },
+            Op.ODispatch(fname, argc) => if (returns_immediately(code, i + 1)) {
+                Option.Some(Op.OTailDispatch(fname, argc))
+            } else {
+                Option.None
+            },
             _ => Option.None,
         };
         match (new_op) {

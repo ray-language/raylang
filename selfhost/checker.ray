@@ -274,10 +274,11 @@ fn is_array(t: Type) -> bool {
 
 // ¿Operandos válidos para los comparadores de orden (< <= > >=)? Mismo tipo, y de int/float/string/char.
 fn order_ok(lt: Type, rt: Type) -> bool {
-    type_eq(
-        lt,
-        rt
-    ) && (type_eq(lt, Type.TInt) || type_eq(lt, Type.TFloat) || type_eq(lt, Type.TString) || type_eq(lt, Type.TChar))
+    type_eq(lt, rt)
+        && (type_eq(lt, Type.TInt)
+            || type_eq(lt, Type.TFloat)
+            || type_eq(lt, Type.TString)
+            || type_eq(lt, Type.TChar))
 }
 
 // Clase de un operador binario: 0=aritmético, 1=orden, 2=igualdad, 3=lógico.
@@ -365,12 +366,7 @@ fn resolve_type(t: Type) -> Type {
 // y `dyn` quedan diferidos a M14.3c/d.
 fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeError> {
     match (t) {
-        Type.TArray(e) => ensure_type(
-            c,
-            e,
-            line,
-            col
-        ),
+        Type.TArray(e) => ensure_type(c, e, line, col),
         Type.TFn(ps, r) => {
             var i = 0;
             while (i < ps.len()) {
@@ -392,7 +388,8 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                         terr(
                             line,
                             col,
-                            "Map expects 2 type arguments (key and value), not " + to_string(args.len())
+                            "Map expects 2 type arguments (key and value), not "
+                                + to_string(args.len())
                         )
                     );
                 }
@@ -418,16 +415,19 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                 return Result.Ok(0);
             }
             // Un struct/enum: la aridad de argumentos de tipo debe casar con sus parámetros.
-            if (c.structs.contains_key(
-            name
-        ) || c.enums.contains_key(name)) {
+            if (c.structs.contains_key(name) || c.enums.contains_key(name)) {
                 let arity = type_arity(c, name);
                 if (args.len() != arity) {
                     return Result.Err(
                         terr(
                             line,
                             col,
-                            "'" + name + "' expects " + to_string(arity) + " type argument(s), got " + to_string(args.len())
+                            "'"
+                                + name
+                                + "' expects "
+                                + to_string(arity)
+                                + " type argument(s), got "
+                                + to_string(args.len())
                         )
                     );
                 }
@@ -449,31 +449,33 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             var i = 0;
             while (i < traits.len()) {
                 let tr = traits[i];
-                match (get(
-                    c.traits,
-                    tr
-                )) {
+                match (get(c.traits, tr)) {
                     Option.None => {
                         return Result.Err(
                             terr(
                                 line,
                                 col,
-                                "trait '" + tr + "' not declared (in 'dyn " + join_strs(traits) + "')"
+                                "trait '"
+                                    + tr
+                                    + "' not declared (in 'dyn "
+                                    + join_strs(traits)
+                                    + "')"
                             )
                         );
                     },
                     Option.Some(ms) => {
                         var mi = 0;
                         while (mi < ms.len()) {
-                            if (contains_str(
-                                seen,
-                                ms[mi].name
-                            )) {
+                            if (contains_str(seen, ms[mi].name)) {
                                 return Result.Err(
                                     terr(
                                         line,
                                         col,
-                                        "the method '" + ms[mi].name + "' appears in more than one trait of 'dyn " + join_strs(traits) + "': it is ambiguous"
+                                        "the method '"
+                                            + ms[mi].name
+                                            + "' appears in more than one trait of 'dyn "
+                                            + join_strs(traits)
+                                            + "': it is ambiguous"
                                     )
                                 );
                             }
@@ -610,21 +612,18 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
     match (param) {
         Type.TNamed(n, pargs) => {
             // Incógnita del lado de la firma: ligarla (o exigir que coincida con lo ya ligado).
-            if (pargs.len() == 0 && contains_str(
-            holes,
-            n
-        )) {
-                match (get(
-            sigma,
-            n
-        )) {
+            if (pargs.len() == 0 && contains_str(holes, n)) {
+                match (get(sigma, n)) {
                     Option.Some(prev) => {
-                        if (!type_eq(
-                        prev,
-                        arg
-                    )) {
+                        if (!type_eq(prev, arg)) {
                             Result.Err(
-                                "'" + n + "' cannot be " + type_str(prev) + " and " + type_str(arg) + " at the same time"
+                                "'"
+                                    + n
+                                    + "' cannot be "
+                                    + type_str(prev)
+                                    + " and "
+                                    + type_str(arg)
+                                    + " at the same time"
                             )
                         } else { Result.Ok(0) }
                     },
@@ -668,10 +667,11 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
         },
         // Primitivos (y variable rígida vs lo que sea): igualdad exacta.
         _ => {
-            if (type_eq(
-            param,
-            arg
-        )) { Result.Ok(0) } else { Result.Err("expected " + type_str(param) + ", got " + type_str(arg)) }
+            if (type_eq(param, arg)) {
+                Result.Ok(0)
+            } else {
+                Result.Err("expected " + type_str(param) + ", got " + type_str(arg))
+            }
         },
     }
 }
@@ -1267,15 +1267,18 @@ fn check_bounds(c: Checker, f: Func) -> Result<int, TypeError> {
     var i = 0;
     while (i < f.bounds.len()) {
         let b = f.bounds[i];
-        if (!contains_str(
-            f.type_params,
-            b.param
-        )) {
+        if (!contains_str(f.type_params, b.param)) {
             return Result.Err(
                 terr(
                     f.line,
                     f.col,
-                    "the bound '" + b.param + ": " + b.trait_name + "' does not constrain any type parameter of '" + f.name + "'"
+                    "the bound '"
+                        + b.param
+                        + ": "
+                        + b.trait_name
+                        + "' does not constrain any type parameter of '"
+                        + f.name
+                        + "'"
                 )
             );
         }
@@ -1353,10 +1356,7 @@ fn check_fn_body(
         Option.None => { },
     }
     pop_scope(c);
-    if (type_eq(
-    ret,
-    Type.TUnit
-)) {
+    if (type_eq(ret, Type.TUnit)) {
         if (!type_eq(body_ty, Type.TUnit) && !diverges) {
             return Result.Err(
                 terr(
@@ -1374,7 +1374,11 @@ fn check_fn_body(
             terr(
                 eline,
                 ecol,
-                label + " declares return type " + type_str(ret) + ", but its body produces " + type_str(body_ty)
+                label
+                    + " declares return type "
+                    + type_str(ret)
+                    + ", but its body produces "
+                    + type_str(body_ty)
             )
         )
     }
@@ -1392,15 +1396,17 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
                     let ty = resolve_type(annot);
                     // El tipo declarado es el esperado del valor (chequeo bidireccional: fija el `[]`).
                     let vt = check_expr_expected(c, value, ty)?;
-                    if (!type_eq(
-                        vt,
-                        ty
-                    )) {
+                    if (!type_eq(vt, ty)) {
                         return Result.Err(
                             terr(
                                 value.line,
                                 value.col,
-                                "'" + name + "' is declared as " + type_str(ty) + " but initialized with " + type_str(vt)
+                                "'"
+                                    + name
+                                    + "' is declared as "
+                                    + type_str(ty)
+                                    + " but initialized with "
+                                    + type_str(vt)
                             )
                         );
                     }
@@ -1424,15 +1430,15 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
                 },
                 Option.None => { },
             }
-            if (!type_eq(
-                vt,
-                c.current_return
-            )) {
+            if (!type_eq(vt, c.current_return)) {
                 return Result.Err(
                     terr(
                         stmt.line,
                         stmt.col,
-                        "returning " + type_str(vt) + " but the function declares return type " + type_str(c.current_return)
+                        "returning "
+                            + type_str(vt)
+                            + " but the function declares return type "
+                            + type_str(c.current_return)
                     )
                 );
             }
@@ -1456,10 +1462,7 @@ fn check_assign(
 ) -> Result<int, TypeError> {
     match (target.kind) {
         EKind.EIdent(name) => {
-            match (lookup(
-            c,
-            name
-        )) {
+            match (lookup(c, name)) {
                 Option.None => Result.Err(terr(target.line, target.col, "variable '" + name + "' not declared")),
                 Option.Some(v) => {
                     if (!v.mutable) {
@@ -1467,20 +1470,24 @@ fn check_assign(
                             terr(
                                 line,
                                 col,
-                                "cannot assign to '" + name + "': it is immutable (declared with 'let'; use 'var')"
+                                "cannot assign to '"
+                                    + name
+                                    + "': it is immutable (declared with 'let'; use 'var')"
                             )
                         );
                     }
                     let vt = check_expr(c, value)?;
-                    if (!type_eq(
-                        vt,
-                        v.ty
-                    )) {
+                    if (!type_eq(vt, v.ty)) {
                         return Result.Err(
                             terr(
                                 value.line,
                                 value.col,
-                                "'" + name + "' is " + type_str(v.ty) + " but is assigned " + type_str(vt)
+                                "'"
+                                    + name
+                                    + "' is "
+                                    + type_str(v.ty)
+                                    + " but is assigned "
+                                    + type_str(vt)
                             )
                         );
                     }
@@ -1516,15 +1523,17 @@ fn check_assign(
         EKind.EField(object, name) => {
             let fty = check_field(c, object, name)?;
             let vt = check_expr(c, value)?;
-            if (!type_eq(
-                vt,
-                fty
-            )) {
+            if (!type_eq(vt, fty)) {
                 return Result.Err(
                     terr(
                         value.line,
                         value.col,
-                        "the field '" + name + "' is " + type_str(fty) + " but is assigned " + type_str(vt)
+                        "the field '"
+                            + name
+                            + "' is "
+                            + type_str(fty)
+                            + " but is assigned "
+                            + type_str(vt)
                     )
                 );
             }
@@ -1550,9 +1559,7 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
 
 fn check_expr_inner(c: Checker, e: Expr) -> Result<Type, TypeError> {
     match (e.kind) {
-        EKind.EInt(_) => Result.Ok(
-            Type.TInt
-        ),
+        EKind.EInt(_) => Result.Ok(Type.TInt),
         EKind.EFloat(_) => Result.Ok(Type.TFloat),
         EKind.EBool(_) => Result.Ok(Type.TBool),
         EKind.EStr(_) => Result.Ok(Type.TString),
@@ -1617,17 +1624,19 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                 let err_ty = args[1];
                 match (c.current_return) {
                     Type.TNamed(rn, rargs) => {
-                        if (rn == "Result" && rargs.len() == 2 && type_eq(
-                        rargs[1],
-                        err_ty
-                    )) {
+                        if (rn == "Result" && rargs.len() == 2 && type_eq(rargs[1], err_ty)) {
                             Result.Ok(ok_ty)
                         } else {
                             Result.Err(
                                 terr(
                                     line,
                                     col,
-                                    "'?' on " + type_str(it) + " requires the function to return Result<_, " + type_str(err_ty) + ">, but it returns " + type_str(c.current_return)
+                                    "'?' on "
+                                        + type_str(it)
+                                        + " requires the function to return Result<_, "
+                                        + type_str(err_ty)
+                                        + ">, but it returns "
+                                        + type_str(c.current_return)
                                 )
                             )
                         }
@@ -1636,7 +1645,12 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         terr(
                             line,
                             col,
-                            "'?' on " + type_str(it) + " requires the function to return Result<_, " + type_str(err_ty) + ">, but it returns " + type_str(c.current_return)
+                            "'?' on "
+                                + type_str(it)
+                                + " requires the function to return Result<_, "
+                                + type_str(err_ty)
+                                + ">, but it returns "
+                                + type_str(c.current_return)
                         )
                     ),
                 }
@@ -1651,7 +1665,10 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                                 terr(
                                     line,
                                     col,
-                                    "'?' on " + type_str(it) + " requires the function to return Option<_>, but it returns " + type_str(c.current_return)
+                                    "'?' on "
+                                        + type_str(it)
+                                        + " requires the function to return Option<_>, but it returns "
+                                        + type_str(c.current_return)
                                 )
                             )
                         }
@@ -1660,7 +1677,10 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         terr(
                             line,
                             col,
-                            "'?' on " + type_str(it) + " requires the function to return Option<_>, but it returns " + type_str(c.current_return)
+                            "'?' on "
+                                + type_str(it)
+                                + " requires the function to return Option<_>, but it returns "
+                                + type_str(c.current_return)
                         )
                     ),
                 }
@@ -1713,15 +1733,15 @@ fn check_expr_expected_inner(c: Checker, e: Expr, expected: Type) -> Result<Type
                     var i = 0;
                     while (i < elems.len()) {
                         let t = check_expr_expected(c, elems[i], elem_exp)?;
-                        if (!type_eq(
-                            t,
-                            elem_exp
-                        )) {
+                        if (!type_eq(t, elem_exp)) {
                             return Result.Err(
                                 terr(
                                     elems[i].line,
                                     elems[i].col,
-                                    "the array elements must be " + type_str(elem_exp) + ", not " + type_str(t)
+                                    "the array elements must be "
+                                        + type_str(elem_exp)
+                                        + ", not "
+                                        + type_str(t)
                                 )
                             );
                         }
@@ -1758,10 +1778,11 @@ fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result
     let t = check_expr(c, inner)?;
     match (op) {
         UnOp.Neg => {
-            if (type_eq(
-            t,
-            Type.TInt
-        ) || type_eq(t, Type.TFloat)) { Result.Ok(t) } else { Result.Err(terr(line, col, "cannot negate (-) a " + type_str(t))) }
+            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) {
+                Result.Ok(t)
+            } else {
+                Result.Err(terr(line, col, "cannot negate (-) a " + type_str(t)))
+            }
         },
         UnOp.Not => {
             if (type_eq(t, Type.TBool)) {
@@ -1794,54 +1815,70 @@ fn check_binary(
     let rt = check_expr(c, r)?;
     let kind = op_kind(op);
     if (kind == 0) {
-        if (type_eq(
-    lt,
-    Type.TInt
-) && type_eq(rt, Type.TInt)) { Result.Ok(Type.TInt) } else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) { Result.Ok(Type.TFloat) } else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) { Result.Ok(Type.TString) } else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) { Result.Ok(lt) } else {
+        if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) {
+            Result.Ok(Type.TInt)
+        } else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) {
+            Result.Ok(Type.TFloat)
+        } else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) {
+            Result.Ok(Type.TString)
+        } else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) {
+            Result.Ok(lt)
+        } else {
             Result.Err(
                 terr(
                     line,
                     col,
-                    "the operator '" + bin_op_str(op) + "' requires both operands int or both float, not " + type_str(lt) + " and " + type_str(rt)
+                    "the operator '"
+                        + bin_op_str(op)
+                        + "' requires both operands int or both float, not "
+                        + type_str(lt)
+                        + " and "
+                        + type_str(rt)
                 )
             )
         }
     } else if (kind == 1) {
-        if (order_ok(
-    lt,
-    rt
-)) { Result.Ok(Type.TBool) } else {
+        if (order_ok(lt, rt)) { Result.Ok(Type.TBool) } else {
             Result.Err(
                 terr(
                     line,
                     col,
-                    "the operator '" + bin_op_str(op) + "' compares int/float/string/char of the same type, not " + type_str(lt) + " and " + type_str(rt)
+                    "the operator '"
+                        + bin_op_str(op)
+                        + "' compares int/float/string/char of the same type, not "
+                        + type_str(lt)
+                        + " and "
+                        + type_str(rt)
                 )
             )
         }
     } else if (kind == 2) {
-        if (type_eq(
-    lt,
-    rt
-) && is_comparable(lt)) { Result.Ok(Type.TBool) } else {
+        if (type_eq(lt, rt) && is_comparable(lt)) { Result.Ok(Type.TBool) } else {
             Result.Err(
                 terr(
                     line,
                     col,
-                    "the operator '" + bin_op_str(op) + "' requires both operands of the same comparable type, not " + type_str(lt) + " and " + type_str(rt)
+                    "the operator '"
+                        + bin_op_str(op)
+                        + "' requires both operands of the same comparable type, not "
+                        + type_str(lt)
+                        + " and "
+                        + type_str(rt)
                 )
             )
         }
     } else {
-        if (type_eq(
-    lt,
-    Type.TBool
-) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) } else {
+        if (type_eq(lt, Type.TBool) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) } else {
             Result.Err(
                 terr(
                     line,
                     col,
-                    "the operator '" + bin_op_str(op) + "' requires bool operands, not " + type_str(lt) + " and " + type_str(rt)
+                    "the operator '"
+                        + bin_op_str(op)
+                        + "' requires bool operands, not "
+                        + type_str(lt)
+                        + " and "
+                        + type_str(rt)
                 )
             )
         }
@@ -1857,13 +1894,7 @@ fn check_call(
     col: int
 ) -> Result<Type, TypeError> {
     match (callee.kind) {
-        EKind.EIdent(n) => check_named_call(
-            c,
-            n,
-            cargs,
-            line,
-            col
-        ),
+        EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
         // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, `Map.new()` (M48.1), o llamada al
         // valor de un campo. (UFCS / métodos de trait quedan diferidos a M14.3d.)
         EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, expected, line, col),
@@ -1990,7 +2021,13 @@ fn resolve_bound_method(
             terr(
                 line,
                 col,
-                "method '" + method + "' ambiguous for '" + tp + "': several bounded traits declare it (" + join_comma(hits) + ")"
+                "method '"
+                    + method
+                    + "' ambiguous for '"
+                    + tp
+                    + "': several bounded traits declare it ("
+                    + join_comma(hits)
+                    + ")"
             )
         );
     }
@@ -2016,22 +2053,31 @@ fn resolve_bound_method(
             terr(
                 line,
                 col,
-                "the method '" + method + "' expects " + to_string(expected.len()) + " argument(s) (not counting the receiver), received " + to_string(cargs.len())
+                "the method '"
+                    + method
+                    + "' expects "
+                    + to_string(expected.len())
+                    + " argument(s) (not counting the receiver), received "
+                    + to_string(cargs.len())
             )
         );
     }
     var k = 0;
     while (k < cargs.len()) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
-        if (!type_eq(
-            at,
-            expected[k]
-        )) {
+        if (!type_eq(at, expected[k])) {
             return Result.Err(
                 terr(
                     cargs[k].line,
                     cargs[k].col,
-                    "argument " + to_string(k + 1) + " of method '" + method + "': expected " + type_str(expected[k]) + ", got " + type_str(at)
+                    "argument "
+                        + to_string(k + 1)
+                        + " of method '"
+                        + method
+                        + "': expected "
+                        + type_str(expected[k])
+                        + ", got "
+                        + type_str(at)
                 )
             );
         }
@@ -2144,15 +2190,17 @@ fn coerce_to_dyn(
                 terr(
                     line,
                     col,
-                    "cannot convert 'dyn " + join_strs(source) + "' into 'dyn " + join_strs(traits) + "': can only upcast to a subset of traits"
+                    "cannot convert 'dyn "
+                        + join_strs(source)
+                        + "' into 'dyn "
+                        + join_strs(traits)
+                        + "': can only upcast to a subset of traits"
                 )
             );
         },
         _ => { },
     }
-    match (type_key_of(
-    current
-)) {
+    match (type_key_of(current)) {
         Option.None => Result.Err(
             terr(
                 line,
@@ -2163,14 +2211,17 @@ fn coerce_to_dyn(
         Option.Some(key) => {
             var i = 0;
             while (i < traits.len()) {
-                if (!c.impl_traits.contains_key(
-                    mangle(key, traits[i])
-                )) {
+                if (!c.impl_traits.contains_key(mangle(key, traits[i]))) {
                     return Result.Err(
                         terr(
                             line,
                             col,
-                            type_str(current) + " does not implement '" + traits[i] + "': it cannot be used as 'dyn " + join_strs(traits) + "'"
+                            type_str(current)
+                                + " does not implement '"
+                                + traits[i]
+                                + "': it cannot be used as 'dyn "
+                                + join_strs(traits)
+                                + "'"
                         )
                     );
                 }
@@ -2205,14 +2256,16 @@ fn dispatch_dyn_method(
         },
     };
     // Object safety: si `Self` aparece fuera del receptor (en un param o el retorno), no es invocable.
-    if (method_uses_self(
-        sig
-    )) {
+    if (method_uses_self(sig)) {
         return Result.Err(
             terr(
                 line,
                 col,
-                "the method '" + method + "' uses 'Self': it is not callable on 'dyn " + join_strs(traits) + "'"
+                "the method '"
+                    + method
+                    + "' uses 'Self': it is not callable on 'dyn "
+                    + join_strs(traits)
+                    + "'"
             )
         );
     }
@@ -2228,22 +2281,31 @@ fn dispatch_dyn_method(
             terr(
                 line,
                 col,
-                "the method '" + method + "' expects " + to_string(expected.len()) + " argument(s) (not counting the receiver), received " + to_string(cargs.len())
+                "the method '"
+                    + method
+                    + "' expects "
+                    + to_string(expected.len())
+                    + " argument(s) (not counting the receiver), received "
+                    + to_string(cargs.len())
             )
         );
     }
     var k = 0;
     while (k < cargs.len()) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
-        if (!type_eq(
-            at,
-            expected[k]
-        )) {
+        if (!type_eq(at, expected[k])) {
             return Result.Err(
                 terr(
                     cargs[k].line,
                     cargs[k].col,
-                    "argument " + to_string(k + 1) + " of method '" + method + "': expected " + type_str(expected[k]) + ", got " + type_str(at)
+                    "argument "
+                        + to_string(k + 1)
+                        + " of method '"
+                        + method
+                        + "': expected "
+                        + type_str(expected[k])
+                        + ", got "
+                        + type_str(at)
                 )
             );
         }
@@ -2306,15 +2368,9 @@ fn types_use_self(ts: [Type]) -> bool {
 // El tipo del campo `fname` de un struct `sname` con args de tipo `targs`, ya sustituido (`None` si
 // no es un struct o no tiene ese campo). Compartido por el acceso a campo y la resolución UFCS.
 fn struct_field_type(c: Checker, sname: string, targs: [Type], fname: string) -> Option<Type> {
-    match (get(
-    c.structs,
-    sname
-)) {
+    match (get(c.structs, sname)) {
         Option.Some(fields) => {
-            match (find_field(
-            fields,
-            fname
-        )) {
+            match (find_field(fields, fname)) {
                 Option.Some(fty) => Option.Some(subst(fty, build_sigma(struct_tparams(c, sname), targs))),
                 Option.None => Option.None,
             }
@@ -2356,7 +2412,39 @@ fn check_ufcs(
 
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
 fn is_known_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "exit" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "__exists" || name == "args" || name == "__pop" || name == "char_code"
+    name == "print"
+        || name == "eprint"
+        || name == "len"
+        || name == "push"
+        || name == "to_string"
+        || name == "trim"
+        || name == "split"
+        || name == "chars"
+        || name == "contains"
+        || name == "replace"
+        || name == "starts_with"
+        || name == "ends_with"
+        || name == "to_upper"
+        || name == "to_lower"
+        || name == "substring"
+        || name == "repeat"
+        || name == "join"
+        || name == "insert"
+        || name == "get"
+        || name == "contains_key"
+        || name == "keys"
+        || name == "values"
+        || name == "remove"
+        || name == "panic"
+        || name == "exit"
+        || name == "__parse_int"
+        || name == "__parse_float"
+        || name == "__read_file"
+        || name == "__write_file"
+        || name == "__exists"
+        || name == "args"
+        || name == "__pop"
+        || name == "char_code"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -2546,7 +2634,11 @@ fn check_generic_call(
             terr(
                 line,
                 col,
-                label + " expects " + to_string(params.len()) + " argument(s), received " + to_string(cargs.len())
+                label
+                    + " expects "
+                    + to_string(params.len())
+                    + " argument(s), received "
+                    + to_string(cargs.len())
             )
         );
     }
@@ -2571,14 +2663,16 @@ fn check_generic_call(
     // Todos los parámetros de tipo deben haber quedado determinados.
     var ti = 0;
     while (ti < type_params.len()) {
-        if (!sigma.contains_key(
-            type_params[ti]
-        )) {
+        if (!sigma.contains_key(type_params[ti])) {
             return Result.Err(
                 terr(
                     line,
                     col,
-                    "could not infer the type parameter '" + type_params[ti] + "' of " + label + " (it does not appear in the arguments)"
+                    "could not infer the type parameter '"
+                        + type_params[ti]
+                        + "' of "
+                        + label
+                        + " (it does not appear in the arguments)"
                 )
             );
         }
@@ -2622,10 +2716,7 @@ fn check_bound_satisfied(
 ) -> Result<int, TypeError> {
     match (concrete) {
         Type.TNamed(u, args) => {
-            if (args.len() == 0 && contains_str(
-                c.tparams,
-                u
-            )) {
+            if (args.len() == 0 && contains_str(c.tparams, u)) {
                 if (bounds_has(c.bounds, u, trait_name)) {
                     return Result.Ok(0);
                 }
@@ -2633,35 +2724,39 @@ fn check_bound_satisfied(
                     terr(
                         line,
                         col,
-                        "the type parameter '" + u + "' is not bounded by '" + trait_name + "' (required by the call)"
+                        "the type parameter '"
+                            + u
+                            + "' is not bounded by '"
+                            + trait_name
+                            + "' (required by the call)"
                     )
                 );
             }
-            if (c.impl_traits.contains_key(
-            mangle(u, trait_name)
-        )) { Result.Ok(0) } else {
+            if (c.impl_traits.contains_key(mangle(u, trait_name))) { Result.Ok(0) } else {
                 Result.Err(
                     terr(
                         line,
                         col,
-                        type_str(concrete) + " does not implement '" + trait_name + "' (required by the call)"
+                        type_str(concrete)
+                            + " does not implement '"
+                            + trait_name
+                            + "' (required by the call)"
                     )
                 )
             }
         },
         _ => {
-            match (type_key_of(
-            concrete
-        )) {
+            match (type_key_of(concrete)) {
                 Option.Some(key) => {
-                    if (c.impl_traits.contains_key(
-                    mangle(key, trait_name)
-                )) { Result.Ok(0) } else {
+                    if (c.impl_traits.contains_key(mangle(key, trait_name))) { Result.Ok(0) } else {
                         Result.Err(
                             terr(
                                 line,
                                 col,
-                                type_str(concrete) + " does not implement '" + trait_name + "' (required by the call)"
+                                type_str(concrete)
+                                    + " does not implement '"
+                                    + trait_name
+                                    + "' (required by the call)"
                             )
                         )
                     }
@@ -2788,7 +2883,14 @@ fn b_arity(
             terr(
                 line,
                 col,
-                name + " expects " + to_string(n) + " " + plural + det + ", received " + to_string(got)
+                name
+                    + " expects "
+                    + to_string(n)
+                    + " "
+                    + plural
+                    + det
+                    + ", received "
+                    + to_string(got)
             )
         );
     }
@@ -2825,10 +2927,11 @@ fn want_int(a: [Type], cargs: [Expr], i: int, msg: string) -> Result<int, TypeEr
 fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("to_string", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    if (!(type_eq(
-        a[0],
-        Type.TInt
-    ) || type_eq(a[0], Type.TFloat) || type_eq(a[0], Type.TBool) || type_eq(a[0], Type.TString) || type_eq(a[0], Type.TChar))) {
+    if (!(type_eq(a[0], Type.TInt)
+        || type_eq(a[0], Type.TFloat)
+        || type_eq(a[0], Type.TBool)
+        || type_eq(a[0], Type.TString)
+        || type_eq(a[0], Type.TChar))) {
         return Result.Err(
             terr(
                 cargs[0].line,
@@ -2896,9 +2999,7 @@ fn check_pop_prim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
     b_arity("__pop", 1, "", cargs.len(), line, col)?;
     let a0 = check_expr(c, cargs[0])?;
     match (a0) {
-        Type.TArray(elem) => Result.Ok(
-            Type.TArray(elem)
-        ),
+        Type.TArray(elem) => Result.Ok(Type.TArray(elem)),
         _ => Result.Err(terr(cargs[0].line, cargs[0].col, "__pop expects an array, not " + type_str(a0))),
     }
 }
@@ -3036,15 +3137,15 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
             want_string(a, cargs, 1, "contains expects a string as substring, not ")?;
         },
         Type.TArray(elem) => {
-            if (!type_eq(
-            a[1],
-            elem
-        )) {
+            if (!type_eq(a[1], elem)) {
                 return Result.Err(
                     terr(
                         cargs[1].line,
                         cargs[1].col,
-                        "contains: the array is of " + type_str(elem) + " but looking for " + type_str(a[1])
+                        "contains: the array is of "
+                            + type_str(elem)
+                            + " but looking for "
+                            + type_str(a[1])
                     )
                 );
             }
@@ -3082,9 +3183,7 @@ fn check_assoc_map_new(
     }
     match (expected) {
         Option.Some(t) => {
-            match (map_kv(
-            t
-        )) {
+            match (map_kv(t)) {
                 Option.Some(_) => {
                     ensure_type(c, t, line, col)?;
                     Result.Ok(t)
@@ -3111,9 +3210,7 @@ fn check_assoc_map_new(
 fn check_insert(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("insert", 3, " (map, key, value)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
                 return Result.Err(
@@ -3148,19 +3245,17 @@ fn check_insert(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
 fn check_contains_key(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("contains_key", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => {
-            if (!type_eq(
-                a[1],
-                kv[0]
-            )) {
+            if (!type_eq(a[1], kv[0])) {
                 return Result.Err(
                     terr(
                         cargs[1].line,
                         cargs[1].col,
-                        "contains_key: the Map key is " + type_str(kv[0]) + " but got " + type_str(a[1])
+                        "contains_key: the Map key is "
+                            + type_str(kv[0])
+                            + " but got "
+                            + type_str(a[1])
                     )
                 );
             }
@@ -3180,9 +3275,7 @@ fn check_contains_key(c: Checker, cargs: [Expr], line: int, col: int) -> Result<
 fn check_get(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("get", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
                 return Result.Err(
@@ -3209,9 +3302,7 @@ fn check_get(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Typ
 fn check_remove(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("remove", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
                 return Result.Err(
@@ -3237,9 +3328,7 @@ fn check_remove(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
 fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("keys", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[0])),
         Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "keys expects a Map, not " + type_str(a[0]))),
     }
@@ -3248,9 +3337,7 @@ fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
 fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("values", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    match (map_kv(
-    a[0]
-)) {
+    match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[1])),
         Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "values expects a Map, not " + type_str(a[0]))),
     }
@@ -3268,19 +3355,12 @@ fn call_type(
     col: int
 ) -> Result<Type, TypeError> {
     match (ty) {
-        Type.TFn(params, ret) => check_args(
-            c,
-            params,
-            ret,
-            cargs,
-            "the function",
-            line,
-            col
-        ),
+        Type.TFn(params, ret) => check_args(c, params, ret, cargs, "the function", line, col),
         _ => {
             var msg = "cannot call a value of type " + type_str(ty) + " (not a function)";
             if (hint) {
-                msg = msg + "; note: a tail starting with '(' after an if/while/match/block parses as a call of its value — separate it with 'return' or 'let'";
+                msg = msg
+                    + "; note: a tail starting with '(' after an if/while/match/block parses as a call of its value — separate it with 'return' or 'let'";
             }
             Result.Err(terr(line, col, msg))
         },
@@ -3312,7 +3392,11 @@ fn check_args(
             terr(
                 line,
                 col,
-                label + " expects " + to_string(params.len()) + " argument(s), received " + to_string(cargs.len())
+                label
+                    + " expects "
+                    + to_string(params.len())
+                    + " argument(s), received "
+                    + to_string(cargs.len())
             )
         );
     }
@@ -3320,15 +3404,19 @@ fn check_args(
     while (i < cargs.len()) {
         // El tipo del parámetro es el esperado del argumento (propaga a `[]`, etc.).
         let at = check_expr_expected(c, cargs[i], params[i])?;
-        if (!type_eq(
-            at,
-            params[i]
-        )) {
+        if (!type_eq(at, params[i])) {
             return Result.Err(
                 terr(
                     cargs[i].line,
                     cargs[i].col,
-                    "argument " + to_string(i + 1) + " of " + label + ": expected " + type_str(params[i]) + ", got " + type_str(at)
+                    "argument "
+                        + to_string(i + 1)
+                        + " of "
+                        + label
+                        + ": expected "
+                        + type_str(params[i])
+                        + ", got "
+                        + type_str(at)
                 )
             );
         }
@@ -3356,15 +3444,14 @@ fn check_if(
     let then_ty = check_block_opt(c, then_b, expected)?;
     match (elseopt) {
         Option.None => {
-            if (!type_eq(
-                then_ty,
-                Type.TUnit
-            )) {
+            if (!type_eq(then_ty, Type.TUnit)) {
                 return Result.Err(
                     terr(
                         line,
                         col,
-                        "an if without else has type unit, but its branch produces " + type_str(then_ty) + " (add an else)"
+                        "an if without else has type unit, but its branch produces "
+                            + type_str(then_ty)
+                            + " (add an else)"
                     )
                 );
             }
@@ -3378,15 +3465,15 @@ fn check_if(
             if (expr_diverges(else_e)) {
                 return Result.Ok(then_ty);
             }
-            if (!type_eq(
-                then_ty,
-                else_ty
-            )) {
+            if (!type_eq(then_ty, else_ty)) {
                 return Result.Err(
                     terr(
                         line,
                         col,
-                        "the if branches have different types: " + type_str(then_ty) + " and " + type_str(else_ty)
+                        "the if branches have different types: "
+                            + type_str(then_ty)
+                            + " and "
+                            + type_str(else_ty)
                     )
                 );
             }
@@ -3444,7 +3531,9 @@ fn check_break(c: Checker, kw: string, line: int, col: int) -> Result<int, TypeE
             terr(
                 line,
                 col,
-                "'" + kw + "' must be a statement of the loop body (not inside a call argument, an operator, a literal or an index)"
+                "'"
+                    + kw
+                    + "' must be a statement of the loop body (not inside a call argument, an operator, a literal or an index)"
             )
         );
     }
@@ -3519,15 +3608,15 @@ fn check_array(c: Checker, elems: [Expr], line: int, col: int) -> Result<Type, T
     var i = 1;
     while (i < elems.len()) {
         let t = check_expr(c, elems[i])?;
-        if (!type_eq(
-            t,
-            first
-        )) {
+        if (!type_eq(t, first)) {
             return Result.Err(
                 terr(
                     elems[i].line,
                     elems[i].col,
-                    "the array elements must be of the same type: " + type_str(first) + " and " + type_str(t)
+                    "the array elements must be of the same type: "
+                        + type_str(first)
+                        + " and "
+                        + type_str(t)
                 )
             );
         }
@@ -3547,16 +3636,13 @@ fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> 
         );
     }
     match (at) {
-        Type.TArray(elem) => Result.Ok(
-            elem
-        ),
+        Type.TArray(elem) => Result.Ok(elem),
         Type.TString => Result.Ok(Type.TChar),
         _ => {
             var msg = "cannot index a " + type_str(at) + " (not an array, string or bytes)";
-            if (block_like(
-                array
-            )) {
-                msg = msg + "; note: a tail starting with '[' after an if/while/match/block parses as an indexing of its value — separate it with 'return' or 'let'";
+            if (block_like(array)) {
+                msg = msg
+                    + "; note: a tail starting with '[' after an if/while/match/block parses as an indexing of its value — separate it with 'return' or 'let'";
             }
             Result.Err(terr(array.line, array.col, msg))
         },
@@ -3570,15 +3656,9 @@ fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError
     let ot = check_expr(c, object)?;
     match (ot) {
         Type.TNamed(sname, targs) => {
-            match (get(
-            c.structs,
-            sname
-        )) {
+            match (get(c.structs, sname)) {
                 Option.Some(fields) => {
-                    match (find_field(
-                    fields,
-                    name
-                )) {
+                    match (find_field(fields, name)) {
                         Option.Some(fty) => {
                             let sigma = build_sigma(struct_tparams(c, sname), targs);
                             Result.Ok(subst(fty, sigma))
@@ -3669,10 +3749,11 @@ fn seed_sigma_from_expected(
 fn type_has_var(t: Type, holes: [string]) -> bool {
     match (t) {
         Type.TNamed(n, args) => {
-            if (args.len() == 0 && contains_str(
-            holes,
-            n
-        )) { true } else { types_have_var(args, holes) }
+            if (args.len() == 0 && contains_str(holes, n)) {
+                true
+            } else {
+                types_have_var(args, holes)
+            }
         },
         Type.TArray(e) => type_has_var(e, holes),
         Type.TFn(ps, r) => types_have_var(ps, holes) || type_has_var(r, holes),
@@ -3702,10 +3783,11 @@ fn check_value_against(
     holes: [string]
 ) -> Result<Type, TypeError> {
     let exp = subst(declared, sigma);
-    if (type_has_var(
-    exp,
-    holes
-)) { check_expr(c, value) } else { check_expr_expected(c, value, exp) }
+    if (type_has_var(exp, holes)) {
+        check_expr(c, value)
+    } else {
+        check_expr_expected(c, value, exp)
+    }
 }
 
 // Para cada parámetro de tipo, recupera lo inferido en σ (en orden), o error si quedó indeterminado.
@@ -3719,10 +3801,7 @@ fn finalize_type_args(
     var targs: [Type] = [];
     var i = 0;
     while (i < tparams.len()) {
-        match (get(
-            sigma,
-            tparams[i]
-        )) {
+        match (get(sigma, tparams[i])) {
             Option.Some(t) => {
                 targs.push(t);
             },
@@ -3731,7 +3810,11 @@ fn finalize_type_args(
                     terr(
                         line,
                         col,
-                        "could not infer the type parameter '" + tparams[i] + "' of " + label + "; annotate the type"
+                        "could not infer the type parameter '"
+                            + tparams[i]
+                            + "' of "
+                            + label
+                            + "; annotate the type"
                     )
                 );
             },
@@ -3874,16 +3957,10 @@ fn check_enum_lit(
     line: int,
     col: int
 ) -> Result<Type, TypeError> {
-    match (get(
-    c.enums,
-    enum_name
-)) {
+    match (get(c.enums, enum_name)) {
         Option.None => Result.Err(terr(line, col, "enum '" + enum_name + "' not declared")),
         Option.Some(variants) => {
-            match (find_variant(
-            variants,
-            variant
-        )) {
+            match (find_variant(variants, variant)) {
                 Option.None => Result.Err(
                     terr(line, col, "the enum '" + enum_name + "' has no variant '" + variant + "'")
                 ),
@@ -3893,7 +3970,14 @@ fn check_enum_lit(
                             terr(
                                 line,
                                 col,
-                                "the variant '" + enum_name + "." + variant + "' expects " + to_string(payload.len()) + " argument(s), got " + to_string(cargs.len())
+                                "the variant '"
+                                    + enum_name
+                                    + "."
+                                    + variant
+                                    + "' expects "
+                                    + to_string(payload.len())
+                                    + " argument(s), got "
+                                    + to_string(cargs.len())
                             )
                         );
                     }
@@ -4008,23 +4092,21 @@ fn check_match(
         let body_ty = check_expr_opt(c, arm.body, expected)?;
         pop_scope(c);
         // Un brazo que diverge (panic/return) no fija el tipo del match; lo ceden los demás.
-        if (!expr_diverges(
-            arm.body
-        )) {
+        if (!expr_diverges(arm.body)) {
             match (result_ty) {
                 Option.None => {
                     result_ty = Option.Some(body_ty);
                 },
                 Option.Some(prev) => {
-                    if (!type_eq(
-                    prev,
-                    body_ty
-                )) {
+                    if (!type_eq(prev, body_ty)) {
                         return Result.Err(
                             terr(
                                 arm.body.line,
                                 arm.body.col,
-                                "the match arms produce different types: " + type_str(prev) + " and " + type_str(body_ty)
+                                "the match arms produce different types: "
+                                    + type_str(prev)
+                                    + " and "
+                                    + type_str(body_ty)
                             )
                         );
                     }
@@ -4049,7 +4131,10 @@ fn check_match(
                 terr(
                     line,
                     col,
-                    "non-exhaustive match on '" + enum_name + "': missing variants: " + join_comma(missing)
+                    "non-exhaustive match on '"
+                        + enum_name
+                        + "': missing variants: "
+                        + join_comma(missing)
                 )
             );
         }
@@ -4089,14 +4174,15 @@ fn check_pattern(
                     terr(
                         pat.line,
                         pat.col,
-                        "the pattern is of enum '" + pat_enum + "', but the scrutinee is '" + enum_name + "'"
+                        "the pattern is of enum '"
+                            + pat_enum
+                            + "', but the scrutinee is '"
+                            + enum_name
+                            + "'"
                     )
                 );
             }
-            match (find_variant(
-            variants,
-            variant
-        )) {
+            match (find_variant(variants, variant)) {
                 Option.None => Result.Err(
                     terr(
                         pat.line,
@@ -4110,7 +4196,14 @@ fn check_pattern(
                             terr(
                                 pat.line,
                                 pat.col,
-                                "the pattern '" + enum_name + "." + variant + "' binds " + to_string(bindings.len()) + " value(s), but the variant has " + to_string(payload.len())
+                                "the pattern '"
+                                    + enum_name
+                                    + "."
+                                    + variant
+                                    + "' binds "
+                                    + to_string(bindings.len())
+                                    + " value(s), but the variant has "
+                                    + to_string(payload.len())
                             )
                         );
                     }
@@ -4333,15 +4426,18 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     var tj = 0;
     while (tj < trait_methods.len()) {
         let tm = trait_methods[tj];
-        if (!contains_str(
-            impl_names,
-            tm.name
-        ) && !has_default(tm)) {
+        if (!contains_str(impl_names, tm.name) && !has_default(tm)) {
             return Result.Err(
                 terr(
                     imp.line,
                     imp.col,
-                    "the impl of '" + imp.trait_name + "' for " + type_str(target) + " does not implement method '" + tm.name + "'"
+                    "the impl of '"
+                        + imp.trait_name
+                        + "' for "
+                        + type_str(target)
+                        + " does not implement method '"
+                        + tm.name
+                        + "'"
                 )
             );
         }
@@ -4351,30 +4447,33 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     mi = 0;
     while (mi < imp.methods.len()) {
         let m = imp.methods[mi];
-        match (find_method_sig(
-            trait_methods,
-            m.name
-        )) {
+        match (find_method_sig(trait_methods, m.name)) {
             Option.None => {
                 return Result.Err(
                     terr(
                         m.line,
                         m.col,
-                        "the trait '" + imp.trait_name + "' does not declare a method '" + m.name + "'"
+                        "the trait '"
+                            + imp.trait_name
+                            + "' does not declare a method '"
+                            + m.name
+                            + "'"
                     )
                 );
             },
             Option.Some(tm) => {
                 check_method_sig(tm, m, target)?;
                 let mangled = mangle(key, m.name);
-                if (c.methods.contains_key(
-                    mangled
-                )) {
+                if (c.methods.contains_key(mangled)) {
                     return Result.Err(
                         terr(
                             m.line,
                             m.col,
-                            "method '" + m.name + "' ambiguous for " + type_str(target) + ": an impl already provides it"
+                            "method '"
+                                + m.name
+                                + "' ambiguous for "
+                                + type_str(target)
+                                + ": an impl already provides it"
                         )
                     );
                 }
@@ -4390,18 +4489,18 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     tj = 0;
     while (tj < trait_methods.len()) {
         let tm = trait_methods[tj];
-        if (has_default(
-            tm
-        ) && !contains_str(impl_names, tm.name)) {
+        if (has_default(tm) && !contains_str(impl_names, tm.name)) {
             let mangled = mangle(key, tm.name);
-            if (c.methods.contains_key(
-                mangled
-            )) {
+            if (c.methods.contains_key(mangled)) {
                 return Result.Err(
                     terr(
                         imp.line,
                         imp.col,
-                        "method '" + tm.name + "' ambiguous for " + type_str(target) + ": an impl already provides it"
+                        "method '"
+                            + tm.name
+                            + "' ambiguous for "
+                            + type_str(target)
+                            + ": an impl already provides it"
                     )
                 );
             }
@@ -4424,15 +4523,16 @@ fn check_impl_bounds(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     var i = 0;
     while (i < imp.bounds.len()) {
         let b = imp.bounds[i];
-        if (!contains_str(
-            imp.type_params,
-            b.param
-        )) {
+        if (!contains_str(imp.type_params, b.param)) {
             return Result.Err(
                 terr(
                     imp.line,
                     imp.col,
-                    "the bound '" + b.param + ": " + b.trait_name + "' mentions a type parameter the impl does not declare"
+                    "the bound '"
+                        + b.param
+                        + ": "
+                        + b.trait_name
+                        + "' mentions a type parameter the impl does not declare"
                 )
             );
         }
@@ -4522,7 +4622,10 @@ fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result
     }
     var i = 0;
     while (i < a.args.len()) {
-        if (a.args[i] != "Eq" && a.args[i] != "Show" && a.args[i] != "Hash" && a.args[i] != "ToJson") {
+        if (a.args[i] != "Eq"
+            && a.args[i] != "Show"
+            && a.args[i] != "Hash"
+            && a.args[i] != "ToJson") {
             return Result.Err(
                 terr(
                     a.line,
@@ -4689,7 +4792,11 @@ fn ensure_impl_target(
                         terr(
                             line,
                             col,
-                            "'" + n + "' is generic: declare its parameters in the impl, e.g. 'impl<T> ... for " + n + "<T>' (M9.2b)"
+                            "'"
+                                + n
+                                + "' is generic: declare its parameters in the impl, e.g. 'impl<T> ... for "
+                                + n
+                                + "<T>' (M9.2b)"
                         )
                     );
                 }
@@ -4719,7 +4826,12 @@ fn ensure_generic_impl_target(
             terr(
                 line,
                 col,
-                "'" + n + "' expects " + to_string(arity) + " type parameter(s), the impl declares " + to_string(type_params.len())
+                "'"
+                    + n
+                    + "' expects "
+                    + to_string(arity)
+                    + " type parameter(s), the impl declares "
+                    + to_string(type_params.len())
             )
         );
     }
@@ -4746,7 +4858,11 @@ fn ensure_generic_impl_target(
             terr(
                 line,
                 col,
-                "the generic impl must apply to '" + n + "<" + join_comma(type_params) + ">' (its own distinct type parameters)"
+                "the generic impl must apply to '"
+                    + n
+                    + "<"
+                    + join_comma(type_params)
+                    + ">' (its own distinct type parameters)"
             )
         );
     }
@@ -4761,7 +4877,12 @@ fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeErr
             terr(
                 m.line,
                 m.col,
-                "the method '" + m.name + "' takes " + to_string(m.params.len()) + " parameter(s) (including self), but the trait requires " + to_string(tm.params.len())
+                "the method '"
+                    + m.name
+                    + "' takes "
+                    + to_string(m.params.len())
+                    + " parameter(s) (including self), but the trait requires "
+                    + to_string(tm.params.len())
             )
         );
     }
@@ -4769,15 +4890,19 @@ fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeErr
     while (i < tm.params.len()) {
         let want = resolve_type(subst_self(tm.params[i].ty, target));
         let got = resolve_type(subst_self(m.params[i].ty, target));
-        if (!type_eq(
-            want,
-            got
-        )) {
+        if (!type_eq(want, got)) {
             return Result.Err(
                 terr(
                     m.params[i].line,
                     m.params[i].col,
-                    "the parameter " + to_string(i + 1) + " of method '" + m.name + "' is " + type_str(got) + ", but the trait requires " + type_str(want)
+                    "the parameter "
+                        + to_string(i + 1)
+                        + " of method '"
+                        + m.name
+                        + "' is "
+                        + type_str(got)
+                        + ", but the trait requires "
+                        + type_str(want)
                 )
             );
         }
@@ -4785,15 +4910,17 @@ fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeErr
     }
     let want_ret = resolve_type(subst_self(tm.ret, target));
     let got_ret = resolve_type(subst_self(m.ret, target));
-    if (!type_eq(
-        want_ret,
-        got_ret
-    )) {
+    if (!type_eq(want_ret, got_ret)) {
         return Result.Err(
             terr(
                 m.line,
                 m.col,
-                "the method '" + m.name + "' returns " + type_str(got_ret) + ", but the trait requires " + type_str(want_ret)
+                "the method '"
+                    + m.name
+                    + "' returns "
+                    + type_str(got_ret)
+                    + ", but the trait requires "
+                    + type_str(want_ret)
             )
         );
     }

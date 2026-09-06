@@ -89,7 +89,11 @@ fn write_packet(c: Conn, payload: [int]) -> Result<int, string> {
 fn at(p: [int], i: int) -> Result<int, string> {
     if (i < 0 || i >= p.len()) {
         return Result.Err(
-            "mysql: truncated packet (requested byte " + to_string(i) + " de " + to_string(p.len()) + ")"
+            "mysql: truncated packet (requested byte "
+                + to_string(i)
+                + " de "
+                + to_string(p.len())
+                + ")"
         );
     }
     Result.Ok(p[i])
@@ -381,7 +385,9 @@ fn connect_opts(
                         // sigue el OK/ERR en el bucle
                     } else {
                         return Result.Err(
-                            "mysql: caching_sha2_password requires the full path; use connect_tls (the " + "password travels encrypted), a user with mysql_native_password, or " + "warm the server cache with another client"
+                            "mysql: caching_sha2_password requires the full path; use connect_tls (the "
+                                + "password travels encrypted), a user with mysql_native_password, or "
+                                + "warm the server cache with another client"
                         );
                     }
                 }

@@ -8,14 +8,14 @@ fn main() {
     match (parse_int(a[1])) {
         Option.Some(port) => {
             match (pg_query(
-            host,
-            port,
-            "raylang",
-            "test",
-            "secret",
-            "clientnonce123456",
-            "SELECT greeting"
-        )) {
+                host,
+                port,
+                "raylang",
+                "test",
+                "secret",
+                "clientnonce123456",
+                "SELECT greeting"
+            )) {
                 Result.Ok(cols) => {
                     var s = "";
                     var primero = true;

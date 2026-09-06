@@ -91,9 +91,15 @@ fn bar_width(ratio: float) -> int {
 }
 
 fn bar_row(css: string, lang: string, width: int, label: string) -> string {
-    "<div class=\"brow " + css + "\"><span>" + lang + "</span><i style=\"width:" + to_string(
-        width
-    ) + "%\"></i><b>" + label + "</b></div>"
+    "<div class=\"brow "
+        + css
+        + "\"><span>"
+        + lang
+        + "</span><i style=\"width:"
+        + to_string(width)
+        + "%\"></i><b>"
+        + label
+        + "</b></div>"
 }
 
 // Un grupo por programa: raylang (1×, referencia) + rustc/go/node relativos.
@@ -145,7 +151,9 @@ pub fn build(md: string) -> string {
     }
     var note = "";
     if (caption.len() > 0) {
-        note = "<p class=\"bench-note\">" + caption + " · el mismo output en todas las variantes, verificado por checksum · barra más larga = más lento que el binario nativo de raylang (1×), truncada en 4×.</p>";
+        note = "<p class=\"bench-note\">"
+            + caption
+            + " · el mismo output en todas las variantes, verificado por checksum · barra más larga = más lento que el binario nativo de raylang (1×), truncada en 4×.</p>";
     }
     "<div class=\"bench-chart\">" + groups + "</div>" + note
 }

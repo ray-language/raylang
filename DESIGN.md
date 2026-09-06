@@ -12226,6 +12226,39 @@ conservador).
 condición) siguen siendo el consejo por defecto; lo que cambia es que la bandera deja de ser el
 plan B, porque era el plan malo.
 
+## 184. M192 — lote B de `ray-remote`: literales, desplazamientos y `from` (sep 2026)
+
+Tres fricciones pequeñas del feedback, las tres del mismo sitio: escribir criptografía a mano.
+
+**Los literales que no cabían.** `let c: u64 = 0xFFFFFFFFFFFFFFFF` era "integer out of range": el
+lexer validaba contra `i64` antes de que nadie mirara el tipo del destino, y así las tablas de
+constantes de DES o SHA-512 no se podían copiar del estándar (el rodeo era `(hi << 32) | lo`). La
+decisión tiene dos partes. (1) El lexer lee el literal como `u64` y, si no cabe en `int`, lo marca
+**amplio**: se guarda como sus 64 bits en el `i64` del token y con sufijo `u64` implícito. Un literal
+amplio es `u64` sin contexto — como en Rust, donde un entero que solo cabe en `u64` no necesita
+anotación —, y un contexto `int` es error de tipos con el mensaje normal. (2) **Sufijos** `u8`/
+`u32`/`u64` pegados a los dígitos, para el caso sin contexto (`0xFFu32`). Se representa en el token
+sin cambiar la aridad de `Int(i64, Radix)`: `Radix` pasa de enum a `{ base, suffix }` con consts
+`DEC`/`HEX`/…, así que los ~40 sitios que casan `Int(n, radix)` no cambian. Las conversiones a `u64`
+de los motores ya eran bit a bit (`n as u64`), luego un literal amplio llega intacto; el transpilador
+y el formateador lo imprimen como `u64`.
+
+**La cuenta del desplazamiento.** `v << n` con `v: u32, n: int` exigía `as u32`. El checker acepta
+`int` como cuenta (el resultado es el tipo del operando izquierdo; fuera de rango envuelve, como ya
+estaba definido), la VM y el intérprete ganan un brazo por operador, y el nativo emite
+`wrapping_shl((n) as u32)` — que además hace explícita la semántica envolvente que antes dependía
+del modo de compilación de Rust. Salió un bug latente: `check_expr_expected` propagaba el tipo
+esperado a los DOS operandos de un binario "conservador de ancho", y si el derecho no cuajaba dejaba
+registrado el literal del izquierdo como coercionado; el chequeo normal rechazaba después el
+programa, así que nunca llegaba al runtime… hasta que la regla nueva lo dejó pasar y `v >> (32 - n)`
+produjo un ICE. Ahora la cuenta de un shift no hereda el esperado, y el intento fallido restaura
+los sitios.
+
+**`from` contextual.** Solo significa algo al inicio de un ítem (`from M import x;`); reservarla en
+todas partes impedía `fn slice(bits, from, to)`. El lexer la produce como identificador y el parser
+la reconoce por nombre en posición de ítem (y tras `pub`). Como un ítem no puede empezar por un
+identificador, no hay ambigüedad. Se retira el mensaje de M188 (era el apaño hasta este hito).
+
 ## 186. M194 — `std/crypto/{md5,aes,des}`: la cripto que el otro lado impone (sep 2026)
 
 `std/crypto` está bien elegida para diseñar cosas nuevas: Ed25519, X25519, ChaCha20-Poly1305,

@@ -46,8 +46,10 @@ pub(super) fn is_width_preserving(op: BinaryOp) -> bool {
 /// M28.3b: ¿cabe el literal entero `n` (siempre ≥ 0 aquí; los negativos son `-` unario) en un
 /// entero sin signo de `w` bits? Para u64, cualquier i64 no negativo cabe (i64::MAX < u64::MAX).
 pub(super) fn uint_literal_fits(n: i64, w: u8) -> bool {
-    if n < 0 { return false; }
+    // M192: en u64 cabe cualquier literal — incluido uno AMPLIO, que llega como sus 64 bits (i64
+    // negativo). Un literal nunca es negativo de por sí (el `-` es un operador aparte).
     if w >= 64 { return true; }
+    if n < 0 { return false; }
     (n as u64) <= crate::runtime::uint_mask(w)
 }
 
@@ -957,7 +959,7 @@ pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, u
         match &mut stmt.kind {
             StmtKind::For { iter, body, .. } => {
                 if let (Some(next_fn), ForIter::In(_)) = (sites.get(&pos), &*iter) {
-                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0, crate::token::Radix::Dec), line: 0, col: 0 }));
+                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0, crate::token::Radix::DEC), line: 0, col: 0 }));
                     if let ForIter::In(e) = old {
                         *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
                     }

@@ -204,6 +204,10 @@ protocolos binarios. Los literales se adaptan al contexto sin cast:
 ```rust
 let b: u8 = 200;               // literal coercionado
 let h: u32 = 2166136261;       // FNV offset basis
+let k: u64 = 0x428A2F98D728AE22;  // cabe en int: coercionado
+let all = 0xFFFFFFFFFFFFFFFF;  // no cabe en int → literal AMPLIO: es u64 sin anotar (M192)
+let m = 0xFFu32;               // sufijo u8/u32/u64: el literal tiene ese tipo sin contexto
+fn rotl(v: u32, n: int) -> u32 { (v << n) | (v >> (32 - n)) }   // la cuenta del shift es int
 var acc: u32 = h;
 acc = (acc ^ b as u32) * 16777619;   // aritmética u32, envuelve
 ```

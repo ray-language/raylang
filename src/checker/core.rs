@@ -1797,11 +1797,23 @@ impl Checker {
             // acaban siendo el uint esperado; si no, se cae al chequeo normal (que da el error).
             if let ExprKind::Binary { op, left, right } = &expr.kind {
                 if is_width_preserving(*op) {
+                    // M192: el intento se hace sobre una COPIA de los sitios de literal: si no cuaja
+                    // (un lado no acaba siendo el uint esperado), los literales que sí se coercionaron
+                    // quedaban registrados y el lowering los casteaba a un ancho que el chequeo normal
+                    // nunca validó (ICE en runtime con `v >> (32 - n)`).
+                    let saved_sites = self.uint_literal_sites.clone();
                     let lt = self.check_expr_expected(left, expected)?;
-                    let rt = self.check_expr_expected(right, expected)?;
-                    if lt == *expected && rt == *expected {
+                    // La CUENTA de un desplazamiento es un conteo (`int`): no hereda el esperado.
+                    let rt = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                        self.check_expr(right)?
+                    } else {
+                        self.check_expr_expected(right, expected)?
+                    };
+                    let count_ok = matches!(op, BinaryOp::Shl | BinaryOp::Shr) && rt == Type::Int;
+                    if lt == *expected && (rt == *expected || count_ok) {
                         return Ok(expected.clone());
                     }
+                    self.uint_literal_sites = saved_sites;
                 }
             }
         }
@@ -2000,7 +2012,15 @@ impl Checker {
 
     fn check_expr_inner(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match &expr.kind {
-            ExprKind::Int(..) => Ok(Type::Int),
+            // M192: un literal con sufijo (`255u8`, `0xFFu32`) o amplio (`0xFFFFFFFFFFFFFFFF`, solo
+            // cabe en u64) es directamente `uN`, sin contexto: se registra como sitio uint.
+            ExprKind::Int(_, radix) => match radix.fixed_width() {
+                Some(w) => {
+                    self.uint_literal_sites.insert((expr.line, expr.col), w);
+                    Ok(Type::UInt(w))
+                }
+                None => Ok(Type::Int),
+            },
             ExprKind::Float(_) => Ok(Type::Float),
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
@@ -2361,6 +2381,10 @@ impl Checker {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 // M28.3: bit a bit sobre enteros sin signo del mismo ancho → ese ancho.
                 (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::UInt(*a)),
+                // M192 (B2): la CUENTA de un desplazamiento es un conteo, no un valor del mismo
+                // dominio — `v << n` con `v: u32, n: int` no necesita `as u32` (cuenta fuera de
+                // rango: envolvente, como ya estaba definido).
+                (Type::UInt(a), Type::Int) if matches!(op, Shl | Shr) => Ok(Type::UInt(*a)),
                 _ => Err(self.err(line, col, format!(
                     "the operator '{}' requires int operands, not {} and {}",
                     bin_op_str(op), lt, rt
@@ -2401,10 +2425,17 @@ impl Checker {
     /// ese ancho (en el lowering se envuelve en un `as u{w}`) y devuelve `Some(UInt(w))`. Si no es
     /// un literal, `None` (sin coerción). Si es un literal fuera de rango, error.
     pub(super) fn coerce_uint_literal(&mut self, expr: &Expr, w: u8) -> Result<Option<Type>, TypeError> {
-        if let ExprKind::Int(n, _) = &expr.kind {
-            if !uint_literal_fits(*n, w) {
+        if let ExprKind::Int(n, radix) = &expr.kind {
+            // M192: un literal con sufijo ya tiene ancho; solo coerciona a ese mismo ancho.
+            if let Some(s) = radix.suffix
+                && s != w
+            {
                 return Err(self.err(expr.line, expr.col, format!(
-                    "the literal {} does not fit in u{}", n, w)));
+                    "the literal {} is u{} but u{} is expected", literal_text(*n, *radix), s, w)));
+            }
+            if (radix.wide && w < 64) || !uint_literal_fits(*n, w) {
+                return Err(self.err(expr.line, expr.col, format!(
+                    "the literal {} does not fit in u{}", literal_text(*n, *radix), w)));
             }
             self.uint_literal_sites.insert((expr.line, expr.col), w);
             return Ok(Some(Type::UInt(w)));

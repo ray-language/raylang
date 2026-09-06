@@ -320,6 +320,26 @@ fn not_on_an_integer_points_to_bitwise_not() {
 }
 
 #[test]
+fn wide_and_suffixed_literals_and_int_shift_counts() {
+    // M192 (B1): un literal amplio es u64 sin contexto; con sufijo, ese ancho; el tipo esperado
+    // sigue coercionando los literales sin sufijo.
+    check_src("fn main() -> int { let all: u64 = 0xFFFFFFFFFFFFFFFF; let k = 18446744073709551615; let b = 255u8; let m: u32 = 0xFFu32; if (all == k) { 0 } else { 1 } }")
+        .expect("literales amplios y con sufijo");
+    err_contains("fn main() -> int { let x: int = 0xFFFFFFFFFFFFFFFF; 0 }", "'x' is declared as int but initialized with u64");
+    err_contains("fn main() -> int { let x: u32 = 1u8; 0 }", "the literal 1u8 is u8 but u32 is expected");
+    err_contains("fn main() -> int { let x: u8 = 0xFFFFFFFFFFFFFFFF; 0 }", "the literal 18446744073709551615 does not fit in u8");
+    // B2: la cuenta de un desplazamiento es `int` (variable o expresión), sin `as u32`.
+    check_src("fn rotl(v: u32, n: int) -> u32 { (v << n) | (v >> (32 - n)) } fn main() -> int { let r: u32 = rotl(1 as u32, 3); 0 }")
+        .expect("cuenta int");
+    check_src("fn main() -> int { let v: u64 = 1 as u64; let n = 3; let w: u64 = v << n; let z: u64 = (v >> (n + 1)) + 1; 0 }")
+        .expect("cuenta int en contexto esperado u64");
+    err_contains("fn main() -> int { let v: u32 = 1 as u32; let w: u8 = 1 as u8; let y = v << w; 0 }", "requires int operands, not u32 and u8");
+    // B3: `from` es un identificador fuera de la cabecera de un ítem.
+    check_src("fn slice(bits: [int], from: int, to: int) -> [int] { let from = from + 1; bits } fn main() -> int { 0 }")
+        .expect("from como parámetro y variable");
+}
+
+#[test]
 fn break_and_continue_are_loop_statements() {
     // M191: válidos en la espina de sentencias del cuerpo de un bucle; divergen (la rama que
     // rompe cede el tipo).

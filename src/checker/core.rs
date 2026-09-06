@@ -2016,6 +2016,12 @@ impl Checker {
                         _ => Err(self.err(expr.line, expr.col, format!("cannot negate (-) a {}", t))),
                     },
                     UnaryOp::Not if t == Type::Bool => Ok(Type::Bool),
+                    // M188: sobre un entero, la pista que evita el rodeo `v ^ 0xFFFFFFFF` (ray-remote).
+                    UnaryOp::Not if t == Type::Int || matches!(t, Type::UInt(_)) => Err(self.err(
+                        expr.line,
+                        expr.col,
+                        format!("'!' requires bool, not {} (for a bitwise NOT use '~')", t),
+                    )),
                     UnaryOp::Not => Err(self.err(expr.line, expr.col, format!("'!' requires bool, not {}", t))),
                     // M19.3a: NOT bit a bit, int → int. M28.3: también sobre uint (mismo ancho).
                     UnaryOp::BitNot if t == Type::Int => Ok(Type::Int),

@@ -69,7 +69,6 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::Dyn => "Dyn".into(),
         TokenKind::Pub => "Pub".into(),
         TokenKind::Import => "Import".into(),
-        TokenKind::From => "From".into(),
         TokenKind::As => "As".into(),
         TokenKind::IntType => "IntType".into(),
         TokenKind::FloatType => "FloatType".into(),

@@ -2613,6 +2613,9 @@ impl<'a> Interpreter<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => make_uint(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shr(b as u32), w),
+            // M192 (B2): la cuenta puede ser `int`.
+            (Shl, UInt(a, w), Int(b)) => make_uint(a.wrapping_shl(b as u32), w),
+            (Shr, UInt(a, w), Int(b)) => make_uint(a.wrapping_shr(b as u32), w),
             _ => unreachable!("operator/operand combination that the checker should have rejected"),
         })
     }

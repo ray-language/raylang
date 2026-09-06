@@ -4603,6 +4603,9 @@ impl<'a> Vm<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => uint_heap(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shr(b as u32), w),
+            // M192 (B2): la cuenta puede ser `int`.
+            (Shl, UInt(a, w), Int(b)) => uint_heap(a.wrapping_shl(b as u32), w),
+            (Shr, UInt(a, w), Int(b)) => uint_heap(a.wrapping_shr(b as u32), w),
             _ => unreachable!("operator/operand combination that the checker should have rejected"),
         })
     }

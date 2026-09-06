@@ -331,7 +331,6 @@ fn tok_name(k: TokKind) -> string {
         TokKind.Dyn => "dyn",
         TokKind.Pub => "pub",
         TokKind.Import => "import",
-        TokKind.From => "from",
         TokKind.As => "as",
         TokKind.IntType => "int",
         TokKind.FloatType => "float",
@@ -398,7 +397,6 @@ fn tok_debug(k: TokKind) -> string {
         TokKind.Dyn => "Dyn",
         TokKind.Pub => "Pub",
         TokKind.Import => "Import",
-        TokKind.From => "From",
         TokKind.As => "As",
         TokKind.IntType => "IntType",
         TokKind.FloatType => "FloatType",
@@ -451,6 +449,25 @@ fn at_end(p: Parser) -> bool { tok_name(cur_kind(p)) == "eof" }
 // El token actual es exactamente `name` (su grafía canónica).
 fn check(p: Parser, name: string) -> bool { tok_name(cur_kind(p)) == name }
 
+// M192: ¿el token actual es el IDENTIFICADOR `name`? (palabras clave contextuales: `from`).
+fn check_ident_named(p: Parser, name: string) -> bool {
+    match (cur_kind(p)) {
+        TokKind.Ident(n) => n == name,
+        _ => false,
+    }
+}
+
+fn check_next_ident_named(p: Parser, name: string) -> bool {
+    if (p.pos + 1 < p.toks.len()) {
+        match (p.toks[p.pos + 1].kind) {
+            TokKind.Ident(n) => n == name,
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
 // El token SIGUIENTE (uno por delante) es `name`. Para el lookahead de `pub from …`.
 fn check_next(p: Parser, name: string) -> bool {
     if (p.pos + 1 < p.toks.len()) { tok_name(p.toks[p.pos + 1].kind) == name } else { false }
@@ -500,8 +517,6 @@ fn expect_ident(p: Parser, what: string) -> Result<string, ParseError> {
             advance(p);
             Result.Ok(n)
         },
-        // M188: la palabra reservada `from` en posición de nombre, con su porqué (byte-idéntico a Rust).
-        TokKind.From => Result.Err(perr_here(p, "expected " + what + ", but 'from' is a reserved word")),
         _ => Result.Err(perr_here(p, "expected " + what)),
     }
 }
@@ -521,9 +536,9 @@ fn parse_program(p: Parser) -> Result<Program, ParseError> {
     while (!at_end(p)) {
         if (check(p, "import")) {
             imports.push(import_decl(p)?);
-        } else if (check(p, "from")) {
+        } else if (check_ident_named(p, "from")) {
             from_imports.push(import_from_decl(p, false)?);
-        } else if (check(p, "pub") && check_next(p, "from")) {
+        } else if (check(p, "pub") && check_next_ident_named(p, "from")) {
             advance(p);  // 'pub'
             from_imports.push(import_from_decl(p, true)?);  // reexport
         } else {
@@ -643,7 +658,7 @@ fn import_decl(p: Parser) -> Result<ImportDecl, ParseError> {
 // from_import_decl = 'from' module_path 'import' name { ',' name } [ ',' ] ';'  ;  name = IDENT [ 'as' IDENT ]
 // La coma final es opcional (M104): la lista envuelta en varias líneas se edita con un diff de una línea.
 fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
-    let kw = expect(p, "from", "'from'")?;
+    let kw = advance(p);  // `from` (contextual, M192: el llamador ya lo comprobó)
     let modpath = module_path(p)?;
     expect(p, "import", "'import' after 'from M'")?;
     var names: [ImportName] = [];

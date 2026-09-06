@@ -33,12 +33,12 @@ Reservadas (no pueden usarse como identificadores):
 |---|---|
 | Declaraciones | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` |
 | Control | `if` `else` `while` `for` `in` `return` `match` |
-| Módulos | `import` `from` `pub` |
+| Módulos | `import` `pub` (`from` es **contextual**: solo al inicio de un ítem, `from M import x;`) |
 | Valores/tipos | `true` `false` `dyn` `as` `self` `Self` |
 | Tipos primitivos | `int` `float` `bool` `string` `char` `bytes` `ptr` `u8` `u32` `u64` |
 
-> Ojo con `from`: al ser palabra clave, no vale como nombre de parámetro o variable (usa `source`,
-> `origin`, etc.).
+> `from` vale como nombre de parámetro o variable (M192): solo es palabra clave en la cabecera de
+> un `from M import …;`.
 
 ## 2. Símbolos y operadores
 

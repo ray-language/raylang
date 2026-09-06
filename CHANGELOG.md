@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Literales enteros con sufijo y literales amplios `u64`** (M192, DESIGN §184, SPEC §3/§5;
+  feedback de `ray-remote`): `255u8`, `0xFFu32`, `7u64` tienen su tipo sin contexto; un literal que
+  no cabe en `int` pero sí en `u64` (`0xFFFFFFFFFFFFFFFF`, las tablas de SHA-512/DES copiadas del
+  estándar) es `u64` sin anotar (antes: "integer out of range"). `ray fmt` los reemite tal cual.
+- **La cuenta de un desplazamiento es `int`** (M192): `v << n` con `v: u32, n: int` ya no exige
+  `as u32`; la cuenta envuelve como antes. Arreglado de paso un ICE latente: el tipo esperado de
+  un binario dejaba coercionado un literal aunque el otro lado fallara.
+- **`from` es palabra clave contextual** (M192): solo en la cabecera de `from M import …;`; como
+  parámetro o variable es un identificador (`fn slice(bits, from, to)`). Sustituye el mensaje de
+  M188.
+
 - **`ray fmt` ya no desprende los comentarios ni deja líneas de 300 columnas** (M189, DESIGN §181;
   feedback de `ray-remote`): (1) un comentario trailing en la línea de un operando (`&& f(x)  // …`)
   o de un elemento de una lista repartida vuelve con su operando/elemento — y una expresión cuyas

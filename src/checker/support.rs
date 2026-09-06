@@ -209,6 +209,15 @@ pub(super) fn block_diverges(block: &Block) -> bool {
         || block.tail.as_ref().is_some_and(|t| expr_diverges(t))
 }
 
+/// M192: el texto de un literal entero para los mensajes (sin signo si lleva sufijo o es amplio).
+pub(super) fn literal_text(n: i64, radix: crate::token::Radix) -> String {
+    match (radix.suffix, radix.wide) {
+        (Some(w), _) => format!("{}u{}", n as u64, w),
+        (None, true) => (n as u64).to_string(),
+        (None, false) => n.to_string(),
+    }
+}
+
 pub(super) fn stmt_diverges(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Return { .. } => true,

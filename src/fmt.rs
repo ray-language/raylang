@@ -1722,12 +1722,18 @@ fn fmt_float(f: f64) -> String {
 /// hex en mayúscula (`0xFF`, `0o755`, `0b1010`). El valor ya cabe en i64 y es no negativo (el
 /// signo es un `Unary` aparte), así que `{:X}`/`{:o}`/`{:b}` bastan.
 fn fmt_int(n: i64, radix: crate::token::Radix) -> String {
-    use crate::token::Radix;
-    match radix {
-        Radix::Dec => n.to_string(),
-        Radix::Hex => format!("0x{:X}", n),
-        Radix::Oct => format!("0o{:o}", n),
-        Radix::Bin => format!("0b{:b}", n),
+    use crate::token::Base;
+    // M192: un literal con sufijo (o amplio: suffix 64 y sus bits en `i64`) se imprime SIN signo y
+    // con su sufijo; sin sufijo, el valor es no negativo y `{}` basta.
+    let body = match radix.base {
+        Base::Dec => if radix.suffix.is_some() || radix.wide { (n as u64).to_string() } else { n.to_string() },
+        Base::Hex => format!("0x{:X}", n as u64),
+        Base::Oct => format!("0o{:o}", n as u64),
+        Base::Bin => format!("0b{:b}", n as u64),
+    };
+    match radix.suffix {
+        Some(w) => format!("{}u{}", body, w),
+        None => body,
     }
 }
 
@@ -2591,5 +2597,13 @@ mod tests {
         let out = fmt(src);
         assert!(!out.contains("\n        + 1]"), "{out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn integer_suffixes_and_wide_literals_roundtrip() {
+        // M192: el sufijo y el literal amplio (impreso sin signo) se reemiten tal cual.
+        let src = "fn main() -> int {\n    let a = 255u8;\n    let b = 0xFFu32;\n    let c = 0xFFFFFFFFFFFFFFFF;\n    let d = 18446744073709551615;\n    let e: u64 = 7u64;\n    0\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
     }
 }

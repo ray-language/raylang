@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/inflate` incremental** (M193, DESIGN §185; feedback de `ray-remote`): `zlib_stream()` /
+  `inflate_stream()` + `stream_push(z, chunk) -> Result<bytes, string>` descomprimen un stream que
+  dura toda la sesión — cada `push` devuelve lo que produjeron los bloques completados, la ventana
+  LZ77 sobrevive entre llamadas y la entrada puede cortarse en cualquier octeto. Es lo que exigen
+  los encodings ZRLE/Zlib/Tight de RFB y el `permessage-deflate` de WebSocket (un flush de
+  sincronización por mensaje = un mensaje por `push`). raylang puro, cero runtime nuevo.
+
 - **Literales enteros con sufijo y literales amplios `u64`** (M192, DESIGN §184, SPEC §3/§5;
   feedback de `ray-remote`): `255u8`, `0xFFu32`, `7u64` tienen su tipo sin contexto; un literal que
   no cabe en `int` pero sí en `u64` (`0xFFFFFFFFFFFFFFFF`, las tablas de SHA-512/DES copiadas del

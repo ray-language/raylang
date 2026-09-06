@@ -436,31 +436,34 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
 }
 
 // Bucle principal: procesa bloques hasta el que tiene BFINAL=1.
+// M193: UN bloque DEFLATE (cabecera de 3 bits + cuerpo). Devuelve `Ok(1)` si era el último.
+fn inflate_one_block(s: Inflater) -> Result<int, string> {
+    let last = read_bit(s)?;
+    let btype = read_bits(s, 2)?;
+    var r: Result<int, string> = Result.Ok(0);
+    if (btype == 0) {
+        r = stored_block(s);
+    } else {
+        if (btype == 1) {
+            r = inflate_codes(s, fixed_litlen(), fixed_dist());
+        } else {
+            if (btype == 2) {
+                r = dynamic_block(s);
+            } else {
+                return Result.Err("reserved DEFLATE block type (3)");
+            }
+        }
+    }
+    match (r) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(_) => Result.Ok(last),
+    }
+}
+
 fn inflate_blocks(s: Inflater) -> Result<int, string> {
     var last = 0;
     while (last == 0) {
-        last = read_bit(s)?;
-        let btype = read_bits(s, 2)?;
-        var r: Result<int, string> = Result.Ok(0);
-        if (btype == 0) {
-            r = stored_block(s);
-        } else {
-            if (btype == 1) {
-                r = inflate_codes(s, fixed_litlen(), fixed_dist());
-            } else {
-                if (btype == 2) {
-                    r = dynamic_block(s);
-                } else {
-                    return Result.Err("reserved DEFLATE block type (3)");
-                }
-            }
-        }
-        match (r) {
-            Result.Err(e) => {
-                return Result.Err(e);
-            },
-            Result.Ok(_) => { },
-        }
+        last = inflate_one_block(s)?;
     }
     Result.Ok(0)
 }
@@ -655,4 +658,171 @@ pub fn zlib_inflate_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     }
     let comprimido = data.sub_bytes(2, data.len() - 4);
     inflate_raw_limit(comprimido, max_out)
+}
+
+// --- M193: INFLATE INCREMENTAL — un stream que sobrevive a muchos `push` (plan ray-remote C1). ---
+//
+// Varios protocolos mantienen UN stream zlib abierto durante toda la sesión y cada mensaje continúa
+// el anterior reutilizando su ventana LZ77: los encodings ZRLE/Zlib/Tight de RFB, el
+// `permessage-deflate` de WebSocket (RFC 7692). No se puede descomprimir el mensaje N sin el estado
+// que dejaron los N-1. Diseño: el estado guarda la VENTANA (los últimos 32 KiB emitidos, el alcance
+// máximo de una referencia hacia atrás) y la entrada PENDIENTE (lo aún no consumido, con su cursor
+// de bits). Cada `push` añade el trozo y decodifica BLOQUES COMPLETOS desde el último punto de
+// control; un bloque que se queda sin entrada ("truncated") se descarta y se reintenta cuando llegue
+// más. La salida devuelta es exactamente lo que produjeron los bloques completados en ese `push`.
+// Los flushes de sincronización de zlib (`Z_SYNC_FLUSH`, lo que RFB y WebSocket hacen por mensaje)
+// terminan siempre en un límite de bloque, así que cada mensaje sale entero en su `push`.
+// El tamaño de la ventana LZ77: ninguna distancia DEFLATE la supera (RFC 1951 §3.2.5).
+fn window_size() -> int {
+    32768
+}
+
+// El estado de un stream incremental. `window`: los últimos octetos emitidos (≤ 32 KiB), a los que las
+// referencias hacia atrás del siguiente bloque pueden apuntar. `pending`: la entrada aún no
+// consumida; `bitpos`: el bit del primer octeto de `pending` por el que se sigue (un bloque puede
+// terminar a mitad de octeto). `header`: `true` mientras falte consumir la cabecera zlib.
+pub struct InflateStream {
+    window: [int],
+    pending: bytes,
+    bitpos: int,
+    header: bool,
+    finished: bool,
+    failed: Option<string>,
+    limit: int,
+}
+
+/// Creates an incremental decoder for a raw DEFLATE stream (RFC 1951, no wrapper). Feed it with
+/// `stream_push`; each call returns the bytes produced by the blocks completed so far. The LZ77
+/// window (32 KiB) survives across calls, so a protocol that keeps one stream open for a whole
+/// session (RFB ZRLE/Zlib/Tight, WebSocket permessage-deflate) decodes message by message.
+pub fn inflate_stream() -> InflateStream {
+    InflateStream {
+        window: [],
+        pending: b"",
+        bitpos: 0,
+        header: false,
+        finished: false,
+        failed: Option.None,
+        limit: default_limit()
+    }
+}
+
+/// Like `inflate_stream`, for a zlib stream (RFC 1950): the 2-byte header is consumed first (FDICT
+/// is rejected) and the trailing Adler-32, if the stream ever ends, is skipped (not verified).
+pub fn zlib_stream() -> InflateStream {
+    let z = inflate_stream();
+    z.header = true;
+    z
+}
+
+/// Caps the output of a single `stream_push` at `max_out` bytes (decompression-bomb protection);
+/// the default is 64 MiB.
+pub fn stream_set_limit(z: InflateStream, max_out: int) {
+    z.limit = max_out;
+}
+
+/// `true` once the final DEFLATE block has been decoded (a persistent protocol stream never ends).
+pub fn stream_finished(z: InflateStream) -> bool {
+    z.finished
+}
+
+// ¿Es un error de "falta entrada" (reintentable con más datos) y no de corrupción?
+fn is_truncation(msg: string) -> bool {
+    msg.contains("truncated")
+}
+
+/// Feeds `chunk` to the incremental decoder and returns the bytes produced by every block that
+/// completed with the input available so far (possibly empty: the block needs more input). Input
+/// may be split at any byte boundary, even inside a block. A corrupt stream returns `Err` and the
+/// stream stays failed; after the final block, further input is ignored.
+pub fn stream_push(z: InflateStream, chunk: bytes) -> Result<bytes, string> {
+    match (z.failed) {
+        Option.Some(e) => {
+            return Result.Err(e);
+        },
+        Option.None => { },
+    }
+    if (z.finished) {
+        return Result.Ok(b"");
+    }
+    z.pending = z.pending + chunk;
+    // Cabecera zlib (2 octetos): método deflate y sin diccionario preestablecido.
+    if (z.header) {
+        if (z.pending.len() < 2) {
+            return Result.Ok(b"");
+        }
+        if ((z.pending[0] & 15) != 8) {
+            z.failed = Option.Some("unsupported zlib compression method");
+            return Result.Err("unsupported zlib compression method");
+        }
+        if ((z.pending[1] & 32) != 0) {
+            z.failed = Option.Some("zlib preset dictionary (FDICT) not supported");
+            return Result.Err("zlib preset dictionary (FDICT) not supported");
+        }
+        z.pending = z.pending.sub_bytes(2, z.pending.len());
+        z.header = false;
+    }
+    // La ventana entra como salida ya emitida (las referencias hacia atrás la alcanzan); lo nuevo
+    // se acumula detrás. El tope de salida es por `push`, sin contar la ventana.
+    var s = Inflater {
+        data: z.pending,
+        pos: 0,
+        bitpos: z.bitpos,
+        out: z.window,
+        limit: z.window.len() + z.limit
+    };
+    let base = z.window.len();
+    var committed_pos = 0;
+    var committed_bitpos = z.bitpos;
+    var committed_out = base;
+    var go = true;
+    while (go) {
+        match (inflate_one_block(s)) {
+            Result.Ok(last) => {
+                committed_pos = s.pos;
+                committed_bitpos = s.bitpos;
+                committed_out = s.out.len();
+                if (last == 1) {
+                    z.finished = true;
+                    go = false;
+                }
+            },
+            Result.Err(e) => {
+                if (is_truncation(e)) {
+                    // Bloque incompleto: se descarta lo decodificado a medias y se espera más entrada.
+                    go = false;
+                } else {
+                    z.failed = Option.Some(e);
+                    return Result.Err(e);
+                }
+            },
+        }
+    }
+    // Lo producido por los bloques completos de este push.
+    var produced: [int] = [];
+    var i = base;
+    while (i < committed_out) {
+        produced.push(s.out[i]);
+        i = i + 1;
+    }
+    // La ventana: los últimos 32 KiB de todo lo emitido hasta el último bloque completo.
+    var start = committed_out - window_size();
+    if (start < 0) {
+        start = 0;
+    }
+    var window: [int] = [];
+    var k = start;
+    while (k < committed_out) {
+        window.push(s.out[k]);
+        k = k + 1;
+    }
+    z.window = window;
+    // La entrada consumida se descarta; el octeto a medias se conserva con su cursor de bits.
+    z.pending = z.pending.sub_bytes(committed_pos, z.pending.len());
+    z.bitpos = committed_bitpos;
+    if (z.finished) {
+        z.pending = b"";
+        z.bitpos = 0;
+    }
+    Result.Ok(bytes_of(produced))
 }

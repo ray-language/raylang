@@ -31,6 +31,10 @@ tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "x509"]
 # seguridad-adyacente que no se escribe artesanal. Feature aparte para que la VM (que trae su
 # propio rustls vía `net-tls` del host) la active sin arrastrar el TLS de este crate.
 x509 = ["dep:x509-parser"]
+# M195 (plan ray-remote C3): enteros grandes sin signo (`std/bigint`: modpow/modinv/aritmética) sobre
+# `num-bigint` — ya estaba en el árbol vía x509-parser. NO es de tiempo constante (vale para el DH/RSA
+# de un cliente, no para claves de servidor bajo ataque de temporización; SECURITY.md).
+bigint = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
@@ -97,6 +101,10 @@ subtle = { version = "2.6", default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 # M124 — parser X.509 (rusticata) para `net.tls_peer_cert`: subject/issuer/validez/SAN del DER.
 x509-parser = { version = "0.17", optional = true }
+# M195 — std/bigint (feature `bigint`).
+num-bigint = { version = "0.4", optional = true }
+num-traits = { version = "0.2", optional = true }
+num-integer = { version = "0.1", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 # M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.

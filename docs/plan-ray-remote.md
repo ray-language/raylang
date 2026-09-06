@@ -127,7 +127,7 @@ FIPS 46-3 y FIPS-197. El código y los tests **ya existen en `ray-remote/src/cry
 900 líneas): se portan a la stdlib con la advertencia en la doc ("para hablar con protocolos
 que lo exigen, no para diseñar"). SHA-1 ya está en `std/crypto`. Sin dependencia nueva.
 
-### C3. `std/bigint` con `modpow` en el runtime (feedback 3 y 9) — L
+### C3. `std/bigint` con `modpow` en el runtime (feedback 3 y 9) — L ✅ M195 (sobre `bytes`, sin tipo nuevo; `num-bigint` tras la feature `bigint`)
 
 Medido en la app: dos `modpow` de 4096 bits cuestan 14 s en la VM y 4,9 s en nativo, frente a
 10–30 ms de una biblioteca decente. Es el único punto del feedback donde el código de la app no

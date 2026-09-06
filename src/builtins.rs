@@ -1570,6 +1570,16 @@ pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
 pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
     ray_runtime::crypto::hasher_final(h)
 }
+/// M195: la primitiva de `std/bigint` (magnitudes big-endian en `bytes`; ver ray_runtime::bigint).
+#[cfg(all(feature = "bigint", not(target_arch = "wasm32")))]
+pub fn bigint_op(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> {
+    ray_runtime::bigint::op(name, a, b, c)
+}
+#[cfg(any(not(feature = "bigint"), target_arch = "wasm32"))]
+pub fn bigint_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>, String> {
+    Err("bigint is not available in this build (feature 'bigint')".to_string())
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn hasher_new(_alg: &str) -> Result<i64, String> {
     Err("incremental hashing is not available on this platform".to_string())
@@ -2835,6 +2845,16 @@ static BUILTINS: &[Builtin] = &[
     } },
     // M126: hasher INCREMENTAL (new → update* → final; final consume el handle). Devuelven
     // arreglos etiquetados que std/crypto envuelve en Result.
+    // M195: __bigint_op(op, a, b, c) -> [bytes]: ["ok", resultado] | ["err", mensaje]. Primitivo interno
+    // de std/bigint (que valida y reenvasa en Result); los tres operandos son magnitudes big-endian.
+    Builtin { name: "__bigint_op", opcode: OpCode::BigIntOp, check: |a| {
+        arity(a, 4, "__bigint_op", " (op, a, b, c)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__bigint_op expects a string (the operation), not {}", a[0]))); }
+        for (i, t) in a.iter().enumerate().skip(1) {
+            if *t != Type::Bytes { return Err((Some(i), format!("__bigint_op expects bytes, not {}", t))); }
+        }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     Builtin { name: "__hasher_new", opcode: OpCode::HasherNew, check: |a| {
         arity(a, 1, "__hasher_new", " (algorithm)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__hasher_new expects a string (the algorithm), not {}", a[0]))); }

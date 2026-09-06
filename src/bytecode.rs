@@ -278,6 +278,8 @@ pub enum OpCode {
     /// CSPRNG del SO vía ring). Primitivo `__crypto_random_bytes` (→ `crypto.random_bytes`).
     CryptoRandomBytes,
     /// M126: hasher incremental (new -> update* -> final; final consume el handle).
+    /// M195: `__bigint_op(op, a, b, c)` → `[bytes]` (`["ok", r]` / `["err", msg]`). Solo VM.
+    BigIntOp,
     HasherNew,
     HasherUpdate,
     HasherFinal,

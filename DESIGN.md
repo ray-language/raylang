@@ -12259,3 +12259,34 @@ FIPS-197 C.1/C.2/C.3 (AES-128/192/256), NIST SP 800-38A F.2.1 (AES-128-CBC), FIP
 NIST SP 800-67 (3DES), más los round-trips de descifrado. Es la única red de seguridad que vale
 aquí. Lo que sigue pendiente del feedback es `std/bigint` (C3): las dos exponenciaciones modulares
 de 4096 bits de la app cuestan 5 s en nativo y eso no se arregla en raylang puro.
+
+## 187. M195 — `std/bigint`: la única pieza del feedback que raylang puro no podía dar (sep 2026)
+
+El Diffie-Hellman de la autenticación de macOS negocia sobre un grupo de **4096 bits** (no de 512,
+como dice buena parte de la documentación de VNC que circula). `ray-remote` lo implementó a mano
+—Montgomery CIOS, limbs de 31 bits, exponente recortado— y aun así dos exponenciaciones modulares
+costaban 14 s en la VM y 4,9 s en nativo. Cinco segundos al conectar es la diferencia entre una app
+que se siente rota y una que no, y el cuello está en el bucle interno de la multiplicación (accesos
+a `[int]` con comprobación de límites): eso no se arregla desde el código de la aplicación. Una
+biblioteca decente hace esa `modpow` en 10–30 ms.
+
+**Sin tipo nuevo.** Un `BigInt` como valor del lenguaje habría tocado el modelo de valores de los
+tres motores, el GC, `print`, la igualdad… La decisión: un entero grande **es** su magnitud en
+`bytes` big-endian. `bytes` ya es inmutable, hashable, imprimible y viaja por canales; `std/bigint`
+ofrece `from_int`/`from_hex`/`to_hex`/`to_int` y la aritmética como funciones `bytes → bytes`, y
+UNA primitiva `__bigint_op(op, a, b, c) -> [bytes]` (`["ok", r]` / `["err", msg]`, el mismo envase
+que el hasher incremental de M126) hace todo el trabajo en el runtime. Solo sin signo: DH, RSA y JWT
+no necesitan otra cosa, y `sub` devuelve `Err` si el resultado sería negativo.
+
+**La dependencia.** `num-bigint` ya estaba en el árbol (vía `x509-parser`), así que el coste real es
+cero. Va tras la feature `bigint` de `ray-runtime` (activa por defecto; slim y wasm devuelven `Err`;
+`--without bigint` en el nativo emite el `Err` en el sitio sin enlazar el crate), como el resto de
+subsistemas detectados por uso. Lo que la dependencia NO da es tiempo constante, y eso queda escrito
+donde toca (SECURITY.md, REFERENCE, cabecera del módulo): `std/bigint` sirve para el DH o el RSA
+de un cliente, no para la clave privada de un servidor expuesto a medidas de tiempo.
+
+**Verificación.** Vectores pequeños (RFC-style: `4^13 mod 497 = 445`, `3^-1 mod 11 = 4`, los tres
+errores) y un DH de 4096 bits con generador 5 cuyo resultado calcula Python `pow`, en los tres
+motores; la `modpow` de 4096 bits se mide por debajo de 2 s en la VM (es de milisegundos). Con esto
+`src/crypto/` de `ray-remote` puede desaparecer entero: MD5/AES/DES por M194 y `bignum.ray` por
+este hito.

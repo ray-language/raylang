@@ -1736,6 +1736,11 @@ let estado = p.wait();
 
 ### Criptografía y canal seguro (`std/crypto`)
 
+Para un Diffie-Hellman clásico, RSA o un JWT RS256 hace falta aritmética de enteros grandes:
+`std/bigint` (M195) la hace sobre `bytes` big-endian con el runtime detrás (`bigint.modpow(base,
+exp, m)`, `modinv`, `mul`…; una exponenciación de 4096 bits tarda milisegundos). No es de tiempo
+constante: vale para el lado cliente.
+
 Para hablar con un protocolo que exige MD5, DES/3DES o AES en ECB/CBC (VNC, Apple Remote Desktop,
 Kerberos, digest auth) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des` (M194): raylang
 puro, sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo.

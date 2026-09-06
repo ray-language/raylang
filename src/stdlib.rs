@@ -32,6 +32,8 @@ const MODULES: &[(&str, &str)] = &[
     // M194 (plan ray-remote C2): cripto LEGADA en raylang puro — para hablar con protocolos que la
     // exigen (MD5, DES/3DES, AES-ECB/CBC), no para diseñar. `std/crypto` (ring) sigue siendo la de
     // producción.
+    // M195: enteros grandes sobre bytes (runtime num-bigint tras la feature `bigint`).
+    ("std/bigint", include_str!("../std/bigint.ray")),
     ("std/crypto/md5", include_str!("../std/crypto/md5.ray")),
     ("std/crypto/aes", include_str!("../std/crypto/aes.ray")),
     ("std/crypto/des", include_str!("../std/crypto/des.ray")),

@@ -1921,6 +1921,24 @@ impl<'a> Vm<'a> {
                 },
                 // M126: hasher incremental — el estado vive en ray_runtime::crypto (compartido con
                 // el nativo). Arreglos etiquetados; std/crypto los envuelve en Result.
+                OpCode::BigIntOp => {
+                    // M195: pop en orden inverso (c, b, a, op).
+                    let c = self.pop();
+                    let b = self.pop();
+                    let a = self.pop();
+                    let op = self.pop();
+                    let elems = match (&op, &a, &b, &c) {
+                        (HeapValue::Str(op), HeapValue::Bytes(a), HeapValue::Bytes(b), HeapValue::Bytes(c)) => {
+                            match crate::builtins::bigint_op(op, a, b, c) {
+                                Ok(r) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(r)],
+                                Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                            }
+                        }
+                        _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::HasherNew => match self.pop() {
                     HeapValue::Str(alg) => {
                         let elems = match crate::builtins::hasher_new(&alg) {

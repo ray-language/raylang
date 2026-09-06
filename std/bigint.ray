@@ -1,0 +1,180 @@
+// std/bigint — enteros grandes SIN SIGNO sobre `bytes` big-endian (M195, plan ray-remote C3).
+//
+// Un valor es su magnitud en octetos big-endian (`b""` o `b"\x00"` = 0; sin ceros a la izquierda
+// en las salidas). No hay tipo nuevo: los valores se construyen con `from_int`/`from_hex`/`from_bytes`
+// y se leen con `to_hex`/`to_int`/los propios `bytes`. La aritmética la hace el runtime
+// (`num-bigint`), así que una exponenciación modular de 4096 bits cuesta milisegundos, no segundos
+// — es lo que separa "raylang puede hablar Diffie-Hellman clásico, RSA o JWT RS256" de "puede, pero
+// se nota". NO es de tiempo constante: para un CLIENTE (DH/RSA de una conexión) sirve; para operar
+// con la clave privada de un servidor expuesto a medidas de tiempo, no.
+
+import std/hex;
+
+fn call(op: string, a: bytes, b: bytes, c: bytes) -> Result<bytes, string> {
+    let r = __bigint_op(op, a, b, c);
+    if (r.len() == 2 && r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else if (r.len() == 2) {
+        match (from_utf8(r[1])) {
+            Result.Ok(msg) => Result.Err(msg),
+            Result.Err(e) => Result.Err("bigint: error"),
+        }
+    } else {
+        Result.Err("bigint: internal error")
+    }
+}
+
+/// The magnitude of a non-negative `int` as big-endian bytes.
+pub fn from_int(n: int) -> bytes {
+    var v = n;
+    var out: [int] = [];
+    while (v > 0) {
+        out.push(v % 256);
+        v = v / 256;
+    }
+    // invertir a big-endian
+    var be: [int] = [];
+    var i = out.len() - 1;
+    while (i >= 0) {
+        be.push(out[i]);
+        i = i - 1;
+    }
+    bytes_of(be)
+}
+
+/// Parses a hexadecimal magnitude (even or odd length, optional `0x`). Errors on a non-hex digit.
+pub fn from_hex(s: string) -> Result<bytes, string> {
+    var t = s;
+    if (t.starts_with("0x") || t.starts_with("0X")) {
+        t = t.substring(2, t.len());
+    }
+    if (t.len() % 2 == 1) {
+        t = "0" + t;
+    }
+    match (hex.hex_decode(t)) {
+        Result.Ok(b) => Result.Ok(trim(b)),
+        Result.Err(e) => Result.Err("bigint: " + e),
+    }
+}
+
+/// Normalizes big-endian bytes (drops leading zeros) so equal values compare equal as bytes.
+pub fn from_bytes(b: bytes) -> bytes {
+    trim(b)
+}
+
+/// Lowercase hexadecimal of the magnitude (`"0"` for zero, no `0x`).
+pub fn to_hex(a: bytes) -> string {
+    let t = trim(a);
+    if (t.len() == 0) {
+        return "0";
+    }
+    var h = hex.hex_encode(t);
+    if (h.starts_with("0")) {
+        h = h.substring(1, h.len());
+    }
+    h
+}
+
+/// The value as an `int` if it fits (below 2^63), else `None`.
+pub fn to_int(a: bytes) -> Option<int> {
+    let t = trim(a);
+    if (t.len() > 8 || (t.len() == 8 && t[0] >= 128)) {
+        return Option.None;
+    }
+    var v = 0;
+    var i = 0;
+    while (i < t.len()) {
+        v = v * 256 + t[i];
+        i = i + 1;
+    }
+    Option.Some(v)
+}
+
+/// Number of significant bits (0 for zero).
+pub fn bit_len(a: bytes) -> int {
+    let t = trim(a);
+    if (t.len() == 0) {
+        return 0;
+    }
+    var top = t[0];
+    var bits = 0;
+    while (top > 0) {
+        bits = bits + 1;
+        top = top / 2;
+    }
+    (t.len() - 1) * 8 + bits
+}
+
+/// `a + b`.
+pub fn add(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("add", a, b, b"")
+}
+
+/// `a - b`; errors if the result would be negative.
+pub fn sub(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("sub", a, b, b"")
+}
+
+/// `a * b`.
+pub fn mul(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("mul", a, b, b"")
+}
+
+/// Integer quotient `a / b`; errors on division by zero.
+pub fn div(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("div", a, b, b"")
+}
+
+/// Remainder `a % b`; errors on division by zero.
+pub fn rem(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("rem", a, b, b"")
+}
+
+/// `base ^ exp mod modulus` — the primitive behind Diffie-Hellman and RSA. Errors on a zero
+/// modulus. Not constant-time.
+pub fn modpow(base: bytes, exp: bytes, modulus: bytes) -> Result<bytes, string> {
+    call("modpow", base, exp, modulus)
+}
+
+/// The modular inverse of `a` modulo `m`; errors if they are not coprime.
+pub fn modinv(a: bytes, m: bytes) -> Result<bytes, string> {
+    call("modinv", a, m, b"")
+}
+
+/// Greatest common divisor.
+pub fn gcd(a: bytes, b: bytes) -> Result<bytes, string> {
+    call("gcd", a, b, b"")
+}
+
+/// `a << n` / `a >> n`.
+pub fn shl(a: bytes, n: int) -> Result<bytes, string> {
+    call("shl", a, from_int(n), b"")
+}
+
+/// `a >> n`.
+pub fn shr(a: bytes, n: int) -> Result<bytes, string> {
+    call("shr", a, from_int(n), b"")
+}
+
+/// Three-way comparison: -1, 0 or 1.
+pub fn cmp(a: bytes, b: bytes) -> int {
+    match (call("cmp", a, b, b"")) {
+        Result.Ok(r) => {
+            if (r.len() == 1) { r[0] - 1 } else { 0 }
+        },
+        Result.Err(e) => 0,
+    }
+}
+
+/// `true` if the magnitude is zero (`b""` or all-zero bytes).
+pub fn is_zero(a: bytes) -> bool {
+    trim(a).len() == 0
+}
+
+fn trim(b: bytes) -> bytes {
+    var i = 0;
+    while (i < b.len() && b[i] == 0) {
+        i = i + 1;
+    }
+    b.sub_bytes(i, b.len())
+}

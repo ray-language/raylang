@@ -1281,6 +1281,16 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an int"),
             },
+            "__bigint_op" => match (&values[0], &values[1], &values[2], &values[3]) {
+                (Value::Str(op), Value::Bytes(a), Value::Bytes(b), Value::Bytes(c)) => {
+                    let elems = match crate::builtins::bigint_op(op, a, b, c) {
+                        Ok(r) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(r))],
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
+            },
             "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("the checker guarantees bytes"),

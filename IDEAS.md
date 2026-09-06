@@ -3372,7 +3372,7 @@ contra 1.6.4; el plan completo, con lotes, tamaños e hitos M188–M194, está e
 |---|---|---|
 | A bugs | `ray test` dice "all passed" con 0 tests y un módulo sin compilar · `ray fmt` desprende comentarios trailing y colapsa `else if` a 300 columnas · `close` con emisor bloqueado revienta + falta `try_send` · mensajes (`!` sobre entero → `~`, `from`, `break`, `ray run --`) | **alta**: el formateador no es seguro de aplicar; los canales acotados no se pueden cerrar |
 | B SPEC | ✅ M192 literales con sufijo + amplios `u64` · cuenta de desplazamiento `int` · `from` contextual | media: cripto a mano sin casts ni descomposiciones |
-| C stdlib | ✅ M193 `std/inflate` incremental (ZRLE/Tight, permessage-deflate) · ✅ M194 `std/crypto/{md5,aes,des}` (MD5/DES/3DES/AES, código y vectores ya en la app) · `std/bigint` con `modpow` en runtime (`num-bigint`; 5 s → <100 ms al conectar) | **alta** para protocolos reales |
+| C stdlib | ✅ M193 `std/inflate` incremental (ZRLE/Tight, permessage-deflate) · ✅ M194 `std/crypto/{md5,aes,des}` (MD5/DES/3DES/AES, código y vectores ya en la app) · ✅ M195 `std/bigint` con `modpow` en runtime (`num-bigint`; 5 s → ms al conectar) | **alta** para protocolos reales |
 | D decisión | ✅ M191 `break`/`continue` en forma mínima (la bandera no corta el cuerpo: bug real ×3) · `pub fn` con nombre de builtin en módulo cualificado · closure sin anotación con valor | la decide el usuario |
 
 Transversal: MANUAL en negrita "lo que `spawn` captura se copia; entre fibras solo se comparten

@@ -130,6 +130,8 @@ struct Transpiler {
     /// R5: el programa ejecuta std/regex → feature `regex` de ray-runtime (motor acelerado).
     pub(super) needs_rt_regex: bool,
     pub(super) needs_rt_unicode: bool,
+    /// M195: el programa usa `std/bigint` (`__bigint_op`) → feature `bigint` de ray-runtime.
+    pub(super) needs_rt_bigint: bool,
     /// M100: ¿usa `__run` (procesos del SO)? El helper `__ray_run` llama a `ray_runtime::process`
     /// (el MISMO código que la VM). Activa la feature `process` (sin deps; fuerza la vía Cargo).
     needs_rt_process: bool,
@@ -297,6 +299,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         embed: embed.to_vec(),
         needs_net: false,
         needs_rt_crypto: false,
+        needs_rt_bigint: false,
         needs_rt_tls: false,
         needs_rt_sqlite: false,
         needs_rt_regex: false,
@@ -655,6 +658,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // M131: normalización Unicode (detectada por USO del primitivo, como crypto/tls/sqlite).
     if t.needs_rt_unicode {
         rt_features.push("unicode");
+    }
+    // M195: enteros grandes (detectado por USO de `__bigint_op`; `--without bigint` → Err-valor).
+    if t.needs_rt_bigint {
+        rt_features.push("bigint");
     }
     // M100: procesos del SO (detectado por USO de `__run`, como crypto/tls/sqlite; `--without
     // process` es gating de POLÍTICA — el builtin cae al Err de "no soportado", no hay crate detrás).

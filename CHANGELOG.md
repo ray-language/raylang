@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/bigint`** (M195, DESIGN §187; feedback de `ray-remote`): enteros grandes sin signo sobre
+  `bytes` big-endian, con la aritmética en el runtime (`num-bigint`, feature `bigint`; `--without
+  bigint` en el nativo): `modpow`, `modinv`, `add/sub/mul/div/rem/gcd/shl/shr/cmp`, `from_hex`/
+  `to_hex`/`from_int`/`to_int`/`bit_len`. Una `modpow` de 4096 bits pasa de ~5 s (raylang puro) a
+  milisegundos: es lo que separa "puede hablar Diffie-Hellman clásico, RSA o JWT RS256" de "puede,
+  pero se nota". No es de tiempo constante (documentado en SECURITY.md).
+
 - **`std/crypto/md5`, `std/crypto/aes`, `std/crypto/des`** (M194, DESIGN §186; feedback de
   `ray-remote`): criptografía LEGADA en raylang puro para hablar con protocolos que la exigen —
   MD5 (RFC 1321); AES-128/192/256 en ECB y CBC con descifrado (FIPS-197, SP 800-38A); DES y 3DES en

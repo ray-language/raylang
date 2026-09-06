@@ -42,7 +42,6 @@ pub enum TokKind {
     Dyn,
     Pub,
     Import,
-    From,
     As,
     // Palabras clave de tipo.
     IntType,
@@ -295,8 +294,6 @@ fn classify(text: string) -> TokKind {
         TokKind.Pub
     } else if (text == "import") {
         TokKind.Import
-    } else if (text == "from") {
-        TokKind.From
     } else if (text == "as") {
         TokKind.As
     } else if (text == "int") {

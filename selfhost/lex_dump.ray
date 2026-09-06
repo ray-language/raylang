@@ -62,7 +62,6 @@ fn kind_str(k: TokKind) -> string {
         TokKind.Dyn => "Dyn",
         TokKind.Pub => "Pub",
         TokKind.Import => "Import",
-        TokKind.From => "From",
         TokKind.As => "As",
         TokKind.IntType => "IntType",
         TokKind.FloatType => "FloatType",

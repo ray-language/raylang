@@ -162,7 +162,6 @@ impl Parser {
                             | TokenKind::Impl
                             | TokenKind::Pub
                             | TokenKind::Import
-                            | TokenKind::From
                             | TokenKind::Const
                             | TokenKind::Extern
                             | TokenKind::At
@@ -185,12 +184,14 @@ impl Parser {
             return Ok(());
         }
         // M11.3b: `from M import a [as b]{, …};` trae nombres al ámbito.
-        if self.check(&TokenKind::From) {
+        // M192: `from` es palabra clave CONTEXTUAL — solo al inicio de un ítem (`from M import x;`);
+        // en cualquier otra posición es un identificador (`fn slice(bits, from, to)`).
+        if self.check_ident("from") {
             acc.from_imports.push(self.import_from_decl(false)?);
             return Ok(());
         }
         // M11.6a: `pub from M import …;` reexporta (construye la cara pública de un `mod.ray`).
-        if self.check(&TokenKind::Pub) && self.check_next(&TokenKind::From) {
+        if self.check(&TokenKind::Pub) && self.check_ident_next("from") {
             self.advance(); // 'pub'
             acc.from_imports.push(self.import_from_decl(true)?);
             return Ok(());
@@ -278,7 +279,7 @@ impl Parser {
     /// emite `ray fmt` al pasar de 100 columnas— añadir un nombre toca UNA línea del diff, no dos.
     /// `is_pub` (M11.6a): el `pub` ya lo consumió el bucle de `parse_program` (reexport).
     fn import_from_decl(&mut self, is_pub: bool) -> Result<FromImport, ParseError> {
-        let kw = self.expect(&TokenKind::From, "'from'")?;
+        let kw = self.advance(); // `from` (contextual: el llamador ya lo comprobó)
         let (module, _, _) = self.module_path()?;
         self.expect(&TokenKind::Import, "'import' after 'from M'")?;
         let mut names = Vec::new();
@@ -1843,6 +1844,15 @@ impl Parser {
         self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(kind)
     }
 
+    /// M192: ¿el token actual es el identificador `name`? (palabras clave contextuales: `from`).
+    fn check_ident(&self, name: &str) -> bool {
+        matches!(&self.peek().kind, TokenKind::Ident(n) if n == name)
+    }
+
+    fn check_ident_next(&self, name: &str) -> bool {
+        matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(n)) if n == name)
+    }
+
     /// Consume y devuelve el token actual (clonado). No avanza más allá de `Eof`.
     fn advance(&mut self) -> Token {
         let tok = self.tokens[self.pos].clone();
@@ -1897,14 +1907,9 @@ impl Parser {
     /// Consume un identificador y devuelve `(nombre, línea, columna)`.
     fn expect_ident(&mut self, what: &str) -> Result<(String, usize, usize), ParseError> {
         let tok = self.peek().clone();
-        let is_from = tok.kind == TokenKind::From;
         if let TokenKind::Ident(name) = tok.kind {
             self.advance();
             Ok((name, tok.line, tok.col))
-        } else if is_from {
-            // M188: `from` está reservada en cualquier posición (hasta que sea contextual, plan
-            // ray-remote B3); "expected a parameter name" sobre ella no decía por qué.
-            Err(self.error_here(format!("expected {}, but 'from' is a reserved word", what)))
         } else {
             Err(self.error_here(format!("expected {}", what)))
         }
@@ -2004,11 +2009,12 @@ mod tests {
     }
 
     #[test]
-    fn from_as_a_parameter_name_says_it_is_reserved() {
-        // M188: "expected a parameter name" sobre `from` no decía que es palabra reservada.
-        let tokens = crate::lexer::lex("fn slice(bits: [int], from: int) -> [int] { bits }").expect("lex ok");
-        let e = parse(tokens).expect_err("from no puede nombrar un parámetro");
-        assert_eq!(e.msg, "expected a parameter name, but 'from' is a reserved word");
+    fn from_is_contextual_and_remains_a_valid_identifier() {
+        // M192 (B3): `from` solo es palabra clave al inicio de un ítem; como parámetro o variable es
+        // un identificador normal.
+        let prog = parse_prog("fn slice(bits: [int], from: int, to: int) -> [int] { let from = from + 1; bits }\nfrom std/fs import read_file;\nfn main() -> int { 0 }");
+        assert_eq!(prog.functions[0].params[1].name, "from");
+        assert_eq!(prog.from_imports.len(), 1);
     }
 
     #[test]

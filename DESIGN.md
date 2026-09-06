@@ -12327,7 +12327,6 @@ FIPS-197 C.1/C.2/C.3 (AES-128/192/256), NIST SP 800-38A F.2.1 (AES-128-CBC), FIP
 NIST SP 800-67 (3DES), más los round-trips de descifrado. Es la única red de seguridad que vale
 aquí. Lo que sigue pendiente del feedback es `std/bigint` (C3): las dos exponenciaciones modulares
 de 4096 bits de la app cuestan 5 s en nativo y eso no se arregla en raylang puro.
-
 ## 187. M195 — `std/bigint`: la única pieza del feedback que raylang puro no podía dar (sep 2026)
 
 El Diffie-Hellman de la autenticación de macOS negocia sobre un grupo de **4096 bits** (no de 512,

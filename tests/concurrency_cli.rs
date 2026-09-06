@@ -273,22 +273,57 @@ fn main() -> int {
 }
 
 #[test]
-fn close_with_blocked_sender_is_error() {
-    // Cerrar un canal del que un emisor todavía espera enviar es un error de programa, detectado de forma
-    // determinista en el sitio del `close`.
+fn close_wakes_a_blocked_sender_whose_send_fails() {
+    // M190 (feedback de ray-remote): cerrar un canal acotado con un emisor dormido en `send` ya no
+    // es error en el sitio del close — el emisor despierta y SU `send` falla con "send on a closed
+    // channel" (simétrico de los receptores, que reciben `None`). Los valores ya encolados siguen
+    // recibiéndose; el que el emisor tenía pendiente se descarta con él.
     let src = r#"
 fn productor(ch: Channel<int>) { send(ch, 1); send(ch, 2); send(ch, 3); }
 fn main() -> int {
     let ch: Channel<int> = Channel.bounded(1);
-    spawn(fn() { productor(ch); });
+    let t = spawn(fn() { productor(ch); });
     let primero: Option<int> = recv(ch);  // recibe 1; el productor bufferiza 2 y se bloquea en send(3)
-    close(ch);                            // emisor bloqueado -> error
+    close(ch);                            // despierta al productor: su send(3) falla
+    print(primero);
+    print(recv(ch));                      // el 2 encolado sigue ahí
+    print(recv(ch));                      // y después None
+    match (try_join(t)) {
+        Result.Ok(u) => print("ok"),
+        Result.Err(e) => print("task failed: " + e),
+    }
     0
 }
 "#;
-    let (_out, err, code) = run("conc_close_emisor", src, true);
-    assert!(err.contains("blocked sender"), "stderr no menciona emisor bloqueado: {err}");
-    assert_eq!(code, 70);
+    let (out, _err, code) = run("conc_close_emisor", src, true);
+    assert_eq!(out, "Option.Some(1)\nOption.Some(2)\nOption.None\ntask failed: send on a closed channel\n", "{out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn try_send_never_blocks_nor_fails() {
+    // M190: `true` si entregó (receptor aparcado) o encoló (hueco); `false` con la cola llena o el
+    // canal cerrado. Es la vía sin panic para "la otra parte se fue antes que yo".
+    let src = r#"
+import std/time;
+fn main() -> int {
+    let ch: Channel<int> = Channel.bounded(1);
+    print(try_send(ch, 1));   // hueco → true
+    print(try_send(ch, 2));   // llena → false
+    print(recv(ch));
+    close(ch);
+    print(try_send(ch, 3));   // cerrada → false
+    let r: Channel<int> = Channel.new();
+    let t = spawn(fn() { print(recv(r)); });
+    time.sleep(50);           // el receptor se aparca
+    print(try_send(r, 7));    // entregado al receptor aparcado → true
+    join(t);
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_try_send", src, true);
+    assert_eq!(out, "true\nfalse\nOption.Some(1)\nfalse\ntrue\nOption.Some(7)\n", "{out}");
+    assert_eq!(code, 0);
 }
 
 #[test]

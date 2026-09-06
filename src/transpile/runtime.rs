@@ -1479,11 +1479,21 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        let mut st = self.inner.0.lock().unwrap();\n",
             "        match st.q.pop_front() { Some(v) => { st.taken += 1; __ray_notify(&self.inner); __TryRecv::Got(v) } None => if st.closed { __TryRecv::Closed } else { __TryRecv::Empty } }\n",
             "    }\n",
-            // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
-            // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).
+            // M190: envío NO bloqueante — `true` si encoló, `false` si cerrado o lleno. Un rendezvous
+            // (cap 0) sin receptor esperando no tiene hueco: `false` (la VM entrega al receptor
+            // aparcado si lo hay; aquí el receptor en espera no es observable sin bloquear → `false`).
+            "    fn try_send(&self, v: T) -> bool {\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
+            "        if st.closed { return false; }\n",
+            "        if st.cap.map_or(false, |c| st.q.len() >= c) { return false; }\n",
+            "        st.q.push_back(v); __ray_notify(&self.inner); drop(st); __ray_bump(); true\n",
+            "    }\n",
+            // M190: `close` con emisores bloqueados los DESPIERTA — cada uno ve `closed` al reanudarse
+            // y su `send` falla con "send on a closed channel" (las esperas de arriba ya lo comprueban),
+            // como la VM. Antes era error en el sitio del close, y "acotado" y "se cierra para terminar"
+            // resultaban incompatibles.
             "    fn close(&self) {\n",
             "        let mut st = self.inner.0.lock().unwrap();\n",
-            "        if st.senders > 0 { drop(st); __ray_rt_err(\"close on a channel with a blocked sender\"); }\n",
             "        st.closed = true; __ray_notify(&self.inner); drop(st); __ray_bump();\n",
             "    }\n",
             "}\n",

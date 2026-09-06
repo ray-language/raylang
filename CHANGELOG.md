@@ -6,6 +6,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Cerrar un canal acotado con un emisor bloqueado ya no es error: el emisor despierta y su
+  `send` falla** (M190, DESIGN §182; feedback de `ray-remote`). Antes `close` reventaba con "close
+  on a channel with a blocked sender", y "acotado" y "se cierra para terminar" eran incompatibles.
+  Ahora `close` despierta a receptores (`None`) y a emisores ("send on a closed channel" en SU
+  fibra, recuperable con `try_call`/`try_join`). VM y binario nativo.
+- **`try_send(ch, v) -> bool`** (M190): envía sin bloquear ni fallar — `true` si entregó o
+  encoló, `false` si el canal está cerrado o lleno. Simétrico de `try_recv`.
+- **`ray_doc`/hover conocen `Channel.new`, `Channel.bounded` y `Map.new`** (M190): antes negaban el
+  símbolo. La SPEC y el MANUAL dejan de citar `channel()`/`channel(n)`, que no existían.
+- **Documentación** (M190): el MANUAL dice en negrita que lo que `spawn` captura se copia (entre
+  fibras solo se comparten canales y handles); REFERENCE anota que `+` sobre `bytes` es lineal y
+  `[int]`+`bytes_of` octeto a octeto no.
 - **`ray fmt` ya no desprende los comentarios ni deja líneas de 300 columnas** (M189, DESIGN §181;
   feedback de `ray-remote`): (1) un comentario trailing en la línea de un operando (`&& f(x)  // …`)
   o de un elemento de una lista repartida vuelve con su operando/elemento — y una expresión cuyas

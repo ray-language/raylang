@@ -831,10 +831,10 @@ fn build_native_send_on_closed_channel_is_error_like_the_vm() {
 }
 
 #[test]
-fn build_native_close_with_blocked_sender_is_error_like_the_vm() {
-    // Slice de canales: `close` con un emisor bloqueado hacía return silencioso del emisor (y su valor
-    // quedaba consumible); la VM da "close on a channel with a blocked sender" en el sitio del close
-    // (M12.2). Ahora el nativo detecta los emisores bloqueados (contador `senders`) y aborta igual.
+fn build_native_close_wakes_a_blocked_sender_like_the_vm() {
+    // M190: `close` con un emisor bloqueado lo despierta y SU `send` falla ("send on a closed
+    // channel"); el programa sigue. VM y nativo dan la misma salida (antes ambos abortaban con
+    // "close on a channel with a blocked sender" en el sitio del close).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando build_native close-bloqueado: rustc no disponible");
         return;
@@ -845,10 +845,12 @@ fn build_native_close_with_blocked_sender_is_error_like_the_vm() {
         "import std/time;\n\
          fn main() -> int {\n\
            let ch: Channel<int> = Channel.bounded(0);\n\
-           spawn(fn() { send(ch, 1); });  // se bloquea: nadie recibe\n\
+           let t = spawn(fn() { send(ch, 1); print(\"unreachable\"); });  // se bloquea: nadie recibe\n\
            time.sleep(200);               // deja al emisor aparcarse (hilos reales)\n\
-           close(ch);                     // → error de ejecución\n\
-           print(\"inalcanzable\");\n\
+           close(ch);                     // despierta al emisor: su send falla\n\
+           print(try_send(ch, 2));        // cerrado → false, sin panic\n\
+           match (try_join(t)) { Result.Ok(u) => print(\"ok\"), Result.Err(e) => print(\"task failed: \" + e), }\n\
+           print(\"reachable\");\n\
            0\n\
          }\n",
     )
@@ -856,18 +858,14 @@ fn build_native_close_with_blocked_sender_is_error_like_the_vm() {
     let bin = base.join(format!("cb_bin{}", std::env::consts::EXE_SUFFIX));
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native close-bloqueado ok\n{err}");
+    let want = "false\ntask failed: send on a closed channel\nreachable\n";
     let (vm_out, vm_err, vm_code) = ray(&base, &["run", "prog.ray"]);
-    assert!(vm_err.contains("close on a channel with a blocked sender"), "la VM da el error\n{vm_err}");
-    assert_ne!(vm_code, 0);
-    assert!(!vm_out.contains("inalcanzable"));
+    assert_eq!(vm_out, want, "la VM sigue tras el close\n{vm_err}");
+    assert_eq!(vm_code, 0);
     let native = Command::new(&bin).output().expect("corre el binario nativo");
-    let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
-    assert!(
-        native_err.contains("close on a channel with a blocked sender"),
-        "el nativo aborta con el texto de la VM\n{native_err}"
-    );
-    assert_eq!(native.status.code(), Some(70), "el close con emisor bloqueado sale 70, como la VM");
-    assert!(!String::from_utf8_lossy(&native.stdout).contains("inalcanzable"));
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, want, "el nativo hace lo mismo\n{}", String::from_utf8_lossy(&native.stderr));
+    assert_eq!(native.status.code(), Some(0));
 }
 
 #[test]

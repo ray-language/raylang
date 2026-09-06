@@ -225,7 +225,7 @@ iterable  = expresion [ '..' expresion ] ;
 
 - **`let` es inmutable, `var` mutable**; los parámetros son inmutables. Reasignar un `let` es
   error de tipos; *shadowing* permitido en ámbitos internos. La anotación de tipo es opcional si
-  el inicializador determina el tipo; `[]`, `None`, `map_new()`, `channel()` y `Caja.Vacia` son
+  el inicializador determina el tipo; `[]`, `None`, `Map.new()`, `Channel.new()` y `Caja.Vacia` son
   **indeterminados** y exigen anotación o contexto (§7).
 - La **mutación interior no exige `var`**: `obj.campo = v` y `arr[i] = v` mutan el objeto
   referenciado (§8); `var` gobierna la *ligadura*, no el objeto. `s[i] = c` sobre string es
@@ -338,8 +338,8 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
 ## 7. Sistema de tipos (reglas)
 
 - **Inferencia local**: `let x = e;` toma el tipo de `e`. **Bidireccional**: un tipo esperado
-  (anotación, tipo de retorno, parámetro) fija los indeterminados (`[]`, `None`, `map_new()`,
-  `channel()`, construcción de enum genérico) y la **coerción de literal entero a `u*`**
+  (anotación, tipo de retorno, parámetro) fija los indeterminados (`[]`, `None`, `Map.new()`,
+  `Channel.new()`, construcción de enum genérico) y la **coerción de literal entero a `u*`**
   (también en asignación y elementos de arreglo).
 - **Genéricos**: la instanciación se **infiere de los argumentos** por unificación (las
   variables de la firma llamada son incógnitas; las del llamador, rígidas). Dos usos
@@ -416,10 +416,13 @@ en los puntos de cesión), nunca preemptiva.
   valor en vez de re-lanzarlo.
 - `scope(body: fn() -> R) -> R` **posee** las tareas lanzadas dentro: al salir las une; si una
   falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original.
-- `channel() -> Channel<T>` (no acotado), `channel(n)` (acotado; `n = 0` rendezvous).
+- `Channel.new() -> Channel<T>` (no acotado), `Channel.bounded(n)` (acotado; `n = 0` rendezvous).
   `send(ch, v)` bloquea con la cola llena; `recv(ch) -> Option<T>` bloquea vacío-y-abierto,
-  `None` cerrado-y-vacío; `close(ch)` despierta receptores (un `send` sobre cerrado es error;
-  un `close` con emisor bloqueado es error). `select(chs: [Channel<T>]) -> int` bloquea hasta
+  `None` cerrado-y-vacío; `close(ch)` despierta a los receptores (reciben `None`) **y a los
+  emisores bloqueados** (su `send` falla con `send on a closed channel`); es idempotente. Un
+  `send` sobre un canal cerrado es error de ejecución; `try_send(ch, v) -> bool` envía **sin
+  bloquear ni fallar**: `true` si entregó o encoló, `false` si el canal está cerrado o lleno.
+  `select(chs: [Channel<T>]) -> int` bloquea hasta
   que alguno esté listo para recibir y devuelve el **menor índice listo en el momento de la
   comprobación** (un canal cerrado está listo para siempre). `try_recv(ch: Channel<T>) ->
   Received<T>` recibe **sin bloquear**: `Received.Got(v)` si había un valor listo (lo consume,

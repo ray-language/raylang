@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.7.0 — 2026-09-06
 
 - **Un módulo puede definir funciones con nombre de builtin** (M196, DESIGN §188; feedback de
   `ray-remote`): `pub fn close(c: Conn)` en `proto.ray` se consume como `proto.close(c)`, y dentro

@@ -26,6 +26,9 @@ pub enum TokKind {
     Var,
     Fn,
     Return,
+    // M191: salida de bucle.
+    Break,
+    Continue,
     If,
     Else,
     While,
@@ -253,7 +256,7 @@ fn identifier(lx: Lexer) -> TokKind {
 
 // Palabra clave o identificador. Única fuente de verdad sobre qué nombres están reservados.
 fn classify(text: string) -> TokKind {
-    if (text == "let") { TokKind.Let } else if (text == "var") { TokKind.Var } else if (text == "fn") { TokKind.Fn } else if (text == "return") { TokKind.Return } else if (text == "if") { TokKind.If } else if (text == "else") { TokKind.Else } else if (text == "while") { TokKind.While } else if (text == "true") { TokKind.True } else if (text == "false") { TokKind.False } else if (text == "struct") { TokKind.Struct } else if (text == "enum") { TokKind.Enum } else if (text == "match") { TokKind.Match } else if (text == "trait") { TokKind.Trait } else if (text == "impl") { TokKind.Impl } else if (text == "dyn") { TokKind.Dyn } else if (text == "pub") { TokKind.Pub } else if (text == "import") { TokKind.Import } else if (text == "from") { TokKind.From } else if (text == "as") { TokKind.As } else if (text == "int") { TokKind.IntType } else if (text == "float") { TokKind.FloatType } else if (text == "bool") { TokKind.BoolType } else if (text == "string") { TokKind.StringType } else if (text == "char") { TokKind.CharType } else { TokKind.Ident(text) }
+    if (text == "let") { TokKind.Let } else if (text == "var") { TokKind.Var } else if (text == "fn") { TokKind.Fn } else if (text == "return") { TokKind.Return } else if (text == "break") { TokKind.Break } else if (text == "continue") { TokKind.Continue } else if (text == "if") { TokKind.If } else if (text == "else") { TokKind.Else } else if (text == "while") { TokKind.While } else if (text == "true") { TokKind.True } else if (text == "false") { TokKind.False } else if (text == "struct") { TokKind.Struct } else if (text == "enum") { TokKind.Enum } else if (text == "match") { TokKind.Match } else if (text == "trait") { TokKind.Trait } else if (text == "impl") { TokKind.Impl } else if (text == "dyn") { TokKind.Dyn } else if (text == "pub") { TokKind.Pub } else if (text == "import") { TokKind.Import } else if (text == "from") { TokKind.From } else if (text == "as") { TokKind.As } else if (text == "int") { TokKind.IntType } else if (text == "float") { TokKind.FloatType } else if (text == "bool") { TokKind.BoolType } else if (text == "string") { TokKind.StringType } else if (text == "char") { TokKind.CharType } else { TokKind.Ident(text) }
 }
 
 // Lee una cadena "..." (la comilla de apertura ya fue consumida), resolviendo escapes.

@@ -508,6 +508,10 @@ pub enum StmtKind {
         iter: ForIter,
         body: Block,
     },
+    /// M191: `break;` — sale del bucle más interno. Solo dentro de `while`/`for` (checker).
+    Break,
+    /// M191: `continue;` — siguiente iteración del bucle más interno.
+    Continue,
     /// Asignación a un *lvalue*: `x = e;`, `a[i] = e;`, `p.x = e;` (M3.2).
     /// `target` es una expresión asignable (`Ident`, `Index`, o `Field`).
     Assign { target: Expr, value: Expr },
@@ -717,6 +721,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(target, acc);
                 walk_expr(value, acc);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     walk_expr(e, acc);

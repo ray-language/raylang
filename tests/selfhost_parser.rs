@@ -330,6 +330,8 @@ fn dump_stmt(st: &Stmt) -> String {
             Some(e) => format!("(return {}){}", dump_expr(e), pp),
             None => format!("(return){}", pp),
         },
+        StmtKind::Break => format!("(break){}", pp),
+        StmtKind::Continue => format!("(continue){}", pp),
         StmtKind::Expr(e) => format!("(expr {}){}", dump_expr(e), pp),
     }
 }
@@ -486,6 +488,8 @@ fn compare(src: &str, name_tmp: &str) {
 #[test]
 fn function_minima() {
     compare("fn main() -> int { 0 }", "sp_min.ray");
+    // M191: break/continue como sentencias (dump `(break)`/`(continue)`).
+    compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; if (i == 2) { continue; } break; } i }", "sp_break.ray");
     // M188: `from` como nombre de parámetro → el mismo mensaje de palabra reservada.
     compare("fn slice(bits: [int], from: int) -> [int] { bits }", "sp_from_param.ray");
     compare("fn nada() { }", "sp_unit.ray");

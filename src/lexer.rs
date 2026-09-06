@@ -636,6 +636,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "var" => TokenKind::Var,
         "fn" => TokenKind::Fn,
         "return" => TokenKind::Return,
+        "break" => TokenKind::Break,
+        "continue" => TokenKind::Continue,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,

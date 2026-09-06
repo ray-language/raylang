@@ -139,7 +139,7 @@
     },
     "keywords-control": {
       "name": "keyword.control.raylang",
-      "match": "\\b(if|else|while|for|in|return|match|import|from|as)\\b"
+      "match": "\\b(if|else|while|for|in|return|break|continue|match|import|from|as)\\b"
     },
     "self": {
       "comment": "El receptor 'self' y el tipo 'Self' dentro de un trait/impl (M9).",

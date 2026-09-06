@@ -240,6 +240,8 @@ fn dump_stmt(st: Stmt) -> string {
         },
         SKind.SAssign(target, value) => "(assign " + dump_expr(target) + " " + dump_expr(value) + ")" + pp,
         SKind.SReturn(value) => "(return" + dump_opt_expr(value) + ")" + pp,
+        SKind.SBreak => "(break)" + pp,
+        SKind.SContinue => "(continue)" + pp,
         SKind.SExpr(e) => "(expr " + dump_expr(e) + ")" + pp,
     }
 }

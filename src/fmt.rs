@@ -898,6 +898,8 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             Some(e) => format!("return {};", fmt_value(cur, e, indent)),
             None => "return;".to_string(),
         },
+        StmtKind::Break => "break;".to_string(),
+        StmtKind::Continue => "continue;".to_string(),
         StmtKind::Expr(e) => {
             // Las formas con bloque (if/while/match/bloque) como sentencia no llevan `;`.
             if is_block_form(e) {
@@ -2211,6 +2213,7 @@ mod tests {
                 cm_expr(target, n);
                 cm_expr(value, n);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     cm_expr(e, n);

@@ -47,6 +47,8 @@ fn kind_str(k: TokKind) -> string {
         TokKind.Var => "Var",
         TokKind.Fn => "Fn",
         TokKind.Return => "Return",
+        TokKind.Break => "Break",
+        TokKind.Continue => "Continue",
         TokKind.If => "If",
         TokKind.Else => "Else",
         TokKind.While => "While",

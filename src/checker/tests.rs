@@ -319,6 +319,24 @@ fn not_on_an_integer_points_to_bitwise_not() {
     err_contains("fn main() -> int { let y = !\"s\"; 0 }", "'!' requires bool, not string");
 }
 
+#[test]
+fn break_and_continue_are_loop_statements() {
+    // M191: válidos en la espina de sentencias del cuerpo de un bucle; divergen (la rama que
+    // rompe cede el tipo).
+    check_src("fn main() -> int { var i = 0; while (i < 5) { i = i + 1; if (i == 2) { continue; } if (i == 4) { break; } } i }")
+        .expect("break/continue en if dentro de while");
+    check_src("fn main() -> int { var t = 0; for k in 0..3 { let v: int = match (Option.Some(k)) { Option.Some(n) => n, Option.None => { break; } }; t = t + v; } t }")
+        .expect("break en un brazo de match como valor de let");
+    check_src("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; let w = if (i == 2) { continue; } else { i }; } 0 }")
+        .expect("continue en una rama de if como valor de let");
+    err_contains("fn main() -> int { break; 0 }", "'break' outside a loop");
+    err_contains("fn main() -> int { if (true) { continue; } 0 }", "'continue' outside a loop");
+    err_contains("fn main() -> int { while (true) { let f = fn() { break; }; } 0 }", "'break' outside a loop");
+    err_contains("fn main() -> int { while (true) { print({ break; 1 }); } 0 }", "'break' must be a statement of the loop body");
+    err_contains("fn main() -> int { while (true) { let x = 1 + { continue; }; } 0 }", "'continue' must be a statement of the loop body");
+    err_contains("fn main() -> int { while (true) { let xs = [{ break; 1 }]; } 0 }", "'break' must be a statement of the loop body");
+}
+
 fn err_contains(src: &str, needle: &str) {
     let e = check_src(src).expect_err("debería fallar la verificación");
     assert!(

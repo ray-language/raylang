@@ -523,6 +523,15 @@ struct Checker {
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
     /// validar las sentencias `return`.
     current_return: Type,
+    /// M191: profundidad de bucles (`while`/`for`) de la FUNCIÓN en curso — `break`/`continue`
+    /// fuera de un bucle es error. Una función anónima la pone a 0 mientras verifica su cuerpo.
+    loop_depth: usize,
+    /// M191: ¿estamos en la "espina de sentencias" del cuerpo del bucle? `break`/`continue` solo
+    /// valen ahí (cuerpo, ramas de `if`, brazos de `match`, bloques, valores de `let`/asignación):
+    /// en un argumento, operando, literal, índice o condición dejarían la expresión envolvente a
+    /// medio evaluar (temporales en la pila de la VM). Lo apagan las expresiones que no son
+    /// formas-con-bloque y lo enciende el cuerpo de un bucle.
+    break_ok: bool,
     /// Parámetros de tipo en ámbito ahora mismo: los `<T, U>` de la función que se
     /// registra o verifica (M6). `resolve_type` los reclasifica de `Struct(name)` a
     /// `Var(name)`, y `ensure_type` los acepta como tipos válidos.

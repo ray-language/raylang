@@ -215,7 +215,13 @@ Ejemplo del estilo:
 let abs: int = if (x < 0) { -x } else { x };   // if como expresión
 ```
 
-- **Sin `break`/`continue` (decisión explícita, 30 jul 2026).** Nacieron como omisión del diseño
+- **`break`/`continue`: descartados el 30 jul 2026, REABIERTOS el 6 sep 2026 (M191, §183).** La
+  decisión original se conserva abajo tal cual porque explica el coste que se pagó al reabrir;
+  lo que la cambió fue un dato de uso real (el cliente RFB `ray-remote`): el rodeo con bandera
+  `var running = true` **no corta el cuerpo del bucle**, y eso produjo errores silenciosos en
+  tres bucles de red. Forma mínima: sentencias sin valor, solo dentro de `while`/`for` de la
+  misma función, y solo en la "espina de sentencias" del cuerpo (SPEC §5).
+- ~~**Sin `break`/`continue` (decisión explícita, 30 jul 2026).**~~ Nacieron como omisión del diseño
   mínimo de M1 y, al reevaluarlo, se **descartaron** en vez de añadirse: (1) `return` ya da la
   salida temprana — extraer el bucle a una función es el reemplazo canónico de `break` y produce
   código con mejor nombre; (2) el estilo idiomático (for/iteradores, `map`/`filter`/`fold`,
@@ -12072,3 +12078,49 @@ había NOT bit a bit y escribió `v ^ 0xFFFFFFFF`. Sobre un entero, el mensaje a
 Lo que este hito NO toca, a propósito: `break`/`continue` (se reabre en su propio hito, con SPEC),
 `ray fmt` (M189) y los canales (M190).
 
+
+## 183. M191 — `break` y `continue`, reabiertos en forma mínima (sep 2026)
+
+El 30 de julio se descartaron a conciencia (§0): `return` ya daba la salida temprana, el estilo
+idiomático (iteradores, `position`/`any`) cubría casi todo, y en un lenguaje orientado a
+expresiones añadirlos obligaba a decidir el tipo de `break`, tocar la divergencia del checker y
+portarlo a tres motores más el selfhost. El plan de `ray-remote` (IDEAS §86) los devolvió a la mesa
+con un dato que la decisión original no tenía: **el rodeo con bandera no corta el cuerpo del
+bucle**. `running = false` dentro de un `match` no impide que el resto de la vuelta se ejecute, y en
+un cliente con tres bucles de "lee hasta que se cierre" eso produjo errores reales y silenciosos. El
+usuario decidió reabrir; esto es la forma mínima.
+
+**Qué es "mínimo".** Sentencias, no expresiones: `break;` y `continue;` no producen valor y el bucle
+sigue valiendo unit. Sin etiquetas: salen del bucle más interno. Solo dentro de `while`/`for` de la
+misma función: una función anónima pone la profundidad de bucle a cero (un `break` en un
+`fn() { … }` dentro de un bucle es "outside a loop"). Y **divergen**: una rama que termina en
+`break`/`continue` cede su tipo al resto, que es lo que hace útil `Received.Closed => { break; }`
+como brazo de un `match` que produce el frame.
+
+**La restricción que no se ve: la espina de sentencias.** El compilador de la VM no rastrea la
+profundidad de la pila de operandos (nunca lo necesitó: cada construcción deja la pila como la
+encontró). Un `break` es un `Jump` al final del bucle, y el final del bucle espera la pila **como al
+entrar**. Eso se cumple en el cuerpo y en todo lo que anida por formas-con-bloque (`if`/`else`,
+brazos de `match` —el escrutinio vive en un local, no en la pila—, bloques, valores de `let`/
+asignación/`return`), pero no dentro de una expresión a medio evaluar: `print({ break; 1 })` dejaría
+el callee en la pila, `1 + { continue; }` un operando, `[{ break; 1 }]` un elemento. En vez de
+enseñar al compilador a contar temporales (una tabla de efectos por opcode, o un opcode de
+truncado con altura relativa), el checker **restringe** `break`/`continue` a la espina de sentencias:
+`check_expr` cierra la espina para todo lo que no sea forma-con-bloque y el cuerpo de un bucle la
+abre. El mensaje lo dice con la lista de sitios prohibidos. Es una restricción honesta —nadie
+escribe `f({ break; 1 })` a propósito— y deja la puerta abierta a levantarla si algún día hace falta.
+
+**Los motores.** VM: una pila de bucles abiertos por función (`FnScope::loops`) donde cada `break`
+y `continue` deja su `Jump(0)`; `continue` se parchea justo tras el `Pop` del valor del cuerpo (antes
+del paso del bucle: el incremento del `for` o el siguiente `next`), `break` tras el `Pop` de la
+condición de salida. Los cuatro bucles del compilador (`while`, `for` por rango, por colección y por
+`Iterator`) tienen la misma forma, así que son tres llamadas en cada uno. Intérprete: dos variantes
+más de `Flow` que el bucle consume y que el borde de una llamada declara inalcanzables. Nativo:
+`break;`/`continue;` de Rust tal cual — los bucles se emiten como `while`/`for`/`loop` sin closures
+por medio. Selfhost: espejo de los tres (sin `for`, que su subconjunto no tiene), con los mismos
+mensajes byte a byte; el propio selfhost no usa todavía `break` en su código (bootstrap
+conservador).
+
+**Lo que se conserva.** Los patrones del MANUAL §4 (extraer a función, iteradores, invertir la
+condición) siguen siendo el consejo por defecto; lo que cambia es que la bandera deja de ser el
+plan B, porque era el plan malo.

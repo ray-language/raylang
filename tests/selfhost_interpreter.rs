@@ -569,5 +569,7 @@ fn output_code() {
     compare_source("fn main() -> int { 42 }", "in_exit42.ray");
     compare_source("fn main() { }", "in_unit.ray");
     // return temprano que decide el código de salida.
+    // M191: break/continue en while (anidados; continue salta el resto de la vuelta).
+    compare_source("fn main() -> int { var i = 0; var acc = 0; while (true) { i = i + 1; if (i % 2 == 0) { continue; } if (i > 7) { break; } acc = acc + i; } var a = 0; var pairs = 0; while (a < 3) { a = a + 1; var b = 0; while (b < 3) { b = b + 1; if (b == 2) { break; } pairs = pairs + 1; } } print(acc); print(pairs); 0 }", "sv_break.ray");
     compare_source("fn pick(n: int) -> int { if (n > 5) { return 100; } n } fn main() -> int { print(pick(9)); pick(3) }", "in_return.ray");
 }

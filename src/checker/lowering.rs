@@ -47,6 +47,7 @@ pub(super) fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
                 lower_ufcs_expr(target, sites);
                 lower_ufcs_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_ufcs_expr(v, sites);
@@ -186,6 +187,7 @@ pub(super) fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {
                 lower_uintlit_block(body, sites);
             }
             StmtKind::Assign { target, value } => { lower_uintlit_expr(target, sites); lower_uintlit_expr(value, sites); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { lower_uintlit_expr(v, sites); } }
             StmtKind::Expr(e) => lower_uintlit_expr(e, sites),
         }
@@ -279,6 +281,7 @@ pub(super) fn lower_try_block(block: &mut Block, sites: &TryConvMap) {
                 lower_try_block(body, sites);
             }
             StmtKind::Assign { target, value } => { lower_try_expr(target, sites); lower_try_expr(value, sites); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { lower_try_expr(v, sites); } }
             StmtKind::Expr(e) => lower_try_expr(e, sites),
         }
@@ -399,6 +402,7 @@ pub(super) fn lower_operators_block(block: &mut Block, sites: &SiteMap) {
                 lower_operators_expr(target, sites);
                 lower_operators_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_operators_expr(v, sites);
@@ -573,6 +577,7 @@ pub(super) fn lower_dict_calls_block(block: &mut Block, sites: &mut DictSites) {
                 lower_dict_calls_expr(target, sites);
                 lower_dict_calls_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_dict_calls_expr(v, sites);
@@ -755,6 +760,7 @@ pub(super) fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispat
                 lower_dyn_expr(target, coercions, dispatch, upcasts, tm, counter);
                 lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_dyn_expr(v, coercions, dispatch, upcasts, tm, counter);
@@ -945,6 +951,7 @@ fn lower_concat_block(block: &mut Block, sites: &std::collections::HashSet<(usiz
                 lower_concat_expr(target, sites);
                 lower_concat_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_concat_expr(v, sites);
@@ -1101,6 +1108,7 @@ fn lower_fusion_block(block: &mut Block, origin: &PreludeOrigin) {
                 lower_fusion_expr(target, origin);
                 lower_fusion_expr(value, origin);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_fusion_expr(v, origin);

@@ -400,6 +400,8 @@ fn resolve_stmt(r: Resolver, s: Stmt) {
             resolve_expr(r, target);
             resolve_expr(r, value);
         },
+        SKind.SBreak => { },
+        SKind.SContinue => { },
         SKind.SReturn(opt) => {
             match (opt) {
                 Option.Some(v) => resolve_expr(r, v),
@@ -787,6 +789,8 @@ fn tw_stmt(tw: TypeRewriter, s: Stmt) {
             tw_expr(tw, target);
             tw_expr(tw, value);
         },
+        SKind.SBreak => { },
+        SKind.SContinue => { },
         SKind.SReturn(opt) => {
             match (opt) {
                 Option.Some(v) => tw_expr(tw, v),

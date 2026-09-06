@@ -96,6 +96,9 @@ struct Checker {
     impl_traits: Map<string, bool>,
     scopes: [Map<string, VarInfo>],
     current_return: Type,
+    // M191: bucles abiertos de la función en curso y "espina de sentencias" (espejo de Rust).
+    loop_depth: int,
+    break_ok: bool,
     tparams: [string],
     bounds: [Bound],
 }
@@ -741,6 +744,8 @@ fn block_diverges(b: Block) -> bool {
 fn stmt_diverges(s: Stmt) -> bool {
     match (s.kind) {
         SKind.SReturn(_) => true,
+        SKind.SBreak => true,
+        SKind.SContinue => true,
         SKind.SExpr(e) => expr_diverges(e),
         _ => false,
     }
@@ -1409,6 +1414,8 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
             Result.Ok(0)
         },
         SKind.SAssign(target, value) => check_assign(c, target, value, stmt.line, stmt.col),
+        SKind.SBreak => check_break(c, "break", stmt.line, stmt.col),
+        SKind.SContinue => check_break(c, "continue", stmt.line, stmt.col),
         SKind.SReturn(valopt) => {
             var vt = Type.TUnit;
             match (valopt) {
@@ -1531,6 +1538,17 @@ fn check_assign(
 // Expresiones
 // =====================================================================
 fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
+    // M191: cualquier expresión que no sea forma-con-bloque cierra la espina de sentencias.
+    let saved = c.break_ok;
+    if (!is_block_form(e)) {
+        c.break_ok = false;
+    }
+    let r = check_expr_inner(c, e);
+    c.break_ok = saved;
+    r
+}
+
+fn check_expr_inner(c: Checker, e: Expr) -> Result<Type, TypeError> {
     match (e.kind) {
         EKind.EInt(_) => Result.Ok(
             Type.TInt
@@ -1569,8 +1587,14 @@ fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
     }
     ensure_type(c, fe.ret, fe.line, fe.col)?;
     let saved = c.current_return;
+    let saved_depth = c.loop_depth;
+    let saved_ok = c.break_ok;
+    c.loop_depth = 0;  // M191: un bucle exterior no es alcanzable desde una función anónima
+    c.break_ok = false;
     let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "the anonymous function");
     c.current_return = saved;
+    c.loop_depth = saved_depth;
+    c.break_ok = saved_ok;
     r?;
     var ps: [Type] = [];
     pi = 0;
@@ -1661,6 +1685,16 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
 // formas que producen valor (bloque, if, match, literal de struct, construcción de enum). Lo demás se
 // chequea normal.
 fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, TypeError> {
+    let saved = c.break_ok;
+    if (!is_block_form(e)) {
+        c.break_ok = false;
+    }
+    let r = check_expr_expected_inner(c, e, expected);
+    c.break_ok = saved;
+    r
+}
+
+fn check_expr_expected_inner(c: Checker, e: Expr, expected: Type) -> Result<Type, TypeError> {
     // M14.3d-4: si se espera `dyn Trait`, un valor concreto que lo implemente se coerciona. Las
     // formas que propagan el esperado (if/match/bloque) NO se interceptan: la coerción ocurre en sus
     // hojas (cada rama), igual que el resto del chequeo bidireccional.
@@ -3385,8 +3419,47 @@ fn check_while(c: Checker, cond: Expr, body: Block, line: int, col: int) -> Resu
             terr(cond.line, cond.col, "the while condition must be bool, not " + type_str(ct))
         );
     }
-    check_block(c, body)?;
+    check_loop_body(c, body)?;
     Result.Ok(Type.TUnit)
+}
+
+// M191: el cuerpo de un bucle — un nivel más y la espina de sentencias abierta.
+fn check_loop_body(c: Checker, body: Block) -> Result<Type, TypeError> {
+    let saved = c.break_ok;
+    c.loop_depth = c.loop_depth + 1;
+    c.break_ok = true;
+    let r = check_block(c, body);
+    c.loop_depth = c.loop_depth - 1;
+    c.break_ok = saved;
+    r
+}
+
+// M191: `break`/`continue` — solo dentro de un bucle de esta función y en la espina de sentencias.
+fn check_break(c: Checker, kw: string, line: int, col: int) -> Result<int, TypeError> {
+    if (c.loop_depth == 0) {
+        return Result.Err(terr(line, col, "'" + kw + "' outside a loop"));
+    }
+    if (!c.break_ok) {
+        return Result.Err(
+            terr(
+                line,
+                col,
+                "'" + kw + "' must be a statement of the loop body (not inside a call argument, an operator, a literal or an index)"
+            )
+        );
+    }
+    Result.Ok(0)
+}
+
+// M191: ¿forma-con-bloque? Solo estas dejan pasar la espina de sentencias a su interior.
+fn is_block_form(e: Expr) -> bool {
+    match (e.kind) {
+        EKind.EIf(a, b, d) => true,
+        EKind.EWhile(a, b) => true,
+        EKind.EMatch(a, b) => true,
+        EKind.EBlock(b) => true,
+        _ => false,
+    }
 }
 
 // Verifica un bloque en su propio ámbito y devuelve su tipo-valor (la expresión final, o unit).
@@ -4824,6 +4897,8 @@ pub fn check(prog: Program) -> Result<int, TypeError> {
         impl_traits: Map.new(),
         scopes: [],
         current_return: Type.TUnit,
+        loop_depth: 0,
+        break_ok: false,
         tparams: [],
         bounds: []
     };

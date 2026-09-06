@@ -445,6 +445,7 @@ pub(super) fn freshen_block(block: &mut Block, next: &mut usize) {
                 freshen_expr(target, next);
                 freshen_expr(value, next);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     freshen_expr(v, next);
@@ -553,6 +554,7 @@ pub(super) fn renumber_block(block: &mut Block, next: &mut usize) {
                 renumber_expr(target, next);
                 renumber_expr(value, next);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     renumber_expr(v, next);
@@ -730,6 +732,7 @@ pub(super) fn collect_bound_names_block(block: &Block, bound: &mut HashSet<Strin
                 collect_bound_names_expr(target, bound);
                 collect_bound_names_expr(value, bound);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     collect_bound_names_expr(v, bound);
@@ -849,6 +852,7 @@ pub(super) fn inline_forwarders_block(block: &mut Block, fwd: &HashMap<String, S
                 inline_forwarders_expr(target, fwd);
                 inline_forwarders_expr(value, fwd);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     inline_forwarders_expr(v, fwd);
@@ -967,6 +971,7 @@ pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, u
             }
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_for_iters_expr(value, sites),
             StmtKind::Assign { target, value } => { lower_for_iters_expr(target, sites); lower_for_iters_expr(value, sites); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { lower_for_iters_expr(v, sites); } }
             StmtKind::Expr(e) => lower_for_iters_expr(e, sites),
         }
@@ -1070,6 +1075,7 @@ pub(super) fn subst_named_block(block: &mut Block, sigma: &HashMap<String, Type>
                 subst_named_block(body, sigma);
             }
             StmtKind::Assign { target, value } => { subst_named_expr(target, sigma); subst_named_expr(value, sigma); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { subst_named_expr(v, sigma); } }
             StmtKind::Expr(e) => subst_named_expr(e, sigma),
         }

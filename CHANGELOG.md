@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`break` y `continue`** (M191, DESIGN §183, SPEC §5; feedback de `ray-remote`, decisión del
+  usuario): sentencias sin valor que salen del `while`/`for` más interno o pasan a su siguiente
+  iteración. Válidas solo dentro de un bucle de la misma función (una función anónima corta el
+  ámbito) y en la espina de sentencias del cuerpo (ramas de `if`, brazos de `match`, bloques,
+  valores de `let`/asignación/`return`); dentro de un argumento, operando, literal o índice es
+  error de tipos con mensaje propio. Divergen (`Option.None => { break; }` cede el tipo). Los tres
+  motores, el selfhost, `ray fmt`, el LSP y los editores. El MANUAL §4 pasa de "Salir temprano sin
+  `break`" a "Salir temprano" y conserva los patrones (extraer a función, iteradores) como consejo.
 - **`ray test` ya no dice "all passed" cuando no ha corrido nada** (M188, DESIGN §180; feedback
   de `ray-remote`): con una suite que no compila, el veredicto es
   `result: no test ran — 1 suite(s) failed to compile ✗` (o `N test(s) ran, M failed; K suite(s)

@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Cerrar un canal acotado con un emisor bloqueado ya no es error: el emisor despierta y su
+  `send` falla** (M190, DESIGN §182; feedback de `ray-remote`). Antes `close` reventaba con "close
+  on a channel with a blocked sender", y "acotado" y "se cierra para terminar" eran incompatibles.
+  Ahora `close` despierta a receptores (`None`) y a emisores ("send on a closed channel" en SU
+  fibra, recuperable con `try_call`/`try_join`). VM y binario nativo.
+- **`try_send(ch, v) -> bool`** (M190): envía sin bloquear ni fallar — `true` si entregó o
+  encoló, `false` si el canal está cerrado o lleno. Simétrico de `try_recv`.
+- **`ray_doc`/hover conocen `Channel.new`, `Channel.bounded` y `Map.new`** (M190): antes negaban el
+  símbolo. La SPEC y el MANUAL dejan de citar `channel()`/`channel(n)`, que no existían.
+- **Documentación** (M190): el MANUAL dice en negrita que lo que `spawn` captura se copia (entre
+  fibras solo se comparten canales y handles); REFERENCE anota que `+` sobre `bytes` es lineal y
+  `[int]`+`bytes_of` octeto a octeto no.
+
 ## 1.6.4 — 2026-09-04
 
 - **`ray upgrade` avisa cuando corre emulado** (M187, DESIGN §179): mantiene la arquitectura al

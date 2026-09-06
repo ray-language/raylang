@@ -482,6 +482,10 @@ pub enum OpCode {
     /// `Closed` si el canal está cerrado y vacío, `Empty` si está abierto y vacío. Nunca bloquea.
     /// Primitivo `try_recv`. Solo VM.
     ChanTryRecv,
+    /// M190: envío NO bloqueante. Saca valor y canal; empuja `bool`: `true` si lo entregó a un receptor
+    /// bloqueado o lo encoló (había hueco), `false` si el canal está cerrado (o liberado) o lleno. Nunca
+    /// bloquea ni falla. Builtin `try_send`. Solo VM.
+    ChanTrySend,
     // (cerrar un canal reusa el opcode `Close` de M11.8, ad-hoc polimórfico: handle de archivo o canal.)
 
     // --- Aserciones (M13.2a) ---

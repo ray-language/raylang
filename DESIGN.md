@@ -12045,3 +12045,53 @@ de la máquina (`PROCESSOR_ARCHITEW6432`, M184) **y** esa arquitectura tiene ass
 Es la tercera cara del mismo hallazgo: M184 arregló las decisiones internas que colgaban de una
 arquitectura mal deducida, M185 publicó el binario que faltaba y M187 cierra el camino por el que
 un usuario podía quedarse sin enterarse de ninguna de las dos.
+
+## 182. M190 — canales: `close` despierta a los emisores, y `try_send` (sep 2026)
+
+Tercer hito del plan de `ray-remote` (IDEAS §86). Dos entradas del feedback apuntaban al mismo
+sitio: un canal acotado no se podía cerrar con un emisor dormido en `send` ("close on a channel with
+a blocked sender", error en el sitio del close), y `send` sobre un canal cerrado era un error de
+ejecución sin alternativa sin panic. El cliente había tenido que dejar su canal de frames **sin
+acotar** —renunciando a la contrapresión— y envolver cada `send` en `try_call`, que es una excepción
+con otro nombre para un caso completamente normal en un programa con fibras: "la otra parte se fue
+antes que yo".
+
+**Por qué `close` fallaba.** M12.2 (canales acotados) decidió que un emisor bloqueado era una
+invariante que `close` no podía romper: el valor pendiente vive en la fibra aparcada, y cerrar sin
+decidir qué hacer con él habría sido descarte silencioso. La decisión de entonces fue conservadora
+(error en el closer) y coherente con el nativo, que la replicó con un contador `senders`. Lo que la
+app demuestra es que la invariante estaba mal orientada: **cerrar es la forma canónica de apagar** a
+un consumidor (`recv` → `None`), y con un canal acotado el productor puede estar dormido justo en
+ese momento. Que el closer reviente convierte "acotado" y "se cierra para terminar" en propiedades
+incompatibles.
+
+**Decisión.** `close` despierta a los emisores bloqueados **con error en su propia fibra**: su
+`send` termina con el `send on a closed channel` que ya existía, simétrico de los receptores que
+reciben `None`. El valor pendiente se descarta con la fibra (es exactamente lo que pasaría si el
+emisor hubiera llegado un instante después del cierre). En la VM esto pide una pieza nueva: una
+fibra aparcada no puede "fallar" desde fuera, así que lleva un `pending_error` que el bucle de
+ejecución lanza al reanudarla, en la posición del `send` que la aparcó (el `ip` ya apunta tras él),
+por el camino de errores de siempre (`try_call`, fallo de la `Task`, o aborto si es `main`). Ese
+camino se factorizó en `dispatch_error` para no duplicarlo. En el nativo bastó quitar la guarda del
+`close`: las esperas de `send` ya comprobaban `closed` al despertar. Los dos motores dan salida
+byte-idéntica en la sonda (`tests/cli_cli.rs`).
+
+**`try_send(ch, v) -> bool`.** El simétrico de `try_recv` (M116): `true` si entregó a un receptor
+aparcado o encoló (hueco), `false` si el canal está cerrado o lleno. Nunca bloquea ni falla. Es un
+opcode nuevo (`ChanTrySend`, réplica de `ChanSend` con los dos casos de aparcar/errar convertidos en
+`false`) y un método `try_send` en el `__RayChan` del runtime nativo. Diferencia asumida: en el
+nativo, un rendezvous (`cap = 0`) sin receptor esperando devuelve `false` aunque haya un receptor a
+punto de llegar (no es observable sin bloquear); la VM sí entrega al receptor aparcado. Ambos son
+correctos frente al contrato ("sin bloquear").
+
+**Descubribilidad.** `ray_doc "Channel.bounded"` negaba el símbolo (las funciones asociadas van en
+la tabla ASSOC, no en la de builtins) y la SPEC y el MANUAL citaban `channel()`/`channel(n)`, que
+no existían. Se añaden las tres asociadas a la tabla de documentación y se corrige el texto.
+
+**Documentación que la app pidió a gritos.** El MANUAL decía "captura por referencia" y "los struct
+tienen semántica de referencia", y ambas cosas son ciertas dentro de una fibra; pero `spawn` copia
+lo capturado, y el mismo texto significa "comparte" en un sitio y "copia" en otro sin que nada
+avise. Fue un bug real en el cliente (una bandera `live` que la fibra lectora nunca veía cambiar).
+Ahora está en negrita donde se habla de captura y donde se habla de fibras: entre fibras solo se
+comparten canales y handles. El aviso del compilador (closure de `spawn` que captura un struct
+mutado fuera) queda como idea L en el plan.

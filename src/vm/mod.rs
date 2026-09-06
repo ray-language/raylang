@@ -232,6 +232,7 @@ impl<'a> Vm<'a> {
                 scopes: Vec::new(),
                 unit_enums: Default::default(),
                 try_markers: Vec::new(),
+                pending_error: None,
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             fuel: u64::MAX, // sin límite por defecto
@@ -332,6 +333,18 @@ impl<'a> Vm<'a> {
                 return Ok(HeapValue::Unit);
             }
             // --- Punto seguro del GC ---
+            // M190: la fibra despertó con un error pendiente (su `send` bloqueado vio cerrarse el
+            // canal): se lanza en la instrucción que la aparcó (el `ip` ya apunta tras ella) y sigue
+            // el camino normal de errores (try_call, fallo de la fibra, o fin del programa si es main).
+            if let Some(msg) = self.cur.pending_error.take() {
+                let fi = self.cur.frames.len().saturating_sub(1);
+                let (l, c) = self.cur.frames.get(fi).map(|f| {
+                    let ip = f.ip.saturating_sub(1);
+                    program.functions[f.function].chunk.lines.get(ip).copied().unwrap_or((0, 0))
+                }).unwrap_or((0, 0));
+                self.dispatch_error(runtime_error(l, c, &msg))?;
+                continue;
+            }
             if self.cur.heap.should_collect() {
                 self.collect();
                 // M42.2: tope de heap. Si tras recolectar siguen vivos más objetos de los permitidos,
@@ -392,34 +405,34 @@ impl<'a> Vm<'a> {
             match outcome {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
-                Err(mut e) => {
-                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
-                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
-                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
-                    // es la misma disciplina que el intérprete).
-                    if e.trace.is_empty() {
-                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
-                    }
-                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
-                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
-                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
-                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
-                    // `return Err(e)` que aborta el programa.
-                    if !self.cur.try_markers.is_empty() {
-                        self.unwind_to_try_marker(e);
-                        continue;
-                    }
-                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
-                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
-                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
-                    // error es un deadlock, no un fallo de la fibra actual).
-                    if self.cur.frames.is_empty() || self.cur.is_main {
-                        return Err(e);
-                    }
-                    self.fail_current_fiber(e)?;
-                }
+                Err(e) => self.dispatch_error(e)?,
             }
         }
+    }
+
+    /// Encamina un error de ejecución de la fibra en curso (M190: compartido con el error pendiente
+    /// de una fibra reanudada). `Ok(())` = el bucle continúa con lo que el scheduler haya cargado.
+    fn dispatch_error(&mut self, mut e: RuntimeError) -> Result<(), RuntimeError> {
+        let program = self.program;
+        // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen intactos (el `Err` no
+        // los desenrolla) — coste cero en el camino caliente. `is_empty` respeta una traza ya adjunta.
+        if e.trace.is_empty() {
+            e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
+        }
+        // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se desenrolla hasta su
+        // marcador y se entrega `[msg]` como valor. Va ANTES del reparto main/hija a propósito: un
+        // `try_call` en `main` también recupera, y para eso tiene que ganarle al `return Err(e)`.
+        if !self.cur.try_markers.is_empty() {
+            self.unwind_to_try_marker(e);
+            return Ok(());
+        }
+        // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el programa; se
+        // captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los de `main` y los del
+        // scheduler (frames vacíos = la fibra ya se aparcó/terminó → deadlock, no fallo de la fibra).
+        if self.cur.frames.is_empty() || self.cur.is_main {
+            return Err(e);
+        }
+        self.fail_current_fiber(e)
     }
 
     /// V10: ejecuta UNA instrucción del bytecode. Es el antiguo cuerpo de la closure de
@@ -1222,7 +1235,7 @@ impl<'a> Vm<'a> {
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
-                            try_markers: Vec::new(),
+                            try_markers: Vec::new(), pending_error: None,
                         });
                         task
                     };
@@ -1401,6 +1414,43 @@ impl<'a> Vm<'a> {
                         drop(sh);
                         let (l, c2) = pos!();
                         if !self.poll_next(l, c2)? { self.stop = true; }
+                    }
+                }
+                OpCode::ChanTrySend => {
+                    // M190: envío NO bloqueante. Réplica de ChanSend salvo que cerrado/liberado y cola
+                    // llena devuelven `false` en vez de fallar o aparcar; entregado o encolado → `true`.
+                    let v = self.pop();
+                    let h = self.pop_channel();
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                    let (closed, len, cap) = match sh.chan(h) {
+                        Some(c) => (c.closed, c.queue.len(), c.cap),
+                        None => (true, 0, None),
+                    };
+                    if closed {
+                        drop(sh);
+                        self.cur.stack.push(HeapValue::Bool(false));
+                        return Ok(None);
+                    }
+                    if let Some(pos) = sh.parked.iter().position(
+                        |p| p.on == h && matches!(p.waiting, Waiting::Recv))
+                    {
+                        let parked = sh.parked.remove(pos);
+                        Self::wake_recv(&self.cur, &mut sh, parked.fiber, vec![v]);
+                        drop(sh);
+                        self.cur.stack.push(HeapValue::Bool(true));
+                    } else if cap.is_none() || len < cap.unwrap() {
+                        let ch = sh.chan_mut(h).expect("live: closed handled above");
+                        let mut ch_heap = std::mem::take(&mut ch.heap);
+                        let v2 = transfer_value(&self.cur.heap, &mut ch_heap, &v, &mut HashMap::new());
+                        let ch = sh.chan_mut(h).expect("live: closed handled above");
+                        ch.heap = ch_heap;
+                        ch.queue.push_back(v2);
+                        Self::wake_select_waiters(&mut sh, h);
+                        drop(sh);
+                        self.cur.stack.push(HeapValue::Bool(true));
+                    } else {
+                        drop(sh);
+                        self.cur.stack.push(HeapValue::Bool(false));
                     }
                 }
                 OpCode::ChanTryRecv => {
@@ -3665,18 +3715,19 @@ impl<'a> Vm<'a> {
                                 self.cur.stack.push(HeapValue::Unit);
                                 return Ok(None);
                             }
-                            if sh.parked.iter().any(
-                                |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
-                            {
-                                return Err(runtime_error(pos!().0, pos!().1,
-                                    "close on a channel with a blocked sender"));
-                            }
                             sh.chan_mut(ch).expect("just checked live").closed = true;
                             let mut i = 0;
                             while i < sh.parked.len() {
                                 if sh.parked[i].on == ch && matches!(sh.parked[i].waiting, Waiting::Recv) {
                                     let parked = sh.parked.remove(i);
                                     Self::wake_recv(&self.cur, &mut sh, parked.fiber, Vec::new());
+                                } else if sh.parked[i].on == ch && matches!(sh.parked[i].waiting, Waiting::Send(_)) {
+                                    // M190: un emisor bloqueado (cola llena o rendezvous) despierta con
+                                    // su `send` fallando — su valor pendiente se descarta con la fibra
+                                    // aparcada. Antes: "close on a channel with a blocked sender" aquí.
+                                    let mut parked = sh.parked.remove(i);
+                                    parked.fiber.pending_error = Some("send on a closed channel".to_string());
+                                    Self::wake_sender(&mut sh, parked.fiber);
                                 } else {
                                     i += 1;
                                 }

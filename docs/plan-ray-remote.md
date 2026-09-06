@@ -55,7 +55,7 @@ antes que cualquier ergonomía.
 Golden: `tests/fixtures/fmt_comments.ray` (el fichero de doce líneas del feedback) y el propio
 `ray-remote` con `ray fmt --check` en su CI.
 
-### A3. Canales: `close` con emisor bloqueado y `try_send` (feedback 11 y 15) — S
+### A3. Canales: `close` con emisor bloqueado y `try_send` (feedback 11 y 15) — S ✅ M190
 
 Reproducido: `Channel.bounded(1)` lleno + fibra dormida en `send` + `close` →
 `runtime error: close on a channel with a blocked sender`. Hoy "acotado" y "se cierra para
@@ -170,7 +170,7 @@ más selfhost. Recomendación: sí, con el escape explícito.
 sin anotación a partir del cuerpo. Coste M (inferencia en el checker + selfhost). Baja
 prioridad: el rodeo es una sentencia.
 
-## 6. Documentación (transversal, S)
+## 6. Documentación (transversal, S) ✅ M190 (captura/spawn, `bytes`, `Channel.bounded`; el patrón "canal que se cierra" queda con D1)
 
 - **MANUAL, captura de closures**: en negrita, "entre fibras solo se comparten canales y
   handles; lo que `spawn` captura se copia" (feedback 14). Es un bug real que compila y arranca.

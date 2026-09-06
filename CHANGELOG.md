@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/crypto/md5`, `std/crypto/aes`, `std/crypto/des`** (M194, DESIGN §186; feedback de
+  `ray-remote`): criptografía LEGADA en raylang puro para hablar con protocolos que la exigen —
+  MD5 (RFC 1321); AES-128/192/256 en ECB y CBC con descifrado (FIPS-197, SP 800-38A); DES y 3DES en
+  ECB y CBC (FIPS 46-3, SP 800-67). Documentada como "no para diseñar" (sin tiempo constante;
+  `std/crypto` con `ring` sigue siendo la de producción). Portada del cliente RFB y completada; las
+  ~900 líneas de `src/crypto/` de la app se reducen a su `bignum.ray`.
 - **`std/inflate` incremental** (M193, DESIGN §185; feedback de `ray-remote`): `zlib_stream()` /
   `inflate_stream()` + `stream_push(z, chunk) -> Result<bytes, string>` descomprimen un stream que
   dura toda la sesión — cada `push` devuelve lo que produjeron los bloques completados, la ventana

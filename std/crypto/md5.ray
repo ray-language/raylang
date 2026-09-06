@@ -1,0 +1,260 @@
+// std/crypto/md5 — MD5 (RFC 1321) en raylang puro (M194, legado).
+//
+// LEGADO: MD5 está roto para firmas y resistencia a colisiones desde hace dos décadas. Este módulo
+// existe para HABLAR CON PROTOCOLOS QUE LO EXIGEN (la autenticación de Apple Remote Desktop deriva
+// su clave AES del MD5 del secreto Diffie-Hellman; digest auth de HTTP; ...), no para diseñar nada
+// nuevo: para eso, `std/crypto.sha256`. Portado del cliente RFB `ray-remote` con los vectores de
+// RFC 1321 (`tests/crypto_legacy_cli.rs`).
+//
+// La aritmética va en `u32`, que en raylang envuelve por diseño: el algoritmo se escribe tal cual
+// viene en el RFC, sin enmascarar a mano en cada paso.
+
+/// The MD5 digest of `data` (16 bytes). LEGACY: only for protocols that require MD5; use
+/// `std/crypto.sha256` for anything new.
+pub fn md5(data: bytes) -> bytes {
+    var a0: u32 = 0x67452301;
+    var b0: u32 = 0xEFCDAB89;
+    var c0: u32 = 0x98BADCFE;
+    var d0: u32 = 0x10325476;
+
+    let msg = pad(data);
+    let k = table_k();
+    let s = table_s();
+
+    var off = 0;
+    while (off < msg.len()) {
+        // Los 16 words del bloque, little-endian.
+        var m: [u32] = [];
+        var w = 0;
+        while (w < 16) {
+            let p = off + w * 4;
+            let v = msg[p] + msg[p + 1] * 256 + msg[p + 2] * 65536 + msg[p + 3] * 16777216;
+            m.push(v as u32);
+            w = w + 1;
+        }
+
+        var a = a0;
+        var b = b0;
+        var c = c0;
+        var d = d0;
+
+        var i = 0;
+        while (i < 64) {
+            var f: u32 = 0;
+            var g = 0;
+            if (i < 16) {
+                f = b & c | ~b & d;
+                g = i;
+            } else if (i < 32) {
+                f = d & b | ~d & c;
+                g = (5 * i + 1) % 16;
+            } else if (i < 48) {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | ~d);
+                g = 7 * i % 16;
+            }
+            let tmp = d;
+            d = c;
+            c = b;
+            let sum = a + f + k[i] + m[g];
+            b = b + rotl(sum, s[i]);
+            a = tmp;
+            i = i + 1;
+        }
+
+        a0 = a0 + a;
+        b0 = b0 + b;
+        c0 = c0 + c;
+        d0 = d0 + d;
+        off = off + 64;
+    }
+
+    var out: [int] = [];
+    push_le32(out, a0);
+    push_le32(out, b0);
+    push_le32(out, c0);
+    push_le32(out, d0);
+    bytes_of(out)
+}
+
+// Rotación a la izquierda de 32 bits.
+fn rotl(v: u32, n: int) -> u32 {
+    if (n == 0) { v } else { v << n as u32 | v >> (32 - n) as u32 }
+}
+
+fn push_le32(out: [int], v: u32) {
+    out.push((v & 0xFF) as int);
+    out.push((v >> 8 & 0xFF) as int);
+    out.push((v >> 16 & 0xFF) as int);
+    out.push((v >> 24 & 0xFF) as int);
+}
+
+// Un 0x80, ceros hasta dejar 8 octetos libres en el bloque, y la longitud en BITS little-endian.
+fn pad(data: bytes) -> bytes {
+    var out: [int] = [];
+    var i = 0;
+    while (i < data.len()) {
+        out.push(data[i]);
+        i = i + 1;
+    }
+    out.push(0x80);
+    while (out.len() % 64 != 56) {
+        out.push(0);
+    }
+    // La longitud en bits como u64 little-endian. Se calcula por octetos para no desbordar `int`
+    // con mensajes enormes: bit_len = len*8 se parte en su parte baja y su parte alta.
+    let len = data.len();
+    let low = len % 536870912 * 8;
+    let high = len / 536870912;
+    out.push(low % 256);
+    out.push(low / 256 % 256);
+    out.push(low / 65536 % 256);
+    out.push(low / 16777216 % 256);
+    out.push(high % 256);
+    out.push(high / 256 % 256);
+    out.push(high / 65536 % 256);
+    out.push(high / 16777216 % 256);
+    bytes_of(out)
+}
+
+// Las 64 constantes: floor(abs(sin(i + 1)) * 2^32).
+fn table_k() -> [u32] {
+    [
+        0xD76AA478,
+        0xE8C7B756,
+        0x242070DB,
+        0xC1BDCEEE,
+        0xF57C0FAF,
+        0x4787C62A,
+        0xA8304613,
+        0xFD469501,
+        0x698098D8,
+        0x8B44F7AF,
+        0xFFFF5BB1,
+        0x895CD7BE,
+        0x6B901122,
+        0xFD987193,
+        0xA679438E,
+        0x49B40821,
+        0xF61E2562,
+        0xC040B340,
+        0x265E5A51,
+        0xE9B6C7AA,
+        0xD62F105D,
+        0x2441453,
+        0xD8A1E681,
+        0xE7D3FBC8,
+        0x21E1CDE6,
+        0xC33707D6,
+        0xF4D50D87,
+        0x455A14ED,
+        0xA9E3E905,
+        0xFCEFA3F8,
+        0x676F02D9,
+        0x8D2A4C8A,
+        0xFFFA3942,
+        0x8771F681,
+        0x6D9D6122,
+        0xFDE5380C,
+        0xA4BEEA44,
+        0x4BDECFA9,
+        0xF6BB4B60,
+        0xBEBFBC70,
+        0x289B7EC6,
+        0xEAA127FA,
+        0xD4EF3085,
+        0x4881D05,
+        0xD9D4D039,
+        0xE6DB99E5,
+        0x1FA27CF8,
+        0xC4AC5665,
+        0xF4292244,
+        0x432AFF97,
+        0xAB9423A7,
+        0xFC93A039,
+        0x655B59C3,
+        0x8F0CCC92,
+        0xFFEFF47D,
+        0x85845DD1,
+        0x6FA87E4F,
+        0xFE2CE6E0,
+        0xA3014314,
+        0x4E0811A1,
+        0xF7537E82,
+        0xBD3AF235,
+        0x2AD7D2BB,
+        0xEB86D391
+    ]
+}
+
+// Los desplazamientos de cada ronda.
+fn table_s() -> [int] {
+    [
+        7,
+        12,
+        17,
+        22,
+        7,
+        12,
+        17,
+        22,
+        7,
+        12,
+        17,
+        22,
+        7,
+        12,
+        17,
+        22,
+        5,
+        9,
+        14,
+        20,
+        5,
+        9,
+        14,
+        20,
+        5,
+        9,
+        14,
+        20,
+        5,
+        9,
+        14,
+        20,
+        4,
+        11,
+        16,
+        23,
+        4,
+        11,
+        16,
+        23,
+        4,
+        11,
+        16,
+        23,
+        4,
+        11,
+        16,
+        23,
+        6,
+        10,
+        15,
+        21,
+        6,
+        10,
+        15,
+        21,
+        6,
+        10,
+        15,
+        21,
+        6,
+        10,
+        15,
+        21
+    ]
+}

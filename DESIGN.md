@@ -12293,3 +12293,37 @@ anti-bomba es por `push`, sin contar la ventana. Errores de corrupción son pega
 descomprime en trozos de tamaños arbitrarios (cortes dentro de bloques) y mensaje a mensaje, con
 salida byte-idéntica al original en VM, intérprete y nativo (`tests/inflate_stream_cli.rs`).
 Cero runtime nuevo: sigue siendo raylang puro embebido por `src/stdlib.rs`.
+
+## 186. M194 — `std/crypto/{md5,aes,des}`: la cripto que el otro lado impone (sep 2026)
+
+`std/crypto` está bien elegida para diseñar cosas nuevas: Ed25519, X25519, ChaCha20-Poly1305,
+HKDF, todo sobre `ring` y en tiempo constante. Pero cuando un programa habla con un sistema que ya
+existe no elige el algoritmo: lo elige el protocolo del otro lado. Para autenticarse contra el
+Screen Sharing de macOS hacen falta, sin alternativa, MD5 (la clave AES sale del secreto
+Diffie-Hellman), AES-128 en ECB (el bloque de credenciales) y DES (la autenticación VNC clásica).
+`ray-remote` los escribió a mano: unas 900 líneas que no tienen nada que ver con su problema y que
+son exactamente el tipo de código donde un error no se ve — no falla, simplemente no autentica.
+
+**Decisión: tres módulos legados, en raylang puro, con su advertencia en la primera línea.** Van
+como `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des` (módulos anidados, como
+`std/collections/*`), no como un `std/crypto/legacy` único: `encrypt_ecb` existe en AES y en DES,
+y `aes.encrypt_ecb` se lee mejor que `legacy.aes_encrypt_ecb`. Son raylang puro: `ring` no ofrece
+MD5, DES ni AES-ECB (a propósito), y traer otra dependencia de Rust para algoritmos que no deben
+usarse en nada nuevo sería al revés de la política de `SECURITY.md`. La consecuencia —no son de
+tiempo constante— queda escrita en la cabecera de cada módulo, en REFERENCE y en SECURITY.md: sirven
+para hablar con VNC, Apple Remote Desktop, Kerberos o digest auth, y para nada más.
+
+**Qué se portó y qué se completó.** MD5 tal cual (con `u32` envolvente, el algoritmo se escribe
+como en el RFC). AES traía solo el cifrado de 128 bits en ECB; se añaden el descifrado (S-box
+inversa derivada de la directa, `InvShiftRows`, `InvMixColumns` con el producto en GF(2⁸)), las
+claves de 192 y 256 bits (el `SubWord` extra de AES-256 en la expansión) y CBC. DES traía solo el
+cifrado; se añaden el descifrado (las subclaves en orden inverso), CBC y 3DES en EDE con claves de
+24 o 16 octetos. Los helpers específicos de VNC (`vnc_key` con los bits de cada octeto invertidos,
+un accidente histórico de AT&T) se quedan en la app: no son DES, son VNC. Sin relleno: PKCS#7 son
+dos líneas que dependen del protocolo.
+
+**Verificación.** Los vectores oficiales, en los tres motores con salida idéntica: RFC 1321 (MD5),
+FIPS-197 C.1/C.2/C.3 (AES-128/192/256), NIST SP 800-38A F.2.1 (AES-128-CBC), FIPS 46-3 (DES) y
+NIST SP 800-67 (3DES), más los round-trips de descifrado. Es la única red de seguridad que vale
+aquí. Lo que sigue pendiente del feedback es `std/bigint` (C3): las dos exponenciaciones modulares
+de 4096 bits de la app cuestan 5 s en nativo y eso no se arregla en raylang puro.

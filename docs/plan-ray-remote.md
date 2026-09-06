@@ -120,7 +120,7 @@ pub fn inflate_end(z: Inflater) -> Result<bytes, string>                  // col
 puntos arbitrarios (incluido dentro de un código Huffman) y comparado contra Python `zlib`.
 Beneficiario inmediato: ZRLE en `ray-remote`; después `net` (WebSocket comprimido).
 
-### C2. `std/crypto/legacy` (feedback 3) — S–M
+### C2. `std/crypto/legacy` (feedback 3) — S–M ✅ M194 (como `std/crypto/{md5,aes,des}`, con descifrado, CBC, AES-256 y 3DES)
 
 MD5, DES/3DES y AES-128/256 en ECB/CBC, en raylang puro, con los vectores de RFC 1321,
 FIPS 46-3 y FIPS-197. El código y los tests **ya existen en `ray-remote/src/crypto/`** (unas

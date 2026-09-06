@@ -1740,6 +1740,10 @@ let estado = p.wait();
 
 ### Criptografía y canal seguro (`std/crypto`)
 
+Para hablar con un protocolo que exige MD5, DES/3DES o AES en ECB/CBC (VNC, Apple Remote Desktop,
+Kerberos, digest auth) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des` (M194): raylang
+puro, sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo.
+
 `std/crypto` es criptografía de **producción** (tiempo constante, respaldada por `ring` y
 `x25519-dalek`), no una demostración. Tiene cuatro familias, y hacen falta las cuatro para montar un
 canal cifrado entre dos pares:

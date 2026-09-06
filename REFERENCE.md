@@ -83,7 +83,7 @@ Reservadas (no pueden usarse como identificadores):
 | `{ }` | bloques (producen valor), literales de struct, cuerpos |
 | `[ ]` | literales de arreglo `[1, 2, 3]` (coma final permitida), tipos `[T]`, indexación `a[i]` |
 | `,` `;` `:` | separadores; fin de sentencia; anotación de tipo |
-| `.` | campo, método (UFCS), variante de enum (`Option.Some`), módulo (`math.PI`), tupla (`t.0`) |
+| `.` | campo, método (UFCS), variante de enum (`Option.Some`), módulo (`math.PI`), tupla (`t.0`), y el pseudo-módulo `builtin` (`builtin.close(h)`: el builtin aunque el módulo defina su propio `close`, M196) |
 | `..` | rango en `for i in a..b` (semiabierto) |
 | `->` | tipo de retorno de función |
 | `=>` | brazo de `match` |

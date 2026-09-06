@@ -147,6 +147,13 @@ fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
 /// usuario SÍ puede redefinirlas (override). Los internos `__x` no son de cara al usuario. Lo llaman
 /// tanto `check` (fail-fast) como `check_all` (recuperación de errores) para que el mensaje se emita.
 fn check_builtin_redefinition(program: &Program) -> Result<(), TypeError> {
+    // M196: un MÓDULO chequeado como archivo suelto (sin `main`: `ray build proto.ray`, el LSP con un
+    // submódulo abierto) sí puede definir `close`/`len`/…: cuando se carga de verdad va namespacado
+    // (`M::close`) y se consume calificado. La regla solo protege a la entrada, que es la única que
+    // resuelve nombres pelados contra los builtins.
+    if !program.functions.iter().any(|f| f.name == "main") {
+        return Ok(());
+    }
     for f in &program.functions {
         if !f.name.contains("::") && !f.name.contains('#') && !f.name.starts_with("__")
             && crate::builtins::is_builtin(&f.name)

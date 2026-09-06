@@ -101,6 +101,14 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   lo pega al último elemento.
 - **`pub`** exporta funciones, structs, enums, traits y consts. Referenciar un ítem no-`pub` de
   otro módulo es error. `pub from M import x;` **reexporta** (construye la cara pública).
+- **Nombres de builtin en módulos** (M196): un módulo puede definir una función `pub` con el
+  nombre de un builtin (`pub fn close(c: Conn)`), porque se consume calificada (`proto.close(c)`).
+  Dentro de ese módulo el nombre pelado es la función propia; el builtin queda alcanzable por el
+  pseudo-módulo **`builtin`** (`builtin.close(c.sock)`; `builtin.x` con un `x` que no existe es
+  el error normal de nombre no declarado). El archivo de **entrada** no puede redefinir un builtin (su nombre pelado se resuelve
+  antes que cualquier función de usuario), y `from M import close;` sin alias es error por la misma
+  razón: `import M;` + `M.close(...)`, o `from M import close as cerrar;`. El UFCS `x.close()` sigue
+  resolviendo al builtin fuera del módulo: la forma calificada es la canónica.
 - **Cápsulas**: la presencia de `P/mod.ray` vuelve `P/` direccionable (`import P;` carga
   `P/mod.ray`) y **encapsula** su subárbol: importar `P/interno` desde fuera de `P/` es error.
   `P.ray` y `P/mod.ray` a la vez es error (forma canónica única).

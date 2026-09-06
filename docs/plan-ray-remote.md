@@ -157,7 +157,7 @@ Opciones:
 Recomendación: reabrir en la forma mínima. La bandera es el patrón que la gente escribe de
 verdad, y es el que falla en silencio.
 
-### D2. Funciones `pub` de módulo con nombre de builtin (feedback 1)
+### D2. Funciones `pub` de módulo con nombre de builtin (feedback 1) ✅ M196 (escape `builtin.f`)
 
 `pub fn close(c: Conn)` en un módulo consumido cualificado se rechaza. Opción: permitirlo
 cuando el módulo se importa cualificado, con `builtin.close(...)` como escape dentro del

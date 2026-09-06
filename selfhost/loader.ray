@@ -416,7 +416,26 @@ fn resolve_expr(r: Resolver, e: Expr) {
             }
         },
         EKind.ECall(callee, cargs) => {
-            resolve_expr(r, callee);
+            // M196: `builtin.f(args)` — el pseudo-módulo de los builtins: el nombre pelado, sin
+            // pasar por la tabla `own` (espejo del loader de Rust).
+            var escaped = false;
+            match (callee.kind) {
+                EKind.EField(obj, fname) => {
+                    match (obj.kind) {
+                        EKind.EIdent(leaf) => {
+                            if (leaf == "builtin" && !rs_is_local(r, leaf)) {
+                                callee.kind = EKind.EIdent(fname);
+                                escaped = true;
+                            }
+                        },
+                        _ => { },
+                    }
+                },
+                _ => { },
+            }
+            if (!escaped) {
+                resolve_expr(r, callee);
+            }
             var i = 0;
             while (i < cargs.len()) {
                 resolve_expr(r, cargs[i]);

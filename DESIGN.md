@@ -12046,6 +12046,32 @@ Es la tercera cara del mismo hallazgo: M184 arregló las decisiones internas que
 arquitectura mal deducida, M185 publicó el binario que faltaba y M187 cierra el camino por el que
 un usuario podía quedarse sin enterarse de ninguna de las dos.
 
+## 180. M188 — lo que un cliente RFB le dijo a la toolchain, primera entrega (sep 2026)
+
+`ray-apps/ray-remote` (cliente de escritorio remoto: RFB, DH de Apple, cuatro fibras, `std/ui`)
+dejó dieciséis entradas de fricción en su `docs/raylang-feedback.md`; el plan que las ordena está
+en `docs/plan-ray-remote.md` (IDEAS §86). Este hito es el lote de "bugs y mensajes" más barato, y
+se hizo primero por una razón: cada entrada engañaba al lector en vez de fallar.
+
+**El veredicto de `ray test`.** Con la única suite rota, el runner imprimía el error de tipos y
+después `result: 0 test(s), all passed ✓`. El exit era 65 (CI no lo cuela), pero el texto era lo
+único que quedaba a la vista con el scrollback lleno, y decía lo contrario del error. La decisión:
+el veredicto nombra lo que pasó — `no test ran — N suite(s) failed to compile ✗`, o `N ran, M
+failed; K failed to compile` cuando otras suites sí corrieron — y `0 test(s) found` no lleva tick.
+Un veredicto verde exige haber ejecutado algo.
+
+**`ray run -- args`.** El separador `--` se tomaba por un módulo. Se adopta la convención de
+cargo/npm/go: el primer `--` se consume, esté antes del fichero (entrada del proyecto) o después;
+el resto llega al programa intacto, incluido un segundo `--`.
+
+**Dos mensajes.** `'!' requires bool, not u32` era correcto y no ayudaba: la app dedujo que no
+había NOT bit a bit y escribió `v ^ 0xFFFFFFFF`. Sobre un entero, el mensaje añade la pista hacia
+`~`. Y `expected a parameter name` sobre `from` no decía que es palabra reservada; ahora sí
+(hasta que B3 del plan la haga contextual). Ambos en tándem con el espejo selfhost, byte-idénticos.
+
+Lo que este hito NO toca, a propósito: `break`/`continue` (se reabre en su propio hito, con SPEC),
+`ray fmt` (M189) y los canales (M190).
+
 ## 182. M190 — canales: `close` despierta a los emisores, y `try_send` (sep 2026)
 
 Tercer hito del plan de `ray-remote` (IDEAS §86). Dos entradas del feedback apuntaban al mismo

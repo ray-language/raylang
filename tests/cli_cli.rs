@@ -62,6 +62,14 @@ fn run_passes_the_program_args() {
     // Los argumentos tras el archivo llegan a `args()`.
     let (out, _err, _code) = ray(&base, &["run", "prog.ray", "one", "dos", "tres"]);
     assert!(out.contains("3"), "args() ve los 3 argumentos\n{out}");
+    // M188: `--` separa los argumentos del programa (convención de cargo/npm/go); antes se tomaba
+    // por un módulo ("could not read module '--'"). Solo se consume el primero.
+    let (out, _err, code) = ray(&base, &["run", "prog.ray", "--", "a", "b"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("2"), "tras `--` llegan 2 argumentos\n{out}");
+    let (out, _err, code) = ray(&base, &["run", "prog.ray", "--", "--", "x"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("2"), "el segundo `--` es del programa\n{out}");
 }
 
 #[test]

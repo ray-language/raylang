@@ -486,6 +486,8 @@ fn compare(src: &str, name_tmp: &str) {
 #[test]
 fn function_minima() {
     compare("fn main() -> int { 0 }", "sp_min.ray");
+    // M188: `from` como nombre de parámetro → el mismo mensaje de palabra reservada.
+    compare("fn slice(bits: [int], from: int) -> [int] { bits }", "sp_from_param.ray");
     compare("fn nada() { }", "sp_unit.ray");
 }
 

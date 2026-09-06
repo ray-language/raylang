@@ -224,6 +224,31 @@ fn broken_suite_exits_65_but_others_run() {
 }
 
 #[test]
+fn verdict_never_says_all_passed_when_nothing_ran() {
+    // M188 (feedback de ray-remote): con la única suite rota, el runner decía "0 test(s), all
+    // passed ✓" tras el error de tipos. El veredicto dice ahora qué pasó, y sin tick.
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { 0 }\n"),
+        ("tests/broken.ray", "@test\nfn nope() -> bool { missing_fn() }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_broken_only", &files, &[]);
+    assert!(!out.contains("all passed"), "sin pruebas ejecutadas no hay veredicto verde\n{out}");
+    assert!(out.contains("result: no test ran — 1 suite(s) failed to compile ✗"), "{out}");
+    assert_eq!(code, 65, "{out}");
+
+    // Con una suite sana y otra rota, el veredicto cuenta las dos cosas.
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { 0 }\n\n@test\nfn entry_ok() -> bool { true }\n"),
+        ("tests/broken.ray", "@test\nfn nope() -> bool { missing_fn() }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_broken_mixed", &files, &[]);
+    assert!(out.contains("result: 1 test(s) ran, 0 failed; 1 suite(s) failed to compile ✗"), "{out}");
+    assert_eq!(code, 65, "{out}");
+}
+
+#[test]
 fn first_arg_without_extension_is_filter() {
     // M101: `ray test <filtro>` (sin archivo) filtra sobre el proyecto del cwd.
     let files = [

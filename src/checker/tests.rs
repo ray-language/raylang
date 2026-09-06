@@ -307,6 +307,18 @@ fn paren_concat_position_collision_does_not_flatten_the_outer_chain() {
 }
 
 /// Atajo: ¿el mensaje de error contiene esta subcadena?
+#[test]
+fn not_on_an_integer_points_to_bitwise_not() {
+    // M188: `!v` sobre un entero sugiere `~` (el rodeo `v ^ 0xFFFFFFFF` nacía de no saber que existe).
+    err_contains(
+        "fn main() -> int { let x: u32 = 5 as u32; let y = !x; 0 }",
+        "'!' requires bool, not u32 (for a bitwise NOT use '~')",
+    );
+    err_contains("fn main() -> int { let y = !3; 0 }", "'!' requires bool, not int (for a bitwise NOT use '~')");
+    // Sobre otros tipos la pista no aplica.
+    err_contains("fn main() -> int { let y = !\"s\"; 0 }", "'!' requires bool, not string");
+}
+
 fn err_contains(src: &str, needle: &str) {
     let e = check_src(src).expect_err("debería fallar la verificación");
     assert!(

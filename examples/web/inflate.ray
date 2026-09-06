@@ -614,10 +614,7 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
         return Result.Err("gzip header truncated");
     }
     let comprimido = data.sub_bytes(pos, data.len() - 8);
-    match (inflate_raw_limit(
-    comprimido,
-    max_out
-)) {
+    match (inflate_raw_limit(comprimido, max_out)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).

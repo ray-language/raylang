@@ -307,10 +307,7 @@ pub fn serve_shutdown_limits(
     drain_ms: int,
     handler: fn(Req) -> Result<Json, string>
 ) -> Result<int, string> {
-    match (net.tcp_listen(
-    host,
-    port
-)) {
+    match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("rpc listening on port " + to_string(net.local_port(srv)));
@@ -387,7 +384,11 @@ pub fn serve_shutdown_limits(
                 });
                 var waiting = true;
                 while (waiting && active > 0) {
-                    let which = if (conns_open) { select([deadline_ch, done, conns]) } else { select([deadline_ch, done]) };
+                    let which = if (conns_open) {
+                        select([deadline_ch, done, conns])
+                    } else {
+                        select([deadline_ch, done])
+                    };
                     if (which == 0) {
                         waiting = false;
                     } else if (which == 1) {
@@ -406,7 +407,9 @@ pub fn serve_shutdown_limits(
                 }
                 if (active > 0) {
                     eprint(
-                        "rpc off: " + to_string(active) + " connection(s) in flight when the deadline expired"
+                        "rpc off: "
+                            + to_string(active)
+                            + " connection(s) in flight when the deadline expired"
                     );
                 }
             }
@@ -478,14 +481,16 @@ pub fn call_full(
         net.set_read_timeout(c.rd.conn, 0);
     }
     match (response?) {
-        Option.None => Result.Err(
-            "the server closed the connection"
-        ),
+        Option.None => Result.Err("the server closed the connection"),
         Option.Some(fr) => {
             let par = decode_response(fr)?;
             if (par.0 != id) {
                 return Result.Err(
-                    "response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconnect"
+                    "response with unexpected id ("
+                        + to_string(par.0)
+                        + " != "
+                        + to_string(id)
+                        + "); reconnect"
                 );
             }
             par.1
@@ -602,9 +607,9 @@ pub fn pool_call_full(
 // cierra antes de perderse).
 fn release(p: Pool, slot: Slot) {
     match (try_call(fn() -> int {
-    send(p.slots, slot);
-    0
-})) {
+        send(p.slots, slot);
+        0
+    })) {
         Result.Ok(_) => { },
         Result.Err(_e) => match (slot) {
             Slot.Ready(client) => disconnect(client),

@@ -37,7 +37,18 @@ fn make_key() -> string {
 
 // La petición de upgrade del cliente.
 fn upgrade_request(host: string, path: string, key: string) -> string {
-    "GET " + path + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Upgrade: websocket\r\n" + "Connection: Upgrade\r\n" + "Sec-WebSocket-Key: " + key + "\r\n" + "Sec-WebSocket-Version: 13\r\n\r\n"
+    "GET "
+        + path
+        + " HTTP/1.1\r\n"
+        + "Host: "
+        + host
+        + "\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Key: "
+        + key
+        + "\r\n"
+        + "Sec-WebSocket-Version: 13\r\n\r\n"
 }
 
 // Verifica la respuesta 101: estado correcto + `Sec-WebSocket-Accept` == base64(SHA-1(key + GUID)).

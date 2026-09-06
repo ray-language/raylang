@@ -56,9 +56,7 @@ fn show_exit(e: process.Exit) -> string {
 
 fn main() -> int {
     // stdout y stderr por canales separados; wait() cosecha al final.
-    let p = match (process
-        .cmd("sh", ["-c", "printf uno; printf dos >&2; printf tres; exit 4"])
-        .stream()) {
+    let p = match (process.cmd("sh", ["-c", "printf uno; printf dos >&2; printf tres; exit 4"]).stream()) {
         Result.Ok(p) => p,
         Result.Err(e) => {
             print("launch error: " + e);
@@ -69,10 +67,7 @@ fn main() -> int {
     print(show_exit(p.wait()));
 
     // merge_output: todo por out (orden real del kernel); err nace cerrado.
-    let m = match (process
-        .cmd("sh", ["-c", "echo a; echo b >&2; echo c"])
-        .merge_output()
-        .stream()) {
+    let m = match (process.cmd("sh", ["-c", "echo a; echo b >&2; echo c"]).merge_output().stream()) {
         Result.Ok(p) => p,
         Result.Err(e) => {
             print(e);

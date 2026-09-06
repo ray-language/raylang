@@ -76,6 +76,8 @@ pub struct Parser {
     /// [`crate::ast::Program::interp_sites`].
     interp_sites: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
     pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+    /// Ver [`crate::ast::Program::paren_sites`] (M189).
+    paren_sites: std::collections::HashSet<(usize, usize)>,
     /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
     /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
     /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
@@ -93,7 +95,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), depth: 0 }
     }
 
     // =================================================================
@@ -110,6 +112,7 @@ impl Parser {
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
+        acc.paren_sites = std::mem::take(&mut self.paren_sites);
         Ok(acc)
     }
 
@@ -135,6 +138,7 @@ impl Parser {
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
+        acc.paren_sites = std::mem::take(&mut self.paren_sites);
         (acc, errors)
     }
 
@@ -981,6 +985,7 @@ impl Parser {
                     // el sub-parser → se fusiona para no perderlo al formatear.
                     self.interp_sites.extend(std::mem::take(&mut sub.interp_sites));
                     self.pipe_sites.extend(std::mem::take(&mut sub.pipe_sites));
+                    self.paren_sites.extend(std::mem::take(&mut sub.paren_sites));
                     segs.push(InterpSeg::Expr(e.clone()));
                     if first_pos.is_none() {
                         first_pos = Some((el, ec));
@@ -1471,6 +1476,8 @@ impl Parser {
                     return Ok(Expr { kind: ExprKind::TupleLit(elems), line: tok.line, col: tok.col });
                 }
                 self.expect(&TokenKind::RParen, "')' to close the parenthesis")?;
+                // M189: el formateador conserva los paréntesis del usuario (ver `Program::paren_sites`).
+                self.paren_sites.insert((tok.line, tok.col));
                 return Ok(Expr { kind: first.kind, line: tok.line, col: tok.col });
             }
             other => {

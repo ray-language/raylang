@@ -40,12 +40,17 @@ fn full(pat: string, text: string) {
 }
 
 fn span(pat: string, text: string) {
-    match (find(
-    pat,
-    text
-)) {
+    match (find(pat, text)) {
         Option.Some(p) => print(
-            "find  /" + pat + "/ ~ \"" + text + "\" = (" + to_string(p.0) + "," + to_string(p.1) + ")"
+            "find  /"
+                + pat
+                + "/ ~ \""
+                + text
+                + "\" = ("
+                + to_string(p.0)
+                + ","
+                + to_string(p.1)
+                + ")"
         ),
         Option.None => print("find  /" + pat + "/ ~ \"" + text + "\" = <none>"),
     }

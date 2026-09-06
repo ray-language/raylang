@@ -259,9 +259,11 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
 // Pub: también lo usan los módulos GENERADOS por `ray build --templates-only` (M55).
 /// Escapes HTML special characters (`& < > " '`) as entities. Clean text is returned as-is.
 pub fn escape_html(s: string) -> string {
-    if (!(s.contains(
-        "&"
-    ) || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {
+    if (!(s.contains("&")
+        || s.contains("<")
+        || s.contains(">")
+        || s.contains("\"")
+        || s.contains("'"))) {
         return s;
     }
     // `&` primero (si no, re-escaparía las entidades recién emitidas).

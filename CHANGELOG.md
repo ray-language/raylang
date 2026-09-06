@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray fmt` ya no desprende los comentarios ni deja líneas de 300 columnas** (M189, DESIGN §181;
+  feedback de `ray-remote`): (1) un comentario trailing en la línea de un operando (`&& f(x)  // …`)
+  o de un elemento de una lista repartida vuelve con su operando/elemento — y una expresión cuyas
+  líneas interiores llevan comentarios se mantiene repartida aunque cupiera en una; (2) las cadenas
+  de `&&`/`||` y las concatenaciones de strings que no caben se reparten un operando por línea, con
+  el operador abriendo la línea; (3) una cadena `if … { a } else if … { b } …` que no cabe se expande
+  entera, y la condición se mide (antes se partía su primera llamada, `if (f(\n a,\n b\n))`, y no
+  convergía); (4) los **paréntesis del usuario se conservan** aunque la precedencia los haga
+  redundantes (`(n0 * x) % base()` documenta la intención). 65 archivos `.ray` del repo cambian de
+  forma con esto (solo formato; comportamiento idéntico).
+
 ## 1.6.4 — 2026-09-04
 
 - **`ray upgrade` avisa cuando corre emulado** (M187, DESIGN §179): mantiene la arquitectura al

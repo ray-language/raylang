@@ -264,9 +264,9 @@ fn parse_blocks(lines: [string]) -> [Block] {
                 if (ct == "") {
                     // Una línea en blanco solo termina la lista si lo siguiente no es ítem ni
                     // continuación sangrada.
-                    if (i + 1 < lines.len() && (list_marker(
-                lines[i + 1].trim()
-            ) != "" && indent_of(lines[i + 1]) == 0 || indent_of(lines[i + 1]) >= 2 && lines[i + 1].trim() != "")) {
+                    if (i + 1 < lines.len()
+                        && (list_marker(lines[i + 1].trim()) != "" && indent_of(lines[i + 1]) == 0
+                            || indent_of(lines[i + 1]) >= 2 && lines[i + 1].trim() != "")) {
                         i = i + 1;
                     } else {
                         go = false;
@@ -283,12 +283,13 @@ fn parse_blocks(lines: [string]) -> [Block] {
                         var more = true;
                         while (more && i < lines.len()) {
                             let nx = lines[i];
-                            if (nx.trim() != "" && indent_of(
-                            nx
-                        ) >= 2) {
+                            if (nx.trim() != "" && indent_of(nx) >= 2) {
                                 item_lines.push(nx.substring(2, nx.len()));
                                 i = i + 1;
-                            } else if (nx.trim() == "" && i + 1 < lines.len() && lines[i + 1].trim() != "" && indent_of(lines[i + 1]) >= 2) {
+                            } else if (nx.trim() == ""
+                                && i + 1 < lines.len()
+                                && lines[i + 1].trim() != ""
+                                && indent_of(lines[i + 1]) >= 2) {
                                 item_lines.push("");
                                 i = i + 1;
                             } else {
@@ -302,7 +303,11 @@ fn parse_blocks(lines: [string]) -> [Block] {
                 }
             }
             out.push(Block.List(ordered, start, items));
-        } else if (t.contains("|") && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim()) && split_row(t).len() == split_row(lines[i + 1].trim()).len() && split_row(t).len() >= 1) {
+        } else if (t.contains("|")
+            && i + 1 < lines.len()
+            && is_table_separator(lines[i + 1].trim())
+            && split_row(t).len() == split_row(lines[i + 1].trim()).len()
+            && split_row(t).len() >= 1) {
             // Tabla GFM: cabecera + fila separadora con el MISMO número de columnas; las filas
             // siguientes duran mientras contengan '|'. Filas cortas se rellenan, largas se recortan.
             let header_cells = split_row(t);
@@ -347,9 +352,15 @@ fn parse_blocks(lines: [string]) -> [Block] {
             var more = true;
             while (more && i < lines.len()) {
                 let nx = lines[i].trim();
-                if (nx == "" || nx.starts_with(
-                "```"
-            ) || heading_level(nx) > 0 || is_rule(nx) || nx.starts_with(">") || list_marker(nx) != "" && indent_of(lines[i]) == 0 || nx.contains("|") && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim())) {
+                if (nx == ""
+                    || nx.starts_with("```")
+                    || heading_level(nx) > 0
+                    || is_rule(nx)
+                    || nx.starts_with(">")
+                    || list_marker(nx) != "" && indent_of(lines[i]) == 0
+                    || nx.contains("|")
+                        && i + 1 < lines.len()
+                        && is_table_separator(lines[i + 1].trim())) {
                     more = false;
                 } else {
                     text = text + "\n" + nx;
@@ -398,9 +409,9 @@ fn find_emph_close(s: string, start: int, needle: string) -> int {
         if (close < 0) {
             return close;
         }
-        if (needle[0] != '_' || close + needle.len() >= s.len() || !is_word_char(
-            s[close + needle.len()]
-        )) {
+        if (needle[0] != '_'
+            || close + needle.len() >= s.len()
+            || !is_word_char(s[close + needle.len()])) {
             return close;
         }
         at = close + 1;
@@ -648,14 +659,20 @@ fn render_inlines(xs: [Inline]) -> string {
                 out = out + "<strong>" + render_inlines(inner) + "</strong>";
             },
             Inline.Link(inner, url) => {
-                out = out + "<a href=\"" + escape_html(
-                    safe_url(url)
-                ) + "\">" + render_inlines(inner) + "</a>";
+                out = out
+                    + "<a href=\""
+                    + escape_html(safe_url(url))
+                    + "\">"
+                    + render_inlines(inner)
+                    + "</a>";
             },
             Inline.Image(alt, src) => {
-                out = out + "<img src=\"" + escape_html(
-                    safe_url(src)
-                ) + "\" alt=\"" + escape_html(alt) + "\">";
+                out = out
+                    + "<img src=\""
+                    + escape_html(safe_url(src))
+                    + "\" alt=\""
+                    + escape_html(alt)
+                    + "\">";
             },
         }
         i = i + 1;
@@ -699,9 +716,14 @@ fn render_blocks(blocks: [Block]) -> string {
     while (i < blocks.len()) {
         match (blocks[i]) {
             Block.Heading(lvl, xs) => {
-                out = out + "<h" + to_string(
-                    lvl
-                ) + ">" + render_inlines(xs) + "</h" + to_string(lvl) + ">\n";
+                out = out
+                    + "<h"
+                    + to_string(lvl)
+                    + ">"
+                    + render_inlines(xs)
+                    + "</h"
+                    + to_string(lvl)
+                    + ">\n";
             },
             Block.Paragraph(xs) => {
                 out = out + "<p>" + render_inlines(xs) + "</p>\n";
@@ -714,7 +736,11 @@ fn render_blocks(blocks: [Block]) -> string {
                 if (lang == "mermaid") {
                     out = out + "<pre class=\"mermaid\">" + escape_html(body) + "\n</pre>\n";
                 } else {
-                    let cls = if (lang == "") { "" } else { " class=\"language-" + escape_html(lang) + "\"" };
+                    let cls = if (lang == "") {
+                        ""
+                    } else {
+                        " class=\"language-" + escape_html(lang) + "\""
+                    };
                     out = out + "<pre><code" + cls + ">" + escape_html(body) + "\n</code></pre>\n";
                 }
             },
@@ -723,7 +749,11 @@ fn render_blocks(blocks: [Block]) -> string {
             },
             Block.List(ordered, start, items) => {
                 let tag = if (ordered) { "ol" } else { "ul" };
-                let attrs = if (ordered && start != 1) { " start=\"" + to_string(start) + "\"" } else { "" };
+                let attrs = if (ordered && start != 1) {
+                    " start=\"" + to_string(start) + "\""
+                } else {
+                    ""
+                };
                 out = out + "<" + tag + attrs + ">\n";
                 var k = 0;
                 while (k < items.len()) {
@@ -739,9 +769,12 @@ fn render_blocks(blocks: [Block]) -> string {
                 out = out + "<table>\n<thead>\n<tr>";
                 var c = 0;
                 while (c < header.len()) {
-                    out = out + "<th" + align_attr(
-                        aligns[c]
-                    ) + ">" + render_inlines(header[c]) + "</th>";
+                    out = out
+                        + "<th"
+                        + align_attr(aligns[c])
+                        + ">"
+                        + render_inlines(header[c])
+                        + "</th>";
                     c = c + 1;
                 }
                 out = out + "</tr>\n</thead>\n";
@@ -752,9 +785,12 @@ fn render_blocks(blocks: [Block]) -> string {
                         out = out + "<tr>";
                         var k = 0;
                         while (k < rows[r].len()) {
-                            out = out + "<td" + align_attr(
-                                aligns[k]
-                            ) + ">" + render_inlines(rows[r][k]) + "</td>";
+                            out = out
+                                + "<td"
+                                + align_attr(aligns[k])
+                                + ">"
+                                + render_inlines(rows[r][k])
+                                + "</td>";
                             k = k + 1;
                         }
                         out = out + "</tr>\n";

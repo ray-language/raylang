@@ -116,15 +116,11 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                 "HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)"
             );
         }
-        while (frame_size(
-        buf
-    ) > 0 && buf.len() >= frame_size(buf)) {
+        while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
             let fbytes = buf.sub_bytes(0, fsz);
             buf = buf.sub_bytes(fsz, buf.len());
-            match (parse_frame(
-        fbytes
-    )) {
+            match (parse_frame(fbytes)) {
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
@@ -183,7 +179,9 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         if (fr.stream_id == 1) {
                             close(h);
                             return Result.Err(
-                                "the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")"
+                                "the server reset the stream (RST_STREAM, code "
+                                    + to_string(rst_error_code(fr.payload))
+                                    + ")"
                             );
                         }
                     } else if (fr.ftype == ft_goaway()) {

@@ -8,7 +8,9 @@ import std/fs;  // M50.1: write_file_bytes vive en std/fs.
 
 fn main() -> int {
     // Texto repetitivo → el LZ77 encuentra muchas coincidencias y comprime de verdad.
-    let texto = "raylang raylang raylang es un lenguaje de aprendizaje. " + "comprimir y descomprimir, comprimir y descomprimir, una y otra vez. " + "raylang raylang raylang raylang raylang raylang raylang raylang!";
+    let texto = "raylang raylang raylang es un lenguaje de aprendizaje. "
+        + "comprimir y descomprimir, comprimir y descomprimir, una y otra vez. "
+        + "raylang raylang raylang raylang raylang raylang raylang raylang!";
     let original = texto.to_bytes();
 
     // --- DEFLATE crudo: round-trip con inflate_raw. ---

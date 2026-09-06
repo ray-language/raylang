@@ -38,6 +38,12 @@ pub(super) struct Fiber {
     /// otro) porque es una pila, y son POR FIBRA: un `spawn` dentro de un `try_call` no hereda el
     /// marcador (su fallo lo captura su `Task`, como siempre).
     pub(super) try_markers: Vec<TryMarker>,
+    /// M190: un error que la fibra debe LANZAR al reanudarse, en la posición de la instrucción que la
+    /// aparcó. Lo deja `close` en cada emisor bloqueado en un canal acotado: antes `close` con emisor
+    /// bloqueado era error en el sitio del close (y "acotado" y "se cierra para terminar" eran
+    /// incompatibles); ahora el emisor despierta y su `send` falla con "send on a closed channel",
+    /// simétrico de los receptores, que reciben `None`.
+    pub(super) pending_error: Option<String>,
 }
 
 /// Un `try_call` en vuelo (M97.2): a dónde volver si su cuerpo falla.
@@ -958,8 +964,8 @@ impl<'a> Vm<'a> {
                 _ => unreachable!(),
             };
             // M38.1b-2: el valor del emisor (heap de su fibra) entra a la cola → al heap del canal.
-            // M98.3: solo hay emisores bloqueados en canales VIVOS y abiertos (close con emisor
-            // bloqueado es error; un canal liberado estaba cerrado) → el acceso no puede ser stale.
+            // M98.3: solo hay emisores bloqueados en canales VIVOS y abiertos (M190: `close` los
+            // desaparca con error antes de liberar; un canal liberado estaba cerrado) → nunca stale.
             let ch = shared.chan_mut(chan).expect("blocked senders imply a live open channel");
             let mut ch_heap = std::mem::take(&mut ch.heap);
             let sv2 = transfer_value(&parked.fiber.heap, &mut ch_heap, &sv, &mut HashMap::new());

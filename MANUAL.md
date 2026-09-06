@@ -598,7 +598,8 @@ error en ejecución en 2:5: aserción falló
 
 ## 8. Funciones de orden superior e iteradores
 
-**Closures** (funciones anónimas con captura por referencia del ámbito):
+**Closures** (funciones anónimas con captura por referencia del ámbito — **dentro de una fibra**:
+lo que captura una closure pasada a `spawn` se **copia** al arrancar la fibra, ver §Concurrencia):
 
 ```rust
 let doblar = fn(x: int) -> int { x * 2 };
@@ -2132,7 +2133,13 @@ fn main() -> int {
 - `Channel.new()` — sin límite (send nunca bloquea).
 - `Channel.bounded(n)` — acotado: con la cola llena, `send` **bloquea** (backpressure). `n = 0` =
   rendezvous síncrono.
-- `close(ch)` — los valores pendientes aún se reciben; después `recv` da `None`.
+- `close(ch)` — los valores pendientes aún se reciben; después `recv` da `None`. Un emisor
+  dormido en `send` (canal acotado lleno) **despierta y su `send` falla** ("send on a closed
+  channel"): cerrar es la forma canónica de apagar a productores y consumidores a la vez.
+  Idempotente (cerrar dos veces es no-op).
+- `try_send(ch, v) -> bool` — envía **sin bloquear ni fallar**: `true` si entregó o encoló,
+  `false` si el canal está cerrado o lleno. Es la vía para "la otra parte se fue antes que yo",
+  que en un programa con fibras es normal, no excepcional (el `send` a secas es error).
 - `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2, y
   SIGWINCH=28 para el re-maquetado de TUIs), para el **apagado ordenado** de un servicio: compone
   con `recv`/`select` (drena tu canal de trabajo O apaga). Singleton del proceso; unix (VM y
@@ -2266,8 +2273,12 @@ Reglas:
 
 ### El patrón actor (estado compartido entre fibras)
 
-Los heaps de fibra están aislados: un `var` capturado **no** se comparte — cada fibra recibe su
-copia profunda. El estado compartido de verdad tiene UNA forma: una **fibra dueña** del dato y un
+**Los heaps de fibra están aislados: lo que una closure de `spawn` captura se COPIA al arrancar
+la fibra.** Un `var` o un campo de `struct` capturado **no** se comparte — cada fibra recibe su
+copia profunda, y el mismo texto que dentro de una fibra significa "comparte" (los `struct` tienen
+semántica de referencia) en un `spawn` significa "copia". Nada avisa: compila y arranca igual.
+Regla: **entre fibras solo se comparten los canales y los handles**; una bandera `s.live = false`
+que la fibra lectora debe ver es un bug — la señal es un canal que se cierra. El estado compartido de verdad tiene UNA forma: una **fibra dueña** del dato y un
 **canal de peticiones** (el id de canal sí se comparte al transferir). Las peticiones con
 respuesta llevan su canal de reply *dentro* del mensaje:
 

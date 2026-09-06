@@ -365,12 +365,18 @@ pub fn doc(name: &str) -> Option<&'static str> {
         // --- Concurrencia (VM) ---
         "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
         "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
-        "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
+        "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure). Runtime error on a closed channel (use `try_send` when the receiver may be gone).",
+        // M190: las funciones ASOCIADAS (tabla ASSOC) también responden en `ray_doc`/hover — antes
+        // `ray_doc "Channel.bounded"` negaba el símbolo y la única fuente era la tabla de REFERENCE.
+        "Channel.new" => "Creates an unbounded channel: `send` never blocks. Annotate the element type (`let ch: Channel<int> = Channel.new();`).",
+        "Channel.bounded" => "Creates a bounded channel with capacity `cap`: `send` blocks while the queue is full (backpressure); `cap = 0` is a synchronous rendezvous. `close` wakes blocked senders (their `send` fails) and receivers (`recv` yields `None`).",
+        "Map.new" => "Creates an empty Map. Annotate the key/value types (`let m: Map<string, int> = Map.new();`).",
         "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
+        "try_send" => "Sends into a channel WITHOUT blocking: `true` if the value was delivered or queued, `false` if the channel is closed or full. Never fails: the non-panicking counterpart of `send` for producers whose consumer may be gone.",
         "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
         "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
-        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
         "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
@@ -3221,6 +3227,17 @@ static BUILTINS: &[Builtin] = &[
     // (`ASSOC_FNS`), no un builtin `channel`. Los opcodes `ChannelNew`/`ChannelNewBounded` siguen; los
     // emite el compilador para la asociada (no acotado / acotado a la capacidad `n: int ≥ 0`).
     // send(ch, v) -> unit: envía v por el canal ch.
+    // M190: try_send(ch, v) -> bool: envío NO bloqueante y sin panic (feedback de ray-remote: "la otra
+    // parte se fue antes que yo" es normal en un programa con fibras, no excepcional).
+    Builtin { name: "try_send", opcode: OpCode::ChanTrySend, check: |a| {
+        arity(a, 2, "try_send", " (channel, value)")?;
+        let et = match &a[0] {
+            Type::Channel(t) => (**t).clone(),
+            other => return Err((Some(0), format!("try_send expects a Channel as first argument, not {}", other))),
+        };
+        if a[1] != et { return Err((Some(1), format!("try_send: the channel is of {} but got {}", et, a[1]))); }
+        Ok(Type::Bool)
+    } },
     Builtin { name: "send", opcode: OpCode::ChanSend, check: |a| {
         arity(a, 2, "send", " (channel, value)")?;
         let et = match &a[0] {

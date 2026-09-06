@@ -1688,6 +1688,18 @@ impl Transpiler {
                 out.push(')');
             }
             // Canales (concurrencia): send(ch, v) → ch.send(v); recv(ch) → ch.recv() (Option<T>).
+            // M190: try_send(ch, v) -> bool — envío no bloqueante; misma conversión a repr SEND que `send`.
+            "try_send" => {
+                self.needs_concurrency = true;
+                let elem = match self.type_of(eff[0])? {
+                    Type::Channel(t) => (*t).clone(),
+                    other => return Err(format!("try_send on {:?} is not supported", other)),
+                };
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".try_send(");
+                self.emit_to_send(out, eff[1], &elem)?;
+                out.push(')');
+            }
             "send" => {
                 // El valor se convierte a la repr SEND del canal (string/bytes → Arc; primitivos igual).
                 let elem = match self.type_of(eff[0])? {

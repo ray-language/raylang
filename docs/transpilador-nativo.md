@@ -558,9 +558,10 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > handshake rendezvous pasa de "cola vacía" a **generación de consumo** (`taken`) — con ≥2 emisores,
 > A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el suyo ya se
 > consumió; (2) **`send` sobre canal cerrado** aborta con el texto de la VM (`send on a closed
-> channel`; antes: descarte silencioso); (3) **`close` con emisor bloqueado** aborta en el sitio del
-> close (`close on a channel with a blocked sender`, contador `senders`; antes: return silencioso del
-> emisor y su valor quedaba consumible). Los panics llevan el MISMO texto que el error de ejecución de
+> channel`; antes: descarte silencioso); (3) **`close` con emisor bloqueado** — M190: lo DESPIERTA y
+> es su `send` el que aborta con `send on a closed channel`, como la VM (hasta M190 abortaba en el
+> sitio del close con `close on a channel with a blocked sender`, contador `senders`; antes de eso,
+> return silencioso del emisor y su valor quedaba consumible). Los panics llevan el MISMO texto que el error de ejecución de
 > la VM; el exit code (101 vs 70) queda con H6. Tests: multi-emisor ×10, send-cerrado y
 > close-bloqueado en `tests/cli_cli.rs`.
 

@@ -122,7 +122,7 @@ Reservadas (no pueden usarse como identificadores):
 | `bool` | `true`/`false` |
 | `string` | texto UTF-8 inmutable; indexable **por carácter** (`s[i] -> char`) |
 | `char` | un code point Unicode |
-| `bytes` | secuencia inmutable de octetos; `b[i] -> int` |
+| `bytes` | secuencia inmutable de octetos; `b[i] -> int`. Rendimiento: `+` sobre `bytes` es lineal amortizado (reunir 8 MB en 128 trozos: ~20 ms); construir octeto a octeto con `push` a `[int]` + `bytes_of` es dos órdenes más lento — acumula `bytes` con `+` o `sub_bytes` |
 | `unit` | "sin valor útil" (retorno de `print`, etc.) |
 | `[T]` | arreglo dinámico, semántica de **referencia** |
 | `(A, B, …)` | tupla (agregado inmutable, se copia como valor; `t.0 = x` es error) |
@@ -171,7 +171,8 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `try_recv` | `(ch: Channel<T>) -> Received<T>` | recibe **sin bloquear**: `Received.Got(v)` (valor listo, lo consume), `Received.Empty` (abierto y vacío), `Received.Closed` (cerrado y drenado). Para "revisa datos O una orden de control sin quedarte bloqueado" |
 | `select_timeout` | `(chs: [Channel<T>], ms: int) -> Option<int>` | `select` con **plazo**: `Some(i)` (índice menor listo), `None` si vencen los `ms` ms; `ms <= 0` = poll no bloqueante. Event-driven (despierta al llegar un canal, no sondea) |
 | `signals` | `() -> Channel<int>` | M88.1/M107.4: el canal de señales del SO (SIGTERM=15, SIGINT=2, SIGWINCH=28); singleton del proceso, para el apagado ordenado y el re-maquetado al redimensionar (`select` + `term.size()`) — compone con `recv`/`select`. Unix; VM y binario nativo |
-| `close` | `(ch \| handle) -> …` | cierra un canal (los valores pendientes aún se reciben) **o** un handle de archivo/socket |
+| `try_send` | `(ch: Channel<T>, v: T) -> bool` | envía **sin bloquear ni fallar**: `true` si entregó (receptor aparcado) o encoló (hueco), `false` si el canal está cerrado o lleno. Para productores cuyo consumidor puede haberse ido (M190) |
+| `close` | `(ch \| handle) -> …` | cierra un canal (los valores pendientes aún se reciben; los emisores bloqueados despiertan y su `send` falla; idempotente) **o** un handle de archivo/socket |
 
 ### Recuperación de fallos
 

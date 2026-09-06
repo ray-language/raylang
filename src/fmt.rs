@@ -858,7 +858,7 @@ fn stmt_last_line(cur: &Cur, st: &Stmt) -> usize {
             cur.end_line(value)
         }
         StmtKind::Return { value: Some(e) } | StmtKind::Expr(e) => cur.end_line(e),
-        StmtKind::Return { value: None } => st.line,
+        StmtKind::Return { value: None } | StmtKind::Break | StmtKind::Continue => st.line,
         StmtKind::For { body, .. } => body.end_line,
     }
 }

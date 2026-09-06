@@ -53,7 +53,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
-    "exit", "panic", "print", "scope", "select", "__select_timeout", "try_recv", "send", "signals", "spawn", "to_string",
+    "exit", "panic", "print", "scope", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
     // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
     "__task_failed",
     // M97.2: `__try_call` (el primitivo tras `try_call`) → `catch_unwind` en el MISMO hilo.

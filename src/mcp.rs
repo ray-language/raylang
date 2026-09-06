@@ -854,6 +854,15 @@ mod tests {
     /// Métodos de TRAIT de un módulo std (dogfood raydesk: la superficie de std/kv son los
     /// métodos de StoreOps y ray_doc los negaba con el mensaje genérico).
     #[test]
+    fn ray_doc_covers_associated_constructors() {
+        // M190 (feedback de ray-remote): `Channel.bounded` existía pero ray_doc lo negaba.
+        for (sym, needle) in [("Channel.bounded", "backpressure"), ("Channel.new", "unbounded"), ("Map.new", "empty Map"), ("try_send", "WITHOUT blocking")] {
+            let d = doc_text(sym);
+            assert!(d.contains(needle), "{sym}: {d}");
+        }
+    }
+
+    #[test]
     fn ray_doc_covers_std_trait_methods() {
         let d = doc_text("kv.set");
         assert!(d.contains("std/kv") && d.contains("trait StoreOps"), "{d}");

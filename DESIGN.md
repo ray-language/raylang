@@ -12357,3 +12357,31 @@ errores) y un DH de 4096 bits con generador 5 cuyo resultado calcula Python `pow
 motores; la `modpow` de 4096 bits se mide por debajo de 2 s en la VM (es de milisegundos). Con esto
 `src/crypto/` de `ray-remote` puede desaparecer entero: MD5/AES/DES por M194 y `bignum.ray` por
 este hito.
+
+## 188. M196 — el nombre de un builtin dentro de un módulo, y el pseudo-módulo `builtin` (sep 2026)
+
+El checker rechaza `fn len` en la entrada desde M48.3 con razón: un builtin se resuelve antes que
+cualquier función de usuario, así que la definición sería inalcanzable (shadowing al revés, y en
+silencio). `ray-remote` encontró la otra cara: en `proto.ray` quiso `pub fn close(c: Conn)` —el
+nombre natural para cerrar un tipo que envuelve un socket— y acabó con `proto.disconnect`, que dice
+menos. Al investigar resultó que la definición en un módulo YA se admitía (el loader la namespacía a
+`rfb::proto::close` y el chequeo de la entrada la deja pasar); lo que fallaba era doble: (1) dentro
+del módulo, `close(c.sock)` resolvía a la función propia, así que el builtin quedaba inalcanzable
+justo donde hacía falta; (2) el módulo chequeado como archivo suelto (`ray build proto.ray`, el LSP
+con el submódulo abierto) se trataba como entrada y sí daba "cannot be redefined" — de ahí el
+mensaje que la app anotó.
+
+**Decisiones.** (1) Un pseudo-módulo **`builtin`**: `builtin.close(h)` es el builtin, resuelto en
+el loader como el nombre pelado sin pasar por la tabla de nombres propios del módulo (sin validar
+el nombre: `len`/`print` llegan al checker por vías distintas, y un `x` inexistente da el error
+normal de nombre no declarado). Es explícito, no cuesta nada en los motores (llega
+al checker como una llamada normal) y se lee como lo que es. (2) La regla de la entrada se aplica
+solo cuando hay `main`: un archivo sin `main` es un módulo, y un módulo puede llamarse como quiera.
+(3) `from M import close;` sin alias se rechaza con mensaje: traería el nombre pelado a la entrada
+y el builtin ganaría en silencio — que es exactamente lo que la regla original evitaba. Con alias
+(`as cerrar`) o calificado (`M.close`), bien.
+
+**Lo que no cambia.** El UFCS fuera del módulo (`conn.close()`) sigue resolviendo campo → método
+de trait → función libre visible → builtin, y la función del módulo no es visible sin calificar, así
+que `conn.close()` es el builtin (y falla por tipos). La forma calificada es la canónica para
+funciones de módulo con nombre de builtin; queda documentado en SPEC y MANUAL.

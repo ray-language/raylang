@@ -790,6 +790,12 @@ fn main() -> int {
 }
 ```
 
+Un módulo puede llamar a sus funciones como quiera, **incluido el nombre de un builtin** (`pub fn
+close(c: Conn)`, `pub fn len(c: Conn)`): se consumen calificadas (`proto.close(c)`), que es como
+se leen mejor. Dentro del módulo, el nombre pelado es la función propia; para el builtin está el
+pseudo-módulo `builtin`: `builtin.close(c.sock)`. La entrada (`main.ray`) no puede redefinir un
+builtin, y `from proto import close;` sin `as` tampoco (el builtin ganaría en silencio).
+
 Los **tipos** también cruzan módulos: `from geo/punto import Punto;`, o calificado `punto.Punto { x: 1, y: 2 }`
 y `punto.Color.Rojo` (en anotaciones, literales y patrones).
 

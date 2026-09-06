@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Un módulo puede definir funciones con nombre de builtin** (M196, DESIGN §188; feedback de
+  `ray-remote`): `pub fn close(c: Conn)` en `proto.ray` se consume como `proto.close(c)`, y dentro
+  del módulo el builtin sigue alcanzable por el pseudo-módulo `builtin` (`builtin.close(c.sock)`).
+  Un módulo chequeado suelto (`ray build proto.ray`, el LSP) ya no dispara "cannot be redefined"; la
+  entrada sigue sin poder redefinir builtins, y `from M import close;` sin alias es error con
+  mensaje (el builtin ganaría en silencio).
+
 - **`std/bigint`** (M195, DESIGN §187; feedback de `ray-remote`): enteros grandes sin signo sobre
   `bytes` big-endian, con la aritmética en el runtime (`num-bigint`, feature `bigint`; `--without
   bigint` en el nativo): `modpow`, `modinv`, `add/sub/mul/div/rem/gcd/shl/shr/cmp`, `from_hex`/

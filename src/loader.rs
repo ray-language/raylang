@@ -981,6 +981,14 @@ fn classify_from_imports(
         for n in &fi.names {
             let target = classify_from_name(&m.source, &m.name, from, n, surfaces, all_types)?;
             let local = n.local().to_string();
+            // M196: traer sin calificar un nombre que es builtin lo dejaría inalcanzable (el builtin
+            // se resuelve antes que cualquier función de usuario): se pide la forma calificada o un alias.
+            if crate::builtins::is_builtin(&local) {
+                return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
+                    "cannot import '{}' unqualified: it is a language builtin (call it as '{}.{}' or import it 'as' another name)",
+                    local, from.rsplit('/').next().unwrap_or(from), n.name
+                )));
+            }
             if !locals.insert(local.clone()) {
                 return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
                     "name '{}' is already defined or imported in this module; use 'as' to rename it",
@@ -1284,6 +1292,16 @@ impl<'a> Resolver<'a> {
         let ExprKind::Ident(leaf) = &object.kind else { return Ok(None) };
         if self.declared_local(leaf) {
             return Ok(None); // una local tapa al módulo
+        }
+        // M196 (plan ray-remote D2): `builtin.f(...)` es el pseudo-módulo de los builtins del lenguaje —
+        // el escape para llamar al builtin desde un módulo que define una función con SU nombre
+        // (`pub fn close(c: Conn) { … builtin.close(c.sock) }`). Devuelve el nombre pelado sin pasar
+        // por la tabla `own`, así que el checker lo resuelve como builtin aunque el módulo tenga un
+        // `close` propio. Un módulo llamado `builtin` ganaría (está reservado en la práctica).
+        // No se valida el nombre aquí: `len`/`print`/… llegan al checker por distintas vías; si `x` no
+        // existe, el checker lo dice ("name 'x' not declared").
+        if leaf == "builtin" && !self.imports.contains_key("builtin") {
+            return Ok(Some(name.to_string()));
         }
         let Some(path) = self.imports.get(leaf) else {
             return Ok(None); // no es un módulo importado (su leaf)

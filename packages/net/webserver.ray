@@ -460,10 +460,7 @@ fn parse_range(v: string, size: int) -> [int] {
     if (spec.contains(",")) {
         return [];  // multi-rango: fuera de v1 → respuesta completa
     }
-    match (index_of(
-    spec,
-    "-"
-)) {
+    match (index_of(spec, "-")) {
         Option.None => [],
         Option.Some(d) => {
             let a_s: string = spec.substring(0, d).trim();
@@ -481,9 +478,7 @@ fn parse_range(v: string, size: int) -> [int] {
                     },
                 }
             } else {
-                match (parse_int(
-            a_s
-        )) {
+                match (parse_int(a_s)) {
                     Option.None => [],
                     Option.Some(a) => {
                         if (a >= size) {
@@ -492,12 +487,14 @@ fn parse_range(v: string, size: int) -> [int] {
                         if (b_s == "") {
                             return [a, size - 1];  // "a-": hasta el final
                         }
-                        match (parse_int(
-                        b_s
-                    )) {
+                        match (parse_int(b_s)) {
                             Option.None => [],
                             Option.Some(b) => {
-                                if (b < a) { [] } else { [a, if (b < size) { b } else { size - 1 }] }
+                                if (b < a) {
+                                    []
+                                } else {
+                                    [a, if (b < size) { b } else { size - 1 }]
+                                }
                             },
                         }
                     },
@@ -633,9 +630,11 @@ pub fn static_mount_embedded(prefix: string, dir: string, req: Request) -> Respo
         Option.Some(file) => {
             match (embed.read(file)) {
                 Result.Ok(data) => {
-                    let etag: string = "\"" + to_string(
-                        data.len()
-                    ) + "-" + to_string(inflate.crc32(data)) + "\"";
+                    let etag: string = "\""
+                        + to_string(data.len())
+                        + "-"
+                        + to_string(inflate.crc32(data))
+                        + "\"";
                     if (if_none_match_hits(req, etag)) {
                         let r304: Response = bytes_response(304, b"");
                         r304.headers.insert("ETag", etag);
@@ -653,7 +652,63 @@ pub fn static_mount_embedded(prefix: string, dir: string, req: Request) -> Respo
 // La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
 // también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 206) { "Partial Content" } else if (code == 301) { "Moved Permanently" } else if (code == 302) { "Found" } else if (code == 303) { "See Other" } else if (code == 304) { "Not Modified" } else if (code == 307) { "Temporary Redirect" } else if (code == 308) { "Permanent Redirect" } else if (code == 400) { "Bad Request" } else if (code == 401) { "Unauthorized" } else if (code == 403) { "Forbidden" } else if (code == 404) { "Not Found" } else if (code == 405) { "Method Not Allowed" } else if (code == 409) { "Conflict" } else if (code == 413) { "Content Too Large" } else if (code == 415) { "Unsupported Media Type" } else if (code == 416) { "Range Not Satisfiable" } else if (code == 422) { "Unprocessable Content" } else if (code == 429) { "Too Many Requests" } else if (code == 431) { "Request Header Fields Too Large" } else if (code == 500) { "Internal Server Error" } else if (code == 501) { "Not Implemented" } else if (code == 502) { "Bad Gateway" } else if (code == 503) { "Service Unavailable" } else if (code == 504) { "Gateway Timeout" } else { "Status" }
+    if (code == 200) {
+        "OK"
+    } else if (code == 201) {
+        "Created"
+    } else if (code == 204) {
+        "No Content"
+    } else if (code == 206) {
+        "Partial Content"
+    } else if (code == 301) {
+        "Moved Permanently"
+    } else if (code == 302) {
+        "Found"
+    } else if (code == 303) {
+        "See Other"
+    } else if (code == 304) {
+        "Not Modified"
+    } else if (code == 307) {
+        "Temporary Redirect"
+    } else if (code == 308) {
+        "Permanent Redirect"
+    } else if (code == 400) {
+        "Bad Request"
+    } else if (code == 401) {
+        "Unauthorized"
+    } else if (code == 403) {
+        "Forbidden"
+    } else if (code == 404) {
+        "Not Found"
+    } else if (code == 405) {
+        "Method Not Allowed"
+    } else if (code == 409) {
+        "Conflict"
+    } else if (code == 413) {
+        "Content Too Large"
+    } else if (code == 415) {
+        "Unsupported Media Type"
+    } else if (code == 416) {
+        "Range Not Satisfiable"
+    } else if (code == 422) {
+        "Unprocessable Content"
+    } else if (code == 429) {
+        "Too Many Requests"
+    } else if (code == 431) {
+        "Request Header Fields Too Large"
+    } else if (code == 500) {
+        "Internal Server Error"
+    } else if (code == 501) {
+        "Not Implemented"
+    } else if (code == 502) {
+        "Bad Gateway"
+    } else if (code == 503) {
+        "Service Unavailable"
+    } else if (code == 504) {
+        "Gateway Timeout"
+    } else {
+        "Status"
+    }
 }
 
 // --- Lectura de la petición ---
@@ -821,7 +876,11 @@ fn read_with_deadline(conn: int, deadline: int) -> Result<bytes, string> {
 /// takes longer than `read_timeout_millis`.
 pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string> {
     // El plazo total: instante monotónico en que la lectura de ESTA petición vence (0 = sin plazo).
-    let deadline: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
+    let deadline: int = if (limits.read_timeout_millis > 0) {
+        time.monotonic() + limits.read_timeout_millis
+    } else {
+        0
+    };
     var acc: bytes = b"";
     var sep: int = 0 - 1;
     var start: int = 0;
@@ -874,9 +933,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
-    match (from_utf8(
-    acc.sub_bytes(0, sep)
-)) {
+    match (from_utf8(acc.sub_bytes(0, sep))) {
         Result.Err(e) => Result.Err("request headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
@@ -949,29 +1006,29 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // cierra sin completar el cuerpo es error (no un Ok truncado); y el cuerpo se recorta
             // a n (un trozo puede traer octetos de más).
             if (!chunked) {
-                match (get(
-                headers,
-                "content-length"
-            )) {
+                match (get(headers, "content-length")) {
                     Option.Some(cl) => {
-                        match (parse_int(
-                        cl
-                    )) {
+                        match (parse_int(cl)) {
                             Option.Some(n) => {
                                 if (n > limits.max_body_bytes) {
                                     return Result.Err(
-                                        "body too large (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")"
+                                        "body too large (Content-Length "
+                                            + to_string(n)
+                                            + " > "
+                                            + to_string(limits.max_body_bytes)
+                                            + ")"
                                     );
                                 }
                                 while (body.len() < n) {
-                                    match (read_with_deadline(
-                                    conn,
-                                    deadline
-                                )) {
+                                    match (read_with_deadline(conn, deadline)) {
                                         Result.Ok(trozo) => {
                                             if (trozo.len() == 0) {
                                                 return Result.Err(
-                                                    "incomplete body: the connection closed with " + to_string(body.len()) + " de " + to_string(n) + " bytes"
+                                                    "incomplete body: the connection closed with "
+                                                        + to_string(body.len())
+                                                        + " de "
+                                                        + to_string(n)
+                                                        + " bytes"
                                                 );
                                             }
                                             body = body + trozo;
@@ -1082,21 +1139,17 @@ fn dev_notify_ready() {
 }
 
 fn inject_live_reload(r: Response) -> Response {
-    return match (env(
-        "RAY_DEV_RELOAD"
-    )) {
+    return match (env("RAY_DEV_RELOAD")) {
         Option.None => r,
         Option.Some(port) => {
-            if (is_html_response(
-            r
-        )) {
-                match (from_utf8(
-            r.body
-        )) {
+            if (is_html_response(r)) {
+                match (from_utf8(r.body)) {
                     Result.Ok(html) => {
                         // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
                         // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
-                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
+                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:"
+                            + port
+                            + "/\").onmessage=function(){location.reload()}</script>";
                         Response {
                             status: r.status,
                             headers: r.headers,
@@ -1439,7 +1492,11 @@ fn accept_loop(
             print("listening on port " + to_string(net.local_port(srv)));
             dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
-            let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            let sem: Channel<int> = if (bounded) {
+                Channel.bounded(limits.max_conns)
+            } else {
+                Channel.new()
+            };
             var errors: int = 0;
             var follow: bool = true;
             while (follow) {
@@ -1512,16 +1569,17 @@ fn loop_iter_server_drainable(
     prepare: fn(int) -> Result<int, string>,
     handle_conn: fn(int)
 ) -> Result<int, string> {
-    match (net.tcp_listen(
-    host,
-    port
-)) {
+    match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
             dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
-            let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            let sem: Channel<int> = if (bounded) {
+                Channel.bounded(limits.max_conns)
+            } else {
+                Channel.new()
+            };
             let conns: Channel<int> = Channel.new();
             let done: Channel<int> = Channel.new();
             // Se CIERRA al apagar: un canal cerrado queda "listo" para siempre (gotcha de M12.4,
@@ -1626,7 +1684,11 @@ fn loop_iter_server_drainable(
                 while (waiting && active > 0) {
                     // Un canal CERRADO siempre está "listo" → si la bomba cerró `conns`, sacarlo
                     // de la lista del select (el gotcha de M12.4).
-                    let which = if (conns_open) { select([deadline_ch, done, conns]) } else { select([deadline_ch, done]) };
+                    let which = if (conns_open) {
+                        select([deadline_ch, done, conns])
+                    } else {
+                        select([deadline_ch, done])
+                    };
                     if (which == 0) {
                         waiting = false;
                     } else if (which == 1) {
@@ -1645,7 +1707,9 @@ fn loop_iter_server_drainable(
                 }
                 if (active > 0) {
                     eprint(
-                        "off: " + to_string(active) + " connection(s) in flight when the deadline expired"
+                        "off: "
+                            + to_string(active)
+                            + " connection(s) in flight when the deadline expired"
                     );
                 }
             }

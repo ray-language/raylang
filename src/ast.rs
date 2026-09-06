@@ -199,6 +199,11 @@ pub struct Program {
     /// convertía los ejemplos idiomáticos en su forma verbosa). Solo lo consulta el formateador;
     /// están vacíos en el programa fusionado del loader (que trabaja sobre el AST desazucarado).
     pub interp_sites: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
+    /// Posiciones `(línea, col)` de los paréntesis de **agrupación** `(e)` escritos por el usuario
+    /// (M189). El parser no deja nodo para ellos (re-posiciona `e` al `(`); el formateador los
+    /// consulta para NO quitar los paréntesis que el usuario puso aunque la precedencia los haga
+    /// redundantes (en código criptográfico son documentación deliberada). Solo lo usa `fmt`.
+    pub paren_sites: std::collections::HashSet<(usize, usize)>,
     /// Ver [`Program::interp_sites`]. `(receptor, rhs)` de un pipeline: `x |> f(a)` → `(x, f(a))`.
     pub pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
 }

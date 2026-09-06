@@ -70,7 +70,12 @@ fn skip_spaces(t: TS) {
 
 // ¿Es `c` parte de una clave desnuda o de la ruta de una tabla? (letras, dígitos, `_`, `-`, `.`)
 fn es_clave(c: char) -> bool {
-    c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.'
+    c >= 'a' && c <= 'z'
+        || c >= 'A' && c <= 'Z'
+        || c >= '0' && c <= '9'
+        || c == '_'
+        || c == '-'
+        || c == '.'
 }
 
 fn parse_key(t: TS) -> string {
@@ -225,7 +230,12 @@ fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
     if (tok == "false") {
         return Result.Ok(TomlValue.TBool(false));
     }
-    if (tok == "inf" || tok == "+inf" || tok == "-inf" || tok == "nan" || tok == "+nan" || tok == "-nan") {
+    if (tok == "inf"
+        || tok == "+inf"
+        || tok == "-inf"
+        || tok == "nan"
+        || tok == "+nan"
+        || tok == "-nan") {
         return match (parse_float(tok)) {
             Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
             Option.None => Result.Err("invalid float: " + tok),

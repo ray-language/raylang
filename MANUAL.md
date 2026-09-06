@@ -2408,6 +2408,7 @@ manda — la variable siempre gana al default.
 ```sh
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
+                         # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
 ray doc archivo.ray      # documentación Markdown desde ///
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)

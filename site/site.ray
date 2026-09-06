@@ -53,9 +53,7 @@ fn copy_bytes(root: string, out: string, source: string, dest: string) {
 // Copia un ARTEFACTO construido (el wasm del playground, el bundle del editor): si falta, el
 // sitio sale sin él con un aviso — `playground/build.sh` lo produce (no se versiona).
 fn copy_artifact(root: string, out: string, source: string, dest: string) {
-    match (fs.read_file_bytes(
-    root + "/" + source
-)) {
+    match (fs.read_file_bytes(root + "/" + source)) {
         Result.Ok(data) => {
             match (fs.write_file_bytes(out + "/" + dest, data)) {
                 Result.Ok(n) => { },
@@ -64,7 +62,9 @@ fn copy_artifact(root: string, out: string, source: string, dest: string) {
         },
         Result.Err(e) => {
             eprint(
-                "warning: '" + source + "' is not built (run playground/build.sh); the site ships without it"
+                "warning: '"
+                    + source
+                    + "' is not built (run playground/build.sh); the site ships without it"
             );
         },
     }

@@ -348,9 +348,13 @@ pub fn transmit_image(id: int, img: image.Image) -> Result<int, string> {
     match (check_image(id, img)) {
         Option.Some(e) => Result.Err(e),
         Option.None => {
-            let control = "a=t,i=" + to_string(
-                id
-            ) + ",t=d,f=32,s=" + to_string(img.width) + ",v=" + to_string(img.height) + ",q=2";
+            let control = "a=t,i="
+                + to_string(id)
+                + ",t=d,f=32,s="
+                + to_string(img.width)
+                + ",v="
+                + to_string(img.height)
+                + ",q=2";
             emit(kitty_chunks(control, img.pixels))
         },
     }
@@ -382,9 +386,13 @@ pub fn draw_image(id: int, col: int, row: int, img: image.Image) -> Result<int, 
     match (check_image(id, img)) {
         Option.Some(e) => Result.Err(e),
         Option.None => {
-            let control = "a=T,i=" + to_string(
-                id
-            ) + ",t=d,f=32,s=" + to_string(img.width) + ",v=" + to_string(img.height) + ",C=1,q=2";
+            let control = "a=T,i="
+                + to_string(id)
+                + ",t=d,f=32,s="
+                + to_string(img.width)
+                + ",v="
+                + to_string(img.height)
+                + ",C=1,q=2";
             emit("\u{1B}7" + cursor_to(col, row) + kitty_chunks(control, img.pixels) + "\u{1B}8")
         },
     }
@@ -766,7 +774,23 @@ pub fn read_hidden(prompt: string) -> Result<string, string> {
 
 // ¿El code point ocupa DOS celdas? (East Asian Wide + Fullwidth + bloques emoji comunes.)
 fn is_wide(cp: int) -> bool {
-    cp >= 0x1100 && cp <= 0x115F || cp >= 0x231A && cp <= 0x231B || cp >= 0x2600 && cp <= 0x2613 || cp >= 0x2E80 && cp <= 0x303E || cp >= 0x3041 && cp <= 0x30FF || cp >= 0x3105 && cp <= 0x312F || cp >= 0x3131 && cp <= 0x318E || cp >= 0x3200 && cp <= 0x33FF || cp >= 0x3400 && cp <= 0x4DBF || cp >= 0x4E00 && cp <= 0xA48C || cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0xF900 && cp <= 0xFAFF || cp >= 0xFE30 && cp <= 0xFE6B || cp >= 0xFF01 && cp <= 0xFF60 || cp >= 0xFFE0 && cp <= 0xFFE6 || cp >= 0x1F300 && cp <= 0x1FAFF || cp >= 0x20000 && cp <= 0x3FFFD  // Hangul Jamo (0x1100–0x115F)
+    cp >= 0x1100 && cp <= 0x115F  // Hangul Jamo (0x1100–0x115F)
+        || cp >= 0x231A && cp <= 0x231B
+        || cp >= 0x2600 && cp <= 0x2613
+        || cp >= 0x2E80 && cp <= 0x303E
+        || cp >= 0x3041 && cp <= 0x30FF
+        || cp >= 0x3105 && cp <= 0x312F
+        || cp >= 0x3131 && cp <= 0x318E
+        || cp >= 0x3200 && cp <= 0x33FF
+        || cp >= 0x3400 && cp <= 0x4DBF
+        || cp >= 0x4E00 && cp <= 0xA48C
+        || cp >= 0xAC00 && cp <= 0xD7A3
+        || cp >= 0xF900 && cp <= 0xFAFF
+        || cp >= 0xFE30 && cp <= 0xFE6B
+        || cp >= 0xFF01 && cp <= 0xFF60
+        || cp >= 0xFFE0 && cp <= 0xFFE6
+        || cp >= 0x1F300 && cp <= 0x1FAFF
+        || cp >= 0x20000 && cp <= 0x3FFFD
     // ⌚⌛ (0x231A–0x231B)
     // símbolos meteorológicos anchos (0x2600–0x2613)
     // radicales/puntuación CJK (0x2E80–0x303E)
@@ -787,7 +811,15 @@ fn is_wide(cp: int) -> bool {
 
 // ¿El code point es de ancho CERO? (Control C0/C1 y marcas combinantes / de ancho cero comunes.)
 fn is_zero_width(cp: int) -> bool {
-    cp < 0x20 || cp >= 0x7F && cp < 0xA0 || cp >= 0x300 && cp <= 0x36F || cp >= 0x1AB0 && cp <= 0x1AFF || cp >= 0x1DC0 && cp <= 0x1DFF || cp >= 0x200B && cp <= 0x200F || cp >= 0x20D0 && cp <= 0x20FF || cp >= 0xFE20 && cp <= 0xFE2F || cp == 0xFEFF  // control C0 (0x00–0x1F) y C1 (0x7F–0x9F)
+    cp < 0x20  // control C0 (0x00–0x1F) y C1 (0x7F–0x9F)
+        || cp >= 0x7F && cp < 0xA0
+        || cp >= 0x300 && cp <= 0x36F
+        || cp >= 0x1AB0 && cp <= 0x1AFF
+        || cp >= 0x1DC0 && cp <= 0x1DFF
+        || cp >= 0x200B && cp <= 0x200F
+        || cp >= 0x20D0 && cp <= 0x20FF
+        || cp >= 0xFE20 && cp <= 0xFE2F
+        || cp == 0xFEFF
     // combinantes diacríticos (0x0300–0x036F)
     // combinantes extendidos (0x1AB0–0x1AFF)
     // combinantes suplementarios (0x1DC0–0x1DFF)

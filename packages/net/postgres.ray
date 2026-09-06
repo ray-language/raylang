@@ -83,7 +83,9 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
             }
             if (mlen > max_message()) {
                 return Result.Err(
-                    "message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)"
+                    "message exceeds the limit ("
+                        + to_string(mlen)
+                        + " bytes, possible memory bomb)"
                 );
             }
             let total = 1 + mlen;

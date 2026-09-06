@@ -49,9 +49,11 @@ fn bytes_to_ints(b: bytes) -> [int] {
 fn send_msg(c: Conn, doc: [bson.Field]) -> Result<int, string> {
     let body = bson.encode(doc);
     // 16 (cabecera) + 4 (flags) + 1 (kind) + el documento.
-    var m: [int] = le32_of(
-        21 + body.len()
-    ) + le32_of(c.req_id) + le32_of(0) + le32_of(2013) + le32_of(0);
+    var m: [int] = le32_of(21 + body.len())
+        + le32_of(c.req_id)
+        + le32_of(0)
+        + le32_of(2013)
+        + le32_of(0);
     m.push(0);
     m = m + bytes_to_ints(body);
     c.req_id = c.req_id + 1;
@@ -75,7 +77,9 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
             }
             if (total > max_message()) {
                 return Result.Err(
-                    "mongo: message exceeds the limit (" + to_string(total) + " bytes, possible memory bomb)"
+                    "mongo: message exceeds the limit ("
+                        + to_string(total)
+                        + " bytes, possible memory bomb)"
                 );
             }
             if (c.buf.len() >= total) {

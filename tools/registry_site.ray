@@ -160,7 +160,9 @@ fn pagina_paquete(p: Package) -> string {  // es-ok: tools/registry_site.ray fue
         }
         stringbuilder.push(
             sb,
-            "<p class=\"muted\">" + dueno + " <span class=\"badge signed\">nombre reclamado</span></p>"
+            "<p class=\"muted\">"
+                + dueno
+                + " <span class=\"badge signed\">nombre reclamado</span></p>"
         );
     }
     stringbuilder.push(sb, "<p>Instalar: <code>ray add " + p.name + "</code></p>");
@@ -178,7 +180,13 @@ fn pagina_paquete(p: Package) -> string {  // es-ok: tools/registry_site.ray fue
         }
         stringbuilder.push(
             sb,
-            "<tr><td><code>" + esc(v.num) + "</code></td><td><code>" + esc(v.git) + "</code></td><td>" + badges + "</td></tr>"
+            "<tr><td><code>"
+                + esc(v.num)
+                + "</code></td><td><code>"
+                + esc(v.git)
+                + "</code></td><td>"
+                + badges
+                + "</td></tr>"
         );
         i = i - 1;
     }
@@ -208,7 +216,15 @@ fn portada(pkgs: [Package]) -> string {  // es-ok: tools/registry_site.ray fuera
         }
         stringbuilder.push(
             sb,
-            "<tr><td><a href=\"p/" + p.name + ".html\"><code>" + p.name + "</code></a></td><td><code>" + esc(ultima) + "</code></td><td>" + to_string(p.versions.len()) + "</td></tr>"
+            "<tr><td><a href=\"p/"
+                + p.name
+                + ".html\"><code>"
+                + p.name
+                + "</code></a></td><td><code>"
+                + esc(ultima)
+                + "</code></td><td>"
+                + to_string(p.versions.len())
+                + "</td></tr>"
         );
         i = i + 1;
     }

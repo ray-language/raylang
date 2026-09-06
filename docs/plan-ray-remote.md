@@ -27,7 +27,7 @@ Y transversal: documentación (§6).
 
 ## 2. Lote A — bugs y mensajes (primero)
 
-### A1. `ray test` dice "all passed" cuando no ha corrido nada (feedback 5) — S
+### A1. `ray test` dice "all passed" cuando no ha corrido nada (feedback 5) — S ✅ M188
 
 `src/test_runner.rs:146` imprime `result: N test(s), all passed ✓` con `ran == 0` aunque un
 módulo no compile (el exit ya es 65, luego CI no lo cuela; el fallo es de presentación).
@@ -35,7 +35,7 @@ Cambio: si algún módulo del árbol no compila, el veredicto es
 `result: no test ran — 1 module failed to compile ✗`; y `0 test(s)` sin fallo de compilación
 se imprime como `result: 0 test(s) found` sin el tick. Test en `tests/test_runner_cli.rs`.
 
-### A2. `ray fmt` desplaza los comentarios de línea y colapsa cadenas (feedback 13) — M
+### A2. `ray fmt` desplaza los comentarios de línea y colapsa cadenas (feedback 13) — M ✅ M189
 
 Reproducido: un comentario al final de la línea de una continuación de `&&` cae al final de la
 sentencia junto a los demás, y una cadena `else if` de ocho casos queda en una línea de 300
@@ -68,7 +68,7 @@ terminar" son incompatibles, que es justo lo que una app con productor/consumido
   excepcional. Superficie nueva → SPEC §concurrencia, REFERENCE, MANUAL, los tres motores.
 - `ray_doc "Channel.bounded"` responde; el MANUAL deja de hablar de `channel(n)`, que no existe.
 
-### A4. Cuatro mensajes de error que hoy apuntan mal (feedback 6, 7, 10, 12) — S
+### A4. Cuatro mensajes de error que hoy apuntan mal (feedback 6, 7, 10, 12) — S ✅ M188 (`!`, `from`, `ray run --`; el de `break` lo sustituye D1)
 
 | Hoy | Después |
 |---|---|

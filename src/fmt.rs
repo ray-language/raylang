@@ -173,6 +173,11 @@ struct Cur {
     /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
     interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
     pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+    /// Paréntesis de agrupación escritos por el usuario (M189, `Program::paren_sites`): se conservan.
+    parens: std::collections::HashSet<(usize, usize)>,
+    /// Fin `(línea, col)` de cada expresión por su inicio (`Program::expr_spans`): para saber en qué
+    /// LÍNEA termina un operando o un elemento y re-pegarle su comentario trailing (M189).
+    spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
     /// Indentación (nivel, no columnas) del contexto en curso. `fmt_expr`/`fmt_expr_raw` no llevan la
     /// indentación como parámetro (son muchísimos sitios de llamada); en su lugar, las funciones que sí la
     /// conocen (`fmt_stmt`/`fmt_value`/`fmt_expr_indented`) la depositan aquí y la rama block-form de
@@ -207,6 +212,8 @@ impl Cur {
             blanks,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
+            parens: program.paren_sites.clone(),
+            spans: program.expr_spans.clone(),
             base: 0,
             wrap: false,
             force: false,
@@ -273,6 +280,25 @@ impl Cur {
         } else {
             String::new()
         }
+    }
+
+    /// La línea en que TERMINA la expresión `e` (por `expr_spans`; su propia línea si no consta).
+    fn end_line(&self, e: &Expr) -> usize {
+        match self.spans.get(&(e.line, e.col)) {
+            // El fin es exclusivo: una expresión que acaba justo al final de su línea sigue en ella.
+            Some(&(l, c)) if c > 1 || l == e.line => l,
+            Some(&(l, _)) => l.saturating_sub(1).max(e.line),
+            None => e.line,
+        }
+    }
+
+    /// ¿Queda algún comentario **trailing** sin consumir en las líneas `(first, last]`? Es la señal
+    /// de que un constructo emitido en una sola línea dejó atrás comentarios que anotaban sus
+    /// operandos o elementos línea a línea (M189): hay que repartirlo para re-pegarlos.
+    fn has_inner_trailing(&self, first: usize, last: usize) -> bool {
+        // Estrictamente interiores: el de la primera línea lo pega la sentencia plana, y el de la
+        // última lo pega la sentencia repartida (tras su `;`), así que ninguno de los dos cuenta.
+        self.items[self.i..].iter().take_while(|c| c.line < last).any(|c| c.trailing && c.line > first)
     }
 
     /// Vuelca **todos** los comentarios restantes (fin de archivo), cada uno en su línea con sangría `pad`.
@@ -776,9 +802,11 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         {
             s.push(';');
         }
-        if !text.contains('\n') {
-            s.push_str(&cur.trailing_on(st.line));
-        }
+        // El trailing de la línea en que TERMINA la sentencia: la propia si es de una línea; si se
+        // repartió (M189), la última de la fuente — el comentario del último operando/elemento queda
+        // tras el `;`, y un `}  // fin` se queda en su `}`.
+        let end = if text.contains('\n') { stmt_last_line(cur, st) } else { st.line };
+        s.push_str(&cur.trailing_on(end));
         s.push('\n');
     }
     if let Some(tail) = &b.tail {
@@ -788,12 +816,12 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         s.push_str(&cur.flush_before(tail.line, &inner));
         // El tail no pasa por `fmt_stmt`, así que su reintento va aquí (es el único otro punto de
         // entrada de una expresión a nivel de línea).
-        let text = retry_wrapped(cur, base + 1, |c| fmt_value(c, tail, base + 1));
+        let last = cur.end_line(tail);
+        let text = retry_wrapped(cur, base + 1, Some((tail.line, last)), |c| fmt_value(c, tail, base + 1));
         s.push_str(&inner);
         s.push_str(&text);
-        if !text.contains('\n') {
-            s.push_str(&cur.trailing_on(tail.line));
-        }
+        let end = if text.contains('\n') { last } else { tail.line };
+        s.push_str(&cur.trailing_on(end));
         s.push('\n');
     }
     // Comentarios que quedan DENTRO del bloque, tras la última sentencia/tail y antes del `}` (línea <
@@ -817,15 +845,33 @@ fn fmt_stmt(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
     // (p. ej. `print(match …)`) debe indentarse relativa a aquí. `fmt_value` refina el valor por caso.
     let saved = cur.base;
     cur.base = indent;
-    let r = retry_wrapped(cur, indent, |c| fmt_stmt_inner(c, st, indent));
+    let last = stmt_last_line(cur, st);
+    let r = retry_wrapped(cur, indent, Some((st.line, last)), |c| fmt_stmt_inner(c, st, indent));
     cur.base = saved;
     r
+}
+
+/// La última línea de fuente que ocupa la sentencia (para `has_inner_trailing`, M189).
+fn stmt_last_line(cur: &Cur, st: &Stmt) -> usize {
+    match &st.kind {
+        StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Assign { value, .. } => {
+            cur.end_line(value)
+        }
+        StmtKind::Return { value: Some(e) } | StmtKind::Expr(e) => cur.end_line(e),
+        StmtKind::Return { value: None } => st.line,
+        StmtKind::For { body, .. } => body.end_line,
+    }
 }
 
 /// Emite `render` y, si alguna línea del resultado **no cabe** en [`MAX_WIDTH`], lo reemite con el
 /// envuelto de cadenas activo (M105). El cursor de comentarios se restaura entre pasadas: renderizar
 /// los CONSUME, y sin restaurarlo la segunda pasada los perdería.
-fn retry_wrapped(cur: &mut Cur, indent: usize, render: impl Fn(&mut Cur) -> String) -> String {
+fn retry_wrapped(
+    cur: &mut Cur,
+    indent: usize,
+    span: Option<(usize, usize)>,
+    render: impl Fn(&mut Cur) -> String,
+) -> String {
     // El envuelto se decide POR SENTENCIA, con su propio par de pasadas: una sentencia anidada (el
     // cuerpo de una closure que es argumento, p. ej.) empieza plana y se mide sola. Si `wrap`/`force`
     // heredaran los del padre, la sentencia interior se repartiría sin necesidad — y al re-formatear
@@ -839,14 +885,29 @@ fn retry_wrapped(cur: &mut Cur, indent: usize, render: impl Fn(&mut Cur) -> Stri
     cur.wrap = false;
     cur.force = false;
     let first = render(cur);
-    if fits_width(&first, indent) {
+    // M189: aunque quepa, si la forma plana dejó atrás comentarios trailing de sus líneas interiores
+    // (anotaban operandos/elementos uno a uno), se reparte para re-pegarlos… siempre que el reparto
+    // de verdad los recoja; si no, se prefiere la plana (los comentarios caen aparte, como antes).
+    let inner_comments = span.map(|(f, l)| cur.has_inner_trailing(f, l)).unwrap_or(false);
+    if fits_width(&first, indent) && !inner_comments {
         restore(cur);
         return first;
     }
+    let after_flat = cur.i;
     cur.i = save;
     cur.wrap = true;
     cur.force = true;
     let wrapped = render(cur);
+    if let Some((f, l)) = span
+        && inner_comments
+        && fits_width(&first, indent)
+        && cur.has_inner_trailing(f, l)
+    {
+        // El reparto tampoco los alcanzó: no vale la pena cambiar la forma.
+        cur.i = after_flat;
+        restore(cur);
+        return first;
+    }
     restore(cur);
     wrapped
 }
@@ -1012,7 +1073,7 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     // M105/M106: en la pasada de envuelto, lo que no cabe se reparte — una cadena de 2+ eslabones, o
     // una lista delimitada (argumentos, arreglo, tupla, struct, Map). El aplanado se renderiza igual
     // para medirlo, restaurando el cursor de comentarios (renderizar los consume).
-    if cur.wrap && (chain_links(e).is_some() || could_wrap_list(e)) {
+    if cur.wrap && (chain_links(e).is_some() || could_wrap_list(e) || bin_chain(e).is_some()) {
         // Se consume ANTES de renderizar: si no, la medición del aplanado repartiría ya a un hijo.
         let force = std::mem::take(&mut cur.force);
         let save = cur.i;
@@ -1021,7 +1082,9 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
             flat
         } else {
             cur.i = save;
-            if let Some((recv, links)) = chain_links(e) {
+            if let Some((op, operands)) = bin_chain(e) {
+                fmt_bin_chain_wrapped(cur, op, &operands)
+            } else if let Some((recv, links)) = chain_links(e) {
                 fmt_chain_wrapped(cur, recv, &links)
             } else if let Some((head, open, items, close)) = delimited_list(cur, e) {
                 fmt_wrapped_list(cur, &head, open, &items, close)
@@ -1033,13 +1096,148 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
                 fmt_expr_raw(cur, e)
             }
         };
-        return if expr_prec(e) < min_prec { format!("({})", s) } else { s };
+        return if expr_prec(e) < min_prec || user_parens(cur, e) { format!("({})", s) } else { s };
     }
     let s = fmt_expr_raw(cur, e);
-    if expr_prec(e) < min_prec {
+    if expr_prec(e) < min_prec || user_parens(cur, e) {
         format!("({})", s)
     } else {
         s
+    }
+}
+
+/// La condición de un `if`/`while` en la pasada de envuelto (M189): se MIDE con su prefijo (`if (`)
+/// y el `) {` de cierre, en vez de forzarla; solo si así no cabe se reparte. Fuera del envuelto es
+/// un `fmt_expr` normal.
+fn fmt_cond(cur: &mut Cur, cond: &Expr, prefix: &str, wrapping: bool) -> String {
+    if !wrapping {
+        return fmt_expr(cur, cond, 0);
+    }
+    let save = cur.i;
+    cur.force = false;
+    let flat = fmt_expr(cur, cond, 0);
+    let width = indent_width(cur) + prefix.chars().count() + flat.chars().count() + ") {".len();
+    if flat.contains('\n') || width <= MAX_WIDTH {
+        return flat;
+    }
+    cur.i = save;
+    cur.force = true;
+    let split = fmt_expr(cur, cond, 0);
+    cur.force = false;
+    split
+}
+
+/// ¿Escribió el usuario `e` entre paréntesis de agrupación? (M189). Solo cuenta para las formas
+/// cuyos paréntesis pueden ser redundantes por precedencia (binaria, unaria, `as`): son los que el
+/// formateador quitaba, y en `(n0 * x) % base()` documentan la intención. Como el parser re-posiciona
+/// al `(` tanto la expresión agrupada como cualquier binaria exterior que la tenga de operando
+/// izquierdo (`(a + b) * c`: el `*` hereda la posición del `(`), la agrupación pertenece al nodo
+/// MÁS INTERIOR que empieza ahí: si el operando izquierdo comparte la posición, los paréntesis son
+/// suyos, no de `e`.
+fn user_parens(cur: &Cur, e: &Expr) -> bool {
+    if !cur.parens.contains(&(e.line, e.col)) {
+        return false;
+    }
+    let leftmost: &Expr = match &e.kind {
+        ExprKind::Binary { left, .. } => left,
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => expr,
+        _ => return false,
+    };
+    !(leftmost.line == e.line && leftmost.col == e.col)
+}
+
+/// Una **cadena** de un mismo operador asociativo a la izquierda que se reparte un operando por línea
+/// (M189): `&&`, `||` y `+` (concatenaciones largas). Devuelve `(op, operandos en orden)`; `None` con
+/// menos de dos operandos o si algún operando es ya multilínea por su cuenta. Solo el spine izquierdo:
+/// `a && b && c` es `And(And(a, b), c)`; un `&&` a la derecha (`a && (b && c)`) es un operando.
+fn bin_chain(e: &Expr) -> Option<(BinaryOp, Vec<&Expr>)> {
+    let ExprKind::Binary { op, .. } = &e.kind else { return None };
+    if !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Add) {
+        return None;
+    }
+    let mut operands: Vec<&Expr> = Vec::new();
+    let mut node = e;
+    while let ExprKind::Binary { op: o, left, right } = &node.kind {
+        if o != op {
+            break;
+        }
+        operands.push(right);
+        node = left;
+    }
+    operands.push(node);
+    operands.reverse();
+    if operands.len() < 2 || operands.iter().any(|o| is_multiline_form(o)) {
+        return None;
+    }
+    // Un `+` solo es cadena si CONSTRUYE TEXTO (algún operando literal de string) o es larga de verdad:
+    // el forzado del envuelto parte "la primera expresión repartible" sin medir, y `i + 1` dentro de un
+    // índice o `a + b` en una fórmula no son eso.
+    if *op == BinaryOp::Add
+        && operands.len() < 4
+        && !operands.iter().any(|o| matches!(o.kind, ExprKind::Str(_)))
+    {
+        return None;
+    }
+    Some((*op, operands))
+}
+
+/// Emite la cadena repartida: el primer operando en su sitio y **cada operador abre una línea** un
+/// nivel por debajo (`&& is_rgb(…)`). Cada operando que termina en una línea de la fuente con un
+/// comentario trailing lo recupera: es lo que hace que un test que anota qué comprueba cada `&&`
+/// conserve sus anotaciones (antes caían todas juntas al final de la sentencia).
+fn fmt_bin_chain_wrapped(cur: &mut Cur, op: BinaryOp, operands: &[&Expr]) -> String {
+    let pad = INDENT.repeat(cur.base + 1);
+    let p = bin_prec(op);
+    let mut s = String::new();
+    for (i, operand) in operands.iter().enumerate() {
+        if i > 0 {
+            s.push('\n');
+            s.push_str(&pad);
+            s.push_str(bin_op_str(op));
+            s.push(' ');
+            // Los operandos de continuación viven un nivel más adentro: lo que se reparta DENTRO de
+            // ellos (un `&&` largo como operando de un `||`) se mide desde ahí.
+            cur.base += 1;
+        }
+        // El primero admite igual precedencia (asociativo a la izquierda); los demás, mayor.
+        let text = fmt_expr(cur, operand, if i == 0 { p } else { p + 1 });
+        if i > 0 {
+            cur.base -= 1;
+        }
+        let end = last_line_of(operand);
+        s.push_str(&text);
+        if i + 1 < operands.len() {
+            // El trailing del último operando lo pega la sentencia (o queda para el bloque).
+            s.push_str(&cur.trailing_on(end));
+        }
+    }
+    s
+}
+
+/// La línea de fuente en que TERMINA `e`, por su hoja más a la derecha (M189). Es donde está su
+/// comentario trailing. No usa `expr_spans`: esa tabla va por posición de INICIO con política
+/// max-end, y un operando comparte inicio con la expresión que lo contiene (`a && b` empieza donde
+/// `a`), así que le atribuiría el fin de la sentencia entera.
+fn last_line_of(e: &Expr) -> usize {
+    match &e.kind {
+        ExprKind::Binary { right, .. } => last_line_of(right),
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => last_line_of(expr),
+        ExprKind::Call { callee, args } => args.last().map(last_line_of).unwrap_or_else(|| last_line_of(callee)),
+        ExprKind::Index { index, .. } => last_line_of(index),
+        ExprKind::Field { object, .. } => last_line_of(object),
+        ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => xs.last().map(last_line_of).unwrap_or(e.line),
+        ExprKind::MapLit(ps) => ps.last().map(|(_, v)| last_line_of(v)).unwrap_or(e.line),
+        ExprKind::StructLit { fields, .. } => fields.last().map(|(_, v)| last_line_of(v)).unwrap_or(e.line),
+        ExprKind::EnumLit { args, .. } => args.last().map(last_line_of).unwrap_or(e.line),
+        ExprKind::Func(fe) => fe.body.end_line,
+        ExprKind::Block(b) => b.end_line,
+        ExprKind::While { body, .. } => body.end_line,
+        ExprKind::If { then_branch, else_branch, .. } => match else_branch {
+            Some(eb) => last_line_of(eb),
+            None => then_branch.end_line,
+        },
+        ExprKind::Match { arms, scrutinee } => arms.last().map(|a| last_line_of(&a.body)).unwrap_or_else(|| last_line_of(scrutinee)),
+        _ => e.line,
     }
 }
 
@@ -1214,6 +1412,11 @@ fn fmt_wrapped_list(cur: &mut Cur, head: &str, open: &str, items: &[ListItem], c
         if i + 1 < items.len() {
             s.push(',');
         }
+        // M189: el comentario trailing de la línea en que termina el elemento vuelve a su elemento.
+        let end = match item {
+            ListItem::Value(v) | ListItem::Named(_, v) | ListItem::Pair(_, v) => last_line_of(v),
+        };
+        s.push_str(&cur.trailing_on(end));
         s.push('\n');
     }
     cur.base -= 1;
@@ -1400,9 +1603,25 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
 
 /// Formatea una forma con bloque (if/while/match/block) con la indentación `base` (la de su línea).
 fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
+    // La condición/escrutinio se reparte relativo a ESTA línea (M189): `cur.base` debe ser `base`
+    // también en posición de tail, donde nadie lo había fijado.
+    let saved = cur.base;
+    cur.base = base;
+    let s = fmt_expr_indented_inner(cur, e, base);
+    cur.base = saved;
+    s
+}
+
+fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
     match &e.kind {
         ExprKind::If { cond, then_branch, else_branch } => {
-            let c = fmt_expr(cur, cond, 0);
+            // M189: si la sentencia no cabe (pasada de envuelto), la cadena `if … { a } else if … { b }
+            // …` se expande ENTERA — antes quedaba en una línea de 300 columnas, porque el reparto solo
+            // conocía listas y cadenas de métodos y el forzado partía la CONDICIÓN (`if (f(\n a,\n b\n))`,
+            // que además no convergía). La condición se mide, no se fuerza; las ramas se expanden.
+            let expand = cur.wrap;
+            let c = fmt_cond(cur, cond, "if (", expand);
+            cur.expand_block = expand;
             let mut s = format!("if ({}) {}", c, fmt_block(cur, then_branch, base));
             if let Some(eb) = else_branch {
                 match &eb.kind {
@@ -1413,6 +1632,7 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
                     }
                     ExprKind::Block(b) => {
                         s.push_str(" else ");
+                        cur.expand_block = expand;
                         s.push_str(&fmt_block(cur, b, base));
                     }
                     _ => {
@@ -1425,13 +1645,14 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
             s
         }
         ExprKind::While { cond, body } => {
-            let c = fmt_expr(cur, cond, 0);
+            let c = fmt_cond(cur, cond, "while (", cur.wrap);
             format!("while ({}) {}", c, fmt_block(cur, body, base))
         }
         ExprKind::Block(b) => fmt_block(cur, b, base),
         ExprKind::Match { scrutinee, arms } => {
             let inner = INDENT.repeat(base + 1);
-            let mut s = format!("match ({}) {{\n", fmt_expr(cur, scrutinee, 0));
+            let scrutinee = fmt_cond(cur, scrutinee, "match (", cur.wrap);
+            let mut s = format!("match ({}) {{\n", scrutinee);
             for arm in arms {
                 s.push_str(&cur.flush_before(arm.body.line, &inner)); // comentarios encima del brazo
                 // El cuerpo del brazo vive en `base + 1`: una forma con bloque anidada en una sub-expresión
@@ -1852,7 +2073,9 @@ mod tests {
                    }\n";
         let out = fmt(src);
         assert_eq!(fmt(&out), out, "idempotente");
-        assert!(out.contains("{ Option.Some(\"a\") }"), "no expande una rama suelta: {out}");
+        // M189: una cadena que no cabe se expande ENTERA (antes se conservaban las ramas inline y la
+        // línea quedaba de 150 columnas). Ver `if_chain_that_does_not_fit_expands_all_branches`.
+        assert!(out.contains("} else if (e == 'b') {\n        Option.Some(\"b\")\n    }"), "{out}");
     }
 
     /// Una cadena que CABE se queda en una línea, y una de un solo eslabón nunca se reparte (no hay nada
@@ -2297,5 +2520,76 @@ mod tests {
             println!("{sites:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
         }
         println!("TOTAL: {sites} sitios migrados en {changed} files");
+    }
+
+    // ── M189: comentarios pegados a su operando/elemento, cadenas de operadores, ramas de `if`,
+    //    paréntesis del usuario (feedback de ray-remote, docs/plan-ray-remote.md A2) ─────────────
+
+    #[test]
+    fn trailing_comments_stay_with_their_operand_in_a_wrapped_chain() {
+        // El caso del feedback: tres `&&` anotados uno a uno. Antes el formateador aplanaba la cadena
+        // y los tres comentarios caían juntos al final, sin dueño.
+        let src = "fn main() -> int {\n    let a = is_rgb(1)       // dentro del primer tile\n        && is_rgb(2)   // esquina del primer tile\n        && is_rgb(3);   // segundo tile\n    if (a) { 0 } else { 1 }\n}\n\nfn is_rgb(n: int) -> bool { n > 0 }\n";
+        let want = "fn main() -> int {\n    let a = is_rgb(1)  // dentro del primer tile\n        && is_rgb(2)  // esquina del primer tile\n        && is_rgb(3);  // segundo tile\n    if (a) { 0 } else { 1 }\n}\n\nfn is_rgb(n: int) -> bool { n > 0 }\n";
+        assert_eq!(fmt(src), want);
+        assert_eq!(fmt(want), want, "idempotente");
+    }
+
+    #[test]
+    fn a_chain_that_fits_and_has_no_inner_comments_stays_flat() {
+        let src = "fn main() -> int {\n    let a = f(1)\n        && f(2)\n        && f(3);\n    if (a) { 0 } else { 1 }\n}\n\nfn f(n: int) -> bool { n > 0 }\n";
+        assert!(fmt(src).contains("let a = f(1) && f(2) && f(3);"), "{}", fmt(src));
+    }
+
+    #[test]
+    fn trailing_comments_stay_with_their_argument_in_a_wrapped_list() {
+        let src = "fn main() -> int {\n    call(\n        1,  // primero\n        2,  // segundo\n        3\n    )\n}\n\nfn call(a: int, b: int, c: int) -> int { a + b + c }\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    #[test]
+    fn if_chain_that_does_not_fit_expands_all_branches() {
+        // El otro caso del feedback: una tabla de ocho casos en una línea de 300 columnas.
+        let src = "fn name(t: int) -> string {\n    if (t == 1) { \"none (no password)\" } else if (t == 2) { \"VNC password (legacy)\" } else if (t == 30) { \"Apple DH\" } else { \"unknown\" }\n}\n";
+        let want = "fn name(t: int) -> string {\n    if (t == 1) {\n        \"none (no password)\"\n    } else if (t == 2) {\n        \"VNC password (legacy)\"\n    } else if (t == 30) {\n        \"Apple DH\"\n    } else {\n        \"unknown\"\n    }\n}\n";
+        assert_eq!(fmt(src), want);
+        assert_eq!(fmt(want), want, "idempotente");
+    }
+
+    #[test]
+    fn a_long_condition_is_split_instead_of_the_branches_only() {
+        // La condición se MIDE con su `if (`; si no cabe, se reparte ella (antes se partía la primera
+        // llamada de la condición por el forzado, `if (f(\n a,\n b\n))`, y no convergía).
+        let src = "fn main() -> int {\n    if (!is_lower_hex(version_string) || !is_lower_hex(trace_identifier) || !is_lower_hex(span_id) || !is_lower_hex(flags_x)) { 1 } else { 0 }\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    if (!is_lower_hex(version_string)\n        || !is_lower_hex(trace_identifier)\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn user_parentheses_are_preserved() {
+        // `(n0 * x) % base()` documenta la intención en código criptográfico: no se quitan.
+        let src = "fn t(n0: int, x: int) -> int { (n0 * x) % 7 + (n0 + x) * 2 }\n\nfn u(a: int, b: int) -> int { ((a + b) * 2) - (-a) }\n\nfn v(a: int) -> int { (a) + 1 }\n";
+        let want = "fn t(n0: int, x: int) -> int { (n0 * x) % 7 + (n0 + x) * 2 }\n\nfn u(a: int, b: int) -> int { ((a + b) * 2) - (-a) }\n\nfn v(a: int) -> int { a + 1 }\n";
+        assert_eq!(fmt(src), want);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    #[test]
+    fn a_long_string_concatenation_wraps_one_piece_per_line() {
+        let src = "fn main() -> int {\n    let s = \"uno\" + \"dos\" + \"tres\" + \"cuatro\" + \"cinco\" + \"seis\" + \"siete\" + \"ocho\" + \"nueve\" + \"diez\";\n    s.len()\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    let s = \"uno\"\n        + \"dos\"\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn a_small_integer_sum_is_not_a_chain() {
+        // `i + 1` dentro de un índice no se reparte aunque la sentencia no quepa.
+        let src = "fn main() -> int {\n    let b = [1, 2, 3, 4, 5, 6, 7, 8];\n    let i = 0;\n    let x = b[i + 1] as u64 << 48 | b[i + 2] as u64 << 40 | b[i + 3] as u64 << 32 | b[i + 4] as u64 << 24 | b[i + 5] as u64;\n    x as int\n}\n";
+        let out = fmt(src);
+        assert!(!out.contains("\n        + 1]"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 }

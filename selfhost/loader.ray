@@ -153,17 +153,11 @@ fn read_file(path: string) -> Result<string, string> {
 
 // Lee + lexea + parsea un módulo; traduce los errores a LoadError con el nombre del módulo.
 fn load_one(name: string, path: string) -> Result<Program, LoadError> {
-    match (read_file(
-    path
-)) {
+    match (read_file(path)) {
         Result.Ok(src) => {
-            match (lex(
-            src
-        )) {
+            match (lex(src)) {
                 Result.Ok(toks) => {
-                    match (parse(
-                    toks
-                )) {
+                    match (parse(toks)) {
                         Result.Ok(p) => Result.Ok(p),
                         Result.Err(pe) => Result.Err(
                             LoadError { msg: pe.msg, line: pe.line, col: pe.col, module: name }
@@ -244,30 +238,25 @@ fn classify_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, 
         while (j < fi.names.len()) {
             let n = fi.names[j];
             let local = local_of_alias(n.alias, n.name);
-            match (get(
-                surfaces,
-                fi.module
-            )) {
+            match (get(surfaces, fi.module)) {
                 Option.Some(surf) => {
-                    match (get(
-                    surf.values,
-                    n.name
-                )) {
+                    match (get(surf.values, n.name)) {
                         Option.Some(g) => {
                             values.insert(local, g);
                         },
                         Option.None => {
-                            match (get(
-                            surf.types,
-                            n.name
-                        )) {
+                            match (get(surf.types, n.name)) {
                                 Option.Some(g) => {
                                     types.insert(local, g);
                                 },
                                 Option.None => {
                                     return Result.Err(
                                         LoadError {
-                                            msg: "module '" + fi.module + "' does not export '" + n.name + "' (missing 'pub'?)",
+                                            msg: "module '"
+                                                + fi.module
+                                                + "' does not export '"
+                                                + n.name
+                                                + "' (missing 'pub'?)",
                                             line: n.line,
                                             col: n.col,
                                             module: m.name

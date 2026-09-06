@@ -95,11 +95,16 @@ fn main() {
     // --- HTTP/2 framing: round-trip de un HEADERS frame (stream 1, END_HEADERS+END_STREAM). ---
     let block = encode(new_hpack(), [header(":method", "GET"), header(":path", "/")]);
     let frame = headers_frame(1, block, true);
-    match (parse_frame(
-        frame
-    )) {
+    match (parse_frame(frame)) {
         Result.Ok(f) => print(
-            "HEADERS type=" + to_string(f.ftype) + " stream=" + to_string(f.stream_id) + " flags=" + to_string(f.flags) + " blocklen=" + to_string(f.payload.len())
+            "HEADERS type="
+                + to_string(f.ftype)
+                + " stream="
+                + to_string(f.stream_id)
+                + " flags="
+                + to_string(f.flags)
+                + " blocklen="
+                + to_string(f.payload.len())
         ),
         Result.Err(e) => print("ERR frame: " + e),
     }

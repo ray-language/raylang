@@ -102,7 +102,15 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
         }
         if (a < lo || b > hi || a > b) {
             return Result.Err(
-                "cron: '" + name + "' out of range [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')"
+                "cron: '"
+                    + name
+                    + "' out of range ["
+                    + to_string(lo)
+                    + "-"
+                    + to_string(hi)
+                    + "] ('"
+                    + part
+                    + "')"
             );
         }
         var v = a;

@@ -3361,6 +3361,24 @@ como hito independiente previo o paralelo. **Ejecutado en M171** (DESIGN §163):
 hito propio. Encaja con Windows (§84): en la 1 el instalador puede
 elegir `-gnu` para no exigir Build Tools.
 
+## 86. Mejoras impulsadas por `ray-remote` — cliente RFB de escritorio (sep 2026)
+
+Dogfood de `ray-apps/ray-remote` (4.500 líneas: RFB/VNC, DH de Apple sobre 4096 bits, cuatro
+fibras, `std/ui` + `ray bundle`). Su `docs/raylang-feedback.md` deja 16 entradas verificadas
+contra 1.6.4; el plan completo, con lotes, tamaños e hitos M188–M194, está en
+[docs/plan-ray-remote.md](docs/plan-ray-remote.md). Resumen por impacto:
+
+| Lote | Contenido | Impacto |
+|---|---|---|
+| A bugs | `ray test` dice "all passed" con 0 tests y un módulo sin compilar · `ray fmt` desprende comentarios trailing y colapsa `else if` a 300 columnas · `close` con emisor bloqueado revienta + falta `try_send` · mensajes (`!` sobre entero → `~`, `from`, `break`, `ray run --`) | **alta**: el formateador no es seguro de aplicar; los canales acotados no se pueden cerrar |
+| B SPEC | literales validados contra el tipo esperado + sufijos `u64` · cuenta de desplazamiento `int` · `from` contextual | media: cripto a mano sin casts ni descomposiciones |
+| C stdlib | `std/inflate` incremental (ZRLE/Tight, permessage-deflate) · `std/crypto/legacy` (MD5/DES/AES, código y vectores ya en la app) · `std/bigint` con `modpow` en runtime (`num-bigint`; 5 s → <100 ms al conectar) | **alta** para protocolos reales |
+| D decisión | reabrir `break`/`continue` en forma mínima (la bandera no corta el cuerpo: bug real ×3) · `pub fn` con nombre de builtin en módulo cualificado · closure sin anotación con valor | la decide el usuario |
+
+Transversal: MANUAL en negrita "lo que `spawn` captura se copia; entre fibras solo se comparten
+canales y handles" (bug real en la app), `bytes` `+` lineal vs `[int]`+`bytes_of`, y
+`Channel.bounded` en `ray_doc`/MANUAL (hoy el manual cita `channel(n)`, que no existe).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

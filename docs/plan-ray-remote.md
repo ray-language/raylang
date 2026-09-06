@@ -81,7 +81,7 @@ Los mensajes de diagnóstico van en tándem con `selfhost/checker.ray` (byte-id�
 
 ## 3. Lote B — ergonomía numérica y léxica (SPEC primero)
 
-### B1. Literales enteros validados contra el tipo esperado, y sufijos (feedback 2) — M
+### B1. Literales enteros validados contra el tipo esperado, y sufijos (feedback 2) — M ✅ M192
 
 `let c: u64 = 0xFFFFFFFFFFFFFFFF` es hoy `lex error: integer out of range`: el lexer valida
 contra `i64` sin mirar el destino. Propuesta en SPEC: el lexer acepta cualquier literal que
@@ -89,13 +89,13 @@ quepa en `u64`; el checker valida el rango contra el tipo esperado (`int` sigue 
 sin contexto el default es `int`. Sufijos `u8`/`u32`/`u64` para el caso sin contexto
 (`0xFFFFFFFFFFFFFFFFu64`). Toca lexer, checker, selfhost y los tres motores (constantes).
 
-### B2. La cuenta de un desplazamiento es un `int` (feedback 8) — S
+### B2. La cuenta de un desplazamiento es un `int` (feedback 8) — S ✅ M192
 
 `v << n` con `v: u32, n: int` es hoy error de tipos. SPEC: `<<`/`>>` aceptan como segundo
 operando `int` o el mismo tipo sin signo; el resultado es el tipo del primero; cuenta fuera de
 rango con el comportamiento ya definido. Quita un `as u32` de cada rotación en cualquier hash.
 
-### B3. `from` como palabra clave contextual (feedback 10) — S
+### B3. `from` como palabra clave contextual (feedback 10) — S ✅ M192
 
 Solo tiene significado al inicio de sentencia (`from M import X;`). El parser la reserva
 globalmente y no se puede llamar `from` a un parámetro. Cambio: reservada solo en posición de
@@ -140,7 +140,7 @@ nativo emite llamadas a `ray_runtime::bigint`). Desbloquea DH clásico, RSA y JW
 
 ## 5. Lote D — decisiones que reabre la app (las toma el usuario)
 
-### D1. `break`/`continue` (feedback 6)
+### D1. `break`/`continue` (feedback 6) ✅ M191 — reabierto en forma mínima (decisión del usuario, 6 sep)
 
 DESIGN §0 registra la decisión explícita (30 jul 2026) de **no** tenerlos: `return` +
 extracción a función, iteradores, y el coste en el análisis de divergencia y en cuatro
@@ -187,11 +187,12 @@ prioridad: el rodeo es una sentencia.
 | M188 | A1 + A4 + `ray run --` | `ray test` honesto; mensajes que orientan |
 | M189 | A2 (`ray fmt`) | `ray fmt --check` entra en su CI |
 | M190 | A3 + §6 docs | el canal de frames vuelve a ser acotado; `stop` sin `try_call` |
-| M191 | B1 + B2 + B3 | tablas de constantes copiadas del estándar; `rotl` sin casts |
-| M192 | C1 (`std/inflate` incremental) | ZRLE/Zlib/Tight; usable por WAN |
-| M193 | C2 (`std/crypto/legacy`) | `src/crypto/` se reduce a `bignum.ray` |
-| M194 | C3 (`std/bigint`) | conectar pasa de 5 s a <100 ms; `src/crypto/` desaparece |
-| D | D1–D3 | según decisión |
+| M191 | D1 (`break`/`continue`) ✅ | los tres bucles de red con bandera vuelven a ser `break` |
+| M192 | B1 + B2 + B3 | tablas de constantes copiadas del estándar; `rotl` sin casts |
+| M193 | C1 (`std/inflate` incremental) | ZRLE/Zlib/Tight; usable por WAN |
+| M194 | C2 (`std/crypto/legacy`) | `src/crypto/` se reduce a `bignum.ray` |
+| M195 | C3 (`std/bigint`) | conectar pasa de 5 s a <100 ms; `src/crypto/` desaparece |
+| D | D2–D3 | según decisión |
 
 Cada hito: rama + PR, SPEC antes si cambia el lenguaje, DESIGN con el porqué, CHANGELOG "Sin
 publicar", y la validación final es el diff en `ray-remote` que borra el rodeo.

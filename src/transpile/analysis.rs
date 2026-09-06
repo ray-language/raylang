@@ -165,6 +165,7 @@ pub(super) fn visit_exprs_block(b: &Block, f: &mut impl FnMut(&Expr)) {
                 visit_exprs_expr(target, f);
                 visit_exprs_expr(value, f);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     visit_exprs_expr(v, f);
@@ -272,6 +273,7 @@ pub(super) fn idents_of_block(b: &Block, out: &mut std::collections::HashSet<Str
         match &s.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => idents_of_expr(value, out),
             StmtKind::Assign { target, value } => { idents_of_expr(target, out); idents_of_expr(value, out); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(e) = value { idents_of_expr(e, out); } }
             StmtKind::Expr(e) => idents_of_expr(e, out),
             StmtKind::For { iter, body, .. } => {
@@ -323,6 +325,7 @@ pub(super) fn captured_idents_block(b: &Block, out: &mut std::collections::HashS
         match &s.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => captured_idents_expr(value, out),
             StmtKind::Assign { target, value } => { captured_idents_expr(target, out); captured_idents_expr(value, out); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(e) = value { captured_idents_expr(e, out); } }
             StmtKind::Expr(e) => captured_idents_expr(e, out),
             StmtKind::For { iter, body, .. } => {
@@ -349,6 +352,7 @@ pub(super) fn mut_var_decls_block(b: &Block, out: &mut std::collections::HashSet
             }
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => mut_var_decls_expr(value, out),
             StmtKind::Assign { value, .. } => mut_var_decls_expr(value, out),
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(e) = value { mut_var_decls_expr(e, out); } }
             StmtKind::Expr(e) => mut_var_decls_expr(e, out),
             StmtKind::For { body, .. } => mut_var_decls_block(body, out),

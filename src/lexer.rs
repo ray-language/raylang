@@ -236,9 +236,9 @@ impl Lexer {
         // '0' ya se consumió; si le sigue el prefijo, se lee en esa base (solo enteros, sin `.`).
         if self.chars[start] == '0' {
             if let Some((radix, base)) = self.peek().and_then(|p| match p {
-                'x' | 'X' => Some((16, Radix::Hex)),
-                'o' | 'O' => Some((8, Radix::Oct)),
-                'b' | 'B' => Some((2, Radix::Bin)),
+                'x' | 'X' => Some((16, Radix::HEX)),
+                'o' | 'O' => Some((8, Radix::OCT)),
+                'b' | 'B' => Some((2, Radix::BIN)),
                 _ => None,
             }) {
                 let prefix = self.advance(); // consume x/o/b
@@ -250,11 +250,12 @@ impl Lexer {
                     return Err(self.error(format!("expected at least one digit after '0{}'", prefix)));
                 }
                 let digits: String = self.chars[dstart..self.pos].iter().collect();
-                let v = i64::from_str_radix(&digits, radix).map_err(|_| {
+                // M192: se lee como u64 — un literal que no cabe en `int` es AMPLIO (solo `u64`).
+                let v = u64::from_str_radix(&digits, radix).map_err(|_| {
                     let text: String = self.chars[start..self.pos].iter().collect();
                     self.error(format!("integer out of range '{}'", text))
                 })?;
-                return Ok(TokenKind::Int(v, base));
+                return self.int_with_suffix(v, base, start);
             }
         }
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
@@ -303,9 +304,35 @@ impl Lexer {
             Ok(TokenKind::Float(v))
         } else {
             let v = text
-                .parse::<i64>()
+                .parse::<u64>()
                 .map_err(|_| self.error(format!("integer out of range '{}'", text)))?;
-            Ok(TokenKind::Int(v, Radix::Dec))
+            self.int_with_suffix(v, Radix::DEC, start)
+        }
+    }
+
+    /// M192: cierra un literal entero ya leído como `u64`: consume un sufijo `u8`/`u32`/`u64` si lo
+    /// hay (solo si no le sigue otro carácter de identificador: `1u8x` sigue siendo `1` + `u8x`), y
+    /// decide el token. Sin sufijo, un valor que no cabe en `int` es **amplio**: `u64` implícito,
+    /// guardado como sus 64 bits en `i64`. Con sufijo, el valor debe caber en ese ancho.
+    fn int_with_suffix(&mut self, v: u64, base: Radix, start: usize) -> Result<TokenKind, LexError> {
+        let mut suffix: Option<u8> = None;
+        if self.peek() == Some('u') {
+            let rest: String = self.chars[self.pos..].iter().take(4).collect();
+            let (w, len) = if rest.starts_with("u64") { (64u8, 3) } else if rest.starts_with("u32") { (32, 3) } else if rest.starts_with("u8") { (8, 2) } else { (0, 0) };
+            let follows_ident = self.chars.get(self.pos + len).is_some_and(|c| is_ident_continue(*c));
+            if w != 0 && !follows_ident {
+                self.pos += len;
+                suffix = Some(w);
+            }
+        }
+        let text: String = self.chars[start..self.pos].iter().collect();
+        match suffix {
+            Some(w) if w < 64 && v > crate::runtime::uint_mask(w) => {
+                Err(self.error(format!("the literal {} does not fit in u{}", text, w)))
+            }
+            Some(w) => Ok(TokenKind::Int(v as i64, base.with_suffix(Some(w)))),
+            None if v > i64::MAX as u64 => Ok(TokenKind::Int(v as i64, base.with_wide())),
+            None => Ok(TokenKind::Int(v as i64, base)),
         }
     }
 
@@ -636,6 +663,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "var" => TokenKind::Var,
         "fn" => TokenKind::Fn,
         "return" => TokenKind::Return,
+        "break" => TokenKind::Break,
+        "continue" => TokenKind::Continue,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,
@@ -652,7 +681,6 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "dyn" => TokenKind::Dyn,
         "pub" => TokenKind::Pub,
         "import" => TokenKind::Import,
-        "from" => TokenKind::From,
         "extern" => TokenKind::Extern,
         "as" => TokenKind::As,
         "int" => TokenKind::IntType,
@@ -707,11 +735,11 @@ mod tests {
         // Guarda conservadora: sin dígito tras el e (o tras el signo), NO es exponente.
         assert_eq!(
             kinds("1eabc"),
-            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Ident("eabc".into()), TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::DEC), TokenKind::Ident("eabc".into()), TokenKind::Eof]
         );
         assert_eq!(
             kinds("1e+"),
-            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Ident("e".into()), TokenKind::Plus, TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::DEC), TokenKind::Ident("e".into()), TokenKind::Plus, TokenKind::Eof]
         );
         // Un exponente que desborda f64 no es error: satura a infinito (semántica de f64).
         assert_eq!(kinds("1e999"), vec![TokenKind::Float(f64::INFINITY), TokenKind::Eof]);
@@ -771,7 +799,7 @@ mod tests {
         assert_eq!(lens[0], (TokenKind::Let, 3));
         assert_eq!(lens[1], (TokenKind::Ident("foo".into()), 3));
         assert_eq!(lens[2], (TokenKind::Eq, 1));
-        assert_eq!(lens[3], (TokenKind::Int(12345, Radix::Dec), 5));
+        assert_eq!(lens[3], (TokenKind::Int(12345, Radix::DEC), 5));
         assert_eq!(lens[4], (TokenKind::Plus, 1));
         // El string mide su forma ESCRITA (comillas y escapes incluidos): "ab\n" son 6 chars.
         assert_eq!(lens[5], (TokenKind::Str("ab\n".into()), 6));
@@ -800,7 +828,7 @@ mod tests {
     // `3.14` prueba el lexeo de floats, no es una aproximación de PI (falso positivo de `approx_constant`).
     #[allow(clippy::approx_constant)]
     fn literals() {
-        assert_eq!(kinds("42"), vec![TokenKind::Int(42, Radix::Dec), TokenKind::Eof]);
+        assert_eq!(kinds("42"), vec![TokenKind::Int(42, Radix::DEC), TokenKind::Eof]);
         assert_eq!(kinds("3.14"), vec![TokenKind::Float(3.14), TokenKind::Eof]);
         assert_eq!(
             kinds("\"hello\""),
@@ -811,16 +839,16 @@ mod tests {
     #[test]
     fn base_prefixed_integer_literals() {
         // M118: prefijos 0x/0o/0b (mayúsculas también) para hex, octal y binario.
-        assert_eq!(kinds("0xFF"), vec![TokenKind::Int(255, Radix::Hex), TokenKind::Eof]);
-        assert_eq!(kinds("0x1F300"), vec![TokenKind::Int(127744, Radix::Hex), TokenKind::Eof]);
-        assert_eq!(kinds("0o755"), vec![TokenKind::Int(493, Radix::Oct), TokenKind::Eof]);
-        assert_eq!(kinds("0o600"), vec![TokenKind::Int(384, Radix::Oct), TokenKind::Eof]);
-        assert_eq!(kinds("0b1010"), vec![TokenKind::Int(10, Radix::Bin), TokenKind::Eof]);
-        assert_eq!(kinds("0X10"), vec![TokenKind::Int(16, Radix::Hex), TokenKind::Eof]);
-        assert_eq!(kinds("0O17"), vec![TokenKind::Int(15, Radix::Oct), TokenKind::Eof]);
-        assert_eq!(kinds("0B1"), vec![TokenKind::Int(1, Radix::Bin), TokenKind::Eof]);
+        assert_eq!(kinds("0xFF"), vec![TokenKind::Int(255, Radix::HEX), TokenKind::Eof]);
+        assert_eq!(kinds("0x1F300"), vec![TokenKind::Int(127744, Radix::HEX), TokenKind::Eof]);
+        assert_eq!(kinds("0o755"), vec![TokenKind::Int(493, Radix::OCT), TokenKind::Eof]);
+        assert_eq!(kinds("0o600"), vec![TokenKind::Int(384, Radix::OCT), TokenKind::Eof]);
+        assert_eq!(kinds("0b1010"), vec![TokenKind::Int(10, Radix::BIN), TokenKind::Eof]);
+        assert_eq!(kinds("0X10"), vec![TokenKind::Int(16, Radix::HEX), TokenKind::Eof]);
+        assert_eq!(kinds("0O17"), vec![TokenKind::Int(15, Radix::OCT), TokenKind::Eof]);
+        assert_eq!(kinds("0B1"), vec![TokenKind::Int(1, Radix::BIN), TokenKind::Eof]);
         // `0` a secas y `0.5` siguen siendo lo de siempre (no confundir el prefijo).
-        assert_eq!(kinds("0"), vec![TokenKind::Int(0, Radix::Dec), TokenKind::Eof]);
+        assert_eq!(kinds("0"), vec![TokenKind::Int(0, Radix::DEC), TokenKind::Eof]);
         assert_eq!(kinds("0.5"), vec![TokenKind::Float(0.5), TokenKind::Eof]);
         // El lexema mide su forma escrita (prefijo incluido).
         let toks = lex("0xFF").expect("tokeniza");
@@ -831,7 +859,7 @@ mod tests {
         // Un dígito fuera del rango de la base no forma parte del literal.
         assert_eq!(
             kinds("0b12"),
-            vec![TokenKind::Int(1, Radix::Bin), TokenKind::Int(2, Radix::Dec), TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::BIN), TokenKind::Int(2, Radix::DEC), TokenKind::Eof]
         );
     }
 
@@ -866,7 +894,7 @@ mod tests {
         // Int(1), Dot, Ident("x") (acceso a campo), no un flotante.
         assert_eq!(
             kinds("1.x"),
-            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Dot, TokenKind::Ident("x".into()), TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::DEC), TokenKind::Dot, TokenKind::Ident("x".into()), TokenKind::Eof]
         );
         // Y que "12.5" sí es flotante.
         assert_eq!(kinds("12.5"), vec![TokenKind::Float(12.5), TokenKind::Eof]);
@@ -918,6 +946,29 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn integer_suffixes_and_wide_literals() {
+        // M192 (B1): sufijos `u8`/`u32`/`u64`, literal AMPLIO (solo cabe en u64: bits en i64 y
+        // sufijo 64 implícito), y `1u8x` sigue siendo `1` + identificador.
+        let toks = lex("255u8 0xFFu32 7u64 0xFFFFFFFFFFFFFFFF 18446744073709551615 1u8x 42").expect("lex ok");
+        let kinds: Vec<&TokenKind> = toks.iter().map(|t| &t.kind).collect();
+        assert_eq!(kinds[0], &TokenKind::Int(255, Radix::DEC.with_suffix(Some(8))));
+        assert_eq!(kinds[1], &TokenKind::Int(255, Radix::HEX.with_suffix(Some(32))));
+        assert_eq!(kinds[2], &TokenKind::Int(7, Radix::DEC.with_suffix(Some(64))));
+        assert_eq!(kinds[3], &TokenKind::Int(-1, Radix::HEX.with_wide()));
+        assert_eq!(kinds[4], &TokenKind::Int(-1, Radix::DEC.with_wide()));
+        assert_eq!(kinds[5], &TokenKind::Int(1, Radix::DEC));
+        assert_eq!(kinds[6], &TokenKind::Ident("u8x".into()));
+        assert_eq!(kinds[7], &TokenKind::Int(42, Radix::DEC));
+        let e = lex("256u8").expect_err("no cabe");
+        assert!(e.to_string().contains("the literal 256u8 does not fit in u8"), "{e}");
+        let e = lex("18446744073709551616").expect_err("ni en u64");
+        assert!(e.to_string().contains("integer out of range"), "{e}");
+        // `from` ya no es palabra clave (B3): identificador.
+        let toks = lex("from").expect("lex ok");
+        assert_eq!(toks[0].kind, TokenKind::Ident("from".into()));
     }
 
     #[test]

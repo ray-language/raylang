@@ -319,6 +319,44 @@ fn not_on_an_integer_points_to_bitwise_not() {
     err_contains("fn main() -> int { let y = !\"s\"; 0 }", "'!' requires bool, not string");
 }
 
+#[test]
+fn wide_and_suffixed_literals_and_int_shift_counts() {
+    // M192 (B1): un literal amplio es u64 sin contexto; con sufijo, ese ancho; el tipo esperado
+    // sigue coercionando los literales sin sufijo.
+    check_src("fn main() -> int { let all: u64 = 0xFFFFFFFFFFFFFFFF; let k = 18446744073709551615; let b = 255u8; let m: u32 = 0xFFu32; if (all == k) { 0 } else { 1 } }")
+        .expect("literales amplios y con sufijo");
+    err_contains("fn main() -> int { let x: int = 0xFFFFFFFFFFFFFFFF; 0 }", "'x' is declared as int but initialized with u64");
+    err_contains("fn main() -> int { let x: u32 = 1u8; 0 }", "the literal 1u8 is u8 but u32 is expected");
+    err_contains("fn main() -> int { let x: u8 = 0xFFFFFFFFFFFFFFFF; 0 }", "the literal 18446744073709551615 does not fit in u8");
+    // B2: la cuenta de un desplazamiento es `int` (variable o expresión), sin `as u32`.
+    check_src("fn rotl(v: u32, n: int) -> u32 { (v << n) | (v >> (32 - n)) } fn main() -> int { let r: u32 = rotl(1 as u32, 3); 0 }")
+        .expect("cuenta int");
+    check_src("fn main() -> int { let v: u64 = 1 as u64; let n = 3; let w: u64 = v << n; let z: u64 = (v >> (n + 1)) + 1; 0 }")
+        .expect("cuenta int en contexto esperado u64");
+    err_contains("fn main() -> int { let v: u32 = 1 as u32; let w: u8 = 1 as u8; let y = v << w; 0 }", "requires int operands, not u32 and u8");
+    // B3: `from` es un identificador fuera de la cabecera de un ítem.
+    check_src("fn slice(bits: [int], from: int, to: int) -> [int] { let from = from + 1; bits } fn main() -> int { 0 }")
+        .expect("from como parámetro y variable");
+}
+
+#[test]
+fn break_and_continue_are_loop_statements() {
+    // M191: válidos en la espina de sentencias del cuerpo de un bucle; divergen (la rama que
+    // rompe cede el tipo).
+    check_src("fn main() -> int { var i = 0; while (i < 5) { i = i + 1; if (i == 2) { continue; } if (i == 4) { break; } } i }")
+        .expect("break/continue en if dentro de while");
+    check_src("fn main() -> int { var t = 0; for k in 0..3 { let v: int = match (Option.Some(k)) { Option.Some(n) => n, Option.None => { break; } }; t = t + v; } t }")
+        .expect("break en un brazo de match como valor de let");
+    check_src("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; let w = if (i == 2) { continue; } else { i }; } 0 }")
+        .expect("continue en una rama de if como valor de let");
+    err_contains("fn main() -> int { break; 0 }", "'break' outside a loop");
+    err_contains("fn main() -> int { if (true) { continue; } 0 }", "'continue' outside a loop");
+    err_contains("fn main() -> int { while (true) { let f = fn() { break; }; } 0 }", "'break' outside a loop");
+    err_contains("fn main() -> int { while (true) { print({ break; 1 }); } 0 }", "'break' must be a statement of the loop body");
+    err_contains("fn main() -> int { while (true) { let x = 1 + { continue; }; } 0 }", "'continue' must be a statement of the loop body");
+    err_contains("fn main() -> int { while (true) { let xs = [{ break; 1 }]; } 0 }", "'break' must be a statement of the loop body");
+}
+
 fn err_contains(src: &str, needle: &str) {
     let e = check_src(src).expect_err("debería fallar la verificación");
     assert!(

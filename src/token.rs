@@ -11,11 +11,42 @@
 /// literal como lo escribió el usuario (`0xFF`, `0o755`, `0b1010`) en vez de
 /// canonizarlo a decimal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Radix {
+pub enum Base {
     Dec,
     Hex,
     Oct,
     Bin,
+}
+
+/// Cómo se escribió un literal entero (M118 base; M192 sufijo). `suffix` = `Some(8|32|64)` si el
+/// literal lleva `u8`/`u32`/`u64` — o si es **amplio** (no cabe en `int`, solo en `u64`: se guarda
+/// como sus 64 bits en `i64` y `suffix == Some(64)`). El formateador lo reemite tal cual; el checker
+/// lo tipa directamente como `uN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Radix {
+    pub base: Base,
+    /// Sufijo ESCRITO (`u8`/`u32`/`u64`), si lo hay.
+    pub suffix: Option<u8>,
+    /// Literal AMPLIO: no cabe en `int`, solo en `u64` (sus 64 bits van en el `i64` del token). Se
+    /// tipa como `u64` sin sufijo escrito, y el formateador lo reemite sin sufijo.
+    pub wide: bool,
+}
+
+impl Radix {
+    pub const DEC: Radix = Radix { base: Base::Dec, suffix: None, wide: false };
+    pub const HEX: Radix = Radix { base: Base::Hex, suffix: None, wide: false };
+    pub const OCT: Radix = Radix { base: Base::Oct, suffix: None, wide: false };
+    pub const BIN: Radix = Radix { base: Base::Bin, suffix: None, wide: false };
+    pub fn with_suffix(self, suffix: Option<u8>) -> Radix {
+        Radix { suffix, ..self }
+    }
+    pub fn with_wide(self) -> Radix {
+        Radix { wide: true, ..self }
+    }
+    /// El ancho FIJO del literal, si lo tiene: el sufijo escrito, o 64 si es amplio.
+    pub fn fixed_width(&self) -> Option<u8> {
+        self.suffix.or(if self.wide { Some(64) } else { None })
+    }
 }
 
 /// El "qué es" de un token. Las variantes siguen la sección 3 de DESIGN.md.
@@ -43,6 +74,9 @@ pub enum TokenKind {
     Var,
     Fn,
     Return,
+    /// M191: `break` / `continue` — sentencias de salida de bucle (SPEC §5).
+    Break,
+    Continue,
     If,
     Else,
     While,
@@ -59,7 +93,6 @@ pub enum TokenKind {
     Dyn,   // M9.3b (dyn Trait: trait object)
     Pub,    // M11.3 (visibilidad: exporta un ítem del módulo)
     Import, // M11.3 (import M; — importa un módulo como espacio de nombres)
-    From,   // M11.3b (from M import a [as b]; — trae nombres al ámbito)
     Extern, // M41 (extern "lib" { fn … } — declara funciones C para FFI)
     As,     // M11.3b (renombrado en un from-import)
 

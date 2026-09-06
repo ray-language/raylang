@@ -139,7 +139,7 @@ contexts:
         2: entity.name.function.raylang
 
   keywords:
-    - match: '\b(if|else|while|for|in|return|match|import|from|as)\b'
+    - match: '\b(if|else|while|for|in|return|break|continue|match|import|from|as)\b'
       scope: keyword.control.raylang
     # El receptor 'self' y el tipo 'Self' (M9). Antes de 'types' porque Self es mayúscula.
     - match: '\b(self|Self)\b'

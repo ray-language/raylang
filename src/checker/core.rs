@@ -25,6 +25,8 @@ impl Checker {
             accumulate: false,
             errors: Vec::new(),
             current_return: Type::Unit,
+            loop_depth: 0,
+            break_ok: false,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
             for_iter_sites: HashMap::new(),
@@ -903,11 +905,25 @@ impl Checker {
                 for (n, t) in bindings {
                     self.declare(&n, t, false, (stmt.line, stmt.col));
                 }
-                self.check_block(body)?;
+                self.check_loop_body(body)?;
                 self.pop_scope();
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
+            StmtKind::Break | StmtKind::Continue => {
+                // M191: solo dentro de un bucle de esta función, y solo en la espina de sentencias.
+                let kw = if matches!(stmt.kind, StmtKind::Break) { "break" } else { "continue" };
+                if self.loop_depth == 0 {
+                    return Err(self.err(stmt.line, stmt.col, format!("'{}' outside a loop", kw)));
+                }
+                if !self.break_ok {
+                    return Err(self.err(stmt.line, stmt.col, format!(
+                        "'{}' must be a statement of the loop body (not inside a call argument, an operator, a literal or an index)",
+                        kw
+                    )));
+                }
+                Ok(())
+            }
             StmtKind::Return { value } => {
                 let vt = match value {
                     // El retorno declarado es el tipo esperado (propaga a `None`, etc.).
@@ -1751,6 +1767,16 @@ impl Checker {
     /// propagan (`if`/`match`/bloque)—; el resto delega en `check_expr` (que lo
     /// ignora). El llamador compara igualmente el resultado con lo que necesita.
     pub(super) fn check_expr_expected(&mut self, expr: &Expr, expected: &Type) -> Result<Type, TypeError> {
+        let saved = self.break_ok;
+        if !is_block_form(expr) {
+            self.break_ok = false;
+        }
+        let r = self.check_expr_expected_inner(expr, expected);
+        self.break_ok = saved;
+        r
+    }
+
+    fn check_expr_expected_inner(&mut self, expr: &Expr, expected: &Type) -> Result<Type, TypeError> {
         // M9.3b: si se espera un `dyn Trait`, un valor **concreto** que implemente el trait
         // se **coerciona** al trait object. Las formas que propagan el tipo esperado
         // (`if`/`match`/`bloque`) NO se interceptan aquí: dejan que la coerción ocurra en
@@ -1771,11 +1797,23 @@ impl Checker {
             // acaban siendo el uint esperado; si no, se cae al chequeo normal (que da el error).
             if let ExprKind::Binary { op, left, right } = &expr.kind {
                 if is_width_preserving(*op) {
+                    // M192: el intento se hace sobre una COPIA de los sitios de literal: si no cuaja
+                    // (un lado no acaba siendo el uint esperado), los literales que sí se coercionaron
+                    // quedaban registrados y el lowering los casteaba a un ancho que el chequeo normal
+                    // nunca validó (ICE en runtime con `v >> (32 - n)`).
+                    let saved_sites = self.uint_literal_sites.clone();
                     let lt = self.check_expr_expected(left, expected)?;
-                    let rt = self.check_expr_expected(right, expected)?;
-                    if lt == *expected && rt == *expected {
+                    // La CUENTA de un desplazamiento es un conteo (`int`): no hereda el esperado.
+                    let rt = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                        self.check_expr(right)?
+                    } else {
+                        self.check_expr_expected(right, expected)?
+                    };
+                    let count_ok = matches!(op, BinaryOp::Shl | BinaryOp::Shr) && rt == Type::Int;
+                    if lt == *expected && (rt == *expected || count_ok) {
                         return Ok(expected.clone());
                     }
+                    self.uint_literal_sites = saved_sites;
                 }
             }
         }
@@ -1961,8 +1999,28 @@ impl Checker {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
+        // M191: la espina de sentencias solo atraviesa las formas-con-bloque; cualquier otra
+        // expresión (llamada, operador, literal, índice…) la cierra para lo que tenga dentro.
+        let saved = self.break_ok;
+        if !is_block_form(expr) {
+            self.break_ok = false;
+        }
+        let r = self.check_expr_inner(expr);
+        self.break_ok = saved;
+        r
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match &expr.kind {
-            ExprKind::Int(..) => Ok(Type::Int),
+            // M192: un literal con sufijo (`255u8`, `0xFFu32`) o amplio (`0xFFFFFFFFFFFFFFFF`, solo
+            // cabe en u64) es directamente `uN`, sin contexto: se registra como sitio uint.
+            ExprKind::Int(_, radix) => match radix.fixed_width() {
+                Some(w) => {
+                    self.uint_literal_sites.insert((expr.line, expr.col), w);
+                    Ok(Type::UInt(w))
+                }
+                None => Ok(Type::Int),
+            },
             ExprKind::Float(_) => Ok(Type::Float),
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
@@ -2138,8 +2196,12 @@ impl Checker {
                 // capturado sigue siendo error). Solo guardamos/restauramos el tipo
                 // de retorno, que cambia al de esta función.
                 let saved_ret = self.current_return.clone();
+                let saved_loop = (self.loop_depth, self.break_ok);
+                self.loop_depth = 0; // M191: un bucle exterior no es alcanzable desde aquí
+                self.break_ok = false;
                 let r = self.check_fn_body(&fe.params, &fe.return_type, &fe.body, fe.line, fe.col, "the anonymous function");
                 self.current_return = saved_ret;
+                (self.loop_depth, self.break_ok) = saved_loop;
                 r?;
 
                 Ok(Type::Fn(
@@ -2193,7 +2255,7 @@ impl Checker {
                     return Err(self.err(cond.line, cond.col, format!("the while condition must be bool, not {}", ct)));
                 }
                 // El valor del cuerpo se descarta en cada iteración; el while es unit.
-                self.check_block(body)?;
+                self.check_loop_body(body)?;
                 Ok(Type::Unit)
             }
 
@@ -2203,6 +2265,17 @@ impl Checker {
 
     /// Verifica un bloque en su propio ámbito y devuelve su tipo-valor (el de la
     /// expresión final, o unit si no hay).
+    /// El cuerpo de un `while`/`for` (M191): un nivel más de bucle y la espina de sentencias abierta.
+    pub(super) fn check_loop_body(&mut self, body: &Block) -> Result<Type, TypeError> {
+        let saved = self.break_ok;
+        self.loop_depth += 1;
+        self.break_ok = true;
+        let r = self.check_block(body);
+        self.loop_depth -= 1;
+        self.break_ok = saved;
+        r
+    }
+
     pub(super) fn check_block(&mut self, block: &Block) -> Result<Type, TypeError> {
         self.push_scope();
         for stmt in &block.statements {
@@ -2308,6 +2381,10 @@ impl Checker {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 // M28.3: bit a bit sobre enteros sin signo del mismo ancho → ese ancho.
                 (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::UInt(*a)),
+                // M192 (B2): la CUENTA de un desplazamiento es un conteo, no un valor del mismo
+                // dominio — `v << n` con `v: u32, n: int` no necesita `as u32` (cuenta fuera de
+                // rango: envolvente, como ya estaba definido).
+                (Type::UInt(a), Type::Int) if matches!(op, Shl | Shr) => Ok(Type::UInt(*a)),
                 _ => Err(self.err(line, col, format!(
                     "the operator '{}' requires int operands, not {} and {}",
                     bin_op_str(op), lt, rt
@@ -2348,10 +2425,17 @@ impl Checker {
     /// ese ancho (en el lowering se envuelve en un `as u{w}`) y devuelve `Some(UInt(w))`. Si no es
     /// un literal, `None` (sin coerción). Si es un literal fuera de rango, error.
     pub(super) fn coerce_uint_literal(&mut self, expr: &Expr, w: u8) -> Result<Option<Type>, TypeError> {
-        if let ExprKind::Int(n, _) = &expr.kind {
-            if !uint_literal_fits(*n, w) {
+        if let ExprKind::Int(n, radix) = &expr.kind {
+            // M192: un literal con sufijo ya tiene ancho; solo coerciona a ese mismo ancho.
+            if let Some(s) = radix.suffix
+                && s != w
+            {
                 return Err(self.err(expr.line, expr.col, format!(
-                    "the literal {} does not fit in u{}", n, w)));
+                    "the literal {} is u{} but u{} is expected", literal_text(*n, *radix), s, w)));
+            }
+            if (radix.wide && w < 64) || !uint_literal_fits(*n, w) {
+                return Err(self.err(expr.line, expr.col, format!(
+                    "the literal {} does not fit in u{}", literal_text(*n, *radix), w)));
             }
             self.uint_literal_sites.insert((expr.line, expr.col), w);
             return Ok(Some(Type::UInt(w)));

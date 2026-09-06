@@ -629,6 +629,10 @@ impl Transpiler {
                     _ => return Err("unsupported lvalue".into()),
                 }
             }
+            // M191: los bucles se emiten como `while`/`for`/`loop` de Rust sin closures por medio,
+            // así que `break`/`continue` van tal cual al bucle más interno.
+            StmtKind::Break => out.push_str("break;\n"),
+            StmtKind::Continue => out.push_str("continue;\n"),
             StmtKind::Return { value } => {
                 out.push_str("return");
                 if let Some(v) = value {
@@ -860,7 +864,8 @@ impl Transpiler {
     pub(super) fn emit_typed(&mut self, out: &mut String, e: &Expr, expected: &Type) -> Result<(), String> {
         let exp = normalize_type(expected);
         match (&e.kind, &exp) {
-            (ExprKind::Int(n, _), Type::UInt(w)) => write!(out, "{}u{}", n, w).unwrap(),
+            // M192: un literal amplio llega como sus 64 bits en i64 → se imprime como u64.
+            (ExprKind::Int(n, _), Type::UInt(w)) => write!(out, "{}u{}", *n as u64, w).unwrap(),
             (ExprKind::ArrayLit(elems), Type::Array(et)) => {
                 // Mismo izado que el ArrayLit de emit_expr (clase RefCell-en-args, IDEAS §64),
                 // preservando la emisión tipada de cada elemento.
@@ -1147,6 +1152,17 @@ impl Transpiler {
                     out.push_str(".borrow().clone(); __rt_v.extend(");
                     self.emit_expr(out, right)?;
                     out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__rt_v)) }");
+                } else if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                    && matches!(self.type_of(left)?, Type::UInt(_))
+                {
+                    // M192 (B2): desplazamiento de un sized con cuenta `int` o sized: envolvente
+                    // (la cuenta se toma módulo el ancho, como la VM) y sin exigir el mismo tipo.
+                    let m = if matches!(op, BinaryOp::Shl) { "wrapping_shl" } else { "wrapping_shr" };
+                    out.push('(');
+                    self.emit_expr(out, left)?;
+                    write!(out, ").{}((", m).unwrap();
+                    self.emit_expr(out, right)?;
+                    out.push_str(") as u32)");
                 } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                     && matches!(self.type_of(left)?, Type::UInt(_))
                 {
@@ -2105,6 +2121,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
             }
             target_reads(name, target, ks) && split_uses_expr(name, value, ks)
         }
+        StmtKind::Break | StmtKind::Continue => true, // sin expresiones: como `return;`
         StmtKind::Return { value } => value.as_ref().is_none_or(|v| split_uses_expr(name, v, ks)),
         StmtKind::Expr(e) => split_uses_expr(name, e, ks),
     }

@@ -20,7 +20,7 @@ import { setDiagnostics, lintGutter } from "@codemirror/lint";
 import { tags as t } from "@lezer/highlight";
 
 // --- El lenguaje: tokenizador por stream (las mismas clases del viejo overlay, ahora CM6) ---
-const KW = new Set("fn let var const if else while for in match return struct enum trait impl import from as pub dyn extern spawn self Self".split(" "));
+const KW = new Set("fn let var const if else while for in match return break continue struct enum trait impl import from as pub dyn extern spawn self Self".split(" "));
 const TY = new Set("int float bool string char bytes ptr unit Option Result Channel Map".split(" "));
 const LIT = new Set(["true", "false"]);
 

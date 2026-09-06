@@ -44,8 +44,12 @@ longitud en caracteres. **Ningún token cruza líneas.**
 - **Literales**:
   - *Entero*: dígitos decimales (`42`) o con **prefijo de base** (M118): `0x`/`0X` hexadecimal
     (`0x1F`), `0o`/`0O` octal (`0o755`), `0b`/`0B` binario (`0b1010`). Al menos un dígito tras el
-    prefijo (`0x` solo es error léxico). Debe caber en `int` (i64); si no, error léxico. Sin
-    separador `_` (diferido).
+    prefijo (`0x` solo es error léxico). **Sufijo** opcional `u8`/`u32`/`u64` pegado a los
+    dígitos (`255u8`, `0xFFu32`): el literal es de ese tipo sin contexto, y debe caber en él
+    (si no, error léxico). Sin sufijo, un literal que cabe en `int` (i64) es `int` (y se coerciona
+    al `u*` del contexto, §5); uno que **no cabe en `int` pero sí en `u64`** (`0xFFFFFFFFFFFFFFFF`)
+    es **amplio**: vale `u64` sin contexto. Más allá de `u64`, error léxico. Sin separador `_`
+    (diferido).
   - *Flotante*: siempre decimal (los prefijos de base son solo para enteros).
   - *Flotante*: `dígitos '.' dígitos` (`3.14`), con **exponente** opcional `e|E [+|-] dígitos`
     (`1e21`, `1.5e-3`, `2E+10`); un exponente hace el literal flotante aunque no lleve punto.
@@ -135,8 +139,12 @@ tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes' | 'ptr'
   tipo, igual que `Map`/`Channel`/`Task`, y **sombrea** cualquier struct/enum del usuario que se
   llame así).
 - **Enteros sin signo** `u8`/`u32`/`u64`: aritmética, comparación y bits **con wrapping** al
-  ancho (por diseño). Solo operan con su mismo ancho; la conversión es explícita con `as`. Un
-  **literal entero** adopta el ancho del contexto si cabe (fuera de rango = error de tipos).
+  ancho (por diseño). Solo operan con su mismo ancho, salvo la **cuenta de un desplazamiento**
+  (`<<`/`>>`), que puede ser `int` o el mismo ancho (es un conteo, no un valor del dominio; el
+  resultado es el tipo del operando izquierdo, y una cuenta fuera de rango envuelve). La
+  conversión es explícita con `as`. Un **literal entero** sin sufijo adopta el ancho del contexto
+  si cabe (fuera de rango = error de tipos); con sufijo ya tiene ancho (§3) y un contexto de otro
+  ancho es error.
 - **Arreglos `[T]`**, **`Map<K,V>`** (claves *hashables*: `int`, `string`, `char`, `bool`,
   `bytes` — `float` no), **structs** y **enums**: **semántica de referencia** (§8). Tuplas
   `(A, B, …)`: acceso posicional `t.0` y desestructuración; las posiciones son de **solo
@@ -213,6 +221,8 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | 'var' IDENT [ ':' tipo ] '=' expresion ';'
           | destino '=' expresion ';'
           | 'return' [ expresion ] ';'
+          | 'break' ';'
+          | 'continue' ';'
           | 'while' '(' expresion ')' bloque
           | 'for' patron_for 'in' iterable bloque
           | expresion ';'
@@ -236,6 +246,15 @@ iterable  = expresion [ '..' expresion ] ;
   bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
   también puede *caer* del bloque (retorno implícito: la expresión final sin `;`).
+- **`break;`** sale del `while`/`for` más interno y **`continue;`** salta a su siguiente
+  iteración (en un `for`, avanza el iterable). Son **sentencias** (no producen valor; el bucle
+  sigue valiendo unit) y solo son válidas **dentro del cuerpo de un bucle de la misma función**
+  (una función anónima corta el ámbito: `break` dentro de un `fn() { … }` dentro de un bucle es
+  error). Dentro del cuerpo pueden anidarse en `if`/`else`, brazos de `match`, bloques y valores
+  de `let`/asignación/`return` —la **espina de sentencias**—, pero **no** dentro de una
+  expresión que no sea forma-con-bloque (argumento de llamada, operando, elemento de literal,
+  índice): ahí es error de tipos (la expresión envolvente quedaría a medio evaluar). Ambas
+  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto).
 - **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
   que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
   ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente
@@ -356,8 +375,8 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
   Eq`, vía `igual` (no `==`). **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.
-- **Divergencia**: `return`, `panic(…)`, `exit(…)` y las ramas que terminan en ellos tipan como
-  "cede el tipo al resto".
+- **Divergencia**: `return`, `break`, `continue`, `panic(…)`, `exit(…)` y las ramas que
+  terminan en ellos tipan como "cede el tipo al resto".
 
 ## 8. Semántica de evaluación
 

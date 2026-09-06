@@ -47,6 +47,7 @@ pub(super) fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
                 lower_ufcs_expr(target, sites);
                 lower_ufcs_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_ufcs_expr(v, sites);
@@ -74,7 +75,7 @@ pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         _ => None,
     };
     if let Some(target) = target {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         if let ExprKind::Call { callee, mut args } = taken {
             let (cl, cc) = (callee.line, callee.col);
             if let ExprKind::Field { object, .. } = callee.kind {
@@ -186,6 +187,7 @@ pub(super) fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {
                 lower_uintlit_block(body, sites);
             }
             StmtKind::Assign { target, value } => { lower_uintlit_expr(target, sites); lower_uintlit_expr(value, sites); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { lower_uintlit_expr(v, sites); } }
             StmtKind::Expr(e) => lower_uintlit_expr(e, sites),
         }
@@ -200,7 +202,7 @@ pub(super) fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
     if let ExprKind::Int(..) = &expr.kind {
         if let Some(&w) = sites.get(&(expr.line, expr.col)) {
             let (l, c) = (expr.line, expr.col);
-            let inner = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+            let inner = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
             expr.kind = ExprKind::Cast {
                 expr: Box::new(Expr { kind: inner, line: l, col: c }),
                 ty: Type::UInt(w),
@@ -279,6 +281,7 @@ pub(super) fn lower_try_block(block: &mut Block, sites: &TryConvMap) {
                 lower_try_block(body, sites);
             }
             StmtKind::Assign { target, value } => { lower_try_expr(target, sites); lower_try_expr(value, sites); }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => { if let Some(v) = value { lower_try_expr(v, sites); } }
             StmtKind::Expr(e) => lower_try_expr(e, sites),
         }
@@ -297,7 +300,7 @@ pub(super) fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
     };
     if let Some(mangled) = conv {
         let (l, c) = (expr.line, expr.col);
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let inner = match taken {
             ExprKind::Try(inner) => *inner,
             _ => crate::ice!("the guard guarantees a Try"),
@@ -399,6 +402,7 @@ pub(super) fn lower_operators_block(block: &mut Block, sites: &SiteMap) {
                 lower_operators_expr(target, sites);
                 lower_operators_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_operators_expr(v, sites);
@@ -427,7 +431,7 @@ pub(super) fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
     };
     if let Some(target) = target {
         let (l, c) = (expr.line, expr.col);
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let args = match taken {
             ExprKind::Binary { left, right, .. } => vec![*left, *right],
             ExprKind::Unary { expr: inner, .. } => vec![*inner],
@@ -573,6 +577,7 @@ pub(super) fn lower_dict_calls_block(block: &mut Block, sites: &mut DictSites) {
                 lower_dict_calls_expr(target, sites);
                 lower_dict_calls_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_dict_calls_expr(v, sites);
@@ -755,6 +760,7 @@ pub(super) fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispat
                 lower_dyn_expr(target, coercions, dispatch, upcasts, tm, counter);
                 lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_dyn_expr(v, coercions, dispatch, upcasts, tm, counter);
@@ -843,7 +849,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
         _ => None,
     };
     if dispatch_method.is_some() {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let ExprKind::Call { callee, mut args } = taken else { crate::ice!("a dispatch site is a Call") };
         let ExprKind::Field { object, name } = callee.kind else { crate::ice!("the callee of a dispatch is a Field") };
         let tmp = format!("__dynrecv#{}", *counter);
@@ -872,7 +878,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
     // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
     if let Some((set, vtable)) = coercions.get(&(line, col)) {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
         let names = dyn_method_names(set, tm);
@@ -886,7 +892,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // campos del mayor. Necesita un temp porque el origen se referencia varias veces:
     // `{ let __dynup = <obj>; __dyn_S2 { data: __dynup.data, m: __dynup.m, … } }`.
     if let Some(target) = upcasts.get(&(line, col)) {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let source = Expr { kind: taken, line, col };
         let tmp = format!("__dynup#{}", *counter);
         *counter += 1;
@@ -945,6 +951,7 @@ fn lower_concat_block(block: &mut Block, sites: &std::collections::HashSet<(usiz
                 lower_concat_expr(target, sites);
                 lower_concat_expr(value, sites);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_concat_expr(v, sites);
@@ -1101,6 +1108,7 @@ fn lower_fusion_block(block: &mut Block, origin: &PreludeOrigin) {
                 lower_fusion_expr(target, origin);
                 lower_fusion_expr(value, origin);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     lower_fusion_expr(v, origin);

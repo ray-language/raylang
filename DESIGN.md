@@ -215,7 +215,13 @@ Ejemplo del estilo:
 let abs: int = if (x < 0) { -x } else { x };   // if como expresión
 ```
 
-- **Sin `break`/`continue` (decisión explícita, 30 jul 2026).** Nacieron como omisión del diseño
+- **`break`/`continue`: descartados el 30 jul 2026, REABIERTOS el 6 sep 2026 (M191, §183).** La
+  decisión original se conserva abajo tal cual porque explica el coste que se pagó al reabrir;
+  lo que la cambió fue un dato de uso real (el cliente RFB `ray-remote`): el rodeo con bandera
+  `var running = true` **no corta el cuerpo del bucle**, y eso produjo errores silenciosos en
+  tres bucles de red. Forma mínima: sentencias sin valor, solo dentro de `while`/`for` de la
+  misma función, y solo en la "espina de sentencias" del cuerpo (SPEC §5).
+- ~~**Sin `break`/`continue` (decisión explícita, 30 jul 2026).**~~ Nacieron como omisión del diseño
   mínimo de M1 y, al reevaluarlo, se **descartaron** en vez de añadirse: (1) `return` ya da la
   salida temprana — extraer el bucle a una función es el reemplazo canónico de `break` y produce
   código con mejor nombre; (2) el estilo idiomático (for/iteradores, `map`/`filter`/`fold`,
@@ -12173,6 +12179,85 @@ avise. Fue un bug real en el cliente (una bandera `live` que la fibra lectora nu
 Ahora está en negrita donde se habla de captura y donde se habla de fibras: entre fibras solo se
 comparten canales y handles. El aviso del compilador (closure de `spawn` que captura un struct
 mutado fuera) queda como idea L en el plan.
+
+## 183. M191 — `break` y `continue`, reabiertos en forma mínima (sep 2026)
+
+El 30 de julio se descartaron a conciencia (§0): `return` ya daba la salida temprana, el estilo
+idiomático (iteradores, `position`/`any`) cubría casi todo, y en un lenguaje orientado a
+expresiones añadirlos obligaba a decidir el tipo de `break`, tocar la divergencia del checker y
+portarlo a tres motores más el selfhost. El plan de `ray-remote` (IDEAS §86) los devolvió a la mesa
+con un dato que la decisión original no tenía: **el rodeo con bandera no corta el cuerpo del
+bucle**. `running = false` dentro de un `match` no impide que el resto de la vuelta se ejecute, y en
+un cliente con tres bucles de "lee hasta que se cierre" eso produjo errores reales y silenciosos. El
+usuario decidió reabrir; esto es la forma mínima.
+
+**Qué es "mínimo".** Sentencias, no expresiones: `break;` y `continue;` no producen valor y el bucle
+sigue valiendo unit. Sin etiquetas: salen del bucle más interno. Solo dentro de `while`/`for` de la
+misma función: una función anónima pone la profundidad de bucle a cero (un `break` en un
+`fn() { … }` dentro de un bucle es "outside a loop"). Y **divergen**: una rama que termina en
+`break`/`continue` cede su tipo al resto, que es lo que hace útil `Received.Closed => { break; }`
+como brazo de un `match` que produce el frame.
+
+**La restricción que no se ve: la espina de sentencias.** El compilador de la VM no rastrea la
+profundidad de la pila de operandos (nunca lo necesitó: cada construcción deja la pila como la
+encontró). Un `break` es un `Jump` al final del bucle, y el final del bucle espera la pila **como al
+entrar**. Eso se cumple en el cuerpo y en todo lo que anida por formas-con-bloque (`if`/`else`,
+brazos de `match` —el escrutinio vive en un local, no en la pila—, bloques, valores de `let`/
+asignación/`return`), pero no dentro de una expresión a medio evaluar: `print({ break; 1 })` dejaría
+el callee en la pila, `1 + { continue; }` un operando, `[{ break; 1 }]` un elemento. En vez de
+enseñar al compilador a contar temporales (una tabla de efectos por opcode, o un opcode de
+truncado con altura relativa), el checker **restringe** `break`/`continue` a la espina de sentencias:
+`check_expr` cierra la espina para todo lo que no sea forma-con-bloque y el cuerpo de un bucle la
+abre. El mensaje lo dice con la lista de sitios prohibidos. Es una restricción honesta —nadie
+escribe `f({ break; 1 })` a propósito— y deja la puerta abierta a levantarla si algún día hace falta.
+
+**Los motores.** VM: una pila de bucles abiertos por función (`FnScope::loops`) donde cada `break`
+y `continue` deja su `Jump(0)`; `continue` se parchea justo tras el `Pop` del valor del cuerpo (antes
+del paso del bucle: el incremento del `for` o el siguiente `next`), `break` tras el `Pop` de la
+condición de salida. Los cuatro bucles del compilador (`while`, `for` por rango, por colección y por
+`Iterator`) tienen la misma forma, así que son tres llamadas en cada uno. Intérprete: dos variantes
+más de `Flow` que el bucle consume y que el borde de una llamada declara inalcanzables. Nativo:
+`break;`/`continue;` de Rust tal cual — los bucles se emiten como `while`/`for`/`loop` sin closures
+por medio. Selfhost: espejo de los tres (sin `for`, que su subconjunto no tiene), con los mismos
+mensajes byte a byte; el propio selfhost no usa todavía `break` en su código (bootstrap
+conservador).
+
+**Lo que se conserva.** Los patrones del MANUAL §4 (extraer a función, iteradores, invertir la
+condición) siguen siendo el consejo por defecto; lo que cambia es que la bandera deja de ser el
+plan B, porque era el plan malo.
+
+## 184. M192 — lote B de `ray-remote`: literales, desplazamientos y `from` (sep 2026)
+
+Tres fricciones pequeñas del feedback, las tres del mismo sitio: escribir criptografía a mano.
+
+**Los literales que no cabían.** `let c: u64 = 0xFFFFFFFFFFFFFFFF` era "integer out of range": el
+lexer validaba contra `i64` antes de que nadie mirara el tipo del destino, y así las tablas de
+constantes de DES o SHA-512 no se podían copiar del estándar (el rodeo era `(hi << 32) | lo`). La
+decisión tiene dos partes. (1) El lexer lee el literal como `u64` y, si no cabe en `int`, lo marca
+**amplio**: se guarda como sus 64 bits en el `i64` del token y con sufijo `u64` implícito. Un literal
+amplio es `u64` sin contexto — como en Rust, donde un entero que solo cabe en `u64` no necesita
+anotación —, y un contexto `int` es error de tipos con el mensaje normal. (2) **Sufijos** `u8`/
+`u32`/`u64` pegados a los dígitos, para el caso sin contexto (`0xFFu32`). Se representa en el token
+sin cambiar la aridad de `Int(i64, Radix)`: `Radix` pasa de enum a `{ base, suffix }` con consts
+`DEC`/`HEX`/…, así que los ~40 sitios que casan `Int(n, radix)` no cambian. Las conversiones a `u64`
+de los motores ya eran bit a bit (`n as u64`), luego un literal amplio llega intacto; el transpilador
+y el formateador lo imprimen como `u64`.
+
+**La cuenta del desplazamiento.** `v << n` con `v: u32, n: int` exigía `as u32`. El checker acepta
+`int` como cuenta (el resultado es el tipo del operando izquierdo; fuera de rango envuelve, como ya
+estaba definido), la VM y el intérprete ganan un brazo por operador, y el nativo emite
+`wrapping_shl((n) as u32)` — que además hace explícita la semántica envolvente que antes dependía
+del modo de compilación de Rust. Salió un bug latente: `check_expr_expected` propagaba el tipo
+esperado a los DOS operandos de un binario "conservador de ancho", y si el derecho no cuajaba dejaba
+registrado el literal del izquierdo como coercionado; el chequeo normal rechazaba después el
+programa, así que nunca llegaba al runtime… hasta que la regla nueva lo dejó pasar y `v >> (32 - n)`
+produjo un ICE. Ahora la cuenta de un shift no hereda el esperado, y el intento fallido restaura
+los sitios.
+
+**`from` contextual.** Solo significa algo al inicio de un ítem (`from M import x;`); reservarla en
+todas partes impedía `fn slice(bits, from, to)`. El lexer la produce como identificador y el parser
+la reconoce por nombre en posición de ítem (y tras `pub`). Como un ítem no puede empezar por un
+identificador, no hay ambigüedad. Se retira el mensaje de M188 (era el apaño hasta este hito).
 
 ## 185. M193 — `std/inflate` incremental: un stream que dura toda la sesión (sep 2026)
 

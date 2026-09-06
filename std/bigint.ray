@@ -151,6 +151,7 @@ pub fn shl(a: bytes, n: int) -> Result<bytes, string> {
     call("shl", a, from_int(n), b"")
 }
 
+/// `a >> n`.
 pub fn shr(a: bytes, n: int) -> Result<bytes, string> {
     call("shr", a, from_int(n), b"")
 }
@@ -165,6 +166,7 @@ pub fn cmp(a: bytes, b: bytes) -> int {
     }
 }
 
+/// `true` if the magnitude is zero (`b""` or all-zero bytes).
 pub fn is_zero(a: bytes) -> bool {
     trim(a).len() == 0
 }

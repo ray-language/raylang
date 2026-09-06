@@ -218,9 +218,16 @@ pub(super) fn literal_text(n: i64, radix: crate::token::Radix) -> String {
     }
 }
 
+/// ¿Es `e` una forma-con-bloque (`if`/`while`/`match`/bloque)? Son las únicas expresiones que
+/// dejan pasar la "espina de sentencias" de un bucle a lo que contienen (M191).
+pub(super) fn is_block_form(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Match { .. } | ExprKind::Block(_))
+}
+
 pub(super) fn stmt_diverges(stmt: &Stmt) -> bool {
     match &stmt.kind {
-        StmtKind::Return { .. } => true,
+        // M191: `break`/`continue` abandonan el bloque igual que `return` (ceden el tipo).
+        StmtKind::Return { .. } | StmtKind::Break | StmtKind::Continue => true,
         StmtKind::Expr(e) => expr_diverges(e),
         _ => false,
     }

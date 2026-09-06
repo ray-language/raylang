@@ -26,6 +26,9 @@ pub enum TokKind {
     Var,
     Fn,
     Return,
+    // M191: salida de bucle.
+    Break,
+    Continue,
     If,
     Else,
     While,
@@ -261,6 +264,10 @@ fn classify(text: string) -> TokKind {
         TokKind.Fn
     } else if (text == "return") {
         TokKind.Return
+    } else if (text == "break") {
+        TokKind.Break
+    } else if (text == "continue") {
+        TokKind.Continue
     } else if (text == "if") {
         TokKind.If
     } else if (text == "else") {

@@ -52,6 +52,8 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::Var => "Var".into(),
         TokenKind::Fn => "Fn".into(),
         TokenKind::Return => "Return".into(),
+        TokenKind::Break => "Break".into(),
+        TokenKind::Continue => "Continue".into(),
         TokenKind::If => "If".into(),
         TokenKind::Else => "Else".into(),
         TokenKind::While => "While".into(),

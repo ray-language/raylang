@@ -629,6 +629,10 @@ impl Transpiler {
                     _ => return Err("unsupported lvalue".into()),
                 }
             }
+            // M191: los bucles se emiten como `while`/`for`/`loop` de Rust sin closures por medio,
+            // así que `break`/`continue` van tal cual al bucle más interno.
+            StmtKind::Break => out.push_str("break;\n"),
+            StmtKind::Continue => out.push_str("continue;\n"),
             StmtKind::Return { value } => {
                 out.push_str("return");
                 if let Some(v) = value {
@@ -2117,6 +2121,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
             }
             target_reads(name, target, ks) && split_uses_expr(name, value, ks)
         }
+        StmtKind::Break | StmtKind::Continue => true, // sin expresiones: como `return;`
         StmtKind::Return { value } => value.as_ref().is_none_or(|v| split_uses_expr(name, v, ks)),
         StmtKind::Expr(e) => split_uses_expr(name, e, ks),
     }

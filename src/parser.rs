@@ -828,6 +828,15 @@ impl Parser {
                 statements.push(self.return_stmt()?);
                 continue;
             }
+            // M191: `break;` / `continue;` — sentencias sin valor; su validez la decide el checker.
+            if self.check(&TokenKind::Break) || self.check(&TokenKind::Continue) {
+                let kw = self.advance();
+                let kind = if kw.kind == TokenKind::Break { StmtKind::Break } else { StmtKind::Continue };
+                let what = if kind == StmtKind::Break { "break" } else { "continue" };
+                self.expect(&TokenKind::Semicolon, &format!("';' after '{}'", what))?;
+                statements.push(Stmt { kind, line: kw.line, col: kw.col });
+                continue;
+            }
             if self.check(&TokenKind::For) {
                 statements.push(self.for_stmt()?);
                 continue;
@@ -1986,6 +1995,20 @@ mod tests {
     }
 
     #[test]
+    fn break_and_continue_parse_as_statements() {
+        // M191: `break;` / `continue;` son sentencias sin valor; sin `;` es error de sintaxis.
+        let prog = parse_prog("fn main() -> int { while (true) { break; continue; } 0 }");
+        let body = &prog.functions[0].body;
+        let StmtKind::Expr(w) = &body.statements[0].kind else { panic!("while como sentencia") };
+        let ExprKind::While { body: lb, .. } = &w.kind else { panic!("while") };
+        assert!(matches!(lb.statements[0].kind, StmtKind::Break));
+        assert!(matches!(lb.statements[1].kind, StmtKind::Continue));
+        let tokens = crate::lexer::lex("fn main() { while (true) { break } }").expect("lex ok");
+        let e = parse(tokens).expect_err("break sin ;");
+        assert_eq!(e.msg, "expected ';' after 'break'");
+    }
+
+    #[test]
     fn from_is_contextual_and_remains_a_valid_identifier() {
         // M192 (B3): `from` solo es palabra clave al inicio de un ítem; como parámetro o variable es
         // un identificador normal.
@@ -2272,6 +2295,8 @@ mod tests {
                 Some(v) => format!("return {}", sx(v)),
                 None => "return".to_string(),
             },
+            StmtKind::Break => "break".to_string(),
+            StmtKind::Continue => "continue".to_string(),
             StmtKind::Expr(e) => sx(e),
         }
     }

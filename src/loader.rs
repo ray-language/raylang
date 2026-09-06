@@ -494,6 +494,7 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
             shift_expr(target, delta);
             shift_expr(value, delta);
         }
+        StmtKind::Break | StmtKind::Continue => {}
         StmtKind::Return { value } => {
             if let Some(v) = value {
                 shift_expr(v, delta);
@@ -1159,6 +1160,7 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(target, src, module)?;
                 self.resolve_expr(value, src, module)?;
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     self.resolve_expr(v, src, module)?;
@@ -1498,6 +1500,7 @@ impl<'a> TypeRewriter<'a> {
                 self.rewrite_expr(target);
                 self.rewrite_expr(value);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     self.rewrite_expr(v);

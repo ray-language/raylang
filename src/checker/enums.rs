@@ -30,6 +30,7 @@ pub(super) fn resolve_block(block: &mut Block, enums: &HashSet<String>) {
                 resolve_expr(target, enums);
                 resolve_expr(value, enums);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     resolve_expr(v, enums);

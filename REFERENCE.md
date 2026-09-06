@@ -32,6 +32,7 @@ Reservadas (no pueden usarse como identificadores):
 | Grupo | Palabras |
 |---|---|
 | Declaraciones | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` |
+| Control | `if` `else` `while` `for` `in` `match` `return` `break` `continue` |
 | Control | `if` `else` `while` `for` `in` `return` `match` |
 | Módulos | `import` `pub` (`from` es **contextual**: solo al inicio de un ítem, `from M import x;`) |
 | Valores/tipos | `true` `false` `dyn` `as` `self` `Self` |

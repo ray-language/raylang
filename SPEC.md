@@ -221,6 +221,8 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | 'var' IDENT [ ':' tipo ] '=' expresion ';'
           | destino '=' expresion ';'
           | 'return' [ expresion ] ';'
+          | 'break' ';'
+          | 'continue' ';'
           | 'while' '(' expresion ')' bloque
           | 'for' patron_for 'in' iterable bloque
           | expresion ';'
@@ -244,6 +246,15 @@ iterable  = expresion [ '..' expresion ] ;
   bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
   también puede *caer* del bloque (retorno implícito: la expresión final sin `;`).
+- **`break;`** sale del `while`/`for` más interno y **`continue;`** salta a su siguiente
+  iteración (en un `for`, avanza el iterable). Son **sentencias** (no producen valor; el bucle
+  sigue valiendo unit) y solo son válidas **dentro del cuerpo de un bucle de la misma función**
+  (una función anónima corta el ámbito: `break` dentro de un `fn() { … }` dentro de un bucle es
+  error). Dentro del cuerpo pueden anidarse en `if`/`else`, brazos de `match`, bloques y valores
+  de `let`/asignación/`return` —la **espina de sentencias**—, pero **no** dentro de una
+  expresión que no sea forma-con-bloque (argumento de llamada, operando, elemento de literal,
+  índice): ahí es error de tipos (la expresión envolvente quedaría a medio evaluar). Ambas
+  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto).
 - **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
   que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
   ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente
@@ -364,8 +375,8 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
   Eq`, vía `igual` (no `==`). **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.
-- **Divergencia**: `return`, `panic(…)`, `exit(…)` y las ramas que terminan en ellos tipan como
-  "cede el tipo al resto".
+- **Divergencia**: `return`, `break`, `continue`, `panic(…)`, `exit(…)` y las ramas que
+  terminan en ellos tipan como "cede el tipo al resto".
 
 ## 8. Semántica de evaluación
 

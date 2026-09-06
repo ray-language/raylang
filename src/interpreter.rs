@@ -43,6 +43,10 @@ use crate::runtime::{
 /// pero se tratan distinto en el borde de la función.
 enum Flow {
     Return(Value),
+    /// M191: `break` / `continue` propagándose hasta el bucle más interno (el checker garantiza
+    /// que hay uno en la misma función, así que nunca llegan al borde de una llamada).
+    Break,
+    Continue,
     Error(RuntimeError),
     /// Una **llamada en cola** (M13.3b): en vez de recurrir, se propaga hasta `call_body`, que la
     /// ejecuta en un **bucle** (trampolín) reutilizando el marco lógico → recursión de cola en O(1)
@@ -166,6 +170,7 @@ impl<'a> Interpreter<'a> {
         match self.call_function(main, Vec::new(), 0, 0) {
             Ok(v) => Ok(v),
             Err(Flow::Error(e)) => Err(e),
+            Err(Flow::Break) | Err(Flow::Continue) => unreachable!("the checker keeps break/continue inside a loop"),
             // Un 'return' nunca debería escapar de call_function, pero por si acaso.
             Err(Flow::Return(v)) => Ok(v),
             // Una llamada en cola siempre la consume el trampolín de call_body; no escapa.
@@ -254,6 +259,7 @@ impl<'a> Interpreter<'a> {
             match self.eval_tail_block(cur_body) {
                 Ok(v) => break Ok(v),                          // el cuerpo cayó a su valor final
                 Err(Flow::Return(v)) => break Ok(v),           // un 'return' temprano: ese es el valor
+                Err(Flow::Break) | Err(Flow::Continue) => unreachable!("the checker keeps break/continue inside a loop"),
                 // Un error real se propaga; el `call_body` más interno compone la traza
                 // (M79) ANTES de despilar (la pila aún incluye este marco). El chequeo
                 // `is_empty` evita que los envolventes la re-rellenen al desenrollar.
@@ -499,7 +505,7 @@ impl<'a> Interpreter<'a> {
                             self.define(name, Value::Int(i));
                             let r = self.exec_block(body);
                             self.scopes.pop();
-                            r?;
+                            if loop_body(r)? { break; }
                             i += 1;
                         }
                     }
@@ -515,7 +521,7 @@ impl<'a> Interpreter<'a> {
                                     self.define(name, item);
                                     let r = self.exec_block(body);
                                     self.scopes.pop();
-                                    r?;
+                                    if loop_body(r)? { break; }
                                 }
                             }
                             Value::Str(s) => {
@@ -525,7 +531,7 @@ impl<'a> Interpreter<'a> {
                                     self.define(name, Value::Char(c));
                                     let r = self.exec_block(body);
                                     self.scopes.pop();
-                                    r?;
+                                    if loop_body(r)? { break; }
                                 }
                             }
                             Value::Map(rc) => {
@@ -543,7 +549,7 @@ impl<'a> Interpreter<'a> {
                                     if let Some(n) = &vn { self.define(n, val); }
                                     let r = self.exec_block(body);
                                     self.scopes.pop();
-                                    r?;
+                                    if loop_body(r)? { break; }
                                 }
                             }
                             _ => unreachable!("the checker guarantees array/string/Map"),
@@ -583,7 +589,7 @@ impl<'a> Interpreter<'a> {
                             }
                             let r = self.exec_block(body);
                             self.scopes.pop();
-                            r?;
+                            if loop_body(r)? { break; }
                         }
                     }
                 }
@@ -611,6 +617,8 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(())
             }
+            StmtKind::Break => Err(Flow::Break),
+            StmtKind::Continue => Err(Flow::Continue),
             StmtKind::Return { value } => {
                 // M13.3b: el valor de un `return` está en posición de cola → `eval_tail`. Si es una
                 // llamada en cola, propaga `Flow::TailCall` (el trampolín la ejecuta); si es un valor
@@ -829,7 +837,10 @@ impl<'a> Interpreter<'a> {
                 while self.eval_bool(cond)? {
                     // Ejecutar el cuerpo; su valor se descarta, pero un 'return' o un
                     // error dentro del bucle se propaga (el '?' sale de la función).
-                    self.exec_block(body)?;
+                    // M191: `break` corta el bucle; `continue` pasa a la siguiente vuelta.
+                    if loop_body(self.exec_block(body))? {
+                        break;
+                    }
                 }
                 Ok(Value::Unit)
             }
@@ -2815,6 +2826,17 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
 // =====================================================================
 // Tests
 // =====================================================================
+
+/// M191: el desenlace de una vuelta de bucle. `Ok(true)` = `break` (salir), `Ok(false)` = vuelta
+/// normal o `continue`; cualquier otro `Flow` (return, error, tail call) se propaga.
+fn loop_body(r: Result<Value, Flow>) -> Result<bool, Flow> {
+    match r {
+        Ok(_) | Err(Flow::Continue) => Ok(false),
+        Err(Flow::Break) => Ok(true),
+        Err(other) => Err(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2850,6 +2872,7 @@ mod tests {
             Err(Flow::Return(v)) => v,
             Err(Flow::Error(e)) => panic!("error de ejecución inesperado: {}", e),
             Err(Flow::TailCall { .. }) => unreachable!("a tail call does not escape call_body"),
+            Err(Flow::Break) | Err(Flow::Continue) => unreachable!("the checker keeps break/continue inside a loop"),
         }
     }
 

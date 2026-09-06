@@ -74,6 +74,9 @@ pub enum TokenKind {
     Var,
     Fn,
     Return,
+    /// M191: `break` / `continue` — sentencias de salida de bucle (SPEC §5).
+    Break,
+    Continue,
     If,
     Else,
     While,

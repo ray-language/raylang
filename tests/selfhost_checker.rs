@@ -106,6 +106,11 @@ fn type_errors() {
     compare("fn main() -> bool { 1 < true }", "sce_order.ray");
     compare("fn main() -> int { -true }", "sce_neg.ray");
     compare("fn main() -> int { if (!1) { 0 } else { 1 } }", "sce_not.ray");
+    // M191: break/continue — fuera de un bucle, y fuera de la espina de sentencias.
+    compare("fn main() -> int { break; 0 }", "sce_break_outside.ray");
+    compare("fn main() -> int { while (true) { let f = fn() { continue; }; } 0 }", "sce_continue_closure.ray");
+    compare("fn main() -> int { while (true) { print({ break; 1 }); } 0 }", "sce_break_arg.ray");
+    compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; if (i == 2) { continue; } } i }", "sce_break_ok.ray");
     // M188: la pista hacia `~` sobre enteros, byte-idéntica (el selfhost no parsea `as`: caso int).
     compare("fn main() -> int { let y = !3; 0 }", "sce_not_int.ray");
     // Variables.

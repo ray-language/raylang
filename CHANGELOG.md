@@ -17,6 +17,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   parámetro o variable es un identificador (`fn slice(bits, from, to)`). Sustituye el mensaje de
   M188.
 
+- **`break` y `continue`** (M191, DESIGN §183, SPEC §5; feedback de `ray-remote`, decisión del
+  usuario): sentencias sin valor que salen del `while`/`for` más interno o pasan a su siguiente
+  iteración. Válidas solo dentro de un bucle de la misma función (una función anónima corta el
+  ámbito) y en la espina de sentencias del cuerpo (ramas de `if`, brazos de `match`, bloques,
+  valores de `let`/asignación/`return`); dentro de un argumento, operando, literal o índice es
+  error de tipos con mensaje propio. Divergen (`Option.None => { break; }` cede el tipo). Los tres
+  motores, el selfhost, `ray fmt`, el LSP y los editores. El MANUAL §4 pasa de "Salir temprano sin
+  `break`" a "Salir temprano" y conserva los patrones (extraer a función, iteradores) como consejo.
 - **Cerrar un canal acotado con un emisor bloqueado ya no es error: el emisor despierta y su
   `send` falla** (M190, DESIGN §182; feedback de `ray-remote`). Antes `close` reventaba con "close
   on a channel with a blocked sender", y "acotado" y "se cierra para terminar" eran incompatibles.

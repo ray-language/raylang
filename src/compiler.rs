@@ -151,6 +151,13 @@ struct Local {
 }
 
 /// Estado de compilación de **una función**: su chunk, sus locales y sus upvalues.
+/// M191: los saltos pendientes de un bucle abierto (ver `FnScope::loops`).
+#[derive(Default)]
+struct LoopCtx {
+    breaks: Vec<usize>,
+    continues: Vec<usize>,
+}
+
 struct FnScope {
     chunk: Chunk,
     locals: Vec<Local>,
@@ -164,6 +171,9 @@ struct FnScope {
     /// `captured_slots[s] == true` si el slot `s` es capturado por una closure
     /// anidada (debe boxearse). Crece a demanda; se rellena hasta `max_slots`.
     captured_slots: Vec<bool>,
+    /// M191: pila de bucles abiertos de ESTA función; cada `break`/`continue` deja su `Jump(0)`
+    /// aquí y el bucle lo parchea al cerrarse (`end_loop`) o al llegar al paso (`continue_here`).
+    loops: Vec<LoopCtx>,
 }
 
 impl FnScope {
@@ -176,6 +186,7 @@ impl FnScope {
             scope_depth: 0,
             upvalues: Vec::new(),
             captured_slots: Vec::new(),
+            loops: Vec::new(),
         }
     }
 }
@@ -400,8 +411,10 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::Less, line, col);
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col);
+                self.begin_loop();
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col);
+                self.continue_here();
                 // i = i + 1
                 self.emit(OpCode::GetLocal(i_slot), line, col);
                 self.emit_int(1, line, col);
@@ -410,6 +423,7 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::Jump(loop_start), line, col);
                 self.patch_jump(exit);
                 self.emit(OpCode::Pop, line, col);
+                self.end_loop();
                 // MM4: el kernel salta AQUÍ (tras el Pop del bool de la guarda) cuando corre.
                 if let Some(at) = dot_at {
                     let after = self.cur().chunk.code.len();
@@ -505,11 +519,14 @@ impl<'a> Compiler<'a> {
                         self.emit(OpCode::InitLocal(*s), line, col);
                     }
                 }
+                self.begin_loop();
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
+                self.continue_here();
                 self.emit(OpCode::Jump(loop_start), line, col);
                 self.patch_jump(exit);
                 self.emit(OpCode::Pop, line, col); // descartar el bool false
+                self.end_loop();
             }
         }
         Ok(())
@@ -584,8 +601,10 @@ impl<'a> Compiler<'a> {
         let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
         self.emit(OpCode::Pop, line, col);
         bind(self, idx_slot); // liga la(s) variable(s) de la iteración
+        self.begin_loop();
         self.emit_block(body)?;
         self.emit(OpCode::Pop, line, col);
+        self.continue_here();
         self.emit(OpCode::GetLocal(idx_slot), line, col);
         self.emit_int(1, line, col);
         self.emit(OpCode::Add, line, col);
@@ -593,6 +612,7 @@ impl<'a> Compiler<'a> {
         self.emit(OpCode::Jump(loop_start), line, col);
         self.patch_jump(exit);
         self.emit(OpCode::Pop, line, col);
+        self.end_loop();
         Ok(())
     }
 
@@ -608,6 +628,30 @@ impl<'a> Compiler<'a> {
     }
 
     /// Parchea un salto previamente emitido para que apunte al final actual.
+    /// M191: abre un bucle (antes de emitir su cuerpo).
+    fn begin_loop(&mut self) {
+        self.cur().loops.push(LoopCtx::default());
+    }
+
+    /// M191: el punto al que salta `continue` — justo tras el `Pop` del valor del cuerpo, antes
+    /// del paso del bucle (incremento / siguiente `next`) y del salto al inicio.
+    fn continue_here(&mut self) {
+        let jumps = std::mem::take(&mut self.cur().loops.last_mut().expect("loop open").continues);
+        for j in jumps {
+            self.patch_jump(j);
+        }
+    }
+
+    /// M191: cierra el bucle en el punto al que salta `break` — tras el `Pop` de la condición
+    /// de salida, con la pila como al entrar.
+    fn end_loop(&mut self) {
+        let ctx = self.cur().loops.pop().expect("loop open");
+        for j in ctx.breaks {
+            self.patch_jump(j);
+        }
+        debug_assert!(ctx.continues.is_empty(), "continue_here must run before end_loop");
+    }
+
     fn patch_jump(&mut self, at: usize) {
         let s = self.cur();
         let target = s.chunk.code.len();
@@ -845,6 +889,17 @@ impl<'a> Compiler<'a> {
                 }
                 self.emit(OpCode::Return, line, col);
             }
+            // M191: un salto con destino pendiente; el bucle lo parchea. La pila de operandos
+            // está limpia aquí (el checker solo admite break/continue en la espina de sentencias:
+            // cond/escrutinio ya consumidos, locales en el register file), así que basta el Jump.
+            StmtKind::Break => {
+                let j = self.emit(OpCode::Jump(0), line, col);
+                self.cur().loops.last_mut().expect("the checker keeps break inside a loop").breaks.push(j);
+            }
+            StmtKind::Continue => {
+                let j = self.emit(OpCode::Jump(0), line, col);
+                self.cur().loops.last_mut().expect("the checker keeps continue inside a loop").continues.push(j);
+            }
             StmtKind::Expr(e) => {
                 self.emit_expr(e)?;
                 self.emit(OpCode::Pop, line, col); // su valor se descarta
@@ -997,11 +1052,14 @@ impl<'a> Compiler<'a> {
                 self.emit_expr(cond)?;
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col); // cond true → descartarla
+                self.begin_loop();
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
+                self.continue_here();
                 self.emit(OpCode::Jump(loop_start), line, col); // salto hacia atrás
                 self.patch_jump(exit);
                 self.emit(OpCode::Pop, line, col); // cond false → descartarla
+                self.end_loop();
                 self.emit(OpCode::Unit, line, col); // el while vale unit
             }
 

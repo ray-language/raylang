@@ -1,0 +1,648 @@
+// std/crypto/aes — AES-128/192/256 (FIPS-197) en modos ECB y CBC, en raylang puro (M194, legado).
+//
+// LEGADO en el sentido de "primitiva sin autenticar": ECB no oculta patrones (dos bloques iguales
+// dan el mismo criptograma) y CBC no autentica. Este módulo existe para HABLAR CON PROTOCOLOS QUE
+// LO EXIGEN (la autenticación de Apple Remote Desktop cifra el bloque de credenciales con AES-128
+// en ECB); para cifrar algo nuevo, `std/crypto.chacha20poly1305_seal`. Portado del cliente RFB
+// `ray-remote` (cifrado) y completado con el descifrado, CBC y las claves de 192/256 bits; vectores
+// de FIPS-197 y NIST SP 800-38A en `tests/crypto_legacy_cli.rs`. Sin relleno: el llamador trae
+// bloques completos (PKCS#7 es dos líneas y depende del protocolo).
+
+fn nb() -> int { 4 }  // columnas del estado
+
+// Rondas según la longitud de clave (16/24/32 octetos → 10/12/14).
+fn rounds_for(key_len: int) -> int {
+    if (key_len == 16) { 10 } else if (key_len == 24) { 12 } else { 14 }
+}
+
+fn check_key(key: bytes) -> Result<int, string> {
+    if (key.len() != 16 && key.len() != 24 && key.len() != 32) {
+        return Result.Err("aes: the key must be 16, 24 or 32 bytes, got " + to_string(key.len()));
+    }
+    Result.Ok(0)
+}
+
+/// Encrypts one 16-byte block with `key` (16, 24 or 32 bytes).
+pub fn encrypt_block(key: bytes, block: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (block.len() != 16) {
+        return Result.Err("aes: the block must be 16 bytes");
+    }
+    let rk = expand_key(key);
+    var st = to_state(block, 0);
+    encrypt_state(st, rk, rounds_for(key.len()));
+    Result.Ok(bytes_of(st))
+}
+
+/// Decrypts one 16-byte block with `key` (16, 24 or 32 bytes).
+pub fn decrypt_block(key: bytes, block: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (block.len() != 16) {
+        return Result.Err("aes: the block must be 16 bytes");
+    }
+    let rk = expand_key(key);
+    var st = to_state(block, 0);
+    decrypt_state(st, rk, rounds_for(key.len()));
+    Result.Ok(bytes_of(st))
+}
+
+/// Encrypts `plaintext` in ECB mode (each 16-byte block independently; no padding — the input
+/// must be a whole number of blocks). ECB leaks patterns: only for protocols that mandate it.
+pub fn encrypt_ecb(key: bytes, plaintext: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (plaintext.len() % 16 != 0) {
+        return Result.Err("aes: ECB needs a whole number of 16-byte blocks");
+    }
+    let rk = expand_key(key);
+    let nr = rounds_for(key.len());
+    var out: [int] = [];
+    var off = 0;
+    while (off < plaintext.len()) {
+        var st = to_state(plaintext, off);
+        encrypt_state(st, rk, nr);
+        append(out, st);
+        off = off + 16;
+    }
+    Result.Ok(bytes_of(out))
+}
+
+/// Decrypts `ciphertext` in ECB mode (whole 16-byte blocks, no padding).
+pub fn decrypt_ecb(key: bytes, ciphertext: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (ciphertext.len() % 16 != 0) {
+        return Result.Err("aes: ECB needs a whole number of 16-byte blocks");
+    }
+    let rk = expand_key(key);
+    let nr = rounds_for(key.len());
+    var out: [int] = [];
+    var off = 0;
+    while (off < ciphertext.len()) {
+        var st = to_state(ciphertext, off);
+        decrypt_state(st, rk, nr);
+        append(out, st);
+        off = off + 16;
+    }
+    Result.Ok(bytes_of(out))
+}
+
+/// Encrypts `plaintext` in CBC mode with a 16-byte `iv` (whole blocks, no padding, no
+/// authentication).
+pub fn encrypt_cbc(key: bytes, iv: bytes, plaintext: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (iv.len() != 16) {
+        return Result.Err("aes: the IV must be 16 bytes");
+    }
+    if (plaintext.len() % 16 != 0) {
+        return Result.Err("aes: CBC needs a whole number of 16-byte blocks");
+    }
+    let rk = expand_key(key);
+    let nr = rounds_for(key.len());
+    var prev = to_state(iv, 0);
+    var out: [int] = [];
+    var off = 0;
+    while (off < plaintext.len()) {
+        var st = to_state(plaintext, off);
+        var i = 0;
+        while (i < 16) {
+            st[i] = st[i] ^ prev[i];
+            i = i + 1;
+        }
+        encrypt_state(st, rk, nr);
+        append(out, st);
+        prev = st;
+        off = off + 16;
+    }
+    Result.Ok(bytes_of(out))
+}
+
+/// Decrypts `ciphertext` in CBC mode with a 16-byte `iv` (whole blocks, no padding).
+pub fn decrypt_cbc(key: bytes, iv: bytes, ciphertext: bytes) -> Result<bytes, string> {
+    check_key(key)?;
+    if (iv.len() != 16) {
+        return Result.Err("aes: the IV must be 16 bytes");
+    }
+    if (ciphertext.len() % 16 != 0) {
+        return Result.Err("aes: CBC needs a whole number of 16-byte blocks");
+    }
+    let rk = expand_key(key);
+    let nr = rounds_for(key.len());
+    var prev = to_state(iv, 0);
+    var out: [int] = [];
+    var off = 0;
+    while (off < ciphertext.len()) {
+        let cblock = to_state(ciphertext, off);
+        var st = to_state(ciphertext, off);
+        decrypt_state(st, rk, nr);
+        var i = 0;
+        while (i < 16) {
+            st[i] = st[i] ^ prev[i];
+            i = i + 1;
+        }
+        append(out, st);
+        prev = cblock;
+        off = off + 16;
+    }
+    Result.Ok(bytes_of(out))
+}
+
+fn to_state(data: bytes, off: int) -> [int] {
+    var st: [int] = [];
+    var i = 0;
+    while (i < 16) {
+        st.push(data[off + i]);
+        i = i + 1;
+    }
+    st
+}
+
+fn append(out: [int], st: [int]) {
+    var i = 0;
+    while (i < 16) {
+        out.push(st[i]);
+        i = i + 1;
+    }
+}
+
+// Cifra UN bloque (estado de 16 octetos, columna a columna) en el sitio con las claves de ronda.
+fn encrypt_state(state: [int], rk: [int], nr: int) {
+    add_round_key(state, rk, 0);
+    var round = 1;
+    while (round < nr) {
+        sub_bytes(state);
+        shift_rows(state);
+        mix_columns(state);
+        add_round_key(state, rk, round);
+        round = round + 1;
+    }
+    // La última ronda no mezcla columnas.
+    sub_bytes(state);
+    shift_rows(state);
+    add_round_key(state, rk, nr);
+}
+
+// Descifra UN bloque en el sitio: las transformaciones inversas en orden inverso (FIPS-197 §5.3).
+fn decrypt_state(state: [int], rk: [int], nr: int) {
+    let inv = inv_sbox_table();
+    add_round_key(state, rk, nr);
+    var round = nr - 1;
+    while (round >= 1) {
+        inv_shift_rows(state);
+        inv_sub_bytes(state, inv);
+        add_round_key(state, rk, round);
+        inv_mix_columns(state);
+        round = round - 1;
+    }
+    inv_shift_rows(state);
+    inv_sub_bytes(state, inv);
+    add_round_key(state, rk, 0);
+}
+
+// Las claves de ronda ((nr + 1) × 16 octetos) a partir de la clave de 128/192/256 bits (FIPS-197 §5.2).
+fn expand_key(key: bytes) -> [int] {
+    let sbox = sbox_table();
+    let nk = key.len() / 4;
+    let nr = rounds_for(key.len());
+    var w: [int] = [];
+    var i = 0;
+    while (i < key.len()) {
+        w.push(key[i]);
+        i = i + 1;
+    }
+    var rcon = 1;
+    var word = nk;
+    let total = nb() * (nr + 1);
+    while (word < total) {
+        // Los cuatro octetos del word anterior.
+        var t0 = w[(word - 1) * 4];
+        var t1 = w[(word - 1) * 4 + 1];
+        var t2 = w[(word - 1) * 4 + 2];
+        var t3 = w[(word - 1) * 4 + 3];
+        if (word % nk == 0) {
+            // RotWord + SubWord + Rcon.
+            let r0 = t0;
+            t0 = sbox[t1] ^ rcon;
+            t1 = sbox[t2];
+            t2 = sbox[t3];
+            t3 = sbox[r0];
+            rcon = xtime(rcon);
+        } else if (nk > 6 && word % nk == 4) {
+            // AES-256: SubWord extra a mitad de cada grupo de 8 words.
+            t0 = sbox[t0];
+            t1 = sbox[t1];
+            t2 = sbox[t2];
+            t3 = sbox[t3];
+        }
+        let base = (word - nk) * 4;
+        w.push(w[base] ^ t0);
+        w.push(w[base + 1] ^ t1);
+        w.push(w[base + 2] ^ t2);
+        w.push(w[base + 3] ^ t3);
+        word = word + 1;
+    }
+    w
+}
+
+fn add_round_key(state: [int], rk: [int], round: int) {
+    let base = round * 16;
+    var i = 0;
+    while (i < 16) {
+        state[i] = state[i] ^ rk[base + i];
+        i = i + 1;
+    }
+}
+
+fn sub_bytes(state: [int]) {
+    let sbox = sbox_table();
+    var i = 0;
+    while (i < 16) {
+        state[i] = sbox[state[i]];
+        i = i + 1;
+    }
+}
+
+// El estado es columna a columna: el octeto `i` es la fila `i % 4` de la columna `i / 4`. La
+// fila `r` rota `r` posiciones a la izquierda.
+fn shift_rows(state: [int]) {
+    var copy: [int] = [];
+    var i = 0;
+    while (i < 16) {
+        copy.push(state[i]);
+        i = i + 1;
+    }
+    var r = 1;
+    while (r < 4) {
+        var c = 0;
+        while (c < 4) {
+            state[r + 4 * c] = copy[r + 4 * ((c + r) % 4)];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+fn inv_sub_bytes(state: [int], inv: [int]) {
+    var i = 0;
+    while (i < 16) {
+        state[i] = inv[state[i]];
+        i = i + 1;
+    }
+}
+
+// La fila `r` rota `r` posiciones a la DERECHA (inversa de shift_rows).
+fn inv_shift_rows(state: [int]) {
+    var copy: [int] = [];
+    var i = 0;
+    while (i < 16) {
+        copy.push(state[i]);
+        i = i + 1;
+    }
+    var r = 1;
+    while (r < 4) {
+        var c = 0;
+        while (c < 4) {
+            state[r + 4 * ((c + r) % 4)] = copy[r + 4 * c];
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+// La matriz inversa de MixColumns (9, 11, 13, 14 en GF(2^8)).
+fn inv_mix_columns(state: [int]) {
+    var c = 0;
+    while (c < 4) {
+        let b = c * 4;
+        let a0 = state[b];
+        let a1 = state[b + 1];
+        let a2 = state[b + 2];
+        let a3 = state[b + 3];
+        state[b] = mul(a0, 14) ^ mul(a1, 11) ^ mul(a2, 13) ^ mul(a3, 9);
+        state[b + 1] = mul(a0, 9) ^ mul(a1, 14) ^ mul(a2, 11) ^ mul(a3, 13);
+        state[b + 2] = mul(a0, 13) ^ mul(a1, 9) ^ mul(a2, 14) ^ mul(a3, 11);
+        state[b + 3] = mul(a0, 11) ^ mul(a1, 13) ^ mul(a2, 9) ^ mul(a3, 14);
+        c = c + 1;
+    }
+}
+
+// Producto en GF(2^8) por suma de potencias de x (la constante cabe en 4 bits).
+fn mul(a: int, k: int) -> int {
+    var result = 0;
+    var factor = a;
+    var bits = k;
+    while (bits > 0) {
+        if (bits % 2 == 1) {
+            result = result ^ factor;
+        }
+        factor = xtime(factor);
+        bits = bits / 2;
+    }
+    result
+}
+
+// La S-box inversa, derivada de la directa.
+fn inv_sbox_table() -> [int] {
+    let sbox = sbox_table();
+    var inv: [int] = [];
+    var i = 0;
+    while (i < 256) {
+        inv.push(0);
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 256) {
+        inv[sbox[i]] = i;
+        i = i + 1;
+    }
+    inv
+}
+
+// Cada columna se multiplica por la matriz fija de MixColumns en GF(2^8).
+fn mix_columns(state: [int]) {
+    var c = 0;
+    while (c < 4) {
+        let b = c * 4;
+        let a0 = state[b];
+        let a1 = state[b + 1];
+        let a2 = state[b + 2];
+        let a3 = state[b + 3];
+        state[b] = mul2(a0) ^ mul3(a1) ^ a2 ^ a3;
+        state[b + 1] = a0 ^ mul2(a1) ^ mul3(a2) ^ a3;
+        state[b + 2] = a0 ^ a1 ^ mul2(a2) ^ mul3(a3);
+        state[b + 3] = mul3(a0) ^ a1 ^ a2 ^ mul2(a3);
+        c = c + 1;
+    }
+}
+
+// Multiplicar por x en GF(2^8): desplazar y, si se salió el bit alto, reducir por el polinomio
+// irreducible 0x11B.
+fn xtime(a: int) -> int {
+    let shifted = a * 2 % 256;
+    if (a >= 128) { shifted ^ 0x1B } else { shifted }
+}
+
+fn mul2(a: int) -> int { xtime(a) }
+
+fn mul3(a: int) -> int { xtime(a) ^ a }
+
+// La S-box, calculada por su definición (inverso en GF(2^8) + transformación afín) y volcada
+// aquí como tabla.
+fn sbox_table() -> [int] {
+    [
+        0x63,
+        0x7C,
+        0x77,
+        0x7B,
+        0xF2,
+        0x6B,
+        0x6F,
+        0xC5,
+        0x30,
+        0x1,
+        0x67,
+        0x2B,
+        0xFE,
+        0xD7,
+        0xAB,
+        0x76,
+        0xCA,
+        0x82,
+        0xC9,
+        0x7D,
+        0xFA,
+        0x59,
+        0x47,
+        0xF0,
+        0xAD,
+        0xD4,
+        0xA2,
+        0xAF,
+        0x9C,
+        0xA4,
+        0x72,
+        0xC0,
+        0xB7,
+        0xFD,
+        0x93,
+        0x26,
+        0x36,
+        0x3F,
+        0xF7,
+        0xCC,
+        0x34,
+        0xA5,
+        0xE5,
+        0xF1,
+        0x71,
+        0xD8,
+        0x31,
+        0x15,
+        0x4,
+        0xC7,
+        0x23,
+        0xC3,
+        0x18,
+        0x96,
+        0x5,
+        0x9A,
+        0x7,
+        0x12,
+        0x80,
+        0xE2,
+        0xEB,
+        0x27,
+        0xB2,
+        0x75,
+        0x9,
+        0x83,
+        0x2C,
+        0x1A,
+        0x1B,
+        0x6E,
+        0x5A,
+        0xA0,
+        0x52,
+        0x3B,
+        0xD6,
+        0xB3,
+        0x29,
+        0xE3,
+        0x2F,
+        0x84,
+        0x53,
+        0xD1,
+        0x0,
+        0xED,
+        0x20,
+        0xFC,
+        0xB1,
+        0x5B,
+        0x6A,
+        0xCB,
+        0xBE,
+        0x39,
+        0x4A,
+        0x4C,
+        0x58,
+        0xCF,
+        0xD0,
+        0xEF,
+        0xAA,
+        0xFB,
+        0x43,
+        0x4D,
+        0x33,
+        0x85,
+        0x45,
+        0xF9,
+        0x2,
+        0x7F,
+        0x50,
+        0x3C,
+        0x9F,
+        0xA8,
+        0x51,
+        0xA3,
+        0x40,
+        0x8F,
+        0x92,
+        0x9D,
+        0x38,
+        0xF5,
+        0xBC,
+        0xB6,
+        0xDA,
+        0x21,
+        0x10,
+        0xFF,
+        0xF3,
+        0xD2,
+        0xCD,
+        0xC,
+        0x13,
+        0xEC,
+        0x5F,
+        0x97,
+        0x44,
+        0x17,
+        0xC4,
+        0xA7,
+        0x7E,
+        0x3D,
+        0x64,
+        0x5D,
+        0x19,
+        0x73,
+        0x60,
+        0x81,
+        0x4F,
+        0xDC,
+        0x22,
+        0x2A,
+        0x90,
+        0x88,
+        0x46,
+        0xEE,
+        0xB8,
+        0x14,
+        0xDE,
+        0x5E,
+        0xB,
+        0xDB,
+        0xE0,
+        0x32,
+        0x3A,
+        0xA,
+        0x49,
+        0x6,
+        0x24,
+        0x5C,
+        0xC2,
+        0xD3,
+        0xAC,
+        0x62,
+        0x91,
+        0x95,
+        0xE4,
+        0x79,
+        0xE7,
+        0xC8,
+        0x37,
+        0x6D,
+        0x8D,
+        0xD5,
+        0x4E,
+        0xA9,
+        0x6C,
+        0x56,
+        0xF4,
+        0xEA,
+        0x65,
+        0x7A,
+        0xAE,
+        0x8,
+        0xBA,
+        0x78,
+        0x25,
+        0x2E,
+        0x1C,
+        0xA6,
+        0xB4,
+        0xC6,
+        0xE8,
+        0xDD,
+        0x74,
+        0x1F,
+        0x4B,
+        0xBD,
+        0x8B,
+        0x8A,
+        0x70,
+        0x3E,
+        0xB5,
+        0x66,
+        0x48,
+        0x3,
+        0xF6,
+        0xE,
+        0x61,
+        0x35,
+        0x57,
+        0xB9,
+        0x86,
+        0xC1,
+        0x1D,
+        0x9E,
+        0xE1,
+        0xF8,
+        0x98,
+        0x11,
+        0x69,
+        0xD9,
+        0x8E,
+        0x94,
+        0x9B,
+        0x1E,
+        0x87,
+        0xE9,
+        0xCE,
+        0x55,
+        0x28,
+        0xDF,
+        0x8C,
+        0xA1,
+        0x89,
+        0xD,
+        0xBF,
+        0xE6,
+        0x42,
+        0x68,
+        0x41,
+        0x99,
+        0x2D,
+        0xF,
+        0xB0,
+        0x54,
+        0xBB,
+        0x16
+    ]
+}

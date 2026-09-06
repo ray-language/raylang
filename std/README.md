@@ -49,6 +49,9 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
   `fn() -> Result<T, E>`: `policy`/`retry` (backoff exponencial + jitter, sobre el sleep cooperativo),
   `breaker`/`guard`/`is_open` (circuit breaker fail-fast) y `deadline`/`remaining`/`expired`
   (presupuesto de tiempo monótono; aplícalo a la E/S con `net.set_read_timeout`).
+- **`std/crypto/{md5,aes,des}`** (M194) — criptografía LEGADA en raylang puro (MD5; AES-128/192/256
+  ECB/CBC con descifrado; DES y 3DES ECB/CBC), para protocolos que la exigen. No es de tiempo
+  constante: `std/crypto` (ring) sigue siendo la de producción.
 - **`std/collections/{set,deque,stringbuilder}`** (M50.2) — estructuras de datos puras en raylang, en
   submódulos (leaf-binding): `import std/collections/set;` → `set.new`/`add`/`has`/`remove`/`size`/`items`
   (hash set sobre `Hash`+`Eq`); `import std/collections/deque;` → `deque.new`/`push_back`/`push_front`/

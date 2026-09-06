@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/crypto/md5`, `std/crypto/aes`, `std/crypto/des`** (M194, DESIGN §186; feedback de
+  `ray-remote`): criptografía LEGADA en raylang puro para hablar con protocolos que la exigen —
+  MD5 (RFC 1321); AES-128/192/256 en ECB y CBC con descifrado (FIPS-197, SP 800-38A); DES y 3DES en
+  ECB y CBC (FIPS 46-3, SP 800-67). Documentada como "no para diseñar" (sin tiempo constante;
+  `std/crypto` con `ring` sigue siendo la de producción). Portada del cliente RFB y completada; las
+  ~900 líneas de `src/crypto/` de la app se reducen a su `bignum.ray`.
+
 - **`break` y `continue`** (M191, DESIGN §183, SPEC §5; feedback de `ray-remote`, decisión del
   usuario): sentencias sin valor que salen del `while`/`for` más interno o pasan a su siguiente
   iteración. Válidas solo dentro de un bucle de la misma función (una función anónima corta el

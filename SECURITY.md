@@ -271,8 +271,11 @@ documentada:
 - Que un programa pase entrada no confiable a `sh -c` vía `std/process`: el argv es tipado
   precisamente para que eso sea una decisión visible de quien la escribe.
 - Que un **binario nativo** no respete `--fuel`/`--heap`, o que `--fast` no detecte desbordamientos.
-- Que la criptografía **pura en raylang** (`examples/`, material de demostración) no sea de tiempo
-  constante — por eso `std/crypto` se apoya en `ring`.
+- Que la criptografía **pura en raylang** (`examples/`, material de demostración, y los módulos
+  LEGADOS `std/crypto/{md5,aes,des}` de M194) no sea de tiempo constante — por eso `std/crypto` se
+  apoya en `ring`. Los legados existen para hablar con protocolos que los exigen (VNC, Apple Remote
+  Desktop, Kerberos, digest auth); su documentación lo dice en la primera línea y no deben usarse
+  para diseñar nada nuevo.
 - Que un secreto en memoria **no se pueda borrar de forma garantizada** (zeroización). Los strings
   y bytes de raylang son inmutables y viven en un heap con GC: no hay forma de sobreescribir sus
   octetos ni de controlar cuándo se liberan, y el GC puede haberlos copiado. Es una **decisión de

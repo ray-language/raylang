@@ -29,6 +29,12 @@ const MODULES: &[(&str, &str)] = &[
     ("std/collections/set", include_str!("../std/collections/set.ray")),
     ("std/collections/deque", include_str!("../std/collections/deque.ray")),
     ("std/collections/stringbuilder", include_str!("../std/collections/stringbuilder.ray")),
+    // M194 (plan ray-remote C2): cripto LEGADA en raylang puro — para hablar con protocolos que la
+    // exigen (MD5, DES/3DES, AES-ECB/CBC), no para diseñar. `std/crypto` (ring) sigue siendo la de
+    // producción.
+    ("std/crypto/md5", include_str!("../std/crypto/md5.ray")),
+    ("std/crypto/aes", include_str!("../std/crypto/aes.ray")),
+    ("std/crypto/des", include_str!("../std/crypto/des.ray")),
     // M82: mapa hash genérico (claves de usuario vía Hash+Eq; el Map builtin queda para primitivas).
     ("std/collections/dict", include_str!("../std/collections/dict.ray")),
     ("std/math", include_str!("../std/math.ray")),

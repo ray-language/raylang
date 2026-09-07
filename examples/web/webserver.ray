@@ -411,7 +411,12 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
 
 // Decodifica un cuerpo Transfer-Encoding: chunked (sin trailers); el tamaño decodificado respeta
 // `max` y la lectura el plazo total.
-fn leer_cuerpo_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Result<bytes, string> {
+fn leer_cuerpo_chunked(
+    conn: int,
+    inicial: bytes,
+    plazo_fin: int,
+    max: int
+) -> Result<bytes, string> {
     var acc: bytes = inicial;
     var out: bytes = b"";
     var seguir: bool = true;

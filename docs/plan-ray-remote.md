@@ -184,7 +184,7 @@ barato es que `ray_doc` y la referencia muestren el builder de `std/json` en la 
 Toda suite se chequea aunque no tenga `@test`; un `src/main.ray` roto sale 65 con el veredicto de
 M188. Bug real: se coló un commit sin compilar.
 
-### E2. `ray fmt` conserva `if let` (feedback 22) — M
+### E2. `ray fmt` conserva `if let` (feedback 22) — M ✅ M201
 
 El parser desazucara `if let` a `match` antes del AST y el formateador imprime el `match`. Hay que
 conservar el sitio (como los paréntesis de M189) y reimprimir `if let`. En el mismo lote: la

@@ -294,7 +294,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
         externs: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
-        interp_sites: HashMap::new(), pipe_sites: HashMap::new(), paren_sites: HashSet::new(),
+        interp_sites: HashMap::new(), pipe_sites: HashMap::new(), paren_sites: HashSet::new(), if_let_sites: HashSet::new(),
     };
     // Alias UFCS: nombre local de función `from`-importada → global, agregado de todos los módulos.
     // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de

@@ -12451,3 +12451,17 @@ runner chequea **todas** las suites antes de contar pruebas, con o sin ellas (si
 el veredicto de M188 ("no test ran — N suite(s) failed to compile") aunque no aportara pruebas. La
 alternativa —compilar la entrada como paso aparte del runner— habría duplicado la carga y el
 formato de los diagnósticos; tratarla como una suite más es una línea de menos, no de más.
+
+## 193. M201 — `ray fmt` no cambia la construcción que eligió el autor (sep 2026)
+
+Feedback 22 de `ray-remote` (lote E, E2): `if let Result.Err(e) = f() { … }` salía del formateador
+como `match (f()) { Result.Err(e) => { … }, _ => { }, }`. Es equivalente —el parser desazucara
+`if let` a un `match` de dos brazos (M40.1b) y ningún motor lo distingue—, pero un formateador que
+reescribe la construcción deja de ser un formateador. La solución es la misma que para los
+paréntesis del usuario (M189): el parser anota la posición del `if let` en `Program::if_let_sites`
+y `fmt` reemite `if let <patrón> = <expr> { … }`, con `else { … }` o `else if …` encadenado tal
+cual, y sin `else` cuando el brazo `_` es el bloque vacío sintético (que el parser deja en la
+posición del propio `if`, lo que lo distingue de un `else { }` escrito). El AST no cambia: checker,
+motores y selfhost siguen viendo el `match`. En el mismo hito, la firma se medía como cabecera
+pelada, sin la sangría ni el ` {` que se añaden después: una de 99 columnas salía a 101, una más
+que el propio límite — cuatro archivos del repo lo demostraban y quedaron repartidos.

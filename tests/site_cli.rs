@@ -33,7 +33,7 @@ fn generates_the_site_and_both_engines_match() {
     generate(&interp, true);
 
     // Byte-idénticos por ambos motores.
-    for rel in ["index.html", "spec.html", "bench.html"] {
+    for rel in ["index.html", "spec.html", "bench.html", "en/index.html", "en/spec.html", "en/bench.html"] {
         let a = std::fs::read_to_string(vm.join(rel)).unwrap_or_else(|_| panic!("falta {rel}"));
         let b = std::fs::read_to_string(interp.join(rel)).unwrap();
         assert_eq!(a, b, "ambos engines idénticos en {rel}");
@@ -104,6 +104,28 @@ fn generates_the_site_and_both_engines_match() {
         "apps enlazadas\n{landing}"
     );
     assert!(landing.contains("ray-language/ray-index"), "enlace al registro");
+
+    // Sitio bilingüe (M198): `en/` sale de los MISMOS templates; selector ES/EN, hreflang,
+    // assets por prefijo relativo y el playground incrustado en inglés (`?lang=en`).
+    assert!(landing.contains("<html lang=\"es\">"), "idioma del documento\n{landing}");
+    assert!(landing.contains("href=\"en/index.html\" hreflang=\"en\""), "selector EN en la nav\n{landing}");
+    assert!(landing.contains("hreflang=\"en\" href=\"https://raylang.dev/en/index.html\""), "alternate hreflang");
+    let landing_en = std::fs::read_to_string(vm.join("en/index.html")).unwrap();
+    assert!(landing_en.contains("<html lang=\"en\">"), "idioma del documento EN\n{landing_en}");
+    assert!(landing_en.contains("real-world production"), "hero EN\n{landing_en}");
+    assert!(landing_en.contains("Install the toolchain"), "paso 1 EN");
+    assert!(landing_en.contains("href=\"../index.html\" hreflang=\"es\""), "selector ES en la nav EN");
+    assert!(landing_en.contains("../assets/mascot.svg") && landing_en.contains("../assets/fonts/"), "assets relativos desde en/");
+    assert!(landing_en.contains("iframe src=\"../playground/index.html?lang=en\""), "playground en inglés");
+    assert!(landing_en.contains("Lazy pipelines"), "comentarios de los ejemplos del hero en inglés");
+    assert!(!landing_en.contains("{%"), "directivas sin resolver EN");
+    for (rel, mark) in [("en/spec.html", "normative"), ("en/bench.html", "Benchmarks, <span class=\"grad\">measured")] {
+        let page = std::fs::read_to_string(vm.join(rel)).unwrap();
+        assert!(page.contains(mark), "{rel} en inglés\n{page}");
+        assert!(page.contains("../assets/icon.svg"), "{rel}: favicon relativo");
+    }
+    let play_src = std::fs::read_to_string(vm.join("playground/index.html")).unwrap();
+    assert!(play_src.contains("PLAY_T"), "el playground entiende ?lang=en");
 
     // La marca (assets/branding/raylang-brand.pdf): símbolo, mascota, paleta y fuentes.
     assert!(landing.contains("assets/symbol.svg"), "símbolo en la nav\n{landing}");

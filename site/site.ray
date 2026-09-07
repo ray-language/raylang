@@ -139,17 +139,64 @@ fn main() -> int {
         "playground/fonts/jetbrains-mono.woff2",
         "playground/fonts/jetbrains-mono.woff2"
     );
+    // Dos idiomas desde los MISMOS templates (bilingües por `lang`): la raíz en español y
+    // `en/` en inglés; `root` es el prefijo relativo hasta los assets compartidos.
+    let _ = fs.mkdir(out + "/en");
     write_or_die(
         out + "/index.html",
-        landing.render("raylang — un lenguaje para producción real", "index", chart)
+        landing.render("raylang — un lenguaje para producción real", "index", chart, "es", "")
     );
     write_or_die(
         out + "/spec.html",
-        spec_page.render("Especificación del lenguaje raylang", markdown.to_html(spec_md), "spec")
+        spec_page.render(
+            "Especificación del lenguaje raylang",
+            markdown.to_html(spec_md),
+            "spec",
+            "es",
+            ""
+        )
     );
     write_or_die(
         out + "/bench.html",
-        bench_page.render("Benchmarks de raylang", chart, markdown.to_html(bench_md), "bench")
+        bench_page.render(
+            "Benchmarks de raylang",
+            chart,
+            markdown.to_html(bench_md),
+            "bench",
+            "es",
+            ""
+        )
+    );
+    write_or_die(
+        out + "/en/index.html",
+        landing.render(
+            "raylang — a language for real-world production",
+            "index",
+            chart,
+            "en",
+            "../"
+        )
+    );
+    write_or_die(
+        out + "/en/spec.html",
+        spec_page.render(
+            "The raylang language specification",
+            markdown.to_html(spec_md),
+            "spec",
+            "en",
+            "../"
+        )
+    );
+    write_or_die(
+        out + "/en/bench.html",
+        bench_page.render(
+            "raylang benchmarks",
+            chart,
+            markdown.to_html(bench_md),
+            "bench",
+            "en",
+            "../"
+        )
     );
     print("site generated in " + out);
     0

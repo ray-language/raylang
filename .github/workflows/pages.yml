@@ -86,6 +86,9 @@ jobs:
           test -f _site/index.html
           test -f _site/spec.html
           test -f _site/bench.html
+          test -f _site/en/index.html
+          test -f _site/en/spec.html
+          test -f _site/en/bench.html
           test -f _site/playground/raylang.wasm
           test -f _site/playground/editor.bundle.js
       - uses: actions/upload-pages-artifact@v3

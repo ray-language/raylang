@@ -1,6 +1,7 @@
-{% params title: string, page: string, bench: string %}
+{% params title: string, page: string, bench: string, lang: string, root: string %}
 {% extends layout %}
 {% block content %}
+{% let en = lang == "en" %}
 <style>
 .hero { padding: 4.5rem 0 3rem; }
 .hero .wrap {
@@ -281,7 +282,19 @@ section.engines { padding: 2.5rem 0 4rem; }
     <div class="wrap">
         <div>
             <div class="badges">
-                <span class="badge">Estáticamente tipado</span>
+{% if en %}                <span class="badge">Statically typed</span>
+                <span class="badge">Expression-oriented</span>
+                <span class="badge">Self-hosted</span>
+            </div>
+            <h1>A language for <span class="grad">real-world production</span>.</h1>
+            <p class="sub">Generics, traits, pattern matching and multicore concurrency through
+            actors — with errors as values, no null and no exceptions. Written in Rust, with a
+            minimal, deliberate dependency surface.</p>
+            <div class="cta">
+                <a class="btn primary" href="#empezar">Get started</a>
+                <a class="btn ghost" href="#playground">Playground</a>
+                <a class="btn ghost" href="spec.html">Specification</a>
+            </div>{% else %}                <span class="badge">Estáticamente tipado</span>
                 <span class="badge">Orientado a expresiones</span>
                 <span class="badge">Auto-alojado</span>
             </div>
@@ -293,7 +306,7 @@ section.engines { padding: 2.5rem 0 4rem; }
                 <a class="btn primary" href="#empezar">Empezar</a>
                 <a class="btn ghost" href="#playground">Playground</a>
                 <a class="btn ghost" href="spec.html">Especificación</a>
-            </div>
+            </div>{% endif %}
         </div>
         <div class="window">
             <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><div class="tabs" id="hero-tabs"><noscript><span style="color:#6b87a3">tree.ray</span></noscript></div></div>
@@ -317,36 +330,42 @@ section.engines { padding: 2.5rem 0 4rem; }
 <section class="install" id="empezar">
     <div class="wrap">
         <div class="panel">
-        <h2 class="sec">Instálalo <span class="grad">en un minuto</span></h2>
+{% if en %}        <h2 class="sec">Install it <span class="grad">in a minute</span></h2>
+        <p class="lead">A single binary, no dependencies: the installer detects your platform
+        (macOS, Linux and Windows, arm64 and x86_64), downloads the release and leaves
+        <code>ray</code> in <code>~/.local/bin</code> — or in
+        <code>%LOCALAPPDATA%\Programs\raylang\bin</code> from PowerShell, already on your PATH.</p>{% else %}        <h2 class="sec">Instálalo <span class="grad">en un minuto</span></h2>
         <p class="lead">Un solo binario, sin dependencias: el instalador detecta tu plataforma
         (macOS, Linux y Windows, arm64 y x86_64), descarga la release y deja
         <code>ray</code> en <code>~/.local/bin</code> — o en
-        <code>%LOCALAPPDATA%\Programs\raylang\bin</code> desde PowerShell, ya en tu PATH.</p>
+        <code>%LOCALAPPDATA%\Programs\raylang\bin</code> desde PowerShell, ya en tu PATH.</p>{% endif %}
         <div class="steps">
             <div class="step">
                 <span class="stepn">1</span>
                 <div>
-                    <h3>Instala la toolchain</h3>
-                    <p class="hint label">macOS y Linux:</p>
-                    <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raylang.dev/install.sh | sh</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                    {% if en %}<h3>Install the toolchain</h3>
+                    <p class="hint label">macOS and Linux:</p>{% else %}<h3>Instala la toolchain</h3>
+                    <p class="hint label">macOS y Linux:</p>{% endif %}
+                    <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raylang.dev/install.sh | sh</code><button class="copy" type="button" aria-label="{% if en %}Copy the command{% else %}Copiar el comando{% endif %}" title="{% if en %}Copy{% else %}Copiar{% endif %}">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
-                    <p class="hint label">Windows, desde PowerShell:</p>
-                    <div class="cmd"><span class="pr">&gt;</span><code>irm https://raylang.dev/install.ps1 | iex</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                    {% if en %}<p class="hint label">Windows, from PowerShell:</p>{% else %}<p class="hint label">Windows, desde PowerShell:</p>{% endif %}
+                    <div class="cmd"><span class="pr">&gt;</span><code>irm https://raylang.dev/install.ps1 | iex</code><button class="copy" type="button" aria-label="{% if en %}Copy the command{% else %}Copiar el comando{% endif %}" title="{% if en %}Copy{% else %}Copiar{% endif %}">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
-                    <p class="hint">Verifícalo con <code>ray version</code> — un binario, todo incluido: compilador, VM, LSP, formateador y gestor de paquetes.</p>
+                    {% if en %}<p class="hint">Check it with <code>ray version</code> — one binary, everything included: compiler, VM, LSP, formatter and package manager.</p>{% else %}<p class="hint">Verifícalo con <code>ray version</code> — un binario, todo incluido: compilador, VM, LSP, formateador y gestor de paquetes.</p>{% endif %}
                 </div>
             </div>
             <div class="step">
                 <span class="stepn">2</span>
                 <div>
-                    <h3>Crea y corre tu primer proyecto</h3>
-                    <div class="cmd"><span class="pr">$</span><code>ray new hola &amp;&amp; cd hola &amp;&amp; ray run</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                    {% if en %}<h3>Create and run your first project</h3>{% else %}<h3>Crea y corre tu primer proyecto</h3>{% endif %}
+                    <div class="cmd"><span class="pr">$</span><code>ray new hola &amp;&amp; cd hola &amp;&amp; ray run</code><button class="copy" type="button" aria-label="{% if en %}Copy the command{% else %}Copiar el comando{% endif %}" title="{% if en %}Copy{% else %}Copiar{% endif %}">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
-                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
-                    <p class="hint">Y después, <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.md">raylang en media hora</a>: el lenguaje, la concurrencia y un servidor web en una sola guía (también <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md">en inglés</a>).</p>
+{% if en %}                    <p class="hint"><code>ray new</code> leaves a <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompiles and restarts on save.</p>
+                    <p class="hint">Then, <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md">raylang in half an hour</a>: the language, concurrency and a web server in a single guide.</p>{% else %}                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
+                    <p class="hint">Y después, <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.md">raylang en media hora</a>: el lenguaje, la concurrencia y un servidor web en una sola guía (también <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md">en inglés</a>).</p>{% endif %}
                 </div>
             </div>
         </div>
@@ -359,57 +378,75 @@ section.engines { padding: 2.5rem 0 4rem; }
         <div class="cards">
             <div class="card">
                 <div class="ico">≡</div>
-                <h3>Tres motores que coinciden</h3>
+{% if en %}                <h3>Three engines that agree</h3>
+                <p>A bytecode VM to develop, a native binary to deploy and an interpreter as
+                the oracle — byte-for-byte identical output, verified in CI.</p>{% else %}                <h3>Tres motores que coinciden</h3>
                 <p>Una VM de bytecode para desarrollar, un binario nativo para desplegar y un
-                intérprete como oráculo — salida byte a byte idéntica, verificada en CI.</p>
+                intérprete como oráculo — salida byte a byte idéntica, verificada en CI.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">»</div>
-                <h3>Binario nativo</h3>
+{% if en %}                <h3>Native binary</h3>
+                <p><code>ray build --native</code> transpiles to Rust and compiles an executable:
+                3–4× the VM on service workloads and 28–57× on pure compute.</p>{% else %}                <h3>Binario nativo</h3>
                 <p><code>ray build --native</code> transpila a Rust y compila un ejecutable:
-                3–4× la VM en cargas de servicio y 28–57× en cómputo puro.</p>
+                3–4× la VM en cargas de servicio y 28–57× en cómputo puro.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">⇄</div>
-                <h3>Concurrencia por actores</h3>
+{% if en %}                <h3>Actor concurrency</h3>
+                <p>An isolated heap per fiber + ownership transfer on <code>send</code>:
+                real multicore without data races, on an M:N scheduler.</p>{% else %}                <h3>Concurrencia por actores</h3>
                 <p>Heap aislado por fibra + transferencia de propiedad en <code>send</code>:
-                multicore real sin data races, con scheduler M:N.</p>
+                multicore real sin data races, con scheduler M:N.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">?</div>
-                <h3>Errores como valores</h3>
+{% if en %}                <h3>Errors as values</h3>
+                <p>No <code>null</code> and no exceptions: <code>Result</code>/<code>Option</code>
+                + <code>?</code>, exhaustive pattern matching and generics with traits.</p>{% else %}                <h3>Errores como valores</h3>
                 <p>Sin <code>null</code> y sin excepciones: <code>Result</code>/<code>Option</code>
-                + <code>?</code>, pattern matching exhaustivo y genéricos con traits.</p>
+                + <code>?</code>, pattern matching exhaustivo y genéricos con traits.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">⌘</div>
-                <h3>Tooling completo</h3>
+{% if en %}                <h3>Complete tooling</h3>
+                <p><code>ray</code> brings projects, packages, tests, formatter, docs, REPL,
+                an LSP for your editor and an MCP server for LLM agents.</p>{% else %}                <h3>Tooling completo</h3>
                 <p><code>ray</code> trae proyecto, paquetes, tests, formateador, docs, REPL,
-                LSP para el editor y un servidor MCP para agentes LLM.</p>
+                LSP para el editor y un servidor MCP para agentes LLM.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">◇</div>
-                <h3>Dependencias deliberadas</h3>
+{% if en %}                <h3>Deliberate dependencies</h3>
+                <p>HTTP/1.1 and 2, JSON, TOML, DNS, WebSocket and the database clients are
+                written in raylang; every Cargo crate enters justified and measured.</p>{% else %}                <h3>Dependencias deliberadas</h3>
                 <p>HTTP/1.1 y 2, JSON, TOML, DNS, WebSocket o los clientes de BD están escritos
-                en raylang; cada crate de Cargo entra justificado y medido.</p>
+                en raylang; cada crate de Cargo entra justificado y medido.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">∞</div>
-                <h3>Auto-alojado</h3>
+{% if en %}                <h3>Self-hosted</h3>
+                <p>raylang lexes, parses, checks and runs raylang: the self-hosted compiler
+                runs itself on top of the self-hosted engines.</p>{% else %}                <h3>Auto-alojado</h3>
                 <p>raylang lexea, parsea, chequea y ejecuta raylang: el compilador auto-alojado
-                se ejecuta a sí mismo sobre los motores auto-alojados.</p>
+                se ejecuta a sí mismo sobre los motores auto-alojados.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">/</div>
-                <h3>Framework web</h3>
+{% if en %}                <h3>Web framework</h3>
+                <p>A production HTTP server with an Express-style framework, SSR with compiled,
+                typed templates (<code>.ray.html</code>), WebSocket and streaming.</p>{% else %}                <h3>Framework web</h3>
                 <p>Servidor HTTP de producción con framework estilo Express, SSR con templates
-                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming.</p>
+                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">✓</div>
-                <h3>Paquetes verificables</h3>
+{% if en %}                <h3>Verifiable packages</h3>
+                <p><code>ray.toml</code> manifest + lockfile with SHA-256 hashes; the registry
+                accepts Ed25519-signed versions and claimed names.</p>{% else %}                <h3>Paquetes verificables</h3>
                 <p>Manifiesto <code>ray.toml</code> + lockfile con hashes SHA-256; el registro
-                acepta versiones firmadas con Ed25519 y nombres reclamados.</p>
+                acepta versiones firmadas con Ed25519 y nombres reclamados.</p>{% endif %}
             </div>
         </div>
     </div>
@@ -417,7 +454,26 @@ section.engines { padding: 2.5rem 0 4rem; }
 
 <section class="eco platforms" id="plataformas">
     <div class="wrap">
-        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
+{% if en %}        <h2 class="sec">Desktop and mobile, <span class="grad">out of the box</span></h2>
+        <p class="lead">The same raylang source runs as a desktop app on macOS, Linux and
+        Windows and as a mobile app on iPhone and Android — no external framework, no second
+        language. The interface is HTML in the system webview (<code>std/ui</code>), the backend
+        is your raylang web server, and the JS ↔ raylang bridge, native menus, file dialogs,
+        audio and the assets baked into the binary ship with the toolchain.</p>
+        <div class="apps">
+            <div class="app"><b>macOS</b><span><code>ray bundle</code> produces the <code>.app</code> with icon, application menu, About panel and ad-hoc signature (the distribution one is yours to add).</span></div>
+            <div class="app"><b>Linux</b><span>the same command leaves the binary with its <code>.desktop</code> launcher; window and webview on GTK/WebKitGTK.</span></div>
+            <div class="app"><b>Windows</b><span>the same command leaves the desktop <code>.exe</code> (no console on double-click, embedded icon and version) with its shortcut; window and webview on Win32/WebView2, audio through WASAPI.</span></div>
+            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> generates the Xcode project with the program compiled to a static library; persistent signing for device and simulator.</span></div>
+            <div class="app"><b>Android</b><span><code>ray bundle --android</code> generates the Gradle project with the native <code>.so</code>, launcher icon and release signing; audio through AAudio.</span></div>
+        </div>
+        <div class="chips">
+            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
+            <span class="chip"><b>ray bundle --ios</b> · Xcode project</span>
+            <span class="chip"><b>ray bundle --android</b> · Gradle project</span>
+        </div>
+        <p class="note">Step-by-step guide in the
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a> (Spanish).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
         <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
         Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
         interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
@@ -436,24 +492,37 @@ section.engines { padding: 2.5rem 0 4rem; }
             <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
         </div>
         <p class="note">Guía paso a paso en el
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>{% endif %}
     </div>
 </section>
 
 <section class="eco" id="benchmarks">
     <div class="wrap">
-        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
+{% if en %}        <h2 class="sec">Measured, <span class="grad">not promised</span></h2>
+        <p class="lead">The native binary goes head to head with Go and <code>rustc -O</code>, and
+        beats node in 9 of the 10 compute programs of the polyglot bench. The bars come from the
+        repository's real table — re-measuring the bench regenerates this chart.</p>{% else %}        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
         <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
         le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
-        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>
+        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>{% endif %}
         {{& bench }}
-        <p style="margin-top:1.2rem"><a class="btn ghost" href="bench.html">Ver los benchmarks completos</a></p>
+        <p style="margin-top:1.2rem">{% if en %}<a class="btn ghost" href="bench.html">See the full benchmarks</a>{% else %}<a class="btn ghost" href="bench.html">Ver los benchmarks completos</a>{% endif %}</p>
     </div>
 </section>
 
 <section class="eco" id="editores">
     <div class="wrap">
-        <h2 class="sec">En tu <span class="grad">editor</span></h2>
+{% if en %}        <h2 class="sec">In your <span class="grad">editor</span></h2>
+        <p class="lead">Official extensions on top of the raylang LSP: live diagnostics,
+        completion, hover, go to definition, rename and formatting.</p>
+        <div class="apps">
+            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extension on the marketplace, with the LSP client built in</span></a>
+            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><em class="status">under review in Package Control</em><span>syntax + LSP; until approved, install it from the repository</span></a>
+            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">under review in the Zed gallery</em><span>tree-sitter grammar + LSP; until approved, install it as a dev extension</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>point at <code>ray lsp</code> directly; config in editors/</span></a>
+        </div>
+        <p class="note">The Sublime Text and Zed extensions are submitted to their official
+        galleries and awaiting approval:{% else %}        <h2 class="sec">En tu <span class="grad">editor</span></h2>
         <p class="lead">Extensiones oficiales sobre el LSP de raylang: diagnósticos en vivo,
         autocompletado, hover, ir a definición, renombrar y formateo.</p>
         <div class="apps">
@@ -463,7 +532,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
         </div>
         <p class="note">Las extensiones de Sublime Text y Zed están enviadas a sus galerías
-        oficiales y en proceso de aprobación:
+        oficiales y en proceso de aprobación:{% endif %}
         <a href="https://github.com/sublimehq/package_control_channel/pull/9534">Package Control #9534</a> ·
         <a href="https://github.com/zed-industries/extensions/pull/7361">zed-industries/extensions #7361</a>.</p>
     </div>
@@ -473,7 +542,21 @@ section.engines { padding: 2.5rem 0 4rem; }
     <div class="wrap">
         <div class="duo">
             <div>
-                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
+{% if en %}                <h2 class="sec">Native for <span class="grad">LLM agents</span></h2>
+                <p class="lead">raylang ships the two pieces a model needs to write correct
+                raylang — and verify it on its own.</p>
+                <ul>
+                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
+                    the distilled context: the delta against Rust, the canonical forms and the
+                    exact error messages, ready for your prompt or <code>CLAUDE.md</code>.</li>
+                    <li><b><code>ray mcp</code></b> — an MCP server embedded in the binary:
+                    the <em>write → check → fix</em> loop with the compiler's exact diagnostics
+                    and the model's code sandboxed (fuel + heap + deadline, in a subprocess).</li>
+                    <li><code>llms.txt</code> itself is served as a <em>resource</em>
+                    (<code>raylang://llms.txt</code>) — the client injects it before the first
+                    line. Full guide in
+                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.en.md">docs/mcp.en.md</a>.</li>
+                </ul>{% else %}                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
                 <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
                 raylang correcto — y lo verifique solo.</p>
                 <ul>
@@ -488,18 +571,22 @@ section.engines { padding: 2.5rem 0 4rem; }
                     (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
                     primera línea. Guía completa en
                     <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
-                </ul>
+                </ul>{% endif %}
             </div>
             <div class="window">
                 <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>mcp</span></div>
                 <pre><code><span class="pr">$ </span><span class="st">claude mcp add raylang -- ray mcp</span>
 
 <span class="cm"># tools</span>
-<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
+{% if en %}<span class="fn">ray_check</span>   <span class="cm">exact, positioned diagnostics</span>
+<span class="fn">ray_run</span>     <span class="cm">stdout + exit, sandboxed</span>
+<span class="fn">ray_test</span>    <span class="cm">the @test runner</span>
+<span class="fn">ray_fmt</span>     <span class="cm">canonical source</span>
+<span class="fn">ray_doc</span>     <span class="cm">stdlib signature + doc</span>{% else %}<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
 <span class="fn">ray_run</span>     <span class="cm">stdout + exit, confinado</span>
 <span class="fn">ray_test</span>    <span class="cm">el runner @test</span>
 <span class="fn">ray_fmt</span>     <span class="cm">fuente canónico</span>
-<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>
+<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>{% endif %}
 
 <span class="cm"># resource</span>
 <span class="ty">raylang://llms.txt</span></code></pre>
@@ -510,7 +597,16 @@ section.engines { padding: 2.5rem 0 4rem; }
 
 <section class="play" id="playground">
     <div class="wrap">
-        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
+{% if en %}        <h2 class="sec">Try it <span class="grad">in the browser</span></h2>
+        <p class="lead">The full VM compiled to WebAssembly — the playground runs raylang in
+        your browser, with no server and nothing to install.</p>
+        <p class="scope-note"><b>Scope</b>: it runs the <b>whole language</b> and the pure stdlib
+        through <code>import std/*</code> (math, json, markdown, iterators, actors/channels…).
+        The stdlib with I/O (<code>fs</code>, <code>process</code>, networking) compiles but
+        returns <code>Err</code> at run time — the browser has no disk and no sockets. Registry
+        packages (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) and
+        multi-file modules do not resolve here: for those, install <code>ray</code> and use
+        <code>ray add</code>.</p>{% else %}        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
         <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
         en tu navegador, sin servidor y sin instalar nada.</p>
         <p class="scope-note"><b>Alcance</b>: corre el <b>lenguaje completo</b> y la stdlib pura
@@ -519,15 +615,34 @@ section.engines { padding: 2.5rem 0 4rem; }
         <code>Err</code> al ejecutar — el navegador no tiene disco ni sockets. Los paquetes del
         registro (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) y los
         módulos multi-archivo no resuelven aquí: para eso, instala <code>ray</code> y usa
-        <code>ray add</code>.</p>
-        <iframe src="playground/index.html" title="playground de raylang" loading="lazy"></iframe>
-        <p class="after"><a href="playground/index.html">Abrir el playground a pantalla completa →</a></p>
+        <code>ray add</code>.</p>{% endif %}
+        <iframe src="{{ root }}playground/index.html{% if en %}?lang=en{% endif %}" title="{% if en %}raylang playground{% else %}playground de raylang{% endif %}" loading="lazy"></iframe>
+        {% if en %}<p class="after"><a href="{{ root }}playground/index.html?lang=en">Open the playground full screen →</a></p>{% else %}<p class="after"><a href="{{ root }}playground/index.html">Abrir el playground a pantalla completa →</a></p>{% endif %}
     </div>
 </section>
 
 <section class="eco" id="ecosistema">
     <div class="wrap">
-        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
+{% if en %}        <h2 class="sec">Built <span class="grad">with raylang</span></h2>
+        <p class="lead">Servers, tools and even terminal games — real dogfood, published in the
+        organization.</p>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>coding agent and REPL for the terminal</span></a>
+            <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>service monitor with an SSE dashboard</span></a>
+            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>Redis-compatible key-value store (RESP2)</span></a>
+            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
+            <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>at-least-once queue broker with a write-ahead log</span></a>
+            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>encrypted secrets vault, sealed-box sharing</span></a>
+            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>end-to-end encrypted P2P file transfer</span></a>
+            <a class="app" href="https://github.com/ray-language/raygame"><b>raygame</b><span>Tetris in the terminal at 30 fps</span></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>and more →</b><span>raysite, raytop, raymail, raysync, raylogs, raycall…</span></a>
+        </div>
+        <p class="libs">The libraries too: the networking and formats stack
+        (<code>net</code> — HTTP/1.1 and 2, DNS, WebSocket, TLS —, <code>web</code>,
+        <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) lives in
+        <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
+        written in pure raylang, and community packages are published in the
+        <a href="https://github.com/ray-language/ray-index">registry</a> with hashes and signatures.</p>{% else %}        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
         <p class="lead">Servidores, herramientas y hasta juegos de terminal — dogfood real,
         publicado en la organización.</p>
         <div class="apps">
@@ -546,23 +661,30 @@ section.engines { padding: 2.5rem 0 4rem; }
         <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) vive en
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
         escrita en raylang puro, y los paquetes de la comunidad se publican en el
-        <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>
+        <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>{% endif %}
     </div>
 </section>
 
 <section class="engines">
     <div class="wrap">
         <div class="band">
-            <img src="assets/mascot.svg" alt="Manta, la mascota de raylang">
+            <img src="{{ root }}assets/mascot.svg" alt="{% if en %}Manta, the raylang mascot{% else %}Manta, la mascota de raylang{% endif %}">
             <div>
-                <h2>raylang <span class="grad">fluye sin fricción</span></h2>
+{% if en %}                <h2>raylang <span class="grad">flows without friction</span></h2>
+                <p class="claim">One source, three engines: the same program runs the same —
+                byte for byte — in development, in deployment and under the validation oracle.</p>
+                <div class="chips">
+                    <span class="chip"><b>ray run</b> · bytecode VM</span>
+                    <span class="chip"><b>ray build --native</b> · machine binary</span>
+                    <span class="chip"><b>--interp</b> · the oracle</span>
+                </div>{% else %}                <h2>raylang <span class="grad">fluye sin fricción</span></h2>
                 <p class="claim">Un fuente, tres motores: el mismo programa corre igual —
                 byte a byte — en desarrollo, en despliegue y bajo el oráculo de validación.</p>
                 <div class="chips">
                     <span class="chip"><b>ray run</b> · VM de bytecode</span>
                     <span class="chip"><b>ray build --native</b> · binario de máquina</span>
                     <span class="chip"><b>--interp</b> · el oráculo</span>
-                </div>
+                </div>{% endif %}
             </div>
         </div>
     </div>
@@ -609,9 +731,9 @@ section.engines { padding: 2.5rem 0 4rem; }
 (function () {
     var EXAMPLES = [
         { name: "tree.ray", code: "enum Tree { Leaf, Node(Tree, int, Tree) }\n\nfn sum(t: Tree) -> int {\n    match (t) {\n        Tree.Leaf => 0,\n        Tree.Node(l, v, r) => sum(l) + v + sum(r),\n    }\n}\n\nfn main() {\n    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);\n    print(sum(t));    // 3\n}" },
-        { name: "pipeline.ray", code: "fn main() {\n    // Pipelines perezosos: nada se materializa hasta el final.\n    let sum = [1, 2, 3, 4, 5]\n        |> map(fn(x: int) -> int { x * x })\n        |> filter(fn(x: int) -> bool { x % 2 == 1 })\n        |> fold(0, fn(a: int, b: int) -> int { a + b });\n    print(\"odd squares: ${sum}\");    // 35\n\n    let firsts = range(1, 100)\n        .map(fn(x: int) -> int { x * x })\n        .take(4)\n        .collect();\n    print(firsts);    // [1, 4, 9, 16]\n}" },
-        { name: "actors.ray", code: "fn main() {\n    // Actores: fibras + canales, sin estado compartido.\n    let ch: Channel<int> = Channel.new();\n    spawn(fn() {\n        for i in range(1, 6) { send(ch, i * i); }\n        close(ch);\n    });\n    var total = 0;\n    var open = true;\n    while (open) {\n        match (recv(ch)) {\n            Option.Some(v) => { total = total + v; },\n            Option.None => { open = false; },\n        }\n    }\n    print(\"total: ${total}\");    // 55\n}" },
-        { name: "errors.ray", code: "fn parse_port(s: string) -> Result<int, string> {\n    match (s.parse_int()) {\n        Option.Some(p) => Result.Ok(p),\n        Option.None => Result.Err(\"not a number: ${s}\"),\n    }\n}\n\nfn config() -> Result<int, string> {\n    Result.Ok(parse_port(\"8080\")? + 1)    // ? desempaqueta o retorna\n}\n\nfn main() {\n    match (config()) {\n        Result.Ok(p) => print(\"port: ${p}\"),\n        Result.Err(e) => print(\"error: ${e}\"),\n    }\n}" }
+        { name: "pipeline.ray", code: "fn main() {\n    {% if en %}// Lazy pipelines: nothing materializes until the end.{% else %}// Pipelines perezosos: nada se materializa hasta el final.{% endif %}\n    let sum = [1, 2, 3, 4, 5]\n        |> map(fn(x: int) -> int { x * x })\n        |> filter(fn(x: int) -> bool { x % 2 == 1 })\n        |> fold(0, fn(a: int, b: int) -> int { a + b });\n    print(\"odd squares: ${sum}\");    // 35\n\n    let firsts = range(1, 100)\n        .map(fn(x: int) -> int { x * x })\n        .take(4)\n        .collect();\n    print(firsts);    // [1, 4, 9, 16]\n}" },
+        { name: "actors.ray", code: "fn main() {\n    {% if en %}// Actors: fibers + channels, no shared state.{% else %}// Actores: fibras + canales, sin estado compartido.{% endif %}\n    let ch: Channel<int> = Channel.new();\n    spawn(fn() {\n        for i in range(1, 6) { send(ch, i * i); }\n        close(ch);\n    });\n    var total = 0;\n    var open = true;\n    while (open) {\n        match (recv(ch)) {\n            Option.Some(v) => { total = total + v; },\n            Option.None => { open = false; },\n        }\n    }\n    print(\"total: ${total}\");    // 55\n}" },
+        { name: "errors.ray", code: "fn parse_port(s: string) -> Result<int, string> {\n    match (s.parse_int()) {\n        Option.Some(p) => Result.Ok(p),\n        Option.None => Result.Err(\"not a number: ${s}\"),\n    }\n}\n\nfn config() -> Result<int, string> {\n    Result.Ok(parse_port(\"8080\")? + 1)    {% if en %}// ? unwraps or returns{% else %}// ? desempaqueta o retorna{% endif %}\n}\n\nfn main() {\n    match (config()) {\n        Result.Ok(p) => print(\"port: ${p}\"),\n        Result.Err(e) => print(\"error: ${e}\"),\n    }\n}" }
     ];
     var host = document.getElementById("typed");
     var ghost = document.getElementById("ghost");

@@ -1,11 +1,18 @@
-{% params title: string, body: string, page: string %}
+{% params title: string, body: string, page: string, lang: string, root: string %}
 {% extends layout %}
 {% block content %}
 <article class="doc">
     <div class="wrap">
+        {% if lang == "en" %}
+        <blockquote><p>Rendered from <code>SPEC.md</code>, the repository's <strong>normative</strong>
+        document (in Spanish): in case of doubt, the source file of the tagged version rules.
+        The English catalog of the language and its stdlib is
+        <a href="https://github.com/ray-language/raylang/blob/main/REFERENCE.en.md">REFERENCE.en.md</a>.</p></blockquote>
+        {% else %}
         <blockquote><p>Renderizado de <code>SPEC.md</code>, el documento <strong>normativo</strong>
         del repositorio: ante cualquier duda, manda el archivo fuente de la versión
         etiquetada.</p></blockquote>
+        {% endif %}
         {{& body }}
     </div>
 </article>

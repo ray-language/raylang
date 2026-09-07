@@ -1,11 +1,26 @@
-{% params title: string, page: string %}
+{% params title: string, page: string, lang: string, root: string %}
+{% let en = lang == "en" %}
+{% let file = page + ".html" %}
+{% let alt = if (en) { root + file } else { "en/" + file } %}
+{% let nav_platforms = if (en) { "Desktop & mobile" } else { "Desktop y móvil" } %}
+{% let nav_eco = if (en) { "Ecosystem" } else { "Ecosistema" } %}
+{% let nav_guide = if (en) { "Guide" } else { "Guía" } %}
+{% let nav_spec = if (en) { "Specification" } else { "Especificación" } %}
+{% let guide_url = if (en) { "https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md" } else { "https://github.com/ray-language/raylang/blob/main/docs/getting-started.md" } %}
+{% let t_theme = if (en) { "Theme" } else { "Tema" } %}
+{% let t_light = if (en) { "Light theme" } else { "Tema claro" } %}
+{% let t_system = if (en) { "System theme" } else { "Tema del sistema" } %}
+{% let t_dark = if (en) { "Dark theme" } else { "Tema oscuro" } %}
 <!doctype html>
-<html lang="es">
+<html lang="{{ lang }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
-<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<link rel="icon" type="image/svg+xml" href="{{ root }}assets/icon.svg">
+<link rel="alternate" hreflang="es" href="https://raylang.dev/{{ file }}">
+<link rel="alternate" hreflang="en" href="https://raylang.dev/en/{{ file }}">
+<link rel="alternate" hreflang="x-default" href="https://raylang.dev/{{ file }}">
 <script>
 // Aplica el tema guardado ANTES de pintar (evita el destello); sin valor → sistema.
 (function () {
@@ -18,13 +33,13 @@
 /* Fuentes de marca EMBEBIDAS (SIL OFL 1.1; las mismas del playground): sitio 100% autocontenido. */
 @font-face {
     font-family: "Space Grotesk";
-    src: url("assets/fonts/space-grotesk.woff2") format("woff2");
+    src: url("{{ root }}assets/fonts/space-grotesk.woff2") format("woff2");
     font-weight: 300 700;
     font-display: swap;
 }
 @font-face {
     font-family: "JetBrains Mono";
-    src: url("assets/fonts/jetbrains-mono.woff2") format("woff2");
+    src: url("{{ root }}assets/fonts/jetbrains-mono.woff2") format("woff2");
     font-weight: 400;
     font-display: swap;
 }
@@ -347,55 +362,60 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
 <body>
 <nav class="top">
     <div class="wrap">
-        <a class="brand" href="index.html"><img src="assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
+        <a class="brand" href="index.html"><img src="{{ root }}assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
         <span class="spacer"></span>
         <div class="links">
         {% if page == "index" %}
-        <a class="link" href="#plataformas" data-spy="plataformas">Desktop y móvil</a>
+        <a class="link" href="#plataformas" data-spy="plataformas">{{ nav_platforms }}</a>
         <a class="link" href="#agentes" data-spy="agentes">LLMs</a>
         <a class="link" href="#playground" data-spy="playground">Playground</a>
-        <a class="link" href="#ecosistema" data-spy="ecosistema">Ecosistema</a>
-        <a class="link" href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.md">Guía</a>
+        <a class="link" href="#ecosistema" data-spy="ecosistema">{{ nav_eco }}</a>
+        <a class="link" href="{{ guide_url }}">{{ nav_guide }}</a>
         <a class="link" href="bench.html">Benchmarks</a>
-        <a class="link" href="spec.html">Especificación</a>
+        <a class="link" href="spec.html">{{ nav_spec }}</a>
         {% else %}
-        <a class="link" href="index.html#plataformas">Desktop y móvil</a>
+        <a class="link" href="index.html#plataformas">{{ nav_platforms }}</a>
         <a class="link" href="index.html#agentes">LLMs</a>
         <a class="link" href="index.html#playground">Playground</a>
-        <a class="link" href="index.html#ecosistema">Ecosistema</a>
-        <a class="link" href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.md">Guía</a>
+        <a class="link" href="index.html#ecosistema">{{ nav_eco }}</a>
+        <a class="link" href="{{ guide_url }}">{{ nav_guide }}</a>
         {% if page == "bench" %}
         <a class="link active" href="bench.html">Benchmarks</a>
-        <a class="link" href="spec.html">Especificación</a>
+        <a class="link" href="spec.html">{{ nav_spec }}</a>
         {% else %}
         <a class="link" href="bench.html">Benchmarks</a>
-        <a class="link active" href="spec.html">Especificación</a>
+        <a class="link active" href="spec.html">{{ nav_spec }}</a>
         {% endif %}
         {% endif %}
-        <div class="theme" role="group" aria-label="Tema">
-            <button type="button" data-mode="light" title="Tema claro" aria-label="Tema claro">
+        {% if en %}
+        <a class="link lang" href="{{ alt }}" hreflang="es" lang="es" title="Versión en español">ES</a>
+        {% else %}
+        <a class="link lang" href="{{ alt }}" hreflang="en" lang="en" title="English version">EN</a>
+        {% endif %}
+        <div class="theme" role="group" aria-label="{{ t_theme }}">
+            <button type="button" data-mode="light" title="{{ t_light }}" aria-label="{{ t_light }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
             </button>
-            <button type="button" data-mode="system" title="Tema del sistema" aria-label="Tema del sistema">
+            <button type="button" data-mode="system" title="{{ t_system }}" aria-label="{{ t_system }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M9 21h6M12 17v4"></path></svg>
             </button>
-            <button type="button" data-mode="dark" title="Tema oscuro" aria-label="Tema oscuro">
+            <button type="button" data-mode="dark" title="{{ t_dark }}" aria-label="{{ t_dark }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path></svg>
             </button>
         </div>
         </div>
-        <div class="theme" role="group" aria-label="Tema">
-            <button type="button" data-mode="light" title="Tema claro" aria-label="Tema claro">
+        <div class="theme" role="group" aria-label="{{ t_theme }}">
+            <button type="button" data-mode="light" title="{{ t_light }}" aria-label="{{ t_light }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
             </button>
-            <button type="button" data-mode="system" title="Tema del sistema" aria-label="Tema del sistema">
+            <button type="button" data-mode="system" title="{{ t_system }}" aria-label="{{ t_system }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M9 21h6M12 17v4"></path></svg>
             </button>
-            <button type="button" data-mode="dark" title="Tema oscuro" aria-label="Tema oscuro">
+            <button type="button" data-mode="dark" title="{{ t_dark }}" aria-label="{{ t_dark }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path></svg>
             </button>
         </div>
-        <button type="button" class="menu" aria-label="Abrir el menú" aria-expanded="false">
+        <button type="button" class="menu" aria-label="{% if en %}Open the menu{% else %}Abrir el menú{% endif %}" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
         </button>
         <a class="gh" href="https://github.com/ray-language/raylang" aria-label="GitHub" title="GitHub">
@@ -407,11 +427,18 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
 {% endblock %}
 <footer class="site">
     <div class="wrap">
+        {% if en %}
+        <span>Brand identity (ocean palette, typefaces and Manta): the repository's
+        <a href="https://github.com/ray-language/raylang/tree/main/assets/branding">brand manual</a></span>
+        <span>raylang — MIT OR Apache-2.0 license · <a href="https://github.com/ray-language/raylang">github.com/ray-language/raylang</a></span>
+        <span>This site is generated by the language itself: <code>ray run site/site.ray</code></span>
+        {% else %}
         <span>Identidad de marca (paleta océano, tipografías y Manta): el
         <a href="https://github.com/ray-language/raylang/tree/main/assets/branding">manual de marca</a>
         del repositorio</span>
         <span>raylang — licencia MIT OR Apache-2.0 · <a href="https://github.com/ray-language/raylang">github.com/ray-language/raylang</a></span>
         <span>Este sitio lo genera el propio lenguaje: <code>ray run site/site.ray</code></span>
+        {% endif %}
     </div>
 </footer>
 <script>

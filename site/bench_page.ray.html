@@ -1,14 +1,23 @@
-{% params title: string, chart: string, body: string, page: string %}
+{% params title: string, chart: string, body: string, page: string, lang: string, root: string %}
 {% extends layout %}
 {% block content %}
 <article class="doc">
     <div class="wrap">
+        {% if lang == "en" %}
+        <h1>Benchmarks, <span class="grad">measured</span></h1>
+        <blockquote><p>Rendered from <code>benchmarks/poly/README.md</code> (in Spanish): the
+        repository's polyglot bench (14 programs × 9 languages, same output verified by checksum),
+        <a href="https://github.com/ray-language/raylang/tree/main/benchmarks/poly">reproducible
+        with <code>bench.py</code></a>. The chronicle of every optimization arc lives in
+        <a href="https://github.com/ray-language/raylang/blob/main/PERFORMANCE.md">PERFORMANCE.md</a>.</p></blockquote>
+        {% else %}
         <h1>Benchmarks <span class="grad">medidos</span></h1>
         <blockquote><p>Renderizado de <code>benchmarks/poly/README.md</code>: el banco poliglota
         del repositorio (14 programas × 9 lenguajes, mismo output verificado por checksum),
         <a href="https://github.com/ray-language/raylang/tree/main/benchmarks/poly">reproducible
         con <code>bench.py</code></a>. La crónica de cada arco de optimización vive en
         <a href="https://github.com/ray-language/raylang/blob/main/PERFORMANCE.md">PERFORMANCE.md</a>.</p></blockquote>
+        {% endif %}
         {{& chart }}
         <hr>
         {{& body }}

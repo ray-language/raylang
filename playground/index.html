@@ -97,6 +97,35 @@
     <pre id="out"></pre>
   </div>
 </main>
+<script>
+// Idioma de la interfaz: `?lang=en` (la portada en inglés incrusta el playground así);
+// sin parámetro, español. Solo cambia las etiquetas; los ejemplos son los mismos.
+window.PLAY_T = (function () {
+  var en = new URLSearchParams(location.search).get("lang") === "en";
+  var T = en ? {
+    files: "Files", loading: "loading…", fmt: "Format (Shift+Alt+F)", run: "▶ Run ",
+    examples: "examples", output: "output", ready: "ready · LSP active",
+    noWasm: "could not load raylang.wasm — serve it over HTTP (see README)"
+  } : {
+    files: "Archivos", loading: "cargando…", fmt: "Formatear (Shift+Alt+F)", run: "▶ Ejecutar ",
+    examples: "ejemplos", output: "salida", ready: "listo · LSP activo",
+    noWasm: "no se pudo cargar raylang.wasm — sírvelo por HTTP (ver README)"
+  };
+  if (en) {
+    document.documentElement.lang = "en";
+    var fb = document.getElementById("files-btn");
+    fb.title = T.files; fb.setAttribute("aria-label", T.files);
+    document.getElementById("status").textContent = T.loading;
+    document.getElementById("fmt").title = T.fmt;
+    var run = document.getElementById("run");
+    run.firstChild.textContent = T.run;
+    document.querySelector(".tree-header").textContent = T.examples;
+    var labels = document.querySelectorAll(".pane > .label");
+    labels[labels.length - 1].textContent = T.output;
+  }
+  return T;
+})();
+</script>
 
 <script src="editor.bundle.js"></script>
 <script type="module">
@@ -405,11 +434,11 @@ async function cargar() {
     lspNotify("textDocument/didOpen", {
       textDocument: { uri: URI, languageId: "raylang", version: docVersion, text: RayEditor.getDoc(view) },
     });
-    statusEl.textContent = "listo · LSP activo";
+    statusEl.textContent = window.PLAY_T.ready;
     runEl.disabled = false;
     fmtEl.disabled = false;
   } catch (e) {
-    statusEl.textContent = "no se pudo cargar raylang.wasm — sírvelo por HTTP (ver README)";
+    statusEl.textContent = window.PLAY_T.noWasm;
     outEl.textContent = String(e);
   }
 }

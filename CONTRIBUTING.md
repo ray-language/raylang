@@ -105,3 +105,7 @@ the original (`README`, `REFERENCE`, `docs/mcp`), with a language switch at the 
 translation carries `<!-- sync: sha256:… -->` at its foot: the hash of the original it was translated
 from. If you touch a translated original, review its `.en.md` and refresh the marker with
 `python3 tools/docs_sync.py --update <file.en.md>`; `tests/docs_i18n.rs` enforces it in CI.
+
+The website (`site/`) is bilingual from the same templates: every visible text sits in an
+`{% if en %}…{% else %}…{% endif %}` pair, and `site.ray` renders the root in Spanish and `en/` in
+English. When you change a text, change both branches — there is no separate file to forget.

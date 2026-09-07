@@ -12405,3 +12405,21 @@ la traducción y refrescar el marcador (`tools/docs_sync.py --update`). Se eligi
 contenido y no el commit de git porque el commit que actualiza ambos no puede conocer su propio sha.
 El MCP pasa a servir `raylang://reference.md` en inglés: los agentes trabajan mejor con él, y la
 guarda garantiza que no diverge del catálogo en español.
+
+## 190. M198 — el sitio en inglés desde los mismos templates (sep 2026)
+
+Tras las traducciones de M197 faltaba la puerta de entrada: `raylang.dev` era solo en español.
+La primera idea —duplicar `landing.ray.html` en un `landing_en` y vigilarlo con la misma guarda de
+hash— se descartó: 500 de las 750 líneas del template son CSS y JS compartidos, y cada retoque de
+estilo habría exigido dos ediciones. En su lugar los templates son **bilingües**: cada texto visible
+va en un par `{% if en %}…{% else %}…{% endif %}` y el layout resuelve las etiquetas de la
+navegación con `{% let %}` sobre `lang`. `site.ray` renderiza dos veces —raíz en español, `en/` en
+inglés— pasando `lang` y `root` (el prefijo relativo hasta los assets compartidos, `""` o `"../"`),
+así que fuentes, iconos, mascota y el playground se sirven una sola vez. Cada página declara sus
+`hreflang` alternos (es, en, x-default) y un selector ES/EN en la nav; el playground incrustado
+recibe `?lang=en` y traduce solo su interfaz (los ejemplos son los mismos). La especificación y los
+benchmarks en inglés son las mismas páginas con su nota traducida: el cuerpo (`SPEC.md`,
+`benchmarks/poly/README.md`) sigue en español hasta que exista `SPEC.en.md`, que es un proyecto
+aparte por su tamaño y por ser el documento normativo. No hace falta guarda de sincronía: el texto
+de ambos idiomas vive en el mismo archivo, y `tests/site_cli.rs` asevera que `en/` sale sin
+directivas sin resolver y con los assets relativos correctos.

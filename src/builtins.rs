@@ -2272,6 +2272,24 @@ fn read_expired() -> &'static std::sync::Mutex<std::collections::HashSet<i64>> {
     M.get_or_init(Default::default)
 }
 
+/// M203 (feedback 23 de ray-remote): activa (`on`) o desactiva `TCP_NODELAY` en el socket `h` —
+/// sin Nagle, cada escritura pequeña sale ya en vez de esperar hasta 40 ms al ACK anterior; lo
+/// primero que activa un cliente interactivo (VNC, SSH, juegos). TCP y TLS (su socket subyacente);
+/// total: otro handle se ignora. Builtin `__socket_set_nodelay`.
+pub fn socket_set_nodelay(h: i64, on: bool) {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => {
+            let _ = s.set_nodelay(on);
+        }
+        #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+        Some(OpenHandle::Tls(tc)) => {
+            let _ = tc.sock.set_nodelay(on);
+        }
+        _ => {}
+    }
+}
+
 /// Fija (ms > 0) o quita (ms <= 0) el timeout de lectura del socket `h`. Total: un handle que no
 /// es un socket se ignora. Builtin `__socket_set_read_timeout`.
 pub fn socket_set_read_timeout(h: i64, ms: i64) {
@@ -3979,6 +3997,13 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__socket_set_read_timeout", " (handle, ms)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_read_timeout expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_read_timeout expects an int (ms), not {}", a[1]))); }
+        Ok(Type::Unit)
+    } },
+    // __socket_set_nodelay(h, on) -> unit (M203): TCP_NODELAY del socket. Total. Envoltorio net.set_nodelay.
+    Builtin { name: "__socket_set_nodelay", opcode: OpCode::SocketSetNodelay, check: |a| {
+        arity(a, 2, "__socket_set_nodelay", " (handle, on)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_nodelay expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__socket_set_nodelay expects a bool, not {}", a[1]))); }
         Ok(Type::Unit)
     } },
     // --- UDP (M20.8) ---

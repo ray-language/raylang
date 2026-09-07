@@ -196,7 +196,7 @@ firma que sale a 101 columnas.
 sintaxis que las funciones y mostrar campos/variantes; incluir el builder de `std/json` en la
 forma calificada (feedback 20).
 
-### E4. `net.set_nodelay(h, bool)` (feedback 23) — S
+### E4. `net.set_nodelay(h, bool)` (feedback 23) — S ✅ M203
 
 `setsockopt(TCP_NODELAY)` en los tres motores + selfhost; lo primero que activa cualquier cliente
 interactivo.

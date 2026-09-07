@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net.set_nodelay(h, on)`** (M203, feedback 23 de ray-remote): `TCP_NODELAY` en TCP y TLS, en
+  los tres motores; sin Nagle un cliente interactivo ya no espera hasta 40 ms por cada escritura
+  pequeña.
 - **`ray_doc` resuelve tipos** (M202, feedback 21 de ray-remote): `ui.MenuItem` muestra
   `struct MenuItem { tag: string, title: string, shortcut: string }` con su `///`, y un enum sus
   variantes; el listado de un módulo trae los tipos con su forma y recuerda que UFCS no alcanza a

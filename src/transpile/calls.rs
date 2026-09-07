@@ -742,6 +742,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // set_nodelay(h, on) -> unit (M203): TCP_NODELAY del socket.
+            "set_nodelay" => {
+                out.push_str("__ray_set_nodelay(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // socket_write(h, s) → escribe los bytes UTF-8 del string; socket_write_bytes(h, data) → los bytes.
             "socket_write" | "socket_write_bytes" => {
                 out.push_str("__ray_socket_write(");
@@ -1005,7 +1013,7 @@ impl Transpiler {
             if matches!(
                 nfn,
                 "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "peer_addr" | "shutdown_write" | "socket_read" | "socket_read_bytes"
-                    | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout"
+                    | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout" | "set_nodelay"
             ) {
                 return self.emit_net(out, nfn, &eff);
             }
@@ -2502,7 +2510,7 @@ impl Transpiler {
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
-                    "std::net::set_read_timeout" => return Ok(Type::Unit),
+                    "std::net::set_read_timeout" | "std::net::set_nodelay" => return Ok(Type::Unit),
                     "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept"
                     | "std::net::socket_write" | "std::net::socket_write_bytes" | "std::net::shutdown_write" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))

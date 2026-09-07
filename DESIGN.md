@@ -12479,3 +12479,17 @@ el punto 20 (UFCS no alcanza a nombres calificados: `json.obj().field(…)` no c
 forma calificada y qué import hace falta para encadenar. Cambiar la regla de resolución para que
 UFCS mire el módulo que define el tipo del receptor queda fuera: es un cambio del lenguaje y va a
 la SPEC cuando se discuta.
+
+## 195. M203 — `net.set_nodelay`: la opción de socket que todo cliente interactivo activa (sep 2026)
+
+Feedback 23 de `ray-remote` (lote E, E4): un cliente de escritorio remoto manda decenas de
+escrituras de 6 a 10 octetos por segundo, y con Nagle activo el SO puede retener cada una hasta
+40 ms esperando el ACK anterior — la clase de latencia que se nota al mover el ratón. `std/net` no
+tenía forma de desactivarlo; `set_read_timeout` (M56.4) ya demostraba que las opciones de socket
+caben en la API sin abrir un `setsockopt` genérico. `set_nodelay(h, on)` sigue exactamente esa
+plantilla: primitivo `__socket_set_nodelay` en la tabla `BUILTINS` (un opcode, total: otro handle
+se ignora), aplicado al `TcpStream` del registro —también al socket subyacente de una conexión
+TLS— en intérprete y VM, y `__ray_set_nodelay` en el runtime generado del nativo (TLS nativo
+queda fuera: su socket vive dentro de la sesión y no hay diferencia observable en la salida).
+No se expone un `set_option` genérico a propósito: cada opción que entra lo hace con nombre,
+tipo y semántica documentada, como el resto de la superficie.

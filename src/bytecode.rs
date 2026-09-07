@@ -729,6 +729,9 @@ pub enum OpCode {
     /// socket y empuja `unit`. Total. Primitivo `__socket_set_read_timeout` (M56.4); envoltorio
     /// `net.set_read_timeout` en std/net.
     SocketSetReadTimeout,
+    /// Saca `on` (bool) y el handle (int); activa/desactiva `TCP_NODELAY` (Nagle) en el socket y
+    /// empuja `unit`. Total. Primitivo `__socket_set_nodelay` (M203); envoltorio `net.set_nodelay`.
+    SocketSetNodelay,
     /// Saca `port` (int) y `host` (string); enlaza un socket UDP y empuja un `[string]` etiquetado.
     /// Primitivo `__udp_bind`; la lib udp.ray → `Result<int,string>` (M20.8).
     UdpBind,

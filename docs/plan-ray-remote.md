@@ -190,7 +190,7 @@ El parser desazucara `if let` a `match` antes del AST y el formateador imprime e
 conservar el sitio (como los paréntesis de M189) y reimprimir `if let`. En el mismo lote: la
 firma que sale a 101 columnas.
 
-### E3. `ray_doc` con structs, enums y funciones asociadas (feedback 21) — S–M
+### E3. `ray_doc` con structs, enums y funciones asociadas (feedback 21) — S–M ✅ M202
 
 `ui.MenuItem` y `Channel.bounded` responden "no existe". Resolver tipos y asociadas con la misma
 sintaxis que las funciones y mostrar campos/variantes; incluir el builder de `std/json` en la

@@ -32,7 +32,7 @@ por línea), sin dependencias ni estado.
 | `ray_run` | `code`, `stdin?` | `exit` (el `int` de `main`) + stdout + stderr |
 | `ray_test` | `code` | el reporte del runner `@test`; `exit` 0 = verde, 1 = fallos |
 | `ray_fmt` | `code` | el fuente canónico (`ray fmt`) |
-| `ray_doc` | `symbol` | firma + doc de un builtin o `std/*` (`len`, `json.parse`, `crypto.x25519_public_key`…) |
+| `ray_doc` | `symbol` | firma + doc de un builtin, una función o un **tipo** de `std/*` (`len`, `json.parse`, `ui.MenuItem` con sus campos, `process.Exit` con sus variantes…) |
 
 Y dos *resources*: **`raylang://llms.txt`** — el contexto destilado de la pieza A (delta contra
 Rust, formas canónicas, mensajes de error exactos) — y **`raylang://reference.md`** — el catálogo

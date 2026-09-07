@@ -12465,3 +12465,17 @@ posición del propio `if`, lo que lo distingue de un `else { }` escrito). El AST
 motores y selfhost siguen viendo el `match`. En el mismo hito, la firma se medía como cabecera
 pelada, sin la sangría ni el ` {` que se añaden después: una de 99 columnas salía a 101, una más
 que el propio límite — cuatro archivos del repo lo demostraban y quedaron repartidos.
+
+## 194. M202 — `ray_doc` conoce los tipos (sep 2026)
+
+Feedback 21 de `ray-remote` (lote E, E3): `ray_doc "std/ui"` listaba `struct MenuItem`, pero
+`ray_doc "ui.MenuItem"` respondía "no existe", y el agente acabó adivinando los campos compilando
+un snippet a ciegas. La búsqueda por fuente (`source_symbol_doc`) solo miraba funciones públicas y
+métodos de trait; ahora cubre structs (campos con tipo) y enums (variantes con payload), con las
+`///` contiguas a la declaración, y el listado del módulo muestra cada tipo con su forma en vez de
+solo el nombre. La misma vía sirve a los módulos de un proyecto y a sus paquetes (`path`). De paso,
+el punto 20 (UFCS no alcanza a nombres calificados: `json.obj().field(…)` no compila con
+`import std/json;`) se resuelve donde duele, en la herramienta: cada listado termina recordando la
+forma calificada y qué import hace falta para encadenar. Cambiar la regla de resolución para que
+UFCS mire el módulo que define el tipo del receptor queda fuera: es un cambio del lenguaje y va a
+la SPEC cuando se discuta.

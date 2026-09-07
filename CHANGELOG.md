@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray_doc` resuelve tipos** (M202, feedback 21 de ray-remote): `ui.MenuItem` muestra
+  `struct MenuItem { tag: string, title: string, shortcut: string }` con su `///`, y un enum sus
+  variantes; el listado de un módulo trae los tipos con su forma y recuerda que UFCS no alcanza a
+  los nombres calificados (feedback 20).
 - **`ray fmt` conserva `if let`** (M201, feedback 22 de ray-remote): el parser lo desazucara a
   `match` y el formateador lo reescribía; ahora reemite `if let … { } [else …]` tal cual. Y las
   firmas se miden como la línea que sale (sangría + ` {`): una de 99 columnas ya no sale a 101.

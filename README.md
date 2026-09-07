@@ -299,12 +299,15 @@ y config para Neovim/Helix (usan `ray lsp` directo).
 
 ## Estado
 
-**raylang 1.3.1** (última release publicada; las versiones salen como Releases de GitHub con binarios
-por plataforma), con trabajo continuo sobre esa línea (rendimiento, concurrencia nativa, framework web,
-procesos del SO). Motor de producto = la VM; el binario nativo es el destino de despliegue y el
-intérprete, el oráculo de desarrollo. La suite tiene **703 tests unitarios** + **123 archivos de tests de
-integración** (incluido un fuzzer del front-end, los oráculos VM↔intérprete y el corpus de paridad del
-binario nativo). Lo publicado y lo que está en camino, en [`CHANGELOG.md`](CHANGELOG.md).
+La última versión publicada está en las [Releases de GitHub](https://github.com/ray-language/raylang/releases)
+(binarios por plataforma: macOS y Linux en arm64 y x86_64, Windows en x86_64 y arm64, más la
+toolchain autocontenida para `ray build --native`); `ray version` la muestra y `ray upgrade` la
+instala. El trabajo continúa sobre esa línea (rendimiento, concurrencia nativa, framework web,
+escritorio y móvil). Motor de producto = la VM; el binario nativo es el destino de despliegue y el
+intérprete, el oráculo de desarrollo. La suite incluye tests unitarios por fase, más de un
+centenar de archivos de tests de integración, un fuzzer del front-end, los oráculos
+VM↔intérprete y el corpus de paridad del binario nativo. Lo publicado y lo que está en camino, en
+[`CHANGELOG.md`](CHANGELOG.md).
 
 El foco es **producción real**, con el alcance dicho de frente: lo hace un solo mantenedor y no ha pasado
 una auditoría externa (ver [`SECURITY.md`](SECURITY.md#alcance)).

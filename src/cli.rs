@@ -66,6 +66,7 @@ fn run() {
         Some("registry") => cmd_registry(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
+        Some("serve") => cmd_serve(&rest[1..]),
         Some("lsp") => lsp::run(),
         Some("mcp") => mcp::run(),
         Some("repl") | None => repl::run(),
@@ -96,6 +97,7 @@ Project:
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
+  serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
 
 Packages:
   add <name>[@req]  add a dependency from the index to ray.toml and download it
@@ -273,6 +275,78 @@ fn sh_capture(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String
 /// válido con el binario en ejecución). En Windows (M165) el zip lo abre el `tar` del sistema
 /// (bsdtar, Windows 10+) y el `.exe` en ejecución se APARTA a `.old` antes de colocar el nuevo:
 /// no se puede sobrescribir, pero sí renombrar.
+/// `ray serve [dir] [--host H] [--port N]` (M199): un servidor de archivos estáticos para
+/// previsualizar lo que producen las herramientas (`_site/`, `playground/`, `ray doc`). El
+/// servidor está escrito EN raylang (`src/serve.ray`, embebido como la stdlib) y corre en la VM;
+/// aquí solo se parsean los argumentos y se le pasan como `args()`.
+const SERVE_RAY: &str = include_str!("serve.ray");
+
+fn cmd_serve(args: &[String]) {
+    let mut dir: Option<String> = None;
+    let mut host = "127.0.0.1".to_string();
+    let mut port = "8000".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--host" | "-H" if i + 1 < args.len() => {
+                host = args[i + 1].clone();
+                i += 2;
+            }
+            "--port" | "-p" if i + 1 < args.len() => {
+                port = args[i + 1].clone();
+                i += 2;
+            }
+            "--help" | "-h" => {
+                println!("usage: ray serve [dir] [--host H] [--port N]   (defaults: . 127.0.0.1 8000; --port 0 picks a free one)");
+                process::exit(0);
+            }
+            a if a.starts_with('-') => {
+                eprintln!("unknown option '{a}'; usage: ray serve [dir] [--host H] [--port N]");
+                process::exit(64);
+            }
+            a => {
+                if dir.is_some() {
+                    eprintln!("usage: ray serve [dir] [--host H] [--port N]");
+                    process::exit(64);
+                }
+                dir = Some(a.to_string());
+                i += 1;
+            }
+        }
+    }
+    let dir = dir.unwrap_or_else(|| ".".to_string());
+    if !Path::new(&dir).is_dir() {
+        eprintln!("not a directory: {dir}");
+        process::exit(66);
+    }
+    runtime::set_program_args(vec![dir, host, port]);
+    // El servidor solo importa std/*: la ruta de entrada es virtual (no se lee del disco).
+    let loaded = match loader::load_source(Path::new("ray-serve.ray"), SERVE_RAY, &[]) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("internal error loading the embedded server: {}", e.message);
+            process::exit(70);
+        }
+    };
+    let (mut program, locate, multi) = locate_of(loaded);
+    check_or_exit(&mut program, &locate, multi);
+    let compiled = match compiler::compile_program(&program) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("internal error compiling the embedded server: {e}");
+            process::exit(70);
+        }
+    };
+    match vm::run_program_with_limit(&compiled, None, None) {
+        Ok(Value::Int(code)) => process::exit((code & 0xFF) as i32),
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!("ray serve: {e}");
+            process::exit(70);
+        }
+    }
+}
+
 fn cmd_upgrade(args: &[String]) {
     let (check, rest) = take_flag_bool(args, "--check");
     if rest.len() > 1 {
@@ -3930,6 +4004,11 @@ fn load_and_locate(path: &str) -> (crate::ast::Program, Locate, bool) {
             process::exit(65);
         }
     };
+    locate_of(loaded)
+}
+
+/// Separa un programa cargado en (programa, localizador de posiciones, ¿multi-módulo?).
+fn locate_of(loaded: loader::Loaded) -> (crate::ast::Program, Locate, bool) {
     let modules = loaded.modules;
     let multi = modules.len() > 1;
     let locate: Locate = Box::new(move |gline: usize, col: usize, len: usize| {

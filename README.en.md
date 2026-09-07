@@ -233,7 +233,7 @@ To run it locally, raylang runs in the browser (the VM compiled to `wasm32`, **z
 
 ```sh
 ./playground/build.sh
-cd playground && python3 -m http.server 8000   # → http://localhost:8000
+ray serve playground                            # → http://127.0.0.1:8000
 ```
 
 It covers the core language (the whole language + prelude + pure stdlib). See [`playground/`](playground/).
@@ -345,4 +345,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:9645db74c537 -->
+<!-- sync: sha256:b8f99cae221a -->

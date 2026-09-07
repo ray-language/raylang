@@ -526,6 +526,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray fmt <file>... [--write]` | prints the canonical version (4-space indentation; whatever exceeds 100 columns is split: a `from … import` one name per line, a method chain one link per line, `&&`/`\|\|`/`+` chains one operand per line, and delimited lists — arguments, `fn` parameters, literals — one element per line with the closer on its own line; trailing comments stay with their operand/element and your parentheses are kept). `--write`/`-w` rewrites in place and accepts several files |
 | `ray build --templates-only [path…]` | **materializes** on disk the generated module of each `.ray.html` template (`{% params %}` signature), for inspection (without paths: the project root). The normal path does not need it: the loader compiles templates **in memory** when resolving their imports (M102) and ignores a sibling `.ray` |
 | `ray doc <file>` | Markdown documentation of the public surface (`///`) |
+| `ray serve [dir] [--host H] [--port N]` | serves a directory of static files over HTTP for previews (`_site/`, `playground/`, the output of `ray doc`): `index.html` per directory, MIME by extension, `Cache-Control: no-store`, no `..`; defaults to `.` on `127.0.0.1:8000`, `--port 0` picks a free one. It is the server written in raylang embedded in the binary (M199), not a production server (use `net/webserver` for that) |
 | `ray repl` | interactive REPL |
 | `ray lsp` | Language Server (diagnostics, hover, go-to-definition, references, rename, completion, signature help) |
 | `ray mcp` | MCP server for LLM agents: `check`/`run`/`test`/`fmt`/`doc` tools, with the code sandboxed (fuel + heap + deadline), plus the `raylang://llms.txt` resource (the distilled context [`llms.txt`](llms.txt) from the repo root, for the model's prompt). Guide: [`docs/mcp.en.md`](docs/mcp.en.md) |
@@ -589,4 +590,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:ad658495fc57 -->
+<!-- sync: sha256:f72453dee7e0 -->

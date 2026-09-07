@@ -251,6 +251,7 @@ ray build file.ray          # check only (also: ray build --native for a machine
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray fmt file.ray            # canonical formatting
 ray doc file.ray            # API docs (raydoc)
+ray serve [dir]             # static file server for previews (127.0.0.1:8000; --host/--port; --port 0 = free)
 ```
 
 Always run what you write: the checker's messages are positioned and specific — treat

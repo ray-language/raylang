@@ -2966,7 +2966,7 @@ mod win {
             *slot2.0.lock().unwrap() = Some(f());
             slot2.1.notify_all();
         });
-        // 15 s: la creación del entorno de WebView2 puede tardar en frío (arranca msedgewebview2).
+        // La creación del entorno de WebView2 tarda en frío (arranca msedgewebview2).
         // 1.7.0: 60 s — crear el entorno de WebView2 en un runner cargado (dos builds nativos en paralelo)
         // superaba los 15 s y `ui.open` fallaba con "the main thread did not respond" en el humo de CI.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);

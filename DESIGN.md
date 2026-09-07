@@ -12438,3 +12438,16 @@ y una fibra por conexión. Ese programa (`src/serve.ray`) va embebido en el bina
 VM con `args()`: la toolchain corre raylang para servir raylang. `--port 0` imprime el puerto
 asignado (`local_port`, M150) y es lo que usa el test de integración. Fuera de alcance, a
 propósito: TLS, listados de directorio, rangos y keep-alive — para eso está `net/webserver`.
+
+## 192. M200 — `ray test` chequea lo que nadie importa (sep 2026)
+
+Segunda ronda de feedback de `ray-remote` (lote E del plan, `docs/plan-ray-remote.md` §5b). El
+punto 17 es la cara optimista del punto 5 (M188): la suite del proyecto se cargaba (parseaba)
+pero solo se **chequeaba** si tenía `@test`, porque el chequeo era el paso previo a ejecutar sus
+pruebas. `src/main.ray` no lo importa nadie y suele no tener pruebas propias → un error de tipos
+ahí no lo veía nadie hasta `ray build`, y así se coló un commit con la app sin compilar. Ahora el
+runner chequea **todas** las suites antes de contar pruebas, con o sin ellas (sin pruebas, el
+`main` sintético queda vacío y el chequeo es el del programa), y una suite que no compila entra en
+el veredicto de M188 ("no test ran — N suite(s) failed to compile") aunque no aportara pruebas. La
+alternativa —compilar la entrada como paso aparte del runner— habría duplicado la carga y el
+formato de los diagnósticos; tratarla como una suite más es una línea de menos, no de más.

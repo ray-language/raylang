@@ -89,36 +89,48 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
         }
     }
 
-    let total: usize = suites.iter().map(|s| s.tests.len()).sum();
-    if total == 0 {
-        if !frontend_failed {
-            match filter {
-                Some(p) => println!("no tests (@test) containing '{}'", p),
-                None => println!("no tests (@test) in the project"),
+    // M200 (feedback 17 de ray-remote): TODAS las suites se chequean, tengan o no pruebas. Antes
+    // solo se chequeaba la que tenía `@test`, así que un `src/main.ray` sin pruebas propias —la
+    // entrada del proyecto, que nadie importa— podía tener un error de tipos y la suite salía
+    // verde; el error aparecía en `ray build`, o en un commit. El chequeo es único por suite (un
+    // `main` sintético que llama a todas sus pruebas), y sin pruebas es el chequeo del programa.
+    let mut compile_failures = 0;
+    let mut compiles: Vec<bool> = Vec::with_capacity(suites.len());
+    for suite in &suites {
+        match check_suite(suite) {
+            Ok(()) => compiles.push(true),
+            Err(e) => {
+                eprintln!("{}", e);
+                frontend_failed = true;
+                compile_failures += 1;
+                compiles.push(false);
             }
         }
-        return if frontend_failed { 65 } else { 0 };
+    }
+
+    let total: usize = suites.iter().map(|s| s.tests.len()).sum();
+    if total == 0 {
+        if frontend_failed {
+            println!("result: no test ran — {} suite(s) failed to compile ✗", compile_failures);
+            return 65;
+        }
+        match filter {
+            Some(p) => println!("no tests (@test) containing '{}'", p),
+            None => println!("no tests (@test) in the project"),
+        }
+        return 0;
     }
 
     println!("running {} test(s)\n", total);
     let multi_suite = suites.iter().filter(|s| !s.tests.is_empty()).count() > 1;
     let mut failures = 0;
-    let mut compile_failures = 0;
     let mut ran = 0;
-    for suite in &suites {
-        if suite.tests.is_empty() {
+    for (suite, ok) in suites.iter().zip(&compiles) {
+        if suite.tests.is_empty() || !ok {
             continue;
         }
         if multi_suite {
             println!("-- {}", suite.display);
-        }
-        // Chequeo único de la suite: un `main` que llama a TODAS sus pruebas, para surfacing de
-        // errores de compilación una sola vez (no por prueba).
-        if let Err(e) = check_suite(suite) {
-            eprintln!("{}", e);
-            frontend_failed = true;
-            compile_failures += 1;
-            continue;
         }
         for test in &suite.tests {
             ran += 1;
@@ -194,7 +206,17 @@ fn collect_tests(program: &Program, filter: Option<&str>, own_only: bool) -> Vec
 fn check_suite(suite: &Suite) -> Result<(), String> {
     let statements = suite.tests.iter().map(|t| stmt_call(&t.global)).collect();
     let body = Block { statements, tail: Some(Box::new(expr(ExprKind::Int(0, crate::token::Radix::DEC)))), line: 1, col: 1, end_line: 1 };
-    let mut program = swap_main(suite.loaded.program.clone(), synth_main(body));
+    // M200: el `main` del usuario NO se descarta en el chequeo — se renombra (`main#entry`, un
+    // nombre que el léxico de usuario no puede escribir) para que su cuerpo se chequee como una
+    // función más. Antes `swap_main` lo tiraba y un error de tipos dentro de `main` pasaba en
+    // verde (feedback 17 de ray-remote).
+    let mut program = suite.loaded.program.clone();
+    for f in program.functions.iter_mut() {
+        if f.name == "main" {
+            f.name = "main#entry".into();
+        }
+    }
+    let mut program = swap_main(program, synth_main(body));
     checker::check(&mut program).map_err(|mut e| {
         let (module, source, local, col, len) = suite.loaded.locate(e.line, e.col, e.len);
         e.line = local;

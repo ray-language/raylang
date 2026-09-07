@@ -170,6 +170,49 @@ más selfhost. Recomendación: sí, con el escape explícito.
 sin anotación a partir del cuerpo. Coste M (inferencia en el checker + selfhost). Baja
 prioridad: el rodeo es una sentencia.
 
+## 5b. Lote E — segunda ronda de feedback (7 sep 2026, puntos 17–24)
+
+Verificado contra 1.8.0 antes de planificar: el punto 1 ya estaba resuelto (M196; el feedback tenía
+el estado desactualizado) y el 19 (`if`/`else` como operando "se traga" lo que sigue) **no se
+reproduce** con strings, bytes, llamadas ni salto de línea antes del operador — pendiente de un
+caso concreto del proyecto antes de tocar el parser. El 20 (UFCS contra módulos cualificados) no
+entra: cambia una regla de resolución de nombres y merece su propia discusión en la SPEC; lo
+barato es que `ray_doc` y la referencia muestren el builder de `std/json` en la forma que compila.
+
+### E1. `ray test` chequea también la entrada del proyecto (feedback 17) — S ✅ M200
+
+Toda suite se chequea aunque no tenga `@test`; un `src/main.ray` roto sale 65 con el veredicto de
+M188. Bug real: se coló un commit sin compilar.
+
+### E2. `ray fmt` conserva `if let` (feedback 22) — M
+
+El parser desazucara `if let` a `match` antes del AST y el formateador imprime el `match`. Hay que
+conservar el sitio (como los paréntesis de M189) y reimprimir `if let`. En el mismo lote: la
+firma que sale a 101 columnas.
+
+### E3. `ray_doc` con structs, enums y funciones asociadas (feedback 21) — S–M
+
+`ui.MenuItem` y `Channel.bounded` responden "no existe". Resolver tipos y asociadas con la misma
+sintaxis que las funciones y mostrar campos/variantes; incluir el builder de `std/json` en la
+forma calificada (feedback 20).
+
+### E4. `net.set_nodelay(h, bool)` (feedback 23) — S
+
+`setsockopt(TCP_NODELAY)` en los tres motores + selfhost; lo primero que activa cualquier cliente
+interactivo.
+
+### E5. Unificar los brazos de un `match` antes de rendirse con `Result.Err(e)` (feedback 18) — M
+
+El brazo `Ok` ya fija `Result<int, string>`; usarlo como tipo esperado del otro brazo. El mensaje
+ya dice "annotate the type", así que va detrás de E1–E4.
+
+### E6. Detalles (feedback 24) — S
+
+`no tests containing` añade "(by test name)"; el error de `&` con `bool` sugiere
+`((x >> b) & 1) == 1`; ejemplo en el MANUAL de `std/process` con `security`/`open`/`pbcopy`.
+
+Orden: E1 → E2 → E3 → E4 → E5 → E6, un hito cada uno (M200–M205).
+
 ## 6. Documentación (transversal, S) ✅ M190 (captura/spawn, `bytes`, `Channel.bounded`; el patrón "canal que se cierra" queda con D1)
 
 - **MANUAL, captura de closures**: en negrita, "entre fibras solo se comparten canales y
@@ -193,6 +236,7 @@ prioridad: el rodeo es una sentencia.
 | M194 | C2 (`std/crypto/legacy`) | `src/crypto/` se reduce a `bignum.ray` |
 | M195 | C3 (`std/bigint`) | conectar pasa de 5 s a <100 ms; `src/crypto/` desaparece |
 | D | D2–D3 | según decisión |
+| M200–M205 | E1–E6 (lote E, segunda ronda) | `ray test` honesto con la entrada; `fmt` fiel; `ray_doc` completo; sin Nagle |
 
 Cada hito: rama + PR, SPEC antes si cambia el lenguaje, DESIGN con el porqué, CHANGELOG "Sin
 publicar", y la validación final es el diff en `ray-remote` que borra el rodeo.

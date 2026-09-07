@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.9.0 — 2026-09-07
 
 - **Detalles** (M205, feedback 24 de ray-remote): `ray test <filtro>` sin resultados aclara que el
   filtro es por nombre de prueba, no de archivo; `(x >> b) & 1 == 1` explica la precedencia y

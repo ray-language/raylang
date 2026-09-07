@@ -10,6 +10,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   selector de idioma en cada par y una guarda de CI (`tests/docs_i18n.rs`) que detecta cuando el
   original cambia sin revisar la traducción (marcador `<!-- sync: sha256:… -->`; se refresca con
   `tools/docs_sync.py --update`). El MCP sirve `raylang://reference.md` en inglés.
+- **Guía de arranque** `docs/getting-started.md` (+ `docs/getting-started.en.md`): instalar, un
+  proyecto, el lenguaje en quince minutos, concurrencia, un servidor web y las herramientas; todos
+  los ejemplos se ejecutan tal cual.
 
 ## 1.7.0 — 2026-09-06
 

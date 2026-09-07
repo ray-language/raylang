@@ -281,6 +281,7 @@ originals by a CI guard).
 | [`PUBLISH.md`](PUBLISH.md) | The **publisher's guide**: packaging, versioning and publishing to the registry. |
 | [`SPEC.md`](SPEC.md) | The **normative specification** of the language (grammar + semantics). |
 | [`llms.txt`](llms.txt) | **raylang for LLMs**: the distilled context (delta vs Rust, canonical forms, exact errors) so a model writes correct raylang. Paste it into your prompt/CLAUDE.md. |
+| [`docs/getting-started.en.md`](docs/getting-started.en.md) | **raylang in half an hour**: install, a project, the language in fifteen minutes, concurrency, a web server and the tools (in English; original: [`docs/getting-started.md`](docs/getting-started.md)). |
 | [`docs/mcp.en.md`](docs/mcp.en.md) | The **MCP server** (`ray mcp`): the check/run/test/fmt/doc tools for LLM agents, with the code sandboxed (fuel/heap/deadline) (in English; original: [`docs/mcp.md`](docs/mcp.md)). |
 | [`docs/web-framework.md`](docs/web-framework.md) | The **web framework** guide (Express-style): routes, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | The **builds** guide: slim features, PGO, native binary. |
@@ -344,4 +345,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:630463ad8071 -->
+<!-- sync: sha256:9645db74c537 -->

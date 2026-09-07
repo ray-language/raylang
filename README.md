@@ -273,11 +273,11 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | Documento | Qué es |
 |-----------|--------|
 | [`MANUAL.md`](MANUAL.md) | La **guía práctica**: cómo usar el lenguaje, idiomas, y mejores prácticas. |
-| [`REFERENCE.md`](REFERENCE.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. |
+| [`REFERENCE.md`](REFERENCE.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. También en inglés: [`REFERENCE.en.md`](REFERENCE.en.md). |
 | [`PUBLISH.md`](PUBLISH.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
 | [`SPEC.md`](SPEC.md) | La **especificación normativa** del lenguaje (gramática + semántica). |
 | [`llms.txt`](llms.txt) | **raylang para LLMs**: el contexto destilado (delta vs Rust, formas canónicas, errores exactos) para que un modelo escriba raylang correcto. Pégalo en tu prompt/CLAUDE.md. |
-| [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). |
+| [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). También en inglés: [`docs/mcp.en.md`](docs/mcp.en.md). |
 | [`docs/web-framework.md`](docs/web-framework.md) | La guía del **framework web** (estilo Express): rutas, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
 | [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md) | El **backend nativo** por dentro: cómo se transpila a Rust y cómo se garantiza la paridad. |

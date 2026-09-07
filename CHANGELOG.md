@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Documentación en inglés** (M197): `README.en.md`, `REFERENCE.en.md` y `docs/mcp.en.md`, con
+  selector de idioma en cada par y una guarda de CI (`tests/docs_i18n.rs`) que detecta cuando el
+  original cambia sin revisar la traducción (marcador `<!-- sync: sha256:… -->`; se refresca con
+  `tools/docs_sync.py --update`). El MCP sirve `raylang://reference.md` en inglés.
+
 ## 1.7.0 — 2026-09-06
 
 - **`ui.open` en Windows espera hasta 60 s por la ventana** (antes 15): crear el entorno de

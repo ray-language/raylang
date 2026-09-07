@@ -1,5 +1,7 @@
 # Referencia de raylang
 
+Español · [English](REFERENCE.en.md)
+
 El **catálogo exhaustivo** de la superficie del lenguaje: palabras clave, símbolos, operadores,
 builtins, prelude, biblioteca estándar y herramientas. Complementa al [`MANUAL.md`](MANUAL.md) (la
 guía práctica, con prosa y ejemplos) y a la [`SPEC.md`](SPEC.md) (la referencia normativa: ante una
@@ -33,7 +35,6 @@ Reservadas (no pueden usarse como identificadores):
 |---|---|
 | Declaraciones | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` |
 | Control | `if` `else` `while` `for` `in` `match` `return` `break` `continue` |
-| Control | `if` `else` `while` `for` `in` `return` `match` |
 | Módulos | `import` `pub` (`from` es **contextual**: solo al inicio de un ítem, `from M import x;`) |
 | Valores/tipos | `true` `false` `dyn` `as` `self` `Self` |
 | Tipos primitivos | `int` `float` `bool` `string` `char` `bytes` `ptr` `u8` `u32` `u64` |
@@ -99,7 +100,7 @@ Reservadas (no pueden usarse como identificadores):
 
 | Literal | Forma | Notas |
 |---|---|---|
-| Entero | `42`, `-7`, `0xFF`, `0o755`, `0b1010` | decimal o con prefijo `0x`/`0o`/`0b` (hex/octal/binario, mayúsculas también); debe caber en i64. Sin `_` (diferido) |
+| Entero | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `255u8`, `0xFFu32` | decimal o con prefijo `0x`/`0o`/`0b` (hex/octal/binario, mayúsculas también). Sufijo opcional `u8`/`u32`/`u64` = ese tipo sin contexto (M192). Sin sufijo: cabe en `int` → `int` (coerciona al `u*` del contexto); no cabe en `int` pero sí en `u64` (`0xFFFFFFFFFFFFFFFF`) → **amplio**, `u64`. Sin `_` (diferido) |
 | Flotante | `3.14` | `dígitos . dígitos` (el `.` exige decimal: `2.0`, no `2.`); siempre decimal |
 | Booleano | `true` / `false` | |
 | String | `"hola"` | escapes `\n \t \r \\ \" \$ \0`, `\xNN` (octeto hex, U+0000..U+00FF) y `\u{H…H}` (1–6 hex, code point Unicode); sin saltos de línea literales |
@@ -110,7 +111,7 @@ Reservadas (no pueden usarse como identificadores):
 | Tupla | `(1, "a")` | acceso `t.0`, `t.1`; destructuring `let (a, b) = t;` |
 | Struct | `Punto { x: 1, y: 2 }` | |
 | Enum | `Option.Some(5)`, `Color.Rojo` | |
-| Función anónima | `fn(x: int) -> int { x * 2 }` | closure: captura el ámbito por referencia |
+| Función anónima | `fn(x: int) -> int { x * 2 }` | closure: captura el ámbito por referencia — dentro de una fibra; lo que captura una closure pasada a `spawn` se **copia** al arrancar la fibra (solo canales y handles se comparten) |
 
 ## 4. Tipos
 
@@ -518,7 +519,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray build [archivo] [--native …]` | chequea y compila sin ejecutar (0 ok / 65 error); `--native` transpila a Rust y produce un **binario nativo** (24–61× la VM, byte-idéntico); `--lib` (§80b) emite en su lugar una **librería estática** con la entrada C `ray_start()` — lo que un shell móvil (o cualquier host C) linkea; el shell registra sus handlers de ui con `ray_ui_set_handlers` y empuja eventos con `ray_ui_push_event` |
 | `ray bundle [archivo] [--name N] [--icon i.png] [--id com.x.y] [-o dir] [--without lista] [--ios [--ios-target device\|sim\|both]]` | empaqueta una **app de escritorio** (M147c): build nativo `--release` (con el `[native] embed` del ray.toml) → `.app` en macOS (Info.plist + icns vía sips/iconutil + codesign ad-hoc), directorio con `.desktop` en Linux o, en Windows (M180), directorio con `<name>.exe` (subsistema WINDOWS: sin consola al doble clic; icono y VERSIONINFO — nombre, versión, `[app] copyright` — embebidos como recursos por `UpdateResourceW`, sin crates) + `<name>.lnk` (destino y cwd absolutos; cópialo al menú Inicio); sin Authenticode en v1 (SmartScreen avisa); **`--ios`** (§80b) genera en su lugar el PROYECTO XCODE de una app iOS — shell WKWebView en ObjC + staticlibs de dispositivo y simulador (`ray build --native --lib` por dentro; xcconfig elige el `.a` por SDK; `--ios-target device|sim` construye solo un lado — iterando contra un destino, el otro build sobra — y el `.a` del lado no construido se PRESERVA del proyecto anterior) + Info.plist; el MISMO fuente de escritorio corre en el iPhone (`ui.open` entrega la URL al webview del shell; ciclo de vida como eventos `lifecycle`). El `.app` de macOS escribe `NSHumanReadableCopyright` desde **`[app] copyright = "…"`** del ray.toml (M155 — el panel About lo muestra). Simulador sin firma; dispositivo: declara el team en `[ios] development_team = "…"` del ray.toml (M151; el bundle lo escribe en el App.xcconfig y además PRESERVA una firma ya presente al regenerar — antes cada bundle la borraba), o ábrelo en Xcode y elígelo una vez. `--ios` excluye `process` y `audio`. **`--android`** (M156) genera el PROYECTO GRADLE (shell Java + WebView; el programa como cdylib `libray_app.so` en `jniLibs/` — los símbolos JNI van dentro), `--android-abi arm64|x86_64|all` (arm64 default; preserva el `.so` del ABI no construido y `local.properties`), `[android] application_id` en ray.toml; mismas exclusiones que iOS; stdout→logcat tag `ray`; compilar con `gradle assembleDebug` (Gradle 9.x + JDK 17+, AGP 9 pinneado); `--icon` genera los `mipmap-*/ic_launcher.png` multi-densidad (M160, vía sips; legacy — Android 8+ lo enmascara a círculo) y la **firma de release** va por `keystore.properties` en la raíz del proyecto generado (condicional, cero secretos en ray.toml; keystore + properties PRESERVADOS al regenerar — flujo completo en el README generado). OJO: el .app lanza con cwd=/ → los assets van embebidos; sin firma/notarización en v1 (macOS 15+: una app descargada sin firmar exige aprobación en Ajustes) |
 | `ray test [archivo] [filtro]` | corre las `@test` del proyecto: la entrada y todos sus módulos (calificadas: `math.t`) + cada `tests/*.ray` como suite de integración; filtro por subcadena; sale con 0/1 (65 si algo no compila) |
-| `ray fmt <archivo>... [--write]` | imprime la versión canónica (indentación de 4; lo que pase de 100 columnas se reparte: un `from … import` a un nombre por línea, una cadena de métodos a un eslabón por línea, y las listas delimitadas —argumentos, parámetros de `fn`, literales— a un elemento por línea con el cierre en línea propia). `--write`/`-w` reescribe en el sitio y admite varios archivos |
+| `ray fmt <archivo>... [--write]` | imprime la versión canónica (indentación de 4; lo que pase de 100 columnas se reparte: un `from … import` a un nombre por línea, una cadena de métodos a un eslabón por línea, las cadenas de `&&`/`\|\|`/`+` a un operando por línea, y las listas delimitadas —argumentos, parámetros de `fn`, literales— a un elemento por línea con el cierre en línea propia; los comentarios trailing se quedan con su operando/elemento y tus paréntesis se conservan). `--write`/`-w` reescribe en el sitio y admite varios archivos |
 | `ray build --templates-only [ruta…]` | **materializa** en disco el módulo generado de cada template `.ray.html` (firma `{% params %}`), para inspección (sin rutas: la raíz del proyecto). La vía normal no lo necesita: el loader compila los templates **en memoria** al resolver sus imports (M102) e ignora un `.ray` hermano |
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |
@@ -556,7 +557,7 @@ Flags de `build --native`:
 | `--release` | tier de optimización `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native` (más lento de compilar, no portable) |
 | `--fast` | cambia la aritmética **chequeada** por **envolvente** (no detecta desbordamientos): más rendimiento a cambio de una garantía; para código propio, no para entrada hostil |
 | `--target <triple>` | *cross-compile* al triple indicado (requiere el target instalado en la toolchain) |
-| `--without <lista>` | excluye subsistemas: `crypto,tls,sqlite,regex` (caen en un *stub* con error claro o en la implementación en raylang) y `mimalloc,ahash,fibers,process` (que van por defecto). Se une a `[native] without` del `ray.toml` |
+| `--without <lista>` | excluye subsistemas: `crypto,tls,sqlite,regex,bigint` (caen en un *stub* con error claro o en la implementación en raylang) y `mimalloc,ahash,fibers,process` (que van por defecto). Se une a `[native] without` del `ray.toml` |
 
 Los subsistemas con crate de producción (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, regex acelerada)
 se enlazan **solo cuando el programa los usa** (proyecto Cargo generado; el binario llama al mismo código

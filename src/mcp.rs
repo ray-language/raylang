@@ -42,7 +42,9 @@ const MAX_OUT: usize = 64 * 1024;
 const LLMS_TXT: &str = include_str!("../llms.txt");
 // El catálogo completo de firmas por módulo (pieza B): el mapa que evita "proponer" superficies
 // que ya existen. Embebido como llms.txt — la stdlib no vive en disco del lado del cliente.
-const REFERENCE_MD: &str = include_str!("../REFERENCE.md");
+// M197: el catálogo en INGLÉS (los agentes trabajan mejor con él; `tests/docs_i18n.rs` lo mantiene
+// sincronizado con REFERENCE.md).
+const REFERENCE_MD: &str = include_str!("../REFERENCE.en.md");
 
 /// Arranca el servidor sobre stdin/stdout reales (lo llama `ray mcp`).
 pub fn run() {

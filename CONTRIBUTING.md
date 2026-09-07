@@ -97,3 +97,11 @@ Use the bug report issue template. The single most useful thing you can include 
 **minimal `.ray` program** plus expected vs. observed output — and if the engines disagree
 (`--vm` vs `--interp` vs native), say so: engine divergence is always a bug, and the
 highest-priority kind.
+
+## Translations
+
+The working language of the documents is Spanish. Some have an English version as `X.en.md` next to
+the original (`README`, `REFERENCE`, `docs/mcp`), with a language switch at the top of both. A
+translation carries `<!-- sync: sha256:… -->` at its foot: the hash of the original it was translated
+from. If you touch a translated original, review its `.en.md` and refresh the marker with
+`python3 tools/docs_sync.py --update <file.en.md>`; `tests/docs_i18n.rs` enforces it in CI.

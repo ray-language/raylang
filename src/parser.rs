@@ -1840,10 +1840,6 @@ impl Parser {
 
     /// `true` si el **siguiente** token (uno por delante del actual) es `kind`. Para el lookahead de
     /// `pub from …` (M11.6a), que hay que distinguir de `pub fn`/`pub struct`/etc.
-    fn check_next(&self, kind: &TokenKind) -> bool {
-        self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(kind)
-    }
-
     /// M192: ¿el token actual es el identificador `name`? (palabras clave contextuales: `from`).
     fn check_ident(&self, name: &str) -> bool {
         matches!(&self.peek().kind, TokenKind::Ident(n) if n == name)

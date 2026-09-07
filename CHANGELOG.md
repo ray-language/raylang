@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## 1.7.0 — 2026-09-06
 
+- **`ui.open` en Windows espera hasta 60 s por la ventana** (antes 15): crear el entorno de
+  WebView2 en una máquina cargada superaba el plazo y fallaba con "the main thread did not respond".
+
 - **Un módulo puede definir funciones con nombre de builtin** (M196, DESIGN §188; feedback de
   `ray-remote`): `pub fn close(c: Conn)` en `proto.ray` se consume como `proto.close(c)`, y dentro
   del módulo el builtin sigue alcanzable por el pseudo-módulo `builtin` (`builtin.close(c.sock)`).

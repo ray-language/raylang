@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Detalles** (M205, feedback 24 de ray-remote): `ray test <filtro>` sin resultados aclara que el
+  filtro es por nombre de prueba, no de archivo; `(x >> b) & 1 == 1` explica la precedencia y
+  sugiere `(a & b) == c`; el MANUAL trae el patrón de hablar con el sistema por `std/process`
+  (`security`, `pbcopy`, `open`) sin FFI.
+- **Los brazos de un `match` se infieren entre sí** (M204, feedback 18 de ray-remote):
+  `Result.Ok(_) => f(), Result.Err(e) => Result.Err(e)` ya no exige anotar el `let`; el brazo que
+  no determina sus parámetros de tipo toma el tipo de los demás, vaya antes o después.
 - **`net.set_nodelay(h, on)`** (M203, feedback 23 de ray-remote): `TCP_NODELAY` en TCP y TLS, en
   los tres motores; sin Nagle un cliente interactivo ya no espera hasta 40 ms por cada escritura
   pequeña.

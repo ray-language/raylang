@@ -12493,3 +12493,32 @@ TLS— en intérprete y VM, y `__ray_set_nodelay` en el runtime generado del nat
 queda fuera: su socket vive dentro de la sesión y no hay diferencia observable en la salida).
 No se expone un `set_option` genérico a propósito: cada opción que entra lo hace con nombre,
 tipo y semántica documentada, como el resto de la superficie.
+
+## 196. M204 — los brazos de un `match` se infieren entre sí (sep 2026)
+
+Feedback 18 de `ray-remote` (lote E, E5): `match (r) { Result.Ok(_) => g(), Result.Err(e) =>
+Result.Err(e) }` fallaba con "could not infer the type parameter 'T' of the variant 'Result.Err'"
+aunque el otro brazo ya fijaba `Result<int, string>`; el rodeo era anotar el `let`. El chequeo es
+bidireccional (M6): una construcción toma el tipo esperado si lo hay, y un `match` como valor de
+un `let` anotado lo propaga a cada brazo. Lo que faltaba es que, sin tipo esperado externo, los
+propios brazos se lo den: ahora un brazo ya tipado (concreto, sin parámetros de tipo abiertos) es el
+tipo esperado de los que siguen, y un brazo que falla por inferencia se **difiere** y se re-chequea
+al final con el tipo del match — así el orden no importa. Un desajuste real sigue siendo "the match
+arms produce different types" (el tipo esperado no tapa nada: `check_expr_expected` no falla por
+sí mismo ante un tipo distinto, solo guía las construcciones). Sin ningún brazo determinante, el
+error de inferencia se conserva tal cual. Espejo en el selfhost byte-idéntico, con la salvedad de que
+la segunda pasada no re-registra la cobertura (usa un estado de match desechable).
+
+## 197. M205 — los detalles de la segunda semana (sep 2026)
+
+Feedback 24 de `ray-remote` (lote E, E6), tres cosas pequeñas con la misma lógica: donde el
+usuario tropezó, la herramienta debe decir por qué. `ray test store` con un `tests/store_test.ray`
+sin pruebas llamadas así respondía "no tests containing 'store'": era correcto y no orientaba; ahora
+añade que el filtro es por nombre de prueba, no de archivo. `(x >> b) & 1 == 1` se parsea como
+`& (1 == 1)` (precedencia estilo C, documentada, y aun así se cae en ella al transcribir un
+algoritmo): el error de tipos sigue siendo el mismo —no se cambia la precedencia— pero, cuando el
+operando derecho de un `&`/`|`/`^` es una comparación, sugiere `(a & b) == c`. Y el MANUAL recoge
+el patrón que la app usó para el llavero de macOS, el portapapeles y "abrir con": `std/process`
+con `argv` tipado, salida en `bytes` y código de salida como valor — la forma de tocar el sistema
+sin FFI, verificada compilando el ejemplo tal cual. Con esto queda cerrado el lote E salvo lo que
+espera datos del proyecto (19) o una discusión de lenguaje (20).

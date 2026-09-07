@@ -928,6 +928,38 @@ fn generic_t_not_inferable() {
     );
 }
 
+/// M204 (feedback 18 de ray-remote): un brazo cuyo constructor no determina sus parámetros de tipo
+/// (`Result.Err(e)`) toma el tipo que fijan los demás brazos — antes o después de él. Si ninguno lo
+/// fija, el error sigue siendo el de inferencia.
+#[test]
+fn match_arms_infer_enum_type_params_from_each_other() {
+    let ok_fwd = "fn f() -> Result<int, string> { Result.Ok(1) }\nfn g() -> Result<int, string> { let s = match (f()) { Result.Ok(_) => f(), Result.Err(e) => Result.Err(e) }; s }\nfn main() -> int { 0 }";
+    assert!(check_src(ok_fwd).is_ok(), "{:?}", check_src(ok_fwd));
+    let ok_bwd = "fn f() -> Result<int, string> { Result.Ok(1) }\nfn g() -> Result<int, string> { let s = match (f()) { Result.Err(e) => Result.Err(e), Result.Ok(_) => f() }; s }\nfn main() -> int { 0 }";
+    assert!(check_src(ok_bwd).is_ok(), "{:?}", check_src(ok_bwd));
+    err_contains(
+        "fn f() -> Result<int, string> { Result.Ok(1) }\nfn main() -> int { let s = match (f()) { Result.Ok(_) => Result.Err(\"a\"), Result.Err(e) => Result.Err(e) }; 0 }",
+        "could not infer the type parameter 'T'",
+    );
+    // Los brazos siguen teniendo que converger: el tipo esperado no tapa un desajuste real.
+    err_contains(
+        "fn f() -> Result<int, string> { Result.Ok(1) }\nfn main() -> int { let s = match (f()) { Result.Ok(_) => f(), Result.Err(e) => 1 }; 0 }",
+        "the match arms produce different types",
+    );
+}
+
+/// M205 (feedback 24 de ray-remote): `(x >> b) & 1 == 1` es `& (1 == 1)` por precedencia; el error
+/// lo dice y sugiere los paréntesis. Sin comparación a la derecha, el mensaje es el de siempre.
+#[test]
+fn bitwise_and_with_a_comparison_hints_the_parentheses() {
+    err_contains(
+        "fn main() -> int { let x = 5; let b = 1; if ((x >> b) & 1 == 1) { print(1); } 0 }",
+        "requires int operands, not int and bool ('==' binds tighter than '&': did you mean `(a & b) == c`?)",
+    );
+    let e = check_src("fn main() -> int { let x = 5; let t = true; let y = x & t; 0 }").expect_err("bool a la derecha");
+    assert!(!e.msg.contains("did you mean"), "{}", e.msg);
+}
+
 #[test]
 fn generic_as_value_is_error() {
     err_contains(

@@ -315,7 +315,9 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
   patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
 - **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
-  (misma regla de divergencia; todos divergentes → unit). **Exhaustivo** sobre enums. Patrones
+  (misma regla de divergencia; todos divergentes → unit). Un brazo cuyo valor no determina sus
+  parámetros de tipo (`Result.Err(e)` sin tipo esperado) toma el tipo que fijan los demás brazos,
+  vaya antes o después (M204); si ninguno lo fija, es error de inferencia. **Exhaustivo** sobre enums. Patrones
   `Enum.Variante(sub-patrón…)` (también `M.Enum.Variante`), binding suelto, `_`. **Patrones anidados**
   (M40.1c): cada posición del payload es un sub-patrón completo, recursivo (`Result.Ok(Option.Some(v))`).
   **Guardas** (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los

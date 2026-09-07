@@ -1435,6 +1435,10 @@ impl Checker {
         let mut covered: HashSet<String> = HashSet::new();
         let mut catchall = false;
         let mut result_ty: Option<Type> = None;
+        // M204 (feedback 18 de ray-remote): brazos que no pudieron inferir sus parámetros de tipo
+        // (`Result.Err(e)` sin tipo esperado) se difieren y se re-chequean con el tipo que fijen
+        // los demás brazos. Y a la inversa: un brazo ya tipado sirve de tipo esperado a los que siguen.
+        let mut deferred: Vec<(&MatchArm, TypeError)> = Vec::new();
 
         for arm in arms {
             // Un brazo tras un catch-all nunca se alcanza.
@@ -1456,9 +1460,11 @@ impl Checker {
                 self.declare(&name, ty, false, (arm.line, arm.col));
             }
             let guard_ty = arm.guard.as_ref().map(|g| self.check_expr(g));
-            let body_ty = match expected {
-                Some(exp) => self.check_expr_expected(&arm.body, exp),
-                None => self.check_expr(&arm.body),
+            let body_ty = match (expected, &result_ty) {
+                (Some(exp), _) => self.check_expr_expected(&arm.body, exp),
+                // M204: sin tipo esperado, el que fijaron los brazos anteriores (si es concreto).
+                (None, Some(prev)) if !type_has_var(prev) => self.check_expr_expected(&arm.body, &prev.clone()),
+                (None, _) => self.check_expr(&arm.body),
             };
             self.pop_scope();
             if let (Some(g), Some(gt)) = (arm.guard.as_ref(), guard_ty)
@@ -1467,7 +1473,15 @@ impl Checker {
                 return Err(self.err(g.line, g.col,
                     "a match arm guard must be of type bool".into()));
             }
-            let body_ty = body_ty?;
+            let body_ty = match body_ty {
+                Ok(t) => t,
+                // M204: aún sin tipo; se difiere hasta conocer el tipo del match.
+                Err(e) if expected.is_none() && e.msg.starts_with("could not infer the type parameter") => {
+                    deferred.push((arm, e));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             // M13.2b/M14: un brazo que diverge (termina en `panic`/`return`) no fija el tipo del
             // match; lo ceden los demás (igual que una rama de `if`). Así
             // `match (o) { Some(v) => v, None => panic("…") }` cuadra.
@@ -1483,6 +1497,24 @@ impl Checker {
                     )));
                 }
                 _ => {}
+            }
+        }
+
+        // M204: segunda pasada sobre los brazos diferidos, ya con el tipo del match como esperado.
+        for (arm, first_err) in deferred {
+            let Some(exp) = result_ty.clone().filter(|t| !type_has_var(t)) else { return Err(first_err) };
+            let binds = self.check_subpattern(&arm.pattern, &scrut_ty)?;
+            self.push_scope();
+            for (name, ty) in binds {
+                self.declare(&name, ty, false, (arm.line, arm.col));
+            }
+            let body_ty = self.check_expr_expected(&arm.body, &exp);
+            self.pop_scope();
+            let body_ty = body_ty?;
+            if !expr_diverges(&arm.body) && exp != body_ty {
+                return Err(self.err(arm.body.line, arm.body.col, format!(
+                    "the match arms produce different types: {} and {}", exp, body_ty
+                )));
             }
         }
 
@@ -2385,10 +2417,25 @@ impl Checker {
                 // dominio — `v << n` con `v: u32, n: int` no necesita `as u32` (cuenta fuera de
                 // rango: envolvente, como ya estaba definido).
                 (Type::UInt(a), Type::Int) if matches!(op, Shl | Shr) => Ok(Type::UInt(*a)),
-                _ => Err(self.err(line, col, format!(
-                    "the operator '{}' requires int operands, not {} and {}",
-                    bin_op_str(op), lt, rt
-                ))),
+                _ => {
+                    // M205 (feedback 24 de ray-remote): `(x >> b) & 1 == 1` se parsea como
+                    // `(x >> b) & (1 == 1)` (precedencia estilo C: `==` liga más que `&`) y el
+                    // error "int and bool" no dice por qué. Si el operando derecho es una
+                    // comparación, el mensaje sugiere los paréntesis.
+                    let hint = match (&rt, &right.kind) {
+                        (Type::Bool, ExprKind::Binary { op: cmp, .. })
+                            if matches!(cmp, Eq | Ne | Lt | Le | Gt | Ge) && matches!(op, BitAnd | BitOr | BitXor) =>
+                        {
+                            format!(" ('{}' binds tighter than '{}': did you mean `(a {} b) {} c`?)",
+                                bin_op_str(*cmp), bin_op_str(op), bin_op_str(op), bin_op_str(*cmp))
+                        }
+                        _ => String::new(),
+                    };
+                    Err(self.err(line, col, format!(
+                        "the operator '{}' requires int operands, not {} and {}{}",
+                        bin_op_str(op), lt, rt, hint
+                    )))
+                }
             },
         }
     }

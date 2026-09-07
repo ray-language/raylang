@@ -4080,6 +4080,11 @@ fn check_match(
     let enum_sigma = build_sigma(enum_tparams(c, enum_name), enum_targs);
     let st = MatchState { covered: [], catchall: false };
     var result_ty: Option<Type> = Option.None;
+    // M204 (feedback 18 de ray-remote): los brazos que no pudieron inferir sus parámetros de tipo se
+    // difieren y se re-chequean con el tipo que fijen los demás; y un brazo ya tipado sirve de tipo
+    // esperado a los que siguen. Espejo byte-idéntico de `check_match` en Rust.
+    var deferred: [MatchArm] = [];
+    var deferred_errors: [TypeError] = [];
     var ai = 0;
     while (ai < arms.len()) {
         let arm = arms[ai];
@@ -4095,10 +4100,37 @@ fn check_match(
             declare(c, binds[bi].name, binds[bi].ty, false, arm.line, arm.col);
             bi = bi + 1;
         }
-        let body_ty = check_expr_opt(c, arm.body, expected)?;
+        let arm_expected = match (expected) {
+            Option.Some(exp) => Option.Some(exp),
+            Option.None => match (result_ty) {
+                Option.Some(prev) => if (type_has_var(prev, c.tparams)) {
+                    Option.None
+                } else {
+                    Option.Some(prev)
+                },
+                Option.None => Option.None,
+            },
+        };
+        let body_res = check_expr_opt(c, arm.body, arm_expected);
         pop_scope(c);
+        var deferred_this = false;
+        var body_ty = Type.TUnit;
+        match (body_res) {
+            Result.Ok(t) => {
+                body_ty = t;
+            },
+            Result.Err(e) => {
+                if (expected.is_none() && e.msg.starts_with("could not infer the type parameter")) {
+                    deferred.push(arm);
+                    deferred_errors.push(e);
+                    deferred_this = true;
+                } else {
+                    return Result.Err(e);
+                }
+            },
+        }
         // Un brazo que diverge (panic/return) no fija el tipo del match; lo ceden los demás.
-        if (!expr_diverges(arm.body)) {
+        if (!deferred_this && !expr_diverges(arm.body)) {
             match (result_ty) {
                 Option.None => {
                     result_ty = Option.Some(body_ty);
@@ -4120,6 +4152,44 @@ fn check_match(
             }
         }
         ai = ai + 1;
+    }
+    // M204: segunda pasada sobre los brazos diferidos, ya con el tipo del match como esperado.
+    var di = 0;
+    while (di < deferred.len()) {
+        let arm = deferred[di];
+        let exp = match (result_ty) {
+            Option.Some(t) => if (type_has_var(t, c.tparams)) {
+                return Result.Err(deferred_errors[di]);
+            } else { t },
+            Option.None => {
+                return Result.Err(deferred_errors[di]);
+            },
+        };
+        // La cobertura ya quedó registrada en la primera pasada: aquí solo se quieren los bindings.
+        let scratch = MatchState { covered: [], catchall: false };
+        let binds = check_pattern(c, arm.pat, scrut_ty, enum_name, variants, enum_sigma, scratch)?;
+        push_scope(c);
+        var bi = 0;
+        while (bi < binds.len()) {
+            declare(c, binds[bi].name, binds[bi].ty, false, arm.line, arm.col);
+            bi = bi + 1;
+        }
+        let body_res = check_expr_expected(c, arm.body, exp);
+        pop_scope(c);
+        let body_ty = body_res?;
+        if (!expr_diverges(arm.body) && !type_eq(exp, body_ty)) {
+            return Result.Err(
+                terr(
+                    arm.body.line,
+                    arm.body.col,
+                    "the match arms produce different types: "
+                        + type_str(exp)
+                        + " and "
+                        + type_str(body_ty)
+                )
+            );
+        }
+        di = di + 1;
     }
     // Exhaustividad: sin catch-all, deben estar TODAS las variantes.
     if (!st.catchall) {

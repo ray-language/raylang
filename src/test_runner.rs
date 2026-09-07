@@ -115,7 +115,10 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
             return 65;
         }
         match filter {
-            Some(p) => println!("no tests (@test) containing '{}'", p),
+            // M205 (feedback 24): el filtro es por NOMBRE de prueba, no de archivo — `ray test store`
+            // con un `tests/store_test.ray` sin pruebas llamadas así no encuentra nada, y el mensaje
+            // debe decir por qué.
+            Some(p) => println!("no tests (@test) containing '{}' (the filter matches test names, not file names)", p),
             None => println!("no tests (@test) in the project"),
         }
         return 0;

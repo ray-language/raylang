@@ -457,6 +457,20 @@ fn real_examples_valid_values() {
 /// selfhost congelado conserva la gramática vieja, así que esos programas divergen
 /// legítimamente y salieron de este diferencial (DESIGN §148). La pista M87 sigue viva en
 /// POSICIÓN DE EXPRESIÓN (idéntica en ambos), que es lo que se compara aquí.
+/// M204: los brazos de un `match` se infieren entre sí (hacia delante y hacia atrás) igual en ambos
+/// checkers, y el caso sin ningún brazo determinante falla en la misma posición.
+#[test]
+fn match_arms_infer_each_other_in_both_checkers() {
+    compare(
+        "fn f() -> Result<int, string> { Result.Ok(1) }\nfn fwd() -> Result<int, string> {\n    let s = match (f()) {\n        Result.Ok(_) => f(),\n        Result.Err(e) => Result.Err(e),\n    };\n    s\n}\nfn bwd() -> Result<int, string> {\n    let s = match (f()) {\n        Result.Err(e) => Result.Err(e),\n        Result.Ok(_) => f(),\n    };\n    s\n}\nfn main() -> int {\n    match (fwd()) { Result.Ok(v) => print(v), Result.Err(e) => print(e) }\n    match (bwd()) { Result.Ok(v) => print(v), Result.Err(e) => print(e) }\n    0\n}\n",
+        "selfhost_match_infer_ok",
+    );
+    compare(
+        "fn f() -> Result<int, string> { Result.Ok(1) }\nfn main() -> int {\n    let x = match (f()) {\n        Result.Ok(_) => Result.Err(\"a\"),\n        Result.Err(e) => Result.Err(e),\n    };\n    0\n}\n",
+        "selfhost_match_infer_err",
+    );
+}
+
 #[test]
 fn gotcha_55_has_a_hint() { // es-ok: "gotcha" es jerga técnica inglesa aceptada, no español
     // Llamada con un if-expresión (int) como callee, en posición de expresión (tras let).

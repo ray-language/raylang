@@ -201,12 +201,12 @@ forma calificada (feedback 20).
 `setsockopt(TCP_NODELAY)` en los tres motores + selfhost; lo primero que activa cualquier cliente
 interactivo.
 
-### E5. Unificar los brazos de un `match` antes de rendirse con `Result.Err(e)` (feedback 18) — M
+### E5. Unificar los brazos de un `match` antes de rendirse con `Result.Err(e)` (feedback 18) — M ✅ M204
 
 El brazo `Ok` ya fija `Result<int, string>`; usarlo como tipo esperado del otro brazo. El mensaje
 ya dice "annotate the type", así que va detrás de E1–E4.
 
-### E6. Detalles (feedback 24) — S
+### E6. Detalles (feedback 24) — S ✅ M205
 
 `no tests containing` añade "(by test name)"; el error de `&` con `bool` sugiere
 `((x >> b) & 1) == 1`; ejemplo en el MANUAL de `std/process` con `security`/`open`/`pbcopy`.

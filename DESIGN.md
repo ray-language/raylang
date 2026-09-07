@@ -12385,3 +12385,23 @@ y el builtin ganaría en silencio — que es exactamente lo que la regla origina
 de trait → función libre visible → builtin, y la función del módulo no es visible sin calificar, así
 que `conn.close()` es el builtin (y falla por tipos). La forma calificada es la canónica para
 funciones de módulo con nombre de builtin; queda documentado en SPEC y MANUAL.
+
+## 189. M197 — documentación en inglés, sin que se pudra (sep 2026)
+
+El proyecto se escribe en español (documentos-contrato, crónica, manual) y el código y todo lo que
+el compilador emite van en inglés. Para quien llega de fuera hacía falta al menos la puerta y el
+catálogo: `README.en.md`, `REFERENCE.en.md` (las tablas de firmas, lo que se consulta a diario y lo
+que menos prosa tiene) y `docs/mcp.en.md` (su público conecta agentes y suele estar en inglés). El
+MANUAL (2.700 líneas y el que más cambia) se queda en español a propósito: dos copias de ese tamaño
+sin desfase son un trabajo continuo; si hace falta, un *getting started* corto en inglés que remita a
+REFERENCE.
+
+**La decisión que importa es la de mantenimiento.** Una traducción sin guarda se pudre en silencio.
+Convención: `X.en.md` junto a `X.md` (un directorio `docs/en/` separaría el par y facilita olvidarlo),
+selector de idioma en la cabecera de ambos, y al pie de la traducción un marcador
+`<!-- sync: sha256:<12 hex> -->` con el hash del original del que se tradujo. `tests/docs_i18n.rs`
+recalcula el hash del original y falla si no coincide: tocar un original traducido obliga a revisar
+la traducción y refrescar el marcador (`tools/docs_sync.py --update`). Se eligió el hash del
+contenido y no el commit de git porque el commit que actualiza ambos no puede conocer su propio sha.
+El MCP pasa a servir `raylang://reference.md` en inglés: los agentes trabajan mejor con él, y la
+guarda garantiza que no diverge del catálogo en español.

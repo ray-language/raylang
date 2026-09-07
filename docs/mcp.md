@@ -1,5 +1,7 @@
 # El servidor MCP de raylang (`ray mcp`)
 
+Español · [English](mcp.en.md)
+
 "El LSP para agentes" (IDEAS §51, pieza B): un servidor [MCP](https://modelcontextprotocol.io)
 embebido en el binario `ray` que da a un LLM el bucle **escribir → verificar → corregir**. La
 alucinación se convierte en iteración: el modelo escribe raylang, `ray_check` le devuelve los

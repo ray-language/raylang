@@ -3709,6 +3709,16 @@ impl<'a> Vm<'a> {
                     crate::builtins::socket_set_read_timeout(handle, ms);
                     self.push(HeapValue::Unit);
                 }
+                // M203: TCP_NODELAY del socket (total).
+                OpCode::SocketSetNodelay => {
+                    let on = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bool(on)) = (handle, on) else {
+                        unreachable!("the checker guarantees int, bool");
+                    };
+                    crate::builtins::socket_set_nodelay(handle, on);
+                    self.push(HeapValue::Unit);
+                }
                 OpCode::Close => {
                     // Ad-hoc polimórfico: un handle de archivo (int, M11.8) o un canal (M12.1).
                     match self.pop() {

@@ -255,3 +255,13 @@ pub fn local_port(h: int) -> int {
 pub fn set_read_timeout(h: int, ms: int) {
     __socket_set_read_timeout(h, ms);
 }
+
+// M203 (feedback 23 de ray-remote): sin Nagle, cada escritura pequeña sale ya (eventos de ratón,
+// peticiones de update) en vez de esperar hasta 40 ms al ACK anterior.
+/// Enables (`on = true`) or disables `TCP_NODELAY` on socket `h`: with it on, small writes are
+/// sent immediately instead of being held by Nagle's algorithm until the previous ACK arrives —
+/// the first thing any interactive client (VNC, SSH, games) turns on. Applies to TCP and TLS
+/// connections; total: other handles are ignored.
+pub fn set_nodelay(h: int, on: bool) {
+    __socket_set_nodelay(h, on);
+}

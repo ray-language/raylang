@@ -1673,6 +1673,56 @@ Detalles que evitan los errores clásicos de otras plataformas:
   en que el hijo escribió (fusionar después inventa un orden); `stderr` vuelve vacío.
 - macOS, Linux y Windows (M175: `CreateProcess` + Job Objects; `Exit.Signal` no ocurre en Windows).
 
+**Hablar con el sistema sin FFI.** El patrón se repite en cualquier app de escritorio: el llavero,
+el portapapeles, "abrir con la app por defecto". Un proceso con `argv` tipado, salida como `bytes`
+y código de salida como valor es la forma correcta — sin `unsafe`, sin cadenas de shell y sin
+depender de que el usuario tenga otra cosa instalada (feedback de `ray-remote`, M205):
+
+```rust
+import std/process;
+
+// Un secreto del llavero de macOS (`security` viene con el sistema): "" si no está.
+fn keychain_password(service: string, account: string) -> string {
+    match (process.run("security", ["find-generic-password", "-s", service, "-a", account, "-w"])) {
+        Result.Ok(o) => match (o.exit) {
+            process.Exit.Code(c) => {
+                if (c != 0) { return ""; }    // no existe, o el usuario denegó el acceso
+                match (from_utf8(o.stdout)) {
+                    Result.Ok(s) => s.trim(),
+                    Result.Err(_) => "",
+                }
+            },
+            process.Exit.Signal(_) => "",
+        },
+        Result.Err(_) => "",               // no es macOS
+    }
+}
+
+// Al portapapeles: `pbcopy` (macOS), `xclip`/`wl-copy` (Linux), `clip` (Windows).
+fn copy_to_clipboard(text: string) -> bool {
+    match (process.cmd("pbcopy", []).stdin(text.to_bytes()).run()) {
+        Result.Ok(o) => exited_zero(o.exit),
+        Result.Err(_) => false,
+    }
+}
+
+// Abrir una URL o un archivo con la aplicación por defecto: `open` (macOS), `xdg-open` (Linux),
+// `cmd /c start` (Windows). El hijo se lanza y ya: no se espera su salida.
+fn open_default(target: string) -> bool {
+    match (process.run("open", [target])) {
+        Result.Ok(o) => exited_zero(o.exit),
+        Result.Err(_) => false,
+    }
+}
+
+fn exited_zero(e: process.Exit) -> bool {
+    match (e) {
+        process.Exit.Code(c) => c == 0,
+        process.Exit.Signal(_) => false,
+    }
+}
+```
+
 **Streaming** (`.stream()`): para consumir la salida MIENTRAS el hijo corre (logs largos, un
 `tail -f`, un proceso que no termina), en vez de esperar el `Output` final. Devuelve un `Proc`
 con dos canales acotados (`out`/`err`, trozos `bytes`; su cierre marca el fin del flujo) y

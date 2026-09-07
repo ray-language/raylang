@@ -6,6 +6,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Detalles** (M205, feedback 24 de ray-remote): `ray test <filtro>` sin resultados aclara que el
+  filtro es por nombre de prueba, no de archivo; `(x >> b) & 1 == 1` explica la precedencia y
+  sugiere `(a & b) == c`; el MANUAL trae el patrón de hablar con el sistema por `std/process`
+  (`security`, `pbcopy`, `open`) sin FFI.
+- **Los brazos de un `match` se infieren entre sí** (M204, feedback 18 de ray-remote):
+  `Result.Ok(_) => f(), Result.Err(e) => Result.Err(e)` ya no exige anotar el `let`; el brazo que
+  no determina sus parámetros de tipo toma el tipo de los demás, vaya antes o después.
+- **`net.set_nodelay(h, on)`** (M203, feedback 23 de ray-remote): `TCP_NODELAY` en TCP y TLS, en
+  los tres motores; sin Nagle un cliente interactivo ya no espera hasta 40 ms por cada escritura
+  pequeña.
+- **`ray_doc` resuelve tipos** (M202, feedback 21 de ray-remote): `ui.MenuItem` muestra
+  `struct MenuItem { tag: string, title: string, shortcut: string }` con su `///`, y un enum sus
+  variantes; el listado de un módulo trae los tipos con su forma y recuerda que UFCS no alcanza a
+  los nombres calificados (feedback 20).
 - **`ray fmt` conserva `if let`** (M201, feedback 22 de ray-remote): el parser lo desazucara a
   `match` y el formateador lo reescribía; ahora reemite `if let … { } [else …]` tal cual. Y las
   firmas se miden como la línea que sale (sangría + ` {`): una de 99 columnas ya no sale a 101.

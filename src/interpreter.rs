@@ -2434,6 +2434,14 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees int, int"),
             },
+            // M203: TCP_NODELAY del socket (total).
+            "__socket_set_nodelay" => match (&values[0], &values[1]) {
+                (Value::Int(h), Value::Bool(on)) => {
+                    crate::builtins::socket_set_nodelay(*h, *on);
+                    Value::Unit
+                }
+                _ => unreachable!("the checker guarantees int, bool"),
+            },
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
                 Value::Int(h) => {

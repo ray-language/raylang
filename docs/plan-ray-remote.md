@@ -190,23 +190,23 @@ El parser desazucara `if let` a `match` antes del AST y el formateador imprime e
 conservar el sitio (como los paréntesis de M189) y reimprimir `if let`. En el mismo lote: la
 firma que sale a 101 columnas.
 
-### E3. `ray_doc` con structs, enums y funciones asociadas (feedback 21) — S–M
+### E3. `ray_doc` con structs, enums y funciones asociadas (feedback 21) — S–M ✅ M202
 
 `ui.MenuItem` y `Channel.bounded` responden "no existe". Resolver tipos y asociadas con la misma
 sintaxis que las funciones y mostrar campos/variantes; incluir el builder de `std/json` en la
 forma calificada (feedback 20).
 
-### E4. `net.set_nodelay(h, bool)` (feedback 23) — S
+### E4. `net.set_nodelay(h, bool)` (feedback 23) — S ✅ M203
 
 `setsockopt(TCP_NODELAY)` en los tres motores + selfhost; lo primero que activa cualquier cliente
 interactivo.
 
-### E5. Unificar los brazos de un `match` antes de rendirse con `Result.Err(e)` (feedback 18) — M
+### E5. Unificar los brazos de un `match` antes de rendirse con `Result.Err(e)` (feedback 18) — M ✅ M204
 
 El brazo `Ok` ya fija `Result<int, string>`; usarlo como tipo esperado del otro brazo. El mensaje
 ya dice "annotate the type", así que va detrás de E1–E4.
 
-### E6. Detalles (feedback 24) — S
+### E6. Detalles (feedback 24) — S ✅ M205
 
 `no tests containing` añade "(by test name)"; el error de `&` con `bool` sugiere
 `((x >> b) & 1) == 1`; ejemplo en el MANUAL de `std/process` con `security`/`open`/`pbcopy`.

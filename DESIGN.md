@@ -12465,3 +12465,60 @@ posición del propio `if`, lo que lo distingue de un `else { }` escrito). El AST
 motores y selfhost siguen viendo el `match`. En el mismo hito, la firma se medía como cabecera
 pelada, sin la sangría ni el ` {` que se añaden después: una de 99 columnas salía a 101, una más
 que el propio límite — cuatro archivos del repo lo demostraban y quedaron repartidos.
+
+## 194. M202 — `ray_doc` conoce los tipos (sep 2026)
+
+Feedback 21 de `ray-remote` (lote E, E3): `ray_doc "std/ui"` listaba `struct MenuItem`, pero
+`ray_doc "ui.MenuItem"` respondía "no existe", y el agente acabó adivinando los campos compilando
+un snippet a ciegas. La búsqueda por fuente (`source_symbol_doc`) solo miraba funciones públicas y
+métodos de trait; ahora cubre structs (campos con tipo) y enums (variantes con payload), con las
+`///` contiguas a la declaración, y el listado del módulo muestra cada tipo con su forma en vez de
+solo el nombre. La misma vía sirve a los módulos de un proyecto y a sus paquetes (`path`). De paso,
+el punto 20 (UFCS no alcanza a nombres calificados: `json.obj().field(…)` no compila con
+`import std/json;`) se resuelve donde duele, en la herramienta: cada listado termina recordando la
+forma calificada y qué import hace falta para encadenar. Cambiar la regla de resolución para que
+UFCS mire el módulo que define el tipo del receptor queda fuera: es un cambio del lenguaje y va a
+la SPEC cuando se discuta.
+
+## 195. M203 — `net.set_nodelay`: la opción de socket que todo cliente interactivo activa (sep 2026)
+
+Feedback 23 de `ray-remote` (lote E, E4): un cliente de escritorio remoto manda decenas de
+escrituras de 6 a 10 octetos por segundo, y con Nagle activo el SO puede retener cada una hasta
+40 ms esperando el ACK anterior — la clase de latencia que se nota al mover el ratón. `std/net` no
+tenía forma de desactivarlo; `set_read_timeout` (M56.4) ya demostraba que las opciones de socket
+caben en la API sin abrir un `setsockopt` genérico. `set_nodelay(h, on)` sigue exactamente esa
+plantilla: primitivo `__socket_set_nodelay` en la tabla `BUILTINS` (un opcode, total: otro handle
+se ignora), aplicado al `TcpStream` del registro —también al socket subyacente de una conexión
+TLS— en intérprete y VM, y `__ray_set_nodelay` en el runtime generado del nativo (TLS nativo
+queda fuera: su socket vive dentro de la sesión y no hay diferencia observable en la salida).
+No se expone un `set_option` genérico a propósito: cada opción que entra lo hace con nombre,
+tipo y semántica documentada, como el resto de la superficie.
+
+## 196. M204 — los brazos de un `match` se infieren entre sí (sep 2026)
+
+Feedback 18 de `ray-remote` (lote E, E5): `match (r) { Result.Ok(_) => g(), Result.Err(e) =>
+Result.Err(e) }` fallaba con "could not infer the type parameter 'T' of the variant 'Result.Err'"
+aunque el otro brazo ya fijaba `Result<int, string>`; el rodeo era anotar el `let`. El chequeo es
+bidireccional (M6): una construcción toma el tipo esperado si lo hay, y un `match` como valor de
+un `let` anotado lo propaga a cada brazo. Lo que faltaba es que, sin tipo esperado externo, los
+propios brazos se lo den: ahora un brazo ya tipado (concreto, sin parámetros de tipo abiertos) es el
+tipo esperado de los que siguen, y un brazo que falla por inferencia se **difiere** y se re-chequea
+al final con el tipo del match — así el orden no importa. Un desajuste real sigue siendo "the match
+arms produce different types" (el tipo esperado no tapa nada: `check_expr_expected` no falla por
+sí mismo ante un tipo distinto, solo guía las construcciones). Sin ningún brazo determinante, el
+error de inferencia se conserva tal cual. Espejo en el selfhost byte-idéntico, con la salvedad de que
+la segunda pasada no re-registra la cobertura (usa un estado de match desechable).
+
+## 197. M205 — los detalles de la segunda semana (sep 2026)
+
+Feedback 24 de `ray-remote` (lote E, E6), tres cosas pequeñas con la misma lógica: donde el
+usuario tropezó, la herramienta debe decir por qué. `ray test store` con un `tests/store_test.ray`
+sin pruebas llamadas así respondía "no tests containing 'store'": era correcto y no orientaba; ahora
+añade que el filtro es por nombre de prueba, no de archivo. `(x >> b) & 1 == 1` se parsea como
+`& (1 == 1)` (precedencia estilo C, documentada, y aun así se cae en ella al transcribir un
+algoritmo): el error de tipos sigue siendo el mismo —no se cambia la precedencia— pero, cuando el
+operando derecho de un `&`/`|`/`^` es una comparación, sugiere `(a & b) == c`. Y el MANUAL recoge
+el patrón que la app usó para el llavero de macOS, el portapapeles y "abrir con": `std/process`
+con `argv` tipado, salida en `bytes` y código de salida como valor — la forma de tocar el sistema
+sin FFI, verificada compilando el ejemplo tal cual. Con esto queda cerrado el lote E salvo lo que
+espera datos del proyecto (19) o una discusión de lenguaje (20).

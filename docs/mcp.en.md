@@ -32,7 +32,7 @@ messages), with no dependencies and no state.
 | `ray_run` | `code`, `stdin?` | `exit` (the `int` of `main`) + stdout + stderr |
 | `ray_test` | `code` | the `@test` runner's report; `exit` 0 = green, 1 = failures |
 | `ray_fmt` | `code` | the canonical source (`ray fmt`) |
-| `ray_doc` | `symbol` | signature + doc of a builtin or `std/*` function (`len`, `json.parse`, `crypto.x25519_public_key`…) |
+| `ray_doc` | `symbol` | signature + doc of a builtin, a `std/*` function or a **type** (`len`, `json.parse`, `ui.MenuItem` with its fields, `process.Exit` with its variants…) |
 
 And two *resources*: **`raylang://llms.txt`** — the distilled context of piece A (delta against
 Rust, canonical forms, exact error messages) — and **`raylang://reference.md`** — the full
@@ -78,4 +78,4 @@ Jul 2026).
 `std/*` modules: `ray_doc("json.parse")`, `ray_doc("regex.find_all")` — or the bare name, which is
 searched in every module.
 
-<!-- sync: sha256:b6b42c6fc63b -->
+<!-- sync: sha256:89638b808b17 -->

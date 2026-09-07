@@ -404,21 +404,33 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
         // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
         // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
         // y ray_doc los negaba; la firma sale del MethodSig, la doc del mismo escaneo de ///).
-        let sig = match prog.functions.iter().find(|f| f.is_pub && f.name == func) {
-            Some(f) => fn_signature(f),
-            None => {
-                let (t, m) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
-                    t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
-                })?;
-                trait_method_signature(&t.name, m)
-            }
+        // M202 (feedback 21 de ray-remote): también los TIPOS públicos del módulo — `ui.MenuItem`
+        // devolvía "no existe" y el agente tenía que adivinar los campos compilando a ciegas. Un
+        // struct muestra sus campos con tipo; un enum, sus variantes con payload.
+        let sig = if let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) {
+            fn_signature(f)
+        } else if let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
+            t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
+        }) {
+            trait_method_signature(&t.name, m)
+        } else if let Some(s) = prog.structs.iter().find(|s| s.is_pub && s.name == func) {
+            struct_signature(s)
+        } else if let Some(e) = prog.enums.iter().find(|e| e.is_pub && e.name == func) {
+            enum_signature(e)
+        } else {
+            return None;
         };
-        // Las `///` contiguas encima del `pub fn <func>(` en el fuente del módulo.
+        // Las `///` contiguas encima de la declaración (`pub fn f(`, `pub struct S {`, `pub enum E {`).
         let lines: Vec<&str> = src.lines().collect();
         let mut doc_lines: Vec<&str> = Vec::new();
+        let heads = [
+            format!("pub fn {func}("), format!("fn {func}("), format!("pub fn {func}<"),
+            format!("pub struct {func} "), format!("pub struct {func}<"),
+            format!("pub enum {func} "), format!("pub enum {func}<"),
+        ];
         if let Some(i) = lines.iter().position(|l| {
             let t = l.trim_start();
-            t.starts_with(&format!("pub fn {func}(")) || t.starts_with(&format!("fn {func}("))
+            heads.iter().any(|h| t.starts_with(h.as_str()))
         }) {
             let mut j = i;
             while j > 0 && (lines[j - 1].trim_start().starts_with("///") || lines[j - 1].trim_start().starts_with("//")) {
@@ -434,6 +446,27 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
     }
 }
 
+
+/// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).
+fn struct_signature(s: &crate::ast::StructDef) -> String {
+    let tparams = if s.type_params.is_empty() { String::new() } else { format!("<{}>", s.type_params.join(", ")) };
+    let fields: Vec<String> = s.fields.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+    format!("struct {}{tparams} {{ {} }}", s.name, fields.join(", "))
+}
+
+/// `enum Nombre<T> { Variante(tipos), Unit, … }` (M202).
+fn enum_signature(e: &crate::ast::EnumDef) -> String {
+    let tparams = if e.type_params.is_empty() { String::new() } else { format!("<{}>", e.type_params.join(", ")) };
+    let variants: Vec<String> = e.variants.iter().map(|v| {
+        if v.payload.is_empty() {
+            v.name.clone()
+        } else {
+            let tys: Vec<String> = v.payload.iter().map(|t| t.to_string()).collect();
+            format!("{}({})", v.name, tys.join(", "))
+        }
+    }).collect();
+    format!("enum {}{tparams} {{ {} }}", e.name, variants.join(", "))
+}
 
 /// La firma legible de un método de trait (`nombre(recv, args) -> ret  [trait T — …]`). La
 /// comparten la búsqueda por símbolo y el listado de módulo entero.
@@ -474,10 +507,10 @@ fn std_module_listing(symbol: &str) -> Option<String> {
     let prog = crate::parser::parse(tokens).ok()?;
     let mut lines: Vec<String> = Vec::new();
     for s in prog.structs.iter().filter(|s| s.is_pub) {
-        lines.push(format!("struct {}", s.name));
+        lines.push(struct_signature(s));
     }
     for e in prog.enums.iter().filter(|e| e.is_pub) {
-        lines.push(format!("enum {}", e.name));
+        lines.push(enum_signature(e));
     }
     for f in prog.functions.iter().filter(|f| f.is_pub) {
         lines.push(fn_signature(f));
@@ -490,8 +523,13 @@ fn std_module_listing(symbol: &str) -> Option<String> {
     if lines.is_empty() {
         return None;
     }
+    // M202 (feedback 20): el builder de std/json "encadenable" solo lo es tras importar los nombres —
+    // UFCS no alcanza a los nombres calificados. La nota va en cada listado para que el agente
+    // escriba la forma que compila con `import std/<m>;`.
     Some(format!(
-        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export.",
+        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
+         With `import std/{bare};` call them qualified: `{bare}.f(x, …)`; method-style chaining `x.f(…)` \
+         (UFCS) needs `from std/{bare} import f;` — UFCS never reaches qualified names.",
         lines.len(),
         lines.join("\n"),
         bare
@@ -862,6 +900,20 @@ mod tests {
             let d = doc_text(sym);
             assert!(d.contains(needle), "{sym}: {d}");
         }
+    }
+
+    /// M202 (feedback 21 de ray-remote): los tipos públicos de un módulo — struct con sus campos,
+    /// enum con sus variantes — y su `///`; y el listado del módulo los muestra con su forma.
+    #[test]
+    fn ray_doc_covers_std_types_with_fields_and_variants() {
+        let d = doc_text("ui.MenuItem");
+        assert!(d.contains("struct MenuItem { tag: string, title: string, shortcut: string }"), "{d}");
+        assert!(d.contains("One item of a custom menu"), "la /// del struct: {d}");
+        let d = doc_text("process.Exit");
+        assert!(d.starts_with("std/process: enum Exit {"), "{d}");
+        let listing = doc_text("std/ui");
+        assert!(listing.contains("struct MenuItem { tag: string"), "el listado muestra los campos: {listing}");
+        assert!(listing.contains("UFCS never reaches qualified names"), "{listing}");
     }
 
     #[test]

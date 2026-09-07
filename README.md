@@ -10,9 +10,11 @@
 
 [![CI](https://github.com/ray-language/raylang/actions/workflows/ci.yml/badge.svg)](https://github.com/ray-language/raylang/actions/workflows/ci.yml)
 [![Licencia: MIT OR Apache-2.0](https://img.shields.io/badge/licencia-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
-[![Versión](https://img.shields.io/badge/versión-1.3.1-brightgreen.svg)](CHANGELOG.md)
+[![Versión](https://img.shields.io/github/v/release/ray-language/raylang?label=versi%C3%B3n&color=brightgreen)](https://github.com/ray-language/raylang/releases)
 
 **[raylang.dev](https://raylang.dev)** · [Instalación](#instalación) · [Un vistazo](#un-vistazo-al-lenguaje) · [Playground](https://raylang.dev/playground/) · [Documentación](#documentación) · [Lo notable](#lo-notable)
+
+Español · [English](README.en.md)
 
 </div>
 
@@ -103,8 +105,8 @@ irm https://raylang.dev/install.ps1 | iex
 
 Deja `ray.exe` (y `raylang.exe`) en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade al PATH de
 usuario (sin administrador; abre una terminal nueva). Mismas variables que el `.sh`
-(`RAYLANG_VERSION`, `RAYLANG_BIN_DIR`, …). Solo x86_64: Windows ARM lo ejecuta por emulación.
-Qué funciona y qué no en Windows: [`PRODUCTION.md`](PRODUCTION.md#windows).
+(`RAYLANG_VERSION`, `RAYLANG_BIN_DIR`, …). Binarios x86_64 y ARM64. Qué funciona y qué no en
+Windows: [`PRODUCTION.md`](PRODUCTION.md#windows) y [`docs/windows.md`](docs/windows.md).
 
 Para actualizar a la última versión (o consultar si hay una nueva):
 
@@ -204,14 +206,13 @@ fn calc() -> Result<int, string> {
 
 ```rust
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() { var i = 0; while (i < 5) { send(ch, i * i); i = i + 1; } close(ch); });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    while (true) {
         match (recv(ch)) {
             Option.Some(v) => { total = total + v; },
-            Option.None => { seguir = false; },
+            Option.None => { break; },      // el canal se cerró: fin
         }
     }
     print("total: ${total}");   // 0+1+4+9+16 = 30
@@ -219,7 +220,7 @@ fn main() -> int {
 }
 ```
 
-Hay **173 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
+Hay **más de 170 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
 concurrency, un servidor web, WebSockets, y el propio compilador auto-alojado en [`selfhost/`](selfhost/).
 
 ## Playground web
@@ -281,6 +282,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
 | [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md) | El **backend nativo** por dentro: cómo se transpila a Rust y cómo se garantiza la paridad. |
 | [`docs/diseno-concurrencia-nativa.md`](docs/diseno-concurrencia-nativa.md) | El **scheduler de fibras M:N** del binario nativo: corrutinas, reactor y decisiones. |
+| [`docs/windows.md`](docs/windows.md) | El **contrato de Windows**: qué funciona, cómo, y las deudas que quedan. |
 | [`PERFORMANCE.md`](PERFORMANCE.md) | La **crónica de rendimiento**: cada arco de optimización, medido. |
 | [`PRODUCTION.md`](PRODUCTION.md) | El **contrato de producción**: ejes, invariantes y criterios de calidad vigentes. |
 | [`book/`](book/) | El **libro** (mdBook): cómo se **construyó** el lenguaje, fase a fase. |

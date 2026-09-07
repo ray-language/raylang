@@ -642,6 +642,9 @@ struct Checker {
     /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
     /// imports.
     ufcs_aliases: HashMap<String, String>,
+    /// Funciones **públicas** por nombre global (M206): el paso 5 de UFCS (dirigido por el tipo del
+    /// receptor) solo alcanza las `pub` del módulo que declara el tipo.
+    pub_functions: HashSet<String>,
     /// Bandas de módulo del loader (fix de IDEAS §52): `(línea_de_inicio, prefijo)` ordenado por
     /// inicio. Un sitio UFCS resuelve primero contra las funciones **propias** de su módulo
     /// (`prefijo::nombre`, por la banda a la que pertenece su línea) — el ámbito léxico del módulo,

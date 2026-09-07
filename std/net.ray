@@ -265,3 +265,13 @@ pub fn set_read_timeout(h: int, ms: int) {
 pub fn set_nodelay(h: int, on: bool) {
     __socket_set_nodelay(h, on);
 }
+
+// M207 (feedback de ray-remote): un túnel abierto horas sobre una red que se cae en silencio se
+// queda en un `recv` eterno; con keepalive el SO sondea y la lectura falla.
+/// Enables (`on = true`) or disables `SO_KEEPALIVE` on socket `h`: the OS probes an idle
+/// connection and reports it dead when the peer vanished (a long-lived tunnel over a flaky
+/// network would otherwise hang in `recv` forever). Probe timing is the OS default. Applies to
+/// TCP and TLS connections; total: other handles are ignored.
+pub fn set_keepalive(h: int, on: bool) {
+    __socket_set_keepalive(h, on);
+}

@@ -176,8 +176,9 @@ Verificado contra 1.8.0 antes de planificar: el punto 1 ya estaba resuelto (M196
 el estado desactualizado) y el 19 (`if`/`else` como operando "se traga" lo que sigue) **no se
 reproduce** con strings, bytes, llamadas ni salto de línea antes del operador — pendiente de un
 caso concreto del proyecto antes de tocar el parser. El 20 (UFCS contra módulos cualificados) no
-entra: cambia una regla de resolución de nombres y merece su propia discusión en la SPEC; lo
-barato es que `ray_doc` y la referencia muestren el builder de `std/json` en la forma que compila.
+entra en el lote: cambia una regla de resolución de nombres. Se discutió y se hizo aparte
+(M206, 1.10.0: UFCS dirigido por el tipo del receptor, SPEC §6.3 paso 5); mientras tanto `ray_doc`
+mostró la forma que compila (M202).
 
 ### E1. `ray test` chequea también la entrada del proyecto (feedback 17) — S ✅ M200
 

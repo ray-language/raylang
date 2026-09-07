@@ -180,9 +180,12 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    `fs.read_file(p) fs.write_file(p, s) fs.exists(p)` · `time.now() time.sleep(ms)` ·
    `random.below(n)`.
 
-Generic collections are MODULE functions, not methods: `import std/collections/deque;`
-then `deque.push_back(d, x)`, `deque.len(d)` — UFCS `d.push_back(x)` fails because
-UFCS never reaches qualified names.
+Generic collections are MODULE functions: `import std/collections/deque;` then
+`deque.push_back(d, x)` — and, since 1.10.0, also `d.push_back(x)`: UFCS resolves against
+the module that DECLARES the receiver's struct/enum type (pub functions whose first
+parameter is that type), so builders chain with just `import std/json;`:
+`json.obj().field("host", h).field("port", p)`. Primitives and prelude types
+(`Option`/`Result`/`Map`) have no module: for those, UFCS needs the unqualified import.
 
 Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex

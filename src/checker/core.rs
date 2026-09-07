@@ -29,6 +29,7 @@ impl Checker {
             break_ok: false,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
+            pub_functions: HashSet::new(),
             for_iter_sites: HashMap::new(),
             op_sites: HashMap::new(),
             concat_sites: HashSet::new(),
@@ -220,6 +221,9 @@ impl Checker {
                 bounds: f.bounds.clone(),
             };
             self.functions.insert(f.name.clone(), sig);
+            if f.is_pub {
+                self.pub_functions.insert(f.name.clone());
+            }
             // M10.2b: posición de declaración (para ir-a-definición). Solo al recolectar.
             if self.gather {
                 self.fn_defs.insert(f.name.clone(), (f.line, f.col));
@@ -2802,6 +2806,8 @@ impl Checker {
             name.to_string()
         } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
             global
+        } else if let Some(by_type) = self.type_module_fn(name, recv_ty) {
+            by_type
         } else {
             return Err(self.err(line, col, format!(
                 "no field or function '{}' applicable to {}", name, recv_ty
@@ -2822,6 +2828,29 @@ impl Checker {
         // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
         self.ufcs_sites.insert((line, col, name.to_string()), target);
         Ok(ty)
+    }
+
+    /// M206 — paso 5 de §6.3, UFCS **dirigido por el tipo del receptor**: si `recv_ty` es un struct
+    /// o enum declarado en un módulo `M` (su nombre global lleva el prefijo `M::`) y `M::name` es
+    /// una función **pública** cuyo primer parámetro admite el receptor, esa es la resolución.
+    /// Es lo que hace que un builder (`json.obj().field(a).field(b)`, `conn.set_encodings(x)?`)
+    /// encadene con solo `import M;`, como un método inherente. Los tipos del prelude y los
+    /// primitivos no tienen prefijo → no aplica; las privadas de `M` no se alcanzan.
+    fn type_module_fn(&self, name: &str, recv_ty: &Type) -> Option<String> {
+        let tname = match recv_ty {
+            Type::Struct(n, _) | Type::Enum(n, _) => n,
+            _ => return None,
+        };
+        let (prefix, _) = tname.rsplit_once("::")?;
+        let candidate = format!("{prefix}::{name}");
+        if !self.pub_functions.contains(&candidate) {
+            return None;
+        }
+        let sig = self.functions.get(&candidate)?;
+        let first = sig.params.first()?;
+        let mut sigma: HashMap<String, Type> = HashMap::new();
+        unify(first, recv_ty, &mut sigma).ok()?;
+        Some(candidate)
     }
 
     /// La función **propia del módulo** del sitio (fix de IDEAS §52): si la línea cae en la banda

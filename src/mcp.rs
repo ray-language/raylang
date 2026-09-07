@@ -523,13 +523,15 @@ fn std_module_listing(symbol: &str) -> Option<String> {
     if lines.is_empty() {
         return None;
     }
-    // M202 (feedback 20): el builder de std/json "encadenable" solo lo es tras importar los nombres —
-    // UFCS no alcanza a los nombres calificados. La nota va en cada listado para que el agente
-    // escriba la forma que compila con `import std/<m>;`.
+    // M202/M206: la nota de cada listado dice cómo se llama lo que lista. Desde M206 UFCS resuelve
+    // contra el módulo que declara el tipo del receptor: `x.f(…)` encadena con `import std/<m>;`
+    // si `x` es un struct/enum de este módulo; sobre primitivos y tipos del prelude hace falta el
+    // import sin calificar.
     Some(format!(
         "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
-         With `import std/{bare};` call them qualified: `{bare}.f(x, …)`; method-style chaining `x.f(…)` \
-         (UFCS) needs `from std/{bare} import f;` — UFCS never reaches qualified names.",
+         With `import std/{bare};` call them qualified: `{bare}.f(x, …)`. Method-style chaining `x.f(…)` \
+         (UFCS) works when `x` is a struct/enum declared by this module (pub functions taking it first); \
+         on primitives or prelude types (`Option`/`Result`/`Map`) it needs `from std/{bare} import f;`.",
         lines.len(),
         lines.join("\n"),
         bare
@@ -913,7 +915,7 @@ mod tests {
         assert!(d.starts_with("std/process: enum Exit {"), "{d}");
         let listing = doc_text("std/ui");
         assert!(listing.contains("struct MenuItem { tag: string"), "el listado muestra los campos: {listing}");
-        assert!(listing.contains("UFCS never reaches qualified names"), "{listing}");
+        assert!(listing.contains("declared by this module"), "{listing}");
     }
 
     #[test]

@@ -87,6 +87,8 @@ struct MatchState {
 // desconocido).
 struct Checker {
     funcs: Map<string, FnSig>,
+    // M206: funciones públicas por nombre global — el paso 5 de UFCS solo alcanza las `pub`.
+    pub_funcs: Map<string, bool>,
     structs: Map<string, [FieldDef]>,
     enums: Map<string, [VariantDef]>,
     struct_tparams: Map<string, [string]>,
@@ -1212,6 +1214,9 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
                 bounds: f.bounds
             }
         );
+        if (f.is_pub) {
+            c.pub_funcs.insert(f.name, true);
+        }
         fi = fi + 1;
     }
     register_traits_impls(c, prog)?;
@@ -2391,14 +2396,24 @@ fn check_ufcs(
     line: int,
     col: int
 ) -> Result<Type, TypeError> {
+    // M206 (paso 5 de SPEC §6.3): UFCS dirigido por el tipo del receptor — `M::f` pública del
+    // módulo que declara el struct/enum del receptor, si su primer parámetro lo admite.
+    var target = name;
     if (!name_is_callable(c, name)) {
-        return Result.Err(
-            terr(
-                line,
-                col,
-                "no field or function '" + name + "' applicable to " + type_str(recv_ty)
-            )
-        );
+        match (type_module_fn(c, name, recv_ty)) {
+            Option.Some(t) => {
+                target = t;
+            },
+            Option.None => {
+                return Result.Err(
+                    terr(
+                        line,
+                        col,
+                        "no field or function '" + name + "' applicable to " + type_str(recv_ty)
+                    )
+                );
+            },
+        }
     }
     var all: [Expr] = [];
     all.push(obj);
@@ -2407,7 +2422,53 @@ fn check_ufcs(
         all.push(cargs[i]);
         i = i + 1;
     }
-    check_named_call(c, name, all, line, col)
+    check_named_call(c, target, all, line, col)
+}
+
+// M206: `M::name` pública del módulo `M` que declara el tipo del receptor (su nombre global lleva el
+// prefijo `M::`), si su primer parámetro admite el receptor. Espejo de `type_module_fn` en Rust.
+fn type_module_fn(c: Checker, name: string, recv_ty: Type) -> Option<string> {
+    let tname = match (recv_ty) {
+        Type.TNamed(n, _) => n,
+        _ => {
+            return Option.None;
+        },
+    };
+    let cut = match (last_index_of(tname, "::")) {
+        Option.Some(i) => i,
+        Option.None => {
+            return Option.None;
+        },
+    };
+    let candidate = tname.substring(0, cut) + "::" + name;
+    if (!c.pub_funcs.contains_key(candidate)) {
+        return Option.None;
+    }
+    match (get(c.funcs, candidate)) {
+        Option.Some(sig) => {
+            if (sig.params.len() == 0) {
+                return Option.None;
+            }
+            match (unify(sig.params[0], recv_ty, Map.new(), sig.type_params)) {
+                Result.Ok(_) => Option.Some(candidate),
+                Result.Err(_) => Option.None,
+            }
+        },
+        Option.None => Option.None,
+    }
+}
+
+// Posición del último `::` de `s` (`None` si no hay). Sin `index_of`: el checker auto-alojado no
+// lo conoce como método de string, y un bucle por caracteres basta.
+fn last_index_of(s: string, sub: string) -> Option<int> {
+    var i = s.len() - 2;
+    while (i >= 0) {
+        if (s[i] == ':' && s[i + 1] == ':') {
+            return Option.Some(i);
+        }
+        i = i - 1;
+    }
+    Option.None
 }
 
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
@@ -5095,6 +5156,7 @@ fn check_method_body(
 pub fn check(prog: Program) -> Result<int, TypeError> {
     let c = Checker {
         funcs: Map.new(),
+        pub_funcs: Map.new(),
         structs: Map.new(),
         enums: Map.new(),
         struct_tparams: Map.new(),

@@ -2442,6 +2442,14 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees int, bool"),
             },
+            // M207: SO_KEEPALIVE del socket (total).
+            "__socket_set_keepalive" => match (&values[0], &values[1]) {
+                (Value::Int(h), Value::Bool(on)) => {
+                    crate::builtins::socket_set_keepalive(*h, *on);
+                    Value::Unit
+                }
+                _ => unreachable!("the checker guarantees int, bool"),
+            },
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
                 Value::Int(h) => {

@@ -626,6 +626,15 @@ let r = [1, 2, 3, 4]
     |> filter(fn(x: int) -> bool { x > 4 });
 ```
 
+`f` puede ser un builtin, una función del ámbito (propia, del prelude o `from`-importada) y, desde
+M206, **una función pública del módulo que declara el tipo del receptor**: si `c` es un
+`proto.Conn`, `c.set_encodings(x)` es `proto.set_encodings(c, x)` con solo `import rfb/proto;`. Es
+lo que hace encadenables a los builders (`json.obj().field("host", h).field("port", p)`) sin listar
+sus funciones en un `from … import`. Límites: el tipo tiene que ser un struct o enum de ese módulo
+(los del prelude —`Option`, `Result`, `Map`— y los primitivos no tienen módulo), la función tiene
+que ser `pub` y recibir el tipo como **primer** parámetro, y una función libre en el ámbito con ese
+nombre sigue ganando.
+
 ### Eager vs perezoso
 
 Sobre arreglos, `map`/`filter`/`fold` son **eager** (materializan un arreglo por paso). La cadena

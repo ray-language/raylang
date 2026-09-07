@@ -1008,6 +1008,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         write!(out, "fn __ray_peer_addr(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    let reg = __ray_reg().lock().unwrap();\n    match reg.open.get(&h) {{ Some(__RayHandle::Tcp(s)) => s.peer_addr().map(|p| Rc::<str>::from(p.to_string())).map_err(|e| Rc::<str>::from(e.to_string())), {tls_peer}Some(_) => Err(Rc::<str>::from(format!(\"handle {{}} is not a TCP/TLS socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))) }} }}\n").unwrap();
         // M203: TCP_NODELAY (total; TLS nativo queda fuera — su socket vive dentro de la sesión).
         out.push_str("fn __ray_set_nodelay(h: i64, on: bool) { let reg = __ray_reg().lock().unwrap(); if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let _ = s.set_nodelay(on); } }\n");
+        // M207: SO_KEEPALIVE (la std de Rust no lo expone → setsockopt a mano, como en builtins.rs).
+        out.push_str(concat!(
+            "#[cfg(unix)] fn __ray_keepalive_raw(s: &std::net::TcpStream, on: bool) { use std::os::fd::AsRawFd; unsafe extern \"C\" { fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32; }\n",
+            "    #[cfg(target_os = \"linux\")] const SOL: i32 = 1; #[cfg(target_os = \"linux\")] const KA: i32 = 9; #[cfg(not(target_os = \"linux\"))] const SOL: i32 = 0xffff; #[cfg(not(target_os = \"linux\"))] const KA: i32 = 0x0008;\n",
+            "    let v: i32 = if on { 1 } else { 0 }; unsafe { setsockopt(s.as_raw_fd(), SOL, KA, &v as *const i32 as *const core::ffi::c_void, 4); } }\n",
+            "#[cfg(windows)] fn __ray_keepalive_raw(s: &std::net::TcpStream, on: bool) { use std::os::windows::io::AsRawSocket; #[link(name = \"ws2_32\")] unsafe extern \"system\" { fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32; }\n",
+            "    let v: i32 = if on { 1 } else { 0 }; unsafe { setsockopt(s.as_raw_socket() as usize, 0xffff, 0x0008, &v as *const i32 as *const u8, 4); } }\n",
+            "fn __ray_set_keepalive(h: i64, on: bool) { let reg = __ray_reg().lock().unwrap(); if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { __ray_keepalive_raw(s, on); } }\n",
+        ));
         if t.fibers {
             // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda en el ctx (rd_to) y
             // lo aplica el park de la lectura (wait_readable_timeout). ms <= 0 lo quita, como hoy.

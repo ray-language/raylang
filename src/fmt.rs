@@ -175,6 +175,8 @@ struct Cur {
     pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
     /// Paréntesis de agrupación escritos por el usuario (M189, `Program::paren_sites`): se conservan.
     parens: std::collections::HashSet<(usize, usize)>,
+    /// `if let` del usuario (M201, `Program::if_let_sites`): el `match` desazucarado se reemite como `if let`.
+    if_lets: std::collections::HashSet<(usize, usize)>,
     /// Fin `(línea, col)` de cada expresión por su inicio (`Program::expr_spans`): para saber en qué
     /// LÍNEA termina un operando o un elemento y re-pegarle su comentario trailing (M189).
     spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
@@ -213,6 +215,7 @@ impl Cur {
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
             parens: program.paren_sites.clone(),
+            if_lets: program.if_let_sites.clone(),
             spans: program.expr_spans.clone(),
             base: 0,
             wrap: false,
@@ -561,7 +564,10 @@ fn fmt_annotations(anns: &[Annotation]) -> String {
 /// la admite en parámetros, y así la forma es idéntica a la de los argumentos.
 fn fmt_params_at(params: &[Param], base: usize, prefix: &str, suffix: &str) -> String {
     let flat = format!("{}({}){}", prefix, fmt_params(params), suffix);
-    if params.len() < 2 || flat.chars().count() <= MAX_WIDTH {
+    // M201: se mide la LÍNEA que saldrá — con la sangría de `base` y el ` {` (o `;`) que el emisor
+    // añade después —, no solo la cabecera pelada: una firma de 99 columnas salía a 101.
+    let width = INDENT.chars().count() * base + flat.chars().count() + 2;
+    if params.len() < 2 || width <= MAX_WIDTH {
         return flat;
     }
     let inner = INDENT.repeat(base + 1);
@@ -1651,6 +1657,30 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
             format!("while ({}) {}", c, fmt_block(cur, body, base))
         }
         ExprKind::Block(b) => fmt_block(cur, b, base),
+        ExprKind::Match { scrutinee, arms } if cur.if_lets.contains(&(e.line, e.col)) && arms.len() == 2 => {
+            // M201: un `if let` del usuario (desazucarado por el parser a `match` de dos brazos) se
+            // reemite como `if let`: `if let <patrón> = <expr> { … } [else { … } | else if …]`.
+            let scrut = fmt_cond(cur, scrutinee, "if let  = ", cur.wrap);
+            let mut s = format!("if let {} = {} ", fmt_pattern(&arms[0].pattern), scrut);
+            match &arms[0].body.kind {
+                ExprKind::Block(b) => s.push_str(&fmt_block(cur, b, base)),
+                _ => s.push_str(&fmt_expr(cur, &arms[0].body, 0)),
+            }
+            match &arms[1].body.kind {
+                // Sin `else`: el parser dejó un bloque vacío sintético en la posición del `if`.
+                ExprKind::Block(b) if b.statements.is_empty() && b.tail.is_none() && b.line == e.line && b.col == e.col => {}
+                ExprKind::Block(b) => {
+                    s.push_str(" else ");
+                    s.push_str(&fmt_block(cur, b, base));
+                }
+                // `else if …` / `else if let …`: la expresión `if` va tal cual, encadenada.
+                _ => {
+                    s.push_str(" else ");
+                    s.push_str(&fmt_expr_indented(cur, &arms[1].body, base));
+                }
+            }
+            s
+        }
         ExprKind::Match { scrutinee, arms } => {
             let inner = INDENT.repeat(base + 1);
             let scrutinee = fmt_cond(cur, scrutinee, "match (", cur.wrap);
@@ -1934,6 +1964,32 @@ mod tests {
         // Anidado: `scope(fn() { spawn(fn() { … }) })`.
         let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
         assert_eq!(fmt(nested), nested, "función anónima anidada, idempotente: {:?}", fmt(nested));
+    }
+
+    /// M201 (feedback 22 de ray-remote): `if let` se conserva — con `else`, con `else if` encadenado,
+    /// sin `else`, y como valor de un `let`. Un `match` escrito por el usuario sigue siendo `match`.
+    #[test]
+    fn keeps_if_let_instead_of_rewriting_it_as_match() {
+        let src = "fn f() -> Result<int, string> {\n    Result.Ok(1)\n}\n\nfn main() -> int {\n    if let Result.Err(e) = f() {\n        print(e);\n    }\n    if let Result.Ok(v) = f() {\n        print(v);\n    } else {\n        print(\"no\");\n    }\n    if let Result.Ok(v) = f() {\n        print(v);\n    } else if let Result.Err(e) = f() {\n        print(e);\n    } else {\n        print(\"?\");\n    }\n    let n = if let Result.Ok(v) = f() { v } else { 0 };\n    match (f()) {\n        Result.Ok(v) => print(v),\n        _ => print(\"err\"),\n    }\n    n\n}\n";
+        let out = fmt(src);
+        assert_eq!(out, src, "if let intacto: {out}");
+        assert!(!out.contains("match (f()) {\n        Result.Err"), "no reescribe if let como match: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M201: la firma se mide como la LÍNEA que sale (sangría + ` {`), no como la cabecera pelada —
+    /// una de 99 columnas salía a 101, una más que el propio límite.
+    #[test]
+    fn a_signature_that_would_reach_101_columns_is_split() {
+        let src = "fn build_response_for_client(connection_identifier_number: int, negotiated_encodings: [int]) -> int {\n    0\n}\n";
+        let flat = src.lines().next().unwrap();
+        assert!(flat.chars().count() > MAX_WIDTH, "el caso mide {} columnas", flat.chars().count());
+        let out = fmt(src);
+        for l in out.lines() {
+            assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
+        }
+        assert!(out.starts_with("fn build_response_for_client(\n    connection_identifier_number: int,\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     /// M104 — un `from … import` que pasa de MAX_WIDTH se envuelve a un nombre por línea; el que cabe

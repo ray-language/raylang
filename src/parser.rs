@@ -78,6 +78,8 @@ pub struct Parser {
     pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
     /// Ver [`crate::ast::Program::paren_sites`] (M189).
     paren_sites: std::collections::HashSet<(usize, usize)>,
+    /// Ver [`crate::ast::Program::if_let_sites`] (M201).
+    if_let_sites: std::collections::HashSet<(usize, usize)>,
     /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
     /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
     /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
@@ -95,7 +97,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), if_let_sites: std::collections::HashSet::new(), depth: 0 }
     }
 
     // =================================================================
@@ -113,6 +115,7 @@ impl Parser {
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
+        acc.if_let_sites = std::mem::take(&mut self.if_let_sites);
         Ok(acc)
     }
 
@@ -139,6 +142,7 @@ impl Parser {
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
+        acc.if_let_sites = std::mem::take(&mut self.if_let_sites);
         (acc, errors)
     }
 
@@ -1590,6 +1594,7 @@ impl Parser {
             line,
             col,
         };
+        self.if_let_sites.insert((line, col)); // M201: `ray fmt` lo reemite como `if let`
         Ok(Expr {
             kind: ExprKind::Match { scrutinee: Box::new(scrut), arms: vec![arm_then, arm_else] },
             line,

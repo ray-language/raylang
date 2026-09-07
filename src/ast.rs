@@ -204,6 +204,11 @@ pub struct Program {
     /// consulta para NO quitar los paréntesis que el usuario puso aunque la precedencia los haga
     /// redundantes (en código criptográfico son documentación deliberada). Solo lo usa `fmt`.
     pub paren_sites: std::collections::HashSet<(usize, usize)>,
+    /// Posiciones `(línea, col)` de los `if let` del usuario (M201): el parser los desazucara a un
+    /// `match` de dos brazos (`patrón => then, _ => else`) y el formateador, sin esto, imprimía el
+    /// `match` — un formateador que cambia la construcción elegida deja de ser un formateador
+    /// (feedback 22 de ray-remote). Solo lo usa `fmt` para reemitir `if let`.
+    pub if_let_sites: std::collections::HashSet<(usize, usize)>,
     /// Ver [`Program::interp_sites`]. `(receptor, rhs)` de un pipeline: `x |> f(a)` → `(x, f(a))`.
     pub pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
 }

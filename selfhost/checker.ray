@@ -3499,7 +3499,13 @@ fn check_block_opt(c: Checker, b: Block, expected: Option<Type>) -> Result<Type,
     }
 }
 
-fn check_while(c: Checker, cond: Expr, body: Block, line: int, col: int) -> Result<Type, TypeError> {
+fn check_while(
+    c: Checker,
+    cond: Expr,
+    body: Block,
+    line: int,
+    col: int
+) -> Result<Type, TypeError> {
     let ct = check_expr(c, cond)?;
     if (!type_eq(ct, Type.TBool)) {
         return Result.Err(

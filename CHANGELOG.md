@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray fmt` conserva `if let`** (M201, feedback 22 de ray-remote): el parser lo desazucara a
+  `match` y el formateador lo reescribía; ahora reemite `if let … { } [else …]` tal cual. Y las
+  firmas se miden como la línea que sale (sangría + ` {`): una de 99 columnas ya no sale a 101.
 - **`ray test` chequea también la entrada del proyecto** (M200, feedback 17 de ray-remote): toda
   suite se compila aunque no tenga `@test`, así que un `src/main.ray` con un error de tipos ya no
   pasa en verde (sale 65 con el veredicto "N suite(s) failed to compile").

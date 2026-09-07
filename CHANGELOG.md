@@ -10,6 +10,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   selector de idioma en cada par y una guarda de CI (`tests/docs_i18n.rs`) que detecta cuando el
   original cambia sin revisar la traducción (marcador `<!-- sync: sha256:… -->`; se refresca con
   `tools/docs_sync.py --update`). El MCP sirve `raylang://reference.md` en inglés.
+- **`ray serve [dir] [--host H] [--port N]`** (M199): servidor de archivos estáticos para
+  previsualizar (`_site/`, `playground/`, la salida de `ray doc`), escrito en raylang y embebido en
+  el binario: `index.html` por directorio, MIME por extensión, `Cache-Control: no-store`, sin `..`.
+  Sustituye a `python3 -m http.server` en el Makefile y en las guías.
 - **Sitio bilingüe** (M198): `raylang.dev/en/` con la portada, los benchmarks y la especificación
   en inglés, generados desde los mismos templates; selector ES/EN en la navegación, `hreflang`
   alternos y el playground incrustado con su interfaz en inglés (`?lang=en`).

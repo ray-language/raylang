@@ -11,9 +11,8 @@
 //
 //   ray run site/site.ray <raíz-del-repo> <dir-de-salida>
 //
-// Previsualización local: abrir `index.html` de la salida o servir el directorio con
-// cualquier servidor estático (el iframe del playground requiere servirlo por http en
-// algunos navegadores; `python3 -m http.server -d <salida>` basta).
+// Previsualización local: `ray serve <salida>` (el iframe del playground requiere servirlo
+// por http en algunos navegadores).
 
 import std/fs;
 import std/markdown;

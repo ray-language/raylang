@@ -1,0 +1,330 @@
+// src/serve.ray — `ray serve`: un servidor de archivos estáticos escrito EN raylang (M199).
+//
+// Va embebido en el binario (`include_str!` desde cli.rs, como la stdlib) y corre en la VM:
+// `ray serve [dir] [--host H] [--port N]` lo carga con args `[dir, host, port]`. Es una
+// previsualización, no un servidor de producción: HTTP/1.1 mínimo (GET/HEAD, un archivo por
+// conexión, `Connection: close`), `index.html` por directorio, tipos MIME por extensión y
+// `Cache-Control: no-store` para que lo que se ve sea siempre lo que hay en disco. Sin TLS,
+// sin listados, sin rangos: para eso está el paquete `net` (webserver.static_mount).
+//
+// Solo std/net + std/fs: la misma pieza que `packages/net` usa por debajo, sin dependencias.
+
+import std/net;
+import std/fs;
+
+/// Content-Type for a file name, by extension (lower-cased); `application/octet-stream` otherwise.
+pub fn mime_of(name: string) -> string {
+    let lower = name.to_lower();
+    let ext = match (lower.split(".").pop()) {
+        Option.Some(e) => e,
+        Option.None => "",
+    };
+    if (ext == "html" || ext == "htm") {
+        return "text/html; charset=utf-8";
+    }
+    if (ext == "css") {
+        return "text/css; charset=utf-8";
+    }
+    if (ext == "js" || ext == "mjs") {
+        return "text/javascript; charset=utf-8";
+    }
+    if (ext == "json") {
+        return "application/json";
+    }
+    if (ext == "wasm") {
+        return "application/wasm";
+    }
+    if (ext == "svg") {
+        return "image/svg+xml";
+    }
+    if (ext == "png") {
+        return "image/png";
+    }
+    if (ext == "jpg" || ext == "jpeg") {
+        return "image/jpeg";
+    }
+    if (ext == "gif") {
+        return "image/gif";
+    }
+    if (ext == "webp") {
+        return "image/webp";
+    }
+    if (ext == "ico") {
+        return "image/x-icon";
+    }
+    if (ext == "woff2") {
+        return "font/woff2";
+    }
+    if (ext == "woff") {
+        return "font/woff";
+    }
+    if (ext == "ttf") {
+        return "font/ttf";
+    }
+    if (ext == "txt" || ext == "md" || ext == "ray" || ext == "sh" || ext == "ps1") {
+        return "text/plain; charset=utf-8";
+    }
+    if (ext == "xml") {
+        return "application/xml";
+    }
+    if (ext == "pdf") {
+        return "application/pdf";
+    }
+    if (ext == "mp3") {
+        return "audio/mpeg";
+    }
+    if (ext == "mp4") {
+        return "video/mp4";
+    }
+    "application/octet-stream"
+}
+
+fn hex_value(code: int) -> int {
+    if (code >= 48 && code <= 57) {
+        return code - 48;
+    }
+    if (code >= 97 && code <= 102) {
+        return code - 87;
+    }
+    if (code >= 65 && code <= 70) {
+        return code - 55;
+    }
+    -1
+}
+
+/// Decodes `%XX` escapes (invalid ones are kept verbatim). Only the ASCII range is needed for
+/// file names produced by the tools; anything else stays as the browser sent it.
+pub fn url_decode(s: string) -> string {
+    if (!s.contains("%")) {
+        return s;
+    }
+    var out: [int] = [];
+    let raw = s.to_bytes();
+    var i = 0;
+    while (i < raw.len()) {
+        let b = raw[i];
+        if (b == 37 && i + 2 < raw.len()) {
+            let hi = hex_value(raw[i + 1]);
+            let lo = hex_value(raw[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push(hi * 16 + lo);
+                i = i + 3;
+                continue;
+            }
+        }
+        out.push(b);
+        i = i + 1;
+    }
+    match (from_utf8(bytes_of(out))) {
+        Result.Ok(t) => t,
+        Result.Err(_) => s,
+    }
+}
+
+/// Maps a request path to a file under `dir`: strips the query string, decodes escapes,
+/// rejects any `.`/`..` segment (no traversal), and serves `index.html` for directories.
+/// `None` when nothing is there.
+pub fn resolve(dir: string, request_path: string) -> Option<string> {
+    let no_query = match (request_path.index_of("?")) {
+        Option.Some(i) => request_path.substring(0, i),
+        Option.None => request_path,
+    };
+    let decoded = url_decode(no_query);
+    var clean: [string] = [];
+    for seg in decoded.split("/") {
+        if (seg == "") {
+            continue;
+        }
+        if (seg == "." || seg == "..") {
+            return Option.None;
+        }
+        clean.push(seg);
+    }
+    var full = dir;
+    for seg in clean {
+        full = full + "/" + seg;
+    }
+    if (fs.is_dir(full)) {
+        full = full + "/index.html";
+    }
+    if (fs.exists(full) && !fs.is_dir(full)) { Option.Some(full) } else { Option.None }
+}
+
+// ¿`request_path` (sin query, ya decodificado por `resolve`) nombra un directorio bajo `dir`?
+fn is_directory(dir: string, request_path: string) -> bool {
+    var full = dir;
+    for seg in url_decode(request_path).split("/") {
+        if (seg == "" || seg == "." || seg == "..") {
+            continue;
+        }
+        full = full + "/" + seg;
+    }
+    fs.is_dir(full)
+}
+
+fn write_all(sock: int, head: string, body: bytes) {
+    let _ = net.socket_write(sock, head);
+    if (body.len() > 0) {
+        let _ = net.socket_write_bytes(sock, body);
+    }
+}
+
+fn respond(sock: int, status: string, mime: string, body: bytes, head_only: bool) {
+    let head = "HTTP/1.1 "
+        + status
+        + "\r\n"
+        + "Content-Type: "
+        + mime
+        + "\r\n"
+        + "Content-Length: ${body.len()}\r\n"
+        + "Cache-Control: no-store\r\n"
+        + "Connection: close\r\n\r\n";
+    if (head_only) {
+        write_all(sock, head, b"");
+    } else {
+        write_all(sock, head, body);
+    }
+}
+
+// Lee hasta el fin de las cabeceras (o EOF / 16 KB) y devuelve la línea de petición.
+fn request_line(sock: int) -> string {
+    var buf = "";
+    while (!buf.contains("\r\n\r\n") && buf.len() < 16384) {
+        match (net.socket_read(sock)) {
+            Result.Ok(chunk) => {
+                if (chunk == "") {
+                    break;
+                }
+                buf = buf + chunk;
+            },
+            Result.Err(_) => {
+                break;
+            },
+        }
+    }
+    match (buf.index_of("\r\n")) {
+        Option.Some(i) => buf.substring(0, i),
+        Option.None => buf,
+    }
+}
+
+fn handle(sock: int, dir: string) {
+    net.set_read_timeout(sock, 5000);
+    let line = request_line(sock);
+    let parts = line.split(" ");
+    if (parts.len() < 2) {
+        respond(
+            sock,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            "bad request\n".to_bytes(),
+            false
+        );
+        close(sock);
+        return;
+    }
+    let method = parts[0];
+    let path = parts[1];
+    let head_only = method == "HEAD";
+    if (method != "GET" && !head_only) {
+        respond(
+            sock,
+            "405 Method Not Allowed",
+            "text/plain; charset=utf-8",
+            "method not allowed\n".to_bytes(),
+            false
+        );
+        print("${method} ${path} 405");
+        close(sock);
+        return;
+    }
+    // Un directorio sin barra final redirige a `dir/`: así los enlaces relativos de su
+    // index.html resuelven contra el directorio y no contra el padre.
+    let bare = match (path.index_of("?")) {
+        Option.Some(i) => path.substring(0, i),
+        Option.None => path,
+    };
+    if (!bare.ends_with("/") && is_directory(dir, bare)) {
+        let head = "HTTP/1.1 301 Moved Permanently\r\nLocation: "
+            + bare
+            + "/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        write_all(sock, head, b"");
+        print("${method} ${path} 301");
+        close(sock);
+        return;
+    }
+    match (resolve(dir, path)) {
+        Option.Some(file) => {
+            match (fs.read_file_bytes(file)) {
+                Result.Ok(data) => {
+                    respond(sock, "200 OK", mime_of(file), data, head_only);
+                    print("${method} ${path} 200");
+                },
+                Result.Err(e) => {
+                    respond(
+                        sock,
+                        "500 Internal Server Error",
+                        "text/plain; charset=utf-8",
+                        (e + "\n").to_bytes(),
+                        head_only
+                    );
+                    print("${method} ${path} 500 ${e}");
+                },
+            }
+        },
+        Option.None => {
+            respond(
+                sock,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                "not found\n".to_bytes(),
+                head_only
+            );
+            print("${method} ${path} 404");
+        },
+    }
+    close(sock);
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() != 3) {
+        eprint("usage: ray serve [dir] [--host H] [--port N]");
+        return 64;
+    }
+    let dir = argv[0];
+    let host = argv[1];
+    let port = match (argv[2].parse_int()) {
+        Option.Some(p) => p,
+        Option.None => {
+            eprint("invalid port: " + argv[2]);
+            return 64;
+        },
+    };
+    if (!fs.is_dir(dir)) {
+        eprint("not a directory: " + dir);
+        return 66;
+    }
+    let listener = match (net.tcp_listen(host, port)) {
+        Result.Ok(l) => l,
+        Result.Err(e) => {
+            eprint("could not listen on ${host}:${port}: ${e}");
+            return 69;
+        },
+    };
+    let bound = net.local_port(listener);
+    print("serving ${dir} at http://${host}:${bound}/  (Ctrl-C to stop)");
+    while (true) {
+        match (net.tcp_accept(listener)) {
+            Result.Ok(sock) => {
+                spawn(fn() {
+                    handle(sock, dir);
+                });
+            },
+            Result.Err(e) => {
+                eprint("accept: " + e);
+            },
+        }
+    }
+    0
+}

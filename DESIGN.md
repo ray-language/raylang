@@ -12423,3 +12423,18 @@ benchmarks en inglés son las mismas páginas con su nota traducida: el cuerpo (
 aparte por su tamaño y por ser el documento normativo. No hace falta guarda de sincronía: el texto
 de ambos idiomas vive en el mismo archivo, y `tests/site_cli.rs` asevera que `en/` sale sin
 directivas sin resolver y con los assets relativos correctos.
+
+## 191. M199 — `ray serve`: previsualizar con el propio lenguaje (sep 2026)
+
+Las instrucciones para probar el sitio y el playground terminaban en `python3 -m http.server`: un
+lenguaje que genera su sitio con sus propios templates y luego pide Python para mirarlo. El servidor
+HTTP de producción vive en el paquete `net` (nivel 2, fuera del binario) y no se quiso moverlo dentro
+solo por esto; lo que hace falta para una previsualización cabe en 250 líneas de raylang sobre
+`std/net` + `std/fs`: aceptar, leer la línea de petición, mapear la ruta a un archivo bajo el
+directorio rechazando `.`/`..`, `index.html` por directorio (con redirección 301 a `dir/` para que
+los enlaces relativos resuelvan), MIME por extensión, `Cache-Control: no-store`, `Connection: close`
+y una fibra por conexión. Ese programa (`src/serve.ray`) va embebido en el binario con
+`include_str!`, como la stdlib, y `ray serve` solo parsea `[dir] --host --port` y lo ejecuta en la
+VM con `args()`: la toolchain corre raylang para servir raylang. `--port 0` imprime el puerto
+asignado (`local_port`, M150) y es lo que usa el test de integración. Fuera de alcance, a
+propósito: TLS, listados de directorio, rangos y keep-alive — para eso está `net/webserver`.

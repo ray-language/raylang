@@ -333,6 +333,7 @@ browser. Routes with parameters, middleware, typed JSON, static files, cookies a
 | `ray build --native --release` | optimized native binary; `ray toolchain install` if you have no Rust |
 | `ray bundle` | desktop app (`.app`, `.desktop`, `.exe`) or an iOS/Android project |
 | `ray doc src/main.ray` | documentation from `///` comments |
+| `ray serve _site` | serves a static directory for previews (`--port`, `--host`) |
 | `ray lsp` / `ray mcp` | editors (VSCode, Sublime, Zed, Neovim/Helix) / LLM agents |
 | `ray add`, `ray search`, `ray registry publish` | dependencies and publishing |
 
@@ -346,4 +347,4 @@ browser. Routes with parameters, middleware, typed JSON, static files, cookies a
 - With an agent: paste [`llms.txt`](../llms.txt) into the prompt and connect `ray mcp`
   ([`mcp.en.md`](mcp.en.md)) so it verifies what it writes.
 
-<!-- sync: sha256:b7d1a0fca00d -->
+<!-- sync: sha256:6aa52a519e95 -->

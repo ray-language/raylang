@@ -334,6 +334,7 @@ Rutas con parámetros, middleware, JSON tipado, estáticos, cookies y sesiones: 
 | `ray build --native --release` | binario nativo optimizado; `ray toolchain install` si no tienes Rust |
 | `ray bundle` | app de escritorio (`.app`, `.desktop`, `.exe`) o proyecto iOS/Android |
 | `ray doc src/main.ray` | documentación desde los comentarios `///` |
+| `ray serve _site` | sirve un directorio estático para previsualizar (`--port`, `--host`) |
 | `ray lsp` / `ray mcp` | editor (VSCode, Sublime, Zed, Neovim/Helix) / agentes LLM |
 | `ray add`, `ray search`, `ray registry publish` | dependencias y publicación |
 

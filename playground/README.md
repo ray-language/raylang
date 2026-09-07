@@ -19,8 +19,7 @@ programa que use esas features da un error claro.
 
 ```sh
 ./playground/build.sh                 # compila el .wasm release y lo deja en playground/
-cd playground && python3 -m http.server 8000
-# abre http://localhost:8000
+ray serve playground                  # el servidor estático de la toolchain → http://127.0.0.1:8000
 ```
 
 > Hay que **servirlo por HTTP** (no `file://`): el navegador bloquea `fetch` del `.wasm` en local.

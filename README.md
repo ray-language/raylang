@@ -233,7 +233,7 @@ Para correrlo en local, raylang corre en el navegador (la VM compilada a `wasm32
 
 ```sh
 ./playground/build.sh
-cd playground && python3 -m http.server 8000   # → http://localhost:8000
+ray serve playground                            # → http://127.0.0.1:8000
 ```
 
 Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`playground/`](playground/).

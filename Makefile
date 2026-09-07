@@ -76,8 +76,8 @@ pgo-slim: ## Release slim + PGO
 playground: ## Compila el playground web a wasm (playground/raylang.wasm)
 	sh playground/build.sh
 
-playground-serve: ## Sirve el playground en http://localhost:8000
-	cd playground && python3 -m http.server 8000
+playground-serve: ## Sirve el playground en http://127.0.0.1:8000 (ray serve)
+	cargo run --quiet --bin ray -- serve playground
 
 ##@ Medición (banco sobre la VM de release; recompila antes si tocaste src/)
 
@@ -116,8 +116,8 @@ book-serve: ## Sirve el libro con recarga en vivo
 site: ## Genera el sitio (landing + SPEC + bench + playground) → _site/ (mismo paso que pages.yml)
 	cargo run --quiet --bin ray -- run site/site.ray . _site
 
-site-serve: site ## Genera y sirve el sitio en http://localhost:8000
-	python3 -m http.server 8000 -d _site
+site-serve: site ## Genera y sirve el sitio en http://127.0.0.1:8000 (ray serve)
+	cargo run --quiet --bin ray -- serve _site
 
 vscode: ## Compila la extensión de VSCode (npm install + tsc)
 	cd editors/vscode && npm install --no-fund --no-audit && npm run compile

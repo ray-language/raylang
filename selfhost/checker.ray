@@ -4120,7 +4120,11 @@ fn check_match(
                 body_ty = t;
             },
             Result.Err(e) => {
-                if (expected.is_none() && e.msg.starts_with("could not infer the type parameter")) {
+                let no_expected = match (expected) {
+                    Option.Some(_) => false,
+                    Option.None => true,
+                };
+                if (no_expected && e.msg.starts_with("could not infer the type parameter")) {
                     deferred.push(arm);
                     deferred_errors.push(e);
                     deferred_this = true;

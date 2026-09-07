@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray test` chequea también la entrada del proyecto** (M200, feedback 17 de ray-remote): toda
+  suite se compila aunque no tenga `@test`, así que un `src/main.ray` con un error de tipos ya no
+  pasa en verde (sale 65 con el veredicto "N suite(s) failed to compile").
+
 ## 1.8.0 — 2026-09-07
 
 - **Documentación en inglés** (M197): `README.en.md`, `REFERENCE.en.md` y `docs/mcp.en.md`, con

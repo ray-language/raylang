@@ -249,6 +249,33 @@ fn verdict_never_says_all_passed_when_nothing_ran() {
 }
 
 #[test]
+fn a_broken_entry_without_tests_fails_the_suite() {
+    // M200 (feedback 17 de ray-remote): `src/main.ray` no lo importa nadie y no tenía `@test`, así
+    // que un error de tipos ahí pasaba en verde y solo lo veía `ray build`. Ahora toda suite se
+    // chequea, con o sin pruebas.
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { let x: int = \"broken\"; 0 }\n"),
+        ("tests/store_test.ray", "@test\nfn adds() -> bool { 1 + 1 == 2 }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_broken_entry", &files, &[]);
+    assert!(out.contains("type error") && out.contains("initialized with string"), "el diagnóstico de la entrada se muestra\n{out}");
+    assert!(out.contains("ok    adds"), "la suite de integración corre igual\n{out}");
+    assert!(out.contains("result: 1 test(s) ran, 0 failed; 1 suite(s) failed to compile ✗"), "{out}");
+    assert_eq!(code, 65, "{out}");
+
+    // Sin ninguna prueba en el proyecto, la entrada rota sigue siendo un 65 con veredicto honesto.
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { let x: int = \"broken\"; 0 }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_broken_entry_only", &files, &[]);
+    assert!(out.contains("result: no test ran — 1 suite(s) failed to compile ✗"), "{out}");
+    assert!(!out.contains("no tests (@test) in the project"), "{out}");
+    assert_eq!(code, 65, "{out}");
+}
+
+#[test]
 fn first_arg_without_extension_is_filter() {
     // M101: `ray test <filtro>` (sin archivo) filtra sobre el proyecto del cwd.
     let files = [

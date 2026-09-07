@@ -67,9 +67,10 @@ fn generates_the_site_and_both_engines_match() {
         assert!(landing.contains(platform), "plataforma {platform} en la sección");
     }
     assert!(landing.contains("data-spy=\"plataformas\""), "enlace de nav a plataformas");
-    // Extensiones en revisión: el estado visible en la tarjeta y el enlace al PR de cada galería.
-    assert!(landing.contains("en revisión en Package Control"), "estado de Sublime");
-    assert!(landing.contains("package_control_channel/pull/9534"), "PR de Package Control");
+    // Sublime ya está en Package Control (sep 2026); Zed sigue en revisión con su PR enlazado.
+    assert!(landing.contains("Package Control: Install Package"), "instalación de Sublime");
+    assert!(!landing.contains("en revisión en Package Control"), "Sublime ya no está en revisión");
+    assert!(landing.contains("en revisión en la galería de Zed"), "estado de Zed");
     assert!(landing.contains("zed-industries/extensions/pull/7361"), "PR de la galería de Zed");
     // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).
     assert!(!landing.contains("{%"), "directivas sin resolver");

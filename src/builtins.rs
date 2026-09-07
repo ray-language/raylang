@@ -2290,6 +2290,61 @@ pub fn socket_set_nodelay(h: i64, on: bool) {
     }
 }
 
+/// M207 (feedback de ray-remote): activa (`on`) o desactiva `SO_KEEPALIVE` en el socket `h` — el SO
+/// sondea la conexión ociosa y la da por caída si el peer desapareció (un túnel remoto abierto
+/// horas lo necesita para no quedarse colgado en un `recv` eterno). TCP y TLS; total. La std de
+/// Rust no expone la opción → `setsockopt` a mano, como hace `poll.rs` con sus `extern`.
+/// Builtin `__socket_set_keepalive`.
+pub fn socket_set_keepalive(h: i64, on: bool) {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => set_keepalive_raw(s, on),
+        #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+        Some(OpenHandle::Tls(tc)) => set_keepalive_raw(&tc.sock, on),
+        _ => {}
+    }
+}
+
+#[cfg(unix)]
+fn set_keepalive_raw(s: &std::net::TcpStream, on: bool) {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
+    }
+    #[cfg(target_os = "linux")]
+    const SOL_SOCKET: i32 = 1;
+    #[cfg(target_os = "linux")]
+    const SO_KEEPALIVE: i32 = 9;
+    #[cfg(not(target_os = "linux"))]
+    const SOL_SOCKET: i32 = 0xffff;
+    #[cfg(not(target_os = "linux"))]
+    const SO_KEEPALIVE: i32 = 0x0008;
+    let v: i32 = if on { 1 } else { 0 };
+    // SAFETY: fd válido mientras `s` viva; el puntero apunta a un i32 local del tamaño declarado.
+    unsafe {
+        setsockopt(s.as_raw_fd(), SOL_SOCKET, SO_KEEPALIVE, &v as *const i32 as *const core::ffi::c_void, 4);
+    }
+}
+
+#[cfg(windows)]
+fn set_keepalive_raw(s: &std::net::TcpStream, on: bool) {
+    use std::os::windows::io::AsRawSocket;
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32;
+    }
+    const SOL_SOCKET: i32 = 0xffff;
+    const SO_KEEPALIVE: i32 = 0x0008;
+    let v: i32 = if on { 1 } else { 0 };
+    // SAFETY: socket válido mientras `s` viva; el puntero apunta a un i32 local del tamaño declarado.
+    unsafe {
+        setsockopt(s.as_raw_socket() as usize, SOL_SOCKET, SO_KEEPALIVE, &v as *const i32 as *const u8, 4);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn set_keepalive_raw(_s: &std::net::TcpStream, _on: bool) {}
+
 /// Fija (ms > 0) o quita (ms <= 0) el timeout de lectura del socket `h`. Total: un handle que no
 /// es un socket se ignora. Builtin `__socket_set_read_timeout`.
 pub fn socket_set_read_timeout(h: i64, ms: i64) {
@@ -4004,6 +4059,13 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__socket_set_nodelay", " (handle, on)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_nodelay expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::Bool { return Err((Some(1), format!("__socket_set_nodelay expects a bool, not {}", a[1]))); }
+        Ok(Type::Unit)
+    } },
+    // __socket_set_keepalive(h, on) -> unit (M207): SO_KEEPALIVE del socket. Total. Envoltorio net.set_keepalive.
+    Builtin { name: "__socket_set_keepalive", opcode: OpCode::SocketSetKeepalive, check: |a| {
+        arity(a, 2, "__socket_set_keepalive", " (handle, on)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_keepalive expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__socket_set_keepalive expects a bool, not {}", a[1]))); }
         Ok(Type::Unit)
     } },
     // --- UDP (M20.8) ---

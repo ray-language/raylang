@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`net.set_keepalive(h, on)`** (M207, feedback de ray-remote): `SO_KEEPALIVE` en TCP y TLS, en
+  los tres motores; un túnel ocioso sobre una red caída ya no se queda en `recv` para siempre.
+- **UFCS dirigido por el tipo del receptor** (M206, SPEC §6.3 paso 5): `c.set_encodings(x)?` con
+  `c: proto.Conn` resuelve a `proto.set_encodings(c, x)` con solo `import rfb/proto;`, y los
+  builders encadenan (`json.obj().field("host", h).field("port", p)`). Solo funciones `pub` del
+  módulo que declara el struct/enum, con el tipo como primer parámetro; una función libre en el
+  ámbito sigue ganando. Compatible hacia atrás: solo entra donde antes había error.
+
 ## 1.9.0 — 2026-09-07
 
 - **Detalles** (M205, feedback 24 de ray-remote): `ray test <filtro>` sin resultados aclara que el

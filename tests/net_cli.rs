@@ -128,6 +128,20 @@ fn set_nodelay_is_total_and_keeps_the_exchange_working() {
     assert!(out.contains("pong:ping"), "{out}");
 }
 
+/// M207: `net.set_keepalive` existe, es total y no rompe el intercambio; en ambos motores.
+#[test]
+fn set_keepalive_is_total_and_keeps_the_exchange_working() {
+    for vm in [true, false] {
+        let port = toy_echo_server();
+        let src = format!(
+            "import std/net;\nfn main() -> int {{\n    let c = match (net.tcp_connect(\"127.0.0.1\", {port})) {{ Result.Ok(h) => h, Result.Err(e) => {{ print(e); return 1; }} }};\n    net.set_keepalive(c, true);\n    net.set_keepalive(c, false);\n    net.set_keepalive(c, true);\n    net.set_keepalive(9999, true);\n    let _ = net.socket_write(c, \"ping\\n\");\n    match (net.socket_read(c)) {{ Result.Ok(s) => print(s), Result.Err(e) => print(\"err: \" + e) }}\n    close(c);\n    0\n}}\n"
+        );
+        let (out, code) = run(if vm { "net_keepalive_vm" } else { "net_keepalive_interp" }, &src, vm);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("pong:ping"), "{out}");
+    }
+}
+
 #[test]
 fn tcp_server_accepts_and_responds() {
     for vm in [false, true] {

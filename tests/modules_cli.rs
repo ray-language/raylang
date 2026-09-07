@@ -45,6 +45,34 @@ fn import_qualified_en_ambos_engines() {
     }
 }
 
+/// M206 (SPEC §6.3 paso 5): UFCS dirigido por el tipo del receptor — `c.set_encodings(x)` resuelve a
+/// `proto.set_encodings(c, x)` con solo `import rfb/proto;`, en ambos motores. Límites: no alcanza
+/// funciones privadas ni las que no reciben el tipo como primer parámetro, y una función libre en el
+/// ámbito con ese nombre sigue ganando.
+#[test]
+fn ufcs_reaches_the_module_that_declares_the_receiver_type() {
+    let proto = "pub struct Conn { host: string, encs: [int] }\npub fn connect(host: string) -> Result<Conn, string> { Result.Ok(Conn { host: host, encs: [] }) }\npub fn set_encodings(c: Conn, encs: [int]) -> Result<Conn, string> { c.encs = encs; Result.Ok(c) }\npub fn describe(c: Conn) -> string { \"${c.host} encs=${c.encs.len()}\" }\nfn hidden(c: Conn) -> int { 1 }\npub fn other(n: int, c: Conn) -> int { n }\n";
+    let main = "import rfb/proto;\nfn setup() -> Result<string, string> {\n    let c = proto.connect(\"vnc.local\")?;\n    let ready = c.set_encodings([0, 16])?;\n    Result.Ok(ready.describe())\n}\nfn main() -> int {\n    match (setup()) { Result.Ok(s) => print(s), Result.Err(e) => print(e) }\n    0\n}\n";
+    for vm in [true, false] {
+        let (out, code) = run_modules("ray_ufcs_type_module", "main", &[("rfb/proto", proto), ("main", main)], vm);
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(out.trim(), "vnc.local encs=2", "{out}");
+    }
+    // Privada: no se alcanza.
+    let bad = "import rfb/proto;\nfn main() -> int {\n    let c = match (proto.connect(\"x\")) { Result.Ok(c) => c, Result.Err(_) => { return 1; } };\n    print(c.hidden());\n    0\n}\n";
+    let (out, code) = run_modules("ray_ufcs_type_module_priv", "main", &[("rfb/proto", proto), ("main", bad)], true);
+    assert_eq!(code, 65, "{out}");
+    // El tipo no es el primer parámetro: no aplica.
+    let bad = "import rfb/proto;\nfn main() -> int {\n    let c = match (proto.connect(\"x\")) { Result.Ok(c) => c, Result.Err(_) => { return 1; } };\n    print(c.other(1));\n    0\n}\n";
+    let (out, code) = run_modules("ray_ufcs_type_module_first", "main", &[("rfb/proto", proto), ("main", bad)], true);
+    assert_eq!(code, 65, "{out}");
+    // Una función libre en el ámbito con el mismo nombre gana (paso 4 antes que el 5).
+    let shadow = "import rfb/proto;\nfn describe(c: proto.Conn) -> string { \"local\" }\nfn main() -> int {\n    let c = match (proto.connect(\"x\")) { Result.Ok(c) => c, Result.Err(_) => { return 1; } };\n    print(c.describe());\n    0\n}\n";
+    let (out, code) = run_modules("ray_ufcs_type_module_shadow", "main", &[("rfb/proto", proto), ("main", shadow)], true);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out.trim(), "local", "{out}");
+}
+
 #[test]
 fn qualified_const_from_module() {
     // M49.1c: un `pub const` de un módulo se accede CALIFICADO (`M.CONST`), en ambos motores.

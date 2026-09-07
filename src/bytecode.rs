@@ -732,6 +732,9 @@ pub enum OpCode {
     /// Saca `on` (bool) y el handle (int); activa/desactiva `TCP_NODELAY` (Nagle) en el socket y
     /// empuja `unit`. Total. Primitivo `__socket_set_nodelay` (M203); envoltorio `net.set_nodelay`.
     SocketSetNodelay,
+    /// Saca `on` (bool) y el handle (int); activa/desactiva `SO_KEEPALIVE` en el socket y empuja
+    /// `unit`. Total. Primitivo `__socket_set_keepalive` (M207); envoltorio `net.set_keepalive`.
+    SocketSetKeepalive,
     /// Saca `port` (int) y `host` (string); enlaza un socket UDP y empuja un `[string]` etiquetado.
     /// Primitivo `__udp_bind`; la lib udp.ray → `Result<int,string>` (M20.8).
     UdpBind,

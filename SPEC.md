@@ -108,7 +108,8 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   el error normal de nombre no declarado). El archivo de **entrada** no puede redefinir un builtin (su nombre pelado se resuelve
   antes que cualquier función de usuario), y `from M import close;` sin alias es error por la misma
   razón: `import M;` + `M.close(...)`, o `from M import close as cerrar;`. El UFCS `x.close()` sigue
-  resolviendo al builtin fuera del módulo: la forma calificada es la canónica.
+  resolviendo al builtin fuera del módulo (el builtin va antes que el paso 5 de §6.3): la forma
+  calificada es la canónica.
 - **Cápsulas**: la presencia de `P/mod.ray` vuelve `P/` direccionable (`import P;` carga
   `P/mod.ray`) y **encapsula** su subárbol: importar `P/interno` desde fuera de `P/` es error.
   `P.ray` y `P/mod.ray` a la vez es error (forma canónica única).
@@ -337,8 +338,13 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 `recv.f(args)` resuelve, en orden: (1) construcción de variante de enum, (2) **campo** del
 struct de tipo función, (3) **método de trait** del tipo del receptor (incluye el trait object y
 el parámetro acotado), (4) **UFCS**: `f(recv, args)` con `f` función libre o builtin (el
-receptor participa en la inferencia de genéricos). Todo se resuelve **estáticamente** en el
-checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
+receptor participa en la inferencia de genéricos), (5) **UFCS dirigido por el tipo** (M206): si
+`recv` es un struct o enum declarado en un módulo `M` y existe `M.f` **pública** cuyo primer
+parámetro admite el receptor, la llamada es `M.f(recv, args)` — sin importar `f` por nombre
+(`import M;` basta; el tipo dice dónde mirar, como un método inherente). No aplica a tipos del
+prelude (`Option`, `Result`, `Map`…) ni a primitivos, ni alcanza funciones privadas de `M`; una
+función libre en el ámbito con ese nombre (paso 4) sigue ganando. Todo se resuelve
+**estáticamente** en el checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
 
 ### 6.4 Pipelines
 

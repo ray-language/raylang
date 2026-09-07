@@ -12522,3 +12522,39 @@ el patrón que la app usó para el llavero de macOS, el portapapeles y "abrir co
 con `argv` tipado, salida en `bytes` y código de salida como valor — la forma de tocar el sistema
 sin FFI, verificada compilando el ejemplo tal cual. Con esto queda cerrado el lote E salvo lo que
 espera datos del proyecto (19) o una discusión de lenguaje (20).
+
+## 198. M206 — UFCS dirigido por el tipo del receptor (sep 2026, 1.10.0)
+
+Feedback 20 de `ray-remote`, y antes el de `raydesk` con `std/json`: un builder diseñado para
+encadenar (`json.obj().field(…).field(…)`) no encadenaba con `import std/json;`, porque UFCS solo
+buscaba funciones **en el ámbito** (propias, prelude, `from`-importadas) y `import M;` mete `M` en
+el ámbito, no sus funciones. El rodeo era `from std/json import obj, field, item` —una lista que
+hay que recordar y que choca con los builtins en cuanto una se llama `close`— o el anidado a mano.
+La regla nueva es el paso 5 de §6.3: si el receptor es un struct o enum declarado en `M` (su
+nombre global lleva `M::`) y `M::f` es pública con el tipo como primer parámetro, la llamada es
+`M.f(recv, args)`. Es el método inherente de Rust sin sintaxis nueva: el tipo dice dónde mirar, y
+no hace falta importar nada más que el módulo. Decisiones: (a) va **quinto**, después de la
+función libre en el ámbito, para que ningún programa que hoy compila cambie de significado —solo
+entra donde antes había error—; (b) solo `pub`, porque la privacidad rige igual que en la llamada
+calificada; (c) primer parámetro y unificación, como el paso 2 de módulo propio, para que
+`other(n: int, c: Conn)` no aparezca como método de `Conn`; (d) los tipos del prelude y los
+primitivos no tienen módulo y quedan fuera a propósito: `30.seconds()` sigue pidiendo el import sin
+calificar (no hay un "módulo de int"). Se consideró exigir además que `M` esté importado en el
+archivo del sitio: el checker trabaja sobre el programa fusionado y no conoce los imports por
+archivo, y Rust tampoco lo exige para los métodos inherentes — un valor de `Conn` en la mano ya
+implica que `rfb/proto` está en el programa. El lowering no cambia: `ufcs_sites` baja la llamada
+al nombre global, lo mismo que el rodeo escribía a mano, así que VM, nativo y selfhost no ven
+nada nuevo (el selfhost espeja la resolución en `type_module_fn`). Es una menor (1.10.0), no un
+parche: un programa que use la cadena no compila con 1.9.0, y el registro debe poder decirlo.
+
+## 199. M207 — `net.set_keepalive` (sep 2026)
+
+Petición de `ray-remote` tras M203: un cliente de escritorio remoto mantiene la conexión abierta
+horas, y cuando la red se cae en silencio (portátil que duerme, Wi-Fi que cambia) el `recv` se
+queda esperando para siempre — no hay tráfico que falle. `SO_KEEPALIVE` es la respuesta clásica: el
+SO sondea la conexión ociosa y la lectura falla cuando el peer no contesta. Misma plantilla que
+`set_nodelay`, con una diferencia: la std de Rust no expone la opción, así que es un `setsockopt`
+a mano con los `extern` declarados en el sitio (como `poll.rs`), constantes por plataforma
+(`SOL_SOCKET`/`SO_KEEPALIVE` difieren entre Linux y BSD/macOS; Windows por `ws2_32`). Se expone
+solo el interruptor, no la temporización (`TCP_KEEPIDLE`/`KEEPINTVL`: distinta por SO y rara vez
+necesaria); quien necesite plazos finos tiene `set_read_timeout`.

@@ -3719,6 +3719,16 @@ impl<'a> Vm<'a> {
                     crate::builtins::socket_set_nodelay(handle, on);
                     self.push(HeapValue::Unit);
                 }
+                // M207: SO_KEEPALIVE del socket (total).
+                OpCode::SocketSetKeepalive => {
+                    let on = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bool(on)) = (handle, on) else {
+                        unreachable!("the checker guarantees int, bool");
+                    };
+                    crate::builtins::socket_set_keepalive(handle, on);
+                    self.push(HeapValue::Unit);
+                }
                 OpCode::Close => {
                     // Ad-hoc polimórfico: un handle de archivo (int, M11.8) o un canal (M12.1).
                     match self.pop() {

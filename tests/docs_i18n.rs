@@ -38,22 +38,22 @@ fn every_translation_has_its_original_cross_linked_and_in_sync() {
     assert!(!list.is_empty(), "hay al menos README.en.md");
     for en in list {
         let rel = en.strip_prefix(repo_root()).unwrap().display().to_string();
-        let es = en.with_file_name(en.file_name().unwrap().to_str().unwrap().replace(".en.md", ".md"));
-        if !es.exists() {
-            problems.push(format!("{rel}: no existe el original {}", es.file_name().unwrap().to_str().unwrap()));
+        let original = en.with_file_name(en.file_name().unwrap().to_str().unwrap().replace(".en.md", ".md"));
+        if !original.exists() {
+            problems.push(format!("{rel}: no existe el original {}", original.file_name().unwrap().to_str().unwrap()));
             continue;
         }
         let en_text = std::fs::read_to_string(&en).unwrap();
-        let es_text = std::fs::read_to_string(&es).unwrap();
+        let original_text = std::fs::read_to_string(&original).unwrap();
         let en_name = en.file_name().unwrap().to_str().unwrap();
-        let es_name = es.file_name().unwrap().to_str().unwrap();
-        if !en_text.contains(&format!("]({es_name})")) {
-            problems.push(format!("{rel}: falta el enlace de idioma al original ({es_name})"));
+        let original_name = original.file_name().unwrap().to_str().unwrap();
+        if !en_text.contains(&format!("]({original_name})")) {
+            problems.push(format!("{rel}: falta el enlace de idioma al original ({original_name})"));
         }
-        if !es_text.contains(&format!("]({en_name})")) {
-            problems.push(format!("{}: falta el enlace de idioma a la traducción ({en_name})", es_name));
+        if !original_text.contains(&format!("]({en_name})")) {
+            problems.push(format!("{}: falta el enlace de idioma a la traducción ({en_name})", original_name));
         }
-        let want = short_sha256(&es);
+        let want = short_sha256(&original);
         match en_text.find("<!-- sync: sha256:") {
             Some(i) => {
                 let have = &en_text[i + "<!-- sync: sha256:".len()..i + "<!-- sync: sha256:".len() + 12];

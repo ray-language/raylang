@@ -12773,3 +12773,16 @@ se compone: `@derive(Clone)` en los hijos y un `impl Clone` a mano en el padre q
 implícita al asignar. Verificado en VM, intérprete y nativo con el mismo resultado (el campo
 `bool` clonado no se comparte; el arreglo sí); el selfhost registra el método derivado como los
 demás.
+
+## 214. M222 — un valor-función con nombre lleva su tipo dyn puesto (sep 2026)
+
+`ray-sublime` compilando a nativo con 1.11.0: `let f = if forward { word_right } else { word_left }`
+—dos funciones con nombre como valor en las ramas de un `if`— pasaba la VM y fallaba en rustc con
+`E0308: different fn items have unique types`. El transpilador emitía `Rc::new(fn_item)` confiando
+en que el contexto coercionara a `Rc<dyn Fn(…) -> …>`; en una rama de `if`/`match` el contexto no
+existe hasta unificar las ramas, y dos ítems de función son dos tipos distintos. Ahora el valor se
+emite `(Rc::new(f) as Rc<dyn Fn(P…) -> R>)` con la firma que el transpilador ya conoce: un solo
+tipo en todas las ramas, y el mismo que espera cualquier receptor. Las funciones genéricas
+conservan la forma desnuda (no hay tipo dyn cerrado sin instanciar); las llamadas directas no
+pasan por aquí. Misma familia que IDEAS §63 y M212: lo que la VM acepta y el nativo rechaza es un
+bug de paridad, y el corpus nativo gana `examples/types/fn_values_branch.ray` para no repetirlo.

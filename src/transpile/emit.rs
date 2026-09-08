@@ -1109,9 +1109,18 @@ impl Transpiler {
                     }
                 } else if self.consts.contains_key(name) {
                     write!(out, "{}()", mangle(name)).unwrap(); // constante → llamada NAME()
-                } else if self.funcs.contains_key(name) {
-                    // Función usada como VALOR → Rc::new(fn) (coerciona a Rc<dyn Fn> por el contexto).
-                    write!(out, "Rc::new({})", mangle(name)).unwrap();
+                } else if let Some(sig) = self.funcs.get(name) {
+                    // Función usada como VALOR → `Rc::new(fn) as Rc<dyn Fn(…) -> …>`. El cast al tipo
+                    // dyn es explícito (M213b, ray-sublime): dos funciones distintas en las ramas de un
+                    // `if`/`match` tienen tipos de ítem distintos en Rust y sin la coerción explícita
+                    // rustc no encontraba un tipo común (E0308 "different fn items have unique types").
+                    // Con parámetros de tipo (genérica) no hay tipo dyn cerrado: se deja la forma
+                    // desnuda, que coerciona por el contexto como antes.
+                    let fty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
+                    match if sig.tparams.is_empty() { rust_ty(&fty, &self.enums, &self.tparams).ok() } else { None } {
+                        Some(dyn_ty) => write!(out, "(Rc::new({}) as {})", mangle(name), dyn_ty).unwrap(),
+                        None => write!(out, "Rc::new({})", mangle(name)).unwrap(),
+                    }
                 } else {
                     out.push_str(&mangle(name));
                 }

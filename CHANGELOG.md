@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`json.parse_relaxed`** (M218, ray-sublime #5): comentarios `//` `/* */` y comas finales — el
+  dialecto de `tsconfig.json`, `.vscode/*.json` y `.sublime-settings`; `parse` sigue estricto.
+- **`std/zip`** (M219, ray-sublime #4/#21): lectura de archivos ZIP en raylang puro sobre
+  `std/inflate` — `open`, `entries`, `find`, `read`, `read_entry`; STORE y DEFLATE con CRC-32.
 - **Herramientas y mensajes** (M217, ray-sublime #7–#11, #20, #22–#24, #29, #31, #33): `ray check`
   (alias de `build`) y "unknown subcommand" en vez de "could not read module"; `ray doc std/ui` y
   `ray doc ui.MenuItem` desde el CLI; headless de `std/ui` con `RAY_UI_TRACE=1` y

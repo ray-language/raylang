@@ -12715,3 +12715,27 @@ que `builtin.` alcanza igual). Y la documentación: el coste de `s[i]` junto a l
 una vez / `bytes` en O(1) (mientras H1 no cambie la representación), qué quita `trim`, las formas
 canónicas de `ray fmt` que sorprenden, y "formatear al final, nunca entre parches" en
 `docs/mcp.md` y `llms.txt` — la entrada 31 no era un bug del formateador sino del flujo.
+
+## 209. M218 — `json.parse_relaxed` (sep 2026)
+
+Plan de `ray-sublime`, J1 (entradas 5 y 21): 1 876 de los 2 648 archivos de configuración que lee
+la app llevan comentarios y comas finales, y `json.parse` los rechaza — el mismo dialecto de
+`tsconfig.json`, `.vscode/*.json` y `.eslintrc`. Va como función aparte, `parse_relaxed`, no como
+opción de `parse`: el estricto sigue siendo la puerta por defecto (JSON de la red, de una API) y
+el relajado se elige a sabiendas para configuración escrita por personas. En el parser es un
+flag del cursor: `skip_ws` salta `//…` y `/*…*/` en modo relajado, y `parse_array`/`parse_object`
+aceptan una coma antes del cierre. Nada más se relaja (ni comillas simples, ni claves sin
+comillas, ni `NaN`): es JSON con comentarios, no JSON5.
+
+## 210. M219 — `std/zip`, el contenedor que faltaba (sep 2026)
+
+Plan de `ray-sublime`, J2 (entradas 4 y 21): 98 `.sublime-package` son archivos ZIP y
+`std/inflate` ya hacía lo difícil (DEFLATE); faltaba el contenedor. `std/zip` es lectura pura en
+raylang sobre `bytes` (que se indexa en O(1), entrada 23): busca el registro de fin de directorio
+central desde el final (comentario de hasta 64 KB), recorre las entradas del directorio central
+—que es la fuente de verdad de tamaños y CRC, aunque la cabecera local lleve el bit 3 de
+descriptor—, y `read_entry` localiza la cabecera local, saca los octetos, los pasa por
+`inflate_raw_limit` con el tamaño esperado (un stream que se pasa del tamaño es un error, no un
+desbordamiento) y verifica tamaño y CRC-32. Fuera, con `Err` con nombre: ZIP64, multi-disco,
+cifrado y los métodos que no son STORE ni DEFLATE. Sin escritura: el caso de uso es leer paquetes,
+no producirlos, y `std/deflate` + 200 líneas lo darían el día que haga falta.

@@ -127,12 +127,12 @@ incluido (`%TEMP%`).
 
 Medido por la app: 2 648 archivos de configuración, ninguno legible con la stdlib tal cual.
 
-### J1. `std/json` relajado (comentarios `//` `/* */` y comas finales) — S
+### J1. `std/json` relajado (comentarios `//` `/* */` y comas finales) — S ✅ M218
 
 `json.parse_relaxed(s)` (o `json.parse_with(s, JsonOptions)`): el mismo dialecto de
 `tsconfig.json`, `.vscode/*.json`, `.eslintrc`. 1 876 de los 2 648 archivos.
 
-### J2. `std/zip` de lectura — S–M
+### J2. `std/zip` de lectura — S–M ✅ M219
 
 `std/inflate` ya hace lo difícil; falta el contenedor: directorio central, cabeceras locales,
 `entries(z) -> [Entry]`, `read(z, name) -> Result<bytes, string>`, STORE y DEFLATE. Unas 200

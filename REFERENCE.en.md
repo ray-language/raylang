@@ -222,7 +222,7 @@ also exist as free calls (`method(recv, args)`).
 | Method | Result | Description |
 |---|---|---|
 | `s.len()` | `int` | length **in characters** |
-| `s[i]` | `char` | indexing by character (out of range = error); `s[i] = c` is forbidden (immutable). **Cost**: on a non-ASCII string every access scans from the start (and today loading the variable copies the string): a `for i in 0..s.len() { s[i] }` loop is quadratic — to walk text, call `s.chars()` ONCE and index the array; for octets, `bytes` indexes in O(1) |
+| `s[i]` | `char` | indexing by character (out of range = error); `s[i] = c` is forbidden (immutable). **Cost** (M213): ASCII in O(1); on non-ASCII text **sequential** access (ascending or descending) is amortized O(1) and random access O(distance) from the last position; `s.len()` is O(1) after the first time. A `while (i < s.len()) { s[i] }` loop is no longer quadratic; `s.chars()` remains the explicit way to materialize the array |
 | `s.trim()` | `string` | without surrounding whitespace: spaces, tabs and line breaks (`"\r\n".trim()` is `""`) |
 | `s.split(sep)` | `[string]` | parts |
 | `s.contains(sub)` | `bool` | substring |
@@ -598,4 +598,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:1f0493c1c9bc -->
+<!-- sync: sha256:da1f484039c1 -->

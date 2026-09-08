@@ -434,8 +434,8 @@ impl<'a> Vm<'a> {
             Err(e) => Err(e),
         };
         let elems = match result {
-            Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
-            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+            Ok(()) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())],
+            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
         };
         // M38.1b-2: el resultado se aloja en el heap de la fibra que se despierta (no el de la actual).
         let h = fiber.heap.allocate(Obj::Array(elems));
@@ -521,7 +521,7 @@ impl<'a> Vm<'a> {
         let arr = self
             .cur
             .heap
-            .allocate(crate::gc::Obj::Array(vec![HeapValue::Str(e.msg)]));
+            .allocate(crate::gc::Obj::Array(vec![HeapValue::Str(e.msg.into())]));
         self.push(HeapValue::Obj(arr));
     }
 

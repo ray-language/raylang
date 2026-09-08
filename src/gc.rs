@@ -52,7 +52,12 @@ pub enum HeapValue {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Str(String),
+    /// M213: string COMPARTIDO (`Arc<str>`, inmutable). Antes era un `String` propio que se copiaba
+    /// entero en cada carga de variable, paso de argumento o clave de mapa, y `s[i]` recorría la
+    /// cadena para saber si era ASCII en cada acceso (bucle cuadrático). `Arc` y no `Rc`: el
+    /// scheduler M:N mueve fibras entre hilos y el valor debe ser `Send` sin `unsafe`. La caché de
+    /// indexación (`vm::str_cache`) se apoya en la identidad del `Arc`.
+    Str(std::sync::Arc<str>),
     Char(char), // M11.4c
     /// Entero sin signo con tamaño (M28.3): `(valor_enmascarado, ancho_en_bits)`. Escalar inline
     /// como `Int`/`Char`; no es objeto del heap ni lo traza el GC.
@@ -217,7 +222,7 @@ const INITIAL_GC_BYTES: usize = 16 << 20;
 /// V6: bytes del *payload* inline de un valor (los buffers que el conteo por objetos no ve).
 fn value_bytes(v: &HeapValue) -> usize {
     match v {
-        HeapValue::Str(s) => s.capacity(),
+        HeapValue::Str(s) => s.len(),
         HeapValue::Bytes(b) => b.capacity(),
         _ => 0,
     }

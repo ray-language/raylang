@@ -905,7 +905,7 @@ impl<'a> Vm<'a> {
                             HeapValue::UInt(v, _) => crate::ffi::FfiVal::Int(*v as i64), // M41.4: u64 → 64 bits
                             HeapValue::Float(f) => crate::ffi::FfiVal::Float(*f),
                             HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
-                            HeapValue::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),
+                            HeapValue::Str(s) => crate::ffi::FfiVal::Str(s),
                             HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()),
                             HeapValue::Ptr(p) => crate::ffi::FfiVal::Int(*p), // M41.4b
                             _ => return Err(runtime_error(pos!().0, pos!().1,
@@ -927,7 +927,7 @@ impl<'a> Vm<'a> {
                                 Some(bytes) => {
                                     let inner = if desc.ret_kind == crate::ffi::CKind::OptStr {
                                         match String::from_utf8(bytes) {
-                                            Ok(s) => HeapValue::Str(s),
+                                            Ok(s) => HeapValue::Str(s.into()),
                                             Err(_) => return Err(runtime_error(pos!().0, pos!().1,
                                                 "the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)")),
                                         }
@@ -1015,7 +1015,7 @@ impl<'a> Vm<'a> {
                     let len = match self.pop() {
                         // M90.6: ASCII → nº de chars == nº de bytes (O(1) tras el is_ascii vectorizado).
                         HeapValue::Str(s) => {
-                            if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 }
+                            str_cache::char_len(&s) as i64 // M213: len por caracteres, cacheado
                         }
                         // M16.1a: len de bytes = nº de octetos.
                         HeapValue::Bytes(b) => b.len() as i64,
@@ -1592,7 +1592,7 @@ impl<'a> Vm<'a> {
                             drop(sh);
                             let elems = match failed {
                                 None => Vec::new(),
-                                Some(msg) => vec![HeapValue::Str(msg)],
+                                Some(msg) => vec![HeapValue::Str(msg.into())],
                             };
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
@@ -1803,7 +1803,7 @@ impl<'a> Vm<'a> {
                     // que usa el intérprete en `to_string`.
                     let v = self.pop();
                     let s = format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v);
-                    self.push(HeapValue::Str(s));
+                    self.push(HeapValue::Str(s.into()));
                 }
                 OpCode::ConcatN(n) => {
                     // V2 (bench políglota): concatenación n-aria — un solo String con la capacidad
@@ -1820,7 +1820,7 @@ impl<'a> Vm<'a> {
                         if let HeapValue::Str(s) = v { out.push_str(s); }
                     }
                     self.cur.stack.truncate(start);
-                    self.push(HeapValue::Str(out));
+                    self.push(HeapValue::Str(out.into()));
                 }
                 OpCode::SortPrim => {
                     // V5 (bench políglota): sort nativo de [int]/[string]/[char]. Devuelve un
@@ -1851,7 +1851,7 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(nh));
                 }
                 OpCode::Trim => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string())),
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string().into())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::Split => {
@@ -1868,7 +1868,7 @@ impl<'a> Vm<'a> {
                     // (+4%: el barrido extra cuesta más que los reallocs amortizados) ganan. El
                     // camino genérico de `str::split` es el rápido; no reabrir sin re-medir.
                     let parts: Vec<HeapValue> =
-                        s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
+                        s.split(&*sep).map(|p| HeapValue::Str(p.to_string().into())).collect();
                     // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.
                     let h = self.cur.heap.allocate(Obj::Array(parts));
                     self.push(HeapValue::Obj(h));
@@ -1893,7 +1893,7 @@ impl<'a> Vm<'a> {
                 }
                 // M16.1b: los octetos UTF-8 del string → bytes (inline, no objeto del heap).
                 OpCode::ToBytes => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
+                    HeapValue::Str(s) => self.push(HeapValue::Bytes(s.as_bytes().to_vec())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 // M89.2: guardia — la cripto de ring en un binario sin la feature 'net-tls'
@@ -1945,8 +1945,8 @@ impl<'a> Vm<'a> {
                 OpCode::HasherNew => match self.pop() {
                     HeapValue::Str(alg) => {
                         let elems = match crate::builtins::hasher_new(&alg) {
-                            Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
-                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                            Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
@@ -1960,8 +1960,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, bytes");
                     };
                     let elems = match crate::builtins::hasher_update(handle, &chunk) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2102,8 +2102,8 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees bytes"),
                     };
                     let elems = match String::from_utf8(b) {
-                        Ok(s) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        Ok(s) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(s.into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2139,11 +2139,11 @@ impl<'a> Vm<'a> {
                 OpCode::EmbedList => {
                     let elems = match crate::builtins::embed_list() {
                         Ok(keys) => {
-                            let mut v = vec![HeapValue::Str("ok".to_string())];
-                            v.extend(keys.into_iter().map(HeapValue::Str));
+                            let mut v = vec![HeapValue::Str("ok".to_string().into())];
+                            v.extend(keys.into_iter().map(|k| HeapValue::Str(k.into())));
                             v
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2155,8 +2155,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees string, bytes");
                     };
                     let elems = match crate::builtins::write_file_bytes(&path, &data) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2234,8 +2234,8 @@ impl<'a> Vm<'a> {
                     if crate::builtins::is_tls_handle(handle) {
                         // M19.4b: las escrituras TLS cifran por su propia bomba (busy-spin en el raro bloqueo).
                         let elems = match crate::builtins::tls_write_nb(handle, &data) {
-                            Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
-                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                            Ok(_) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
@@ -2244,7 +2244,7 @@ impl<'a> Vm<'a> {
                         // socket sea escribible (en vez de girar) → no acapara el hilo del scheduler.
                         match crate::builtins::socket_write_nb(handle, &data) {
                             Ok(n) if n == data.len() => {
-                                let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
+                                let elems = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
@@ -2254,7 +2254,7 @@ impl<'a> Vm<'a> {
                                 return Ok(None);
                             }
                             Err(e) => {
-                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
@@ -2266,7 +2266,7 @@ impl<'a> Vm<'a> {
                     let x = self.pop();
                     let cont = self.pop();
                     let res = match (&cont, &x) {
-                        (HeapValue::Str(s), HeapValue::Str(sub)) => s.contains(sub.as_str()),
+                        (HeapValue::Str(s), HeapValue::Str(sub)) => s.contains(&**sub),
                         // M11.7b: arreglo → pertenencia por igualdad estructural.
                         (HeapValue::Obj(h), _) => {
                             self.cur.heap.degrade_int_array(*h); // M98.5 (préstamo inmutable después)
@@ -2287,7 +2287,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Str(from), HeapValue::Str(a)) = (s, from, a) else {
                         unreachable!("the checker guarantees three strings");
                     };
-                    self.push(HeapValue::Str(s.replace(from.as_str(), a.as_str())));
+                    self.push(HeapValue::Str(s.replace(&*from, &*a).into()));
                 }
 
                 // --- Más string (M11.7a) ---
@@ -2297,7 +2297,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
                         unreachable!("the checker guarantees two strings");
                     };
-                    self.push(HeapValue::Bool(s.starts_with(p.as_str())));
+                    self.push(HeapValue::Bool(s.starts_with(&*p)));
                 }
                 OpCode::EndsWith => {
                     let p = self.pop();
@@ -2305,14 +2305,14 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
                         unreachable!("the checker guarantees two strings");
                     };
-                    self.push(HeapValue::Bool(s.ends_with(p.as_str())));
+                    self.push(HeapValue::Bool(s.ends_with(&*p)));
                 }
                 OpCode::ToUpper => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_uppercase())),
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_uppercase().into())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::ToLower => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_lowercase())),
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_lowercase().into())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::Substring => {
@@ -2323,7 +2323,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Int(i), HeapValue::Int(j)) = (s, i, j) else {
                         unreachable!("the checker guarantees string, int, int");
                     };
-                    self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j)));
+                    self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j).into()));
                 }
                 // M19.2: sub-secuencia de bytes por octeto (con clamp). Orden en la pila: b, i, j.
                 OpCode::SubBytes => {
@@ -2352,7 +2352,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Int(n)) = (s, n) else {
                         unreachable!("the checker guarantees string, int");
                     };
-                    self.push(HeapValue::Str(crate::builtins::repeat_str(&s, n)));
+                    self.push(HeapValue::Str(crate::builtins::repeat_str(&s, n).into()));
                 }
                 OpCode::IndexOf => {
                     // Primitivo: [] o [i] (índice de carácter). El prelude → Option<int>.
@@ -2388,12 +2388,12 @@ impl<'a> Vm<'a> {
                         }).sum::<usize>() + sep.len() * elems.len().saturating_sub(1);
                         let mut out = String::with_capacity(total);
                         for (i, v) in elems.iter().enumerate() {
-                            if i > 0 { out.push_str(sep.as_str()); }
+                            if i > 0 { out.push_str(&*sep); }
                             if let HeapValue::Str(s) = v { out.push_str(s); }
                         }
                         out
                     };
-                    self.push(HeapValue::Str(out));
+                    self.push(HeapValue::Str(out.into()));
                 }
 
                 // --- Más arreglos (M11.7b) ---
@@ -2504,7 +2504,7 @@ impl<'a> Vm<'a> {
                     let mut line = String::new();
                     let elems = match std::io::stdin().read_line(&mut line) {
                         Ok(0) | Err(_) => vec![],
-                        Ok(_) => vec![HeapValue::Str(line.trim_end_matches(['\n', '\r']).to_string())],
+                        Ok(_) => vec![HeapValue::Str(line.trim_end_matches(['\n', '\r']).to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2512,8 +2512,8 @@ impl<'a> Vm<'a> {
                 OpCode::Env => {
                     // Primitivo: [] si no existe, [valor] si sí. El prelude → Option<string>.
                     let elems = match self.pop() {
-                        HeapValue::Str(name) => match std::env::var(name.as_str()) {
-                            Ok(v) => vec![HeapValue::Str(v)],
+                        HeapValue::Str(name) => match std::env::var(&*name) {
+                            Ok(v) => vec![HeapValue::Str(v.into())],
                             Err(_) => vec![],
                         },
                         _ => unreachable!("the checker guarantees a string"),
@@ -2525,7 +2525,7 @@ impl<'a> Vm<'a> {
                     // Argumentos del programa (del almacén de proceso); arreglo de strings.
                     let items: Vec<HeapValue> = crate::runtime::program_args()
                         .iter()
-                        .map(|a| HeapValue::Str(a.clone()))
+                        .map(|a| HeapValue::Str(a.clone().into()))
                         .collect();
                     let h = self.cur.heap.allocate(Obj::Array(items));
                     self.push(HeapValue::Obj(h));
@@ -2533,9 +2533,9 @@ impl<'a> Vm<'a> {
                 OpCode::ReadFile => {
                     // Arreglo etiquetado ["ok", contenido] o ["err", msg]. El prelude → Result.
                     let elems = match self.pop() {
-                        HeapValue::Str(path) => match std::fs::read_to_string(path.as_str()) {
-                            Ok(c) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c)],
-                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        HeapValue::Str(path) => match std::fs::read_to_string(&*path) {
+                            Ok(c) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(c.into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                         },
                         _ => unreachable!("the checker guarantees a string"),
                     };
@@ -2549,15 +2549,15 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
                         unreachable!("the checker guarantees two strings");
                     };
-                    let elems = match std::fs::write(path.as_str(), contents.as_str()) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    let elems = match std::fs::write(&*path, &*contents) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Exists => match self.pop() {
-                    HeapValue::Str(path) => self.push(HeapValue::Bool(std::path::Path::new(path.as_str()).exists())),
+                    HeapValue::Str(path) => self.push(HeapValue::Bool(std::path::Path::new(&*path).exists())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::AppendFile => {
@@ -2567,9 +2567,9 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
                         unreachable!("the checker guarantees two strings");
                     };
-                    let elems = match crate::builtins::append_to_file(path.as_str(), contents.as_str()) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    let elems = match crate::builtins::append_to_file(&*path, &*contents) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2579,9 +2579,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(p) => p,
                         _ => unreachable!("the checker guarantees a string"),
                     };
-                    let elems = match std::fs::remove_file(&path) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    let elems = match std::fs::remove_file(&*path) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2592,11 +2592,11 @@ impl<'a> Vm<'a> {
                     let mut args = vec![String::new(); op.argc()];
                     for i in (0..op.argc()).rev() {
                         args[i] = match self.pop() {
-                            HeapValue::Str(s) => s,
+                            HeapValue::Str(s) => s.to_string(),
                             _ => unreachable!("the checker guarantees strings"),
                         };
                     }
-                    let elems = crate::builtins::fs_tagged(*op, &args).into_iter().map(HeapValue::Str).collect();
+                    let elems = crate::builtins::fs_tagged(*op, &args).into_iter().map(|x| HeapValue::Str(x.into())).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2616,8 +2616,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees string, bytes");
                     };
                     let elems = match crate::builtins::append_bytes_to_file(&path, &data) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2629,11 +2629,11 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::list_dir(&path) {
                         Ok(names) => {
-                            let mut v = vec![HeapValue::Str("ok".to_string())];
-                            v.extend(names.into_iter().map(HeapValue::Str));
+                            let mut v = vec![HeapValue::Str("ok".to_string().into())];
+                            v.extend(names.into_iter().map(|n| HeapValue::Str(n.into())));
                             v
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2669,8 +2669,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees a string");
                     };
                     let elems = match crate::builtins::sqlite_open(&path) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2684,22 +2684,22 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string, [string]");
                     };
                     let params: Vec<String> = self.as_array(ph).iter().map(|v| match v {
-                        HeapValue::Str(s) => s.clone(),
+                        HeapValue::Str(s) => s.to_string(),
                         _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
                     let elems = if matches!(instr, OpCode::SqliteExec) {
                         match crate::builtins::sqlite_exec(handle, &sql, &params) {
-                            Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
-                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                            Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         }
                     } else {
                         match crate::builtins::sqlite_query(handle, &sql, &params) {
                             Ok((ncols, cells)) => {
-                                let mut v = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(ncols.to_string())];
-                                v.extend(cells.into_iter().map(HeapValue::Str));
+                                let mut v = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(ncols.to_string().into())];
+                                v.extend(cells.into_iter().map(|c| HeapValue::Str(c.into())));
                                 v
                             }
-                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         }
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2730,7 +2730,7 @@ impl<'a> Vm<'a> {
                     else { unreachable!("the checker guarantees the __run signature") };
                     let as_strings = |vm: &mut Self, h| -> Vec<String> {
                         vm.as_array(h).iter().map(|v| match v {
-                            HeapValue::Str(s) => s.clone(),
+                            HeapValue::Str(s) => s.to_string(),
                             _ => unreachable!("the checker guarantees [string]"),
                         }).collect()
                     };
@@ -2765,7 +2765,7 @@ impl<'a> Vm<'a> {
                     else { unreachable!("the checker guarantees the __proc_spawn signature") };
                     let as_strings = |vm: &mut Self, h| -> Vec<String> {
                         vm.as_array(h).iter().map(|v| match v {
-                            HeapValue::Str(s) => s.clone(),
+                            HeapValue::Str(s) => s.to_string(),
                             _ => unreachable!("the checker guarantees [string]"),
                         }).collect()
                     };
@@ -2811,8 +2811,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees two strings");
                     };
                     let elems = match crate::builtins::open_file(&path, &mode) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2822,7 +2822,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("the checker guarantees an int"),
                     };
-                    let elems = crate::builtins::read_line_handle(handle).map(|l| vec![HeapValue::Str(l)]).unwrap_or_default();
+                    let elems = crate::builtins::read_line_handle(handle).map(|l| vec![HeapValue::Str(l.into())]).unwrap_or_default();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2845,8 +2845,8 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees two ints"),
                     };
                     let elems = match crate::builtins::seek_handle(handle, pos) {
-                        Ok(p) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(p.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(p) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(p.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2858,8 +2858,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string");
                     };
                     let elems = match crate::builtins::write_handle(handle, &s) {
-                        Ok(_) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(_) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2872,8 +2872,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, bytes");
                     };
                     let elems = match crate::builtins::write_bytes_handle(handle, &data) {
-                        Ok(_) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(_) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2884,8 +2884,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::sync_handle(handle) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2897,10 +2897,10 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::try_lock_handle(handle) {
                         Ok(got) => vec![
-                            HeapValue::Str("ok".to_string()),
-                            HeapValue::Str(if got { "1" } else { "0" }.to_string()),
+                            HeapValue::Str("ok".to_string().into()),
+                            HeapValue::Str(if got { "1" } else { "0" }.to_string().into()),
                         ],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2910,8 +2910,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::unlock_handle(handle) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2922,8 +2922,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees a string");
                     };
                     let elems = match crate::builtins::watch_open(&path) {
-                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2941,29 +2941,29 @@ impl<'a> Vm<'a> {
                     };
                     // ¿Venció el plazo de un aparcado anterior? (io_wait marcó el handle.)
                     if crate::builtins::take_read_timeout(handle) {
-                        let elems = vec![HeapValue::Str("timeout".to_string())];
+                        let elems = vec![HeapValue::Str("timeout".to_string().into())];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
                         match crate::builtins::watch_try_next(handle) {
                             Ok(Some((kind, path))) => {
                                 let elems = vec![
-                                    HeapValue::Str("ok".to_string()),
-                                    HeapValue::Str(kind),
-                                    HeapValue::Str(path),
+                                    HeapValue::Str("ok".to_string().into()),
+                                    HeapValue::Str(kind.into()),
+                                    HeapValue::Str(path.into()),
                                 ];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Err(e) => {
-                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Ok(None) => match crate::builtins::watch_fd(handle) {
                                 // Sin evento aún: aparca en el fd del watcher (con plazo si ms > 0).
                                 Err(e) => {
-                                    let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                    let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                                     let h = self.cur.heap.allocate(Obj::Array(elems));
                                     self.push(HeapValue::Obj(h));
                                 }
@@ -2997,8 +2997,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::chmod_path(&path, mode) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3014,8 +3014,8 @@ impl<'a> Vm<'a> {
                         crate::builtins::stderr_write(&s)
                     };
                     let elems = match r {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3025,16 +3025,16 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees bytes");
                     };
                     let elems = match crate::builtins::stdout_write_bytes(&b) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::StdoutFlush => {
                     let elems = match crate::builtins::stdout_flush() {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3134,8 +3134,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees three ints");
                     };
                     let elems = match crate::builtins::audio_open(rate, channels, latency) {
-                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3145,8 +3145,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::audio_drain(handle) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3157,8 +3157,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::audio_played(handle) {
-                        Ok(ms) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(ms.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(ms) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(ms.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3185,8 +3185,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees two strings");
                     };
                     let elems = match crate::builtins::ui_open(&title, &url, width, height) {
-                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3212,8 +3212,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees two bools");
                     };
                     let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave) {
-                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3227,8 +3227,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::ui_eval_js(handle, &js) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3246,13 +3246,13 @@ impl<'a> Vm<'a> {
                         .as_array(ih)
                         .iter()
                         .map(|v| match v {
-                            HeapValue::Str(s) => s.clone(),
+                            HeapValue::Str(s) => s.to_string(),
                             _ => unreachable!("the checker guarantees [string]"),
                         })
                         .collect();
                     let elems = match crate::builtins::ui_menu(&title, &items) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3270,13 +3270,13 @@ impl<'a> Vm<'a> {
                         .as_array(ih)
                         .iter()
                         .map(|v| match v {
-                            HeapValue::Str(s) => s.clone(),
+                            HeapValue::Str(s) => s.to_string(),
                             _ => unreachable!("the checker guarantees [string]"),
                         })
                         .collect();
                     let elems = match crate::builtins::ui_app_menu(&name, &items) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3292,8 +3292,8 @@ impl<'a> Vm<'a> {
                     }
                     args.reverse();
                     let elems = match crate::builtins::ui_set_about(&args[0], &args[1], &args[2], &args[3]) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3309,10 +3309,10 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::ui_dialog(&kind, &arg) {
                         Ok(Some(path)) => {
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(path)]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(path.into())]
                         }
-                        Ok(None) => vec![HeapValue::Str("none".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(None) => vec![HeapValue::Str("none".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3325,22 +3325,22 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     if crate::builtins::take_read_timeout(crate::builtins::UI_EVENTS_PSEUDO_HANDLE) {
-                        let elems = vec![HeapValue::Str("timeout".to_string())];
+                        let elems = vec![HeapValue::Str("timeout".to_string().into())];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else if let Some((kind, window, tag)) = crate::builtins::ui_try_next() {
                         let elems = vec![
-                            HeapValue::Str("ok".to_string()),
-                            HeapValue::Str(kind),
-                            HeapValue::Str(window.to_string()),
-                            HeapValue::Str(tag),
+                            HeapValue::Str("ok".to_string().into()),
+                            HeapValue::Str(kind.into()),
+                            HeapValue::Str(window.to_string().into()),
+                            HeapValue::Str(tag.into()),
                         ];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
                         match crate::builtins::ui_event_fd() {
                             Err(e) => {
-                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
@@ -3377,8 +3377,8 @@ impl<'a> Vm<'a> {
                         crate::builtins::term_raw_off()
                     };
                     let elems = match r {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3394,9 +3394,9 @@ impl<'a> Vm<'a> {
                         Ok(h) => {
                             // M15.5: la VM usa sockets NO bloqueantes → socket_read cede al scheduler.
                             let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3414,9 +3414,9 @@ impl<'a> Vm<'a> {
                         Ok(h) => {
                             // Igual que TcpConnect: la VM usa sockets NO bloqueantes (M15.5).
                             let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3428,16 +3428,16 @@ impl<'a> Vm<'a> {
                     let elems = match crate::builtins::tls_peer_cert(handle) {
                         Ok(s) => {
                             let mut v = vec![
-                                HeapValue::Str("ok".to_string()),
-                                HeapValue::Str(s.subject),
-                                HeapValue::Str(s.issuer),
-                                HeapValue::Str(s.not_before_ms.to_string()),
-                                HeapValue::Str(s.not_after_ms.to_string()),
+                                HeapValue::Str("ok".to_string().into()),
+                                HeapValue::Str(s.subject.into()),
+                                HeapValue::Str(s.issuer.into()),
+                                HeapValue::Str(s.not_before_ms.to_string().into()),
+                                HeapValue::Str(s.not_after_ms.to_string().into()),
                             ];
-                            v.extend(s.san.into_iter().map(HeapValue::Str));
+                            v.extend(s.san.into_iter().map(|x| HeapValue::Str(x.into())));
                             v
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3448,7 +3448,7 @@ impl<'a> Vm<'a> {
                     let form = match self.pop() { HeapValue::Str(f) => f, _ => unreachable!("the checker guarantees a string") };
                     let s = match self.pop() { HeapValue::Str(s) => s, _ => unreachable!("the checker guarantees a string") };
                     match crate::builtins::unicode_normalize(&s, &form) {
-                        Ok(out) => self.push(HeapValue::Str(out)),
+                        Ok(out) => self.push(HeapValue::Str(out.into())),
                         Err(e) => return Err(runtime_error(pos!().0, pos!().1, &e)),
                     }
                 }
@@ -3456,8 +3456,8 @@ impl<'a> Vm<'a> {
                 OpCode::SocketShutdownWrite => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
                     let elems = match crate::builtins::shutdown_write(handle) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3465,8 +3465,8 @@ impl<'a> Vm<'a> {
                 OpCode::PeerAddr => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
                     let elems = match crate::builtins::peer_addr(handle) {
-                        Ok(a) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(a)],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(a) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(a.into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3482,9 +3482,9 @@ impl<'a> Vm<'a> {
                         Ok(h) => {
                             // M20.11: la VM usa el socket NO bloqueante → udp_recv_from cede al scheduler.
                             let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3500,8 +3500,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string, int, bytes");
                     };
                     let elems = match crate::builtins::udp_send_to(handle, &host, port, &data) {
-                        Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3555,9 +3555,9 @@ impl<'a> Vm<'a> {
                     let elems = match crate::builtins::tls_connect(&host, port) {
                         Ok(h) => {
                             let _ = crate::builtins::tls_set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3573,9 +3573,9 @@ impl<'a> Vm<'a> {
                     let elems = match crate::builtins::tls_connect_h2(&host, port) {
                         Ok(h) => {
                             let _ = crate::builtins::tls_set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3590,8 +3590,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string, string");
                     };
                     let elems = match crate::builtins::tls_accept(handle, &cert, &key) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3605,8 +3605,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string");
                     };
                     let elems = match crate::builtins::tls_upgrade(handle, &host) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3619,12 +3619,12 @@ impl<'a> Vm<'a> {
                     // M15.5: lectura no bloqueante. WouldBlock (Ok(None)) → aparcar la fibra y reintentar.
                     match crate::builtins::socket_read_nb(handle) {
                         Ok(Some(s)) => {
-                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)];
+                            let elems = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(s.into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
-                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -3654,10 +3654,10 @@ impl<'a> Vm<'a> {
                     // Cesión en `socket_write` (como SocketWriteBytes): escritura parcial de los octetos
                     // UTF-8; si el buffer se llena, cede la fibra (el resto pendiente vive en bytes, lo que
                     // evita reconstruir un string roto a mitad de carácter multibyte).
-                    let bytes = s.into_bytes();
+                    let bytes = s.as_bytes().to_vec();
                     match crate::builtins::socket_write_nb(handle, &bytes) {
                         Ok(n) if n == bytes.len() => {
-                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
+                            let elems = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -3667,7 +3667,7 @@ impl<'a> Vm<'a> {
                             return Ok(None);
                         }
                         Err(e) => {
-                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -3684,9 +3684,9 @@ impl<'a> Vm<'a> {
                         Ok(h) => {
                             // M15.5: escucha NO bloqueante → tcp_accept cede al scheduler.
                             let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3699,12 +3699,12 @@ impl<'a> Vm<'a> {
                     // M15.5: accept no bloqueante. WouldBlock (Ok(None)) → aparcar y reintentar.
                     match crate::builtins::tcp_accept_nb(handle) {
                         Ok(Some(c)) => {
-                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c.to_string())];
+                            let elems = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(c.to_string().into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
-                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -3999,9 +3999,9 @@ impl<'a> Vm<'a> {
                     };
                     let v = match out {
                         Out::Bool(b) => HeapValue::Bool(b),
-                        Out::Str(s) => HeapValue::Str(s),
+                        Out::Str(s) => HeapValue::Str(s.into()),
                         Out::Strs(xs) => {
-                            let elems: Vec<HeapValue> = xs.into_iter().map(HeapValue::Str).collect();
+                            let elems: Vec<HeapValue> = xs.into_iter().map(|x| HeapValue::Str(x.into())).collect();
                             HeapValue::Obj(self.cur.heap.allocate(Obj::Array(elems)))
                         }
                         Out::Span(sp) => {
@@ -4025,7 +4025,7 @@ impl<'a> Vm<'a> {
                             let payload = c.map(|groups| {
                                 let elems: Vec<HeapValue> = groups
                                     .into_iter()
-                                    .map(|g| self.regex_option(*opt, g.map(HeapValue::Str)))
+                                    .map(|g| self.regex_option(*opt, g.map(|x| HeapValue::Str(x.into()))))
                                     .collect();
                                 HeapValue::Obj(self.cur.heap.allocate(Obj::Array(elems)))
                             });
@@ -4463,16 +4463,14 @@ impl<'a> Vm<'a> {
             // por acceso): un string ASCII indexa el byte en O(1); uno no-ASCII escanea hasta `i`
             // sin asignar. El conteo total solo se paga al errar.
             HeapValue::Str(s) => {
-                let c = if s.is_ascii() {
-                    let idx = bounds_check(i, s.len(), line, col)?;
-                    s.as_bytes()[idx] as char
-                } else {
-                    match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
-                        Some(c) => c,
-                        None => {
-                            bounds_check(i, s.chars().count(), line, col)?;
-                            unreachable!("nth failed ⇒ index out of range")
-                        }
+                // M213 (ray-sublime #12): `s[i]` amortizado O(1) — la caché por cadena (identidad
+                // del `Arc`) recuerda si es ASCII y la última posición (carácter, byte) para
+                // seguir desde ahí; un bucle sobre el texto deja de ser cuadrático.
+                let c = match str_cache::char_at(&s, i) {
+                    Some(c) => c,
+                    None => {
+                        bounds_check(i, str_cache::char_len(&s), line, col)?;
+                        unreachable!("char_at failed ⇒ index out of range")
                     }
                 };
                 self.push(HeapValue::Char(c));
@@ -4655,7 +4653,7 @@ impl<'a> Vm<'a> {
         }
         Ok(match (op, left, right) {
             // M11.1a: `+` concatena dos strings.
-            (Add, Str(a), Str(b)) => Str(a + &b),
+            (Add, Str(a), Str(b)) => Str(format!("{a}{b}").into()),
             // M16.1b: `+` concatena dos bytes (inline, no son objetos del heap → van por aquí).
             (Add, Bytes(a), Bytes(b)) => {
                 let mut v = a;
@@ -4809,3 +4807,82 @@ fn bounds_check(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Ru
 
 #[cfg(test)]
 mod tests;
+
+/// M213 (ray-sublime #12): indexación y longitud de strings amortizadas. `HeapValue::Str` es un
+/// `Arc<str>` compartido (antes un `String` que se copiaba en cada carga y se recorría entero para
+/// saber si era ASCII en cada `s[i]`: un bucle sobre 40 000 caracteres tardaba 370 ms). La caché
+/// es de UNA entrada por hilo —la última cadena indexada, retenida por su `Arc` para que la
+/// dirección no pueda reutilizarse— con: si es ASCII (byte = carácter, O(1) directo), su longitud
+/// en caracteres, y la última pareja (índice de carácter, offset de byte) para que el acceso
+/// secuencial hacia delante o hacia atrás sea O(1) amortizado en texto no-ASCII. El acceso
+/// aleatorio en no-ASCII sigue siendo O(distancia).
+mod str_cache {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
+    struct Entry {
+        s: Arc<str>,
+        ascii: bool,
+        chars: usize,
+        last_char: usize,
+        last_byte: usize,
+    }
+
+    thread_local! {
+        static LAST: RefCell<Option<Entry>> = const { RefCell::new(None) };
+    }
+
+    fn with_entry<R>(s: &Arc<str>, f: impl FnOnce(&mut Entry) -> R) -> R {
+        LAST.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let hit = matches!(&*slot, Some(e) if Arc::ptr_eq(&e.s, s));
+            if !hit {
+                let ascii = s.is_ascii();
+                let chars = if ascii { s.len() } else { s.chars().count() };
+                *slot = Some(Entry { s: Arc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });
+            }
+            f(slot.as_mut().expect("entry just set"))
+        })
+    }
+
+    /// Longitud en caracteres (O(1) tras la primera vez para cada cadena).
+    pub(super) fn char_len(s: &Arc<str>) -> usize {
+        with_entry(s, |e| e.chars)
+    }
+
+    /// El carácter en la posición `i` (por carácter), o `None` fuera de rango.
+    pub(super) fn char_at(s: &Arc<str>, i: i64) -> Option<char> {
+        let Ok(i) = usize::try_from(i) else { return None };
+        with_entry(s, |e| {
+            if i >= e.chars {
+                return None;
+            }
+            if e.ascii {
+                return Some(e.s.as_bytes()[i] as char);
+            }
+            // No-ASCII: hacia delante desde la última posición, hacia atrás desde ella si queda
+            // más cerca que el principio (un bucle descendente), y si no desde el principio.
+            let bytes = e.s.as_bytes();
+            let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i {
+                (e.last_char, e.last_byte)
+            } else {
+                (0, 0)
+            };
+            while ci < i {
+                let b = bytes[bi];
+                bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 };
+                ci += 1;
+            }
+            while ci > i {
+                bi -= 1;
+                while bi > 0 && (bytes[bi] & 0xC0) == 0x80 {
+                    bi -= 1;
+                }
+                ci -= 1;
+            }
+            e.last_char = ci;
+            e.last_byte = bi;
+            e.s[bi..].chars().next()
+        })
+    }
+}

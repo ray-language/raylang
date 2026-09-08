@@ -12774,6 +12774,28 @@ implícita al asignar. Verificado en VM, intérprete y nativo con el mismo resul
 `bool` clonado no se comparte; el arreglo sí); el selfhost registra el método derivado como los
 demás.
 
+## 213. M213 — strings compartidos en la VM y `s[i]` amortizado (sep 2026)
+
+Plan de `ray-sublime`, H1 (entradas 12 y 23), la única del plan que cambiaba la representación.
+La entrada pedía documentar, un `chars()` sin copia, o cachear la última posición; el diagnóstico
+dio otra cosa: `HeapValue::Str` era un `String` **propio**, así que cada `s[i]` copiaba la cadena
+entera al cargar la variable (y lo mismo cada paso de argumento y cada clave de mapa), y el
+fast-path ASCII la recorría entera para decidir si lo era. Una caché de posición sobre `String`
+no era posible: sin identidad estable no hay clave segura (una dirección liberada se reutiliza).
+Decisiones: (1) `Str(Arc<str>)` — inmutable y compartido; `Arc` y no `Rc` porque el scheduler M:N
+mueve fibras entre hilos del SO y el valor tiene que ser `Send` sin un `unsafe impl` nuevo (el
+nativo usa `Rc<str>` porque su runtime es hilo-por-fibra con envío por copia); el coste es un
+incremento atómico por clon frente a un `memcpy`. (2) Una caché de **una** entrada por hilo,
+retenida por el propio `Arc` (la dirección no puede reutilizarse mientras la caché la sujeta),
+con ASCII-ness, longitud en caracteres y la última pareja (carácter, byte): ASCII indexa el byte;
+no-ASCII avanza o retrocede desde la última posición cuando queda más cerca que el principio.
+`len()` usa la misma caché. (3) Los 242 sitios de construcción se convirtieron con las posiciones
+exactas que da `cargo build --message-format=json` (`.into()`/`.to_string()` insertados por byte),
+y los 34 restantes a mano — el método deja el diff auditable y no toca la semántica. Medido en
+debug: 362 → 36 ms el bucle ASCII de 40 000 caracteres (igual que `chars()` + índice), 655 → 24 ms
+el descendente UTF-8. `MapKey::Str` sigue siendo `String` (se convierte en la frontera del mapa);
+`Value::Str` del intérprete también: es el oráculo, no el motor de producto.
+
 ## 214. M222 — un valor-función con nombre lleva su tipo dyn puesto (sep 2026)
 
 `ray-sublime` compilando a nativo con 1.11.0: `let f = if forward { word_right } else { word_left }`

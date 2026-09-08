@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## 1.11.1 — 2026-09-08
 
+- **Strings compartidos e `s[i]` amortizado** (M213, ray-sublime #12): la VM representa los
+  strings como `Arc<str>` (sin copiar la cadena en cada carga) y cachea por cadena si es ASCII, su
+  longitud y la última posición: un bucle sobre 40 000 caracteres pasa de 362 ms a 36 ms, y el
+  recorrido UTF-8 en ambos sentidos es O(1) amortizado. Sin cambio observable.
+
+## 1.11.1 — 2026-09-08
+
 - **Nativo: funciones con nombre como valor en ramas** (M222, ray-sublime): `if (b) { right } else
   { left }` (o un `match` que devuelve funciones) compilaba en la VM y en nativo fallaba con
   `E0308: different fn items have unique types`; el transpilador emite ahora la coerción explícita

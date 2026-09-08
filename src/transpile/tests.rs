@@ -271,6 +271,18 @@ fn iterates_inline_split_without_materializing() {
 
 /// N6a: la lectura `a[i]` sobre una variable local no-celda toma el préstamo directo
 /// (`a.borrow()`), sin el `Rc::clone` intermedio que solo movía refcounts.
+/// M222 (ray-sublime, 1.11.0): dos funciones con nombre como valor en las ramas de un `if` — cada
+/// ítem de función tiene su propio tipo en Rust, así que el valor se emite con la coerción explícita
+/// `Rc::new(f) as Rc<dyn Fn(…) -> …>`; antes rustc fallaba con E0308.
+#[test]
+fn named_function_values_are_cast_to_their_dyn_type() {
+    let rust = transpile_src(
+        "fn left(n: int) -> int { n - 1 }\nfn right(n: int) -> int { n + 1 }\nfn main() {\n    let f = if (true) { right } else { left };\n    print(f(1));\n}",
+    );
+    assert!(rust.contains("(Rc::new(right) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+    assert!(rust.contains("(Rc::new(left) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+}
+
 #[test]
 fn indexed_reads_borrow_without_cloning_the_rc() {
     let rust = transpile_src(

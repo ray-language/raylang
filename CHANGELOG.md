@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Nativo: funciones con nombre como valor en ramas** (M222, ray-sublime): `if (b) { right } else
+  { left }` (o un `match` que devuelve funciones) compilaba en la VM y en nativo fallaba con
+  `E0308: different fn items have unique types`; el transpilador emite ahora la coerción explícita
+  a `Rc<dyn Fn(…) -> …>`.
+
 ## 1.11.0 — 2026-09-08
 
 - **`@derive(Clone)`** (M221, ray-sublime #14): `clone(self) -> Self` con copia superficial para

@@ -1,0 +1,32 @@
+// M222 (ray-sublime, 1.11.0): dos funciones con nombre como VALOR en las ramas de un `if`/`match`.
+// En Rust cada ítem de función tiene su propio tipo: el nativo emite ahora la coerción explícita a
+// `Rc<dyn Fn(…) -> …>`. Idéntico en VM, intérprete y nativo.
+fn left(n: int) -> int { n - 1 }
+
+fn right(n: int) -> int { n + 1 }
+
+fn twice(n: int) -> int { n * 2 }
+
+fn pick(mode: string) -> fn(int) -> int {
+    if (mode == "left") { left } else if (mode == "right") { right } else { twice }
+}
+
+fn main() -> int {
+    let forward = true;
+    let f = if (forward) { right } else { left };
+    print(f(10));
+    let g = if (!forward) { right } else { left };
+    print(g(10));
+    let pl = pick("left");
+    print(pl(5));
+    let px = pick("x");
+    print(px(5));
+    let table = [left, right, twice];
+    var i = 0;
+    while (i < table.len()) {
+        let t = table[i];
+        print(t(1));
+        i = i + 1;
+    }
+    0
+}

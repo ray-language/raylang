@@ -65,7 +65,7 @@ primitivos siguen por `__ray_sort`. Test en `native_corpus`/`native_differential
 
 ## 3. Lote H — checker y stdlib pequeña
 
-### H1. Indexar un string por carácter deja de ser cuadrático (entrada 12) — L (decisión)
+### H1. Indexar un string por carácter deja de ser cuadrático (entrada 12) — L ✅ M213 (`Arc<str>` + caché de indexación)
 
 **Diagnóstico (8 sep):** el coste no es solo el escaneo hasta `i`: `HeapValue::Str` es un `String`
 propio, así que cada `s[i]` **clona la cadena entera** al cargar la variable y además recorre la

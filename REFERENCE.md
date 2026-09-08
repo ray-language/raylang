@@ -223,7 +223,7 @@ que también existen como llamada libre (`metodo(recv, args)`).
 | Método | Resultado | Descripción |
 |---|---|---|
 | `s.len()` | `int` | longitud **en caracteres** |
-| `s[i]` | `char` | indexación por carácter (fuera de rango = error); `s[i] = c` está prohibido (inmutable). **Coste**: sobre un string no-ASCII cada acceso recorre desde el principio (y hoy la carga de la variable copia el string): un bucle `for i in 0..s.len() { s[i] }` es cuadrático — para recorrer texto, `s.chars()` UNA vez y luego indexa el arreglo; para octetos, `bytes` se indexa en O(1) |
+| `s[i]` | `char` | indexación por carácter (fuera de rango = error); `s[i] = c` está prohibido (inmutable). **Coste** (M213): ASCII en O(1); en texto no-ASCII el acceso **secuencial** (ascendente o descendente) es O(1) amortizado y el aleatorio O(distancia) desde la última posición; `s.len()` es O(1) tras la primera vez. Un bucle `while (i < s.len()) { s[i] }` ya no es cuadrático; `s.chars()` sigue siendo la forma explícita de materializar el arreglo |
 | `s.trim()` | `string` | sin blancos en los bordes: espacios, tabuladores y saltos de línea (`"\r\n".trim()` es `""`) |
 | `s.split(sep)` | `[string]` | partes |
 | `s.contains(sub)` | `bool` | subcadena |

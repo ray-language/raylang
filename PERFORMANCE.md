@@ -1749,6 +1749,26 @@ self-hosting por el tercer backend.
   Tras el cambio: ~34 ms en VM/intérprete/nativo (~1 ms de overshoot). Sin coste de CPU (no es
   spin-sleep): es la misma syscall bloqueante, solo la precisa.
 
+### Strings compartidos e indexación amortizada (M213, sep 2026)
+
+Origen: `ray-sublime` midió que `for i in 0..s.len() { s[i] }` era cuadrático (40 000 caracteres:
+72 ms frente a 2 ms con `chars()`, en release; en debug 362 ms frente a 37). Dos costes O(n) por
+acceso: `HeapValue::Str` era un `String` propio que se **copiaba entero** al cargar la variable, y
+el fast-path ASCII de `s[i]` recorría la cadena para decidir si era ASCII. Cambios: `Str(Arc<str>)`
+(un incremento atómico por carga en vez de un `memcpy`; `Arc` porque el scheduler M:N mueve fibras
+entre hilos) y una caché de una entrada por hilo, retenida por el propio `Arc`, con ASCII-ness,
+longitud en caracteres y la última pareja (carácter, byte) — el acceso secuencial hacia delante o
+hacia atrás en UTF-8 es O(1) amortizado; el aleatorio en no-ASCII, O(distancia). `len()` de string
+usa la misma caché.
+
+| Bucle (debug, 40 000 chars ASCII / 20 000 no-ASCII) | antes | después |
+|---|---|---|
+| `s[i]` ascendente, ASCII | 362 ms | **36 ms** (= `chars()` + índice) |
+| `s[i]` ascendente, UTF-8 | — | 26 ms |
+| `s[j]` descendente, UTF-8 | 655 ms (tras el Arc, sin retroceso) | **24 ms** |
+
+Sin cambio observable: los tres motores dan lo mismo; el intérprete (oráculo) mantiene `String`.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

@@ -3390,3 +3390,22 @@ canales y handles" (bug real en la app), `bytes` `+` lineal vs `[int]`+`bytes_of
 - El **orden de las secciones numeradas es cronológico** (por cuándo se clasificó la idea), no por
   importancia ni por estado: una sección puede estar ya ✅ ejecutada. Lo entregado se lee en
   [CHANGELOG.md](CHANGELOG.md); lo vigente, en [SPEC.md](SPEC.md) y [REFERENCE.md](REFERENCE.md).
+
+## 87. Mejoras impulsadas por `ray-sublime` — editor con el ecosistema de Sublime Text (sep 2026)
+
+Dogfood de `ray-apps/ray-sublime` (motor de regex con backtracking, lectores de YAML/plist/ZIP/
+JSON relajado, motor de `.sublime-syntax`, `std/ui` + `web`). Su `IDEAS.md` deja 33 entradas por
+etapa; verificadas contra 1.10.0 y ordenadas en [docs/plan-ray-sublime.md](docs/plan-ray-sublime.md)
+(hitos M211–M219 + decisiones). Resumen por impacto:
+
+| Lote | Contenido | Impacto |
+|---|---|---|
+| G bugs | `std/regex` acepta look-around/`\p{}`/backrefs y revienta (ICE) en la primera búsqueda — y el pánico en un worker **cuelga** el proceso · `impl Ord` + `sort` corre en la VM y rompe el nativo (`E0277`) | **alta**: ramas perdidas y procesos colgados |
+| H checker/stdlib | `s[i]` cuadrático (370 ms vs 36 ms a 40 k chars) · `push(Option.None)` no infiere del parámetro · sin `sort_by` · sin `fs.remove_all`/`temp_dir` | media-alta: lo repite cualquier programa que procese texto |
+| I tooling/docs | `ray check`, `ray doc std/x`, `RAY_UI_TRACE`/`RAY_UI_EXIT_AFTER_MS` en headless, `RAYLANG_MAX_DEPTH`, mensajes (`fn u32`, módulo que tapa un builtin), docs (fmt canónico, `trim`, `s[i]` vs `bytes`, `Set`) | media: barato y transversal |
+| J formatos | `json.parse_relaxed` (1 876 archivos) · `std/zip` lectura (98) · yaml/plist a decidir | media |
+| K decisión | `return` como expresión `never` · `@derive(Clone)` · intérprete embebible (§88 futuro) · trazas sin editar código | la decide el usuario |
+
+Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
+los 6 226 patrones reales de sintaxis usan look-around. La entrada 31 (`fmt` rompe parches) no se
+reproduce con 1.10.0.

@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray bundle` estricto** (M208, feedback 25 de ray-remote): un flag desconocido es error (antes
+  `--bogus` o `--native` hacían un bundle normal en silencio), `--help` imprime el uso sin compilar
+  (antes compilaba 17 s en release), y `[app] name`, `icon` e `id` del ray.toml alimentan el
+  bundle (los flags los sobrescriben).
+
 ## 1.10.0 — 2026-09-07
 
 - **`net.set_keepalive(h, on)`** (M207, feedback de ray-remote): `SO_KEEPALIVE` en TCP y TLS, en

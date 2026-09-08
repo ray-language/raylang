@@ -1227,7 +1227,8 @@ El cierre del círculo de escritorio: `ray bundle` compila el binario nativo `--
 los assets de `[native] embed` dentro) y lo deja en el formato del SO:
 
 ```sh
-ray bundle --icon icon.png            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
+ray bundle                            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
+                                      #   nombre/icono/id: [app] name/icon/id del ray.toml (o --name/--icon/--id)
                                       # Linux: MiApp/ con el binario + MiApp.desktop
                                       # Windows: MiApp con MiApp.exe (icono y versión embebidos,
                                       #          sin consola al doble clic) + MiApp.lnk

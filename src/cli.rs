@@ -93,7 +93,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
+  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1306,29 +1306,81 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// cwd=/) y produce el formato del SO: `.app` en macOS (Info.plist + icns por sips/iconutil +
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
+const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]]\n\
+  name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
+the flags override them.";
+
 fn cmd_bundle(args: &[String]) {
-    let flag_value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
-    let name_arg = flag_value("--name");
-    let icon = flag_value("--icon");
-    let id_arg = flag_value("--id");
-    let out_arg = flag_value("-o");
-    let without_arg = flag_value("--without");
+    // M208 (feedback 25 de ray-remote): parseo ESTRICTO. Antes cualquier flag desconocido se
+    // ignoraba en silencio (`--bogus` hacía un bundle normal; `--help` compilaba 17 s en release
+    // y no enseñaba nada). Un flag que no se conoce es error 64 con el uso; `--help` imprime el uso.
+    let mut name_arg: Option<String> = None;
+    let mut icon_arg: Option<String> = None;
+    let mut id_arg: Option<String> = None;
+    let mut out_arg: Option<String> = None;
+    let mut without_arg: Option<String> = None;
     // M155b: `--ios-target device|sim|both` — qué staticlib(s) construye `--ios` (both por
     // defecto; iterando contra un solo destino, el otro build son ~15-20 s tirados).
-    let ios_target_arg = flag_value("--ios-target");
+    let mut ios_target_arg: Option<String> = None;
     // `--ios` (§80b): en vez del .app/.desktop del HOST, genera el proyecto Xcode de una app
     // iOS (shell WKWebView + staticlibs de dispositivo y simulador). Solo host macOS.
-    let ios = args.iter().any(|a| a == "--ios");
+    let mut ios = false;
     // M156: `--android` genera el proyecto GRADLE (shell Java + WebView + el programa como
     // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
-    let android = args.iter().any(|a| a == "--android");
-    let android_abi_arg = flag_value("--android-abi");
-    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg, &ios_target_arg, &android_abi_arg].iter().filter_map(|o| o.as_ref()).collect();
-    let file = args
-        .iter()
-        .find(|a| !a.starts_with('-') && !values.iter().any(|v| v.as_str() == a.as_str()))
-        .map(String::as_str);
-    let path = resolve_entry(file, true);
+    let mut android = false;
+    let mut android_abi_arg: Option<String> = None;
+    let mut file: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = |slot: &mut Option<String>, i: &mut usize| {
+            match args.get(*i + 1) {
+                Some(v) => {
+                    *slot = Some(v.clone());
+                    *i += 2;
+                }
+                None => {
+                    eprintln!("'{a}' needs a value\n{BUNDLE_USAGE}");
+                    process::exit(64);
+                }
+            }
+        };
+        match a {
+            "--help" | "-h" => {
+                println!("{BUNDLE_USAGE}");
+                process::exit(0);
+            }
+            "--name" => value(&mut name_arg, &mut i),
+            "--icon" => value(&mut icon_arg, &mut i),
+            "--id" => value(&mut id_arg, &mut i),
+            "-o" => value(&mut out_arg, &mut i),
+            "--without" => value(&mut without_arg, &mut i),
+            "--ios-target" => value(&mut ios_target_arg, &mut i),
+            "--android-abi" => value(&mut android_abi_arg, &mut i),
+            "--ios" => {
+                ios = true;
+                i += 1;
+            }
+            "--android" => {
+                android = true;
+                i += 1;
+            }
+            _ if a.starts_with('-') => {
+                eprintln!("unknown option '{a}'\n{BUNDLE_USAGE}");
+                process::exit(64);
+            }
+            _ => {
+                if file.is_some() {
+                    eprintln!("only one file can be bundled ('{}' and '{a}')\n{BUNDLE_USAGE}", file.as_deref().unwrap_or(""));
+                    process::exit(64);
+                }
+                file = Some(a.to_string());
+                i += 1;
+            }
+        }
+    }
+    let path = resolve_entry(file.as_deref(), true);
 
     // El manifiesto del ENTRY da nombre/versión/exclusiones por defecto (como build_native).
     let entry_dir = match Path::new(&path).parent() {
@@ -1337,11 +1389,18 @@ fn cmd_bundle(args: &[String]) {
     };
     let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
     let manifest = Manifest::load(&entry_dir).ok().flatten();
+    // M208: `--name`/`--icon`/`--id` → `[app] name/icon/id` del ray.toml → defaults. El icono del
+    // manifiesto es relativo a la raíz del proyecto (el bundle puede correrse desde cualquier cwd).
     let name = name_arg
+        .or_else(|| manifest.as_ref().and_then(|m| m.app_name.clone()))
         .or_else(|| manifest.as_ref().map(|m| m.name.clone()))
         .unwrap_or_else(|| {
             Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
         });
+    let icon: Option<String> = icon_arg.or_else(|| {
+        manifest.as_ref().and_then(|m| m.app_icon.as_ref().map(|i| m.root.join(i).to_string_lossy().into_owned()))
+    });
+    let id_arg = id_arg.or_else(|| manifest.as_ref().and_then(|m| m.app_id.clone()));
     let version = manifest.as_ref().map(|m| m.version.clone()).unwrap_or_else(|| "0.1.0".to_string());
     // El identifier por defecto sale del nombre (minúsculas, [a-z0-9-]): estable y único-ish.
     let bundle_id = id_arg.clone().unwrap_or_else(|| {

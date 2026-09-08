@@ -12558,3 +12558,18 @@ a mano con los `extern` declarados en el sitio (como `poll.rs`), constantes por 
 (`SOL_SOCKET`/`SO_KEEPALIVE` difieren entre Linux y BSD/macOS; Windows por `ws2_32`). Se expone
 solo el interruptor, no la temporización (`TCP_KEEPIDLE`/`KEEPINTVL`: distinta por SO y rara vez
 necesaria); quien necesite plazos finos tiene `set_read_timeout`.
+
+## 200. M208 — `ray bundle` deja de aceptar lo que no entiende (sep 2026)
+
+Tercera ronda de feedback de `ray-remote` (lote F, `docs/plan-ray-remote.md` §5c), punto 25:
+`ray bundle src/main.ray --native` hacía un bundle normal y salía con 0; `ray bundle --help`
+compilaba 17 s en release porque `--help` era otro flag ignorado; y `[app] icon` en el ray.toml no
+hacía nada, el `.icns` solo entraba por `--icon`. Las tres cosas tienen la misma causa: el parseo
+por `position(flag)` tomaba lo que reconocía y dejaba pasar el resto. Ahora el bucle es estricto,
+como en `ray serve`: un flag desconocido es error 64 con el uso, un flag con valor sin valor
+también, `--help` imprime el uso y sale, y solo hay un archivo posicional. El manifiesto gana
+`[app] name`, `icon` e `id` (el icono relativo a la raíz del proyecto, porque el bundle puede
+correrse desde cualquier cwd); los flags siguen mandando, para el caso de un icono alternativo o un
+id de prueba. `[android] application_id` conserva su precedencia sobre `[app] id` en el proyecto
+Gradle (es más específico). El test barato —`--help` y tres flags malos— corre sin rustc; la
+estructura del bundle sigue probándose con el test existente cuando hay toolchain.

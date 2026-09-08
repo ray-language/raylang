@@ -1162,10 +1162,13 @@ fn break_stmt(p: Parser) -> Result<Stmt, ParseError> {
 fn return_stmt(p: Parser) -> Result<Stmt, ParseError> {
     let kw = advance(p);  // 'return'
     var value: Option<Expr> = Option.None;
-    if (!check(p, ";")) {
+    if (!(check(p, ";") || check(p, "}"))) {
         value = Option.Some(expression(p)?);
     }
-    expect(p, ";", "';' at the end of the return")?;
+    // M220: `return e` como cola de un bloque no necesita `;` (espejo del parser Rust).
+    if (!check(p, "}")) {
+        expect(p, ";", "';' at the end of the return")?;
+    }
     Result.Ok(Stmt { kind: SKind.SReturn(value), line: kw.line, col: kw.col })
 }
 
@@ -1400,6 +1403,22 @@ fn primary(p: Parser) -> Result<Expr, ParseError> {
     }
     if (check(p, "match")) {
         return match_expr(p);
+    }
+    // M220: `return [e]` como expresión → bloque `{ return e; }` (espejo del parser Rust).
+    if (check(p, "return")) {
+        let kw = advance(p);
+        var value: Option<Expr> = Option.None;
+        if (!(check(p, ",") || check(p, ")") || check(p, "]") || check(p, "}") || check(p, ";"))) {
+            value = Option.Some(expression(p)?);
+        }
+        let stmt = Stmt { kind: SKind.SReturn(value), line: kw.line, col: kw.col };
+        return Result.Ok(
+            Expr {
+                kind: EKind.EBlock(Block { stmts: [stmt], tail: Option.None, line: kw.line, col: kw.col }),
+                line: kw.line,
+                col: kw.col
+            }
+        );
     }
     let t = cur_tok(p);
     match (t.kind) {

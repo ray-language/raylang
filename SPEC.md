@@ -254,7 +254,11 @@ iterable  = expresion [ '..' expresion ] ;
   en orden de clave — determinista) y cualquier tipo que implemente **`Iterator<T>`** (§7): el
   bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
-  también puede *caer* del bloque (retorno implícito: la expresión final sin `;`).
+  también puede *caer* del bloque (retorno implícito: la expresión final sin `;`). Además de
+  sentencia, **`return [e]` es expresión** (M220): en un brazo de `match`, en el valor de un
+  `let` o donde vaya una expresión, `Option.None => return code,` equivale a
+  `Option.None => { return code; }` — **diverge** (§7), así que cede el tipo al resto (el brazo
+  `Some(v) => v` fija el tipo del `match`). Es azúcar: el parser lo desazucara a ese bloque.
 - **`break;`** sale del `while`/`for` más interno y **`continue;`** salta a su siguiente
   iteración (en un `for`, avanza el iterable). Son **sentencias** (no producen valor; el bucle
   sigue valiendo unit) y solo son válidas **dentro del cuerpo de un bucle de la misma función**

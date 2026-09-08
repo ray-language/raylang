@@ -80,6 +80,8 @@ pub struct Parser {
     paren_sites: std::collections::HashSet<(usize, usize)>,
     /// Ver [`crate::ast::Program::if_let_sites`] (M201).
     if_let_sites: std::collections::HashSet<(usize, usize)>,
+    /// Ver [`crate::ast::Program::return_expr_sites`] (M220).
+    return_expr_sites: std::collections::HashSet<(usize, usize)>,
     /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
     /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
     /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
@@ -97,7 +99,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), if_let_sites: std::collections::HashSet::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), if_let_sites: std::collections::HashSet::new(), return_expr_sites: std::collections::HashSet::new(), depth: 0 }
     }
 
     // =================================================================
@@ -116,6 +118,7 @@ impl Parser {
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
         acc.if_let_sites = std::mem::take(&mut self.if_let_sites);
+        acc.return_expr_sites = std::mem::take(&mut self.return_expr_sites);
         Ok(acc)
     }
 
@@ -143,6 +146,7 @@ impl Parser {
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
         acc.if_let_sites = std::mem::take(&mut self.if_let_sites);
+        acc.return_expr_sites = std::mem::take(&mut self.return_expr_sites);
         (acc, errors)
     }
 
@@ -1087,12 +1091,15 @@ impl Parser {
     /// returnStmt = 'return' [ expression ] ';'
     fn return_stmt(&mut self) -> Result<Stmt, ParseError> {
         let kw = self.advance(); // 'return'
-        let value = if self.check(&TokenKind::Semicolon) {
+        let value = if self.check(&TokenKind::Semicolon) || self.check(&TokenKind::RBrace) {
             None
         } else {
             Some(self.expression()?)
         };
-        self.expect(&TokenKind::Semicolon, "';' at the end of the return")?;
+        // M220: `return e` como COLA de un bloque (`else { return 99 }`) no necesita `;`.
+        if !self.check(&TokenKind::RBrace) {
+            self.expect(&TokenKind::Semicolon, "';' at the end of the return")?;
+        }
         Ok(Stmt {
             kind: StmtKind::Return { value },
             line: kw.line,
@@ -1453,6 +1460,27 @@ impl Parser {
             // No hay ambigüedad: la `fn` de nivel superior lleva nombre.
             TokenKind::Fn => return self.fn_expr(),
             TokenKind::Match => return self.match_expr(),
+            // M220: `return [e]` como EXPRESIÓN (`Option.None => return code,`): azúcar de
+            // `{ return e; }` — un bloque que diverge, que checker y motores ya entienden. El
+            // valor es opcional: `return` pelado ante `,` `)` `]` `}` `;`.
+            TokenKind::Return => {
+                let kw = self.advance();
+                let value = if matches!(
+                    self.peek_kind(),
+                    TokenKind::Comma | TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace | TokenKind::Semicolon
+                ) {
+                    None
+                } else {
+                    Some(self.expression()?)
+                };
+                self.return_expr_sites.insert((kw.line, kw.col));
+                let stmt = Stmt { kind: StmtKind::Return { value }, line: kw.line, col: kw.col };
+                return Ok(Expr {
+                    kind: ExprKind::Block(Block { statements: vec![stmt], tail: None, line: kw.line, col: kw.col, end_line: kw.line }),
+                    line: kw.line,
+                    col: kw.col,
+                });
+            }
             _ => {}
         }
 

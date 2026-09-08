@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`return e` como expresión** (M220, ray-sublime #13): `Option.None => return code,` en un brazo
+  de `match` o `else { return 99 }` como cola; diverge y cede el tipo al resto. Azúcar de
+  `{ return e; }` en los dos parsers (Rust y selfhost); `ray fmt` lo conserva.
 - **`json.parse_relaxed`** (M218, ray-sublime #5): comentarios `//` `/* */` y comas finales — el
   dialecto de `tsconfig.json`, `.vscode/*.json` y `.sublime-settings`; `parse` sigue estricto.
 - **`std/zip`** (M219, ray-sublime #4/#21): lectura de archivos ZIP en raylang puro sobre

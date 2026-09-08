@@ -12739,3 +12739,20 @@ descriptor—, y `read_entry` localiza la cabecera local, saca los octetos, los 
 desbordamiento) y verifica tamaño y CRC-32. Fuera, con `Err` con nombre: ZIP64, multi-disco,
 cifrado y los métodos que no son STORE ni DEFLATE. Sin escritura: el caso de uso es leer paquetes,
 no producirlos, y `std/deflate` + 200 líneas lo darían el día que haga falta.
+
+## 211. M220 — `return` como expresión, por azúcar (sep 2026)
+
+Plan de `ray-sublime`, K1 (entrada 13): `Option.None => return code,` era error de sintaxis y
+obligaba a reestructurar la función alrededor del `match`; el rodeo `=> { return code; }` ya
+compilaba y ya divergía. La decisión es hacer exactamente eso en el parser: `return [e]` en
+posición de expresión es azúcar del bloque `{ return e; }`, anotado en `Program::return_expr_sites`
+para que `ray fmt` lo reemita como se escribió (el mismo mecanismo que `paren_sites`, M189, e
+`if_let_sites`, M201). Checker, compilador, intérprete, transpilador y selfhost no cambian: un
+bloque que termina en `return` ya diverge (§7) y ya cede el tipo al otro brazo. Se rechazó
+introducir un tipo `never` en el sistema de tipos: la divergencia por análisis de sentencias ya
+existe y da el mismo resultado sin tocar la unificación en dos checkers. El valor es opcional
+(`return` pelado ante `,` `)` `]` `}` `;`), y como cola de un bloque (`else { return 99 }`) la
+sentencia `return` tampoco necesita `;`. Fuera de una posición donde la divergencia se honra
+(`1 + return 2`), el bloque tipa unit y el error es el de siempre — el azúcar no crea programas
+válidos que no lo fueran ya con llaves. El parser auto-alojado aplica el mismo azúcar, así que el
+corpus de paridad de parsers incluye el ejemplo sin excepción.

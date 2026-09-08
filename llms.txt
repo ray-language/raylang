@@ -95,7 +95,8 @@ fn setup() -> Result<int, string> {
 }
 ```
 
-`?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
+`return e` is also an EXPRESSION (diverges): `Option.None => return -1,` in a match arm,
+`else { return 99 }` as a block tail. `?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
 otherwise: `'?' on Result<int, string> requires the function to return Result<_, string>,
 but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 `assert_eq(a, b)` (no custom-message variant — use `panic`).

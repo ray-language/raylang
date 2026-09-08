@@ -1,0 +1,38 @@
+// M220 (ray-sublime #13): `return e` como expresión — en un brazo de `match`, en un `else` y en
+// la espina de un bucle; idéntico en VM, intérprete y nativo.
+fn code_of(code: int) -> int {
+    let c = match (char_from_code(code)) {
+        Option.Some(ch) => ch,
+        Option.None => return 0 - 1,
+    };
+    char_code(c)
+}
+
+fn first_even(xs: [int]) -> int {
+    var i = 0;
+    while (i < xs.len()) {
+        let x = xs[i];
+        let half = if (x % 2 == 0) { x / 2 } else {
+            i = i + 1;
+            continue;
+        };
+        return half;
+    }
+    0 - 1
+}
+
+fn bail(flag: bool) -> int {
+    let v = if (flag) { 10 } else {
+        return 99;
+    };
+    v + 1
+}
+
+fn main() -> int {
+    print(code_of(65));
+    print(code_of(0 - 5));
+    print(first_even([3, 5, 8, 9]));
+    print(bail(true));
+    print(bail(false));
+    0
+}

@@ -768,6 +768,10 @@ match (evento) {
 }
 ```
 
+Un brazo puede **salir de la función** con `return` como expresión (M220): `Option.None =>
+return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así que no fija el tipo del
+`match` (lo fija el otro brazo). Lo mismo en un `else` (`let v = if (ok) { x } else { return 99 };`).
+
 Y azúcar `if let` para un solo caso:
 
 ```rust

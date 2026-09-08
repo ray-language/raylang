@@ -177,6 +177,9 @@ struct Cur {
     parens: std::collections::HashSet<(usize, usize)>,
     /// `if let` del usuario (M201, `Program::if_let_sites`): el `match` desazucarado se reemite como `if let`.
     if_lets: std::collections::HashSet<(usize, usize)>,
+    /// `return e` en posición de expresión (M220, `Program::return_expr_sites`): el bloque
+    /// `{ return e; }` desazucarado se reemite como `return e`.
+    return_exprs: std::collections::HashSet<(usize, usize)>,
     /// Fin `(línea, col)` de cada expresión por su inicio (`Program::expr_spans`): para saber en qué
     /// LÍNEA termina un operando o un elemento y re-pegarle su comentario trailing (M189).
     spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
@@ -216,6 +219,7 @@ impl Cur {
             pipe: program.pipe_sites.clone(),
             parens: program.paren_sites.clone(),
             if_lets: program.if_let_sites.clone(),
+            return_exprs: program.return_expr_sites.clone(),
             spans: program.expr_spans.clone(),
             base: 0,
             wrap: false,
@@ -985,6 +989,20 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
     }
 }
 
+/// M220: `return [e]` en posición de expresión — el parser lo dejó como bloque `{ return e; }` y
+/// anotó el sitio; se reemite como `return e` (no como bloque).
+fn fmt_return_expr(cur: &mut Cur, e: &Expr) -> Option<String> {
+    let ExprKind::Block(b) = &e.kind else { return None };
+    if !cur.return_exprs.contains(&(e.line, e.col)) || b.statements.len() != 1 || b.tail.is_some() {
+        return None;
+    }
+    let StmtKind::Return { value } = &b.statements[0].kind else { return None };
+    Some(match value {
+        Some(v) => format!("return {}", fmt_expr(cur, v, 0)),
+        None => "return".to_string(),
+    })
+}
+
 fn is_block_form(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Match { .. } | ExprKind::Block(_))
 }
@@ -1521,6 +1539,9 @@ fn unary_op_str(op: UnaryOp) -> &'static str {
 }
 
 fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
+    if let Some(s) = fmt_return_expr(cur, e) {
+        return s;
+    }
     match &e.kind {
         // M118: reimprimir el literal en la base en que se escribió (0xFF/0o755/0b1010), no
         // canonizar a decimal — la base carga intención (máscaras de bits, permisos octales).
@@ -1621,6 +1642,9 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
 }
 
 fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
+    if let Some(s) = fmt_return_expr(cur, e) {
+        return s; // M220: `return e` en posición de expresión, no un bloque
+    }
     match &e.kind {
         ExprKind::If { cond, then_branch, else_branch } => {
             // M189: si la sentencia no cabe (pasada de envuelto), la cadena `if … { a } else if … { b }
@@ -1964,6 +1988,17 @@ mod tests {
         // Anidado: `scope(fn() { spawn(fn() { … }) })`.
         let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
         assert_eq!(fmt(nested), nested, "función anónima anidada, idempotente: {:?}", fmt(nested));
+    }
+
+    /// M220: `return e` en posición de expresión se conserva (no se reescribe como bloque), y como
+    /// cola de un bloque queda canónico con `;`.
+    #[test]
+    fn keeps_return_as_an_expression() {
+        let src = "fn f(o: Option<int>) -> int {\n    let v = match (o) {\n        Option.Some(x) => x,\n        Option.None => return 0 - 1,\n    };\n    v\n}\n\nfn g(b: bool) -> int {\n    let s = if (b) { 1 } else { return 99 };\n    s\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("        Option.None => return 0 - 1,\n"), "{out}");
+        assert!(out.contains("else { return 99; }") || out.contains("else {\n        return 99;\n    }"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     /// M201 (feedback 22 de ray-remote): `if let` se conserva — con `else`, con `else if` encadenado,

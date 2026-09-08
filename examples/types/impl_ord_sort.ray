@@ -1,0 +1,55 @@
+// M212 (ray-sublime #27): `impl Ord` de usuario + `sort` — idéntico en VM, intérprete y nativo.
+// Antes compilaba en la VM y el binario nativo fallaba con `E0277: Range: Ord is not satisfied`.
+struct Range {
+    lo: int,
+    hi: int,
+}
+
+impl Ord for Range {
+    fn less(self, other: Range) -> bool { self.lo < other.lo }
+}
+
+enum Level {
+    Low,
+    Mid,
+    High,
+}
+
+fn rank(l: Level) -> int {
+    match (l) {
+        Level.Low => 0,
+        Level.Mid => 1,
+        Level.High => 2,
+    }
+}
+
+impl Ord for Level {
+    fn less(self, other: Level) -> bool { rank(self) < rank(other) }
+}
+
+fn main() -> int {
+    // Estable: los dos rangos con lo=1 conservan su orden relativo (hi 9 antes que hi 2).
+    let rs = [
+        Range { lo: 5, hi: 6 },
+        Range { lo: 1, hi: 9 },
+        Range { lo: 3, hi: 4 },
+        Range { lo: 1, hi: 2 }
+    ];
+    let sorted = sort(rs);
+    var i = 0;
+    while (i < sorted.len()) {
+        print("${sorted[i].lo}-${sorted[i].hi}");
+        i = i + 1;
+    }
+    print(rs[0].lo);  // sort copia: el original no cambia
+    let ls = [Level.High, Level.Low, Level.Mid];
+    let levels = sort(ls);
+    var j = 0;
+    while (j < levels.len()) {
+        print(rank(levels[j]));
+        j = j + 1;
+    }
+    print(Range { lo: 1, hi: 0 }.less(Range { lo: 2, hi: 0 }));
+    print(Level.High.less(Level.Low));
+    0
+}

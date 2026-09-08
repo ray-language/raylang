@@ -205,7 +205,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `iter` | `(xs: [T]) -> Iter<T>` | iterador perezoso sobre un arreglo |
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | suma un iterador (vía UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **terminales de iterador** (no son el mínimo de dos valores: eso es `math.min`) |
-| `sort` | `(xs: [T: Ord]) -> [T]` | ordena un arreglo (copia ordenada) |
+| `sort` | `(xs: [T: Ord]) -> [T]` | ordena un arreglo (copia ordenada, estable); `T` primitivo o de usuario con `impl Ord` — también en nativo (M212) |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | aserciones del runner de tests; fallan con `panic` |
 
 ## 6. Métodos por tipo de receptor

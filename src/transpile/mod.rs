@@ -372,6 +372,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     t.tparams.clear();
     // impls de Display (= el Show de raylang): struct `Name { f: v, … }`, enum `Name.Variant(payload)`.
     t.emit_rayshow_impls(&mut out, prog)?;
+    // M212 (ray-sublime #27): un tipo de usuario con `impl Ord` obtiene los impls de Rust
+    // (PartialEq/Eq/PartialOrd/Ord) delegando en su `less` — sin ellos `sort([Range])` compilaba
+    // en la VM y el nativo fallaba con E0277.
+    t.emit_ord_impls(&mut out, prog);
     // Constantes de nivel superior → funciones `fn NAME() -> T { <literal> }`.
     for c in &prog.consts {
         // `std::math::PI`/`E` se emiten como constantes de `std::f64::consts` en el sitio de uso.

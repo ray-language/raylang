@@ -138,6 +138,7 @@ fn enforce_queue_cap(q: &mut VecDeque<Event>) {
 }
 
 fn push_event(kind: &str, window: i64, tag: &str) {
+    EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ev = events();
     {
         let mut q = ev.queue.lock().unwrap();
@@ -207,6 +208,49 @@ pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
             }
         }
     }
+}
+
+/// M217 (ray-sublime #9): en headless, `RAY_UI_EXIT_AFTER_MS=N` termina el proceso (salida 0)
+/// cuando pasan N ms sin que se haya encolado ningún evento y la cola está vacía — el event loop
+/// de una app de std/ui no acaba nunca por sí solo y en CI había que matarlo desde fuera
+/// (`perl -e 'alarm N'`). Es un hilo vigilante independiente del motor (la VM aparca la fibra en
+/// el fd de eventos, no en `next_event_blocking`), arrancado una vez en la primera ventana.
+fn start_headless_exit_watchdog() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Some(after) = headless_exit_after() else { return };
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        let seen = EVENT_SEQ.load(std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(after);
+        let quiet = EVENT_SEQ.load(std::sync::atomic::Ordering::SeqCst) == seen
+            && events().queue.lock().unwrap().is_empty();
+        if quiet {
+            if ui_trace() {
+                eprintln!("[ui] exit: no event for {} ms (RAY_UI_EXIT_AFTER_MS)", after.as_millis());
+            }
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            std::process::exit(0);
+        }
+    });
+}
+
+/// M217: cuenta de eventos encolados (para el vigilante de salida del headless).
+static EVENT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// M217: `RAY_UI_TRACE=1` — trazas del backend headless en stderr.
+fn ui_trace() -> bool {
+    std::env::var_os("RAY_UI_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// M217: `RAY_UI_EXIT_AFTER_MS=N` (solo headless) — tras N ms sin eventos, el proceso termina.
+fn headless_exit_after() -> Option<std::time::Duration> {
+    if !headless() {
+        return None;
+    }
+    std::env::var("RAY_UI_EXIT_AFTER_MS").ok()?.parse::<u64>().ok().map(std::time::Duration::from_millis)
 }
 
 // Lee hasta `max` octetos del pipe (no-bloqueante) y los descarta.
@@ -497,6 +541,10 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     }
     notify_dev_windowed();
     if headless() {
+        start_headless_exit_watchdog();
+        if ui_trace() {
+            eprintln!("[ui] open {id} {title} {url}");
+        }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
         // M152: el inyector de MENSAJES para pruebas (precedente RAY_UI_PICK): con la
         // variable seteada y no vacía, cada ventana headless "recibe" ese window.ray.send
@@ -557,7 +605,14 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(w) => match &w.win {
-            Win::Headless => Ok(()),
+            Win::Headless => {
+                // M217 (ray-sublime #8): con RAY_UI_TRACE=1, cada eval_js (y por tanto cada
+                // `ui.reply`) queda en stderr — un test de CI puede afirmar QUÉ contestó la app.
+                if ui_trace() {
+                    eprintln!("[ui] eval {id} {js}");
+                }
+                Ok(())
+            }
             #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
             Win::Shell => {
                 drop(map);

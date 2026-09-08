@@ -258,7 +258,9 @@ ray serve [dir]             # static file server for previews (127.0.0.1:8000; -
 ```
 
 Always run what you write: the checker's messages are positioned and specific — treat
-them as the feedback loop, not as failure.
+them as the feedback loop, not as failure. Format (`ray fmt`) at the END of a task, never
+between text-replacement patches: the canonical rewrite (collapsed calls, split signatures)
+removes the next patch's anchor silently — verify with grep that each patch landed.
 
 Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 `[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,

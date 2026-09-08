@@ -73,6 +73,20 @@ fn ufcs_reaches_the_module_that_declares_the_receiver_type() {
     assert_eq!(out.trim(), "local", "{out}");
 }
 
+/// M217 (ray-sublime #24): dentro de un módulo, `get(m, k)` resuelve a la `get` propia del módulo
+/// (M196); el error de tipos del argumento dice que tapa al builtin/prelude y señala `builtin.get`.
+#[test]
+fn a_module_function_that_shadows_a_builtin_is_named_in_the_error() {
+    let settings = "pub struct Settings { m: Map<string, int> }\npub fn get(s: Settings, key: string) -> Option<int> {\n    get(s.m, key)\n}\n";
+    let main = "import settings;\nfn main() -> int { 0 }\n";
+    let (_out, code) = run_modules("ray_shadow_hint", "main", &[("settings", settings), ("main", main)], true);
+    assert_eq!(code, 65);
+    let entry = std::env::temp_dir().join("ray_shadow_hint").join("main.ray");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg(&entry).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("argument 1 of 'settings::get'") && err.contains("shadows the builtin here; call builtin.get("), "{err}");
+}
+
 #[test]
 fn qualified_const_from_module() {
     // M49.1c: un `pub const` de un módulo se accede CALIFICADO (`M.CONST`), en ambos motores.

@@ -78,4 +78,13 @@ Jul 2026).
 `std/*` modules: `ray_doc("json.parse")`, `ray_doc("regex.find_all")` — or the bare name, which is
 searched in every module.
 
-<!-- sync: sha256:89638b808b17 -->
+## Agent workflow: format at the end
+
+`ray fmt` is canonical and **rewrites** what is not: it collapses a multi-line call that fits in 100
+columns, splits a long signature, moves a comment to its operand. An agent that applies changes by
+text replacement and formats **between** patches leaves the next patch without its anchor — and the
+failure is silent: it compiles, the tests pass and the change is not there (ray-sublime, entry 31).
+Rule: format at the end of the task, never between patches, and verify with `grep` that every patch
+landed.
+
+<!-- sync: sha256:e8fb8f57c968 -->

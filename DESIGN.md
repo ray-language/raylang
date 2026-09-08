@@ -12694,3 +12694,24 @@ ejecuciones en paralelo —el caso de una suite de tests— no colisionan, y dos
 tampoco. Los tres van por el opcode etiquetado `FsTagged`/`FsOp` (M67), con `TempDir` como el
 primer `FsOp` de aridad cero; el nativo emite `std::fs::remove_dir_all`, `std::env::temp_dir` y
 un helper con el mismo esquema de nombre, así que la ruta que devuelve un motor la entiende otro.
+
+## 208. M217 — el lote de herramientas y mensajes de `ray-sublime` (sep 2026)
+
+Plan de `ray-sublime`, lote I: nueve entradas pequeñas con la misma lógica que M205 —donde el
+usuario tropezó, la herramienta debe decir por qué o hacer lo obvio—. `ray check` es alias de
+`ray build` (la costumbre de otros lenguajes), y un primer argumento que no es flag, ni archivo
+existente, ni `.ray` es "unknown subcommand" en vez de "could not read module 'check'". `ray doc`
+acepta lo que no es un archivo como símbolo y responde exactamente lo que `ray_doc` del MCP
+(`std/ui` lista, `ui.MenuItem` da campos y doc): una sola resolución, dos puertas. El backend
+headless de `std/ui` gana `RAY_UI_TRACE=1` (cada `open`/`eval_js`/`reply` en stderr, para que un
+test afirme QUÉ contestó la app sin que cada app invente su log) y `RAY_UI_EXIT_AFTER_MS=N`, un
+hilo vigilante que termina el proceso con 0 tras N ms sin eventos encolados: vigilante y no
+plazo en `next_event_blocking`, porque la VM aparca la fibra en el fd de eventos y nunca pasa por
+ahí. `RAYLANG_MAX_DEPTH=N` fija la profundidad de recursión (VM e intérprete, mismo mensaje con el
+límite vigente). Dos mensajes: `fn u32(…)` dice que `u32` es un tipo primitivo (Rust solo: el
+lexer auto-alojado no tiene el token), y "argument 1 of 'settings::get'…" añade que la `get` del
+módulo tapa al builtin y que `builtin.get(…)` es la salida (también para funciones del prelude,
+que `builtin.` alcanza igual). Y la documentación: el coste de `s[i]` junto a la regla `chars()`
+una vez / `bytes` en O(1) (mientras H1 no cambie la representación), qué quita `trim`, las formas
+canónicas de `ray fmt` que sorprenden, y "formatear al final, nunca entre parches" en
+`docs/mcp.md` y `llms.txt` — la entrada 31 no era un bug del formateador sino del flujo.

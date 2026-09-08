@@ -337,8 +337,9 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
 /// Firma + doc de un builtin (registro único, `src/builtins.rs`) o — *fallback* — de un
 /// envoltorio del **prelude** (`parse_int`, `read_int`, `assert_eq`, `sort`…: funciones
 /// raylang ordinarias, no filas de la tabla; cazado probando el MCP con Claude Code real).
-#[cfg(test)] // producción entra por doc_text_at (call_tool); los tests usan la forma corta
-fn doc_text(symbol: &str) -> String {
+// Producción entra por doc_text_at (call_tool); la forma corta la usan los tests y, desde M217,
+// `ray doc <símbolo>` del CLI.
+pub(crate) fn doc_text(symbol: &str) -> String {
     doc_text_at(symbol, None)
 }
 

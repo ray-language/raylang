@@ -307,3 +307,17 @@ pub fn program_args() -> &'static [String] {
 /// (segfault) en vez de errar; con la pila grande del hilo worker (`lib::with_big_stack`)
 /// este límite se alcanza holgadamente sin reventar.
 pub const MAX_CALL_DEPTH: usize = 1024;
+
+/// M217 (ray-sublime #20): el límite de profundidad de llamadas, configurable con
+/// `RAYLANG_MAX_DEPTH=N` (mínimo 16; por defecto [`MAX_CALL_DEPTH`]). Se lee una vez.
+pub fn max_call_depth() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("RAYLANG_MAX_DEPTH").ok().and_then(|v| v.parse::<usize>().ok()).map(|n| n.max(16)).unwrap_or(MAX_CALL_DEPTH)
+    })
+}
+
+/// M217: el mensaje de desbordamiento, con el límite vigente (idéntico en VM e intérprete).
+pub fn stack_overflow_message() -> String {
+    format!("stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)", max_call_depth())
+}

@@ -77,3 +77,11 @@ correcciones del lado MCP apliquen — un servidor viejo puede exhibir bugs ya c
 `ray_doc` acepta, además de builtins y funciones del prelude, las funciones públicas de los
 módulos `std/*` embebidos: `ray_doc("json.parse")`, `ray_doc("regex.find_all")` — o el nombre
 a secas, que se busca en todos los módulos.
+
+## Flujo con agentes: formatear al final
+
+`ray fmt` es canónico y **reescribe** lo que no lo es: colapsa una llamada de varias líneas que cabe en
+100 columnas, reparte una firma larga, mueve un comentario a su operando. Un agente que aplica cambios
+por reemplazo de texto y formatea **entre** parches deja al siguiente parche sin ancla — y el fallo es
+silencioso: compila, los tests pasan y el cambio no está (ray-sublime, entrada 31). Regla: formatea
+al final de la tarea, nunca entre parches, y verifica con `grep` que cada parche entró.

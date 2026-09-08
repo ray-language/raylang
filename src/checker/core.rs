@@ -2830,6 +2830,21 @@ impl Checker {
         Ok(ty)
     }
 
+    /// M217 (ray-sublime #24): dentro de un módulo, `get(…)` resuelve a la `get` PROPIA del módulo
+    /// (regla M196) aunque el llamador quisiera el builtin o la función del prelude; el error de
+    /// tipos del argumento lo dice y señala la salida (`builtin.get(…)`).
+    fn shadow_hint(&self, label: &str) -> String {
+        let bare = label.trim_matches('\'').rsplit("::").next().unwrap_or("");
+        let shadows = !bare.is_empty()
+            && label.contains("::")
+            && (crate::builtins::is_builtin(bare) || self.functions.contains_key(bare));
+        if shadows {
+            format!(" (the module's own '{bare}' shadows the builtin here; call builtin.{bare}(…) for the builtin)")
+        } else {
+            String::new()
+        }
+    }
+
     /// M206 — paso 5 de §6.3, UFCS **dirigido por el tipo del receptor**: si `recv_ty` es un struct
     /// o enum declarado en un módulo `M` (su nombre global lleva el prefijo `M::`) y `M::name` es
     /// una función **pública** cuyo primer parámetro admite el receptor, esa es la resolución.
@@ -3025,8 +3040,8 @@ impl Checker {
             };
             if at != *expected {
                 return Err(self.err(arg.line, arg.col, format!(
-                    "argument {} of {}: expected {}, got {}",
-                    i + 1, label, expected, at
+                    "argument {} of {}: expected {}, got {}{}",
+                    i + 1, label, expected, at, self.shadow_hint(label)
                 )));
             }
         }
@@ -3069,7 +3084,7 @@ impl Checker {
                 self.check_value_against(arg, param, &sigma)?
             };
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
-                "argument {} of {}: {}", i + 1, label, reason
+                "argument {} of {}: {}{}", i + 1, label, reason, self.shadow_hint(label)
             )))?;
         }
         // M40.3b: los argumentos mandan; si algún parámetro de tipo NO aparece en ellos (p. ej. un

@@ -1625,6 +1625,15 @@ let home = env("HOME");            // Option<string>
 let argv = args();                 // [string]
 ```
 
+### Profundidad de recursión
+
+La VM y el intérprete cortan una recursión demasiado profunda con un error limpio en vez de
+reventar la pila de Rust: `stack overflow (recursion too deep: 1024 frames; RAYLANG_MAX_DEPTH
+raises the limit)`. El límite por defecto es 1024 marcos; `RAYLANG_MAX_DEPTH=N` en el entorno lo
+cambia (mínimo 16). Un compilador que recorre árboles de profundidad arbitraria conviene que lo
+suba a sabiendas —o que convierta la recursión en bucle—; el mensaje dice siempre el límite
+vigente (M217).
+
 ### Procesos del SO (`std/process`)
 
 Ejecuta comandos externos **sin shell**: el `argv` es tipado, así que la inyección clásica no es
@@ -2501,7 +2510,8 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
-ray doc archivo.ray      # documentación Markdown desde ///
+ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui` o `ray doc ui.MenuItem` (M217)
+ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo

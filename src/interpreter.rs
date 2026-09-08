@@ -31,7 +31,7 @@ use crate::ast::*;
 use crate::bytecode::MathFn;
 use crate::runtime::{
     eval_const_literal, make_uint, program_args, Cell, Closure, EnumInstance, MapKey,
-    RuntimeError, StructInstance, Value, MAX_CALL_DEPTH,
+    RuntimeError, StructInstance, Value,
 };
 
 
@@ -211,11 +211,11 @@ impl<'a> Interpreter<'a> {
         // Rust (que acabaría en segfault). La comprobación es ANTES de incrementar,
         // igual que la VM mira `frames.len()` antes de empujar el marco → ambos motores
         // coinciden en la frontera. La posición es la del cuerpo de la función.
-        if self.depth >= MAX_CALL_DEPTH {
+        if self.depth >= crate::runtime::max_call_depth() {
             return Err(runtime_error(
                 body.line,
                 body.col,
-                "stack overflow (recursion too deep)",
+                &crate::runtime::stack_overflow_message(),
             ));
         }
         self.depth += 1;

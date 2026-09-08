@@ -99,7 +99,7 @@ Tres funciones en `std/fs`, con primitivos `__remove_all`, `__temp_dir` y `__mak
 (directorio único por proceso: nada de colisiones entre ejecuciones en paralelo). Windows
 incluido (`%TEMP%`).
 
-## 4. Lote I — herramientas, mensajes y documentación (S, un solo hito)
+## 4. Lote I — herramientas, mensajes y documentación (S, un solo hito) ✅ M217
 
 - **`ray check`** como alias de `ray build` (entrada 10), y un subcomando desconocido dice
   "unknown subcommand 'check'; run `ray help`" en vez de `could not read module 'check'`.

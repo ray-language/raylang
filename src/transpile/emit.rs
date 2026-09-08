@@ -1293,7 +1293,7 @@ impl Transpiler {
                 }
             }
             // Indexación de LECTURA. Tupla: `t.0` → `t.0` (campo nativo). Arreglo: `a[i]` →
-            // `a.borrow()[i].clone()`. String: `s[i]` → char por índice (chars().nth; OOB → panic).
+            // `a.borrow()[i].clone()`. String: `s[i]` → char por índice (`__ray_char_at`, M223; OOB → panic).
             ExprKind::Index { array, index } if matches!(self.type_of(array)?, Type::Tuple(_)) => {
                 self.emit_expr(out, array)?;
                 match &index.kind {
@@ -1304,11 +1304,14 @@ impl Transpiler {
             ExprKind::Index { array, index } => {
                 match self.type_of(array)? {
                     // string: `s[i]` → el carácter en la posición i (por carácter, como la VM).
+                    // M223: vía `__ray_char_at` (caché por cadena: O(1) amortizado, ver runtime.rs);
+                    // fuera de rango → el mismo pánico del `unwrap` de antes.
                     Type::String => {
+                        out.push_str("__ray_char_at(&(");
                         self.emit_expr(out, array)?;
-                        out.push_str(".chars().nth(");
+                        out.push_str("), ");
                         self.emit_expr(out, index)?;
-                        out.push_str(" as usize).unwrap()");
+                        out.push_str(").unwrap()");
                     }
                     // bytes: `b[i]` → el octeto como int (Rc<[u8]>, sin borrow); OOB = pánico (~error de la VM).
                     // Paréntesis: el `as i64` no puede ir seguido de un método (p. ej. `.ray_show()`).

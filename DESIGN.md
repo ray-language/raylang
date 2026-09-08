@@ -12808,3 +12808,22 @@ tipo en todas las ramas, y el mismo que espera cualquier receptor. Las funciones
 conservan la forma desnuda (no hay tipo dyn cerrado sin instanciar); las llamadas directas no
 pasan por aquí. Misma familia que IDEAS §63 y M212: lo que la VM acepta y el nativo rechaza es un
 bug de paridad, y el corpus nativo gana `examples/types/fn_values_branch.ray` para no repetirlo.
+
+## 215. M223 — el nativo indexa strings con la misma caché que la VM (sep 2026)
+
+Al medir 1.11.2 con los benches nuevos (`benchmarks/str_index*.ray`) apareció el hueco: M213 había
+arreglado `s[i]` en la VM (×46) pero `ray build --native` —lo que compila `ray-sublime`— seguía
+emitiendo `chars().nth(i)`, y `len(s)` escaneaba `is_ascii` en cada llamada; el mismo bucle tardaba
+1,3 s en nativo frente a 0,09 s en la VM. H19 lo había diferido ("exige cambiar la representación")
+pero la representación nativa ya era `Rc<str>` desde el principio: lo que faltaba era la caché. El
+runtime generado gana `__ray_char_at`/`__ray_char_len` con el diseño exacto de `vm::str_cache`: una
+entrada por hilo retenida por su `Rc` (identidad por `Rc::ptr_eq`, sin riesgo de reutilización de
+dirección), ASCII-ness, longitud en caracteres y la última pareja (carácter, byte) desde la que se
+avanza o retrocede. El receptor de `s[i]` siempre llega como valor `Rc<str>` (un clon local, un
+literal, el resultado de un `unwrap_or_else` de split fusionado), así que el helper toma `&Rc<str>`
+y el `.clone()` que ya se emitía es el incremento de refcount que da el acierto de caché. Fuera de
+rango conserva el pánico del `unwrap` anterior (no cambia el contrato). No hay `yield` dentro del
+helper: el `RefCell` del hilo nunca queda prestado a través de una fibra. Medido: 1,32 → 0,04 s
+(ASCII 288k) y 0,40 → 0,02 s (UTF-8 descendente 120k); VM y nativo byte-idénticos en el programa de
+cadenas intercaladas que pisa la caché en cada iteración. Lección de método: un cambio de
+rendimiento en la VM se mide también en el nativo antes de publicarlo.

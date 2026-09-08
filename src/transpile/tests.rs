@@ -657,11 +657,23 @@ fn concat_of_bytes_and_arrays() {
 
 #[test]
 fn string_len_counts_characters() {
-    // `len(string)` = nº de CARACTERES (como la VM), no bytes. Fast-path ASCII (H19): `is_ascii()` →
-    // `.len()` (octetos == chars, escaneo SIMD); si no, `.chars().count()` (UTF-8, decodifica).
+    // `len(string)` = nº de CARACTERES (como la VM), no bytes. M223: vía `__ray_char_len`, cuya caché
+    // por cadena paga el escaneo ASCII / `chars().count()` UNA vez por cadena (antes, en cada llamada).
     let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
-    assert!(rust.contains("is_ascii()"), "len de string con fast-path ASCII: {}", rust);
-    assert!(rust.contains(".chars().count() as i64"), "fallback no-ASCII por caracteres: {}", rust);
+    assert!(rust.contains("__ray_char_len(&(s.clone()))"), "len de string por la caché: {}", rust);
+    assert!(rust.contains("let chars = if ascii { s.len() } else { s.chars().count() };"), "helper por caracteres: {}", rust);
+}
+
+/// M223 (ray-sublime #12): `s[i]` va por `__ray_char_at` (caché de una entrada por hilo: ASCII →
+/// byte directo; UTF-8 → desde la última posición hacia delante o atrás). Fuera de rango conserva el
+/// pánico del `unwrap`. Antes era `chars().nth(i)`: cuadrático en un bucle sobre el texto.
+#[test]
+fn string_index_goes_through_the_char_cache() {
+    let rust = transpile_src("fn main() { let s = \"añb\"; print(s[1]); }");
+    assert!(rust.contains("__ray_char_at(&(s.clone()), 1i64).unwrap()"), "s[i] por la caché: {}", rust);
+    assert!(!rust.contains(".chars().nth("), "sin chars().nth: {}", rust);
+    assert!(rust.contains("fn __ray_char_at(s: &Rc<str>, i: i64) -> Option<char>"), "helper: {}", rust);
+    assert!(rust.contains("Rc::ptr_eq(&e.s, s)"), "identidad por Rc: {}", rust);
 }
 
 /// Los extremos de un `for` de rango se emiten ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
@@ -670,7 +682,7 @@ fn string_len_counts_characters() {
 #[test]
 fn parenthesizes_the_bounds_of_a_range_loop() {
     let rust = transpile_src("fn main() { let s = \"abc\"; for i in 0..s.len() { print(s[i]); } }");
-    assert!(rust.contains("for i in (0i64)..({ let __rt_s"), "extremos entre parentesis: {}", rust);
+    assert!(rust.contains("for i in (0i64)..(__ray_char_len(&(s.clone())))"), "extremos entre parentesis: {}", rust);
 }
 
 /// El modo de iteración de un `for … in` lo decide el tipo del CONTENEDOR, no el del elemento:

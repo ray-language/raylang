@@ -33,7 +33,7 @@ recogen en §7 como datos, sin trabajo asociado salvo lo que ya cae en otro lote
 
 ## 2. Lote G — bugs (primero)
 
-### G1. `std/regex`: rechazar lo que no soporta, y que un ICE nunca cuelgue (entradas 1, 2, 3) — M
+### G1. `std/regex`: rechazar lo que no soporta, y que un ICE nunca cuelgue (entradas 1, 2, 3) — M ✅ M211
 
 Hoy `compile("(?=foo)")` y `compile("\\p{Lu}+")` devuelven `Ok` y la primera `search` provoca
 un pánico en el traductor al dialecto del crate; `(a)\\1` y `\\Gab` compilan y devuelven `false`
@@ -44,13 +44,14 @@ en silencio. Dos piezas:
   (`(?=` `(?!` `(?<=` `(?<!`), backreferences (`\\1`…`\\9`, `\\k<n>`), `\\G`, cuantificadores
   posesivos y grupos atómicos, `\\p{…}`/`\\P{…}`, `\\h`, `&&` en clases. Mensaje:
   `"regex: look-around is not supported"`, etc. La REFERENCE lista explícitamente lo excluido.
-- La **traducción** del runtime deja de hacer `panic!` cuando el crate rechaza un patrón
-  validado: devuelve un `RuntimeError` con el patrón, byte-idéntico en VM, intérprete y nativo.
-  Y un pánico en un hilo del scheduler no puede dejar el proceso esperando para siempre: el
-  hilo que muere aborta el proceso con el mensaje (como ya hace el fallo de un `main`).
+- Con el validador delante, la traducción del runtime solo recibe el subconjunto documentado y
+  su `unwrap` vuelve a ser un ICE de verdad (un bug nuestro), no una vía que el usuario pueda
+  disparar. Y un pánico en un hilo del scheduler no puede dejar el proceso esperando para
+  siempre: el hook lo presenta como ICE y termina el proceso con 101, venga del hilo que venga.
 
-Test: los seis patrones, `Err` en `compile` en los tres motores; y un pánico inducido en un
-worker termina el proceso con salida 70, no cuelga.
+Hecho (M211): 18 construcciones rechazadas por nombre, idéntico en VM, intérprete y nativo; un
+pánico inyectado en un worker (`RAYLANG_DEBUG_PANIC_WORKER`) termina con 101 en menos de un
+segundo, no cuelga.
 
 ### G2. `impl Ord` de usuario + `sort` rompe el binario nativo (entrada 27) — M
 

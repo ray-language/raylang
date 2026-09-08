@@ -12573,3 +12573,38 @@ correrse desde cualquier cwd); los flags siguen mandando, para el caso de un ico
 id de prueba. `[android] application_id` conserva su precedencia sobre `[app] id` en el proyecto
 Gradle (es más específico). El test barato —`--help` y tres flags malos— corre sin rustc; la
 estructura del bundle sigue probándose con el test existente cuando hay toolchain.
+
+## 201. M209 — el `Info.plist` admite claves, y la de red local va sola (sep 2026)
+
+Feedback 26 de `ray-remote` (lote F, F2): una app de escritorio que habla con la red local necesita
+`NSLocalNetworkUsageDescription` en su `Info.plist`; sin ella macOS puede denegar en silencio y el
+`connect` falla con "No route to host (os error 65)" mientras el mismo host responde desde la
+terminal — se tarda en relacionar una cosa con la otra. `ray bundle` generaba el plist entero con
+claves fijas, y el rodeo era editarlo con `plutil` y volver a firmar. Dos piezas: `[app.plist]` en
+el ray.toml, volcada tal cual (cadenas escapadas para XML; `true`/`false` como `<true/>`/
+`<false/>`; en orden de declaración, sin validar nombres —el catálogo de claves es de Apple y
+cambia—), y la clave de red local **por defecto** cuando el programa importa `std/net`, `std/udp` o
+el paquete `net`, directa o transitivamente: el bundle ya carga el programa entero, así que la
+lista de módulos está ahí, y una app con `std/ui` y red la va a necesitar casi siempre. Si el
+usuario declara la clave, manda la suya. Solo macOS: Linux y Windows no tienen equivalente.
+
+## 202. M210 — la ventana con opciones (sep 2026)
+
+Feedback 27 de `ray-remote` (lote F, F3): `ui.open(title, url, width, height)` era toda la geometría.
+Sin tamaño mínimo la ventana se reduce hasta que la interfaz deja de tener sentido; sin memoria del
+frame, cada arranque vuelve al centro; sin `resizable`, no hay diálogos fijos. La forma elegida es
+un segundo constructor, `open_with(title, url, WindowOptions)`, con `options(w, h)` para partir de
+los defaults de `open` y retocar campos —raylang no tiene valores por defecto en structs, y una
+firma de nueve parámetros no se lee—; `open` queda intacto. Un solo primitivo nuevo
+(`__ui_open_with`, nueve argumentos planos: los motores no conocen el struct) y `open_window_with`
+en el runtime; `open_window` es el caso simple. Backends: en macOS todo lo da `NSWindow`
+(`setContentMinSize:`, la máscara sin el bit de redimensionado, `center`, y `setFrameAutosaveName:`,
+que restaura el frame guardado al ponerse — por eso va DESPUÉS del centrado: el frame recordado
+gana); en GTK `gtk_window_set_resizable`, `gtk_widget_set_size_request` y `gtk_window_set_position`
+(cargados por dlsym como opcionales, por simetría con el puente); en Win32 el estilo sin
+`WS_THICKFRAME`/`WS_MAXIMIZEBOX`, `WM_GETMINMAXINFO` con el mínimo del área cliente más el marco
+medido al crear, y el centrado calculado con `GetSystemMetrics`. La memoria del frame solo existe
+donde el sistema la da (macOS); no se inventa una persistencia propia en Linux/Windows —es fácil
+de hacer mal y la app puede resolverlo en dos líneas si lo necesita—, y la referencia lo dice. Un
+mínimo mayor que la ventana es `Err`, como un tamaño fuera de rango. Con esto queda cerrado el
+lote F.

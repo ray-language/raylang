@@ -460,9 +460,40 @@ fn notify_dev_windowed() {
 
 /// Abre una ventana con el webview del sistema cargando `url`, registrada con el `id` DEL
 /// LLAMADOR (su handle): los eventos la nombran con ese id. `close(h)` → [`close_window`].
+/// M210 (feedback 27 de ray-remote): la geometría de una ventana más allá de ancho × alto.
+/// `min_width`/`min_height` (0 = sin mínimo), `resizable`, `center` (posición inicial centrada) y
+/// `autosave` (nombre bajo el que el SISTEMA recuerda tamaño y posición entre arranques —
+/// `frameAutosaveName` de NSWindow; vacío = no recordar; Linux/Windows no lo ofrecen y lo ignoran).
+#[derive(Debug, Clone)]
+pub struct WindowOptions {
+    pub width: i64,
+    pub height: i64,
+    pub min_width: i64,
+    pub min_height: i64,
+    pub resizable: bool,
+    pub center: bool,
+    pub autosave: String,
+}
+
+impl WindowOptions {
+    /// Las opciones de `ui.open`: solo tamaño, redimensionable y centrada, sin mínimo ni memoria.
+    pub fn simple(width: i64, height: i64) -> Self {
+        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new() }
+    }
+}
+
 pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<(), String> {
+    open_window_with(id, title, url, &WindowOptions::simple(width, height))
+}
+
+/// Abre una ventana con [`WindowOptions`] (M210). `open_window` es el caso simple.
+pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<(), String> {
+    let (width, height) = (opts.width, opts.height);
     if !(1..=16384).contains(&width) || !(1..=16384).contains(&height) {
         return Err(format!("ui: unsupported window size {width}x{height}"));
+    }
+    if opts.min_width < 0 || opts.min_height < 0 || opts.min_width > width || opts.min_height > height {
+        return Err(format!("ui: unsupported minimum size {}x{} for a {width}x{height} window", opts.min_width, opts.min_height));
     }
     notify_dev_windowed();
     if headless() {
@@ -493,27 +524,27 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
     #[cfg(target_os = "macos")]
     {
         ensure_app()?;
-        let mw = mac::open_window(title, url, width, height)?;
+        let mw = mac::open_window(title, url, opts.clone())?;
         windows().lock().unwrap().insert(id, WinState { win: mw, closed: false });
         Ok(())
     }
     #[cfg(target_os = "linux")]
     {
         ensure_app()?;
-        let gw = gtk::open_window(id, title, url, width, height)?;
+        let gw = gtk::open_window(id, title, url, opts.clone())?;
         windows().lock().unwrap().insert(id, WinState { win: gw, closed: false });
         Ok(())
     }
     #[cfg(windows)]
     {
         ensure_app()?;
-        let ww = win::open_window(id, title, url, width, height)?;
+        let ww = win::open_window(id, title, url, opts.clone())?;
         windows().lock().unwrap().insert(id, WinState { win: ww, closed: false });
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
-        let _ = (title, url);
+        let _ = (title, url, opts);
         Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
@@ -835,6 +866,14 @@ mod mac {
     type MsgIdId = unsafe extern "C" fn(Id, Sel, Id) -> Id;
     type MsgIdIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
     type MsgInitWindow = unsafe extern "C" fn(Id, Sel, CGRect, u64, u64, u8) -> Id;
+    /// M210: `setContentMinSize:` recibe un NSSize (dos f64, misma forma que CGSize).
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGSize {
+        w: f64,
+        h: f64,
+    }
+    type MsgVoidSize = unsafe extern "C" fn(Id, Sel, CGSize);
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
     // M148 (menús + diálogos):
     type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
@@ -1419,12 +1458,16 @@ mod mac {
     }
 
     /// Crea la ventana + webview EN EL HILO PRINCIPAL y devuelve sus punteros retenidos.
-    pub(super) fn open_window(title: &str, url: &str, width: i64, height: i64) -> Result<Win, String> {
+    pub(super) fn open_window(title: &str, url: &str, opts: super::WindowOptions) -> Result<Win, String> {
         let title = title.to_string();
         let url = url.to_string();
+        let (width, height) = (opts.width, opts.height);
         on_main_sync(move || {
-            const STYLE_TITLED_CLOSABLE_MINIATURIZABLE_RESIZABLE: u64 = 1 | 2 | 4 | 8;
+            const STYLE_TITLED_CLOSABLE_MINIATURIZABLE: u64 = 1 | 2 | 4;
+            const STYLE_RESIZABLE: u64 = 8;
             const BACKING_BUFFERED: u64 = 2;
+            // M210: sin `resizable`, la máscara no lleva el bit de redimensionado (ni el botón verde).
+            let style = if opts.resizable { STYLE_TITLED_CLOSABLE_MINIATURIZABLE | STYLE_RESIZABLE } else { STYLE_TITLED_CLOSABLE_MINIATURIZABLE };
             let rect = CGRect { x: 0.0, y: 0.0, w: width as f64, h: height as f64 };
             unsafe {
                 let alloc: MsgId = std::mem::transmute(msg_send());
@@ -1439,7 +1482,7 @@ mod mac {
                     alloc(cls(b"NSWindow\0"), sel(b"alloc\0")),
                     sel(b"initWithContentRect:styleMask:backing:defer:\0"),
                     rect,
-                    STYLE_TITLED_CLOSABLE_MINIATURIZABLE_RESIZABLE,
+                    style,
                     BACKING_BUFFERED,
                     0,
                 );
@@ -1518,7 +1561,20 @@ mod mac {
                 // cambio, sí lo retiene fuerte hasta el desregistro del close).
                 set_id(window, sel(b"setDelegate:\0"), delegate);
 
-                plain(window, sel(b"center\0"));
+                // M210: tamaño mínimo del área de contenido, centrado opcional y, si hay nombre de
+                // autosave, el SISTEMA restaura aquí el frame guardado (y lo guarda al mover/cerrar)
+                // — va DESPUÉS del center para que el frame recordado gane al centrado.
+                if opts.min_width > 0 || opts.min_height > 0 {
+                    let set_size: MsgVoidSize = std::mem::transmute(msg_send());
+                    set_size(window, sel(b"setContentMinSize:\0"), CGSize { w: opts.min_width as f64, h: opts.min_height as f64 });
+                }
+                if opts.center {
+                    plain(window, sel(b"center\0"));
+                }
+                if !opts.autosave.is_empty() {
+                    let set_name: MsgBoolId = std::mem::transmute(msg_send());
+                    set_name(window, sel(b"setFrameAutosaveName:\0"), nsstring(&opts.autosave));
+                }
                 set_id(window, sel(b"makeKeyAndOrderFront:\0"), std::ptr::null_mut());
                 // Un binario sin bundle abre DETRÁS de las demás apps si no se activa.
                 let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
@@ -1628,6 +1684,10 @@ mod gtk {
     // M152 — user content manager + lectura del payload (JSC). user_script_new:
     // (source, injected_frames, injection_time, allow_list, block_list).
     type FnUcmNew = unsafe extern "C" fn() -> Widget;
+    /// M210: opciones de ventana (todas presentes en GTK3; se cargan como opcionales por simetría).
+    type FnSetResizable = unsafe extern "C" fn(Widget, i32);
+    type FnSetSizeRequest = unsafe extern "C" fn(Widget, i32, i32);
+    type FnSetPosition = unsafe extern "C" fn(Widget, i32);
     type FnWebViewNewWithUcm = unsafe extern "C" fn(Widget) -> Widget;
     type FnUcmRegister = unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> i32;
     type FnUserScriptNew = unsafe extern "C" fn(
@@ -1713,6 +1773,9 @@ mod gtk {
         // no romper ui.open en distros viejas por una feature nueva; webkit2gtk ≥2.22 los trae).
         signal_connect3: FnSignalConnect3,
         ucm_new: Option<FnUcmNew>,
+        set_resizable: Option<FnSetResizable>,
+        set_size_request: Option<FnSetSizeRequest>,
+        set_position: Option<FnSetPosition>,
         webview_new_with_ucm: Option<FnWebViewNewWithUcm>,
         ucm_register: Option<FnUcmRegister>,
         user_script_new: Option<FnUserScriptNew>,
@@ -1841,6 +1904,18 @@ mod gtk {
                 ucm_new: {
                     let p = dlsym(webkit, c"webkit_user_content_manager_new".as_ptr());
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUcmNew>(p))
+                },
+                set_resizable: {
+                    let p = dlsym(gtk, c"gtk_window_set_resizable".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetResizable>(p))
+                },
+                set_size_request: {
+                    let p = dlsym(gtk, c"gtk_widget_set_size_request".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetSizeRequest>(p))
+                },
+                set_position: {
+                    let p = dlsym(gtk, c"gtk_window_set_position".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetPosition>(p))
                 },
                 webview_new_with_ucm: {
                     let p = dlsym(webkit, c"webkit_web_view_new_with_user_content_manager".as_ptr());
@@ -2156,11 +2231,11 @@ mod gtk {
         id: i64,
         title: &str,
         url: &str,
-        width: i64,
-        height: i64,
+        opts: super::WindowOptions,
     ) -> Result<Win, String> {
         let title = std::ffi::CString::new(title.replace('\0', "")).unwrap();
         let url = std::ffi::CString::new(url.replace('\0', "")).unwrap();
+        let (width, height) = (opts.width, opts.height);
         let alive = Arc::new(AtomicBool::new(true));
         let alive2 = alive.clone();
         let (window, webview) = on_main_sync(move || {
@@ -2172,6 +2247,16 @@ mod gtk {
                 }
                 (api.set_title)(window, title.as_ptr());
                 (api.set_default_size)(window, width as i32, height as i32);
+                // M210: opciones de ventana. GTK no recuerda el frame por sí solo (`autosave` se ignora).
+                if !opts.resizable && let Some(f) = api.set_resizable {
+                    f(window, 0);
+                }
+                if (opts.min_width > 0 || opts.min_height > 0) && let Some(f) = api.set_size_request {
+                    f(window, opts.min_width as i32, opts.min_height as i32);
+                }
+                if opts.center && let Some(f) = api.set_position {
+                    f(window, 1); // GTK_WIN_POS_CENTER
+                }
                 // M152 — puente IPC: webview con user content manager (handler "ray" + el
                 // shim window.ray.send inyectado en el MAIN frame al arrancar el documento).
                 // Con CUALQUIER símbolo del puente ausente (webkit2gtk < 2.22): webview
@@ -2785,6 +2870,9 @@ mod win {
         /// M183: atajos (código VK, con Shift, tag) — los atiende `AcceleratorKeyPressed` del
         /// webview, porque el teclado del webview NO llega a la ventana anfitriona.
         accels: Vec<(u16, bool, String)>,
+        /// M210: tamaño mínimo de la VENTANA (área cliente mínima + marco), para WM_GETMINMAXINFO;
+        /// (0, 0) = sin mínimo.
+        min_track: (i32, i32),
     }
 
     unsafe extern "system" fn dispatcher_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -2802,6 +2890,21 @@ mod win {
         // SAFETY: GWLP_USERDATA es el Box<WinCtx> que puso `open_window` (o 0 antes de eso).
         let ctx_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WinCtx;
         match msg {
+            // M210: tamaño mínimo — el SO consulta aquí antes de cada redimensionado.
+            WM_GETMINMAXINFO => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: el ctx vive mientras la ventana; lparam es el MINMAXINFO del SO.
+                    let ctx = unsafe { &*ctx_ptr };
+                    if ctx.min_track != (0, 0) {
+                        let mmi = lparam.0 as *mut MINMAXINFO;
+                        unsafe {
+                            (*mmi).ptMinTrackSize.x = ctx.min_track.0;
+                            (*mmi).ptMinTrackSize.y = ctx.min_track.1;
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
             WM_SIZE => {
                 if !ctx_ptr.is_null() {
                     // SAFETY: el ctx vive mientras la ventana (se libera en WM_DESTROY, en este hilo).
@@ -3215,9 +3318,10 @@ mod win {
         Ok((controller, webview))
     }
 
-    pub(super) fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<Win, String> {
+    pub(super) fn open_window(id: i64, title: &str, url: &str, opts: super::WindowOptions) -> Result<Win, String> {
         let title = title.to_string();
         let url = url.to_string();
+        let (width, height) = (opts.width, opts.height);
         let alive = Arc::new(AtomicBool::new(true));
         let alive2 = alive.clone();
         let hwnd = on_main_sync(move || {
@@ -3226,18 +3330,38 @@ mod win {
                 let instance = GetModuleHandleW(None).map_err(|e| format!("ui: GetModuleHandle: {e}"))?;
                 // El tamaño pedido es el ÁREA CLIENTE: se ajusta el marco.
                 let mut rc = RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 };
-                let style = WS_OVERLAPPEDWINDOW;
+                // M210: sin `resizable`, ni borde grueso ni botón de maximizar.
+                let style = if opts.resizable {
+                    WS_OVERLAPPEDWINDOW
+                } else {
+                    WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0))
+                };
                 let has_menu = !menu_specs().lock().unwrap().is_empty();
                 let _ = AdjustWindowRectEx(&mut rc, style, has_menu, WINDOW_EX_STYLE::default());
+                let (win_w, win_h) = (rc.right - rc.left, rc.bottom - rc.top);
+                // M210: mínimo de la ventana = mínimo del área cliente + el marco que acabamos de medir.
+                let min_track = if opts.min_width > 0 || opts.min_height > 0 {
+                    (opts.min_width as i32 + (win_w - width as i32), opts.min_height as i32 + (win_h - height as i32))
+                } else {
+                    (0, 0)
+                };
+                // M210: centrada en la pantalla principal si se pide; Windows no recuerda el frame solo.
+                let (x, y) = if opts.center {
+                    let sw = GetSystemMetrics(SM_CXSCREEN);
+                    let sh = GetSystemMetrics(SM_CYSCREEN);
+                    (((sw - win_w) / 2).max(0), ((sh - win_h) / 2).max(0))
+                } else {
+                    (CW_USEDEFAULT, CW_USEDEFAULT)
+                };
                 let hwnd = CreateWindowExW(
                     WINDOW_EX_STYLE::default(),
                     windows::core::w!("RayUiWindow"),
                     PCWSTR(wide(&title).as_ptr()),
                     style,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
-                    rc.right - rc.left,
-                    rc.bottom - rc.top,
+                    x,
+                    y,
+                    win_w,
+                    win_h,
                     None,
                     None,
                     Some(instance.into()),
@@ -3245,7 +3369,7 @@ mod win {
                 )
                 .map_err(|e| format!("ui: could not create the window: {e}"))?;
                 let (menu_tags, accels) = build_menubar(hwnd);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {

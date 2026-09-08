@@ -18,6 +18,13 @@
 use std::path::{Path, PathBuf};
 
 /// El manifiesto parseado de un proyecto.
+/// Un valor de `[app.plist]` (M209): cadena o booleano.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlistValue {
+    Str(String),
+    Bool(bool),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     pub name: String,
@@ -68,6 +75,11 @@ pub struct Manifest {
     pub app_name: Option<String>,
     pub app_icon: Option<String>,
     pub app_id: Option<String>,
+    /// M209 (feedback 26 de ray-remote): `[app.plist]` — claves extra que `ray bundle` vuelca tal
+    /// cual al `Info.plist` del `.app` (macOS), en orden de declaración. `"texto"` → `<string>`,
+    /// `true`/`false` sin comillas → `<true/>`/`<false/>`. Sin ella, `ray bundle` no daba forma de
+    /// declarar `NSLocalNetworkUsageDescription` y el rodeo era `plutil` + `codesign`.
+    pub app_plist: Vec<(String, PlistValue)>,
     /// M155: `[app] description` — la descripción corta de la app (hoy la usa `ui.set_about`
     /// como referencia documental; el panel la recibe por código). `None` = sin descripción.
     pub app_description: Option<String>,
@@ -130,6 +142,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_name = None;
     let mut app_icon = None;
     let mut app_id = None;
+    let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
     let mut android_application_id = None;
     let mut app_description = None;
 
@@ -226,6 +239,15 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                     ios_development_team = Some(as_string()?);
                 }
             }
+            // M209: `[app.plist]` — cada clave va al Info.plist tal cual (cadena o bool).
+            "app.plist" => {
+                let value = match value_raw {
+                    "true" => PlistValue::Bool(true),
+                    "false" => PlistValue::Bool(false),
+                    _ => PlistValue::Str(as_string()?),
+                };
+                app_plist.push((key.to_string(), value));
+            }
             "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -250,6 +272,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_name,
         app_icon,
         app_id,
+        app_plist,
         app_description,
     })
 }
@@ -381,6 +404,19 @@ mod tests {
         assert_eq!(m.app_icon.as_deref(), Some("assets/icon.png"));
         assert_eq!(m.app_id.as_deref(), Some("org.example.demo"));
         assert!(bare.app_name.is_none() && bare.app_icon.is_none() && bare.app_id.is_none());
+        // M209: [app.plist] — claves extra del Info.plist, cadena o bool, en orden.
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app.plist]\nNSLocalNetworkUsageDescription = \"Talks to devices nearby\"\nLSUIElement = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            m.app_plist,
+            vec![
+                ("NSLocalNetworkUsageDescription".to_string(), PlistValue::Str("Talks to devices nearby".to_string())),
+                ("LSUIElement".to_string(), PlistValue::Bool(true)),
+            ]
+        );
+        assert!(bare.app_plist.is_empty());
     }
 
     #[test]

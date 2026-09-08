@@ -55,6 +55,49 @@ fn app_name_and_id_come_from_the_manifest() {
     }
 }
 
+/// M209: `[app.plist]` va tal cual al Info.plist (cadena y bool) y el permiso de red local se añade
+/// solo cuando el programa importa la red. Solo aplica al `.app` de macOS.
+#[test]
+fn plist_keys_and_local_network_permission() {
+    if !have_rustc() || !cfg!(target_os = "macos") {
+        return;
+    }
+    let base = std::env::temp_dir().join("ray_bundle_cli_plist");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"netapp\"\nversion = \"1.0.0\"\nentry = \"main.ray\"\n\n[app.plist]\nLSUIElement = true\nCFBundleDisplayName = \"Net & Co <beta>\"\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("main.ray"), "import std/net;\nfn main() { print(net.local_port(0)); }\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["bundle", "main.ray", "--without", "mimalloc,ahash,fibers", "-o", "."])
+        .current_dir(&base)
+        .output()
+        .expect("corre");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let plist = std::fs::read_to_string(base.join("netapp.app/Contents/Info.plist")).unwrap();
+    for needle in [
+        "<key>LSUIElement</key><true/>",
+        "<key>CFBundleDisplayName</key><string>Net &amp; Co &lt;beta&gt;</string>",
+        "<key>NSLocalNetworkUsageDescription</key><string>netapp connects to devices on your local network.</string>",
+    ] {
+        assert!(plist.contains(needle), "plist con {needle}:\n{plist}");
+    }
+    // Sin red y sin [app.plist]: ninguna de las dos claves.
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"quiet\"\nversion = \"1.0.0\"\nentry = \"main.ray\"\n").unwrap();
+    std::fs::write(base.join("main.ray"), "fn main() { print(1); }\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["bundle", "main.ray", "--without", "mimalloc,ahash,fibers", "-o", "."])
+        .current_dir(&base)
+        .output()
+        .expect("corre");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let plist = std::fs::read_to_string(base.join("quiet.app/Contents/Info.plist")).unwrap();
+    assert!(!plist.contains("NSLocalNetworkUsageDescription") && !plist.contains("LSUIElement"), "{plist}");
+}
+
 #[test]
 fn bundle_produces_the_platform_structure() {
     if !have_rustc() {

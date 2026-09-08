@@ -37,6 +37,59 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
     }
 }
 
+/// Window geometry beyond width × height (M210). `min_width`/`min_height` (0 = no minimum),
+/// `resizable`, `center` (initial position centered on the main screen) and `autosave`: a name
+/// under which the SYSTEM remembers size and position between launches (NSWindow's
+/// `frameAutosaveName` on macOS; Linux and Windows have no equivalent and ignore it; "" = don't).
+/// Build it with `ui.options(width, height)` and tweak the fields you need.
+pub struct WindowOptions {
+    width: int,
+    height: int,
+    min_width: int,
+    min_height: int,
+    resizable: bool,
+    center: bool,
+    autosave: string,
+}
+
+/// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave.
+pub fn options(width: int, height: int) -> WindowOptions {
+    WindowOptions {
+        width: width,
+        height: height,
+        min_width: 0,
+        min_height: 0,
+        resizable: true,
+        center: true,
+        autosave: ""
+    }
+}
+
+/// Like `open`, with `WindowOptions`: `ui.open_with("App", url, ui.options(1024, 720))` after
+/// setting e.g. `o.min_width = 640; o.autosave = "main";`. Errors on an invalid size or a
+/// minimum larger than the window.
+pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, string> {
+    let r = __ui_open_with(
+        title,
+        url,
+        o.width,
+        o.height,
+        o.min_width,
+        o.min_height,
+        o.resizable,
+        o.center,
+        o.autosave
+    );
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 /// Runs JavaScript in the window's page, fire-and-forget: it does NOT wait for the result (and
 /// before the page finishes loading it may be a no-op). `Err` if the handle is not a window.
 pub fn eval_js(h: int, js: string) -> Result<int, string> {

@@ -1,0 +1,33 @@
+// M215 (ray-sublime #18): `sort_by` (comparador) y `sort_by_key` (clave) — estables, copia nueva.
+struct Person {
+    name: string,
+    age: int,
+}
+
+fn main() -> int {
+    let people = [
+        Person { name: "Ada", age: 36 },
+        Person { name: "Grace", age: 45 },
+        Person { name: "Linus", age: 36 },
+        Person { name: "Bjarne", age: 28 }
+    ];
+    // Por clave: los dos de 36 conservan su orden (Ada antes que Linus).
+    let by_age = sort_by_key(people, fn(p: Person) -> int { p.age });
+    var i = 0;
+    while (i < by_age.len()) {
+        print("${by_age[i].name} ${by_age[i].age}");
+        i = i + 1;
+    }
+    // Por comparador, descendente por nombre.
+    let by_name = people.sort_by(fn(a: Person, b: Person) -> bool { a.name > b.name });
+    var j = 0;
+    while (j < by_name.len()) {
+        print(by_name[j].name);
+        j = j + 1;
+    }
+    // Primitivos: descendente, y por longitud (estable).
+    print([3, 1, 2].sort_by(fn(a: int, b: int) -> bool { a > b }));
+    print(["ccc", "a", "bb", "dd"].sort_by_key(fn(s: string) -> int { s.len() }));
+    print(people[0].name);  // el original no cambia
+    0
+}

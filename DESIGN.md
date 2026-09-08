@@ -12667,3 +12667,16 @@ corta (`builtin_arg_expected`). Espejo selfhost en `check_generic_call`, `check_
 `check_insert` y `check_contains`. H1 (indexación de strings) queda como decisión aparte: la causa
 real es que `HeapValue::Str` es un `String` propio que se clona en cada carga, y la solución es
 `Rc<str>` en la VM (unos 230 sitios), no una caché de posición.
+
+## 206. M215 — `sort_by` y `sort_by_key` (sep 2026)
+
+Plan de `ray-sublime`, H3 (entrada 18): `sort` exige `T: Ord`, y eso solo sirve cuando el tipo es
+tuyo y tiene un único orden natural; en cuanto se quiere ordenar por otra clave —lo habitual al
+presentar datos— o un tipo ajeno, había que escribir la ordenación a mano (y con M212 pendiente,
+`impl Ord` ni siquiera era la salida). Las dos funciones van en el **prelude**, en raylang: el
+mismo merge bottom-up estable de `sort`, con `less(a, b)` como comparador, y `sort_by_key` sobre
+`sort_by` comparando `key(x).less(key(y))` con `K: Ord`. Ni opcode ni intercepción nativa: el
+transpilador las emite como cualquier función genérica del prelude, así que los tres motores
+coinciden por construcción (`examples/stdlib/sort_by.ray` entra en el corpus nativo). El coste de
+`sort_by_key` es `key` dos veces por comparación; una versión con claves precalculadas (Schwartz)
+se hará si alguna app lo mide.

@@ -86,6 +86,64 @@ fn sort<T: Ord>(a: [T]) -> [T] {
     out
 }
 
+// M215 (ray-sublime #18): orden por COMPARADOR y por CLAVE, para el caso general que `sort` (un
+// único orden natural por `Ord`) no cubre: ordenar por otro campo, o un tipo que no es tuyo.
+// Mismo merge estable que `sort`; `less(a, b)` dice si `a` va antes que `b`.
+/// Sorts `a` ascending by the comparator `less(a, b)` ("a goes before b"), returning a NEW array;
+/// stable (equal elements keep their order). `sort_by(xs, fn(a: int, b: int) -> bool { a > b })`
+/// sorts descending.
+fn sort_by<T>(xs: [T], less: fn(T, T) -> bool) -> [T] {
+    var src: [T] = [];
+    var i: int = 0;
+    while (i < xs.len()) {
+        src.push(xs[i]);
+        i = i + 1;
+    }
+    let n = src.len();
+    var width = 1;
+    while (width < n) {
+        var dst: [T] = [];
+        var lo = 0;
+        while (lo < n) {
+            var mid = lo + width;
+            if (mid > n) {
+                mid = n;
+            }
+            var hi = lo + 2 * width;
+            if (hi > n) {
+                hi = n;
+            }
+            var p = lo;
+            var q = mid;
+            while (p < mid || q < hi) {
+                if (p >= mid) {
+                    dst.push(src[q]);
+                    q = q + 1;
+                } else if (q >= hi) {
+                    dst.push(src[p]);
+                    p = p + 1;
+                } else if (less(src[q], src[p])) {
+                    dst.push(src[q]);
+                    q = q + 1;
+                } else {
+                    dst.push(src[p]);
+                    p = p + 1;
+                }
+            }
+            lo = lo + 2 * width;
+        }
+        src = dst;
+        width = width * 2;
+    }
+    src
+}
+
+/// Sorts `a` ascending by the key `key(x)` (`K: Ord` — int, string, float, char, bool, bytes or a
+/// type with `impl Ord`), returning a NEW array; stable. `sort_by_key(people, fn(p: Person) -> int { p.age })`.
+fn sort_by_key<T, K: Ord>(xs: [T], key: fn(T) -> K) -> [T] {
+    sort_by(xs, fn(x: T, y: T) -> bool { key(x).less(key(y)) })
+}
+
 // M14.6d: I/O de archivos. Envoltorios sobre los primitivos `__read_file`/`__write_file` (que devuelven
 // un arreglo etiquetado ["ok",…]/["err",msg]) traducidos a Result — el runtime no sabe de Result, como
 // en Rust (`src/prelude.rs`). `exists` es un builtin directo (-> bool), no necesita envoltorio.

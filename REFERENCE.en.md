@@ -205,6 +205,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | sums an iterator (via UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **iterator terminals** (not the minimum of two values: that is `math.min`) |
 | `sort` | `(xs: [T: Ord]) -> [T]` | sorts an array (sorted copy, stable); `T` primitive or a user type with `impl Ord` — natively too (M212) |
+| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | sort by **comparator** (`less(a, b)` = "a goes first") or by **key** (M215); stable, new copy; also via UFCS `xs.sort_by(…)` |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | test-runner assertions; they fail with `panic` |
 
 ## 6. Methods by receiver type
@@ -590,4 +591,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:3b334feedc9e -->
+<!-- sync: sha256:10c90c7c69cd -->

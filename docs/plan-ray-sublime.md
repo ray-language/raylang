@@ -88,7 +88,7 @@ vista. La inferencia de M204 (brazos de `match`) tiene el mismo espíritu: el pa
 argumento; basta pasarlo como tipo esperado. Espejo selfhost. Test: `push`, `insert` de `Map` y
 una función de usuario `fn f(x: Option<int>)` con `f(Option.None)`.
 
-### H3. `sort_by(xs, cmp)` y `sort_by_key(xs, key)` (entrada 18) — S–M
+### H3. `sort_by(xs, cmp)` y `sort_by_key(xs, key)` (entrada 18) — S–M ✅ M215
 
 En el prelude (merge estable con el comparador, como `sort`), con opcode en la VM y helper
 nativo. Con G2 hecho, el nativo usa el mismo camino. Cierra el caso general de `std/sort`.

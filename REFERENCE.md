@@ -206,6 +206,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | suma un iterador (vía UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **terminales de iterador** (no son el mínimo de dos valores: eso es `math.min`) |
 | `sort` | `(xs: [T: Ord]) -> [T]` | ordena un arreglo (copia ordenada, estable); `T` primitivo o de usuario con `impl Ord` — también en nativo (M212) |
+| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | orden por **comparador** (`less(a, b)` = "a va antes") o por **clave** (M215); estables, copia nueva; también vía UFCS `xs.sort_by(…)` |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | aserciones del runner de tests; fallan con `panic` |
 
 ## 6. Métodos por tipo de receptor

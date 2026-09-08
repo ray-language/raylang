@@ -161,7 +161,7 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
 
 1. **Free global builtins** (no import, called free-form): `print eprint to_string
    panic assert assert_eq args env input parse_int parse_float from_utf8 bytes_of
-   sort get char_code char_from_code try_call` and the concurrency set (`spawn send
+   sort sort_by sort_by_key get char_code char_from_code try_call` and the concurrency set (`spawn send
    recv try_recv join try_join scope select select_timeout close signals`).
 2. **Method builtins** (RECEIVER form ONLY — the free form is `function 'x' not
    declared`): strings `s.len() s.trim() s.split(",") s.chars() s.contains(x)

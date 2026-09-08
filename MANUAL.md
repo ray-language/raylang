@@ -727,9 +727,11 @@ Traits derivables con `@derive` (struct/enum no genéricos):
 ```rust
 from std/json import ToJson;      // ToJson vive en std/json: derivarlo exige tenerlo en ámbito
 
-@derive(Eq, Show, Hash, ToJson)
+@derive(Eq, Show, Hash, ToJson, Clone)
 struct Par { a: int, b: int }
 
+// Clone  → clone(self) -> Self, copia SUPERFICIAL (M221): los campos por valor se copian y los
+//          de referencia (arreglos, mapas, structs) se comparten — lo que hace el literal a mano
 // Eq     → habilita == y assert_eq
 // Show   → habilita print/to_string ("Par { a: 1, b: 2 }")
 // Hash   → habilita usarlo como elemento de Set (o clave de Dict)

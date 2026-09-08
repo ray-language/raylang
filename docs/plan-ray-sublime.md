@@ -155,7 +155,7 @@ funciona). La forma mínima: `return e` como expresión de tipo `never` que unif
 cualquiera, solo en posición de brazo o de `else`. Coste M: parser, checker (divergencia ya
 existe), fmt, selfhost. Opción cero: documentar el rodeo `=> { return code; }`, que ya compila.
 
-### K2. Copia estructural de structs (entrada 14)
+### K2. Copia estructural de structs (entrada 14) ✅ M221 `@derive(Clone)`, copia superficial
 
 Los structs son referencias; copiar es escribir cada campo. Opción: `@derive(Clone)` que genera
 `clone(self) -> Self` con copia superficial (campos por valor; arrays y mapas compartidos, que

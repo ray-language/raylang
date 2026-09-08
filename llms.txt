@@ -72,7 +72,7 @@ fn largest<T: Ord>(a: T, b: T) -> T {            // generics with bounds
 let f = fn(x: int) -> int { x * 2 };             // anonymous fn (closure, captures by ref)
 [1, 2, 3].map(f).filter(fn(x: int) -> bool { x > 2 });
 
-@derive(Eq, Show)                                // also Hash, ToJson — NOT Ord (impl it)
+@derive(Eq, Show)                                // also Hash, ToJson, Clone (shallow copy) — NOT Ord (impl it)
 struct User { id: int, name: string, }
 
 @test

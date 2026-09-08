@@ -161,6 +161,8 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     "Eq" => new_impls.push(parse_derived_impl("Eq", &s.name, "fn eq(self, other: Self) -> bool", &struct_eq_body(&s.fields))),
                     "Show" => new_impls.push(parse_derived_impl("Show", &s.name, "fn show(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
+                    // M221: copia superficial — el literal con cada campo de `self`.
+                    "Clone" => new_impls.push(parse_derived_impl("Clone", &s.name, "fn clone(self) -> Self", &struct_clone_body(&s.name, &s.fields))),
                     // M93.5: el trait ToJson vive en std/json → el módulo debe tenerlo en ámbito
                     // (`from std/json import ToJson;`); si no, el impl generado da "unknown trait".
                     "ToJson" => new_impls.push(parse_derived_impl("ToJson", &s.name, "fn to_json(self) -> string", &struct_tojson_body(a, &s.fields)?)),
@@ -183,6 +185,8 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     "Eq" => new_impls.push(parse_derived_impl("Eq", &e.name, "fn eq(self, other: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
                     "Show" => new_impls.push(parse_derived_impl("Show", &e.name, "fn show(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
+                    // M221: copia superficial — reconstruir la misma variante con su payload.
+                    "Clone" => new_impls.push(parse_derived_impl("Clone", &e.name, "fn clone(self) -> Self", &enum_clone_body(&e.name, &e.variants))),
                     // M93.5: la representación JSON de un enum es una decisión abierta → diferido.
                     "ToJson" => {
                         return Err(TypeError { msg: "cannot derive ToJson for an enum (only structs for now)".into(), line: a.line, col: a.col, len: 1 });
@@ -227,8 +231,8 @@ pub(super) fn validate_derive(a: &Annotation, name: &str, type_params: &[String]
         return Err(TypeError { msg: "'@derive' requires at least one trait (e.g. @derive(Eq))".into(), line: a.line, col: a.col, len: 1 });
     }
     for arg in &a.args {
-        if arg != "Eq" && arg != "Show" && arg != "Hash" && arg != "ToJson" {
-            return Err(TypeError { msg: format!("cannot derive '{}' (for now Eq, Show, Hash and ToJson)", arg), line: a.line, col: a.col, len: 1 });
+        if arg != "Eq" && arg != "Show" && arg != "Hash" && arg != "ToJson" && arg != "Clone" {
+            return Err(TypeError { msg: format!("cannot derive '{}' (for now Eq, Show, Hash, ToJson and Clone)", arg), line: a.line, col: a.col, len: 1 });
         }
     }
     if !type_params.is_empty() {
@@ -364,6 +368,32 @@ pub(super) fn enum_hash_body(name: &str, variants: &[VariantDef]) -> String {
             arms.push_str(&format!(
                 "            {name}.{v}({b}) => {acc},\n",
                 v = v.name, b = binds.join(", ")
+            ));
+        }
+    }
+    format!("        match (self) {{\n{arms}        }}")
+}
+
+/// M221: cuerpo de `clone` para un struct — el literal con cada campo tomado de `self` (copia
+/// superficial: un campo-referencia queda compartido, como al escribir el literal a mano).
+pub(super) fn struct_clone_body(name: &str, fields: &[(String, Type)]) -> String {
+    let inits: Vec<String> = fields.iter().map(|(n, _)| format!("{n}: self.{n}")).collect();
+    format!("        {name} {{ {} }}", inits.join(", "))
+}
+
+/// M221: cuerpo de `clone` para un enum — `match (self)` que reconstruye la misma variante con su
+/// payload (posición a posición).
+pub(super) fn enum_clone_body(name: &str, variants: &[VariantDef]) -> String {
+    let mut arms = String::new();
+    for v in variants {
+        if v.payload.is_empty() {
+            arms.push_str(&format!("            {name}.{v} => {name}.{v},\n", v = v.name));
+        } else {
+            let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("p{i}")).collect();
+            arms.push_str(&format!(
+                "            {name}.{v}({b}) => {name}.{v}({b}),\n",
+                v = v.name,
+                b = binds.join(", ")
             ));
         }
     }

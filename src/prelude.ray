@@ -33,6 +33,16 @@ trait Eq {
     fn eq(self, other: Self) -> bool;
 }
 
+// M221 (ray-sublime #14): copia SUPERFICIAL de un struct/enum — los campos por valor se copian y
+// los que son referencia (arreglos, mapas, structs, canales…) se COMPARTEN. `@derive(Clone)` lo
+// genera; un tipo con hijos que deban copiarse lo implementa a mano llamando a sus `clone()`.
+/// A shallow copy of `self`: value fields are copied, reference fields (arrays, maps, structs…)
+/// are shared. Derivable with `@derive(Clone)`; not object-safe (returns `Self`).
+trait Clone {
+    /// Returns a new value with the same fields as `self` (shallow copy).
+    fn clone(self) -> Self;
+}
+
 // Representación textual (limpieza post-M11, L2). `@derive(Show)` genera el `impl` para un
 // struct/enum. No usa `Self` fuera del receptor, así que sí es object-safe (`dyn Show`).
 /// Textual representation of a value. Derivable with `@derive(Show)`; object-safe (`dyn Show`).

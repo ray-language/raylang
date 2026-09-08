@@ -4782,12 +4782,13 @@ fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result
         if (a.args[i] != "Eq"
             && a.args[i] != "Show"
             && a.args[i] != "Hash"
-            && a.args[i] != "ToJson") {
+            && a.args[i] != "ToJson"
+            && a.args[i] != "Clone") {
             return Result.Err(
                 terr(
                     a.line,
                     a.col,
-                    "cannot derive '" + a.args[i] + "' (for now Eq, Show, Hash and ToJson)"
+                    "cannot derive '" + a.args[i] + "' (for now Eq, Show, Hash, ToJson and Clone)"
                 )
             );
         }
@@ -4826,6 +4827,13 @@ fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
                 type_params: no_tparams(),
                 bounds: no_bounds()
             }
+        );
+    }
+    // M221: `clone(self) -> Self` (copia superficial).
+    if (trait_name == "Clone") {
+        c.methods.insert(
+            mangle(type_name, "clone"),
+            FnSig { params: [target], ret: target, type_params: no_tparams(), bounds: no_bounds() }
         );
     }
     if (trait_name == "ToJson") {

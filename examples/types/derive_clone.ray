@@ -1,0 +1,29 @@
+// M221 (ray-sublime #14): `@derive(Clone)` — copia SUPERFICIAL: los campos por valor se copian y
+// los de referencia (aquí un arreglo) se comparten. Idéntico en VM, intérprete y nativo.
+@derive(Clone)
+struct Flags {
+    fold: bool,
+    dotall: bool,
+    tags: [string],
+}
+
+@derive(Clone, Show)
+enum Mode {
+    Plain,
+    Timed(int, string),
+}
+
+fn main() -> int {
+    let a = Flags { fold: true, dotall: false, tags: ["x"] };
+    let b = a.clone();
+    b.fold = false;  // el campo por valor no se comparte
+    b.tags.push("y");  // el arreglo sí (copia superficial)
+    print(a.fold);
+    print(b.fold);
+    print(a.tags.len());
+    print(b.tags.len());
+    let m = Mode.Timed(3, "s");
+    print(m.clone());
+    print(Mode.Plain.clone());
+    0
+}

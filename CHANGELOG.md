@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## 1.11.1 — 2026-09-08
+## 1.11.2 — 2026-09-08
 
 - **Strings compartidos e `s[i]` amortizado** (M213, ray-sublime #12): la VM representa los
   strings como `Arc<str>` (sin copiar la cadena en cada carga) y cachea por cadena si es ASCII, su

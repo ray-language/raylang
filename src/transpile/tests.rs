@@ -387,7 +387,7 @@ fn transpiles_generic_functions() {
     );
     assert!(rust.contains("fn id<T: Clone + RayShow + 'static>(mut x: T) -> T"), "{}", rust);
     assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
-    assert!(rust.contains("let __rt_a0 = Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
+    assert!(rust.contains("(Rc::new(neg) as Rc<dyn Fn(bool) -> bool>)"), "{}", rust); // función como valor → Rc::new(fn) as dyn (M222)
 }
 
 #[test]

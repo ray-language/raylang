@@ -225,7 +225,7 @@ por resuelto al reprobarlo con 1.10.0 (caso de versión antigua).
 Flags desconocidos → error 64 con el uso; `--help` imprime el uso sin compilar; nombre, icono e id
 desde el ray.toml con los flags como override.
 
-### F2. `[app.plist]` y `NSLocalNetworkUsageDescription` por defecto (feedback 26) — S–M
+### F2. `[app.plist]` y `NSLocalNetworkUsageDescription` por defecto (feedback 26) — S–M ✅ M209
 
 Tabla `[app.plist]` volcada al Info.plist (string y bool); la clave de red local se añade sola
 cuando el programa importa `std/net` o el paquete `net` (el bundle ya carga el programa entero).

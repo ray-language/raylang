@@ -12573,3 +12573,17 @@ correrse desde cualquier cwd); los flags siguen mandando, para el caso de un ico
 id de prueba. `[android] application_id` conserva su precedencia sobre `[app] id` en el proyecto
 Gradle (es más específico). El test barato —`--help` y tres flags malos— corre sin rustc; la
 estructura del bundle sigue probándose con el test existente cuando hay toolchain.
+
+## 201. M209 — el `Info.plist` admite claves, y la de red local va sola (sep 2026)
+
+Feedback 26 de `ray-remote` (lote F, F2): una app de escritorio que habla con la red local necesita
+`NSLocalNetworkUsageDescription` en su `Info.plist`; sin ella macOS puede denegar en silencio y el
+`connect` falla con "No route to host (os error 65)" mientras el mismo host responde desde la
+terminal — se tarda en relacionar una cosa con la otra. `ray bundle` generaba el plist entero con
+claves fijas, y el rodeo era editarlo con `plutil` y volver a firmar. Dos piezas: `[app.plist]` en
+el ray.toml, volcada tal cual (cadenas escapadas para XML; `true`/`false` como `<true/>`/
+`<false/>`; en orden de declaración, sin validar nombres —el catálogo de claves es de Apple y
+cambia—), y la clave de red local **por defecto** cuando el programa importa `std/net`, `std/udp` o
+el paquete `net`, directa o transitivamente: el bundle ya carga el programa entero, así que la
+lista de módulos está ahí, y una app con `std/ui` y red la va a necesitar casi siempre. Si el
+usuario declara la clave, manda la suya. Solo macOS: Linux y Windows no tienen equivalente.

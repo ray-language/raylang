@@ -1229,6 +1229,8 @@ los assets de `[native] embed` dentro) y lo deja en el formato del SO:
 ```sh
 ray bundle                            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
                                       #   nombre/icono/id: [app] name/icon/id del ray.toml (o --name/--icon/--id)
+                                      #   [app.plist] → claves extra del Info.plist; el permiso de red local
+                                      #   (NSLocalNetworkUsageDescription) se añade solo si el programa usa la red
                                       # Linux: MiApp/ con el binario + MiApp.desktop
                                       # Windows: MiApp con MiApp.exe (icono y versión embebidos,
                                       #          sin consola al doble clic) + MiApp.lnk

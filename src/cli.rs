@@ -1309,7 +1309,8 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
 [--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]]\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
-the flags override them.";
+the flags override them. [app.plist] keys go verbatim into the macOS Info.plist; \
+NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
 
 fn cmd_bundle(args: &[String]) {
     // M208 (feedback 25 de ray-remote): parseo ESTRICTO. Antes cualquier flag desconocido se
@@ -1668,7 +1669,19 @@ fn cmd_bundle(args: &[String]) {
     let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &tmp_bin);
+        // M209: claves extra del Info.plist ([app.plist]) y el permiso de red local por defecto
+        // cuando el programa habla con la red (std/net, std/udp o el paquete `net`): sin
+        // `NSLocalNetworkUsageDescription`, macOS puede denegar en silencio y el connect falla con
+        // "No route to host" mientras el mismo host responde desde la terminal.
+        let mut extra: Vec<(String, crate::manifest::PlistValue)> =
+            manifest.as_ref().map(|m| m.app_plist.clone()).unwrap_or_default();
+        if uses_network(&path) && !extra.iter().any(|(k, _)| k == "NSLocalNetworkUsageDescription") {
+            extra.push((
+                "NSLocalNetworkUsageDescription".to_string(),
+                crate::manifest::PlistValue::Str(format!("{name} connects to devices on your local network.")),
+            ));
+        }
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &tmp_bin);
     } else if cfg!(unix) {
         bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
     } else if cfg!(windows) {
@@ -1696,7 +1709,22 @@ fn cmd_bundle(args: &[String]) {
 /// El `.app` de macOS: la estructura es un árbol de carpetas + un Info.plist mínimo. El icns es
 /// best-effort (sips + iconutil, herramientas del sistema); el codesign ad-hoc también (mantiene
 /// válida la firma que el linker de arm64 aplicó, tras mover el binario).
-fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, bin: &Path) {
+/// M209: ¿el programa importa la red (`std/net`, `std/udp` o el paquete `net`, directa o
+/// transitivamente)? Se mira la lista de módulos cargados, que ya incluye las dependencias.
+fn uses_network(entry: &str) -> bool {
+    let Ok(loaded) = loader::load_with_deps(Path::new(entry), &dependency_roots()) else { return false };
+    loaded.modules.iter().any(|m| {
+        let n = m.name.replace("::", "/");
+        n == "std/net" || n == "std/udp" || n == "net" || n.starts_with("net/")
+    })
+}
+
+/// Escapa `&`, `<` y `>` para un valor de texto del plist.
+fn plist_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], bin: &Path) {
     let app = out_dir.join(format!("{name}.app"));
     let _ = fs::remove_dir_all(&app);
     let macos_dir = app.join("Contents/MacOS");
@@ -1721,6 +1749,16 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
     let copyright_key = copyright
         .map(|c| format!("\x20 <key>NSHumanReadableCopyright</key><string>{c}</string>\n"))
         .unwrap_or_default();
+    // M209: `[app.plist]` + el permiso de red local por defecto, tal cual, en orden.
+    let mut extra_keys = String::new();
+    for (k, v) in extra {
+        let value = match v {
+            crate::manifest::PlistValue::Str(s) => format!("<string>{}</string>", plist_escape(s)),
+            crate::manifest::PlistValue::Bool(true) => "<true/>".to_string(),
+            crate::manifest::PlistValue::Bool(false) => "<false/>".to_string(),
+        };
+        extra_keys.push_str(&format!("\x20 <key>{}</key>{value}\n", plist_escape(k)));
+    }
     let plist = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -1735,6 +1773,7 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
          \x20 <key>NSHighResolutionCapable</key><true/>\n\
          {icon_key}\
          {copyright_key}\
+         {extra_keys}\
          \x20 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n\
          </dict>\n</plist>\n"
     );

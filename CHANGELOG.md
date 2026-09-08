@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`[app.plist]` y permiso de red local** (M209, feedback 26 de ray-remote): claves extra del
+  `Info.plist` desde el ray.toml (cadena o bool), y `NSLocalNetworkUsageDescription` por defecto
+  cuando el programa importa `std/net`, `std/udp` o `net` — sin ella macOS denegaba en silencio y
+  el `connect` fallaba con "No route to host".
 - **`ray bundle` estricto** (M208, feedback 25 de ray-remote): un flag desconocido es error (antes
   `--bogus` o `--native` hacían un bundle normal en silencio), `--help` imprime el uso sin compilar
   (antes compilaba 17 s en release), y `[app] name`, `icon` e `id` del ray.toml alimentan el

@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/regex` rechaza lo que no implementa** (M211, ray-sublime #1–#3): look-around, grupos
+  atómicos, flags en línea, `\p{…}`, backreferences, `\G`/`\A`/`\z`, `\h`, posesivos, clases
+  POSIX y `&&` devuelven `Err` con nombre en `compile` — antes "compilaban" y reventaban (ICE) en
+  la primera búsqueda, o casaban el carácter literal en silencio. Y un pánico en un hilo del
+  scheduler ya no cuelga el proceso: sale como ICE con código 101.
 - **`ui.open_with(title, url, WindowOptions)`** (M210, feedback 27 de ray-remote): tamaño mínimo,
   `resizable`, `center` y `autosave` (el sistema recuerda tamaño y posición en macOS); `ui.options(w, h)`
   da los defaults de `open`. Mínimo y `resizable` en los tres backends.

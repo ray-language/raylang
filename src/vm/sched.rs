@@ -318,6 +318,11 @@ impl<'a> Vm<'a> {
     /// worker apagó el programa. Fija `Shared.outcome` con lo que ESTE worker determinó (si aún no lo fijó
     /// otro). No devuelve nada: el resultado viaja por `outcome`.
     pub(super) fn run_worker(&mut self) {
+        // M211: inyección de un pánico en un worker, SOLO para el test que asevera que un ICE en un
+        // hilo del scheduler termina el proceso en vez de colgarlo (`tests/ice_policy.rs`).
+        if std::env::var_os("RAYLANG_DEBUG_PANIC_WORKER").is_some() {
+            panic!("debug: injected panic in a scheduler worker");
+        }
         match self.poll_next(0, 0) {
             Ok(true) => {}          // fibra cargada en `self.cur`
             Ok(false) => return,    // el programa ya terminó (outcome fijado por otro)

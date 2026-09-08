@@ -119,3 +119,23 @@ fn central_net_presents_the_ice() {
     assert!(stderr.contains("invariante rota de prueba"), "el payload del pánico\n{stderr}");
     assert!(stderr.contains("report it"), "asks el reporte\n{stderr}");
 }
+
+/// M211 (ray-sublime #1): un pánico en un hilo del scheduler (no en el worker principal) terminaba
+/// sin que nadie lo recogiera y el proceso se quedaba COLGADO esperando el `join`. Ahora el hook
+/// lo presenta como ICE y sale con 101 — en segundos, no nunca. Inyección: `RAYLANG_DEBUG_PANIC_WORKER`.
+#[test]
+fn a_panic_in_a_scheduler_worker_terminates_the_process() {
+    let path = std::env::temp_dir().join("ray_ice_worker.ray");
+    std::fs::write(&path, "fn main() -> int {\n    let t = spawn(fn() { print(1); });\n    join(t);\n    print(\"unreachable\");\n    0\n}\n").unwrap();
+    let started = std::time::Instant::now();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg(&path)
+        .env("RAYLANG_DEBUG_PANIC_WORKER", "1")
+        .output()
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "el proceso no debe colgarse");
+    assert_eq!(out.status.code(), Some(101), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("injected panic in a scheduler worker") && err.contains("ICE"), "{err}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("unreachable"));
+}

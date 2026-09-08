@@ -12608,3 +12608,24 @@ donde el sistema la da (macOS); no se inventa una persistencia propia en Linux/W
 de hacer mal y la app puede resolverlo en dos líneas si lo necesita—, y la referencia lo dice. Un
 mínimo mayor que la ventana es `Err`, como un tamaño fuera de rango. Con esto queda cerrado el
 lote F.
+
+## 203. M211 — `std/regex` dice que no, y un ICE nunca cuelga (sep 2026)
+
+Primer hito del plan de `ray-sublime` (`docs/plan-ray-sublime.md`, G1). Dos hallazgos: (1) el
+parser de `std/regex` trataba como LITERAL todo lo que no conocía —`(?=foo)` era un grupo con
+el texto `?=foo`, `\p` la letra p, `\1` el dígito 1—, así que `compile` devolvía `Ok` y el
+patrón o no casaba nunca (backreferences, `\G`) o reventaba en la primera búsqueda: la vía
+acelerada traduce el patrón CRUDO al dialecto del crate `regex`, que sí entiende look-around y
+`\p{…}` y falla en `(?=` sin soporte o en `p{Lu}+` mal escapado, y ese `unwrap` era un ICE.
+(2) Ese pánico ocurría en un hilo del scheduler, no en el worker principal cuyo `join` recoge el
+monitor, y el proceso se quedaba esperando para siempre. La app lo midió: el 39 % de los 6 226
+patrones reales de sintaxis usan look-around; no es un caso raro. Decisiones: el validador
+raylang —el mismo en los tres motores— rechaza por nombre todo lo que el motor no implementa
+(look-around, atómicos, flags en línea, `\p`, backreferences, anclas `\G\A\z`, `\h`,
+posesivos y apilados, POSIX y `&&` en clases), con lo que la traducción solo recibe el
+subconjunto documentado y el `unwrap` del runtime vuelve a ser lo que dice ser: un bug nuestro.
+La alternativa —implementar look-around en la Pike VM— cambia la complejidad (deja de ser lineal)
+y no cabe en un hito; `std/regex` es un motor lineal y la referencia ahora lista lo excluido. Y el
+hook de pánico termina el proceso con el banner de ICE y 101 cuando el hilo que panica no es el
+worker principal (ese sigue su camino de siempre): una inyección por variable de entorno lo
+prueba sin necesitar un ICE real.

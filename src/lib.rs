@@ -212,8 +212,21 @@ where
     // convención Unix: exit 141 (128+SIGPIPE), en silencio — el destino de un programa C.
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if !is_broken_pipe_panic_message(&panic_payload_text(info.payload())) {
-            previous(info);
+        let detail = panic_payload_text(info.payload());
+        if is_broken_pipe_panic_message(&detail) {
+            return;
+        }
+        previous(info);
+        // M211 (ray-sublime #1): un pánico en un hilo del scheduler (un worker M:N, el hilo de
+        // un `spawn` bloqueante…) no llega al `join()` del worker principal, que se quedaba
+        // esperando para siempre — el proceso colgado en vez de muerto. Un ICE termina el
+        // proceso, venga del hilo que venga; el worker principal sigue su camino de siempre
+        // (banner tras el join) porque su pánico sí llega al monitor.
+        if let Some(main_id) = MAIN_WORKER.get()
+            && std::thread::current().id() != *main_id
+        {
+            eprintln!("{}", diagnostic::ice_banner(&format!("in a runtime thread: {detail}")));
+            std::process::exit(101);
         }
     }));
     // M146 (std/ui): el hilo 1 del proceso —el ÚNICO que AppKit acepta— ya no se queda dentro
@@ -235,7 +248,10 @@ where
             let _ = tx_ui.send(GateMsg::UiRequested);
         }));
     }
-    std::thread::spawn(move || match spawn_big_stack(f) {
+    std::thread::spawn(move || match spawn_big_stack(move || {
+        let _ = MAIN_WORKER.set(std::thread::current().id());
+        f()
+    }) {
         Ok(v) => {
             let _ = tx.send(GateMsg::Done(v));
         }
@@ -265,6 +281,10 @@ where
         }
     }
 }
+
+/// El hilo worker principal (el de la pila grande): su pánico lo recoge el monitor; el de
+/// cualquier OTRO hilo aborta el proceso desde el hook (M211).
+static MAIN_WORKER: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
 
 /// El texto de un payload de pánico (`String` o `&str`; otra cosa → marcador).
 fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {

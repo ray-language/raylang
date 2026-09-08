@@ -250,3 +250,51 @@ fn main() {
     assert_eq!(vm, interp, "VM (crate regex) ≡ intérprete (Pike VM), byte a byte");
     assert_eq!(vm, pike, "VM (crate regex) ≡ VM con RAYLANG_REGEX_PIKE=1 (Pike VM)");
 }
+
+/// M211 (ray-sublime #1–#3): lo que el motor no implementa se rechaza en `compile` con un `Err` con
+/// nombre — antes look-around y `\p{…}` "compilaban" y reventaban (ICE) en la primera búsqueda por
+/// la vía acelerada, y `\1`/`\G` casaban el carácter literal en silencio. Idéntico en ambos motores.
+#[test]
+fn unsupported_constructs_are_rejected_at_compile() {
+    let cases: &[(&str, &str)] = &[
+        ("(?=foo)", "look-ahead"),
+        ("(?!foo)", "look-ahead"),
+        ("(?<=a)b", "look-behind"),
+        ("(?<!a)b", "look-behind"),
+        ("(?>ab)", "atomic"),
+        ("(?i)ab", "inline flags"),
+        ("\\p{Lu}+", "Unicode classes"),
+        ("(a)\\1", "backreferences"),
+        ("(?P<n>a)\\k<n>", "backreferences"),
+        ("\\Gab", "anchor escape"),
+        ("\\Aab", "anchor escape"),
+        ("a\\h", "not supported"),
+        ("a*+", "possessive"),
+        ("a++", "possessive"),
+        ("a?+", "possessive"),
+        ("[[:alpha:]]", "POSIX classes"),
+        ("[a-z&&[^m]]", "intersection"),
+        ("[\\p{L}]", "Unicode classes"),
+    ];
+    let mut src = String::from("import std/regex;\nfn main() -> int {\n");
+    for (pat, _) in cases {
+        let lit = pat.replace('\\', "\\\\").replace('"', "\\\"");
+        src.push_str(&format!(
+            "    match (regex.compile(\"{lit}\")) {{ Result.Ok(_) => print(\"ok\"), Result.Err(e) => print(e) }}\n"
+        ));
+    }
+    // Lo que SÍ se soporta sigue compilando (grupos con nombre, no captura, lazy, bounds, clases).
+    src.push_str("    match (regex.compile(\"(?P<w>a+?)(?:b|c)*[^x]{2,3}\\\\d\")) { Result.Ok(_) => print(\"ok\"), Result.Err(e) => print(e) }\n    0\n}\n");
+    let path = std::env::temp_dir().join("ray_regex_unsupported.ray");
+    std::fs::write(&path, &src).unwrap();
+    for flags in [&[][..], &["--vm"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang")).args(flags).arg(&path).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), cases.len() + 1, "{lines:?}");
+        for ((pat, needle), line) in cases.iter().zip(&lines) {
+            assert!(line.starts_with("regex: ") && line.contains(needle), "{pat}: {line}");
+        }
+        assert_eq!(lines[cases.len()], "ok", "{flags:?}");
+    }
+}

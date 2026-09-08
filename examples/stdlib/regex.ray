@@ -194,6 +194,13 @@ fn parse_repeat(p: PS) -> Result<Re, string> {
                 node = Re.Opt(node, lazy);
             }
         }
+        // M211: un segundo cuantificador pegado (`a*+`, `a++`, `a?+`, `a{2}*`) es un cuantificador
+        // posesivo (o un apilado sin sentido): no se implementa y la vía acelerada lo lee distinto.
+        if (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?')) {
+            return Result.Err(
+                "regex: possessive or stacked quantifiers ('*+', '++', '?+') are not supported"
+            );
+        }
     }
     Result.Ok(node)
 }
@@ -304,6 +311,20 @@ fn parse_atom(p: PS) -> Result<Re, string> {
         // de apertura (1..; el 0 es el match entero). M128: `(?P<name>...)` y `(?<name>...)`
         // capturan CON nombre (mismo índice posicional; el nombre va a la tabla `names`).
         var g = 0 - 1;
+        // M211 (ray-sublime #1): `(?` seguido de algo que no sea `:`, `P<` o `<` es look-around,
+        // grupo atómico o flags en línea — el motor no los implementa y antes se colaban como
+        // literales (y la vía acelerada reventaba al traducirlos). Se rechazan con nombre.
+        if (!ps_at_end(p) && ps_peek(p) == '?') {
+            let k = if (p.pos + 1 < p.pat.len()) { ps_peek2(p) } else { ' ' };
+            if (k != ':' && k != 'P' && k != '<') {
+                return Result.Err(unsupported_group(k));
+            }
+            if (k == '<'
+                && p.pos + 2 < p.pat.len()
+                && (p.pat[p.pos + 2] == '=' || p.pat[p.pos + 2] == '!')) {
+                return Result.Err("regex: look-behind '(?<=' / '(?<!' is not supported");
+            }
+        }
         if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && ps_peek2(p) == ':') {
             ps_advance(p);
             ps_advance(p);
@@ -384,10 +405,44 @@ fn parse_atom(p: PS) -> Result<Re, string> {
             return Result.Err("regex: trailing '\\' at end of pattern");
         }
         let e = ps_advance(p);
+        check_escape(e)?;
         return Result.Ok(escape_atom(e));
     }
     ps_advance(p);
     Result.Ok(Re.Lit(c))
+}
+
+// M211: el mensaje de un grupo `(?X` que el motor no implementa.
+fn unsupported_group(k: char) -> string {
+    if (k == '=' || k == '!') {
+        "regex: look-ahead '(?=' / '(?!' is not supported"
+    } else if (k == '>') {
+        "regex: atomic groups '(?>' are not supported"
+    } else {
+        "regex: inline flags and '(?"
+            + to_string(k)
+            + "' groups are not supported (only '(?:', '(?P<name>' and '(?<name>')"
+    }
+}
+
+// M211: escapes que el motor NO implementa. Antes `\p`, `\1` o `\G` eran el carácter literal
+// (`p`, `1`, `G`) — un patrón que "compilaba" y no casaba nunca, o reventaba en la vía acelerada.
+fn check_escape(e: char) -> Result<int, string> {
+    if (e == 'p' || e == 'P') {
+        return Result.Err("regex: Unicode classes '\\p{…}' are not supported");
+    }
+    if (e >= '1' && e <= '9' || e == 'k') {
+        return Result.Err("regex: backreferences ('\\1', '\\k<name>') are not supported");
+    }
+    if (e == 'G' || e == 'A' || e == 'z' || e == 'Z') {
+        return Result.Err(
+            "regex: the anchor escape '\\" + to_string(e) + "' is not supported (use '^' and '$')"
+        );
+    }
+    if (e == 'h' || e == 'H' || e == 'R' || e == 'X') {
+        return Result.Err("regex: the escape '\\" + to_string(e) + "' is not supported");
+    }
+    Result.Ok(0)
 }
 
 // Un escape en posición de átomo: clase predefinida (`\d`/`\w`/`\s` y negadas) o literal (`\.` `\n` …).
@@ -418,12 +473,21 @@ fn parse_class(p: PS) -> Result<Class, string> {
     }
     var ranges: [Range] = [];
     while (!ps_at_end(p) && ps_peek(p) != ']') {
+        // M211: `[:alpha:]` (clases POSIX) y `&&` (intersección) no se implementan; la vía
+        // acelerada sí los interpreta, así que dejarlos pasar como literales rompía la paridad.
+        if (ps_peek(p) == '[' && p.pos + 1 < p.pat.len() && ps_peek2(p) == ':') {
+            return Result.Err("regex: POSIX classes '[:alpha:]' are not supported inside a class");
+        }
+        if (ps_peek(p) == '&' && p.pos + 1 < p.pat.len() && ps_peek2(p) == '&') {
+            return Result.Err("regex: class intersection '&&' is not supported");
+        }
         if (ps_peek(p) == '\\') {
             ps_advance(p);  // barra
             if (ps_at_end(p)) {
                 return Result.Err("regex: trailing '\\' at end of class");
             }
             let e = ps_advance(p);
+            check_escape(e)?;
             // Clases predefinidas dentro de la clase: se fusionan sus rangos.
             if (e == 'd') {
                 append_all(ranges, ranges_digit());

@@ -231,7 +231,7 @@ Tabla `[app.plist]` volcada al Info.plist (string y bool); la clave de red local
 cuando el programa importa `std/net` o el paquete `net` (el bundle ya carga el programa entero).
 Solo macOS.
 
-### F3. `ui.open_with(title, url, WindowOptions)` (feedback 27) — M–L
+### F3. `ui.open_with(title, url, WindowOptions)` (feedback 27) — M–L ✅ M210
 
 `min_width`, `min_height`, `resizable`, `center`, `autosave`; `open` queda igual. Tamaño mínimo y
 `resizable` en los tres backends; el autosave del frame solo donde lo da el sistema (macOS), y la

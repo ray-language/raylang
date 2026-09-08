@@ -52,6 +52,45 @@ fn main() {
 const WANT: &str = "size rejected: true\neval ok: true\nquiet queue: true\n\
 event: closed, same window: true\neval after close: true\n";
 
+/// M210 (feedback 27 de ray-remote): `ui.open_with` con `WindowOptions` — mínimo, redimensionable,
+/// centrado y autosave. En headless las opciones se validan y la ventana es una fila en memoria.
+const OPEN_WITH_PROGRAM: &str = r#"
+import std/ui;
+
+fn main() {
+    var o = ui.options(1024, 720);
+    o.min_width = 640;
+    o.min_height = 480;
+    o.resizable = false;
+    o.autosave = "main";
+    match (ui.open_with("Opts", "http://127.0.0.1:1/", o)) {
+        Result.Ok(h) => { print("opened: " + to_string(h > 0)); let _ = close(h); },
+        Result.Err(e) => print("open failed: " + e),
+    }
+    var bad = ui.options(400, 300);
+    bad.min_width = 800;
+    match (ui.open_with("Bad", "http://127.0.0.1:1/", bad)) {
+        Result.Ok(_) => print("bad: minimum larger than the window accepted"),
+        Result.Err(e) => print("min rejected: " + to_string(e.contains("unsupported minimum size"))),
+    }
+}
+"#;
+
+#[test]
+fn open_with_validates_its_options_on_both_engines() {
+    let path = tmp("open_with").join("main.ray");
+    std::fs::write(&path, OPEN_WITH_PROGRAM).unwrap();
+    for interp in [false, true] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if interp {
+            cmd.arg("--interp");
+        }
+        let (out, code) = run_headless(cmd.arg(&path));
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(out, "opened: true\nmin rejected: true\n", "interp={interp}\n{out}");
+    }
+}
+
 #[test]
 fn headless_battery_matches_on_all_three_engines() {
     let base = tmp("battery");

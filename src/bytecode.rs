@@ -632,6 +632,9 @@ pub enum OpCode {
     AudioPlayed,
     /// M146: `__ui_open(title, url, w, h)` — abre una ventana con webview (['ok', h] / ['err', msg]).
     UiOpen,
+    /// M210: `__ui_open_with` — 9 argumentos (título, url, ancho, alto, mínimo ancho/alto,
+    /// redimensionable, centrada, autosave); empuja el `[string]` etiquetado como `UiOpen`.
+    UiOpenWith,
     /// M146: `__ui_eval_js(h, js)` — ejecuta JS en la página, fire-and-forget (['ok'] / ['err', msg]).
     UiEvalJs,
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el

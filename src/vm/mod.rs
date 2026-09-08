@@ -3188,6 +3188,33 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M210: la ventana con opciones (9 argumentos; se sacan en orden inverso).
+                OpCode::UiOpenWith => {
+                    let autosave = self.pop();
+                    let center = self.pop();
+                    let resizable = self.pop();
+                    let min_h = self.pop();
+                    let min_w = self.pop();
+                    let height = self.pop();
+                    let width = self.pop();
+                    let url = self.pop();
+                    let title = self.pop();
+                    let (HeapValue::Str(title), HeapValue::Str(url), HeapValue::Str(autosave)) = (title, url, autosave) else {
+                        unreachable!("the checker guarantees three strings");
+                    };
+                    let (HeapValue::Int(width), HeapValue::Int(height), HeapValue::Int(min_w), HeapValue::Int(min_h)) = (width, height, min_w, min_h) else {
+                        unreachable!("the checker guarantees four ints");
+                    };
+                    let (HeapValue::Bool(resizable), HeapValue::Bool(center)) = (resizable, center) else {
+                        unreachable!("the checker guarantees two bools");
+                    };
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave) {
+                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M146: JS a la página, fire-and-forget (el despacho al hilo principal es async).
                 OpCode::UiEvalJs => {
                     let HeapValue::Str(js) = self.pop() else {

@@ -1356,7 +1356,10 @@ confianza que el resto del programa (la vía de bajo nivel es
 un `"message"` por ventana abierta. El puente vive en las tres plataformas de escritorio: macOS, Linux
 (WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente), Windows (WebView2, M179)
 y el shell iOS de
-`ray bundle --ios` (allí `window` llega como 0).
+`ray bundle --ios` (allí `window` llega como 0). Para la geometría más allá de ancho × alto —tamaño
+mínimo, `resizable`, centrado y que el sistema recuerde tamaño y posición—, `ui.open_with(title, url,
+o)` con `var o = ui.options(1024, 720); o.min_width = 640; o.autosave = "main";` (M210; el autosave lo
+da macOS, Linux y Windows lo ignoran).
 
 Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
 canales — `(messages, other)`: los `"message"` por el primero, `closed`/`menu` por el

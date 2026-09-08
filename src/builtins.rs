@@ -1081,18 +1081,34 @@ const UI_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 /// handle que el programa tiene en la mano — sin tabla de traducción.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_open(title: &str, url: &str, width: i64, height: i64) -> Result<i64, String> {
+    ui_open_with(title, url, ray_runtime::ui::WindowOptions::simple(width, height))
+}
+/// M210: `ui.open_with` — la ventana con opciones (mínimo, redimensionable, centrado, autosave).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_open_with(title: &str, url: &str, opts: ray_runtime::ui::WindowOptions) -> Result<i64, String> {
     let id = {
         let mut reg = registry().lock().unwrap();
         let id = reg.next;
         reg.next += 1;
         id
     };
-    ray_runtime::ui::open_window(id, title, url, width, height)?;
+    ray_runtime::ui::open_window_with(id, title, url, &opts)?;
     registry().lock().unwrap().open.insert(id, OpenHandle::Window(UiWindow(id)));
     Ok(id)
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i64, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+/// Los 9 argumentos de `__ui_open_with` (M210), en orden: ancho, alto, mínimo ancho/alto,
+/// redimensionable, centrada, autosave. Los motores los pasan tal cual.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str) -> Result<i64, String> {
+    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string() })
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -3865,6 +3881,16 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__ui_open expects a string (the url), not {}", a[1]))); }
         if a[2] != Type::Int { return Err((Some(2), format!("__ui_open expects an int (the width), not {}", a[2]))); }
         if a[3] != Type::Int { return Err((Some(3), format!("__ui_open expects an int (the height), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave) -> [string] (M210):
+    // la ventana con opciones; misma respuesta etiquetada que __ui_open.
+    Builtin { name: "__ui_open_with", opcode: OpCode::UiOpenWith, check: |a| {
+        arity(a, 9, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave)")?;
+        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String];
+        for (i, t) in want.iter().enumerate() {
+            if a[i] != *t { return Err((Some(i), format!("__ui_open_with expects {} as argument {}, not {}", t, i + 1, a[i]))); }
+        }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_eval_js(h, js) -> [string] (M146): ["ok"] o ["err", msg]. Fire-and-forget: no espera

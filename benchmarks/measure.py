@@ -8,6 +8,8 @@ CASES = [
     ("loop 10M     VM",  [BIN, "--vm", "benchmarks/loop.ray"]),
     ("arrays 2000x VM",  [BIN, "--vm", "benchmarks/arrays.ray"]),
     ("gcnested     VM",  [BIN, "--vm", "benchmarks/gcnested.ray"]),  # GC con hijos en el heap
+    ("str_index    VM",  [BIN, "--vm", "benchmarks/str_index.ray"]),  # M213: s[i] ASCII secuencial
+    ("str_idx_utf8 VM",  [BIN, "--vm", "benchmarks/str_index_utf8.ray"]),  # M213: s[i] UTF-8 descendente
 ]
 # Mejor-de-N: N grande filtra mejor el ruido del planificador. Opt.7 (~8 %) quedaba enmascarado con N=5
 # (la baseline saltaba ±4 % entre corridas) y se destapó limpio con N=15. Usa N alto para señales pequeñas.

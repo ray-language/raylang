@@ -44,8 +44,11 @@ coste de mover/construir strings).
 python3 benchmarks/measure.py "etiqueta"   # mide fib35/loop/arreglos sobre la VM (release)
 ```
 
-Programas extra: `fib35.ray` (recursión más larga), `loop.ray` (bucle aritmético apretado)
-y `arrays.ray` (asignación en heap + GC).
+Programas extra: `fib35.ray` (recursión más larga), `loop.ray` (bucle aritmético apretado),
+`arrays.ray` (asignación en heap + GC), `gcnested.ray` (GC con hijos en el heap) y, desde M213,
+`str_index.ray` / `str_index_utf8.ray` (`s[i]` secuencial sobre 288k chars ASCII y descendente
+sobre 120k chars UTF-8: lineales gracias a la caché por cadena; un retroceso al `String` copiado
+por acceso los dejaría ×46 y ×30 más lentos).
 
 ## Resultado de referencia
 

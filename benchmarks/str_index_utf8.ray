@@ -1,0 +1,22 @@
+// Indexación DESCENDENTE `s[i]` sobre una cadena UTF-8 (120 000 caracteres, sin fast-path ASCII):
+// el peor caso de M213. La caché recuerda la última pareja (carácter, byte) y retrocede desde ahí
+// → lineal (~0.03 s); sin ella cada acceso recorría la cadena desde el principio (0.8 s).
+fn main() -> int {
+    var s = "";
+    var k = 0;
+    while (k < 4000) {
+        s = s + "añoración über naïve çà 日本語 ñandú";
+        k = k + 1;
+    }
+    let n = s.len();
+    var i = n - 1;
+    var count = 0;
+    while (i >= 0) {
+        if (s[i] == 'ñ') {
+            count = count + 1;
+        }
+        i = i - 1;
+    }
+    print(count);
+    0
+}

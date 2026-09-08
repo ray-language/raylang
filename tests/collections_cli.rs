@@ -272,3 +272,13 @@ keys+values casan = true
 ";
     assert_eq!(o_in, expected, "output expected_val");
 }
+
+/// M215 (ray-sublime #18): `sort_by` / `sort_by_key` — estables, copia nueva, idénticos en ambos motores.
+#[test]
+fn sort_by_and_sort_by_key_both_engines() {
+    let path = format!("{}/examples/stdlib/sort_by.ray", env!("CARGO_MANIFEST_DIR"));
+    ambos_engines_matches(
+        &path,
+        "Bjarne 28\nAda 36\nLinus 36\nGrace 45\nLinus\nGrace\nBjarne\nAda\n[3, 2, 1]\n[a, bb, dd, ccc]\nAda\n",
+    );
+}

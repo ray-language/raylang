@@ -12648,3 +12648,35 @@ por lo que el vector de elementos ordena sin más. Los genéricos con `impl Ord`
 Rust, ahora documentado. `examples/types/impl_ord_sort.ray` entra en el corpus nativo, que
 compara VM y nativo byte a byte: es la comprobación que faltaba para que un `sort` de tipo de
 usuario no volviera a romperse en silencio.
+
+## 205. M214 — los argumentos de una llamada genérica toman el tipo ya inferido (sep 2026)
+
+Plan de `ray-sublime`, H2 (entrada 17): `out.push(Option.None)` con `out: [Option<string>]` pedía
+anotar aunque el tipo estaba a la vista. `push` es un método de trait del prelude sobre `[T]`
+(M48.4e), así que la llamada va por `check_generic_call`: unifica cada argumento con su parámetro
+en orden, y el receptor ya fija `T = Option<string>` antes de mirar el segundo argumento — pero
+ese segundo argumento se tipaba **sin expectativa** (`check_expr`), y `Option.None` sin expectativa
+no puede saber su `T`. Los payloads de un constructor de enum ya hacían lo correcto
+(`check_value_against`: el tipo declarado sustituido con la σ parcial es el esperado si es
+concreto); ahora la llamada genérica hace lo mismo con cada argumento. Es la misma idea que M204
+(brazos de un `match`): la información que ya tiene el checker viaja al sitio donde falta.
+Efecto: `push`, `contains`, `insert`, `send` y cualquier función genérica del usuario; sin nada
+que fije `T` (`[Option.None]`), el error de inferencia se conserva. Los builtins de contenedor de
+la tabla `BUILTINS` (que no pasan por firmas genéricas) reciben la misma expectativa por una tabla
+corta (`builtin_arg_expected`). Espejo selfhost en `check_generic_call`, `check_push`,
+`check_insert` y `check_contains`. H1 (indexación de strings) queda como decisión aparte: la causa
+real es que `HeapValue::Str` es un `String` propio que se clona en cada carga, y la solución es
+`Rc<str>` en la VM (unos 230 sitios), no una caché de posición.
+
+## 206. M215 — `sort_by` y `sort_by_key` (sep 2026)
+
+Plan de `ray-sublime`, H3 (entrada 18): `sort` exige `T: Ord`, y eso solo sirve cuando el tipo es
+tuyo y tiene un único orden natural; en cuanto se quiere ordenar por otra clave —lo habitual al
+presentar datos— o un tipo ajeno, había que escribir la ordenación a mano (y con M212 pendiente,
+`impl Ord` ni siquiera era la salida). Las dos funciones van en el **prelude**, en raylang: el
+mismo merge bottom-up estable de `sort`, con `less(a, b)` como comparador, y `sort_by_key` sobre
+`sort_by` comparando `key(x).less(key(y))` con `K: Ord`. Ni opcode ni intercepción nativa: el
+transpilador las emite como cualquier función genérica del prelude, así que los tres motores
+coinciden por construcción (`examples/stdlib/sort_by.ray` entra en el corpus nativo). El coste de
+`sort_by_key` es `key` dos veces por comparación; una versión con claves precalculadas (Schwartz)
+se hará si alguna app lo mide.

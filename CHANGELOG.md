@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`sort_by(xs, less)` y `sort_by_key(xs, key)`** (M215, ray-sublime #18): orden por comparador o
+  por clave, estables, en el prelude (idénticos en VM, intérprete y nativo).
+- **`out.push(Option.None)` infiere del contenedor** (M214, ray-sublime #17): el argumento de una
+  llamada genérica toma como tipo esperado el parámetro ya fijado por los anteriores (`push`,
+  `contains`, `insert`, `send`, funciones de usuario); antes pedía una variable anotada.
 - **`impl Ord` de usuario + `sort` ya compila en nativo** (M212, ray-sublime #27): el transpilador
   emite `PartialEq`/`Eq`/`PartialOrd`/`Ord` de Rust para el struct o enum delegando en su `less`;
   antes corría en la VM y el binario nativo fallaba con `E0277`.

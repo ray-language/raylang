@@ -214,6 +214,31 @@ ya dice "annotate the type", así que va detrás de E1–E4.
 
 Orden: E1 → E2 → E3 → E4 → E5 → E6, un hito cada uno (M200–M205).
 
+## 5c. Lote F — tercera ronda de feedback (8 sep 2026, puntos 25–27): la app de escritorio
+
+Verificado contra main: los tres puntos son reales (`cmd_bundle` ignoraba flags desconocidos y
+`--help`; el Info.plist se genera con claves fijas; `ui.open` es toda la geometría). El 19 lo dieron
+por resuelto al reprobarlo con 1.10.0 (caso de versión antigua).
+
+### F1. `ray bundle` estricto y `[app] name/icon/id` (feedback 25) — S ✅ M208
+
+Flags desconocidos → error 64 con el uso; `--help` imprime el uso sin compilar; nombre, icono e id
+desde el ray.toml con los flags como override.
+
+### F2. `[app.plist]` y `NSLocalNetworkUsageDescription` por defecto (feedback 26) — S–M
+
+Tabla `[app.plist]` volcada al Info.plist (string y bool); la clave de red local se añade sola
+cuando el programa importa `std/net` o el paquete `net` (el bundle ya carga el programa entero).
+Solo macOS.
+
+### F3. `ui.open_with(title, url, WindowOptions)` (feedback 27) — M–L
+
+`min_width`, `min_height`, `resizable`, `center`, `autosave`; `open` queda igual. Tamaño mínimo y
+`resizable` en los tres backends; el autosave del frame solo donde lo da el sistema (macOS), y la
+referencia lo dice. Sin persistencia propia en Linux/Windows.
+
+Orden: F1 → F2 → F3 (M208–M210).
+
 ## 6. Documentación (transversal, S) ✅ M190 (captura/spawn, `bytes`, `Channel.bounded`; el patrón "canal que se cierra" queda con D1)
 
 - **MANUAL, captura de closures**: en negrita, "entre fibras solo se comparten canales y

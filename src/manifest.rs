@@ -62,6 +62,12 @@ pub struct Manifest {
     /// M155: `[app] copyright` — la línea de copyright del panel About (el bundle la escribe
     /// como `NSHumanReadableCopyright` en el Info.plist del .app). `None` = sin copyright.
     pub app_copyright: Option<String>,
+    /// M208 (feedback 25 de ray-remote): `[app] name` / `icon` / `id` — lo que `ray bundle` tomaba
+    /// solo de la línea de órdenes (`--name`, `--icon`, `--id`) se declara UNA vez aquí; los flags
+    /// siguen mandando si se dan. `icon` es relativo a la raíz del proyecto.
+    pub app_name: Option<String>,
+    pub app_icon: Option<String>,
+    pub app_id: Option<String>,
     /// M155: `[app] description` — la descripción corta de la app (hoy la usa `ui.set_about`
     /// como referencia documental; el panel la recibe por código). `None` = sin descripción.
     pub app_description: Option<String>,
@@ -121,6 +127,9 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut dev_listen = None;
     let mut ios_development_team = None;
     let mut app_copyright = None;
+    let mut app_name = None;
+    let mut app_icon = None;
+    let mut app_id = None;
     let mut android_application_id = None;
     let mut app_description = None;
 
@@ -197,6 +206,10 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 // M155: metadatos de la app para el panel About / el bundle.
                 "copyright" => app_copyright = Some(as_string()?),
                 "description" => app_description = Some(as_string()?),
+                // M208: nombre/icono/id de la app para `ray bundle`.
+                "name" => app_name = Some(as_string()?),
+                "icon" => app_icon = Some(as_string()?),
+                "id" => app_id = Some(as_string()?),
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
             "android" => {
@@ -234,6 +247,9 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         ios_development_team,
         android_application_id,
         app_copyright,
+        app_name,
+        app_icon,
+        app_id,
         app_description,
     })
 }
@@ -356,6 +372,15 @@ mod tests {
         assert_eq!(m.app_description.as_deref(), Some("A demo"));
         let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
         assert!(bare.app_copyright.is_none() && bare.app_description.is_none());
+        // M208: [app] name/icon/id — lo que antes solo entraba por --name/--icon/--id.
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nname = \"Demo App\"\nicon = \"assets/icon.png\"\nid = \"org.example.demo\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.app_name.as_deref(), Some("Demo App"));
+        assert_eq!(m.app_icon.as_deref(), Some("assets/icon.png"));
+        assert_eq!(m.app_id.as_deref(), Some("org.example.demo"));
+        assert!(bare.app_name.is_none() && bare.app_icon.is_none() && bare.app_id.is_none());
     }
 
     #[test]

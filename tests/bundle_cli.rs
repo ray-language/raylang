@@ -10,6 +10,51 @@ fn have_rustc() -> bool {
     Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// M208 (feedback 25 de ray-remote): `--help` imprime el uso sin compilar nada y un flag desconocido
+/// es error 64 con el uso — antes ambos hacían un bundle completo (17 s de release) en silencio.
+#[test]
+fn help_and_unknown_flags_do_not_build_anything() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["bundle", "--help"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("usage: ray bundle") && text.contains("[app] name/icon/id"), "{text}");
+    for bad in [&["bundle", "--bogus-flag"][..], &["bundle", "--native"][..], &["bundle", "--icon"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(bad).output().unwrap();
+        assert_eq!(out.status.code(), Some(64), "{bad:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("usage: ray bundle"), "{err}");
+    }
+}
+
+/// M208: `[app] name` e `id` del ray.toml alimentan el bundle (antes solo `--name`/`--id`).
+#[test]
+fn app_name_and_id_come_from_the_manifest() {
+    if !have_rustc() {
+        return;
+    }
+    let base = std::env::temp_dir().join("ray_bundle_cli_app");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"mini-app\"\nversion = \"1.0.0\"\nentry = \"main.ray\"\n\n[app]\nname = \"Mini App\"\nid = \"org.example.mini\"\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("main.ray"), "fn main() { print(\"hi\"); }\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["bundle", "main.ray", "--without", "mimalloc,ahash,fibers", "-o", "."])
+        .current_dir(&base)
+        .output()
+        .expect("corre");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    if cfg!(target_os = "macos") {
+        let plist = std::fs::read_to_string(base.join("Mini App.app/Contents/Info.plist")).expect("el .app lleva el [app] name");
+        assert!(plist.contains("<key>CFBundleIdentifier</key><string>org.example.mini</string>"), "{plist}");
+    } else if cfg!(target_os = "linux") {
+        assert!(base.join("Mini App").is_dir() || base.join("Mini App.desktop").exists() || base.read_dir().unwrap().any(|e| e.unwrap().file_name().to_string_lossy().contains("Mini App")), "el bundle lleva el [app] name");
+    }
+}
+
 #[test]
 fn bundle_produces_the_platform_structure() {
     if !have_rustc() {

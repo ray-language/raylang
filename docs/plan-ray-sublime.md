@@ -53,7 +53,7 @@ Hecho (M211): 18 construcciones rechazadas por nombre, idéntico en VM, intérpr
 pánico inyectado en un worker (`RAYLANG_DEBUG_PANIC_WORKER`) termina con 101 en menos de un
 segundo, no cuelga.
 
-### G2. `impl Ord` de usuario + `sort` rompe el binario nativo (entrada 27) — M
+### G2. `impl Ord` de usuario + `sort` rompe el binario nativo (entrada 27) — M ✅ M212
 
 `sort(rs)` con `impl Ord for Range` corre en la VM (`1 5`) y en nativo falla con
 `E0277: the trait bound Range: Ord is not satisfied`: `__ray_sort` exige el `Ord` de Rust y el

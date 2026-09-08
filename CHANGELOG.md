@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`impl Ord` de usuario + `sort` ya compila en nativo** (M212, ray-sublime #27): el transpilador
+  emite `PartialEq`/`Eq`/`PartialOrd`/`Ord` de Rust para el struct o enum delegando en su `less`;
+  antes corría en la VM y el binario nativo fallaba con `E0277`.
 - **`std/regex` rechaza lo que no implementa** (M211, ray-sublime #1–#3): look-around, grupos
   atómicos, flags en línea, `\p{…}`, backreferences, `\G`/`\A`/`\z`, `\h`, posesivos, clases
   POSIX y `&&` devuelven `Err` con nombre en `compile` — antes "compilaban" y reventaban (ICE) en

@@ -12629,3 +12629,22 @@ y no cabe en un hito; `std/regex` es un motor lineal y la referencia ahora lista
 hook de pánico termina el proceso con el banner de ICE y 101 cuando el hilo que panica no es el
 worker principal (ese sigue su camino de siempre): una inyección por variable de entorno lo
 prueba sin necesitar un ICE real.
+
+## 204. M212 — `impl Ord` de usuario también ordena en nativo (sep 2026)
+
+Plan de `ray-sublime`, G2 (entrada 27): `sort(rs)` con `impl Ord for Range` corría en la VM y el
+binario nativo fallaba con `E0277: the trait bound Range: Ord is not satisfied` — descubierto al
+empaquetar, tras pasar toda la batería de tests, y costó una rama a medio construir. Misma familia
+que IDEAS §63 (`[float]`): `__ray_sort` es `Vec::sort` y exige el `Ord` de Rust, y los tipos de
+usuario se emitían con `#[derive(Clone)]` a secas; el `T#less` del usuario sí se emitía como
+función, pero nadie lo conectaba con el trait. Ahora, por cada struct o enum no genérico con un
+`T#less` en el programa, el transpilador emite `PartialEq`/`Eq`/`PartialOrd`/`Ord` con un `cmp`
+sobre dos llamadas a ese `less` (Less / Greater / Equal): `Vec::sort` es estable, como el merge
+del prelude en la VM, así que el orden de los iguales coincide, y el `<` en que se intercepta
+`.less()` resuelve por el mismo `PartialOrd`. Un struct viaja como `Rc<RefCell<T>>` y un enum como
+`Rc<T>` — el `cmp` envuelve el `self` según el caso, y `Rc`/`RefCell` ya propagan `Ord` desde `T`,
+por lo que el vector de elementos ordena sin más. Los genéricos con `impl Ord` quedan fuera (su
+`less` es genérico y no hay monomorfización que seguir en el emisor): siguen dando el error de
+Rust, ahora documentado. `examples/types/impl_ord_sort.ray` entra en el corpus nativo, que
+compara VM y nativo byte a byte: es la comprobación que faltaba para que un `sort` de tipo de
+usuario no volviera a romperse en silencio.

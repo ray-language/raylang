@@ -710,6 +710,7 @@ fn parses_files_reales_equal_what_el_oracle() {
                         // (M27.1, diferido en el toolchain auto-alojado)
         "keys.ray", // M107.3: demo de term.read_key; usa acceso a tupla `wh.0` (M27.1, idem)
         "regex_demo.ray", // M29.1: demo del motor de regex; usa interpolación f"..." (idem)
+        "impl_ord_sort.ray", // M212: impl Ord + sort en nativo; usa interpolación (M27.3, idem)
         "regex_captures_demo.ray", // M81: capturas; usa tuplas `p.0` (M27.1, idem) — rojo pre-existente
                                    // descubierto en la limpieza ES→EN (nunca estuvo en la lista)
         "chacha20.ray", // M30.1a: ChaCha20 usa enteros con tamaño u32 (M28.3, idem)

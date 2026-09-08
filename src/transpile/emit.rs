@@ -1550,6 +1550,44 @@ impl Transpiler {
     /// enum → `Name.Variant(payload)` / `Name.Variant`. Recursivo (un campo/payload struct se `borrow`ea).
     /// Genera `impl RayShow` para cada struct/enum de usuario (recursivo; genérico-consciente con
     /// `where` `A: RayShow`). struct → `Name { f: v, … }`; enum → `Name.Variant(payload)` / `Name.Variant`.
+    /// M212 (ray-sublime #27): `impl Ord for T` de usuario → `PartialEq`/`Eq`/`PartialOrd`/`Ord` de
+    /// Rust para el struct/enum manglado, con `cmp` construido sobre el `T#less` emitido (dos
+    /// llamadas: `less(a, b)` → Less, `less(b, a)` → Greater, si no Equal). Así `__ray_sort`
+    /// (`Vec::sort`, estable) ordena `[T]` igual que el merge estable del prelude en la VM, y el
+    /// `<` en que se intercepta `.less()` también resuelve. El elemento del vector es
+    /// `Rc<RefCell<T>>`, y `Rc`/`RefCell` ya propagan `Ord` desde `T`. Los tipos genéricos quedan
+    /// fuera (su `less` es genérico y no hay monomorfización que seguir aquí).
+    pub(super) fn emit_ord_impls(&self, out: &mut String, prog: &Program) {
+        let names: Vec<(String, bool)> = prog
+            .structs
+            .iter()
+            .filter(|s| s.type_params.is_empty() && !s.name.starts_with("__dyn_"))
+            .map(|s| (s.name.clone(), true))
+            .chain(prog.enums.iter().filter(|e| e.type_params.is_empty()).map(|e| (e.name.clone(), false)))
+            .collect();
+        for (name, is_struct) in names {
+            let less = format!("{name}#less");
+            if !prog.functions.iter().any(|f| f.name == less) {
+                continue;
+            }
+            let ty = mangle(&name);
+            let less_fn = mangle(&less);
+            // Un struct viaja como `Rc<RefCell<T>>` (semántica de referencia); un enum, como `Rc<T>`.
+            let wrap = if is_struct { "Rc::new(std::cell::RefCell::new(" } else { "Rc::new((" };
+            writeln!(
+                out,
+                "impl PartialEq for {ty} {{ fn eq(&self, o: &Self) -> bool {{ self.cmp(o) == std::cmp::Ordering::Equal }} }}\n\
+                 impl Eq for {ty} {{}}\n\
+                 impl PartialOrd for {ty} {{ fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {{ Some(self.cmp(o)) }} }}\n\
+                 impl Ord for {ty} {{ fn cmp(&self, o: &Self) -> std::cmp::Ordering {{\n\
+                 \x20   let a = {wrap}self.clone())); let b = {wrap}o.clone()));\n\
+                 \x20   if {less_fn}(a.clone(), b.clone()) {{ std::cmp::Ordering::Less }} else if {less_fn}(b, a) {{ std::cmp::Ordering::Greater }} else {{ std::cmp::Ordering::Equal }}\n\
+                 }} }}"
+            )
+            .unwrap();
+        }
+    }
+
     pub(super) fn emit_rayshow_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
         // Un tipo-función usado como ELEMENTO de un contenedor (`[fn]`, `Map<_, fn>`, `(fn, …)`) de un campo
         // o payload necesita su `impl RayShow` (el impl genérico del contenedor exige `T: RayShow`). Un `fn`

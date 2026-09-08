@@ -204,7 +204,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | `iter` | `(xs: [T]) -> Iter<T>` | lazy iterator over an array |
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | sums an iterator (via UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **iterator terminals** (not the minimum of two values: that is `math.min`) |
-| `sort` | `(xs: [T: Ord]) -> [T]` | sorts an array (sorted copy) |
+| `sort` | `(xs: [T: Ord]) -> [T]` | sorts an array (sorted copy, stable); `T` primitive or a user type with `impl Ord` — natively too (M212) |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | test-runner assertions; they fail with `panic` |
 
 ## 6. Methods by receiver type
@@ -590,4 +590,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:13b57c4e67d6 -->
+<!-- sync: sha256:3b334feedc9e -->

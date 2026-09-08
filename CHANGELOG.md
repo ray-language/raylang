@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Herramientas y mensajes** (M217, ray-sublime #7–#11, #20, #22–#24, #29, #31, #33): `ray check`
+  (alias de `build`) y "unknown subcommand" en vez de "could not read module"; `ray doc std/ui` y
+  `ray doc ui.MenuItem` desde el CLI; headless de `std/ui` con `RAY_UI_TRACE=1` y
+  `RAY_UI_EXIT_AFTER_MS=N`; `RAYLANG_MAX_DEPTH=N` y el límite en el mensaje de desbordamiento;
+  `fn u32(…)` dice que el nombre es un tipo primitivo; el error de tipos de una función de módulo
+  que tapa un builtin señala `builtin.f(…)`; REFERENCE con el coste de `s[i]`, qué quita `trim`,
+  `b[i]` O(1) y las formas canónicas de `ray fmt`; "formatear al final" en `docs/mcp.md` y `llms.txt`.
+- **`fs.remove_all`, `fs.temp_dir`, `fs.make_temp_dir`** (M216, ray-sublime #26): borrado recursivo
+  y directorios temporales únicos, en los tres motores — lo que toda suite que toca el disco
+  escribía a mano.
 - **`sort_by(xs, less)` y `sort_by_key(xs, key)`** (M215, ray-sublime #18): orden por comparador o
   por clave, estables, en el prelude (idénticos en VM, intérprete y nativo).
 - **`out.push(Option.None)` infiere del contenedor** (M214, ray-sublime #17): el argumento de una

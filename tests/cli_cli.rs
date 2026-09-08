@@ -3673,3 +3673,59 @@ fn build_native_rebuild_to_the_same_output_replaces_the_inode() {
     assert!(native.status.success(), "el binario reconstruido no muere al exec: {:?}", native.status);
     assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "56");
 }
+
+/// M217 (ray-sublime #10): `ray check` es alias de `ray build`, y un subcomando desconocido lo dice
+/// (antes: "could not read module 'check'", que parecía un error de módulo).
+#[test]
+fn check_alias_and_unknown_subcommand() {
+    let cwd = std::env::temp_dir();
+    let path = cwd.join("ray_check_alias.ray");
+    std::fs::write(&path, "fn main() -> int { let x: int = \"no\"; 0 }\n").unwrap();
+    let (_out, err, code) = ray(&cwd, &["check", path.to_str().unwrap()]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("type error"), "{err}");
+    std::fs::write(&path, "fn main() -> int { 0 }\n").unwrap();
+    let (_out, _err, code) = ray(&cwd, &["check", path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let (_out, err, code) = ray(&cwd, &["bogus-cmd"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("unknown subcommand 'bogus-cmd'") && err.contains("ray help"), "{err}");
+}
+
+/// M217 (ray-sublime #7): `ray doc std/<módulo>` y `ray doc <módulo>.<símbolo>` desde el CLI — la
+/// misma resolución que `ray_doc` del MCP; un símbolo inexistente sale 66.
+#[test]
+fn doc_resolves_std_modules_and_symbols() {
+    let cwd = std::env::temp_dir();
+    let (out, _err, code) = ray(&cwd, &["doc", "std/ui"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("struct MenuItem { tag: string"), "{out}");
+    let (out, _err, code) = ray(&cwd, &["doc", "ui.MenuItem"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("One item of a custom menu"), "{out}");
+    let (out, _err, code) = ray(&cwd, &["doc", "len"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("len("), "{out}");
+    let (_out, err, code) = ray(&cwd, &["doc", "nope.zz"]);
+    assert_eq!(code, 66, "{err}");
+}
+
+/// M217 (ray-sublime #20): `RAYLANG_MAX_DEPTH=N` fija la profundidad de recursión y el mensaje
+/// dice el límite vigente, igual en ambos motores.
+#[test]
+fn recursion_depth_is_configurable_and_reported() {
+    let cwd = std::env::temp_dir();
+    let path = cwd.join("ray_depth.ray");
+    std::fs::write(&path, "fn down(n: int) -> int { if (n == 0) { 0 } else { down(n - 1) + 1 } }\nfn main() -> int { print(down(200)); 0 }\n").unwrap();
+    for flags in [&[][..], &["--interp"][..]] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["run"]).args(flags).arg(&path)
+            .env("RAYLANG_MAX_DEPTH", "100")
+            .output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("stack overflow (recursion too deep: 100 frames; RAYLANG_MAX_DEPTH raises the limit)"), "{flags:?}: {err}");
+    }
+    let (out, _err, code) = ray(&cwd, &["run", path.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "200");
+}

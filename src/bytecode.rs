@@ -25,14 +25,21 @@ pub enum FsOp {
     Mtime,
     /// M115.3: metadatos SIN seguir symlinks (lstat) → ["ok", kind, mode, size, mtime_ms].
     Stat,
+    /// M216 (ray-sublime #26): borrado recursivo (`fs.remove_all`).
+    RemoveAll,
+    /// M216: el directorio temporal del sistema (`fs.temp_dir`, sin argumentos).
+    TempDir,
+    /// M216: un directorio temporal NUEVO y único (`fs.make_temp_dir(prefix)`).
+    MakeTempDir,
 }
 
 impl FsOp {
     /// Nº de argumentos string (rutas) que saca de la pila.
     pub fn argc(self) -> usize {
         match self {
-            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat => 1,
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir => 1,
             FsOp::Rename | FsOp::CopyFile => 2,
+            FsOp::TempDir => 0,
         }
     }
 }

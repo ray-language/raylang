@@ -420,6 +420,13 @@ impl Parser {
     /// tparam   = IDENT [ ':' IDENT { '+' IDENT } ]    (el bound, M9.2)
     fn function(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn'")?;
+        // M217 (ray-sublime #22): `fn u32(…)` decía "expected the function name" — el nombre está
+        // reservado por un tipo primitivo y el mensaje debe decirlo (como ya hace `Task`).
+        if let Some(prim) = self.primitive_type_keyword() {
+            return Err(self.error_here(format!(
+                "'{prim}' is a primitive type and cannot name a function (pick another name, e.g. 'le32' or 'read_{prim}')"
+            )));
+        }
         let (name, _, _) = self.expect_ident("the function name")?;
         let (type_params, bounds) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' after the function name")?;
@@ -1916,6 +1923,20 @@ impl Parser {
         }
     }
 
+    /// M217: el nombre del tipo primitivo si el token actual es una palabra clave de tipo.
+    fn primitive_type_keyword(&self) -> Option<String> {
+        Some(match &self.peek().kind {
+            TokenKind::IntType => "int".to_string(),
+            TokenKind::FloatType => "float".to_string(),
+            TokenKind::BoolType => "bool".to_string(),
+            TokenKind::StringType => "string".to_string(),
+            TokenKind::CharType => "char".to_string(),
+            TokenKind::BytesType => "bytes".to_string(),
+            TokenKind::UIntType(w) => format!("u{w}"),
+            _ => return None,
+        })
+    }
+
     /// Construye un error apuntando al token actual, subrayándolo entero (M33a).
     fn error_here(&self, msg: String) -> ParseError {
         let t = self.peek();
@@ -1980,6 +2001,15 @@ fn is_lvalue(e: &Expr) -> bool {
 // =====================================================================
 #[cfg(test)]
 mod tests {
+    /// M217 (ray-sublime #22): un tipo primitivo como nombre de función dice que está reservado.
+    #[test]
+    fn a_primitive_type_cannot_name_a_function() {
+        for (src, prim) in [("fn u32(x: int) -> int { x }", "u32"), ("fn int() -> int { 1 }", "int"), ("fn bytes() -> int { 1 }", "bytes")] {
+            let tokens = crate::lexer::lex(src).unwrap();
+            let e = crate::parser::parse(tokens).expect_err("debe fallar");
+            assert!(e.msg.contains(&format!("'{prim}' is a primitive type and cannot name a function")), "{}", e.msg);
+        }
+    }
     use super::*;
 
     /// Parsea una expresión suelta (para tests de precedencia/asociatividad).

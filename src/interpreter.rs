@@ -31,7 +31,7 @@ use crate::ast::*;
 use crate::bytecode::MathFn;
 use crate::runtime::{
     eval_const_literal, make_uint, program_args, Cell, Closure, EnumInstance, MapKey,
-    RuntimeError, StructInstance, Value, MAX_CALL_DEPTH,
+    RuntimeError, StructInstance, Value,
 };
 
 
@@ -211,11 +211,11 @@ impl<'a> Interpreter<'a> {
         // Rust (que acabaría en segfault). La comprobación es ANTES de incrementar,
         // igual que la VM mira `frames.len()` antes de empujar el marco → ambos motores
         // coinciden en la frontera. La posición es la del cuerpo de la función.
-        if self.depth >= MAX_CALL_DEPTH {
+        if self.depth >= crate::runtime::max_call_depth() {
             return Err(runtime_error(
                 body.line,
                 body.col,
-                "stack overflow (recursion too deep)",
+                &crate::runtime::stack_overflow_message(),
             ));
         }
         self.depth += 1;
@@ -1775,11 +1775,15 @@ impl<'a> Interpreter<'a> {
             }
             // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
             // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
-            "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__stat" | "__rename" | "__copy_file" => {
+            "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__stat" | "__rename" | "__copy_file"
+            | "__remove_all" | "__temp_dir" | "__make_temp_dir" => {
                 use crate::bytecode::FsOp;
                 let op = match name {
                     "__mkdir" => FsOp::Mkdir,
                     "__remove_dir" => FsOp::RemoveDir,
+                    "__remove_all" => FsOp::RemoveAll,
+                    "__temp_dir" => FsOp::TempDir,
+                    "__make_temp_dir" => FsOp::MakeTempDir,
                     "__file_size" => FsOp::FileSize,
                     "__mtime" => FsOp::Mtime,
                     "__stat" => FsOp::Stat,

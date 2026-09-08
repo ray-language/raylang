@@ -56,6 +56,8 @@ fn run() {
         Some("run") => cmd_run(&rest[1..]),
         Some("dev") => cmd_dev(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
+        // M217 (ray-sublime #10): `ray check` = `ray build` sin flags de nativo — la costumbre de otros lenguajes.
+        Some("check") => cmd_build(&rest[1..]),
         Some("bundle") => cmd_bundle(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
@@ -92,6 +94,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
+  check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
@@ -3827,9 +3830,20 @@ fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn cmd_doc(args: &[String]) {
     let Some(path) = args.first() else {
-        eprintln!("usage: ray doc <file>");
+        eprintln!("usage: ray doc <file | std/<module> | <module>.<symbol> | <builtin>>");
         process::exit(64);
     };
+    // M217 (ray-sublime #7): lo que no es un archivo es un SÍMBOLO — la misma resolución que
+    // `ray_doc` del MCP: `std/ui` lista el módulo, `ui.MenuItem` o `json.parse` dan firma + doc.
+    if !Path::new(path).exists() {
+        let text = mcp::doc_text(path);
+        if text.contains("is not a builtin, a prelude function, nor a public std/* function") {
+            eprintln!("{text}");
+            process::exit(66);
+        }
+        println!("{text}");
+        return;
+    }
     let title = std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -3860,6 +3874,12 @@ fn legacy(rest: &[String]) {
         };
         if let Some(dest) = moved {
             eprintln!("'ray {first}' moved: use `{dest}` (see `ray help`)");
+            process::exit(64);
+        }
+        // M217 (ray-sublime #10): un primer argumento que no es flag ni archivo existente ni termina
+        // en `.ray` era "could not read module 'check'" — parecía un módulo, no un subcomando.
+        if !first.starts_with('-') && !first.ends_with(".ray") && !first.ends_with(".ray.html") && !Path::new(first).exists() {
+            eprintln!("unknown subcommand '{first}' (run `ray help` for the list)");
             process::exit(64);
         }
     }

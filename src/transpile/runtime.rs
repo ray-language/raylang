@@ -337,6 +337,15 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // enruta por el merge sort del prelude (NaN queda fuera de __sort_prim a propósito): aquí se
     // replica EXACTAMENTE ese merge bottom-up estable comparando con `<` — paridad byte-idéntica
     // incluso con NaN, cosa que `total_cmp`/`sort_by` con orden no-total no garantizarían.
+    // M216: fs.make_temp_dir(prefix) — `<temp>/<prefix><pid>_<n>`, único por proceso y llamada.
+    out.push_str(concat!(
+        "fn __ray_make_temp_dir(prefix: &str) -> Result<Rc<str>, Rc<str>> {\n",
+        "    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+        "    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+        "    let clean: String = prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.').collect();\n",
+        "    let dir = std::env::temp_dir().join(format!(\"{clean}{}_{n}\", std::process::id()));\n",
+        "    match std::fs::create_dir_all(&dir) { Ok(()) => Ok(Rc::<str>::from(dir.to_string_lossy().as_ref())), Err(e) => Err(Rc::<str>::from(e.to_string().as_str())) }\n}\n",
+    ));
     out.push_str("fn __ray_sort_float(a: &Rc<std::cell::RefCell<Vec<f64>>>) -> Rc<std::cell::RefCell<Vec<f64>>> {\n");
     out.push_str("    let mut src = a.borrow().clone(); let n = src.len(); let mut width = 1;\n");
     out.push_str("    while width < n {\n");

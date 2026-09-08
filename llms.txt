@@ -177,7 +177,7 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*
    crypto.chacha20poly1305_seal/open crypto.random_bytes crypto.x25519_public_key/
    x25519_shared_secret` (raw DH → always `crypto.hkdf_sha256` before AEAD) ·
-   `fs.read_file(p) fs.write_file(p, s) fs.exists(p)` · `time.now() time.sleep(ms)` ·
+   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.remove_all(p) fs.make_temp_dir(prefix)` · `time.now() time.sleep(ms)` ·
    `random.below(n)`.
 
 Generic collections are MODULE functions: `import std/collections/deque;` then
@@ -258,7 +258,9 @@ ray serve [dir]             # static file server for previews (127.0.0.1:8000; -
 ```
 
 Always run what you write: the checker's messages are positioned and specific — treat
-them as the feedback loop, not as failure.
+them as the feedback loop, not as failure. Format (`ray fmt`) at the END of a task, never
+between text-replacement patches: the canonical rewrite (collapsed calls, split signatures)
+removes the next patch's anchor silently — verify with grep that each patch landed.
 
 Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 `[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,

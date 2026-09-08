@@ -526,10 +526,20 @@ impl Transpiler {
             }
             // Operaciones de directorio con resultado unitario → Result<int,string> (Ok(0)/Err(msg)):
             // mkdir (create_dir_all), remove_dir (solo vacío), rename, copy_file (std::fs::copy).
-            "mkdir" | "remove_dir" | "rename" | "copy_file" => {
+            // M216: temp_dir() -> string (total) y make_temp_dir(prefix) -> Result<string,string>.
+            "temp_dir" => {
+                out.push_str("Rc::<str>::from(std::env::temp_dir().to_string_lossy().as_ref())");
+            }
+            "make_temp_dir" => {
+                out.push_str("__ray_make_temp_dir(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "mkdir" | "remove_dir" | "remove_all" | "rename" | "copy_file" => {
                 let (rust_fn, two_args, map_unit) = match ffn {
                     "mkdir" => ("std::fs::create_dir_all", false, false),
                     "remove_dir" => ("std::fs::remove_dir", false, false),
+                    "remove_all" => ("std::fs::remove_dir_all", false, false),
                     "rename" => ("std::fs::rename", true, false),
                     _ => ("std::fs::copy", true, true), // copy devuelve u64 → .map(|_| ())
                 };
@@ -2507,7 +2517,9 @@ impl Transpiler {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
-                        "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
+                        "temp_dir" => Type::String,
+                        "make_temp_dir" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
+                        "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir" | "remove_all"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
                         | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "unlock" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])

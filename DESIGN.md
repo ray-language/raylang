@@ -12680,3 +12680,38 @@ transpilador las emite como cualquier función genérica del prelude, así que l
 coinciden por construcción (`examples/stdlib/sort_by.ray` entra en el corpus nativo). El coste de
 `sort_by_key` es `key` dos veces por comparación; una versión con claves precalculadas (Schwartz)
 se hará si alguna app lo mide.
+
+## 207. M216 — `fs.remove_all`, `fs.temp_dir` y `fs.make_temp_dir` (sep 2026)
+
+Plan de `ray-sublime`, H4 (entrada 26): montar un árbol de paquetes de prueba obligó a escribir
+un `remove_tree` recursivo a mano (`list_dir` + `is_dir` + `remove_file`/`remove_dir`) y a fijar
+la ruta temporal a `/tmp`. `remove_dir` era solo-vacío a propósito ("el borrado recursivo es
+peligroso → a demanda", M-fs); la demanda llegó, y la respuesta es una función con **nombre
+propio** —`remove_all`, no un flag en `remove_dir`— para que el borrado recursivo se vea en el
+código. `temp_dir` devuelve el temporal del sistema (portátil: `$TMPDIR`, `/tmp`, `%TEMP%`) y
+`make_temp_dir(prefix)` crea `<temp>/<prefix><pid>_<n>` con un contador por proceso: dos
+ejecuciones en paralelo —el caso de una suite de tests— no colisionan, y dos llamadas seguidas
+tampoco. Los tres van por el opcode etiquetado `FsTagged`/`FsOp` (M67), con `TempDir` como el
+primer `FsOp` de aridad cero; el nativo emite `std::fs::remove_dir_all`, `std::env::temp_dir` y
+un helper con el mismo esquema de nombre, así que la ruta que devuelve un motor la entiende otro.
+
+## 208. M217 — el lote de herramientas y mensajes de `ray-sublime` (sep 2026)
+
+Plan de `ray-sublime`, lote I: nueve entradas pequeñas con la misma lógica que M205 —donde el
+usuario tropezó, la herramienta debe decir por qué o hacer lo obvio—. `ray check` es alias de
+`ray build` (la costumbre de otros lenguajes), y un primer argumento que no es flag, ni archivo
+existente, ni `.ray` es "unknown subcommand" en vez de "could not read module 'check'". `ray doc`
+acepta lo que no es un archivo como símbolo y responde exactamente lo que `ray_doc` del MCP
+(`std/ui` lista, `ui.MenuItem` da campos y doc): una sola resolución, dos puertas. El backend
+headless de `std/ui` gana `RAY_UI_TRACE=1` (cada `open`/`eval_js`/`reply` en stderr, para que un
+test afirme QUÉ contestó la app sin que cada app invente su log) y `RAY_UI_EXIT_AFTER_MS=N`, un
+hilo vigilante que termina el proceso con 0 tras N ms sin eventos encolados: vigilante y no
+plazo en `next_event_blocking`, porque la VM aparca la fibra en el fd de eventos y nunca pasa por
+ahí. `RAYLANG_MAX_DEPTH=N` fija la profundidad de recursión (VM e intérprete, mismo mensaje con el
+límite vigente). Dos mensajes: `fn u32(…)` dice que `u32` es un tipo primitivo (Rust solo: el
+lexer auto-alojado no tiene el token), y "argument 1 of 'settings::get'…" añade que la `get` del
+módulo tapa al builtin y que `builtin.get(…)` es la salida (también para funciones del prelude,
+que `builtin.` alcanza igual). Y la documentación: el coste de `s[i]` junto a la regla `chars()`
+una vez / `bytes` en O(1) (mientras H1 no cambie la representación), qué quita `trim`, las formas
+canónicas de `ray fmt` que sorprenden, y "formatear al final, nunca entre parches" en
+`docs/mcp.md` y `llms.txt` — la entrada 31 no era un bug del formateador sino del flujo.

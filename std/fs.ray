@@ -93,6 +93,27 @@ pub fn remove_dir(path: string) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+// M216 (ray-sublime #26): lo que toda suite de tests que toca el disco acaba escribiendo a mano.
+/// Removes `path` and EVERYTHING under it (files and subdirectories); `Err` if it does not exist
+/// or cannot be removed. `remove_dir` only removes an empty directory.
+pub fn remove_all(path: string) -> Result<int, string> {
+    let r = __remove_all(path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The system's temporary directory (`$TMPDIR`, `/tmp`, `%TEMP%`…), without a trailing separator.
+pub fn temp_dir() -> string {
+    let r = __temp_dir();
+    r[1]
+}
+
+/// Creates a NEW, unique temporary directory `<temp_dir>/<prefix><pid>_<n>` and returns its path;
+/// two processes (or two calls) never collide. Remove it with `remove_all` when done.
+pub fn make_temp_dir(prefix: string) -> Result<string, string> {
+    let r = __make_temp_dir(prefix);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 /// Whether the path exists and is a directory (total; never fails).
 pub fn is_dir(path: string) -> bool {
     __is_dir(path)

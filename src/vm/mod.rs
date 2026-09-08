@@ -38,7 +38,10 @@ use sched::*;
 /// **mismo** que el del intérprete (`runtime::MAX_CALL_DEPTH`, M13.3a) para que
 /// ambos motores coincidan en la frontera: un programa que recurre justo al límite
 /// da el mismo veredicto en los dos.
-const MAX_FRAMES: usize = crate::runtime::MAX_CALL_DEPTH;
+/// M217: el límite de marcos, configurable con `RAYLANG_MAX_DEPTH` (ver `runtime::max_call_depth`).
+fn max_frames() -> usize {
+    crate::runtime::max_call_depth()
+}
 
 /// M38.3b paso 3: cuando un worker no encuentra fibra lista pero otro sigue ejecutando (`running > 0`),
 /// espera con un *busy-poll* de baja frecuencia (en vez de una `Condvar`, que exigiría pasar el guard del
@@ -4057,8 +4060,8 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Call(idx, argc) => {
-                    if self.cur.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
+                    if self.cur.frames.len() >= max_frames() {
+                        return Err(runtime_error(pos!().0, pos!().1, &crate::runtime::stack_overflow_message()));
                     }
                     let base = self.push_locals(*idx);
                     for i in (0..*argc).rev() {
@@ -4092,8 +4095,8 @@ impl<'a> Vm<'a> {
                 // --- Funciones de primera clase (M4.1) ---
                 OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
                 OpCode::CallValue(argc) => {
-                    if self.cur.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
+                    if self.cur.frames.len() >= max_frames() {
+                        return Err(runtime_error(pos!().0, pos!().1, &crate::runtime::stack_overflow_message()));
                     }
                     let mut args_rev = Vec::with_capacity(*argc);
                     for _ in 0..*argc {
@@ -4121,8 +4124,8 @@ impl<'a> Vm<'a> {
                 // cierra el marcador (camino bueno) o el manejador de errores del bucle (camino
                 // malo), no este opcode.
                 OpCode::TryCall => {
-                    if self.cur.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
+                    if self.cur.frames.len() >= max_frames() {
+                        return Err(runtime_error(pos!().0, pos!().1, &crate::runtime::stack_overflow_message()));
                     }
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),

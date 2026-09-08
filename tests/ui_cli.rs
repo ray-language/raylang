@@ -91,6 +91,30 @@ fn open_with_validates_its_options_on_both_engines() {
     }
 }
 
+/// M217 (ray-sublime #8, #9): con `RAY_UI_TRACE=1` el headless escribe en stderr cada open y eval_js
+/// (y por tanto cada `ui.reply`), y con `RAY_UI_EXIT_AFTER_MS=N` el proceso termina solo (salida 0)
+/// tras N ms sin eventos — sin `perl -e alarm` en CI. La fibra estaba aparcada en `next_event()`.
+#[test]
+fn headless_trace_and_exit_after_idle() {
+    let path = tmp("trace_exit").join("main.ray");
+    std::fs::write(&path, "import std/ui;\nfn main() {\n    match (ui.open(\"T\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Ok(h) => { let _ = ui.eval_js(h, \"reply(1)\"); print(\"opened\"); let _ = ui.next_event(); print(\"never\"); },\n        Result.Err(e) => print(e),\n    }\n}\n").unwrap();
+    let started = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg(&path)
+        .env("RAY_UI_BACKEND", "headless")
+        .env("RAY_UI_TRACE", "1")
+        .env("RAY_UI_EXIT_AFTER_MS", "300")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(15), "termina solo");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    let so = String::from_utf8_lossy(&out.stdout);
+    assert!(err.contains("[ui] open 1 T http://127.0.0.1:1/") && err.contains("[ui] eval 1 reply(1)") && err.contains("[ui] exit"), "{err}");
+    assert_eq!(so, "opened\n", "la salida anterior al cierre se conserva; 'never' no llega");
+}
+
 #[test]
 fn headless_battery_matches_on_all_three_engines() {
     let base = tmp("battery");

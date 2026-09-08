@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.11.3 — 2026-09-08
 
 - **Nativo: `s[i]` y `len(s)` amortizados O(1)** (M223, par del M213 de la VM): `ray build --native`
   emitía `s[i]` como `chars().nth(i)` (cuadrático en un bucle sobre el texto) y `len` escaneaba la

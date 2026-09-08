@@ -1769,6 +1769,16 @@ usa la misma caché.
 
 Sin cambio observable: los tres motores dan lo mismo; el intérprete (oráculo) mantiene `String`.
 
+**Nativo (M223).** El mismo bench en `ray build --native --release` seguía cuadrático (`chars().nth`)
+hasta que el runtime generado recibió la misma caché (`__ray_char_at`/`__ray_char_len`, DESIGN §215):
+
+| Bucle (release, nativo) | 1.11.2 | M223 |
+|---|---|---|
+| `s[i]` ascendente, ASCII 288k | 1,32 s | **0,04 s** |
+| `s[j]` descendente, UTF-8 120k | 0,40 s | **0,02 s** |
+
+Ambos casos viven en `benchmarks/str_index.ray` y `str_index_utf8.ray` y en el gate de regresión.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

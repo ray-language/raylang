@@ -306,6 +306,37 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("    unsafe { Rc::from_raw(Rc::into_raw(bytes) as *const str) }\n}\n");
     // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la primera aparición de sub (como la VM;
     // sub vacío → Some(0)). Rust `str::find` da índice de BYTE, así que se compara por char.
+    // M223 (ray-sublime #12, par del M213 de la VM): `s[i]` y `len(s)` amortizados O(1). Antes `s[i]`
+    // era `chars().nth(i)` (recorre desde el principio: un bucle sobre el texto es cuadrático) y `len`
+    // escaneaba `is_ascii` en cada llamada. Caché de UNA entrada por hilo —la última cadena, retenida
+    // por su `Rc` para que la dirección no pueda reutilizarse— con ASCII-ness, longitud en caracteres
+    // y la última pareja (carácter, byte): ASCII indexa el byte; no-ASCII avanza o retrocede desde la
+    // última posición. Sin `yield` dentro: el `RefCell` nunca queda prestado a través de una fibra.
+    out.push_str("struct __RayStrEntry { s: Rc<str>, ascii: bool, chars: usize, last_char: usize, last_byte: usize }\n");
+    out.push_str("thread_local! { static __RAY_STR_LAST: std::cell::RefCell<Option<__RayStrEntry>> = const { std::cell::RefCell::new(None) }; }\n");
+    out.push_str("fn __ray_str_entry<R>(s: &Rc<str>, f: impl FnOnce(&mut __RayStrEntry) -> R) -> R {\n");
+    out.push_str("    __RAY_STR_LAST.with(|cell| {\n");
+    out.push_str("        let mut slot = cell.borrow_mut();\n");
+    out.push_str("        if !matches!(&*slot, Some(e) if Rc::ptr_eq(&e.s, s)) {\n");
+    out.push_str("            let ascii = s.is_ascii();\n");
+    out.push_str("            let chars = if ascii { s.len() } else { s.chars().count() };\n");
+    out.push_str("            *slot = Some(__RayStrEntry { s: Rc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });\n");
+    out.push_str("        }\n");
+    out.push_str("        f(slot.as_mut().unwrap())\n");
+    out.push_str("    })\n}\n");
+    out.push_str("#[inline] fn __ray_char_len(s: &Rc<str>) -> i64 { __ray_str_entry(s, |e| e.chars as i64) }\n");
+    out.push_str("fn __ray_char_at(s: &Rc<str>, i: i64) -> Option<char> {\n");
+    out.push_str("    let Ok(i) = usize::try_from(i) else { return None };\n");
+    out.push_str("    __ray_str_entry(s, |e| {\n");
+    out.push_str("        if i >= e.chars { return None; }\n");
+    out.push_str("        if e.ascii { return Some(e.s.as_bytes()[i] as char); }\n");
+    out.push_str("        let bytes = e.s.as_bytes();\n");
+    out.push_str("        let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i { (e.last_char, e.last_byte) } else { (0, 0) };\n");
+    out.push_str("        while ci < i { let b = bytes[bi]; bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 }; ci += 1; }\n");
+    out.push_str("        while ci > i { bi -= 1; while bi > 0 && (bytes[bi] & 0xC0) == 0x80 { bi -= 1; } ci -= 1; }\n");
+    out.push_str("        e.last_char = ci; e.last_byte = bi;\n");
+    out.push_str("        e.s[bi..].chars().next()\n");
+    out.push_str("    })\n}\n");
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
     out.push_str("    if s.is_ascii() { return s.find(sub).map(|i| i as i64); }\n");
     out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");

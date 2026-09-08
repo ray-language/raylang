@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Nativo: `s[i]` y `len(s)` amortizados O(1)** (M223, par del M213 de la VM): `ray build --native`
+  emitía `s[i]` como `chars().nth(i)` (cuadrático en un bucle sobre el texto) y `len` escaneaba la
+  cadena en cada llamada; ahora ambos pasan por una caché por cadena (`__ray_char_at` /
+  `__ray_char_len`) en el runtime generado: 1.32 s → 0.04 s el bucle ASCII de 288k caracteres,
+  0.40 s → 0.02 s el descendente UTF-8 de 120k. Salida idéntica a la VM.
 - **Gate de rendimiento**: `benchmarks/str_index.ray` y `str_index_utf8.ray` (indexación `s[i]`
   secuencial ASCII y descendente UTF-8, la ganancia de M213) entran en `regress.py`/`measure.py`;
   baseline regrabado en 1.11.2 (el anterior era de julio y ya no casaba en memoria).

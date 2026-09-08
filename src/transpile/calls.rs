@@ -1259,10 +1259,12 @@ impl Transpiler {
                     // Fast-path ASCII (H19, como la VM en vm.rs:960): para un string ASCII, nº de octetos ==
                     // nº de chars → `.len()` (escaneo `is_ascii` con SIMD) es mucho más rápido que
                     // `.chars().count()` (decodifica char a char). Cierra la brecha O(n²) de `while i < s.len()`.
+                    // M223: la longitud sale de la caché por cadena (`__ray_char_len`): el escaneo se
+                    // paga UNA vez por cadena, no en cada `while i < s.len()`.
                     Type::String => {
-                        out.push_str("{ let __rt_s = ");
+                        out.push_str("__ray_char_len(&(");
                         self.emit_expr(out, eff[0])?;
-                        out.push_str("; if __rt_s.is_ascii() { __rt_s.len() as i64 } else { __rt_s.chars().count() as i64 } }");
+                        out.push_str("))");
                     }
                     // bytes: `len` es el nº de octetos → `.len()` es correcto.
                     _ => {

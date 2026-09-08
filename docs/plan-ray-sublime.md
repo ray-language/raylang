@@ -74,6 +74,11 @@ corrección real es representar los strings de la VM como `Rc<str>` compartidos 
 `vm/mod.rs`, más `gc`/`transfer`): una sesión, y de paso desaparece la copia en cada paso de string
 por toda la VM. Va a decisión del usuario como arco propio (M213).
 
+**Nativo (M223, 8 sep):** M213 solo cubría la VM; el transpilador seguía emitiendo `chars().nth(i)`
+(1,3 s en el bench ASCII frente a 0,09 s en la VM). El runtime generado recibe la misma caché por
+cadena (`__ray_char_at`/`__ray_char_len`): 0,04 s / 0,02 s. Es lo que ve `ray-sublime`, que compila
+en nativo.
+
 Medido hoy: 40 000 caracteres, `s[i]` en bucle 370 ms frente a 36 ms con `chars()`. Fix (c) de
 la entrada: el runtime cachea la última posición (byte, carácter) por string y el acceso
 secuencial hacia delante o atrás se vuelve amortizado O(1); el acceso aleatorio sigue O(n) y la

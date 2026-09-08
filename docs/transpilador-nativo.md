@@ -845,6 +845,8 @@ código generado.
 > ROI): cerrar del todo el anti-patrón `s[i]` exige cambiar la representación de string (`Rc<str>` →
 > indexable por char), un cambio grande y arriesgado que solo beneficia código no-idiomático; los clones
 > de `for`/`filter` no son cuello (el nativo gana igual) → no valen el análisis de mutación.
+> **Cerrado en M223 (sep 2026):** el anti-patrón `s[i]` dejó de ser cuadrático sin cambiar la
+> representación: `__ray_char_at`/`__ray_char_len` con la caché por cadena de la VM (DESIGN §215).
 
 **H20. ✅ RESUELTO. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
 `--release` fija `target-cpu=native` (binario no portable, documentado) sin alternativa "release

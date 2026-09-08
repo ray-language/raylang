@@ -960,6 +960,20 @@ fn bitwise_and_with_a_comparison_hints_the_parentheses() {
     assert!(!e.msg.contains("did you mean"), "{}", e.msg);
 }
 
+/// M214 (ray-sublime #17): el argumento de una llamada genérica toma como tipo esperado el parámetro
+/// ya sustituido — `out.push(Option.None)` con `out: [Option<string>]` infiere `T` del receptor; lo
+/// mismo `contains`, `insert` de `Map` y una función de usuario genérica. Sin nada que fije `T`,
+/// el error de inferencia se conserva.
+#[test]
+fn generic_call_arguments_take_the_solved_parameter_as_expected_type() {
+    let ok = "fn first<T>(xs: [T], x: T) -> T { x }\nfn main() -> int {\n    var out: [Option<string>] = [];\n    out.push(Option.None);\n    let _c = out.contains(Option.None);\n    var m: Map<string, Option<int>> = Map.new();\n    m.insert(\"a\", Option.None);\n    let _f = first([Option.Some(1)], Option.None);\n    0\n}";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn main() -> int { let xs = [Option.None]; 0 }",
+        "could not infer the type parameter 'T'",
+    );
+}
+
 #[test]
 fn generic_as_value_is_error() {
     err_contains(

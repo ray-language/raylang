@@ -2899,13 +2899,21 @@ impl Checker {
         // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
         // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
         if let Some(b) = crate::builtins::lookup(name) {
-            let mut arg_types = Vec::with_capacity(args.len());
+            let mut arg_types: Vec<Type> = Vec::with_capacity(args.len());
             for (i, a) in args.iter().enumerate() {
                 if i == 0 && let Some(r) = recv {
                     arg_types.push(r.clone()); // receptor ya tipado: no re-verificar
                     continue;
                 }
-                arg_types.push(self.check_expr(a)?);
+                // M214 (ray-sublime #17): el contenedor del primer argumento fija el tipo ESPERADO
+                // de los demás — `out.push(Option.None)` con `out: [Option<string>]` infiere `T`
+                // del elemento, como ya hacía una función de usuario con `Option<int>` en la firma.
+                let expected_arg = arg_types.first().and_then(|t0| builtin_arg_expected(name, t0, i));
+                let ty = match expected_arg {
+                    Some(exp) if !type_has_var(&exp) => self.check_expr_expected(a, &exp)?,
+                    _ => self.check_expr(a)?,
+                };
+                arg_types.push(ty);
             }
             return match (b.check)(&arg_types) {
                 Ok(t) => {
@@ -3054,7 +3062,11 @@ impl Checker {
             let at = if i == 0 && let Some(r) = recv {
                 r.clone() // receptor ya tipado: no re-verificar (ver check_named_call_recv)
             } else {
-                self.check_expr(arg)?
+                // M214 (ray-sublime #17): el parámetro, sustituido con lo inferido HASTA AQUÍ, es
+                // el tipo esperado del argumento si ya es concreto — `out.push(Option.None)` con
+                // `out: [Option<string>]` fija `T` por el receptor y `None` lo toma de ahí (como
+                // los payloads de un constructor de enum, `check_value_against`).
+                self.check_value_against(arg, param, &sigma)?
             };
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "argument {} of {}: {}", i + 1, label, reason
@@ -3391,5 +3403,20 @@ impl Checker {
             None => 1,
         };
         TypeError { msg, line, col, len }
+    }
+}
+
+/// M214: el tipo esperado del argumento `i` de un builtin de contenedor, dado el tipo del primer
+/// argumento: `push`/`contains`/`position` sobre `[T]` esperan `T`; `insert` sobre `Map<K, V>`
+/// espera `K` y `V`; `get`/`remove`/`contains_key` esperan `K`; `send` sobre `Channel<T>` espera
+/// `T`. `None` para todo lo demás (el argumento se tipa sin expectativa, como siempre).
+fn builtin_arg_expected(name: &str, first: &Type, i: usize) -> Option<Type> {
+    match (name, first, i) {
+        ("push" | "contains" | "position", Type::Array(elem), 1) => Some((**elem).clone()),
+        ("insert", Type::Map(k, _), 1) => Some((**k).clone()),
+        ("insert", Type::Map(_, v), 2) => Some((**v).clone()),
+        ("get" | "remove" | "contains_key", Type::Map(k, _), 1) => Some((**k).clone()),
+        ("send" | "try_send", Type::Channel(t), 1) => Some((**t).clone()),
+        _ => None,
     }
 }

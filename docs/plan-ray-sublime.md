@@ -65,7 +65,14 @@ primitivos siguen por `__ray_sort`. Test en `native_corpus`/`native_differential
 
 ## 3. Lote H — checker y stdlib pequeña
 
-### H1. Indexar un string por carácter deja de ser cuadrático (entrada 12) — M
+### H1. Indexar un string por carácter deja de ser cuadrático (entrada 12) — L (decisión)
+
+**Diagnóstico (8 sep):** el coste no es solo el escaneo hasta `i`: `HeapValue::Str` es un `String`
+propio, así que cada `s[i]` **clona la cadena entera** al cargar la variable y además recorre la
+cadena para decidir si es ASCII — dos O(n) por acceso. Una caché de posición no lo arregla. La
+corrección real es representar los strings de la VM como `Rc<str>` compartidos (~230 sitios en
+`vm/mod.rs`, más `gc`/`transfer`): una sesión, y de paso desaparece la copia en cada paso de string
+por toda la VM. Va a decisión del usuario como arco propio (M213).
 
 Medido hoy: 40 000 caracteres, `s[i]` en bucle 370 ms frente a 36 ms con `chars()`. Fix (c) de
 la entrada: el runtime cachea la última posición (byte, carácter) por string y el acceso
@@ -73,7 +80,7 @@ secuencial hacia delante o atrás se vuelve amortizado O(1); el acceso aleatorio
 referencia lo dice junto a `s[i]`, con la regla práctica de la entrada 23 (`chars()` una vez para
 texto; `bytes` se indexa directo). Aplica a VM, intérprete y nativo (mismo `Value`).
 
-### H2. `Option.None` como argumento de una función genérica infiere del parámetro (entrada 17) — M
+### H2. `Option.None` como argumento de una función genérica infiere del parámetro (entrada 17) — M ✅ M214
 
 `out.push(Option.None)` con `out: [Option<string>]` pide anotación aunque el tipo está a la
 vista. La inferencia de M204 (brazos de `match`) tiene el mismo espíritu: el parámetro

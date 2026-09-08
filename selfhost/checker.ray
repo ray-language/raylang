@@ -2706,7 +2706,9 @@ fn check_generic_call(
     let sigma: Map<string, Type> = Map.new();
     var i = 0;
     while (i < cargs.len()) {
-        let at = check_expr(c, cargs[i])?;
+        // M214: el parámetro sustituido con lo inferido hasta aquí es el tipo esperado del
+        // argumento si ya es concreto (espejo de check_generic_call en Rust).
+        let at = check_value_against(c, cargs[i], params[i], sigma, type_params)?;
         match (unify(params[i], at, sigma, type_params)) {
             Result.Ok(_) => { },
             Result.Err(reason) => {
@@ -2901,7 +2903,11 @@ fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
         );
     }
     let a0 = check_expr(c, cargs[0])?;
-    let a1 = check_expr(c, cargs[1])?;
+    // M214: el elemento del arreglo es el tipo ESPERADO del valor (`push(out, Option.None)` infiere).
+    let a1 = match (a0) {
+        Type.TArray(elem) => check_expr_expected(c, cargs[1], elem)?,
+        _ => check_expr(c, cargs[1])?,
+    };
     match (a0) {
         Type.TArray(elem) => {
             if (!type_eq(a1, elem)) {
@@ -3192,7 +3198,12 @@ fn check_join(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
 // contains(x, y) -> bool: ad-hoc polimórfico. String: ¿subcadena? Arreglo: ¿pertenencia (mismo elem)?
 fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("contains", 2, " (string/array, value)", cargs.len(), line, col)?;
-    let a = check_args_types(c, cargs)?;
+    // M214: sobre un arreglo, el elemento es el tipo ESPERADO del valor buscado.
+    let a0 = check_expr(c, cargs[0])?;
+    let a = match (a0) {
+        Type.TArray(elem) => [a0, check_expr_expected(c, cargs[1], elem)?],
+        _ => [a0, check_expr(c, cargs[1])?],
+    };
     match (a[0]) {
         Type.TString => {
             want_string(a, cargs, 1, "contains expects a string as substring, not ")?;
@@ -3270,7 +3281,12 @@ fn check_assoc_map_new(
 
 fn check_insert(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("insert", 3, " (map, key, value)", cargs.len(), line, col)?;
-    let a = check_args_types(c, cargs)?;
+    // M214: clave y valor del Map son el tipo ESPERADO de los argumentos 2 y 3.
+    let a0 = check_expr(c, cargs[0])?;
+    let a = match (map_kv(a0)) {
+        Option.Some(kv) => [a0, check_expr_expected(c, cargs[1], kv[0])?, check_expr_expected(c, cargs[2], kv[1])?],
+        Option.None => [a0, check_expr(c, cargs[1])?, check_expr(c, cargs[2])?],
+    };
     match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {

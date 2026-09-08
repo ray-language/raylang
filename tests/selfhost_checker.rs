@@ -471,6 +471,15 @@ fn match_arms_infer_each_other_in_both_checkers() {
     );
 }
 
+/// M214: `push`/`contains`/`insert` con `Option.None` infieren del contenedor en ambos checkers.
+#[test]
+fn generic_arguments_infer_from_the_receiver_in_both_checkers() {
+    compare(
+        "fn main() -> int {\n    var out: [Option<string>] = [];\n    out.push(Option.None);\n    out.push(Option.Some(\"x\"));\n    print(out.contains(Option.None));\n    var m: Map<string, Option<int>> = Map.new();\n    m.insert(\"a\", Option.None);\n    print(m.contains_key(\"a\"));\n    print(out.len());\n    0\n}\n",
+        "selfhost_generic_arg_expected",
+    );
+}
+
 #[test]
 fn gotcha_55_has_a_hint() { // es-ok: "gotcha" es jerga técnica inglesa aceptada, no español
     // Llamada con un if-expresión (int) como callee, en posición de expresión (tras let).

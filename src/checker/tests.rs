@@ -986,6 +986,16 @@ fn return_as_expression_diverges_in_arms_and_else() {
     );
 }
 
+/// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no
+/// genéricos; en genéricos sigue siendo error, como los demás derives.
+#[test]
+fn derive_clone_on_struct_and_enum() {
+    let ok = "@derive(Clone)\nstruct F { a: int, xs: [int] }\n@derive(Clone)\nenum M { P, T(int, string) }\nfn main() -> int { let f = F { a: 1, xs: [] }; let g = f.clone(); let m = M.T(1, \"s\").clone(); g.a + match (m) { M.P => 0, M.T(n, _) => n } }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("@derive(Clone)\nstruct B<T> { v: T }\nfn main() -> int { 0 }", "cannot derive for the generic type");
+    err_contains("@derive(Copy)\nstruct F { a: int }\nfn main() -> int { 0 }", "cannot derive 'Copy'");
+}
+
 #[test]
 fn generic_as_value_is_error() {
     err_contains(

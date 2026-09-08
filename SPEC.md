@@ -116,7 +116,10 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 - Los **tipos** se namespacan por módulo (dos módulos pueden definir `Node`); las funciones
   también. `main` vive en el módulo de entrada.
 - **Anotaciones** (conjunto cerrado): `@test` sobre funciones `() -> bool` o `() -> unit`;
-  `@derive(Eq, Show, Hash, ToJson)` sobre structs/enums **no genéricos** — `Hash` genera
+  `@derive(Eq, Show, Hash, ToJson, Clone)` sobre structs/enums **no genéricos** — `Clone` genera
+  `clone(self) -> Self`, una copia **superficial** (M221: los campos por valor se copian; los de
+  referencia —arreglos, mapas, structs, canales— se comparten, igual que al escribir el literal a
+  mano); `Hash` genera
   `hash(self) -> int` combinando el `.hash()` de los campos (un campo `float`/array no es
   hashable) y `ToJson` genera `to_json(self) -> string` (su trait vive en `std/json` y debe estar
   en ámbito para derivarlo). `Ord` **no** es derivable: se implementa a mano. Cualquier otra
@@ -532,8 +535,8 @@ sobre el que se escriben las capas 1 y 2.
   `Reverse(reverse)` · `Contains(contains)` · `From<S>(convert)` · `Iterator<T>(next)` ·
   `Add(add)`/`Sub(sub)`/`Mul(mul)`/`Div(div)`/`Neg(neg)` (sobrecarga de operadores) ·
   `StrOps`/`BytesOps`/`MapOps`/`OptionOps`/`ResultOps` (los métodos de string, bytes, `Map`,
-  `Option<T>` y `Result<T,E>`). **Derivables** con `@derive(…)`: `Eq`, `Show`, `Hash` y `ToJson`
-  — y solo esos cuatro (`Ord` se implementa a mano).
+  `Option<T>` y `Result<T,E>`). **Derivables** con `@derive(…)`: `Eq`, `Show`, `Hash`, `ToJson` y
+  `Clone` — y solo esos cinco (`Ord` se implementa a mano).
 
 ### 10.2 La biblioteca estándar `std/`
 

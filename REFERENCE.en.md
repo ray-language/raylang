@@ -473,6 +473,7 @@ documents), `exec → Result<int, string>`, `disconnect`. Parameter binding (ant
 | `@derive(Eq)` | non-generic struct/enum | generates `impl Eq` (structural equality) |
 | `@derive(Show)` | non-generic struct/enum | generates `impl Show` (`Name { f: v }` / `Name.Variant(v)`); supports recursive enums |
 | `@derive(Hash)` | non-generic struct/enum | generates `impl Hash` (for `Set`/`Dict` keys) |
+| `@derive(Clone)` | non-generic struct/enum | M221: generates `impl Clone` (`clone(self) -> Self`), a **shallow** copy: value fields are copied, reference fields (arrays, maps, structs, channels) are shared — the same as writing the literal by hand. To copy children, `impl Clone` by hand calling their `clone()` |
 | `@derive(ToJson)` | non-generic struct/enum | generates `impl ToJson` (`to_json(self) -> string`), used by the web framework's typed JSON responses. The trait lives in `std/json`: it must be in scope (`from std/json import ToJson;`) |
 
 They combine: `@derive(Eq, Show, Hash, ToJson)`. Those are the **four** derivable traits; `Ord` is
@@ -597,4 +598,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:386a133b4ac1 -->
+<!-- sync: sha256:1f0493c1c9bc -->

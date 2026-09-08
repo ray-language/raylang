@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`@derive(Clone)`** (M221, ray-sublime #14): `clone(self) -> Self` con copia superficial para
+  structs y enums no genéricos (los campos por valor se copian, los de referencia se comparten);
+  en los tres motores y en el selfhost.
 - **`return e` como expresión** (M220, ray-sublime #13): `Option.None => return code,` en un brazo
   de `match` o `else { return 99 }` como cola; diverge y cede el tipo al resto. Azúcar de
   `{ return e; }` en los dos parsers (Rust y selfhost); `ray fmt` lo conserva.

@@ -12756,3 +12756,20 @@ sentencia `return` tampoco necesita `;`. Fuera de una posición donde la diverge
 (`1 + return 2`), el bloque tipa unit y el error es el de siempre — el azúcar no crea programas
 válidos que no lo fueran ya con llaves. El parser auto-alojado aplica el mismo azúcar, así que el
 corpus de paridad de parsers incluye el ejemplo sin excepción.
+
+## 212. M221 — `@derive(Clone)`: la copia que el literal hace a mano (sep 2026)
+
+Plan de `ray-sublime`, K2 (entrada 14): los structs tienen semántica de referencia, así que
+"guardar los flags y restaurarlos" obligaba a escribir un `copy_flags` con cada campo repetido y
+a acordarse de tocarlo al añadir uno. La respuesta es un trait `Clone` en el prelude
+(`clone(self) -> Self`) derivable por el mismo generador que `Eq`/`Show`/`Hash`/`ToJson`: para
+un struct, el literal con cada campo tomado de `self`; para un enum, un `match` que reconstruye
+la variante con su payload. La decisión de semántica es explícita y está en la SPEC: copia
+**superficial**. Los campos por valor se copian; los que son referencia (arreglos, mapas, structs,
+canales, handles) se comparten — exactamente lo que hace el literal escrito a mano, sin
+sorpresas y sin tener que decidir qué significa copiar un canal o un handle. Una copia profunda
+se compone: `@derive(Clone)` en los hijos y un `impl Clone` a mano en el padre que llame a sus
+`clone()`. El nombre es `Clone` y no `Copy` porque es una llamada explícita, no una copia
+implícita al asignar. Verificado en VM, intérprete y nativo con el mismo resultado (el campo
+`bool` clonado no se comparte; el arreglo sí); el selfhost registra el método derivado como los
+demás.

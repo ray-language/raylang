@@ -480,6 +480,16 @@ fn generic_arguments_infer_from_the_receiver_in_both_checkers() {
     );
 }
 
+/// M221: `@derive(Clone)` en ambos checkers (struct y enum), y el mensaje del derive desconocido.
+#[test]
+fn derive_clone_in_both_checkers() {
+    compare(
+        "@derive(Clone)\nstruct F { a: int, b: bool }\n@derive(Clone)\nenum M { P, T(int) }\nfn main() -> int {\n    let f = F { a: 1, b: true };\n    let g = f.clone();\n    g.a = 2;\n    print(f.a);\n    print(g.a);\n    let m = M.T(3).clone();\n    match (m) {\n        M.P => print(0),\n        M.T(n) => print(n),\n    }\n    0\n}\n",
+        "selfhost_derive_clone",
+    );
+    compare("@derive(Copy)\nstruct F { a: int }\nfn main() -> int { 0 }\n", "selfhost_derive_copy_err");
+}
+
 #[test]
 fn gotcha_55_has_a_hint() { // es-ok: "gotcha" es jerga técnica inglesa aceptada, no español
     // Llamada con un if-expresión (int) como callee, en posición de expresión (tras let).

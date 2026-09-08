@@ -470,6 +470,7 @@ todos.
 | `@derive(Eq)` | struct/enum no genérico | genera `impl Eq` (igualdad estructural) |
 | `@derive(Show)` | struct/enum no genérico | genera `impl Show` (`Nombre { c: v }` / `Nombre.Variante(v)`); soporta enums recursivos |
 | `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`/`Dict`) |
+| `@derive(Clone)` | struct/enum no genérico | M221: genera `impl Clone` (`clone(self) -> Self`), copia **superficial**: los campos por valor se copian, los de referencia (arreglos, mapas, structs, canales) se comparten — lo mismo que escribir el literal a mano. Para copiar hijos, `impl Clone` a mano llamando a sus `clone()` |
 | `@derive(ToJson)` | struct/enum no genérico | genera `impl ToJson` (`to_json(self) -> string`), que usan las respuestas JSON tipadas del framework web. El trait vive en `std/json`: hay que tenerlo en ámbito (`from std/json import ToJson;`) |
 
 Se combinan: `@derive(Eq, Show, Hash, ToJson)`. Son las **cuatro** derivables; `Ord` se implementa

@@ -73,3 +73,15 @@ fn main() -> int {{
         assert_eq!(code, 0);
     }
 }
+
+/// M216 (ray-sublime #26): `remove_all` borra recursivo, `temp_dir` es el temporal del sistema y
+/// `make_temp_dir` crea un directorio nuevo y único; `Err` al borrar lo que no existe. Ambos motores.
+#[test]
+fn remove_all_and_temp_dirs_both_engines() {
+    let src = "import std/fs;\nfn main() -> int {\n    print(fs.temp_dir().len() > 0);\n    let d = match (fs.make_temp_dir(\"ray_fs_m216_\")) { Result.Ok(p) => p, Result.Err(e) => { print(e); return 1; } };\n    let d2 = match (fs.make_temp_dir(\"ray_fs_m216_\")) { Result.Ok(p) => p, Result.Err(e) => { print(e); return 1; } };\n    print(d != d2);\n    print(d.starts_with(fs.temp_dir()));\n    let _ = fs.mkdir(d + \"/a/b\");\n    let _ = fs.write_file(d + \"/a/b/f.txt\", \"x\");\n    print(fs.is_dir(d + \"/a/b\"));\n    match (fs.remove_all(d)) { Result.Ok(_) => print(\"removed\"), Result.Err(e) => print(e) }\n    let _ = fs.remove_all(d2);\n    print(fs.exists(d));\n    match (fs.remove_all(d)) { Result.Ok(_) => print(\"bad\"), Result.Err(_) => print(\"err on missing\") }\n    0\n}\n";
+    for vm in [false, true] {
+        let (out, code) = run(if vm { "fs_m216_vm" } else { "fs_m216_interp" }, src, vm);
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(out, "true\ntrue\ntrue\ntrue\nremoved\nfalse\nerr on missing\n", "vm={vm}\n{out}");
+    }
+}

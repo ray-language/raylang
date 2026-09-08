@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`fs.remove_all`, `fs.temp_dir`, `fs.make_temp_dir`** (M216, ray-sublime #26): borrado recursivo
+  y directorios temporales únicos, en los tres motores — lo que toda suite que toca el disco
+  escribía a mano.
 - **`sort_by(xs, less)` y `sort_by_key(xs, key)`** (M215, ray-sublime #18): orden por comparador o
   por clave, estables, en el prelude (idénticos en VM, intérprete y nativo).
 - **`out.push(Option.None)` infiere del contenedor** (M214, ray-sublime #17): el argumento de una

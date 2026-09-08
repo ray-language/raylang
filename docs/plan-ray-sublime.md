@@ -93,7 +93,7 @@ una función de usuario `fn f(x: Option<int>)` con `f(Option.None)`.
 En el prelude (merge estable con el comparador, como `sort`), con opcode en la VM y helper
 nativo. Con G2 hecho, el nativo usa el mismo camino. Cierra el caso general de `std/sort`.
 
-### H4. `fs.remove_all(path)` y `fs.temp_dir()` / `fs.make_temp_dir(prefix)` (entrada 26) — S
+### H4. `fs.remove_all(path)` y `fs.temp_dir()` / `fs.make_temp_dir(prefix)` (entrada 26) — S ✅ M216
 
 Tres funciones en `std/fs`, con primitivos `__remove_all`, `__temp_dir` y `__make_temp_dir`
 (directorio único por proceso: nada de colisiones entre ejecuciones en paralelo). Windows

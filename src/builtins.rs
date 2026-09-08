@@ -403,12 +403,36 @@ pub fn append_bytes_to_file(path: &str, data: &[u8]) -> std::io::Result<()> {
 /// M67: las operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file), compartidas
 /// por ambos motores. Devuelve el arreglo etiquetado ya montado (`["ok"(, dato)]`/`["err", msg]`) —
 /// todas las cargas son strings, así cada motor solo lo convierte a su tipo de valor.
+/// M216: crea `<temp_dir>/<prefix><pid>_<n>` (único por proceso y por llamada) y devuelve su ruta.
+pub fn make_temp_dir(prefix: &str) -> Result<String, String> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let clean: String = prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.').collect();
+    let dir = std::env::temp_dir().join(format!("{clean}{}_{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
     use crate::bytecode::FsOp;
     let r = match op {
         FsOp::Mkdir => std::fs::create_dir_all(&args[0]),
         // Solo directorios VACÍOS (el borrado recursivo es peligroso → a demanda).
         FsOp::RemoveDir => std::fs::remove_dir(&args[0]),
+        // M216: el borrado recursivo, a demanda y con nombre propio (`fs.remove_all`).
+        FsOp::RemoveAll => std::fs::remove_dir_all(&args[0]),
+        // M216: el temporal del sistema, total (["ok", ruta]).
+        FsOp::TempDir => {
+            return vec!["ok".to_string(), std::env::temp_dir().to_string_lossy().into_owned()];
+        }
+        // M216: un directorio temporal nuevo y ÚNICO — `<temp>/<prefix><pid>_<n>` con un contador
+        // por proceso: dos ejecuciones en paralelo (o dos llamadas seguidas) no colisionan.
+        FsOp::MakeTempDir => {
+            return match make_temp_dir(&args[0]) {
+                Ok(p) => vec!["ok".to_string(), p],
+                Err(e) => vec!["err".to_string(), e],
+            };
+        }
         FsOp::Rename => std::fs::rename(&args[0], &args[1]),
         FsOp::CopyFile => std::fs::copy(&args[0], &args[1]).map(|_| ()),
         FsOp::FileSize => {
@@ -3657,6 +3681,21 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__remove_dir", opcode: OpCode::FsTagged(FsOp::RemoveDir), check: |a| {
         arity(a, 1, "__remove_dir", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__remove_dir expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M216: __remove_all(path) / __temp_dir() / __make_temp_dir(prefix) — etiquetados como los demás.
+    Builtin { name: "__remove_all", opcode: OpCode::FsTagged(FsOp::RemoveAll), check: |a| {
+        arity(a, 1, "__remove_all", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__remove_all expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__temp_dir", opcode: OpCode::FsTagged(FsOp::TempDir), check: |a| {
+        arity(a, 0, "__temp_dir", "")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__make_temp_dir", opcode: OpCode::FsTagged(FsOp::MakeTempDir), check: |a| {
+        arity(a, 1, "__make_temp_dir", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__make_temp_dir expects a string (the prefix), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__file_size", opcode: OpCode::FsTagged(FsOp::FileSize), check: |a| {

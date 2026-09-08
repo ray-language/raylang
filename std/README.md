@@ -86,6 +86,7 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 
 - **`std/inflate`** — `inflate_raw`/`zlib_inflate`/`gunzip` (DEFLATE/zlib/gzip), `crc32`.
 - **`std/deflate`** — `deflate_raw`/`zlib_compress`/`gzip_compress` (sobre `std/inflate` para el CRC).
+- **`std/zip`** — lectura de archivos ZIP (M219): `open`/`entries`/`find`/`read`/`read_entry`; STORE y DEFLATE sobre `std/inflate`.
 - **`std/huffman`** — `huffman_encode`/`huffman_decode`.
 
 ### Procesamiento de texto y datos (M40.7d)

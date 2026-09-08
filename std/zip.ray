@@ -1,0 +1,163 @@
+// std/zip (M219, ray-sublime #4/#21) — LECTURA de archivos ZIP: directorio central + cabeceras
+// locales, entradas STORE (0) y DEFLATE (8, sobre std/inflate), CRC-32 verificado. Sin escritura,
+// sin cifrado, sin ZIP64 ni multi-disco (se rechazan con Err). Todo en raylang puro sobre `bytes`
+// (que se indexa en O(1)): lo difícil ya lo hacía std/inflate; esto es el contenedor.
+
+import std/inflate;
+
+/// One entry of the archive as listed in the central directory: `name` as stored (with `/`
+/// separators; a directory ends in `/`), `size` uncompressed, `compressed_size`, `method`
+/// (0 = stored, 8 = deflate), `crc32` and the local header `offset`.
+pub struct Entry {
+    name: string,
+    size: int,
+    compressed_size: int,
+    method: int,
+    crc32: int,
+    offset: int,
+}
+
+/// A ZIP archive held in memory, with its entries in central-directory order.
+pub struct Archive {
+    data: bytes,
+    entries: [Entry],
+}
+
+fn le16(b: bytes, i: int) -> int {
+    b[i] + b[i + 1] * 256
+}
+
+fn le32(b: bytes, i: int) -> int {
+    b[i] + b[i + 1] * 256 + b[i + 2] * 65536 + b[i + 3] * 16777216
+}
+
+/// Parses the central directory of a ZIP file held in memory (`fs.read_file_bytes` it first).
+/// `Err` if the end-of-central-directory record is missing or malformed, or on ZIP64 /
+/// multi-disk archives (not supported).
+pub fn open(data: bytes) -> Result<Archive, string> {
+    let n = data.len();
+    if (n < 22) {
+        return Result.Err("zip: too short to be an archive");
+    }
+    // El registro EOCD (firma 0x06054b50) va al final, seguido de un comentario de hasta 65535 bytes.
+    let min = if (n > 22 + 65535) { n - 22 - 65535 } else { 0 };
+    var i = n - 22;
+    var found = 0 - 1;
+    while (i >= min) {
+        if (le32(data, i) == 101010256) {
+            found = i;
+            break;
+        }
+        i = i - 1;
+    }
+    if (found < 0) {
+        return Result.Err("zip: end of central directory not found (not a ZIP file?)");
+    }
+    let disk = le16(data, found + 4);
+    let count = le16(data, found + 10);
+    let cd_size = le32(data, found + 12);
+    let cd_off = le32(data, found + 16);
+    if (disk != 0 || count == 65535 || cd_off == 4294967295 || cd_size == 4294967295) {
+        return Result.Err("zip: multi-disk and ZIP64 archives are not supported");
+    }
+    if (cd_off + cd_size > n) {
+        return Result.Err("zip: central directory out of bounds");
+    }
+    var entries: [Entry] = [];
+    var p = cd_off;
+    var k = 0;
+    while (k < count) {
+        if (p + 46 > n || le32(data, p) != 33639248) {
+            return Result.Err("zip: bad central directory entry");
+        }
+        let method = le16(data, p + 10);
+        let crc = le32(data, p + 16);
+        let csize = le32(data, p + 20);
+        let usize_ = le32(data, p + 24);
+        let nlen = le16(data, p + 28);
+        let elen = le16(data, p + 30);
+        let clen = le16(data, p + 32);
+        let off = le32(data, p + 42);
+        if (p + 46 + nlen > n) {
+            return Result.Err("zip: bad central directory entry");
+        }
+        let name = match (from_utf8(data.sub_bytes(p + 46, p + 46 + nlen))) {
+            Result.Ok(s) => s,
+            Result.Err(_) => {
+                return Result.Err("zip: an entry name is not UTF-8");
+            },
+        };
+        entries.push(
+            Entry {
+                name: name,
+                size: usize_,
+                compressed_size: csize,
+                method: method,
+                crc32: crc,
+                offset: off
+            }
+        );
+        p = p + 46 + nlen + elen + clen;
+        k = k + 1;
+    }
+    Result.Ok(Archive { data: data, entries: entries })
+}
+
+/// The entries of the archive, in central-directory order.
+pub fn entries(a: Archive) -> [Entry] {
+    a.entries
+}
+
+/// The entry called `name` (exact match, `/` separators), if any.
+pub fn find(a: Archive, name: string) -> Option<Entry> {
+    var i = 0;
+    while (i < a.entries.len()) {
+        if (a.entries[i].name == name) {
+            return Option.Some(a.entries[i]);
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
+/// Reads one entry: locates its local header, decompresses (stored or deflate) and verifies size
+/// and CRC-32. `Err` on an unsupported method (e.g. 12 = bzip2, 14 = lzma), a corrupt stream or a
+/// CRC mismatch.
+pub fn read_entry(a: Archive, e: Entry) -> Result<bytes, string> {
+    let d = a.data;
+    let h = e.offset;
+    if (h + 30 > d.len() || le32(d, h) != 67324752) {
+        return Result.Err("zip: bad local header for '" + e.name + "'");
+    }
+    let nlen = le16(d, h + 26);
+    let elen = le16(d, h + 28);
+    let start = h + 30 + nlen + elen;
+    if (start + e.compressed_size > d.len()) {
+        return Result.Err("zip: data of '" + e.name + "' out of bounds");
+    }
+    let raw = d.sub_bytes(start, start + e.compressed_size);
+    let out = if (e.method == 0) {
+        raw
+    } else if (e.method == 8) {
+        inflate.inflate_raw_limit(raw, e.size)?
+    } else {
+        return Result.Err("zip: unsupported compression method ${e.method} for '" + e.name + "'");
+    };
+    if (out.len() != e.size) {
+        return Result.Err(
+            "zip: size mismatch for '" + e.name + "' (expected ${e.size}, got ${out.len()})"
+        );
+    }
+    if (inflate.crc32(out) != e.crc32) {
+        return Result.Err("zip: CRC-32 mismatch for '" + e.name + "'");
+    }
+    Result.Ok(out)
+}
+
+/// `read_entry` of the entry called `name`; `Err` if there is no such entry.
+pub fn read(a: Archive, name: string) -> Result<bytes, string> {
+    match (find(a, name)) {
+        Option.Some(e) => read_entry(a, e),
+        Option.None => Result.Err("zip: no entry named '" + name + "'"),
+    }
+}

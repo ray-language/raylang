@@ -33,6 +33,9 @@ CASES = [
     ("loop10M",  [BIN, "--vm", "benchmarks/loop.ray"]),
     ("arrays",   [BIN, "--vm", "benchmarks/arrays.ray"]),
     ("gcnested", [BIN, "--vm", "benchmarks/gcnested.ray"]),
+    # M213: `s[i]` amortizado O(1) (ASCII y UTF-8 descendente). Un retroceso a cuadrático sería ×46.
+    ("str_index",      [BIN, "--vm", "benchmarks/str_index.ray"]),
+    ("str_index_utf8", [BIN, "--vm", "benchmarks/str_index_utf8.ray"]),
 ]
 
 # M98.4: los casos de MEMORIA — pico de RSS (ru_maxrss del hijo, vía os.wait4; cero deps).
@@ -122,7 +125,7 @@ def record():
         f.write("\n")
     print(f"baseline grabado en {BASELINE} ({datos['fingerprint']})")
     for nombre, seg in datos["cases"].items():
-        print(f"  {nombre:10s} {seg:.4f} s")
+        print(f"  {nombre:14s} {seg:.4f} s")
     for nombre, b in datos["mem"].items():
         print(f"  {nombre:10s} {mb(b)}")
 
@@ -145,12 +148,12 @@ def check(threshold, strict):
     for nombre, seg in actual.items():
         ref = base["cases"].get(nombre)
         if ref is None:
-            print(f"  {nombre:10s} {seg:.4f} s   (nuevo; sin referencia)")
+            print(f"  {nombre:14s} {seg:.4f} s   (nuevo; sin referencia)")
             continue
         delta = seg / ref - 1.0
         peor = max(peor, delta)
         marca = "OK  " if delta <= threshold else "LENTO"
-        print(f"  {nombre:10s} {seg:.4f} s  vs {ref:.4f} s  ({delta:+.1%})  {marca}")
+        print(f"  {nombre:14s} {seg:.4f} s  vs {ref:.4f} s  ({delta:+.1%})  {marca}")
         if delta > threshold:
             regresiones.append((nombre, delta))
     # M98.4: el gate de MEMORIA (pico de RSS vs baseline; umbral propio, más ancho).

@@ -42,6 +42,10 @@ Reservadas (no pueden usarse como identificadores):
 > `from` vale como nombre de parámetro o variable (M192): solo es palabra clave en la cabecera de
 > un `from M import …;`.
 
+> `return [e]` es también **expresión** (M220): en un brazo de `match`, en un `else` o como valor
+> de `let`, `Option.None => return code,` equivale a `{ return code; }` — **diverge** y cede el tipo
+> al resto; como cola de un bloque no necesita `;` (`else { return 99 }`). `ray fmt` lo conserva.
+
 ## 2. Símbolos y operadores
 
 ### Tabla de precedencia (de menor a mayor; SPEC §6.1)

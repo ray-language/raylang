@@ -147,7 +147,7 @@ decide cuando J1 y J2 estén: la app ya los tiene en `src/formats/` y no bloquea
 
 ## 6. Lote K — decisiones que reabre la app (las toma el usuario)
 
-### K1. `return` (y `panic`) como expresión de tipo `never` (entrada 13)
+### K1. `return` (y `panic`) como expresión de tipo `never` (entrada 13) ✅ M220 (por azúcar, sin `never`)
 
 `Option.None => return code,` en un brazo de `match` es error de sintaxis. Hoy `return` es una
 sentencia; la SPEC ya tiene la regla de divergencia para bloques (`{ return x; }` en un brazo

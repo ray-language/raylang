@@ -974,6 +974,18 @@ fn generic_call_arguments_take_the_solved_parameter_as_expected_type() {
     );
 }
 
+/// M220 (ray-sublime #13): `return e` como expresión en un brazo de `match`/`else` diverge y cede el
+/// tipo; el valor devuelto sigue chequeándose contra el tipo de retorno de la función.
+#[test]
+fn return_as_expression_diverges_in_arms_and_else() {
+    let ok = "fn f(o: Option<int>) -> int { let v = match (o) { Option.Some(x) => x, Option.None => return 0 - 1 }; v * 2 }\nfn g(b: bool) -> string { let s = if (b) { \"y\" } else { return \"n\" }; s + \"!\" }\nfn main() -> int { f(Option.Some(1)) }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn f(o: Option<int>) -> int { match (o) { Option.Some(x) => x, Option.None => return \"no\" } }\nfn main() -> int { 0 }",
+        "returning string but the function declares return type int",
+    );
+}
+
 #[test]
 fn generic_as_value_is_error() {
     err_contains(

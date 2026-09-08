@@ -209,6 +209,10 @@ pub struct Program {
     /// `match` — un formateador que cambia la construcción elegida deja de ser un formateador
     /// (feedback 22 de ray-remote). Solo lo usa `fmt` para reemitir `if let`.
     pub if_let_sites: std::collections::HashSet<(usize, usize)>,
+    /// Posiciones `(línea, col)` de los `return [e]` en posición de EXPRESIÓN (M220): el parser
+    /// los desazucara a un bloque `{ return e; }` (que diverge) y el formateador los reemite
+    /// como `return e`. Solo lo usa `fmt`.
+    pub return_expr_sites: std::collections::HashSet<(usize, usize)>,
     /// Ver [`Program::interp_sites`]. `(receptor, rhs)` de un pipeline: `x |> f(a)` → `(x, f(a))`.
     pub pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
 }

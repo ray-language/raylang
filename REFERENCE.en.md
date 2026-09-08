@@ -42,6 +42,10 @@ Reserved (cannot be used as identifiers):
 > `from` is valid as a parameter or variable name (M192): it is a keyword only at the head of a
 > `from M import …;`.
 
+> `return [e]` is also an **expression** (M220): in a `match` arm, an `else` or a `let` value,
+> `Option.None => return code,` equals `{ return code; }` — it **diverges** and yields the type to
+> the rest; as a block tail it needs no `;` (`else { return 99 }`). `ray fmt` keeps it.
+
 ## 2. Symbols and operators
 
 ### Precedence table (lowest to highest; SPEC §6.1)
@@ -593,4 +597,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:2d0f1df744bb -->
+<!-- sync: sha256:386a133b4ac1 -->

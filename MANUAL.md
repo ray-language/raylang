@@ -1379,8 +1379,9 @@ proyecto en `ray://app/files/<ruta>` (ruta canónica, `..` nunca sale de él, Ra
 tramos, ETag/304), y `ui.open("App", "ray://app/assets/index.html", 1200, 800)` abre sin puerto
 alguno. Ninguna otra aplicación de la máquina puede hablar con ese "servidor", el bundle no
 necesita el permiso de red local y los bytes van en streaming por trozos de 256 KiB — un archivo
-de 8 MiB con `fetch` y `Range` tarda unos 50 ms. Hoy lo sirve el backend de macOS; en Linux y
-Windows los montajes se aceptan y el esquema llega en los siguientes hitos.
+de 8 MiB con `fetch` y `Range` tarda unos 50 ms en macOS. Lo sirven los tres backends: WKWebView,
+WebKitGTK (con una lib anterior a 2.36 solo cuerpo y MIME, sin Range ni 304) y WebView2 (el tramo
+pedido se contesta desde memoria).
 
 Las respuestas grandes no tienen coste oculto (M225): el literal JS de `ui.reply` se escapa en el
 runtime en una pasada, así que responder 1 MB cuesta unos 4 ms de ida y vuelta y 8 MB unos 30 ms

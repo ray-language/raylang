@@ -1,0 +1,14 @@
+<body style="background:#1f2430;color:#ccc"><script>
+(async()=>{
+  const t0=performance.now();
+  const r=await fetch('ray://app/site/big.bin',{headers:{Range:'bytes=1000-'}});
+  const b=await r.arrayBuffer();
+  const t1=performance.now();
+  window.ray.send('big status='+r.status+' len='+b.byteLength+' cr='+r.headers.get('Content-Range')+' ms='+(t1-t0).toFixed(1));
+  const m=await fetch('ray://app/mem/hello.txt'); window.ray.send('mem status='+m.status+' body='+await m.text()+' type='+m.headers.get('Content-Type'));
+  const e=await fetch('ray://app/site/big.bin',{headers:{'If-None-Match':r.headers.get('ETag')}}); window.ray.send('etag status='+e.status);
+  const n=await fetch('ray://app/nope'); window.ray.send('missing status='+n.status);
+  const x=await fetch('ray://app/site/../secret'); window.ray.send('traversal status='+x.status);
+  window.ray.send('done');
+})();
+</script></body>

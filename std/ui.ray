@@ -276,8 +276,8 @@ pub fn save_file(suggested: string) -> Result<Option<string>, string> {
 /// page requests the files; `open("App", "ray://app/index.html", …)` then needs no server at all.
 /// `mount_dir("files", "/path/to/project")` serves `ray://app/files/<rel>` from disk (canonical
 /// path; `..` never escapes the directory; a directory serves its `index.html`). Requests to
-/// anything not mounted are 404. GET/HEAD only. Linux/Windows backends: pending (the mounts are
-/// accepted; the scheme is not served yet).
+/// anything not mounted are 404. GET/HEAD only. Served by the three desktop backends (WebKitGTK
+/// older than 2.36: body and MIME only, no Range/304; WebView2: the requested range from memory).
 pub fn mount_dir(prefix: string, dir: string) -> Result<int, string> {
     let r = __ui_mount("dir", prefix, dir);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

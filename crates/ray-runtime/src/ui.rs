@@ -643,7 +643,7 @@ pub mod scheme {
         let mut m = mounts().lock().unwrap();
         m.dirs.retain(|(p, _)| *p != prefix);
         m.dirs.push((prefix, canonical));
-        m.dirs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        m.dirs.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
         Ok(())
     }
 
@@ -735,12 +735,13 @@ pub mod scheme {
         let mut out = Vec::with_capacity(b.len());
         let mut i = 0;
         while i < b.len() {
-            if b[i] == b'%' && i + 2 < b.len() {
-                if let (Some(h), Some(l)) = (hex(b.get(i + 1).copied()), hex(b.get(i + 2).copied())) {
-                    out.push(h * 16 + l);
-                    i += 3;
-                    continue;
-                }
+            if b[i] == b'%'
+                && i + 2 < b.len()
+                && let (Some(h), Some(l)) = (hex(b.get(i + 1).copied()), hex(b.get(i + 2).copied()))
+            {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
             }
             out.push(b[i]);
             i += 1;
@@ -2399,6 +2400,54 @@ mod gtk {
     type FnJsResultGetValue = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
     type FnJscIsString = unsafe extern "C" fn(*mut c_void) -> i32;
     type FnJscToString = unsafe extern "C" fn(*mut c_void) -> *mut std::ffi::c_char;
+    // M227 — esquema ray:// (WebKitGTK ≥ 2.36 para status/cabeceras; antes, solo cuerpo+MIME).
+    type FnPtr0 = unsafe extern "C" fn() -> *mut c_void;
+    type FnPtr1 = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type FnSchemeCb = extern "C" fn(*mut c_void, *mut c_void);
+    type FnRegisterScheme = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, FnSchemeCb, *mut c_void, *mut c_void);
+    type FnSecurityRegister = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char);
+    type FnReqGetStr = unsafe extern "C" fn(*mut c_void) -> *const std::ffi::c_char;
+    type FnHeadersGetOne = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char) -> *const std::ffi::c_char;
+    type FnHeadersNew = unsafe extern "C" fn(i32) -> *mut c_void;
+    type FnHeadersAppend = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, *const std::ffi::c_char);
+    type FnResponseNew = unsafe extern "C" fn(*mut c_void, i64) -> *mut c_void;
+    type FnResponseSetStatus = unsafe extern "C" fn(*mut c_void, u32, *const std::ffi::c_char);
+    type FnResponseSetStr = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char);
+    type FnResponseSetHeaders = unsafe extern "C" fn(*mut c_void, *mut c_void);
+    type FnReqFinishResponse = unsafe extern "C" fn(*mut c_void, *mut c_void);
+    type FnReqFinish = unsafe extern "C" fn(*mut c_void, *mut c_void, i64, *const std::ffi::c_char);
+    type FnMemStreamNew = unsafe extern "C" fn(*const c_void, usize, *mut c_void) -> *mut c_void;
+    type FnFileNew = unsafe extern "C" fn(*const std::ffi::c_char) -> *mut c_void;
+    type FnFileRead = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+    type FnSeek = unsafe extern "C" fn(*mut c_void, i64, i32, *mut c_void, *mut c_void) -> i32;
+    type FnGMalloc = unsafe extern "C" fn(usize) -> *mut c_void;
+
+    /// M227: la API del esquema, toda opcional — sin ella las peticiones `ray://` no se sirven
+    /// (WebKit las falla) pero `ui.open` sigue funcionando en distros viejas.
+    struct SchemeApi {
+        context_default: FnPtr0,
+        register_scheme: FnRegisterScheme,
+        security_manager: Option<FnPtr1>,
+        register_secure: Option<FnSecurityRegister>,
+        register_cors: Option<FnSecurityRegister>,
+        req_get_uri: FnReqGetStr,
+        req_get_method: Option<FnReqGetStr>,
+        req_get_headers: Option<FnPtr1>,
+        headers_get_one: Option<FnHeadersGetOne>,
+        headers_new: Option<FnHeadersNew>,
+        headers_append: Option<FnHeadersAppend>,
+        response_new: Option<FnResponseNew>,
+        response_set_status: Option<FnResponseSetStatus>,
+        response_set_content_type: Option<FnResponseSetStr>,
+        response_set_headers: Option<FnResponseSetHeaders>,
+        req_finish_with_response: Option<FnReqFinishResponse>,
+        req_finish: FnReqFinish,
+        mem_stream_new: FnMemStreamNew,
+        file_new: FnFileNew,
+        file_read: FnFileRead,
+        seek: FnSeek,
+        g_malloc: FnGMalloc,
+    }
     // Las DOS generaciones del eval (aridades distintas — dos aliases, jamás uno "flexible"):
     // 2.40+ `evaluate_javascript(view, script, len, world, source_uri, cancellable, cb, data)`;
     // el clásico `run_javascript(view, script, cancellable, cb, data)`. Fire-and-forget: cb nulo.
@@ -2481,6 +2530,8 @@ mod gtk {
         js_result_get_value: Option<FnJsResultGetValue>,
         jsc_is_string: Option<FnJscIsString>,
         jsc_to_string: Option<FnJscToString>,
+        // M227 — esquema ray:// (opcional en bloque).
+        scheme: Option<SchemeApi>,
     }
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
@@ -2646,7 +2697,161 @@ mod gtk {
                     let p = bridge_sym(webkit, c"jsc_value_to_string");
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJscToString>(p))
                 },
+                scheme: load_scheme_api(webkit),
             })
+        }
+    }
+
+    /// M227: resuelve la API del esquema. Los símbolos de GIO/libsoup llegan por la clausura del
+    /// handle de webkit (como g_idle_add por gtk). Los imprescindibles (registro, uri, finish,
+    /// streams) deciden el `Some`; los de ≥ 2.36 (status/cabeceras) quedan opcionales dentro.
+    fn load_scheme_api(webkit: *mut c_void) -> Option<SchemeApi> {
+        // SAFETY: literales NUL-terminados; los transmutes replican los headers de WebKitGTK/GIO/libsoup.
+        unsafe {
+            let opt = |name: &std::ffi::CStr| {
+                let p = dlsym(webkit, name.as_ptr());
+                (!p.is_null()).then_some(p)
+            };
+            let req = |name: &std::ffi::CStr| opt(name);
+            Some(SchemeApi {
+                context_default: std::mem::transmute::<*mut c_void, FnPtr0>(req(c"webkit_web_context_get_default")?),
+                register_scheme: std::mem::transmute::<*mut c_void, FnRegisterScheme>(req(c"webkit_web_context_register_uri_scheme")?),
+                security_manager: opt(c"webkit_web_context_get_security_manager").map(|p| std::mem::transmute::<*mut c_void, FnPtr1>(p)),
+                register_secure: opt(c"webkit_security_manager_register_uri_scheme_as_secure").map(|p| std::mem::transmute::<*mut c_void, FnSecurityRegister>(p)),
+                register_cors: opt(c"webkit_security_manager_register_uri_scheme_as_cors_enabled").map(|p| std::mem::transmute::<*mut c_void, FnSecurityRegister>(p)),
+                req_get_uri: std::mem::transmute::<*mut c_void, FnReqGetStr>(req(c"webkit_uri_scheme_request_get_uri")?),
+                req_get_method: opt(c"webkit_uri_scheme_request_get_http_method").map(|p| std::mem::transmute::<*mut c_void, FnReqGetStr>(p)),
+                req_get_headers: opt(c"webkit_uri_scheme_request_get_http_headers").map(|p| std::mem::transmute::<*mut c_void, FnPtr1>(p)),
+                headers_get_one: opt(c"soup_message_headers_get_one").map(|p| std::mem::transmute::<*mut c_void, FnHeadersGetOne>(p)),
+                headers_new: opt(c"soup_message_headers_new").map(|p| std::mem::transmute::<*mut c_void, FnHeadersNew>(p)),
+                headers_append: opt(c"soup_message_headers_append").map(|p| std::mem::transmute::<*mut c_void, FnHeadersAppend>(p)),
+                response_new: opt(c"webkit_uri_scheme_response_new").map(|p| std::mem::transmute::<*mut c_void, FnResponseNew>(p)),
+                response_set_status: opt(c"webkit_uri_scheme_response_set_status").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetStatus>(p)),
+                response_set_content_type: opt(c"webkit_uri_scheme_response_set_content_type").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetStr>(p)),
+                response_set_headers: opt(c"webkit_uri_scheme_response_set_http_headers").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetHeaders>(p)),
+                req_finish_with_response: opt(c"webkit_uri_scheme_request_finish_with_response").map(|p| std::mem::transmute::<*mut c_void, FnReqFinishResponse>(p)),
+                req_finish: std::mem::transmute::<*mut c_void, FnReqFinish>(req(c"webkit_uri_scheme_request_finish")?),
+                mem_stream_new: std::mem::transmute::<*mut c_void, FnMemStreamNew>(req(c"g_memory_input_stream_new_from_data")?),
+                file_new: std::mem::transmute::<*mut c_void, FnFileNew>(req(c"g_file_new_for_path")?),
+                file_read: std::mem::transmute::<*mut c_void, FnFileRead>(req(c"g_file_read")?),
+                seek: std::mem::transmute::<*mut c_void, FnSeek>(req(c"g_seekable_seek")?),
+                g_malloc: std::mem::transmute::<*mut c_void, FnGMalloc>(req(c"g_malloc")?),
+            })
+        }
+    }
+
+    /// M227: registra `ray://` en el contexto por defecto UNA vez, antes del primer webview
+    /// (el proceso web nace con la lista de esquemas). Seguro (contexto seguro para fetch/módulos)
+    /// y CORS-enabled (las peticiones cross-origin siguen sin cabeceras CORS → no legibles).
+    fn register_scheme_once(api: &Api) {
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let Some(s) = &api.scheme else { return };
+        if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: hilo del loop GTK; el contexto por defecto vive todo el proceso.
+        unsafe {
+            let ctx = (s.context_default)();
+            if ctx.is_null() {
+                return;
+            }
+            (s.register_scheme)(ctx, c"ray".as_ptr(), on_scheme_request, std::ptr::null_mut(), std::ptr::null_mut());
+            if let Some(mgr) = s.security_manager {
+                let m = mgr(ctx);
+                if !m.is_null() {
+                    if let Some(f) = s.register_secure { f(m, c"ray".as_ptr()); }
+                    if let Some(f) = s.register_cors { f(m, c"ray".as_ptr()); }
+                }
+            }
+        }
+    }
+
+    /// M227: el callback del esquema (hilo del loop GTK). Resuelve con `scheme::serve` (puro) y
+    /// entrega un GInputStream que WebKit lee asíncrono: memoria (copia en g_malloc, liberada por
+    /// g_free) o archivo (GFileInputStream posicionado con g_seekable_seek; un tramo acotado que
+    /// no llega al final se sirve desde memoria, porque WebKit lee hasta EOF). Con WebKitGTK
+    /// < 2.36 no hay status ni cabeceras: se entrega cuerpo + MIME (200), sin Range ni 304.
+    extern "C" fn on_scheme_request(request: *mut c_void, _user: *mut c_void) {
+        let Ok(api) = api() else { return };
+        let Some(s) = &api.scheme else { return };
+        // SAFETY: WebKit entrega una WebKitURISchemeRequest válida en el hilo del loop.
+        unsafe {
+            let text = |p: *const std::ffi::c_char| -> Option<String> {
+                if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()) }
+            };
+            let uri = text((s.req_get_uri)(request)).unwrap_or_default();
+            let full = s.req_finish_with_response.is_some() && s.response_new.is_some();
+            let method = s.req_get_method.and_then(|f| text(f(request))).unwrap_or_else(|| "GET".to_string());
+            let (range, inm) = match (s.req_get_headers, s.headers_get_one) {
+                (Some(get), Some(one)) => {
+                    let h = get(request);
+                    if h.is_null() { (None, None) } else { (text(one(h, c"Range".as_ptr())), text(one(h, c"If-None-Match".as_ptr()))) }
+                }
+                _ => (None, None),
+            };
+            let resp = super::scheme::serve(&uri, &method, if full { range.as_deref() } else { None }, if full { inm.as_deref() } else { None });
+            let mime = resp.headers.iter().find(|(k, _)| k == "Content-Type").map(|(_, v)| v.clone()).unwrap_or_else(|| "application/octet-stream".to_string());
+            let mem_stream = |bytes: &[u8]| -> *mut c_void {
+                let buf = (s.g_malloc)(bytes.len().max(1));
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+                (s.mem_stream_new)(buf, bytes.len(), api.g_free as *mut c_void)
+            };
+            let (stream, len): (*mut c_void, i64) = match &resp.body {
+                super::scheme::Body::Empty => (mem_stream(&[]), 0),
+                super::scheme::Body::Bytes(b, start, n) => {
+                    let (a, z) = (*start as usize, (*start + *n) as usize);
+                    (mem_stream(&b[a..z]), *n as i64)
+                }
+                super::scheme::Body::File { path, start, len } => {
+                    let total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                    if start + len < total {
+                        // Tramo acotado: WebKit lee hasta EOF, así que va desde memoria.
+                        let mut data = Vec::with_capacity(*len as usize);
+                        let mut off = 0u64;
+                        while let Ok(c) = super::scheme::read_chunk(path, *start, *len, off) {
+                            if c.is_empty() { break; }
+                            off += c.len() as u64;
+                            data.extend_from_slice(&c);
+                        }
+                        (mem_stream(&data), data.len() as i64)
+                    } else {
+                        let cpath = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default();
+                        let file = (s.file_new)(cpath.as_ptr());
+                        let st = if file.is_null() { std::ptr::null_mut() } else { (s.file_read)(file, std::ptr::null_mut(), std::ptr::null_mut()) };
+                        if !file.is_null() { (api.g_object_unref)(file); }
+                        if st.is_null() {
+                            (mem_stream(b"not found"), 9)
+                        } else {
+                            if *start > 0 { (s.seek)(st, *start as i64, 0, std::ptr::null_mut(), std::ptr::null_mut()); }
+                            (st, *len as i64)
+                        }
+                    }
+                }
+            };
+            let cmime = std::ffi::CString::new(mime).unwrap_or_default();
+            if full {
+                let response = (s.response_new.unwrap())(stream, len);
+                if let Some(f) = s.response_set_status {
+                    let reason = std::ffi::CString::new(match resp.status { 200 => "OK", 206 => "Partial Content", 304 => "Not Modified", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 416 => "Range Not Satisfiable", _ => "OK" }).unwrap();
+                    f(response, resp.status as u32, reason.as_ptr());
+                }
+                if let Some(f) = s.response_set_content_type { f(response, cmime.as_ptr()); }
+                if let (Some(hnew), Some(happend), Some(hset)) = (s.headers_new, s.headers_append, s.response_set_headers) {
+                    let h = hnew(1); // SOUP_MESSAGE_HEADERS_RESPONSE
+                    if !h.is_null() {
+                        for (k, v) in &resp.headers {
+                            let (ck, cv) = (std::ffi::CString::new(k.as_str()).unwrap_or_default(), std::ffi::CString::new(v.as_str()).unwrap_or_default());
+                            happend(h, ck.as_ptr(), cv.as_ptr());
+                        }
+                        hset(response, h); // la respuesta toma la propiedad
+                    }
+                }
+                (s.req_finish_with_response.unwrap())(request, response);
+                (api.g_object_unref)(response);
+            } else {
+                (s.req_finish)(request, stream, len, cmime.as_ptr());
+            }
+            (api.g_object_unref)(stream);
         }
     }
 
@@ -2960,6 +3165,7 @@ mod gtk {
                 // Con CUALQUIER símbolo del puente ausente (webkit2gtk < 2.22): webview
                 // clásico SIN puente — una feature nueva jamás rompe ui.open en distros
                 // viejas (los mensajes simplemente no llegan; documentado).
+                register_scheme_once(api); // M227: antes del primer webview
                 let webview = if let (
                     Some(ucm_new),
                     Some(webview_with_ucm),
@@ -3535,7 +3741,7 @@ mod win {
     use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-        ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler,
+        ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
     };
     use windows::core::{HSTRING, PCWSTR, PWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -3905,12 +4111,28 @@ mod win {
     /// hasta que el motor responde), y deja el webview navegando a `url` con el shim inyectado.
     unsafe fn attach_webview(hwnd: HWND, id: i64, url: &str) -> Result<(ICoreWebView2Controller, ICoreWebView2), String> {
         let folder = wide(&user_data_folder());
+        // M228: el esquema `ray://` se registra en las OPCIONES del entorno (WebView2 ≥ 112; con un
+        // runtime más viejo la interfaz Options4 no existe y el esquema simplemente no se sirve).
+        // `has_authority_component` → `ray://app/x` se parsea con host `app`; sin
+        // `allowed_origins` solo las páginas del propio esquema pueden pedirle (seguridad).
+        let options: ICoreWebView2EnvironmentOptions = {
+            let o = webview2_com::CoreWebView2EnvironmentOptions::default();
+            let reg = webview2_com::CoreWebView2CustomSchemeRegistration::new(super::scheme::SCHEME.to_string());
+            // SAFETY: los setters escriben celdas propias antes de compartir el objeto con COM.
+            unsafe {
+                reg.set_treat_as_secure(true);
+                reg.set_has_authority_component(true);
+                let regi: ICoreWebView2CustomSchemeRegistration = reg.into();
+                o.set_scheme_registrations(vec![Some(regi)]);
+            }
+            o.into()
+        };
         let environment = {
             let (tx, rx) = std::sync::mpsc::channel();
             CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
                 Box::new(move |handler| {
                     // SAFETY: llamada del loader de WebView2 con el handler del crate.
-                    unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), PCWSTR(folder.as_ptr()), None, &handler) }
+                    unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), PCWSTR(folder.as_ptr()), &options, &handler) }
                         .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, environment: Option<ICoreWebView2Environment>| {
@@ -3957,6 +4179,62 @@ mod win {
                     unsafe { wv.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), &handler) }.map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(|error_code, _id: String| error_code),
+            );
+        }
+        // M228: las peticiones `ray://` se resuelven con `scheme::serve` (puro) y se contestan con
+        // una respuesta en memoria (`SHCreateMemStream`): el tramo que la página pide con Range, o
+        // el archivo entero sin él — v1 sin streaming (un IStream propio sobre el archivo es la
+        // mejora natural). Corre en el hilo de UI; la lectura es local y acotada por la petición.
+        // SAFETY: filtro + handler del crate sobre un webview vivo; `env` vive en la clausura.
+        unsafe {
+            let filter = wide(&format!("{}://*", super::scheme::SCHEME));
+            let _ = webview.AddWebResourceRequestedFilter(PCWSTR(filter.as_ptr()), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            let env = environment.clone();
+            let mut token = 0i64;
+            let _ = webview.add_WebResourceRequested(
+                &WebResourceRequestedEventHandler::create(Box::new(move |_sender, args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
+                    let Some(args) = args else { return Ok(()) };
+                    let req = args.Request()?;
+                    let text = |p: PWSTR| -> String { if p.is_null() { String::new() } else { CoTaskMemPWSTR::from(p).to_string() } };
+                    let mut uri = PWSTR::null();
+                    req.Uri(&mut uri)?;
+                    let uri = text(uri);
+                    let mut method = PWSTR::null();
+                    req.Method(&mut method)?;
+                    let method = text(method);
+                    let headers = req.Headers()?;
+                    let header = |name: &str| -> Option<String> {
+                        let w = wide(name);
+                        let mut v = PWSTR::null();
+                        match headers.GetHeader(PCWSTR(w.as_ptr()), &mut v) {
+                            Ok(()) if !v.is_null() => Some(text(v)),
+                            _ => None,
+                        }
+                    };
+                    let resp = super::scheme::serve(&uri, &method, header("Range").as_deref(), header("If-None-Match").as_deref());
+                    let body: Vec<u8> = match &resp.body {
+                        super::scheme::Body::Empty => Vec::new(),
+                        super::scheme::Body::Bytes(b, start, len) => b[*start as usize..(*start + *len) as usize].to_vec(),
+                        super::scheme::Body::File { path, start, len } => {
+                            let mut data = Vec::with_capacity((*len).min(64 * 1024 * 1024) as usize);
+                            let mut off = 0u64;
+                            while let Ok(c) = super::scheme::read_chunk(path, *start, *len, off) {
+                                if c.is_empty() { break; }
+                                off += c.len() as u64;
+                                data.extend_from_slice(&c);
+                            }
+                            data
+                        }
+                    };
+                    let stream = windows::Win32::UI::Shell::SHCreateMemStream(Some(&body));
+                    let reason = match resp.status { 200 => "OK", 206 => "Partial Content", 304 => "Not Modified", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 416 => "Range Not Satisfiable", _ => "OK" };
+                    let header_text = resp.headers.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\r\n");
+                    let (reason_w, headers_w) = (wide(reason), wide(&header_text));
+                    let response = env.CreateWebResourceResponse(stream.as_ref(), resp.status as i32, PCWSTR(reason_w.as_ptr()), PCWSTR(headers_w.as_ptr()))?;
+                    args.SetResponse(&response)?;
+                    Ok(())
+                })),
+                &mut token,
             );
         }
         // Los mensajes de la página (window.ray.send / request) → la cola de eventos.

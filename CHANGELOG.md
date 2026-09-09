@@ -6,12 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **Esquema `ray://app/…`** (M226, macOS): la página carga sus archivos directamente del proceso,
+- **Esquema `ray://app/…`** (M226 macOS, M227 WebKitGTK, M228 WebView2): la página carga sus archivos directamente del proceso,
   sin servidor TCP local — sin puerto que otra app pueda alcanzar ni permiso de red local en el
   bundle — y en streaming (`Range`/206, `ETag`/304, MIME por extensión, trozos de 256 KiB).
   `ui.mount_dir(prefix, dir)`, `ui.mount_bytes(path, bytes)`, `ui.mount_embed(prefix, embed_prefix)`;
-  `ui.open("App", "ray://app/index.html", …)` ya no necesita servidor. Linux/Windows aceptan los
-  montajes y sirven el esquema en los siguientes hitos.
+  `ui.open("App", "ray://app/index.html", …)` ya no necesita servidor. Linux: por dlopen (con
+  WebKitGTK < 2.36 solo cuerpo+MIME); Windows: WebView2 ≥ 112, tramo pedido en memoria.
 
 ## 1.12.1 — 2026-09-09
 

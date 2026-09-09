@@ -12891,3 +12891,26 @@ que `mount_embed` los lee con `std/embed` y los monta en memoria uno a uno: un s
 Lo que sigue es plataforma pura —`webkit_web_context_register_uri_scheme` en GTK y
 `WebResourceRequested` o `SetVirtualHostNameToFolderMapping` en WebView2— sin tocar el módulo
 puro ni la API.
+
+## 219. M227/M228 — el esquema `ray://` en WebKitGTK y WebView2 (sep 2026)
+
+Con el módulo puro cerrado, cada plataforma es una traducción. **GTK**: `webkit_web_context_
+register_uri_scheme` en el contexto por defecto, una vez y antes del primer webview (el proceso
+web nace con la lista de esquemas), marcado seguro y CORS-enabled en el security manager; el
+callback corre en el hilo del loop y no necesita hilos: entrega un `GInputStream` que WebKit lee
+asíncrono —memoria en un buffer `g_malloc` liberado por `g_free`, o un `GFileInputStream`
+posicionado con `g_seekable_seek`—. Un detalle que decide la forma: WebKit lee hasta EOF, no
+hasta `stream_length`, así que un tramo acotado que no llega al final del archivo va desde memoria
+y el tramo abierto (`bytes=a-`) o el archivo entero, desde el stream. Toda la API llega por
+`dlsym` como el resto del backend, en bloque opcional: sin ella `ui.open` sigue y `ray://` no se
+sirve; con WebKitGTK < 2.36 no existen status ni cabeceras de respuesta y se cae al `finish`
+clásico (cuerpo + MIME, 200). **WebView2**: el esquema se declara en las OPCIONES del entorno
+(`CoreWebView2CustomSchemeRegistration`: seguro, con host, sin `allowed_origins` → solo las
+páginas del propio esquema pueden pedirle) y se atiende en `WebResourceRequested` con filtro
+`ray://*`, contestando con `CreateWebResourceResponse` sobre un `SHCreateMemStream` del tramo
+pedido: v1 sin streaming, porque un `IStream` propio sobre archivo es otro hito y el tramo que una
+página pide con Range ya está acotado. Ninguno de los dos se pudo ejecutar en la máquina de
+desarrollo: compilan y pasan clippy para sus targets, el CI corre lo headless, y la verificación
+en ventana real la hace el usuario en sus VMs con `tools/verify-ray-scheme/` (una página que pide
+un archivo de 8 MiB con Range, un archivo en memoria, un 304, un 404 y un traversal, e informa
+por el puente IPC).

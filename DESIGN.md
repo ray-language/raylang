@@ -12909,11 +12909,13 @@ clásico (cuerpo + MIME, 200). **WebView2**: el esquema se declara en las OPCION
 páginas del propio esquema pueden pedirle) y se atiende en `WebResourceRequested` con filtro
 `ray://*`, contestando con `CreateWebResourceResponse` sobre un `SHCreateMemStream` del tramo
 pedido: v1 sin streaming, porque un `IStream` propio sobre archivo es otro hito y el tramo que una
-página pide con Range ya está acotado. Ninguno de los dos se pudo ejecutar en la máquina de
-desarrollo: compilan y pasan clippy para sus targets, el CI corre lo headless, y la verificación
-en ventana real la hace el usuario en sus VMs con `tools/verify-ray-scheme/` (una página que pide
-un archivo de 8 MiB con Range, un archivo en memoria, un 304, un 404 y un traversal, e informa
-por el puente IPC).
+página pide con Range ya está acotado. Ninguno de los dos corre en la máquina de desarrollo: se
+tiparon con `cargo check --target` y clippy para sus targets, el CI corre lo headless, y la
+verificación en ventana real se hizo en dos VMs con `tools/verify-ray-scheme/` (una página que
+pide un archivo de 8 MiB con Range, un archivo en memoria, un 304, un 404 y un traversal, e
+informa por el puente IPC): 5/5 en elementary OS 8 (aarch64, Wayland, WebKitGTK 4.1, 188 ms) y
+5/5 en Windows (WebView2 Runtime 152, 180 ms), ambos a la primera — el módulo puro hizo su
+trabajo.
 
 ## 220. M229/M230 — `ui.focus` y `minimizable` (sep 2026)
 

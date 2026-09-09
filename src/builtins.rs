@@ -1165,6 +1165,28 @@ pub fn ui_reply(_h: i64, _id: i64, _value: &str, _as_json: bool) -> Result<(), S
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M226: montajes del esquema `ray://app/…` — `kind` = "dir" (source = directorio).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_mount(kind: &str, prefix: &str, source: &str) -> Result<(), String> {
+    match kind {
+        "dir" => ray_runtime::ui::scheme::mount_dir(prefix, source),
+        other => Err(format!("ui: unknown mount kind '{other}'")),
+    }
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_mount(_kind: &str, _prefix: &str, _source: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+/// M226: un archivo en memoria bajo `ray://app/<path>`.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_mount_bytes(path: &str, data: Vec<u8>) -> Result<(), String> {
+    ray_runtime::ui::scheme::mount_bytes(path, data)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_mount_bytes(_path: &str, _data: Vec<u8>) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M146: el fd de la cola global de eventos de UI (para el aparcado de la fibra en la VM).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_event_fd() -> Result<i32, String> {
@@ -3964,6 +3986,21 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Int { return Err((Some(1), format!("__ui_reply expects an int (the request id), not {}", a[1]))); }
         if a[2] != Type::String { return Err((Some(2), format!("__ui_reply expects a string (the value), not {}", a[2]))); }
         if a[3] != Type::Bool { return Err((Some(3), format!("__ui_reply expects a bool (as_json), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_mount(kind, prefix, source) -> [string] (M226): monta bajo ray://app/<prefix>/ ("dir").
+    Builtin { name: "__ui_mount", opcode: OpCode::UiMount, check: |a| {
+        arity(a, 3, "__ui_mount", " (kind, prefix, source)")?;
+        for (i, what) in ["the kind", "the prefix", "the source"].iter().enumerate() {
+            if a[i] != Type::String { return Err((Some(i), format!("__ui_mount expects a string ({what}), not {}", a[i]))); }
+        }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_mount_bytes(path, data) -> [string] (M226): un archivo en memoria bajo ray://app/<path>.
+    Builtin { name: "__ui_mount_bytes", opcode: OpCode::UiMountBytes, check: |a| {
+        arity(a, 2, "__ui_mount_bytes", " (path, data)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_mount_bytes expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__ui_mount_bytes expects bytes (the data), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_menu(title, items) -> [string] (M148): ["ok"] o ["err", msg]. items codificados

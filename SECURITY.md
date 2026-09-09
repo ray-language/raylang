@@ -248,6 +248,7 @@ documentada:
   estado de cada ventana cuelga de `GWLP_USERDATA` y SOLO se lee en el hilo 1 (también desde el handler
   de `AcceleratorKeyPressed`, que corre ahí); la tabla de aceleradores es propia y se destruye con la
   ventana; `GetKeyState` solo consulta modificadores.
+  - M226: el esquema `ray://app/…` (`WKURLSchemeHandler`) sirve la interfaz y los archivos montados **sin socket**: no hay puerto local que otro proceso pueda alcanzar ni permiso de red local en el bundle; los montajes de directorio se canonicalizan y `..` nunca sale de ellos (403 antes de tocar el disco); solo GET/HEAD; sin cabeceras CORS, así que una página de otro origen no puede leer lo servido.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

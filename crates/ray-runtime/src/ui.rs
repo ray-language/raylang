@@ -586,6 +586,408 @@ fn is_dark(rgb: (u8, u8, u8)) -> bool {
     0.2126 * lin(rgb.0) + 0.7152 * lin(rgb.1) + 0.0722 * lin(rgb.2) < 0.5
 }
 
+/// M226: el esquema `ray://app/…` — la página carga sus archivos y los del proyecto por un
+/// esquema de URL propio servido desde el proceso, SIN servidor TCP local: no hay puerto que otra
+/// app de la máquina pueda abrir ni permiso de red local en el bundle, y los bytes viajan en
+/// streaming (Range, ETag/304, MIME por extensión) sin pasar por JSON ni por strings de raylang.
+/// Montajes: directorios (`mount_dir`: archivos del disco, canonicalizados y con guarda contra
+/// `..`) y archivos en memoria (`mount_bytes`: assets embebidos o contenido generado). Todo lo de
+/// aquí es puro y se prueba sin ventana; los backends (WKURLSchemeHandler en macOS) solo traducen
+/// la petición y entregan la [`Response`].
+pub mod scheme {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    /// El esquema y el host fijos: `ray://app/<ruta>`.
+    pub const SCHEME: &str = "ray";
+    pub const HOST: &str = "app";
+    /// Tamaño de trozo con el que los backends entregan un archivo (streaming).
+    pub const CHUNK: usize = 256 * 1024;
+
+    #[derive(Default)]
+    struct Mounts {
+        /// (prefijo normalizado sin barras extremas, directorio canónico). Gana el más largo.
+        dirs: Vec<(String, PathBuf)>,
+        /// ruta normalizada → bytes.
+        files: HashMap<String, Arc<[u8]>>,
+    }
+
+    fn mounts() -> &'static Mutex<Mounts> {
+        static M: OnceLock<Mutex<Mounts>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(Mounts::default()))
+    }
+
+    /// Normaliza una ruta de montaje o de petición: sin barras extremas ni dobles, sin `.`, y
+    /// `..` o NUL la rechazan (nunca se resuelve contra el disco algo que suba de nivel).
+    fn normalize(path: &str) -> Result<String, String> {
+        let mut out: Vec<&str> = Vec::new();
+        for seg in path.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => return Err(format!("ui: path escapes the mount: '{path}'")),
+                s if s.contains('\0') => return Err(format!("ui: invalid path: '{path}'")),
+                s => out.push(s),
+            }
+        }
+        Ok(out.join("/"))
+    }
+
+    /// Monta `dir` bajo `ray://app/<prefix>/`. `dir` debe existir y ser un directorio.
+    pub fn mount_dir(prefix: &str, dir: &str) -> Result<(), String> {
+        let prefix = normalize(prefix)?;
+        let canonical = std::fs::canonicalize(dir).map_err(|e| format!("ui: cannot mount '{dir}': {e}"))?;
+        if !canonical.is_dir() {
+            return Err(format!("ui: cannot mount '{dir}': not a directory"));
+        }
+        let mut m = mounts().lock().unwrap();
+        m.dirs.retain(|(p, _)| *p != prefix);
+        m.dirs.push((prefix, canonical));
+        m.dirs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        Ok(())
+    }
+
+    /// Monta `data` como el archivo `ray://app/<path>` (en memoria; reemplaza si existía).
+    pub fn mount_bytes(path: &str, data: Vec<u8>) -> Result<(), String> {
+        let path = normalize(path)?;
+        if path.is_empty() {
+            return Err("ui: mount_bytes needs a file path".to_string());
+        }
+        mounts().lock().unwrap().files.insert(path, Arc::from(data));
+        Ok(())
+    }
+
+    /// ¿Hay algo montado? (los backends registran el handler siempre; esto es informativo).
+    pub fn has_mounts() -> bool {
+        let m = mounts().lock().unwrap();
+        !m.dirs.is_empty() || !m.files.is_empty()
+    }
+
+    /// El cuerpo de una respuesta: nada, bytes en memoria, o un tramo de archivo que el backend
+    /// lee por trozos (`CHUNK`) fuera del hilo de UI.
+    pub enum Body {
+        Empty,
+        Bytes(Arc<[u8]>, u64, u64),
+        File { path: PathBuf, start: u64, len: u64 },
+    }
+
+    pub struct Response {
+        pub status: u16,
+        pub headers: Vec<(String, String)>,
+        pub body: Body,
+    }
+
+    impl Response {
+        fn plain(status: u16, text: &str) -> Response {
+            Response {
+                status,
+                headers: vec![
+                    ("Content-Type".into(), "text/plain; charset=utf-8".into()),
+                    ("Content-Length".into(), text.len().to_string()),
+                    ("Cache-Control".into(), "no-cache".into()),
+                ],
+                body: Body::Bytes(Arc::from(text.as_bytes()), 0, text.len() as u64),
+            }
+        }
+        /// Longitud total del cuerpo que el backend va a entregar.
+        pub fn body_len(&self) -> u64 {
+            match &self.body {
+                Body::Empty => 0,
+                Body::Bytes(_, _, n) => *n,
+                Body::File { len, .. } => *len,
+            }
+        }
+    }
+
+    /// MIME por extensión (los tipos que una app web usa; el resto `application/octet-stream`).
+    pub fn mime_for(path: &str) -> &'static str {
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "html" | "htm" => "text/html; charset=utf-8",
+            "css" => "text/css; charset=utf-8",
+            "js" | "mjs" => "text/javascript; charset=utf-8",
+            "json" | "map" => "application/json; charset=utf-8",
+            "txt" | "md" | "ray" | "toml" | "yaml" | "yml" | "csv" | "log" => "text/plain; charset=utf-8",
+            "xml" | "plist" => "application/xml; charset=utf-8",
+            "svg" => "image/svg+xml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "ico" => "image/x-icon",
+            "woff" => "font/woff",
+            "woff2" => "font/woff2",
+            "ttf" => "font/ttf",
+            "otf" => "font/otf",
+            "wasm" => "application/wasm",
+            "pdf" => "application/pdf",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" => "audio/ogg",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            _ => "application/octet-stream",
+        }
+    }
+
+    fn percent_decode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' && i + 2 < b.len() {
+                if let (Some(h), Some(l)) = (hex(b.get(i + 1).copied()), hex(b.get(i + 2).copied())) {
+                    out.push(h * 16 + l);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(b[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn hex(c: Option<u8>) -> Option<u8> {
+        match c? {
+            c @ b'0'..=b'9' => Some(c - b'0'),
+            c @ b'a'..=b'f' => Some(c - b'a' + 10),
+            c @ b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    /// `bytes=a-b` / `a-` / `-n` (un solo rango) → (inicio, longitud) dentro de `total`.
+    fn parse_range(spec: &str, total: u64) -> Option<(u64, u64)> {
+        let spec = spec.trim().strip_prefix("bytes=")?;
+        if spec.contains(',') {
+            return None;
+        }
+        let (a, b) = spec.split_once('-')?;
+        let (a, b) = (a.trim(), b.trim());
+        if a.is_empty() {
+            let n: u64 = b.parse().ok()?;
+            if n == 0 || total == 0 {
+                return None;
+            }
+            let n = n.min(total);
+            return Some((total - n, n));
+        }
+        let start: u64 = a.parse().ok()?;
+        if start >= total {
+            return None;
+        }
+        let end: u64 = if b.is_empty() { total - 1 } else { b.parse::<u64>().ok()?.min(total - 1) };
+        if end < start {
+            return None;
+        }
+        Some((start, end - start + 1))
+    }
+
+    /// La ruta de una URL `ray://app/<ruta>[?query][#frag]` normalizada, o `None` si no es de
+    /// este esquema/host.
+    pub fn path_of(url: &str) -> Option<Result<String, String>> {
+        let rest = url.strip_prefix("ray://")?;
+        let rest = rest.split(['?', '#']).next().unwrap_or("");
+        let (host, path) = match rest.split_once('/') {
+            Some((h, p)) => (h, p),
+            None => (rest, ""),
+        };
+        if host != HOST {
+            return None;
+        }
+        Some(normalize(&percent_decode(path)))
+    }
+
+    /// Resuelve y sirve: GET/HEAD, Range (206/416), If-None-Match (304), 404/405. Puro: no
+    /// toca ningún backend; el archivo solo se abre para leer su tamaño y su mtime.
+    pub fn serve(url: &str, method: &str, range: Option<&str>, if_none_match: Option<&str>) -> Response {
+        let path = match path_of(url) {
+            None => return Response::plain(404, "not found"),
+            Some(Err(_)) => return Response::plain(403, "forbidden"),
+            Some(Ok(p)) => p,
+        };
+        if method != "GET" && method != "HEAD" {
+            return Response::plain(405, "method not allowed");
+        }
+        let (name, body, total, etag) = match locate(&path) {
+            Some(x) => x,
+            None => return Response::plain(404, "not found"),
+        };
+        let mut headers = vec![
+            ("Content-Type".to_string(), mime_for(&name).to_string()),
+            ("Accept-Ranges".to_string(), "bytes".to_string()),
+            ("ETag".to_string(), etag.clone()),
+            ("Cache-Control".to_string(), "no-cache".to_string()),
+        ];
+        if if_none_match.map(|t| t.split(',').any(|x| x.trim() == etag)).unwrap_or(false) {
+            return Response { status: 304, headers, body: Body::Empty };
+        }
+        let (status, start, len) = match range {
+            None => (200, 0, total),
+            Some(spec) => match parse_range(spec, total) {
+                Some((s, n)) => {
+                    headers.push(("Content-Range".into(), format!("bytes {}-{}/{}", s, s + n - 1, total)));
+                    (206, s, n)
+                }
+                None => {
+                    headers.push(("Content-Range".into(), format!("bytes */{total}")));
+                    return Response { status: 416, headers, body: Body::Empty };
+                }
+            },
+        };
+        headers.push(("Content-Length".into(), len.to_string()));
+        let body = if method == "HEAD" {
+            Body::Empty
+        } else {
+            match body {
+                Located::Memory(b) => Body::Bytes(b, start, len),
+                Located::Disk(p) => Body::File { path: p, start, len },
+            }
+        };
+        Response { status, headers, body }
+    }
+
+    enum Located {
+        Memory(Arc<[u8]>),
+        Disk(PathBuf),
+    }
+
+    /// (nombre para el MIME, dónde está, tamaño total, ETag). Un directorio sirve su index.html.
+    fn locate(path: &str) -> Option<(String, Located, u64, String)> {
+        let m = mounts().lock().unwrap();
+        let candidates: Vec<String> = if path.is_empty() {
+            vec!["index.html".to_string()]
+        } else {
+            vec![path.to_string(), format!("{path}/index.html")]
+        };
+        for cand in &candidates {
+            if let Some(b) = m.files.get(cand) {
+                let etag = format!("\"m-{}-{:x}\"", b.len(), fnv(b));
+                return Some((cand.clone(), Located::Memory(b.clone()), b.len() as u64, etag));
+            }
+        }
+        for (prefix, dir) in &m.dirs {
+            let rel = if prefix.is_empty() {
+                path.to_string()
+            } else if path == prefix {
+                String::new()
+            } else if let Some(r) = path.strip_prefix(&format!("{prefix}/")) {
+                r.to_string()
+            } else {
+                continue;
+            };
+            let mut candidate = dir.join(&rel);
+            if candidate.is_dir() {
+                candidate = candidate.join("index.html");
+            }
+            let Ok(canonical) = std::fs::canonicalize(&candidate) else { continue };
+            if !canonical.starts_with(dir) || !canonical.is_file() {
+                continue;
+            }
+            let Ok(meta) = std::fs::metadata(&canonical) else { continue };
+            let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let etag = format!("\"f-{}-{:x}\"", meta.len(), mtime);
+            let name = candidate.to_string_lossy().into_owned();
+            return Some((name, Located::Disk(canonical), meta.len(), etag));
+        }
+        None
+    }
+
+    fn fnv(b: &[u8]) -> u64 {
+        b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+    }
+
+    /// Lee un trozo del cuerpo de archivo: `(offset relativo al tramo)` → bytes (vacío al final).
+    pub fn read_chunk(path: &Path, start: u64, len: u64, offset: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let remaining = len.saturating_sub(offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        let mut f = std::fs::File::open(path)?;
+        f.seek(SeekFrom::Start(start + offset))?;
+        let want = remaining.min(CHUNK as u64) as usize;
+        let mut buf = vec![0u8; want];
+        let mut got = 0;
+        while got < want {
+            let n = f.read(&mut buf[got..])?;
+            if n == 0 {
+                break;
+            }
+            got += n;
+        }
+        buf.truncate(got);
+        Ok(buf)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn header<'a>(r: &'a Response, k: &str) -> Option<&'a str> {
+            r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
+        }
+
+        #[test]
+        fn memory_files_ranges_etag_and_errors() {
+            mount_bytes("t/hello.txt", b"hello world".to_vec()).unwrap();
+            let r = serve("ray://app/t/hello.txt", "GET", None, None);
+            assert_eq!(r.status, 200);
+            assert_eq!(header(&r, "Content-Length"), Some("11"));
+            assert_eq!(header(&r, "Content-Type"), Some("text/plain; charset=utf-8"));
+            let etag = header(&r, "ETag").unwrap().to_string();
+            assert_eq!(serve("ray://app/t/hello.txt", "GET", None, Some(&etag)).status, 304);
+            let r = serve("ray://app/t/hello.txt", "GET", Some("bytes=6-"), None);
+            assert_eq!((r.status, header(&r, "Content-Range")), (206, Some("bytes 6-10/11")));
+            assert!(matches!(r.body, Body::Bytes(_, 6, 5)));
+            let r = serve("ray://app/t/hello.txt", "GET", Some("bytes=-4"), None);
+            assert_eq!(header(&r, "Content-Range"), Some("bytes 7-10/11"));
+            assert_eq!(serve("ray://app/t/hello.txt", "GET", Some("bytes=50-"), None).status, 416);
+            assert_eq!(serve("ray://app/t/hello.txt", "POST", None, None).status, 405);
+            assert_eq!(serve("ray://app/t/nope.txt", "GET", None, None).status, 404);
+            assert_eq!(serve("ray://other/t/hello.txt", "GET", None, None).status, 404);
+            assert_eq!(serve("ray://app/../t/hello.txt", "GET", None, None).status, 403);
+            assert_eq!(serve("ray://app/t/hello.txt?x=1#f", "HEAD", None, None).status, 200);
+            assert!(matches!(serve("ray://app/t/hello.txt", "HEAD", None, None).body, Body::Empty));
+            assert!(mount_bytes("../x", vec![]).is_err());
+        }
+
+        #[test]
+        fn directory_mounts_serve_files_with_traversal_guard() {
+            let base = std::env::temp_dir().join(format!("ray_scheme_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(base.join("sub")).unwrap();
+            std::fs::write(base.join("index.html"), b"<h1>hi</h1>").unwrap();
+            std::fs::write(base.join("sub/a.js"), b"1;").unwrap();
+            let big: Vec<u8> = (0..(CHUNK * 2 + 7)).map(|i| (i % 251) as u8).collect();
+            std::fs::write(base.join("big.bin"), &big).unwrap();
+            mount_dir("files", base.to_str().unwrap()).unwrap();
+            assert!(mount_dir("x", base.join("missing").to_str().unwrap()).is_err());
+            let r = serve("ray://app/files/", "GET", None, None);
+            assert_eq!((r.status, header(&r, "Content-Type")), (200, Some("text/html; charset=utf-8")));
+            assert_eq!(serve("ray://app/files", "GET", None, None).status, 200);
+            let r = serve("ray://app/files/sub/a.js", "GET", None, None);
+            assert_eq!(header(&r, "Content-Type"), Some("text/javascript; charset=utf-8"));
+            assert_eq!(serve("ray://app/files/sub/%2e%2e/index.html", "GET", None, None).status, 403);
+            assert_eq!(serve("ray://app/files/sub/../index.html", "GET", None, None).status, 403);
+            let r = serve("ray://app/files/big.bin", "GET", Some("bytes=100-"), None);
+            let Body::File { path, start, len } = r.body else { panic!("file body") };
+            assert_eq!((start, len), (100, big.len() as u64 - 100));
+            let mut out = Vec::new();
+            let mut off = 0;
+            loop {
+                let c = read_chunk(&path, start, len, off).unwrap();
+                if c.is_empty() { break; }
+                off += c.len() as u64;
+                out.extend_from_slice(&c);
+            }
+            assert_eq!(out, &big[100..]);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+}
+
 pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<(), String> {
     open_window_with(id, title, url, &WindowOptions::simple(width, height))
 }
@@ -1011,6 +1413,9 @@ mod mac {
     type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
     // M159: isMainFrame (BOOL sin argumentos).
     type MsgBool = unsafe extern "C" fn(Id, Sel) -> u8;
+    // M226 (esquema ray://): initWithURL:statusCode:HTTPVersion:headerFields: / dataWithBytes:length:.
+    type MsgInitHttpResponse = unsafe extern "C" fn(Id, Sel, Id, i64, Id, Id) -> Id;
+    type MsgDataBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize) -> Id;
 
     fn msg_send() -> *const c_void {
         objc_msgSend as unsafe extern "C" fn() as *const c_void
@@ -1200,6 +1605,151 @@ mod mac {
     }
 
     /// La clase delegate (una por proceso): NSObject + `windowWillClose:` → evento `closed`.
+    /// M226: tareas del esquema en vuelo y canceladas (punteros de WKURLSchemeTask). Todo
+    /// acceso ocurre en el hilo principal (start/stop y las entregas por `on_main`), así que
+    /// el conjunto es consistente sin más disciplina; el hilo lector solo lo consulta.
+    fn scheme_tasks() -> &'static std::sync::Mutex<(std::collections::HashSet<usize>, std::collections::HashSet<usize>)> {
+        static T: std::sync::OnceLock<std::sync::Mutex<(std::collections::HashSet<usize>, std::collections::HashSet<usize>)>> = std::sync::OnceLock::new();
+        T.get_or_init(|| std::sync::Mutex::new((std::collections::HashSet::new(), std::collections::HashSet::new())))
+    }
+
+    fn scheme_cancelled(task: usize) -> bool {
+        scheme_tasks().lock().unwrap().1.contains(&task)
+    }
+
+    /// M226: el objeto WKURLSchemeHandler (singleton). `webView:startURLSchemeTask:` resuelve la
+    /// petición con `scheme::serve` (puro), retiene la tarea y lanza un hilo que lee el cuerpo por
+    /// trozos y lo entrega en el hilo principal (`didReceiveResponse:`/`didReceiveData:`/
+    /// `didFinish`); `webView:stopURLSchemeTask:` marca la tarea y el lector para. WebKit lanza una
+    /// excepción si se entrega a una tarea parada: cada entrega comprueba la marca en el hilo
+    /// principal, donde también corre stop — sin carrera posible.
+    fn scheme_handler() -> Id {
+        static HANDLER: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *HANDLER.get_or_init(|| {
+            extern "C" fn start_task(_this: Id, _sel: Sel, _webview: Id, task: Id) {
+                // SAFETY: el run loop entrega una tarea válida en el hilo principal.
+                let (url, method, range, inm) = unsafe {
+                    let get: MsgId = std::mem::transmute(msg_send());
+                    let get_h: MsgIdId = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let plain: MsgVoid = std::mem::transmute(msg_send());
+                    let text = |o: Id| -> Option<String> {
+                        if o.is_null() { return None; }
+                        let c = utf8(o, sel(b"UTF8String\0"));
+                        if c.is_null() { None } else { Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned()) }
+                    };
+                    let req = get(task, sel(b"request\0"));
+                    let url = text(get(get(req, sel(b"URL\0")), sel(b"absoluteString\0"))).unwrap_or_default();
+                    let method = text(get(req, sel(b"HTTPMethod\0"))).unwrap_or_else(|| "GET".to_string());
+                    let range = text(get_h(req, sel(b"valueForHTTPHeaderField:\0"), nsstring("Range")));
+                    let inm = text(get_h(req, sel(b"valueForHTTPHeaderField:\0"), nsstring("If-None-Match")));
+                    plain(task, sel(b"retain\0"));
+                    (url, method, range, inm)
+                };
+                let task_u = task as usize;
+                scheme_tasks().lock().unwrap().0.insert(task_u);
+                let resp = super::scheme::serve(&url, &method, range.as_deref(), inm.as_deref());
+                std::thread::spawn(move || {
+                    let status = resp.status as i64;
+                    let headers = resp.headers.clone();
+                    on_main(move || unsafe {
+                        if scheme_cancelled(task_u) { return; }
+                        let get: MsgId = std::mem::transmute(msg_send());
+                        let alloc: MsgId = std::mem::transmute(msg_send());
+                        let set_kv: MsgVoidIdId = std::mem::transmute(msg_send());
+                        let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                        let plain: MsgVoid = std::mem::transmute(msg_send());
+                        let init: MsgInitHttpResponse = std::mem::transmute(msg_send());
+                        let task = task_u as Id;
+                        let url = get(get(task, sel(b"request\0")), sel(b"URL\0"));
+                        let dict = get(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
+                        for (k, v) in &headers {
+                            set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(v), nsstring(k));
+                        }
+                        let response = init(
+                            alloc(cls(b"NSHTTPURLResponse\0"), sel(b"alloc\0")),
+                            sel(b"initWithURL:statusCode:HTTPVersion:headerFields:\0"),
+                            url,
+                            status,
+                            nsstring("HTTP/1.1"),
+                            dict,
+                        );
+                        set_id(task, sel(b"didReceiveResponse:\0"), response);
+                        plain(response, sel(b"release\0"));
+                    });
+                    let deliver = |bytes: Vec<u8>| {
+                        on_main(move || unsafe {
+                            if scheme_cancelled(task_u) { return; }
+                            let data_with: MsgDataBytes = std::mem::transmute(msg_send());
+                            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                            let data = data_with(cls(b"NSData\0"), sel(b"dataWithBytes:length:\0"), bytes.as_ptr(), bytes.len());
+                            set_id(task_u as Id, sel(b"didReceiveData:\0"), data);
+                        });
+                    };
+                    match resp.body {
+                        super::scheme::Body::Empty => {}
+                        super::scheme::Body::Bytes(b, start, len) => {
+                            let (s, e) = (start as usize, (start + len) as usize);
+                            for chunk in b[s..e].chunks(super::scheme::CHUNK) {
+                                if scheme_cancelled(task_u) { break; }
+                                deliver(chunk.to_vec());
+                            }
+                        }
+                        super::scheme::Body::File { path, start, len } => {
+                            let mut off = 0u64;
+                            loop {
+                                if scheme_cancelled(task_u) { break; }
+                                match super::scheme::read_chunk(&path, start, len, off) {
+                                    Ok(c) if c.is_empty() => break,
+                                    Ok(c) => { off += c.len() as u64; deliver(c); }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                    on_main(move || unsafe {
+                        let plain: MsgVoid = std::mem::transmute(msg_send());
+                        let cancelled = scheme_cancelled(task_u);
+                        if !cancelled {
+                            plain(task_u as Id, sel(b"didFinish\0"));
+                        }
+                        let mut t = scheme_tasks().lock().unwrap();
+                        t.0.remove(&task_u);
+                        t.1.remove(&task_u);
+                        drop(t);
+                        plain(task_u as Id, sel(b"release\0"));
+                    });
+                });
+            }
+            extern "C" fn stop_task(_this: Id, _sel: Sel, _webview: Id, task: Id) {
+                let task_u = task as usize;
+                let mut t = scheme_tasks().lock().unwrap();
+                if t.0.contains(&task_u) {
+                    t.1.insert(task_u);
+                }
+            }
+            unsafe {
+                let cls_new = objc_allocateClassPair(cls(b"NSObject\0"), c"RayURLSchemeHandler".as_ptr(), 0);
+                class_addMethod(
+                    cls_new,
+                    sel(b"webView:startURLSchemeTask:\0"),
+                    start_task as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"webView:stopURLSchemeTask:\0"),
+                    stop_task as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
+                objc_registerClassPair(cls_new);
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                init(alloc(cls_new, sel(b"alloc\0")), sel(b"init\0")) as usize
+            }
+        }) as Id
+    }
+
     fn delegate_class() -> Id {
         static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *CLASS.get_or_init(|| {
@@ -1677,6 +2227,12 @@ mod mac {
                 );
                 set_id(ucc, sel(b"addUserScript:\0"), script);
                 plain(script, sel(b"release\0")); // el controller lo retiene
+                // M226: el esquema `ray://` — el handler es un singleton (sin estado por
+                // ventana: los montajes son del proceso) y se registra SIEMPRE, porque la
+                // configuration no admite cambios tras crear el webview y un programa puede
+                // montar después de abrir.
+                let add_scheme: MsgVoidIdId = std::mem::transmute(msg_send());
+                add_scheme(cfg, sel(b"setURLSchemeHandler:forURLScheme:\0"), scheme_handler(), nsstring(super::scheme::SCHEME));
 
                 let init_frame_cfg: MsgInitFrameCfg = std::mem::transmute(msg_send());
                 let webview = init_frame_cfg(

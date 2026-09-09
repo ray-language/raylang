@@ -2123,6 +2123,26 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_mount" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Str(k), Value::Str(p), Value::Str(s)) => match crate::builtins::ui_mount(k, p, s) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees three strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_mount_bytes" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(p), Value::Bytes(d)) => match crate::builtins::ui_mount_bytes(p, (**d).clone()) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (string, bytes)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_reply" => {
                 let arr = match (&values[0], &values[1], &values[2], &values[3]) {
                     (Value::Int(h), Value::Int(id), Value::Str(v), Value::Bool(j)) => match crate::builtins::ui_reply(*h, *id, v, *j) {

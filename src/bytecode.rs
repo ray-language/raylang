@@ -647,6 +647,10 @@ pub enum OpCode {
     /// M225: `__ui_reply(h, id, value, as_json)` — resuelve la Promise `id` de la página; el
     /// literal JS se escapa en el runtime en una pasada (['ok'] / ['err', msg]).
     UiReply,
+    /// M226: `__ui_mount(kind, prefix, source)` / `__ui_mount_bytes(path, data)` — montajes del
+    /// esquema `ray://app/…` (['ok'] / ['err', msg]).
+    UiMount,
+    UiMountBytes,
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,

@@ -12865,3 +12865,29 @@ sesión sirvieron de guía; el gate no los incorpora porque exigen una ventana r
 fuera, y es la respuesta para archivos de cientos de MB, binarios y también para no exponer un
 puerto local: un esquema `ray://` propio (`WKURLSchemeHandler` y equivalentes) servido desde
 raylang en streaming — arco aparte.
+
+## 218. M226 — el esquema `ray://`: la interfaz sin servidor local (sep 2026)
+
+La medición de M225 dejó dos cosas que el puente no debe resolver: los archivos de cientos de MB
+(cuatro copias transitorias del payload) y la seguridad de la vía alternativa, un servidor HTTP en
+`127.0.0.1` al que cualquier proceso de la máquina puede hablar y que en el bundle exige el
+permiso de red local. Electron lo resuelve con `protocol.handle`; WebKit tiene el mismo mecanismo,
+`WKURLSchemeHandler`, y WebKitGTK y WebView2 los suyos. El diseño separa lo puro de lo de
+plataforma: `ui::scheme` es un módulo sin dependencias —montajes (directorios canonicalizados con
+guarda contra `..`, archivos en memoria), resolución de `ray://app/<ruta>` (host fijo; `index.html`
+para directorios), GET/HEAD, `Range` de un solo tramo con 206/416, `ETag` por tamaño y mtime (o
+hash FNV en memoria) con 304, MIME por extensión— que devuelve una `Response` cuyo cuerpo es bytes
+o un tramo de archivo; se prueba con `cargo test` sin ventana. El backend de macOS solo traduce:
+un objeto `RayURLSchemeHandler` registrado SIEMPRE en la `WKWebViewConfiguration` (no admite
+cambios tras crear el webview, y un programa puede montar después de abrir), que en
+`startURLSchemeTask:` retiene la tarea, resuelve con `serve` y lanza un hilo que lee el cuerpo
+por trozos de 256 KiB y los entrega en el hilo principal; `stopURLSchemeTask:` marca la tarea y
+cada entrega comprueba la marca en el hilo principal —WebKit lanza una excepción si se entrega a
+una tarea parada, y como stop y entregas corren en el mismo hilo no hay carrera—; el conjunto de
+tareas en vuelo evita que una marca huérfana cancele a una tarea futura con el mismo puntero.
+Los assets embebidos no viven en el runtime (en nativo son una tabla del programa generado), así
+que `mount_embed` los lee con `std/embed` y los monta en memoria uno a uno: un solo primitivo
+`mount_bytes` y ningún acoplamiento nuevo. Medido en ventana real: 8 MiB con `Range` en 53 ms.
+Lo que sigue es plataforma pura —`webkit_web_context_register_uri_scheme` en GTK y
+`WebResourceRequested` o `SetVirtualHostNameToFolderMapping` en WebView2— sin tocar el módulo
+puro ni la API.

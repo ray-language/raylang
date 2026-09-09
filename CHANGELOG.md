@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.12.1 — 2026-09-09
 
 - **Puente IPC lineal** (M225, ray-sublime): `ui.reply` escapaba el literal JS carácter a carácter
   en `std/ui.ray` (cuadrático: 100 KB 237 ms, 1 MB 16 s); ahora lo hace el runtime en una pasada

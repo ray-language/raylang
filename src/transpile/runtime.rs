@@ -767,9 +767,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
             // M210: la ventana con opciones.
-            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
-            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string() };\n",
+            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string() };\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window_with(id, title, url, &opts) {\n",
             "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",

@@ -2248,7 +2248,7 @@ impl Transpiler {
             // M146: std/ui — ventana + webview (ray_runtime::ui tras la feature `ui`). El flag
             // además cambia la FORMA del main emitido: el programa corre en un hilo del SO y el
             // hilo 1 queda para el loop de AppKit (ver la emisión de `fn main`).
-            // M210: la ventana con opciones (9 argumentos).
+            // M210/M224: la ventana con opciones (10 argumentos; los dos últimos son strings).
             "ui_open_with" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_open_with(&*");
@@ -2259,8 +2259,10 @@ impl Transpiler {
                     out.push_str(", ");
                     self.emit_expr(out, a)?;
                 }
-                out.push_str(", &*");
-                self.emit_expr(out, eff[8])?;
+                for a in &eff[8..10] {
+                    out.push_str(", &*");
+                    self.emit_expr(out, a)?;
+                }
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {

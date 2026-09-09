@@ -1124,15 +1124,16 @@ pub fn ui_open_with(title: &str, url: &str, opts: ray_runtime::ui::WindowOptions
 pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
-/// Los 9 argumentos de `__ui_open_with` (M210), en orden: ancho, alto, mínimo ancho/alto,
-/// redimensionable, centrada, autosave. Los motores los pasan tal cual.
+/// Los 10 argumentos de `__ui_open_with` (M210, M224), en orden: ancho, alto, mínimo ancho/alto,
+/// redimensionable, centrada, autosave, color de la barra de título. Los motores los pasan tal cual.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
-pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str) -> Result<i64, String> {
-    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string() })
+#[allow(clippy::too_many_arguments)]
+pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str) -> Result<i64, String> {
+    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string() })
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str) -> Result<i64, String> {
+pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -3922,11 +3923,11 @@ static BUILTINS: &[Builtin] = &[
         if a[3] != Type::Int { return Err((Some(3), format!("__ui_open expects an int (the height), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave) -> [string] (M210):
-    // la ventana con opciones; misma respuesta etiquetada que __ui_open.
+    // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave, titlebar_color)
+    // -> [string] (M210, M224): la ventana con opciones; misma respuesta etiquetada que __ui_open.
     Builtin { name: "__ui_open_with", opcode: OpCode::UiOpenWith, check: |a| {
-        arity(a, 9, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave)")?;
-        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String];
+        arity(a, 10, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color)")?;
+        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String];
         for (i, t) in want.iter().enumerate() {
             if a[i] != *t { return Err((Some(i), format!("__ui_open_with expects {} as argument {}, not {}", t, i + 1, a[i]))); }
         }

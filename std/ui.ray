@@ -41,6 +41,9 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `resizable`, `center` (initial position centered on the main screen) and `autosave`: a name
 /// under which the SYSTEM remembers size and position between launches (NSWindow's
 /// `frameAutosaveName` on macOS; Linux and Windows have no equivalent and ignore it; "" = don't).
+/// `titlebar_color` (M224): a `#rrggbb` color that paints the system title bar like the app's
+/// theme (macOS: transparent title bar over the window background, dark or light title text by
+/// luminance; Windows 11: the caption color; Linux ignores it; "" = system default).
 /// Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
@@ -50,9 +53,11 @@ pub struct WindowOptions {
     resizable: bool,
     center: bool,
     autosave: string,
+    titlebar_color: string,
 }
 
-/// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave.
+/// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
+/// system title bar.
 pub fn options(width: int, height: int) -> WindowOptions {
     WindowOptions {
         width: width,
@@ -61,13 +66,14 @@ pub fn options(width: int, height: int) -> WindowOptions {
         min_height: 0,
         resizable: true,
         center: true,
-        autosave: ""
+        autosave: "",
+        titlebar_color: ""
     }
 }
 
 /// Like `open`, with `WindowOptions`: `ui.open_with("App", url, ui.options(1024, 720))` after
-/// setting e.g. `o.min_width = 640; o.autosave = "main";`. Errors on an invalid size or a
-/// minimum larger than the window.
+/// setting e.g. `o.min_width = 640; o.autosave = "main"; o.titlebar_color = "#1f2430";`. Errors
+/// on an invalid size, a minimum larger than the window or a color that is not `#rrggbb`.
 pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, string> {
     let r = __ui_open_with(
         title,
@@ -78,7 +84,8 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.min_height,
         o.resizable,
         o.center,
-        o.autosave
+        o.autosave,
+        o.titlebar_color
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {

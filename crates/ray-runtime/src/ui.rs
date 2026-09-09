@@ -517,13 +517,38 @@ pub struct WindowOptions {
     pub resizable: bool,
     pub center: bool,
     pub autosave: String,
+    /// M224: color `#rrggbb` de la barra de título (macOS: barra transparente sobre el fondo de la
+    /// ventana con apariencia clara/oscura por luminancia; Windows 11: `DWMWA_CAPTION_COLOR`;
+    /// Linux lo ignora). Vacío = la barra del sistema.
+    pub titlebar_color: String,
 }
 
 impl WindowOptions {
     /// Las opciones de `ui.open`: solo tamaño, redimensionable y centrada, sin mínimo ni memoria.
     pub fn simple(width: i64, height: i64) -> Self {
-        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new() }
+        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new(), titlebar_color: String::new() }
     }
+}
+
+/// M224: `#rrggbb` → (r, g, b) en 0..=255. `None` si no tiene esa forma exacta (el runtime lo
+/// convierte en un `Err` honesto antes de tocar el backend: vale igual en headless).
+fn parse_rgb(color: &str) -> Option<(u8, u8, u8)> {
+    let hex = color.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some((ch(0)?, ch(2)?, ch(4)?))
+}
+
+/// M224: luminancia relativa (sRGB, WCAG) — decide si el título va claro (fondo oscuro) u oscuro.
+#[allow(dead_code)]
+fn is_dark(rgb: (u8, u8, u8)) -> bool {
+    let lin = |c: u8| {
+        let c = c as f64 / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(rgb.0) + 0.7152 * lin(rgb.1) + 0.0722 * lin(rgb.2) < 0.5
 }
 
 pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<(), String> {
@@ -538,6 +563,9 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     }
     if opts.min_width < 0 || opts.min_height < 0 || opts.min_width > width || opts.min_height > height {
         return Err(format!("ui: unsupported minimum size {}x{} for a {width}x{height} window", opts.min_width, opts.min_height));
+    }
+    if !opts.titlebar_color.is_empty() && parse_rgb(&opts.titlebar_color).is_none() {
+        return Err(format!("ui: unsupported titlebar color '{}' (expected #rrggbb)", opts.titlebar_color));
     }
     notify_dev_windowed();
     if headless() {
@@ -929,6 +957,8 @@ mod mac {
         h: f64,
     }
     type MsgVoidSize = unsafe extern "C" fn(Id, Sel, CGSize);
+    /// M224: `colorWithSRGBRed:green:blue:alpha:` (cuatro CGFloat).
+    type MsgIdColor = unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id;
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
     // M148 (menús + diálogos):
     type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
@@ -1549,6 +1579,28 @@ mod mac {
                 // ciclo de vida es nuestro: retención del registro + release explícito.
                 set_bool(window, sel(b"setReleasedWhenClosed:\0"), 0);
                 set_id(window, sel(b"setTitle:\0"), nsstring(&title));
+                // M224: la barra de título del color del tema (como Sublime): la barra se vuelve
+                // transparente y deja ver el fondo de la ventana, que se pinta del color pedido;
+                // la apariencia (Aqua/DarkAqua) sale de la luminancia para que el título y los
+                // controles contrasten. La página pinta su propio fondo opaco encima.
+                if let Some(rgb) = super::parse_rgb(&opts.titlebar_color) {
+                    let color_with: MsgIdColor = std::mem::transmute(msg_send());
+                    let color = color_with(
+                        cls(b"NSColor\0"),
+                        sel(b"colorWithSRGBRed:green:blue:alpha:\0"),
+                        rgb.0 as f64 / 255.0,
+                        rgb.1 as f64 / 255.0,
+                        rgb.2 as f64 / 255.0,
+                        1.0,
+                    );
+                    set_id(window, sel(b"setBackgroundColor:\0"), color);
+                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
+                    let name = if super::is_dark(rgb) { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" };
+                    let appearance = id_id(cls(b"NSAppearance\0"), sel(b"appearanceNamed:\0"), nsstring(name));
+                    if !appearance.is_null() {
+                        set_id(window, sel(b"setAppearance:\0"), appearance);
+                    }
+                }
 
                 // M152: el delegate nace ANTES del webview — el puente IPC lo registra como
                 // script message handler en la configuration con la que el webview se crea.
@@ -3423,6 +3475,13 @@ mod win {
                     None,
                 )
                 .map_err(|e| format!("ui: could not create the window: {e}"))?;
+                // M224: color de la barra de título (Windows 11+; en Windows 10 el atributo no
+                // existe y DWM devuelve error → se ignora: la barra queda la del sistema).
+                if let Some((r, g, b)) = super::parse_rgb(&opts.titlebar_color) {
+                    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR};
+                    let colorref: u32 = (r as u32) | ((g as u32) << 8) | ((b as u32) << 16);
+                    let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &colorref as *const u32 as *const std::ffi::c_void, 4);
+                }
                 let (menu_tags, accels) = build_menubar(hwnd);
                 let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);

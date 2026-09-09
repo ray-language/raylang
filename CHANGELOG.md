@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ui.WindowOptions.titlebar_color`** (M224, ray-sublime): la barra de título del sistema pintada
+  con el color del tema (`"#1f2430"`), como Sublime — macOS: barra transparente sobre el fondo de
+  la ventana con título claro u oscuro por luminancia; Windows 11: color de la caption; Linux lo
+  ignora; `""` = barra del sistema; otra forma → `Err`. Los tres motores y headless.
+
 ## 1.11.3 — 2026-09-08
 
 - **Nativo: `s[i]` y `len(s)` amortizados O(1)** (M223, par del M213 de la VM): `ray build --native`

@@ -1365,7 +1365,11 @@ y el shell iOS de
 `ray bundle --ios` (allí `window` llega como 0). Para la geometría más allá de ancho × alto —tamaño
 mínimo, `resizable`, centrado y que el sistema recuerde tamaño y posición—, `ui.open_with(title, url,
 o)` con `var o = ui.options(1024, 720); o.min_width = 640; o.autosave = "main";` (M210; el autosave lo
-da macOS, Linux y Windows lo ignoran).
+da macOS, Linux y Windows lo ignoran). Para que la barra de título del sistema lleve el color del
+tema, como en Sublime, `o.titlebar_color = "#1f2430"` (M224): en macOS la barra se vuelve
+transparente sobre el fondo de la ventana y el título sale claro u oscuro según la luminancia; en
+Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
+color, y un valor que no sea `#rrggbb` es `Err`.
 
 Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
 canales — `(messages, other)`: los `"message"` por el primero, `closed`/`menu` por el

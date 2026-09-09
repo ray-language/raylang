@@ -12827,3 +12827,20 @@ helper: el `RefCell` del hilo nunca queda prestado a través de una fibra. Medid
 (ASCII 288k) y 0,40 → 0,02 s (UTF-8 descendente 120k); VM y nativo byte-idénticos en el programa de
 cadenas intercaladas que pisa la caché en cada iteración. Lección de método: un cambio de
 rendimiento en la VM se mide también en el nativo antes de publicarlo.
+
+## 216. M224 — la barra de título del color del tema (sep 2026)
+
+`ray-sublime` mostraba la barra de título gris del sistema sobre una interfaz oscura, con su propio
+rótulo "ray-sublime" repetido justo debajo; Sublime, en cambio, pinta la barra con el color del
+esquema. En AppKit eso no es una barra custom: basta `titlebarAppearsTransparent` (la barra deja
+ver el fondo de la ventana), `backgroundColor` con el color pedido y `setAppearance:` Aqua o
+DarkAqua para que el título y los semáforos contrasten. La apariencia se decide por luminancia
+relativa del color (sRGB, umbral 0,5) en vez de pedir otro campo: el color ya dice si el tema es
+oscuro. En Windows 11 es un atributo DWM (`DWMWA_CAPTION_COLOR`), que en Windows 10 no existe y se
+ignora sin error; GTK no tiene equivalente sin dibujar la barra entera (CSD), que queda fuera.
+Un campo `titlebar_color: string` en `WindowOptions` con `""` = sistema, validado como `#rrggbb`
+en `open_window_with` antes de tocar ningún backend —así headless lo rechaza igual y la batería de
+tres motores lo cubre—; el primitivo `__ui_open_with` pasa a diez argumentos planos. La opción de
+más alcance —contenido bajo la barra con pestañas propias (`fullSizeContentView`)— exige una vista
+que devuelva la ventana arrastrable sobre el webview y mover los semáforos; queda como idea aparte
+para cuando una app quiera dibujar en esa franja.

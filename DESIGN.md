@@ -12865,3 +12865,52 @@ sesión sirvieron de guía; el gate no los incorpora porque exigen una ventana r
 fuera, y es la respuesta para archivos de cientos de MB, binarios y también para no exponer un
 puerto local: un esquema `ray://` propio (`WKURLSchemeHandler` y equivalentes) servido desde
 raylang en streaming — arco aparte.
+
+## 218. M226 — el esquema `ray://`: la interfaz sin servidor local (sep 2026)
+
+La medición de M225 dejó dos cosas que el puente no debe resolver: los archivos de cientos de MB
+(cuatro copias transitorias del payload) y la seguridad de la vía alternativa, un servidor HTTP en
+`127.0.0.1` al que cualquier proceso de la máquina puede hablar y que en el bundle exige el
+permiso de red local. Electron lo resuelve con `protocol.handle`; WebKit tiene el mismo mecanismo,
+`WKURLSchemeHandler`, y WebKitGTK y WebView2 los suyos. El diseño separa lo puro de lo de
+plataforma: `ui::scheme` es un módulo sin dependencias —montajes (directorios canonicalizados con
+guarda contra `..`, archivos en memoria), resolución de `ray://app/<ruta>` (host fijo; `index.html`
+para directorios), GET/HEAD, `Range` de un solo tramo con 206/416, `ETag` por tamaño y mtime (o
+hash FNV en memoria) con 304, MIME por extensión— que devuelve una `Response` cuyo cuerpo es bytes
+o un tramo de archivo; se prueba con `cargo test` sin ventana. El backend de macOS solo traduce:
+un objeto `RayURLSchemeHandler` registrado SIEMPRE en la `WKWebViewConfiguration` (no admite
+cambios tras crear el webview, y un programa puede montar después de abrir), que en
+`startURLSchemeTask:` retiene la tarea, resuelve con `serve` y lanza un hilo que lee el cuerpo
+por trozos de 256 KiB y los entrega en el hilo principal; `stopURLSchemeTask:` marca la tarea y
+cada entrega comprueba la marca en el hilo principal —WebKit lanza una excepción si se entrega a
+una tarea parada, y como stop y entregas corren en el mismo hilo no hay carrera—; el conjunto de
+tareas en vuelo evita que una marca huérfana cancele a una tarea futura con el mismo puntero.
+Los assets embebidos no viven en el runtime (en nativo son una tabla del programa generado), así
+que `mount_embed` los lee con `std/embed` y los monta en memoria uno a uno: un solo primitivo
+`mount_bytes` y ningún acoplamiento nuevo. Medido en ventana real: 8 MiB con `Range` en 53 ms.
+Lo que sigue es plataforma pura —`webkit_web_context_register_uri_scheme` en GTK y
+`WebResourceRequested` o `SetVirtualHostNameToFolderMapping` en WebView2— sin tocar el módulo
+puro ni la API.
+
+## 219. M227/M228 — el esquema `ray://` en WebKitGTK y WebView2 (sep 2026)
+
+Con el módulo puro cerrado, cada plataforma es una traducción. **GTK**: `webkit_web_context_
+register_uri_scheme` en el contexto por defecto, una vez y antes del primer webview (el proceso
+web nace con la lista de esquemas), marcado seguro y CORS-enabled en el security manager; el
+callback corre en el hilo del loop y no necesita hilos: entrega un `GInputStream` que WebKit lee
+asíncrono —memoria en un buffer `g_malloc` liberado por `g_free`, o un `GFileInputStream`
+posicionado con `g_seekable_seek`—. Un detalle que decide la forma: WebKit lee hasta EOF, no
+hasta `stream_length`, así que un tramo acotado que no llega al final del archivo va desde memoria
+y el tramo abierto (`bytes=a-`) o el archivo entero, desde el stream. Toda la API llega por
+`dlsym` como el resto del backend, en bloque opcional: sin ella `ui.open` sigue y `ray://` no se
+sirve; con WebKitGTK < 2.36 no existen status ni cabeceras de respuesta y se cae al `finish`
+clásico (cuerpo + MIME, 200). **WebView2**: el esquema se declara en las OPCIONES del entorno
+(`CoreWebView2CustomSchemeRegistration`: seguro, con host, sin `allowed_origins` → solo las
+páginas del propio esquema pueden pedirle) y se atiende en `WebResourceRequested` con filtro
+`ray://*`, contestando con `CreateWebResourceResponse` sobre un `SHCreateMemStream` del tramo
+pedido: v1 sin streaming, porque un `IStream` propio sobre archivo es otro hito y el tramo que una
+página pide con Range ya está acotado. Ninguno de los dos se pudo ejecutar en la máquina de
+desarrollo: compilan y pasan clippy para sus targets, el CI corre lo headless, y la verificación
+en ventana real la hace el usuario en sus VMs con `tools/verify-ray-scheme/` (una página que pide
+un archivo de 8 MiB con Range, un archivo en memoria, un 304, un 404 y un traversal, e informa
+por el puente IPC).

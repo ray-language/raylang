@@ -270,6 +270,59 @@ pub fn save_file(suggested: string) -> Result<Option<string>, string> {
     dialog_result(__ui_dialog("save_file", suggested))
 }
 
+/// M226 — the `ray://app/…` scheme: the page loads its files straight from the process, with no
+/// local TCP server (no port another app on the machine could reach, no local-network permission
+/// in the bundle) and streamed in chunks (Range, ETag/304, MIME by extension). Mount BEFORE the
+/// page requests the files; `open("App", "ray://app/index.html", …)` then needs no server at all.
+/// `mount_dir("files", "/path/to/project")` serves `ray://app/files/<rel>` from disk (canonical
+/// path; `..` never escapes the directory; a directory serves its `index.html`). Requests to
+/// anything not mounted are 404. GET/HEAD only. Served by the three desktop backends (WebKitGTK
+/// older than 2.36: body and MIME only, no Range/304; WebView2: the requested range from memory).
+pub fn mount_dir(prefix: string, dir: string) -> Result<int, string> {
+    let r = __ui_mount("dir", prefix, dir);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Mounts `data` as the in-memory file `ray://app/<path>` (M226): generated content, or assets
+/// (see `mount_embed`). Replaces a previous file at the same path.
+pub fn mount_bytes(path: string, data: bytes) -> Result<int, string> {
+    let r = __ui_mount_bytes(path, data);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Mounts the project's embedded assets (`std/embed`, `[native] embed`) whose key starts with
+/// `embed_prefix` under `ray://app/<prefix>/…` (M226): `mount_embed("", "assets")` makes
+/// `assets/app.css` reachable as `ray://app/assets/app.css`, live from disk under `ray run` and
+/// baked into the native binary otherwise. Returns the number of files mounted.
+pub fn mount_embed(prefix: string, embed_prefix: string) -> Result<int, string> {
+    let names = __embed_list();
+    if (names.len() > 0 && names[0] != "ok") {
+        return Result.Err(names[1]);
+    }
+    var n = 0;
+    var i = 1;
+    while (i < names.len()) {
+        let name = names[i];
+        if (name.starts_with(embed_prefix)) {
+            let r = __embed_read(name);
+            if (r[0] != b"ok") {
+                return Result.Err("embed: read failed: " + name);
+            }
+            let target = if (prefix == "") { name } else { prefix + "/" + name };
+            match (mount_bytes(target, r[1])) {
+                Result.Ok(_) => {
+                    n = n + 1;
+                },
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+            }
+        }
+        i = i + 1;
+    }
+    Result.Ok(n)
+}
+
 /// The UI events as a channel: spawns a pump fiber that forwards `next_event()` into it — use
 /// it to `select` UI events alongside your other channels. Needs the VM or a native build
 /// (`spawn`); on an error from the queue the pump ends and the channel goes quiet.

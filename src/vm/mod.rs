@@ -3255,6 +3255,29 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M226: montajes del esquema ray://.
+                OpCode::UiMount => {
+                    let (HeapValue::Str(source), HeapValue::Str(prefix), HeapValue::Str(kind)) = (self.pop(), self.pop(), self.pop()) else {
+                        unreachable!("the checker guarantees three strings");
+                    };
+                    let elems = match crate::builtins::ui_mount(&kind, &prefix, &source) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::UiMountBytes => {
+                    let (HeapValue::Bytes(data), HeapValue::Str(path)) = (self.pop(), self.pop()) else {
+                        unreachable!("the checker guarantees (string, bytes)");
+                    };
+                    let elems = match crate::builtins::ui_mount_bytes(&path, data) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M148: menú custom (la decodificación vive en ray_runtime::ui, compartida).
                 OpCode::UiMenu => {
                     let items = self.pop();

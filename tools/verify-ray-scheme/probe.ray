@@ -1,0 +1,68 @@
+// Verificación del esquema ray:// en una ventana real (M226–M228). Monta el directorio de este
+// kit (index.html + big.bin de 8 MiB generado por run.sh/run.ps1) y un archivo en memoria, abre
+// ray://app/site/index.html y la página informa por el puente IPC: 206 con Range, memoria, 304,
+// 404 y traversal. Termina solo al recibir "done" (o con RAY_UI_EXIT_AFTER_MS en headless).
+import std/ui;
+
+fn main() -> int {
+    let argv = args();
+    let dir = if (argv.len() > 0) { argv[0] } else { "." };
+    match (ui.mount_dir("site", dir)) {
+        Result.Ok(_) => print("mounted dir"),
+        Result.Err(e) => {
+            print("mount err: " + e);
+            return 1;
+        },
+    }
+    match (ui.mount_bytes("mem/hello.txt", b"hola desde memoria")) {
+        Result.Ok(_) => print("mounted bytes"),
+        Result.Err(e) => {
+            print("mount err: " + e);
+            return 1;
+        },
+    }
+    match (ui.open("ray scheme probe", "ray://app/site/index.html", 500, 300)) {
+        Result.Err(e) => {
+            print("open err: " + e);
+            1
+        },
+        Result.Ok(_) => {
+            var ok = 0;
+            var done = false;
+            while (!done) {
+                match (ui.next_event()) {
+                    Result.Ok(e) => {
+                        if (e.kind == "message") {
+                            print("page: " + e.tag);
+                            if (e.tag.starts_with("big status=206")) {
+                                ok = ok + 1;
+                            }
+                            if (e.tag.starts_with("mem status=200")) {
+                                ok = ok + 1;
+                            }
+                            if (e.tag.starts_with("etag status=304")) {
+                                ok = ok + 1;
+                            }
+                            if (e.tag.starts_with("missing status=404")) {
+                                ok = ok + 1;
+                            }
+                            if (e.tag.starts_with("traversal status=40")) {
+                                ok = ok + 1;
+                            }
+                            if (e.tag == "done") {
+                                done = true;
+                            }
+                        } else if (e.kind == "closed") {
+                            done = true;
+                        }
+                    },
+                    Result.Err(_) => {
+                        done = true;
+                    },
+                }
+            }
+            print("checks passed: " + to_string(ok) + "/5");
+            if (ok == 5) { 0 } else { 1 }
+        },
+    }
+}

@@ -1371,6 +1371,18 @@ transparente sobre el fondo de la ventana y el título sale claro u oscuro segú
 Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
 color, y un valor que no sea `#rrggbb` es `Err`.
 
+**Sin servidor local: el esquema `ray://`** (M226). En vez de levantar un servidor HTTP en
+`127.0.0.1` para servir la interfaz y los archivos del proyecto, la app los monta y la página los
+carga por `ray://app/…` directamente del proceso: `ui.mount_embed("", "assets")` deja los assets
+embebidos en `ray://app/assets/…`, `ui.mount_dir("files", project_dir)` sirve el directorio del
+proyecto en `ray://app/files/<ruta>` (ruta canónica, `..` nunca sale de él, Range para leer por
+tramos, ETag/304), y `ui.open("App", "ray://app/assets/index.html", 1200, 800)` abre sin puerto
+alguno. Ninguna otra aplicación de la máquina puede hablar con ese "servidor", el bundle no
+necesita el permiso de red local y los bytes van en streaming por trozos de 256 KiB — un archivo
+de 8 MiB con `fetch` y `Range` tarda unos 50 ms en macOS. Lo sirven los tres backends: WKWebView,
+WebKitGTK (con una lib anterior a 2.36 solo cuerpo y MIME, sin Range ni 304) y WebView2 (el tramo
+pedido se contesta desde memoria).
+
 Las respuestas grandes no tienen coste oculto (M225): el literal JS de `ui.reply` se escapa en el
 runtime en una pasada, así que responder 1 MB cuesta unos 4 ms de ida y vuelta y 8 MB unos 30 ms
 (medido en WKWebView). Si la respuesta es JSON, `ui.reply_json(window, id, json)` entrega a la

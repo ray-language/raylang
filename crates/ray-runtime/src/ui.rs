@@ -586,6 +586,409 @@ fn is_dark(rgb: (u8, u8, u8)) -> bool {
     0.2126 * lin(rgb.0) + 0.7152 * lin(rgb.1) + 0.0722 * lin(rgb.2) < 0.5
 }
 
+/// M226: el esquema `ray://app/…` — la página carga sus archivos y los del proyecto por un
+/// esquema de URL propio servido desde el proceso, SIN servidor TCP local: no hay puerto que otra
+/// app de la máquina pueda abrir ni permiso de red local en el bundle, y los bytes viajan en
+/// streaming (Range, ETag/304, MIME por extensión) sin pasar por JSON ni por strings de raylang.
+/// Montajes: directorios (`mount_dir`: archivos del disco, canonicalizados y con guarda contra
+/// `..`) y archivos en memoria (`mount_bytes`: assets embebidos o contenido generado). Todo lo de
+/// aquí es puro y se prueba sin ventana; los backends (WKURLSchemeHandler en macOS) solo traducen
+/// la petición y entregan la [`Response`].
+pub mod scheme {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    /// El esquema y el host fijos: `ray://app/<ruta>`.
+    pub const SCHEME: &str = "ray";
+    pub const HOST: &str = "app";
+    /// Tamaño de trozo con el que los backends entregan un archivo (streaming).
+    pub const CHUNK: usize = 256 * 1024;
+
+    #[derive(Default)]
+    struct Mounts {
+        /// (prefijo normalizado sin barras extremas, directorio canónico). Gana el más largo.
+        dirs: Vec<(String, PathBuf)>,
+        /// ruta normalizada → bytes.
+        files: HashMap<String, Arc<[u8]>>,
+    }
+
+    fn mounts() -> &'static Mutex<Mounts> {
+        static M: OnceLock<Mutex<Mounts>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(Mounts::default()))
+    }
+
+    /// Normaliza una ruta de montaje o de petición: sin barras extremas ni dobles, sin `.`, y
+    /// `..` o NUL la rechazan (nunca se resuelve contra el disco algo que suba de nivel).
+    fn normalize(path: &str) -> Result<String, String> {
+        let mut out: Vec<&str> = Vec::new();
+        for seg in path.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => return Err(format!("ui: path escapes the mount: '{path}'")),
+                s if s.contains('\0') => return Err(format!("ui: invalid path: '{path}'")),
+                s => out.push(s),
+            }
+        }
+        Ok(out.join("/"))
+    }
+
+    /// Monta `dir` bajo `ray://app/<prefix>/`. `dir` debe existir y ser un directorio.
+    pub fn mount_dir(prefix: &str, dir: &str) -> Result<(), String> {
+        let prefix = normalize(prefix)?;
+        let canonical = std::fs::canonicalize(dir).map_err(|e| format!("ui: cannot mount '{dir}': {e}"))?;
+        if !canonical.is_dir() {
+            return Err(format!("ui: cannot mount '{dir}': not a directory"));
+        }
+        let mut m = mounts().lock().unwrap();
+        m.dirs.retain(|(p, _)| *p != prefix);
+        m.dirs.push((prefix, canonical));
+        m.dirs.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
+        Ok(())
+    }
+
+    /// Monta `data` como el archivo `ray://app/<path>` (en memoria; reemplaza si existía).
+    pub fn mount_bytes(path: &str, data: Vec<u8>) -> Result<(), String> {
+        let path = normalize(path)?;
+        if path.is_empty() {
+            return Err("ui: mount_bytes needs a file path".to_string());
+        }
+        mounts().lock().unwrap().files.insert(path, Arc::from(data));
+        Ok(())
+    }
+
+    /// ¿Hay algo montado? (los backends registran el handler siempre; esto es informativo).
+    pub fn has_mounts() -> bool {
+        let m = mounts().lock().unwrap();
+        !m.dirs.is_empty() || !m.files.is_empty()
+    }
+
+    /// El cuerpo de una respuesta: nada, bytes en memoria, o un tramo de archivo que el backend
+    /// lee por trozos (`CHUNK`) fuera del hilo de UI.
+    pub enum Body {
+        Empty,
+        Bytes(Arc<[u8]>, u64, u64),
+        File { path: PathBuf, start: u64, len: u64 },
+    }
+
+    pub struct Response {
+        pub status: u16,
+        pub headers: Vec<(String, String)>,
+        pub body: Body,
+    }
+
+    impl Response {
+        fn plain(status: u16, text: &str) -> Response {
+            Response {
+                status,
+                headers: vec![
+                    ("Content-Type".into(), "text/plain; charset=utf-8".into()),
+                    ("Content-Length".into(), text.len().to_string()),
+                    ("Cache-Control".into(), "no-cache".into()),
+                ],
+                body: Body::Bytes(Arc::from(text.as_bytes()), 0, text.len() as u64),
+            }
+        }
+        /// Longitud total del cuerpo que el backend va a entregar.
+        pub fn body_len(&self) -> u64 {
+            match &self.body {
+                Body::Empty => 0,
+                Body::Bytes(_, _, n) => *n,
+                Body::File { len, .. } => *len,
+            }
+        }
+    }
+
+    /// MIME por extensión (los tipos que una app web usa; el resto `application/octet-stream`).
+    pub fn mime_for(path: &str) -> &'static str {
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "html" | "htm" => "text/html; charset=utf-8",
+            "css" => "text/css; charset=utf-8",
+            "js" | "mjs" => "text/javascript; charset=utf-8",
+            "json" | "map" => "application/json; charset=utf-8",
+            "txt" | "md" | "ray" | "toml" | "yaml" | "yml" | "csv" | "log" => "text/plain; charset=utf-8",
+            "xml" | "plist" => "application/xml; charset=utf-8",
+            "svg" => "image/svg+xml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "ico" => "image/x-icon",
+            "woff" => "font/woff",
+            "woff2" => "font/woff2",
+            "ttf" => "font/ttf",
+            "otf" => "font/otf",
+            "wasm" => "application/wasm",
+            "pdf" => "application/pdf",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" => "audio/ogg",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            _ => "application/octet-stream",
+        }
+    }
+
+    fn percent_decode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%'
+                && i + 2 < b.len()
+                && let (Some(h), Some(l)) = (hex(b.get(i + 1).copied()), hex(b.get(i + 2).copied()))
+            {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+            out.push(b[i]);
+            i += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn hex(c: Option<u8>) -> Option<u8> {
+        match c? {
+            c @ b'0'..=b'9' => Some(c - b'0'),
+            c @ b'a'..=b'f' => Some(c - b'a' + 10),
+            c @ b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    /// `bytes=a-b` / `a-` / `-n` (un solo rango) → (inicio, longitud) dentro de `total`.
+    fn parse_range(spec: &str, total: u64) -> Option<(u64, u64)> {
+        let spec = spec.trim().strip_prefix("bytes=")?;
+        if spec.contains(',') {
+            return None;
+        }
+        let (a, b) = spec.split_once('-')?;
+        let (a, b) = (a.trim(), b.trim());
+        if a.is_empty() {
+            let n: u64 = b.parse().ok()?;
+            if n == 0 || total == 0 {
+                return None;
+            }
+            let n = n.min(total);
+            return Some((total - n, n));
+        }
+        let start: u64 = a.parse().ok()?;
+        if start >= total {
+            return None;
+        }
+        let end: u64 = if b.is_empty() { total - 1 } else { b.parse::<u64>().ok()?.min(total - 1) };
+        if end < start {
+            return None;
+        }
+        Some((start, end - start + 1))
+    }
+
+    /// La ruta de una URL `ray://app/<ruta>[?query][#frag]` normalizada, o `None` si no es de
+    /// este esquema/host.
+    pub fn path_of(url: &str) -> Option<Result<String, String>> {
+        let rest = url.strip_prefix("ray://")?;
+        let rest = rest.split(['?', '#']).next().unwrap_or("");
+        let (host, path) = match rest.split_once('/') {
+            Some((h, p)) => (h, p),
+            None => (rest, ""),
+        };
+        if host != HOST {
+            return None;
+        }
+        Some(normalize(&percent_decode(path)))
+    }
+
+    /// Resuelve y sirve: GET/HEAD, Range (206/416), If-None-Match (304), 404/405. Puro: no
+    /// toca ningún backend; el archivo solo se abre para leer su tamaño y su mtime.
+    pub fn serve(url: &str, method: &str, range: Option<&str>, if_none_match: Option<&str>) -> Response {
+        let path = match path_of(url) {
+            None => return Response::plain(404, "not found"),
+            Some(Err(_)) => return Response::plain(403, "forbidden"),
+            Some(Ok(p)) => p,
+        };
+        if method != "GET" && method != "HEAD" {
+            return Response::plain(405, "method not allowed");
+        }
+        let (name, body, total, etag) = match locate(&path) {
+            Some(x) => x,
+            None => return Response::plain(404, "not found"),
+        };
+        let mut headers = vec![
+            ("Content-Type".to_string(), mime_for(&name).to_string()),
+            ("Accept-Ranges".to_string(), "bytes".to_string()),
+            ("ETag".to_string(), etag.clone()),
+            ("Cache-Control".to_string(), "no-cache".to_string()),
+        ];
+        if if_none_match.map(|t| t.split(',').any(|x| x.trim() == etag)).unwrap_or(false) {
+            return Response { status: 304, headers, body: Body::Empty };
+        }
+        let (status, start, len) = match range {
+            None => (200, 0, total),
+            Some(spec) => match parse_range(spec, total) {
+                Some((s, n)) => {
+                    headers.push(("Content-Range".into(), format!("bytes {}-{}/{}", s, s + n - 1, total)));
+                    (206, s, n)
+                }
+                None => {
+                    headers.push(("Content-Range".into(), format!("bytes */{total}")));
+                    return Response { status: 416, headers, body: Body::Empty };
+                }
+            },
+        };
+        headers.push(("Content-Length".into(), len.to_string()));
+        let body = if method == "HEAD" {
+            Body::Empty
+        } else {
+            match body {
+                Located::Memory(b) => Body::Bytes(b, start, len),
+                Located::Disk(p) => Body::File { path: p, start, len },
+            }
+        };
+        Response { status, headers, body }
+    }
+
+    enum Located {
+        Memory(Arc<[u8]>),
+        Disk(PathBuf),
+    }
+
+    /// (nombre para el MIME, dónde está, tamaño total, ETag). Un directorio sirve su index.html.
+    fn locate(path: &str) -> Option<(String, Located, u64, String)> {
+        let m = mounts().lock().unwrap();
+        let candidates: Vec<String> = if path.is_empty() {
+            vec!["index.html".to_string()]
+        } else {
+            vec![path.to_string(), format!("{path}/index.html")]
+        };
+        for cand in &candidates {
+            if let Some(b) = m.files.get(cand) {
+                let etag = format!("\"m-{}-{:x}\"", b.len(), fnv(b));
+                return Some((cand.clone(), Located::Memory(b.clone()), b.len() as u64, etag));
+            }
+        }
+        for (prefix, dir) in &m.dirs {
+            let rel = if prefix.is_empty() {
+                path.to_string()
+            } else if path == prefix {
+                String::new()
+            } else if let Some(r) = path.strip_prefix(&format!("{prefix}/")) {
+                r.to_string()
+            } else {
+                continue;
+            };
+            let mut candidate = dir.join(&rel);
+            if candidate.is_dir() {
+                candidate = candidate.join("index.html");
+            }
+            let Ok(canonical) = std::fs::canonicalize(&candidate) else { continue };
+            if !canonical.starts_with(dir) || !canonical.is_file() {
+                continue;
+            }
+            let Ok(meta) = std::fs::metadata(&canonical) else { continue };
+            let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let etag = format!("\"f-{}-{:x}\"", meta.len(), mtime);
+            let name = candidate.to_string_lossy().into_owned();
+            return Some((name, Located::Disk(canonical), meta.len(), etag));
+        }
+        None
+    }
+
+    fn fnv(b: &[u8]) -> u64 {
+        b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+    }
+
+    /// Lee un trozo del cuerpo de archivo: `(offset relativo al tramo)` → bytes (vacío al final).
+    pub fn read_chunk(path: &Path, start: u64, len: u64, offset: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let remaining = len.saturating_sub(offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
+        let mut f = std::fs::File::open(path)?;
+        f.seek(SeekFrom::Start(start + offset))?;
+        let want = remaining.min(CHUNK as u64) as usize;
+        let mut buf = vec![0u8; want];
+        let mut got = 0;
+        while got < want {
+            let n = f.read(&mut buf[got..])?;
+            if n == 0 {
+                break;
+            }
+            got += n;
+        }
+        buf.truncate(got);
+        Ok(buf)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn header<'a>(r: &'a Response, k: &str) -> Option<&'a str> {
+            r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
+        }
+
+        #[test]
+        fn memory_files_ranges_etag_and_errors() {
+            mount_bytes("t/hello.txt", b"hello world".to_vec()).unwrap();
+            let r = serve("ray://app/t/hello.txt", "GET", None, None);
+            assert_eq!(r.status, 200);
+            assert_eq!(header(&r, "Content-Length"), Some("11"));
+            assert_eq!(header(&r, "Content-Type"), Some("text/plain; charset=utf-8"));
+            let etag = header(&r, "ETag").unwrap().to_string();
+            assert_eq!(serve("ray://app/t/hello.txt", "GET", None, Some(&etag)).status, 304);
+            let r = serve("ray://app/t/hello.txt", "GET", Some("bytes=6-"), None);
+            assert_eq!((r.status, header(&r, "Content-Range")), (206, Some("bytes 6-10/11")));
+            assert!(matches!(r.body, Body::Bytes(_, 6, 5)));
+            let r = serve("ray://app/t/hello.txt", "GET", Some("bytes=-4"), None);
+            assert_eq!(header(&r, "Content-Range"), Some("bytes 7-10/11"));
+            assert_eq!(serve("ray://app/t/hello.txt", "GET", Some("bytes=50-"), None).status, 416);
+            assert_eq!(serve("ray://app/t/hello.txt", "POST", None, None).status, 405);
+            assert_eq!(serve("ray://app/t/nope.txt", "GET", None, None).status, 404);
+            assert_eq!(serve("ray://other/t/hello.txt", "GET", None, None).status, 404);
+            assert_eq!(serve("ray://app/../t/hello.txt", "GET", None, None).status, 403);
+            assert_eq!(serve("ray://app/t/hello.txt?x=1#f", "HEAD", None, None).status, 200);
+            assert!(matches!(serve("ray://app/t/hello.txt", "HEAD", None, None).body, Body::Empty));
+            assert!(mount_bytes("../x", vec![]).is_err());
+        }
+
+        #[test]
+        fn directory_mounts_serve_files_with_traversal_guard() {
+            let base = std::env::temp_dir().join(format!("ray_scheme_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(base.join("sub")).unwrap();
+            std::fs::write(base.join("index.html"), b"<h1>hi</h1>").unwrap();
+            std::fs::write(base.join("sub/a.js"), b"1;").unwrap();
+            let big: Vec<u8> = (0..(CHUNK * 2 + 7)).map(|i| (i % 251) as u8).collect();
+            std::fs::write(base.join("big.bin"), &big).unwrap();
+            mount_dir("files", base.to_str().unwrap()).unwrap();
+            assert!(mount_dir("x", base.join("missing").to_str().unwrap()).is_err());
+            let r = serve("ray://app/files/", "GET", None, None);
+            assert_eq!((r.status, header(&r, "Content-Type")), (200, Some("text/html; charset=utf-8")));
+            assert_eq!(serve("ray://app/files", "GET", None, None).status, 200);
+            let r = serve("ray://app/files/sub/a.js", "GET", None, None);
+            assert_eq!(header(&r, "Content-Type"), Some("text/javascript; charset=utf-8"));
+            assert_eq!(serve("ray://app/files/sub/%2e%2e/index.html", "GET", None, None).status, 403);
+            assert_eq!(serve("ray://app/files/sub/../index.html", "GET", None, None).status, 403);
+            let r = serve("ray://app/files/big.bin", "GET", Some("bytes=100-"), None);
+            let Body::File { path, start, len } = r.body else { panic!("file body") };
+            assert_eq!((start, len), (100, big.len() as u64 - 100));
+            let mut out = Vec::new();
+            let mut off = 0;
+            loop {
+                let c = read_chunk(&path, start, len, off).unwrap();
+                if c.is_empty() { break; }
+                off += c.len() as u64;
+                out.extend_from_slice(&c);
+            }
+            assert_eq!(out, &big[100..]);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+}
+
 pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<(), String> {
     open_window_with(id, title, url, &WindowOptions::simple(width, height))
 }
@@ -1011,6 +1414,9 @@ mod mac {
     type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
     // M159: isMainFrame (BOOL sin argumentos).
     type MsgBool = unsafe extern "C" fn(Id, Sel) -> u8;
+    // M226 (esquema ray://): initWithURL:statusCode:HTTPVersion:headerFields: / dataWithBytes:length:.
+    type MsgInitHttpResponse = unsafe extern "C" fn(Id, Sel, Id, i64, Id, Id) -> Id;
+    type MsgDataBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize) -> Id;
 
     fn msg_send() -> *const c_void {
         objc_msgSend as unsafe extern "C" fn() as *const c_void
@@ -1200,6 +1606,151 @@ mod mac {
     }
 
     /// La clase delegate (una por proceso): NSObject + `windowWillClose:` → evento `closed`.
+    /// M226: tareas del esquema en vuelo y canceladas (punteros de WKURLSchemeTask). Todo
+    /// acceso ocurre en el hilo principal (start/stop y las entregas por `on_main`), así que
+    /// el conjunto es consistente sin más disciplina; el hilo lector solo lo consulta.
+    fn scheme_tasks() -> &'static std::sync::Mutex<(std::collections::HashSet<usize>, std::collections::HashSet<usize>)> {
+        static T: std::sync::OnceLock<std::sync::Mutex<(std::collections::HashSet<usize>, std::collections::HashSet<usize>)>> = std::sync::OnceLock::new();
+        T.get_or_init(|| std::sync::Mutex::new((std::collections::HashSet::new(), std::collections::HashSet::new())))
+    }
+
+    fn scheme_cancelled(task: usize) -> bool {
+        scheme_tasks().lock().unwrap().1.contains(&task)
+    }
+
+    /// M226: el objeto WKURLSchemeHandler (singleton). `webView:startURLSchemeTask:` resuelve la
+    /// petición con `scheme::serve` (puro), retiene la tarea y lanza un hilo que lee el cuerpo por
+    /// trozos y lo entrega en el hilo principal (`didReceiveResponse:`/`didReceiveData:`/
+    /// `didFinish`); `webView:stopURLSchemeTask:` marca la tarea y el lector para. WebKit lanza una
+    /// excepción si se entrega a una tarea parada: cada entrega comprueba la marca en el hilo
+    /// principal, donde también corre stop — sin carrera posible.
+    fn scheme_handler() -> Id {
+        static HANDLER: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *HANDLER.get_or_init(|| {
+            extern "C" fn start_task(_this: Id, _sel: Sel, _webview: Id, task: Id) {
+                // SAFETY: el run loop entrega una tarea válida en el hilo principal.
+                let (url, method, range, inm) = unsafe {
+                    let get: MsgId = std::mem::transmute(msg_send());
+                    let get_h: MsgIdId = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let plain: MsgVoid = std::mem::transmute(msg_send());
+                    let text = |o: Id| -> Option<String> {
+                        if o.is_null() { return None; }
+                        let c = utf8(o, sel(b"UTF8String\0"));
+                        if c.is_null() { None } else { Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned()) }
+                    };
+                    let req = get(task, sel(b"request\0"));
+                    let url = text(get(get(req, sel(b"URL\0")), sel(b"absoluteString\0"))).unwrap_or_default();
+                    let method = text(get(req, sel(b"HTTPMethod\0"))).unwrap_or_else(|| "GET".to_string());
+                    let range = text(get_h(req, sel(b"valueForHTTPHeaderField:\0"), nsstring("Range")));
+                    let inm = text(get_h(req, sel(b"valueForHTTPHeaderField:\0"), nsstring("If-None-Match")));
+                    plain(task, sel(b"retain\0"));
+                    (url, method, range, inm)
+                };
+                let task_u = task as usize;
+                scheme_tasks().lock().unwrap().0.insert(task_u);
+                let resp = super::scheme::serve(&url, &method, range.as_deref(), inm.as_deref());
+                std::thread::spawn(move || {
+                    let status = resp.status as i64;
+                    let headers = resp.headers.clone();
+                    on_main(move || unsafe {
+                        if scheme_cancelled(task_u) { return; }
+                        let get: MsgId = std::mem::transmute(msg_send());
+                        let alloc: MsgId = std::mem::transmute(msg_send());
+                        let set_kv: MsgVoidIdId = std::mem::transmute(msg_send());
+                        let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                        let plain: MsgVoid = std::mem::transmute(msg_send());
+                        let init: MsgInitHttpResponse = std::mem::transmute(msg_send());
+                        let task = task_u as Id;
+                        let url = get(get(task, sel(b"request\0")), sel(b"URL\0"));
+                        let dict = get(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
+                        for (k, v) in &headers {
+                            set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(v), nsstring(k));
+                        }
+                        let response = init(
+                            alloc(cls(b"NSHTTPURLResponse\0"), sel(b"alloc\0")),
+                            sel(b"initWithURL:statusCode:HTTPVersion:headerFields:\0"),
+                            url,
+                            status,
+                            nsstring("HTTP/1.1"),
+                            dict,
+                        );
+                        set_id(task, sel(b"didReceiveResponse:\0"), response);
+                        plain(response, sel(b"release\0"));
+                    });
+                    let deliver = |bytes: Vec<u8>| {
+                        on_main(move || unsafe {
+                            if scheme_cancelled(task_u) { return; }
+                            let data_with: MsgDataBytes = std::mem::transmute(msg_send());
+                            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                            let data = data_with(cls(b"NSData\0"), sel(b"dataWithBytes:length:\0"), bytes.as_ptr(), bytes.len());
+                            set_id(task_u as Id, sel(b"didReceiveData:\0"), data);
+                        });
+                    };
+                    match resp.body {
+                        super::scheme::Body::Empty => {}
+                        super::scheme::Body::Bytes(b, start, len) => {
+                            let (s, e) = (start as usize, (start + len) as usize);
+                            for chunk in b[s..e].chunks(super::scheme::CHUNK) {
+                                if scheme_cancelled(task_u) { break; }
+                                deliver(chunk.to_vec());
+                            }
+                        }
+                        super::scheme::Body::File { path, start, len } => {
+                            let mut off = 0u64;
+                            loop {
+                                if scheme_cancelled(task_u) { break; }
+                                match super::scheme::read_chunk(&path, start, len, off) {
+                                    Ok(c) if c.is_empty() => break,
+                                    Ok(c) => { off += c.len() as u64; deliver(c); }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                    on_main(move || unsafe {
+                        let plain: MsgVoid = std::mem::transmute(msg_send());
+                        let cancelled = scheme_cancelled(task_u);
+                        if !cancelled {
+                            plain(task_u as Id, sel(b"didFinish\0"));
+                        }
+                        let mut t = scheme_tasks().lock().unwrap();
+                        t.0.remove(&task_u);
+                        t.1.remove(&task_u);
+                        drop(t);
+                        plain(task_u as Id, sel(b"release\0"));
+                    });
+                });
+            }
+            extern "C" fn stop_task(_this: Id, _sel: Sel, _webview: Id, task: Id) {
+                let task_u = task as usize;
+                let mut t = scheme_tasks().lock().unwrap();
+                if t.0.contains(&task_u) {
+                    t.1.insert(task_u);
+                }
+            }
+            unsafe {
+                let cls_new = objc_allocateClassPair(cls(b"NSObject\0"), c"RayURLSchemeHandler".as_ptr(), 0);
+                class_addMethod(
+                    cls_new,
+                    sel(b"webView:startURLSchemeTask:\0"),
+                    start_task as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"webView:stopURLSchemeTask:\0"),
+                    stop_task as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
+                objc_registerClassPair(cls_new);
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                init(alloc(cls_new, sel(b"alloc\0")), sel(b"init\0")) as usize
+            }
+        }) as Id
+    }
+
     fn delegate_class() -> Id {
         static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *CLASS.get_or_init(|| {
@@ -1677,6 +2228,12 @@ mod mac {
                 );
                 set_id(ucc, sel(b"addUserScript:\0"), script);
                 plain(script, sel(b"release\0")); // el controller lo retiene
+                // M226: el esquema `ray://` — el handler es un singleton (sin estado por
+                // ventana: los montajes son del proceso) y se registra SIEMPRE, porque la
+                // configuration no admite cambios tras crear el webview y un programa puede
+                // montar después de abrir.
+                let add_scheme: MsgVoidIdId = std::mem::transmute(msg_send());
+                add_scheme(cfg, sel(b"setURLSchemeHandler:forURLScheme:\0"), scheme_handler(), nsstring(super::scheme::SCHEME));
 
                 let init_frame_cfg: MsgInitFrameCfg = std::mem::transmute(msg_send());
                 let webview = init_frame_cfg(
@@ -1843,6 +2400,54 @@ mod gtk {
     type FnJsResultGetValue = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
     type FnJscIsString = unsafe extern "C" fn(*mut c_void) -> i32;
     type FnJscToString = unsafe extern "C" fn(*mut c_void) -> *mut std::ffi::c_char;
+    // M227 — esquema ray:// (WebKitGTK ≥ 2.36 para status/cabeceras; antes, solo cuerpo+MIME).
+    type FnPtr0 = unsafe extern "C" fn() -> *mut c_void;
+    type FnPtr1 = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type FnSchemeCb = extern "C" fn(*mut c_void, *mut c_void);
+    type FnRegisterScheme = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, FnSchemeCb, *mut c_void, *mut c_void);
+    type FnSecurityRegister = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char);
+    type FnReqGetStr = unsafe extern "C" fn(*mut c_void) -> *const std::ffi::c_char;
+    type FnHeadersGetOne = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char) -> *const std::ffi::c_char;
+    type FnHeadersNew = unsafe extern "C" fn(i32) -> *mut c_void;
+    type FnHeadersAppend = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, *const std::ffi::c_char);
+    type FnResponseNew = unsafe extern "C" fn(*mut c_void, i64) -> *mut c_void;
+    type FnResponseSetStatus = unsafe extern "C" fn(*mut c_void, u32, *const std::ffi::c_char);
+    type FnResponseSetStr = unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char);
+    type FnResponseSetHeaders = unsafe extern "C" fn(*mut c_void, *mut c_void);
+    type FnReqFinishResponse = unsafe extern "C" fn(*mut c_void, *mut c_void);
+    type FnReqFinish = unsafe extern "C" fn(*mut c_void, *mut c_void, i64, *const std::ffi::c_char);
+    type FnMemStreamNew = unsafe extern "C" fn(*const c_void, usize, *mut c_void) -> *mut c_void;
+    type FnFileNew = unsafe extern "C" fn(*const std::ffi::c_char) -> *mut c_void;
+    type FnFileRead = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+    type FnSeek = unsafe extern "C" fn(*mut c_void, i64, i32, *mut c_void, *mut c_void) -> i32;
+    type FnGMalloc = unsafe extern "C" fn(usize) -> *mut c_void;
+
+    /// M227: la API del esquema, toda opcional — sin ella las peticiones `ray://` no se sirven
+    /// (WebKit las falla) pero `ui.open` sigue funcionando en distros viejas.
+    struct SchemeApi {
+        context_default: FnPtr0,
+        register_scheme: FnRegisterScheme,
+        security_manager: Option<FnPtr1>,
+        register_secure: Option<FnSecurityRegister>,
+        register_cors: Option<FnSecurityRegister>,
+        req_get_uri: FnReqGetStr,
+        req_get_method: Option<FnReqGetStr>,
+        req_get_headers: Option<FnPtr1>,
+        headers_get_one: Option<FnHeadersGetOne>,
+        headers_new: Option<FnHeadersNew>,
+        headers_append: Option<FnHeadersAppend>,
+        response_new: Option<FnResponseNew>,
+        response_set_status: Option<FnResponseSetStatus>,
+        response_set_content_type: Option<FnResponseSetStr>,
+        response_set_headers: Option<FnResponseSetHeaders>,
+        req_finish_with_response: Option<FnReqFinishResponse>,
+        req_finish: FnReqFinish,
+        mem_stream_new: FnMemStreamNew,
+        file_new: FnFileNew,
+        file_read: FnFileRead,
+        seek: FnSeek,
+        g_malloc: FnGMalloc,
+    }
     // Las DOS generaciones del eval (aridades distintas — dos aliases, jamás uno "flexible"):
     // 2.40+ `evaluate_javascript(view, script, len, world, source_uri, cancellable, cb, data)`;
     // el clásico `run_javascript(view, script, cancellable, cb, data)`. Fire-and-forget: cb nulo.
@@ -1925,6 +2530,8 @@ mod gtk {
         js_result_get_value: Option<FnJsResultGetValue>,
         jsc_is_string: Option<FnJscIsString>,
         jsc_to_string: Option<FnJscToString>,
+        // M227 — esquema ray:// (opcional en bloque).
+        scheme: Option<SchemeApi>,
     }
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
@@ -2090,7 +2697,161 @@ mod gtk {
                     let p = bridge_sym(webkit, c"jsc_value_to_string");
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJscToString>(p))
                 },
+                scheme: load_scheme_api(webkit),
             })
+        }
+    }
+
+    /// M227: resuelve la API del esquema. Los símbolos de GIO/libsoup llegan por la clausura del
+    /// handle de webkit (como g_idle_add por gtk). Los imprescindibles (registro, uri, finish,
+    /// streams) deciden el `Some`; los de ≥ 2.36 (status/cabeceras) quedan opcionales dentro.
+    fn load_scheme_api(webkit: *mut c_void) -> Option<SchemeApi> {
+        // SAFETY: literales NUL-terminados; los transmutes replican los headers de WebKitGTK/GIO/libsoup.
+        unsafe {
+            let opt = |name: &std::ffi::CStr| {
+                let p = dlsym(webkit, name.as_ptr());
+                (!p.is_null()).then_some(p)
+            };
+            let req = |name: &std::ffi::CStr| opt(name);
+            Some(SchemeApi {
+                context_default: std::mem::transmute::<*mut c_void, FnPtr0>(req(c"webkit_web_context_get_default")?),
+                register_scheme: std::mem::transmute::<*mut c_void, FnRegisterScheme>(req(c"webkit_web_context_register_uri_scheme")?),
+                security_manager: opt(c"webkit_web_context_get_security_manager").map(|p| std::mem::transmute::<*mut c_void, FnPtr1>(p)),
+                register_secure: opt(c"webkit_security_manager_register_uri_scheme_as_secure").map(|p| std::mem::transmute::<*mut c_void, FnSecurityRegister>(p)),
+                register_cors: opt(c"webkit_security_manager_register_uri_scheme_as_cors_enabled").map(|p| std::mem::transmute::<*mut c_void, FnSecurityRegister>(p)),
+                req_get_uri: std::mem::transmute::<*mut c_void, FnReqGetStr>(req(c"webkit_uri_scheme_request_get_uri")?),
+                req_get_method: opt(c"webkit_uri_scheme_request_get_http_method").map(|p| std::mem::transmute::<*mut c_void, FnReqGetStr>(p)),
+                req_get_headers: opt(c"webkit_uri_scheme_request_get_http_headers").map(|p| std::mem::transmute::<*mut c_void, FnPtr1>(p)),
+                headers_get_one: opt(c"soup_message_headers_get_one").map(|p| std::mem::transmute::<*mut c_void, FnHeadersGetOne>(p)),
+                headers_new: opt(c"soup_message_headers_new").map(|p| std::mem::transmute::<*mut c_void, FnHeadersNew>(p)),
+                headers_append: opt(c"soup_message_headers_append").map(|p| std::mem::transmute::<*mut c_void, FnHeadersAppend>(p)),
+                response_new: opt(c"webkit_uri_scheme_response_new").map(|p| std::mem::transmute::<*mut c_void, FnResponseNew>(p)),
+                response_set_status: opt(c"webkit_uri_scheme_response_set_status").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetStatus>(p)),
+                response_set_content_type: opt(c"webkit_uri_scheme_response_set_content_type").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetStr>(p)),
+                response_set_headers: opt(c"webkit_uri_scheme_response_set_http_headers").map(|p| std::mem::transmute::<*mut c_void, FnResponseSetHeaders>(p)),
+                req_finish_with_response: opt(c"webkit_uri_scheme_request_finish_with_response").map(|p| std::mem::transmute::<*mut c_void, FnReqFinishResponse>(p)),
+                req_finish: std::mem::transmute::<*mut c_void, FnReqFinish>(req(c"webkit_uri_scheme_request_finish")?),
+                mem_stream_new: std::mem::transmute::<*mut c_void, FnMemStreamNew>(req(c"g_memory_input_stream_new_from_data")?),
+                file_new: std::mem::transmute::<*mut c_void, FnFileNew>(req(c"g_file_new_for_path")?),
+                file_read: std::mem::transmute::<*mut c_void, FnFileRead>(req(c"g_file_read")?),
+                seek: std::mem::transmute::<*mut c_void, FnSeek>(req(c"g_seekable_seek")?),
+                g_malloc: std::mem::transmute::<*mut c_void, FnGMalloc>(req(c"g_malloc")?),
+            })
+        }
+    }
+
+    /// M227: registra `ray://` en el contexto por defecto UNA vez, antes del primer webview
+    /// (el proceso web nace con la lista de esquemas). Seguro (contexto seguro para fetch/módulos)
+    /// y CORS-enabled (las peticiones cross-origin siguen sin cabeceras CORS → no legibles).
+    fn register_scheme_once(api: &Api) {
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let Some(s) = &api.scheme else { return };
+        if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: hilo del loop GTK; el contexto por defecto vive todo el proceso.
+        unsafe {
+            let ctx = (s.context_default)();
+            if ctx.is_null() {
+                return;
+            }
+            (s.register_scheme)(ctx, c"ray".as_ptr(), on_scheme_request, std::ptr::null_mut(), std::ptr::null_mut());
+            if let Some(mgr) = s.security_manager {
+                let m = mgr(ctx);
+                if !m.is_null() {
+                    if let Some(f) = s.register_secure { f(m, c"ray".as_ptr()); }
+                    if let Some(f) = s.register_cors { f(m, c"ray".as_ptr()); }
+                }
+            }
+        }
+    }
+
+    /// M227: el callback del esquema (hilo del loop GTK). Resuelve con `scheme::serve` (puro) y
+    /// entrega un GInputStream que WebKit lee asíncrono: memoria (copia en g_malloc, liberada por
+    /// g_free) o archivo (GFileInputStream posicionado con g_seekable_seek; un tramo acotado que
+    /// no llega al final se sirve desde memoria, porque WebKit lee hasta EOF). Con WebKitGTK
+    /// < 2.36 no hay status ni cabeceras: se entrega cuerpo + MIME (200), sin Range ni 304.
+    extern "C" fn on_scheme_request(request: *mut c_void, _user: *mut c_void) {
+        let Ok(api) = api() else { return };
+        let Some(s) = &api.scheme else { return };
+        // SAFETY: WebKit entrega una WebKitURISchemeRequest válida en el hilo del loop.
+        unsafe {
+            let text = |p: *const std::ffi::c_char| -> Option<String> {
+                if p.is_null() { None } else { Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()) }
+            };
+            let uri = text((s.req_get_uri)(request)).unwrap_or_default();
+            let full = s.req_finish_with_response.is_some() && s.response_new.is_some();
+            let method = s.req_get_method.and_then(|f| text(f(request))).unwrap_or_else(|| "GET".to_string());
+            let (range, inm) = match (s.req_get_headers, s.headers_get_one) {
+                (Some(get), Some(one)) => {
+                    let h = get(request);
+                    if h.is_null() { (None, None) } else { (text(one(h, c"Range".as_ptr())), text(one(h, c"If-None-Match".as_ptr()))) }
+                }
+                _ => (None, None),
+            };
+            let resp = super::scheme::serve(&uri, &method, if full { range.as_deref() } else { None }, if full { inm.as_deref() } else { None });
+            let mime = resp.headers.iter().find(|(k, _)| k == "Content-Type").map(|(_, v)| v.clone()).unwrap_or_else(|| "application/octet-stream".to_string());
+            let mem_stream = |bytes: &[u8]| -> *mut c_void {
+                let buf = (s.g_malloc)(bytes.len().max(1));
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+                (s.mem_stream_new)(buf, bytes.len(), api.g_free as *mut c_void)
+            };
+            let (stream, len): (*mut c_void, i64) = match &resp.body {
+                super::scheme::Body::Empty => (mem_stream(&[]), 0),
+                super::scheme::Body::Bytes(b, start, n) => {
+                    let (a, z) = (*start as usize, (*start + *n) as usize);
+                    (mem_stream(&b[a..z]), *n as i64)
+                }
+                super::scheme::Body::File { path, start, len } => {
+                    let total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                    if start + len < total {
+                        // Tramo acotado: WebKit lee hasta EOF, así que va desde memoria.
+                        let mut data = Vec::with_capacity(*len as usize);
+                        let mut off = 0u64;
+                        while let Ok(c) = super::scheme::read_chunk(path, *start, *len, off) {
+                            if c.is_empty() { break; }
+                            off += c.len() as u64;
+                            data.extend_from_slice(&c);
+                        }
+                        (mem_stream(&data), data.len() as i64)
+                    } else {
+                        let cpath = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default();
+                        let file = (s.file_new)(cpath.as_ptr());
+                        let st = if file.is_null() { std::ptr::null_mut() } else { (s.file_read)(file, std::ptr::null_mut(), std::ptr::null_mut()) };
+                        if !file.is_null() { (api.g_object_unref)(file); }
+                        if st.is_null() {
+                            (mem_stream(b"not found"), 9)
+                        } else {
+                            if *start > 0 { (s.seek)(st, *start as i64, 0, std::ptr::null_mut(), std::ptr::null_mut()); }
+                            (st, *len as i64)
+                        }
+                    }
+                }
+            };
+            let cmime = std::ffi::CString::new(mime).unwrap_or_default();
+            if full {
+                let response = (s.response_new.unwrap())(stream, len);
+                if let Some(f) = s.response_set_status {
+                    let reason = std::ffi::CString::new(match resp.status { 200 => "OK", 206 => "Partial Content", 304 => "Not Modified", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 416 => "Range Not Satisfiable", _ => "OK" }).unwrap();
+                    f(response, resp.status as u32, reason.as_ptr());
+                }
+                if let Some(f) = s.response_set_content_type { f(response, cmime.as_ptr()); }
+                if let (Some(hnew), Some(happend), Some(hset)) = (s.headers_new, s.headers_append, s.response_set_headers) {
+                    let h = hnew(1); // SOUP_MESSAGE_HEADERS_RESPONSE
+                    if !h.is_null() {
+                        for (k, v) in &resp.headers {
+                            let (ck, cv) = (std::ffi::CString::new(k.as_str()).unwrap_or_default(), std::ffi::CString::new(v.as_str()).unwrap_or_default());
+                            happend(h, ck.as_ptr(), cv.as_ptr());
+                        }
+                        hset(response, h); // la respuesta toma la propiedad
+                    }
+                }
+                (s.req_finish_with_response.unwrap())(request, response);
+                (api.g_object_unref)(response);
+            } else {
+                (s.req_finish)(request, stream, len, cmime.as_ptr());
+            }
+            (api.g_object_unref)(stream);
         }
     }
 
@@ -2404,6 +3165,7 @@ mod gtk {
                 // Con CUALQUIER símbolo del puente ausente (webkit2gtk < 2.22): webview
                 // clásico SIN puente — una feature nueva jamás rompe ui.open en distros
                 // viejas (los mensajes simplemente no llegan; documentado).
+                register_scheme_once(api); // M227: antes del primer webview
                 let webview = if let (
                     Some(ucm_new),
                     Some(webview_with_ucm),
@@ -2979,7 +3741,7 @@ mod win {
     use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-        ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler,
+        ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
     };
     use windows::core::{HSTRING, PCWSTR, PWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -3349,12 +4111,28 @@ mod win {
     /// hasta que el motor responde), y deja el webview navegando a `url` con el shim inyectado.
     unsafe fn attach_webview(hwnd: HWND, id: i64, url: &str) -> Result<(ICoreWebView2Controller, ICoreWebView2), String> {
         let folder = wide(&user_data_folder());
+        // M228: el esquema `ray://` se registra en las OPCIONES del entorno (WebView2 ≥ 112; con un
+        // runtime más viejo la interfaz Options4 no existe y el esquema simplemente no se sirve).
+        // `has_authority_component` → `ray://app/x` se parsea con host `app`; sin
+        // `allowed_origins` solo las páginas del propio esquema pueden pedirle (seguridad).
+        let options: ICoreWebView2EnvironmentOptions = {
+            let o = webview2_com::CoreWebView2EnvironmentOptions::default();
+            let reg = webview2_com::CoreWebView2CustomSchemeRegistration::new(super::scheme::SCHEME.to_string());
+            // SAFETY: los setters escriben celdas propias antes de compartir el objeto con COM.
+            unsafe {
+                reg.set_treat_as_secure(true);
+                reg.set_has_authority_component(true);
+                let regi: ICoreWebView2CustomSchemeRegistration = reg.into();
+                o.set_scheme_registrations(vec![Some(regi)]);
+            }
+            o.into()
+        };
         let environment = {
             let (tx, rx) = std::sync::mpsc::channel();
             CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
                 Box::new(move |handler| {
                     // SAFETY: llamada del loader de WebView2 con el handler del crate.
-                    unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), PCWSTR(folder.as_ptr()), None, &handler) }
+                    unsafe { CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), PCWSTR(folder.as_ptr()), &options, &handler) }
                         .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, environment: Option<ICoreWebView2Environment>| {
@@ -3401,6 +4179,62 @@ mod win {
                     unsafe { wv.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), &handler) }.map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(|error_code, _id: String| error_code),
+            );
+        }
+        // M228: las peticiones `ray://` se resuelven con `scheme::serve` (puro) y se contestan con
+        // una respuesta en memoria (`SHCreateMemStream`): el tramo que la página pide con Range, o
+        // el archivo entero sin él — v1 sin streaming (un IStream propio sobre el archivo es la
+        // mejora natural). Corre en el hilo de UI; la lectura es local y acotada por la petición.
+        // SAFETY: filtro + handler del crate sobre un webview vivo; `env` vive en la clausura.
+        unsafe {
+            let filter = wide(&format!("{}://*", super::scheme::SCHEME));
+            let _ = webview.AddWebResourceRequestedFilter(PCWSTR(filter.as_ptr()), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            let env = environment.clone();
+            let mut token = 0i64;
+            let _ = webview.add_WebResourceRequested(
+                &WebResourceRequestedEventHandler::create(Box::new(move |_sender, args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
+                    let Some(args) = args else { return Ok(()) };
+                    let req = args.Request()?;
+                    let text = |p: PWSTR| -> String { if p.is_null() { String::new() } else { CoTaskMemPWSTR::from(p).to_string() } };
+                    let mut uri = PWSTR::null();
+                    req.Uri(&mut uri)?;
+                    let uri = text(uri);
+                    let mut method = PWSTR::null();
+                    req.Method(&mut method)?;
+                    let method = text(method);
+                    let headers = req.Headers()?;
+                    let header = |name: &str| -> Option<String> {
+                        let w = wide(name);
+                        let mut v = PWSTR::null();
+                        match headers.GetHeader(PCWSTR(w.as_ptr()), &mut v) {
+                            Ok(()) if !v.is_null() => Some(text(v)),
+                            _ => None,
+                        }
+                    };
+                    let resp = super::scheme::serve(&uri, &method, header("Range").as_deref(), header("If-None-Match").as_deref());
+                    let body: Vec<u8> = match &resp.body {
+                        super::scheme::Body::Empty => Vec::new(),
+                        super::scheme::Body::Bytes(b, start, len) => b[*start as usize..(*start + *len) as usize].to_vec(),
+                        super::scheme::Body::File { path, start, len } => {
+                            let mut data = Vec::with_capacity((*len).min(64 * 1024 * 1024) as usize);
+                            let mut off = 0u64;
+                            while let Ok(c) = super::scheme::read_chunk(path, *start, *len, off) {
+                                if c.is_empty() { break; }
+                                off += c.len() as u64;
+                                data.extend_from_slice(&c);
+                            }
+                            data
+                        }
+                    };
+                    let stream = windows::Win32::UI::Shell::SHCreateMemStream(Some(&body));
+                    let reason = match resp.status { 200 => "OK", 206 => "Partial Content", 304 => "Not Modified", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 416 => "Range Not Satisfiable", _ => "OK" };
+                    let header_text = resp.headers.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\r\n");
+                    let (reason_w, headers_w) = (wide(reason), wide(&header_text));
+                    let response = env.CreateWebResourceResponse(stream.as_ref(), resp.status as i32, PCWSTR(reason_w.as_ptr()), PCWSTR(headers_w.as_ptr()))?;
+                    args.SetResponse(&response)?;
+                    Ok(())
+                })),
+                &mut token,
             );
         }
         // Los mensajes de la página (window.ray.send / request) → la cola de eventos.

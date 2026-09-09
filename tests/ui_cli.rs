@@ -545,6 +545,30 @@ fn main() {
     );
 }
 
+/// M226 — el esquema `ray://app/…`: los montajes se validan sin ventana (directorio inexistente y
+/// prefijo con `..` → Err; bytes en memoria → Ok) en ambos motores. El servicio real (Range, ETag,
+/// MIME, traversal) lo cubren los tests unitarios de `ray_runtime::ui::scheme`.
+#[test]
+fn ray_scheme_mounts_validate_on_both_engines() {
+    let base = tmp("scheme_mounts");
+    std::fs::write(base.join("index.html"), "<p>hi</p>").unwrap();
+    let path = base.join("main.ray");
+    std::fs::write(
+        &path,
+        format!(
+            "import std/ui;\nfn main() {{\n    print(to_string(ui.mount_dir(\"site\", \"{dir}\").is_ok()));\n    print(to_string(ui.mount_dir(\"bad\", \"{dir}/missing\").is_err()));\n    match (ui.mount_dir(\"../up\", \"{dir}\")) {{ Result.Ok(_) => print(\"escaped\"), Result.Err(e) => print(e) }}\n    print(to_string(ui.mount_bytes(\"mem/a.txt\", b\"abc\").is_ok()));\n    print(to_string(ui.mount_bytes(\"\", b\"abc\").is_err()));\n}}\n",
+            // Windows: la ruta con `\\` dentro de un literal raylang no compila (escapes) → `/`.
+            dir = base.display().to_string().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code) = run_headless(Command::new(env!("CARGO_BIN_EXE_raylang")).args([engine]).arg(&path));
+        assert_eq!(code, 0, "{engine}: {out}");
+        assert_eq!(out, "true\ntrue\nui: path escapes the mount: '../up'\ntrue\ntrue\n", "{engine}\n{out}");
+    }
+}
+
 /// M225 — el literal JS de `reply` se escapa en el runtime (una pasada, lineal) y `reply_json`
 /// entrega por `_deliver_json` (la página recibe `JSON.parse`). El texto exacto del eval sale por
 /// `RAY_UI_TRACE=1` en headless; cubre `\\`, `"`, `\n`, `\r`, NUL y U+2028.

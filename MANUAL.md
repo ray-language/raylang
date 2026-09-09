@@ -1371,6 +1371,12 @@ transparente sobre el fondo de la ventana y el título sale claro u oscuro segú
 Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
 color, y un valor que no sea `#rrggbb` es `Err`.
 
+Las respuestas grandes no tienen coste oculto (M225): el literal JS de `ui.reply` se escapa en el
+runtime en una pasada, así que responder 1 MB cuesta unos 4 ms de ida y vuelta y 8 MB unos 30 ms
+(medido en WKWebView). Si la respuesta es JSON, `ui.reply_json(window, id, json)` entrega a la
+página `JSON.parse(json)` directamente: la Promise resuelve con el objeto. Para archivos de cientos
+de MB o binarios sigue siendo mejor servirlos por HTTP con `Range` que meterlos en un mensaje.
+
 Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
 canales — `(messages, other)`: los `"message"` por el primero, `closed`/`menu` por el
 segundo — con una sola fibra-bomba (es TAMBIÉN el consumidor único: llámalo una vez y no lo

@@ -2123,6 +2123,16 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_reply" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Int(h), Value::Int(id), Value::Str(v), Value::Bool(j)) => match crate::builtins::ui_reply(*h, *id, v, *j) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (int, int, string, bool)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_eval_js" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Int(h), Value::Str(js)) => match crate::builtins::ui_eval_js(*h, js) {

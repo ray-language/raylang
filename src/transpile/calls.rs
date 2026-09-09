@@ -2285,6 +2285,18 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            "ui_reply" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_reply(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[3])?;
+                out.push(')');
+            }
             "ui_next_event" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_next_event(");

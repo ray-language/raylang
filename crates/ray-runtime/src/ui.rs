@@ -105,7 +105,42 @@ fn events() -> &'static Events {
 /// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
 /// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
-pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();"#;
+pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})();"#;
+
+/// M225: el literal JS de `s` (entre comillas dobles), escapado en UNA pasada — `\\`, `"`,
+/// `\n`, `\r`, NUL (el NSString nace de un C-string) y los separadores U+2028/U+2029 que JS
+/// trata como salto de línea. Antes vivía en `std/ui.ray` carácter a carácter con `out + c`
+/// (cuadrático: 1 MB tardaba 16 s); aquí 1 MB son ~2 ms.
+pub fn js_string_literal(s: &str, out: &mut String) {
+    out.reserve(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\u0000"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// M225: resuelve la Promise de `window.ray.request` nº `id` en la ventana `id_window` con `value`
+/// (`as_json` = la página recibe `JSON.parse(value)`, un objeto, vía `_deliver_json`). Construye
+/// el `eval_js` aquí, en una pasada nativa, sin pasar por strings de raylang.
+pub fn reply(window: i64, id: i64, value: &str, as_json: bool) -> Result<(), String> {
+    let mut js = String::with_capacity(value.len() + 40);
+    js.push_str(if as_json { "window.ray._deliver_json(" } else { "window.ray._deliver(" });
+    js.push_str(&id.to_string());
+    js.push(',');
+    js_string_literal(value, &mut js);
+    js.push(')');
+    eval_js(window, &js)
+}
 
 /// M159: cota dura de la cola de eventos. Red de seguridad contra una página hostil o rota
 /// que inunda `window.ray.send` con el consumidor parado: la cola jamás crece sin límite y el

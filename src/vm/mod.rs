@@ -3234,6 +3234,27 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M225: reply/reply_json — el escape del literal JS es nativo (lineal).
+                OpCode::UiReply => {
+                    let HeapValue::Bool(as_json) = self.pop() else {
+                        unreachable!("the checker guarantees a bool");
+                    };
+                    let HeapValue::Str(value) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Int(id) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::ui_reply(handle, id, &value, as_json) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M148: menú custom (la decodificación vive en ray_runtime::ui, compartida).
                 OpCode::UiMenu => {
                     let items = self.pop();

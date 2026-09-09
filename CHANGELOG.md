@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Puente IPC lineal** (M225, ray-sublime): `ui.reply` escapaba el literal JS carácter a carácter
+  en `std/ui.ray` (cuadrático: 100 KB 237 ms, 1 MB 16 s); ahora lo hace el runtime en una pasada
+  (`__ui_reply`): 1 MB ≈ 4 ms y 8 MB ≈ 32 ms de ida y vuelta. `as_request` decodifica el sobre con
+  `substring`. Nuevo **`ui.reply_json(window, id, json)`**: la página recibe `JSON.parse(json)`
+  (un objeto) vía `window.ray._deliver_json`; los shells iOS/Android llevan el shim actualizado.
+
 ## 1.12.0 — 2026-09-09
 
 - **`ui.WindowOptions.titlebar_color`** (M224, ray-sublime): la barra de título del sistema pintada

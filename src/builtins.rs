@@ -1151,6 +1151,20 @@ pub fn ui_eval_js(_h: i64, _js: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M225: `ui.reply`/`ui.reply_json` — el literal JS se construye en el runtime en una pasada.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Result<(), String> {
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::reply(win, id, value, as_json)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_reply(_h: i64, _id: i64, _value: &str, _as_json: bool) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M146: el fd de la cola global de eventos de UI (para el aparcado de la fibra en la VM).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_event_fd() -> Result<i32, String> {
@@ -3939,6 +3953,17 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_eval_js", " (handle, js)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_eval_js expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_eval_js expects a string (the JavaScript), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_reply(h, id, value, as_json) -> [string] (M225): resuelve la Promise `id` de la página
+    // con `value` (as_json → la página recibe JSON.parse(value)). El escape del literal JS es
+    // nativo y lineal; misma respuesta etiquetada que __ui_eval_js.
+    Builtin { name: "__ui_reply", opcode: OpCode::UiReply, check: |a| {
+        arity(a, 4, "__ui_reply", " (handle, id, value, as_json)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_reply expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__ui_reply expects an int (the request id), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__ui_reply expects a string (the value), not {}", a[2]))); }
+        if a[3] != Type::Bool { return Err((Some(3), format!("__ui_reply expects a bool (as_json), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_menu(title, items) -> [string] (M148): ["ok"] o ["err", msg]. items codificados

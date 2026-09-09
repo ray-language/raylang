@@ -54,7 +54,8 @@ event: closed, same window: true\neval after close: true\n";
 
 /// M210 (feedback 27 de ray-remote): `ui.open_with` con `WindowOptions` — mínimo, redimensionable,
 /// centrado y autosave. En headless las opciones se validan y la ventana es una fila en memoria.
-const OPEN_WITH_PROGRAM: &str = r#"
+/// M224: `titlebar_color` acepta `#rrggbb` (vacío = sistema) y rechaza cualquier otra forma.
+const OPEN_WITH_PROGRAM: &str = r##"
 import std/ui;
 
 fn main() {
@@ -63,6 +64,7 @@ fn main() {
     o.min_height = 480;
     o.resizable = false;
     o.autosave = "main";
+    o.titlebar_color = "#1f2430";
     match (ui.open_with("Opts", "http://127.0.0.1:1/", o)) {
         Result.Ok(h) => { print("opened: " + to_string(h > 0)); let _ = close(h); },
         Result.Err(e) => print("open failed: " + e),
@@ -73,8 +75,14 @@ fn main() {
         Result.Ok(_) => print("bad: minimum larger than the window accepted"),
         Result.Err(e) => print("min rejected: " + to_string(e.contains("unsupported minimum size"))),
     }
+    var ugly = ui.options(400, 300);
+    ugly.titlebar_color = "red";
+    match (ui.open_with("Ugly", "http://127.0.0.1:1/", ugly)) {
+        Result.Ok(_) => print("ugly: a non-#rrggbb color accepted"),
+        Result.Err(e) => print("color rejected: " + to_string(e.contains("unsupported titlebar color 'red'"))),
+    }
 }
-"#;
+"##;
 
 #[test]
 fn open_with_validates_its_options_on_both_engines() {
@@ -87,7 +95,7 @@ fn open_with_validates_its_options_on_both_engines() {
         }
         let (out, code) = run_headless(cmd.arg(&path));
         assert_eq!(code, 0, "{out}");
-        assert_eq!(out, "opened: true\nmin rejected: true\n", "interp={interp}\n{out}");
+        assert_eq!(out, "opened: true\nmin rejected: true\ncolor rejected: true\n", "interp={interp}\n{out}");
     }
 }
 

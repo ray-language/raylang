@@ -2112,14 +2112,14 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__ui_open_with" => {
-                let arr = match (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7], &values[8]) {
-                    (Value::Str(t), Value::Str(u), Value::Int(w), Value::Int(h), Value::Int(mw), Value::Int(mh), Value::Bool(r), Value::Bool(c), Value::Str(a)) => {
-                        match crate::builtins::ui_open_with_args(t, u, *w, *h, *mw, *mh, *r, *c, a) {
+                let arr = match (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7], &values[8], &values[9]) {
+                    (Value::Str(t), Value::Str(u), Value::Int(w), Value::Int(h), Value::Int(mw), Value::Int(mh), Value::Bool(r), Value::Bool(c), Value::Str(a), Value::Str(tc)) => {
+                        match crate::builtins::ui_open_with_args(t, u, *w, *h, *mw, *mh, *r, *c, a, tc) {
                             Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
                             Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                         }
                     }
-                    _ => unreachable!("the checker guarantees the 9 argument types"),
+                    _ => unreachable!("the checker guarantees the 10 argument types"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }

@@ -767,9 +767,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
             // M210: la ventana con opciones.
-            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str, mi: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
-            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string() };\n",
+            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string(), minimizable: mi };\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window_with(id, title, url, &opts) {\n",
             "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
@@ -782,6 +782,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::reply(h, id, value, as_json) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M229: foco a una ventana abierta.
+            "fn __ray_ui_focus(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if known { ray_runtime::ui::focus_window(h) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M226: montajes del esquema ray://.
             "fn __ray_ui_mount(kind: &str, prefix: &str, source: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

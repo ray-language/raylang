@@ -44,6 +44,8 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `titlebar_color` (M224): a `#rrggbb` color that paints the system title bar like the app's
 /// theme (macOS: transparent title bar over the window background, dark or light title text by
 /// luminance; Windows 11: the caption color; Linux ignores it; "" = system default).
+/// `minimizable` (M230): `false` disables the minimize button (macOS yellow light, Windows
+/// `WS_MINIMIZEBOX`) for secondary panels such as an About window; GTK ignores it.
 /// Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
@@ -54,6 +56,7 @@ pub struct WindowOptions {
     center: bool,
     autosave: string,
     titlebar_color: string,
+    minimizable: bool,
 }
 
 /// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
@@ -67,7 +70,8 @@ pub fn options(width: int, height: int) -> WindowOptions {
         resizable: true,
         center: true,
         autosave: "",
-        titlebar_color: ""
+        titlebar_color: "",
+        minimizable: true
     }
 }
 
@@ -85,7 +89,8 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.resizable,
         o.center,
         o.autosave,
-        o.titlebar_color
+        o.titlebar_color,
+        o.minimizable
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -268,6 +273,15 @@ pub fn pick_folder() -> Result<Option<string>, string> {
 /// is where the user wants the file written (writing it is your job), `Ok(None)` = cancelled.
 pub fn save_file(suggested: string) -> Result<Option<string>, string> {
     dialog_result(__ui_dialog("save_file", suggested))
+}
+
+/// Brings an already open window to the front and gives it focus (M229): `makeKeyAndOrderFront`
+/// on macOS (and the app is activated), `gtk_window_present` on GTK, restore + foreground on
+/// Windows. Use it when a menu item targets a window that is open but behind another one;
+/// `eval_js(h, "window.focus()")` only focuses the document, not the native window.
+pub fn focus(h: int) -> Result<int, string> {
+    let r = __ui_focus(h);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
 /// M226 — the `ray://app/…` scheme: the page loads its files straight from the process, with no

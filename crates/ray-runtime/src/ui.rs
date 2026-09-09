@@ -556,12 +556,15 @@ pub struct WindowOptions {
     /// ventana con apariencia clara/oscura por luminancia; Windows 11: `DWMWA_CAPTION_COLOR`;
     /// Linux lo ignora). Vacío = la barra del sistema.
     pub titlebar_color: String,
+    /// M230: botón de minimizar (macOS: `NSWindowStyleMaskMiniaturizable`; Windows: `WS_MINIMIZEBOX`;
+    /// GTK3 no lo controla por ventana y lo ignora). `false` para paneles secundarios (About).
+    pub minimizable: bool,
 }
 
 impl WindowOptions {
     /// Las opciones de `ui.open`: solo tamaño, redimensionable y centrada, sin mínimo ni memoria.
     pub fn simple(width: i64, height: i64) -> Self {
-        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new(), titlebar_color: String::new() }
+        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new(), titlebar_color: String::new(), minimizable: true }
     }
 }
 
@@ -1115,6 +1118,46 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
 /// Cierra la ventana `id` (idempotente; el evento `closed` se emite si no se había emitido).
 /// SIEMPRE asíncrono hacia el hilo principal: lo llama el `Drop` del handle, que puede correr
 /// en cualquier hilo — y con la app sin arrancar un despacho síncrono jamás volvería.
+/// M229 (ray-sublime #65): trae al frente y da el foco a una ventana ya abierta: `makeKeyAndOrderFront`
+/// y activar la app en macOS, `gtk_window_present` en GTK, restaurar y `SetForegroundWindow` en Windows.
+/// `window.focus()` por `eval_js` no levanta la ventana NATIVA (solo el foco del documento).
+pub fn focus_window(id: i64) -> Result<(), String> {
+    let map = windows().lock().unwrap();
+    match map.get(&id) {
+        None => Err("ui: not an open window".to_string()),
+        Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
+        Some(WinState { win: Win::Headless, .. }) => {
+            if ui_trace() {
+                eprintln!("[ui] focus {id}");
+            }
+            Ok(())
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Some(WinState { win: Win::Shell, .. }) => Ok(()),
+        #[cfg(target_os = "macos")]
+        Some(WinState { win: Win::Mac { window, .. }, .. }) => {
+            let w = *window;
+            drop(map);
+            mac::focus_window_async(w);
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { window, alive, .. }, .. }) => {
+            let (w, alive) = (*window, alive.clone());
+            drop(map);
+            gtk::focus_window_async(w, alive);
+            Ok(())
+        }
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, alive }, .. }) => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::focus_window_async(h, alive);
+            Ok(())
+        }
+    }
+}
+
 pub fn close_window(id: i64) {
     mark_closed(id);
     let removed = windows().lock().unwrap().remove(&id);
@@ -2134,11 +2177,15 @@ mod mac {
         let url = url.to_string();
         let (width, height) = (opts.width, opts.height);
         on_main_sync(move || {
-            const STYLE_TITLED_CLOSABLE_MINIATURIZABLE: u64 = 1 | 2 | 4;
+            const STYLE_TITLED_CLOSABLE: u64 = 1 | 2;
+            const STYLE_MINIATURIZABLE: u64 = 4;
             const STYLE_RESIZABLE: u64 = 8;
             const BACKING_BUFFERED: u64 = 2;
             // M210: sin `resizable`, la máscara no lleva el bit de redimensionado (ni el botón verde).
-            let style = if opts.resizable { STYLE_TITLED_CLOSABLE_MINIATURIZABLE | STYLE_RESIZABLE } else { STYLE_TITLED_CLOSABLE_MINIATURIZABLE };
+            // M230: sin `minimizable`, tampoco el de miniaturizar (el amarillo nace deshabilitado).
+            let style = STYLE_TITLED_CLOSABLE
+                | if opts.minimizable { STYLE_MINIATURIZABLE } else { 0 }
+                | if opts.resizable { STYLE_RESIZABLE } else { 0 };
             let rect = CGRect { x: 0.0, y: 0.0, w: width as f64, h: height as f64 };
             unsafe {
                 let alloc: MsgId = std::mem::transmute(msg_send());
@@ -2303,6 +2350,18 @@ mod mac {
     }
 
     /// Cierra y LIBERA la ventana en el hilo principal, asíncrono (llamable desde un Drop).
+    /// M229: trae la ventana al frente con foco (y activa la app: sin bundle puede estar detrás).
+    pub(super) fn focus_window_async(window: usize) {
+        on_main(move || unsafe {
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+            let shared: MsgId = std::mem::transmute(msg_send());
+            let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+            set_bool(app, sel(b"activateIgnoringOtherApps:\0"), 1);
+            set_id(window as Id, sel(b"makeKeyAndOrderFront:\0"), std::ptr::null_mut());
+        });
+    }
+
     pub(super) fn close_window_async(window: usize, webview: usize, delegate: usize) {
         on_main(move || unsafe {
             let set_id: MsgVoidId = std::mem::transmute(msg_send());
@@ -2532,6 +2591,8 @@ mod gtk {
         jsc_to_string: Option<FnJscToString>,
         // M227 — esquema ray:// (opcional en bloque).
         scheme: Option<SchemeApi>,
+        // M229 — gtk_window_present (core GTK3; opcional por simetría).
+        window_present: Option<FnWidgetOp>,
     }
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
@@ -2698,6 +2759,10 @@ mod gtk {
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJscToString>(p))
                 },
                 scheme: load_scheme_api(webkit),
+                window_present: {
+                    let p = dlsym(gtk, c"gtk_window_present".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnWidgetOp>(p))
+                },
             })
         }
     }
@@ -3284,6 +3349,20 @@ mod gtk {
             let Ok(api) = api().as_ref() else { return };
             // SAFETY: ventana viva y estamos en el hilo del loop; destroy dispara el handler.
             unsafe { (api.destroy)(window as Widget) };
+        });
+    }
+
+    /// M229: `gtk_window_present` — desminimiza, sube y da el foco (el WM puede solo parpadear).
+    pub(super) fn focus_window_async(window: usize, alive: Arc<AtomicBool>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(api) = api().as_ref() else { return };
+            if let Some(present) = api.window_present {
+                // SAFETY: ventana viva, hilo del loop.
+                unsafe { present(window as Widget) };
+            }
         });
     }
 }
@@ -4307,10 +4386,12 @@ mod win {
                 // El tamaño pedido es el ÁREA CLIENTE: se ajusta el marco.
                 let mut rc = RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 };
                 // M210: sin `resizable`, ni borde grueso ni botón de maximizar.
+                // M230: sin WS_MINIMIZEBOX el botón de minimizar nace deshabilitado.
+                let minimize_mask = if opts.minimizable { 0 } else { WS_MINIMIZEBOX.0 };
                 let style = if opts.resizable {
-                    WS_OVERLAPPEDWINDOW
+                    WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !minimize_mask)
                 } else {
-                    WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0))
+                    WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0 | minimize_mask))
                 };
                 let has_menu = !menu_specs().lock().unwrap().is_empty();
                 let _ = AdjustWindowRectEx(&mut rc, style, has_menu, WINDOW_EX_STYLE::default());
@@ -4406,6 +4487,23 @@ mod win {
             // SAFETY: hilo 1, ventana viva.
             unsafe {
                 let _ = DestroyWindow(HWND(hwnd as *mut _));
+            }
+        });
+    }
+
+    /// M229: restaura si está minimizada y la trae al frente con foco.
+    pub(super) fn focus_window_async(hwnd: usize, alive: Arc<AtomicBool>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: hilo 1, ventana viva.
+            unsafe {
+                let h = HWND(hwnd as *mut _);
+                if IsIconic(h).as_bool() {
+                    let _ = ShowWindow(h, SW_RESTORE);
+                }
+                let _ = SetForegroundWindow(h);
             }
         });
     }

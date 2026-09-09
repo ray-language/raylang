@@ -12914,3 +12914,19 @@ desarrollo: compilan y pasan clippy para sus targets, el CI corre lo headless, y
 en ventana real la hace el usuario en sus VMs con `tools/verify-ray-scheme/` (una página que pide
 un archivo de 8 MiB con Range, un archivo en memoria, un 304, un 404 y un traversal, e informa
 por el puente IPC).
+
+## 220. M229/M230 — `ui.focus` y `minimizable` (sep 2026)
+
+Dos huecos de `ray-sublime` (#65, #66) al hacer su About propio sobre M224. **Foco**: no había
+forma de levantar una ventana ya abierta; `eval_js("window.focus()")` enfoca el documento del
+webview, no la `NSWindow`. Un primitivo `__ui_focus(h)` que en cada backend hace lo canónico —
+`makeKeyAndOrderFront:` precedido de `activateIgnoringOtherApps:` (sin bundle la app puede estar
+detrás), `gtk_window_present` (el WM decide: en Wayland puede limitarse a marcar la ventana), y
+`SW_RESTORE` si está minimizada más `SetForegroundWindow` — con el mismo despacho `on_main` que el
+cierre y el mismo `Err` si el handle no es una ventana abierta. **Minimizar**: `resizable = false`
+quitaba el zoom pero el botón amarillo es un bit aparte de la máscara de estilo. Un campo
+`minimizable` en `WindowOptions` (default `true`) que en macOS retira `Miniaturizable` de la
+máscara al crear —el botón nace deshabilitado, sin tocar `standardWindowButton` después— y en
+Windows `WS_MINIMIZEBOX`; GTK3 no tiene control por ventana de ese botón y lo ignora, como
+`autosave`. El primitivo `__ui_open_with` pasa a once argumentos: el struct de raylang sigue siendo
+la única superficie que el usuario ve, y añadir un campo con default no rompe a nadie.

@@ -2263,6 +2263,8 @@ impl Transpiler {
                     out.push_str(", &*");
                     self.emit_expr(out, a)?;
                 }
+                out.push_str(", ");
+                self.emit_expr(out, eff[10])?; // M230: minimizable
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {
@@ -2283,6 +2285,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &*");
                 self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "ui_focus" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_focus(");
+                self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
             "ui_mount" if name.starts_with("__") && !self.exclude.contains("ui") => {

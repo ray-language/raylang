@@ -651,6 +651,8 @@ pub enum OpCode {
     /// esquema `ray://app/…` (['ok'] / ['err', msg]).
     UiMount,
     UiMountBytes,
+    /// M229: `__ui_focus(h)` — trae al frente y da el foco (['ok'] / ['err', msg]).
+    UiFocus,
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,

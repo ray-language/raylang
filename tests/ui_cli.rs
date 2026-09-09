@@ -545,6 +545,33 @@ fn main() {
     );
 }
 
+/// M225 — el literal JS de `reply` se escapa en el runtime (una pasada, lineal) y `reply_json`
+/// entrega por `_deliver_json` (la página recibe `JSON.parse`). El texto exacto del eval sale por
+/// `RAY_UI_TRACE=1` en headless; cubre `\\`, `"`, `\n`, `\r`, NUL y U+2028.
+#[test]
+fn reply_escapes_natively_and_reply_json_uses_deliver_json() {
+    let path = tmp("reply_escape").join("main.ray");
+    std::fs::write(
+        &path,
+        "import std/ui;\nfn main() {\n    match (ui.open(\"R\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Ok(h) => {\n            let _ = ui.reply(h, 7, \"a\\\\b\\\"c\\nd\\re\\u{0}f\\u{2028}g\");\n            let _ = ui.reply_json(h, 8, \"{\\\"k\\\": [1, 2]}\");\n            print(\"sent\");\n            let _ = close(h);\n        },\n        Result.Err(e) => print(e),\n    }\n}\n",
+    )
+    .unwrap();
+    for engine in ["--vm", "--interp"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+            .args([engine])
+            .arg(&path)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "sent\n", "{engine}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("[ui] eval 1 window.ray._deliver(7,\"a\\\\b\\\"c\\nd\\re\\u0000f\\u2028g\")"), "{engine}: reply escapado:\n{err}");
+        assert!(err.contains("[ui] eval 1 window.ray._deliver_json(8,\"{\\\"k\\\": [1, 2]}\")"), "{engine}: reply_json:\n{err}");
+    }
+}
+
 /// M157 — request/reply del puente IPC: el sobre `\u{1}q\u{1}id\u{1}payload` se decodifica
 /// con as_request, un send plano no, y reply (eval_js) es Ok. 3 motores, headless (el sobre
 /// entra por RAY_UI_MSG).

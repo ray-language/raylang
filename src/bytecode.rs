@@ -644,6 +644,9 @@ pub enum OpCode {
     UiOpenWith,
     /// M146: `__ui_eval_js(h, js)` — ejecuta JS en la página, fire-and-forget (['ok'] / ['err', msg]).
     UiEvalJs,
+    /// M225: `__ui_reply(h, id, value, as_json)` — resuelve la Promise `id` de la página; el
+    /// literal JS se escapa en el runtime en una pasada (['ok'] / ['err', msg]).
+    UiReply,
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,

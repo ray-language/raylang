@@ -12844,3 +12844,24 @@ tres motores lo cubre—; el primitivo `__ui_open_with` pasa a diez argumentos p
 más alcance —contenido bajo la barra con pestañas propias (`fullSizeContentView`)— exige una vista
 que devuelva la ventana arrastrable sobre el webview y mover los semáforos; queda como idea aparte
 para cuando una app quiera dibujar en esa franja.
+
+## 217. M225 — el puente IPC deja de ser cuadrático (sep 2026)
+
+Al plantear cómo mover archivos de varios MB por el puente, la medición con una ventana real lo
+puso en su sitio: el transporte —`postMessage`, el handler nativo, la cola, la fibra, `eval_js` y
+el parse del literal en JS— mueve 32 MB en 82 ms de ida y vuelta; lo que tardaba 16 s por MB era
+`js_string` en `std/ui.ray`, que escapaba la respuesta carácter a carácter con `out = out + c`.
+Con `Arc<str>` cada `+` sigue copiando la cadena entera, así que el bucle es cuadrático por
+diseño del lenguaje, no de la VM; `as_request` hacía lo mismo con el body. La corrección no es
+"escribir mejor raylang" sino mover el escape a donde pertenece: un primitivo `__ui_reply(h, id,
+value, as_json)` que construye el `eval_js` en el runtime en una pasada (`js_string_literal`:
+`\\`, `"`, `\n`, `\r`, NUL —el NSString nace de un C-string—, U+2028/9), y `as_request` con
+`substring`/`index_of`. Resultado: 1 MB 4 ms, 8 MB 32 ms. Sobre el mismo primitivo, `reply_json`
+entrega `JSON.parse(json)` por `_deliver_json` en el shim: la página recibe un objeto y el
+frontend deja de parsear a mano; se eligió `JSON.parse` en JS y no un literal de objeto porque un
+`{"__proto__": …}` como literal fija el prototipo y como `JSON.parse` es una propiedad propia —el
+coste es el mismo y la semántica, la segura. Dos benches nuevos en el directorio temporal de la
+sesión sirvieron de guía; el gate no los incorpora porque exigen una ventana real. Lo que queda
+fuera, y es la respuesta para archivos de cientos de MB, binarios y también para no exponer un
+puerto local: un esquema `ray://` propio (`WKURLSchemeHandler` y equivalentes) servido desde
+raylang en streaming — arco aparte.

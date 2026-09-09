@@ -96,7 +96,8 @@ static NSString *const rayJsShim =
     @"function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\\u0000/g,\"\"))}"
     @"window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;"
     @"return new Promise(function(r){p[i]=r;q(\"\\u0001q\\u0001\"+i+\"\\u0001\"+e(t))})},"
-    @"_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();";
+    @"_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},"
+    @"_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})();";
 
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;

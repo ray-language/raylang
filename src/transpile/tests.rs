@@ -65,6 +65,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_spawn", "__proc_read", "__proc_write", "__proc_try_wait", "__proc_kill",
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_open_with", "__ui_eval_js", "__ui_next_event",
+    // M225: reply/reply_json con el escape nativo.
+    "__ui_reply",
     // M148: menús + diálogos de archivo.
     "__ui_menu", "__ui_app_menu", "__ui_set_about", "__ui_dialog",
     // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.

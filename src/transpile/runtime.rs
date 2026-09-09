@@ -778,6 +778,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::eval_js(h, js) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M225: reply/reply_json — el literal JS lo escapa ray_runtime en una pasada.
+            "fn __ray_ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if known { ray_runtime::ui::reply(h, id, value, as_json) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_menu(title: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::menu(title, &its) {\n",

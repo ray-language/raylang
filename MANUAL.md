@@ -1369,7 +1369,10 @@ da macOS, Linux y Windows lo ignoran). Para que la barra de título del sistema 
 tema, como en Sublime, `o.titlebar_color = "#1f2430"` (M224): en macOS la barra se vuelve
 transparente sobre el fondo de la ventana y el título sale claro u oscuro según la luminancia; en
 Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
-color, y un valor que no sea `#rrggbb` es `Err`.
+color, y un valor que no sea `#rrggbb` es `Err`. Un panel secundario como un About lleva
+`o.minimizable = false` (M230: el botón de minimizar nace deshabilitado; GTK lo ignora), y si el
+menú lo vuelve a pedir con la ventana ya abierta detrás de la principal, `ui.focus(h)` (M229) la
+trae al frente con foco: `eval_js(h, "window.focus()")` solo enfoca el documento, no la ventana.
 
 **Sin servidor local: el esquema `ray://`** (M226). En vez de levantar un servidor HTTP en
 `127.0.0.1` para servir la interfaz y los archivos del proyecto, la app los monta y la página los

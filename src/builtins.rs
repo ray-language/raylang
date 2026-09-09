@@ -1124,16 +1124,16 @@ pub fn ui_open_with(title: &str, url: &str, opts: ray_runtime::ui::WindowOptions
 pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
-/// Los 10 argumentos de `__ui_open_with` (M210, M224), en orden: ancho, alto, mínimo ancho/alto,
-/// redimensionable, centrada, autosave, color de la barra de título. Los motores los pasan tal cual.
+/// Los 11 argumentos de `__ui_open_with` (M210, M224, M230), en orden: ancho, alto, mínimo ancho/alto,
+/// redimensionable, centrada, autosave, color de la barra de título, minimizable. Los motores los pasan tal cual.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str) -> Result<i64, String> {
-    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string() })
+pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str, minimizable: bool) -> Result<i64, String> {
+    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), minimizable })
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str) -> Result<i64, String> {
+pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str, _minimizable: bool) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -1148,6 +1148,20 @@ pub fn ui_eval_js(h: i64, js: &str) -> Result<(), String> {
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_eval_js(_h: i64, _js: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_focus(h: i64) -> Result<(), String> {
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::focus_window(win)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_focus(_h: i64) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -3959,11 +3973,11 @@ static BUILTINS: &[Builtin] = &[
         if a[3] != Type::Int { return Err((Some(3), format!("__ui_open expects an int (the height), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave, titlebar_color)
-    // -> [string] (M210, M224): la ventana con opciones; misma respuesta etiquetada que __ui_open.
+    // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave, titlebar_color,
+    // minimizable) -> [string] (M210, M224, M230): la ventana con opciones; misma respuesta que __ui_open.
     Builtin { name: "__ui_open_with", opcode: OpCode::UiOpenWith, check: |a| {
-        arity(a, 10, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color)")?;
-        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String];
+        arity(a, 11, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color, minimizable)")?;
+        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String, Type::Bool];
         for (i, t) in want.iter().enumerate() {
             if a[i] != *t { return Err((Some(i), format!("__ui_open_with expects {} as argument {}, not {}", t, i + 1, a[i]))); }
         }
@@ -3975,6 +3989,12 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_eval_js", " (handle, js)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_eval_js expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_eval_js expects a string (the JavaScript), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_focus(h) -> [string] (M229): trae al frente y da el foco a la ventana `h`.
+    Builtin { name: "__ui_focus", opcode: OpCode::UiFocus, check: |a| {
+        arity(a, 1, "__ui_focus", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_focus expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_reply(h, id, value, as_json) -> [string] (M225): resuelve la Promise `id` de la página

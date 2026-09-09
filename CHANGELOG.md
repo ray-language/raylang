@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ui.focus(h)`** (M229, ray-sublime #65): trae al frente y da el foco a una ventana ya abierta
+  (`makeKeyAndOrderFront` + activar la app en macOS, `gtk_window_present` en GTK, restaurar +
+  `SetForegroundWindow` en Windows). `eval_js(h, "window.focus()")` solo enfocaba el documento.
+- **`ui.WindowOptions.minimizable`** (M230, ray-sublime #66): `false` deshabilita el botón de
+  minimizar (máscara de estilo en macOS, `WS_MINIMIZEBOX` en Windows; GTK lo ignora) para paneles
+  secundarios como un About.
 - **Esquema `ray://app/…`** (M226 macOS, M227 WebKitGTK, M228 WebView2): la página carga sus archivos directamente del proceso,
   sin servidor TCP local — sin puerto que otra app pueda alcanzar ni permiso de red local en el
   bundle — y en streaming (`Range`/206, `ETag`/304, MIME por extensión, trozos de 256 KiB).

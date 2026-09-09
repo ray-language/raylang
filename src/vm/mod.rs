@@ -3191,8 +3191,9 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
-                // M210/M224: la ventana con opciones (10 argumentos; se sacan en orden inverso).
+                // M210/M224/M230: la ventana con opciones (11 argumentos; se sacan en orden inverso).
                 OpCode::UiOpenWith => {
+                    let minimizable = self.pop();
                     let titlebar_color = self.pop();
                     let autosave = self.pop();
                     let center = self.pop();
@@ -3209,10 +3210,10 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(width), HeapValue::Int(height), HeapValue::Int(min_w), HeapValue::Int(min_h)) = (width, height, min_w, min_h) else {
                         unreachable!("the checker guarantees four ints");
                     };
-                    let (HeapValue::Bool(resizable), HeapValue::Bool(center)) = (resizable, center) else {
-                        unreachable!("the checker guarantees two bools");
+                    let (HeapValue::Bool(resizable), HeapValue::Bool(center), HeapValue::Bool(minimizable)) = (resizable, center, minimizable) else {
+                        unreachable!("the checker guarantees three bools");
                     };
-                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color) {
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3228,6 +3229,18 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::ui_eval_js(handle, &js) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M229: foco a una ventana abierta.
+                OpCode::UiFocus => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::ui_focus(handle) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };

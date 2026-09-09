@@ -557,7 +557,8 @@ fn ray_scheme_mounts_validate_on_both_engines() {
         &path,
         format!(
             "import std/ui;\nfn main() {{\n    print(to_string(ui.mount_dir(\"site\", \"{dir}\").is_ok()));\n    print(to_string(ui.mount_dir(\"bad\", \"{dir}/missing\").is_err()));\n    match (ui.mount_dir(\"../up\", \"{dir}\")) {{ Result.Ok(_) => print(\"escaped\"), Result.Err(e) => print(e) }}\n    print(to_string(ui.mount_bytes(\"mem/a.txt\", b\"abc\").is_ok()));\n    print(to_string(ui.mount_bytes(\"\", b\"abc\").is_err()));\n}}\n",
-            dir = base.display()
+            // Windows: la ruta con `\\` dentro de un literal raylang no compila (escapes) → `/`.
+            dir = base.display().to_string().replace('\\', "/")
         ),
     )
     .unwrap();

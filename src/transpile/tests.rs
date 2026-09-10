@@ -680,7 +680,11 @@ fn native_devtools_are_baked_only_when_the_build_asks() {
     let _ = std::fs::create_dir_all(&dir);
     std::fs::write(dir.join("main.ray"), "import std/ui;\nfn main() { let _ = ui.open(\"A\", \"http://127.0.0.1:1/\", 320, 200); }\n").unwrap();
     let parse = || {
-        let mut prog = crate::loader::load(&dir.join("main.ray")).expect("load").program;
+        // `LoadError` no implementa Debug en todas las plataformas: match, como el test de std/ffi.
+        let mut prog = match crate::loader::load(&dir.join("main.ray")) {
+            Ok(l) => l.program,
+            Err(_) => panic!("no se pudo cargar el programa de std/ui"),
+        };
         crate::checker::check(&mut prog).expect("check");
         prog
     };

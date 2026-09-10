@@ -103,9 +103,10 @@ fn program_uses_spawn(program: &CompiledProgram) -> bool {
 
 /// M38.3b paso 3: una referencia al programa compilado **compartible entre hilos worker**. `CompiledProgram`
 /// contiene `Value` (las constantes del chunk) que usa `Rc` → es `!Send`/`!Sync` **por tipo**. Pero durante
-/// la ejecución el programa es **inmutable** y el único acceso a sus constantes (`const_to_heap`) sólo LEE:
-/// copia los escalares y clona el `Vec` interno de `Bytes` **por deref** (nunca clona ni dropea un `Rc`, así
-/// que ningún refcount se toca) → compartir esta referencia inmutable entre hilos es sano. El wrapper lo
+/// la ejecución el programa es **inmutable** y sus constantes se leen por la tabla `CompiledFn::consts`
+/// (M233: `HeapValue` ya convertidos — los strings son `Arc<str>`, cuyo refcount SÍ es atómico) o por
+/// `const_int`, que solo lee un escalar; nunca se clona ni dropea un `Rc` de `Value` desde un worker →
+/// compartir esta referencia inmutable entre hilos es sano. El wrapper lo
 /// afirma con `unsafe impl`; sólo cruza el borde del `thread::spawn` (dentro del worker se usa como `&`).
 #[derive(Clone, Copy)]
 struct ProgRef<'a>(&'a CompiledProgram);
@@ -156,6 +157,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             captured: Vec::new(),
             has_captured: false,
             upvalues: Vec::new(),
+            consts: CompiledFn::consts_of(chunk),
             chunk: chunk.clone(),
         }],
         structs: Vec::new(),
@@ -453,7 +455,7 @@ impl<'a> Vm<'a> {
         macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             match instr {
                 OpCode::Constant(idx) => {
-                    let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
+                    let v = self.program.functions[func].consts[*idx].clone();
                     self.push(v);
                 }
                 OpCode::True => self.push(HeapValue::Bool(true)),
@@ -627,7 +629,7 @@ impl<'a> Vm<'a> {
                         Local::Plain(v) => v.clone(),
                         Local::Boxed(_) => self.get_local(base, *s),
                     };
-                    let b = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let b = self.program.functions[func].consts[*c].clone();
                     self.push(a);
                     self.push(b);
                 }
@@ -656,7 +658,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     let left = self.get_local(base, *s);
-                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let right = self.program.functions[func].consts[*c].clone();
                     let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         match op {
                             CmpOp::Less => a < b,
@@ -780,7 +782,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     let left = self.get_local(base, *s);
-                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let right = self.program.functions[func].consts[*c].clone();
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
@@ -804,7 +806,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     let left = self.get_local(base, *s);
-                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let right = self.program.functions[func].consts[*c].clone();
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
@@ -827,7 +829,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     let left = self.get_local(base, *s);
-                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let right = self.program.functions[func].consts[*c].clone();
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
@@ -849,7 +851,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     let left = self.get_local(base, *s);
-                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let right = self.program.functions[func].consts[*c].clone();
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_sub(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
@@ -1802,8 +1804,17 @@ impl<'a> Vm<'a> {
                     // Representación textual (la misma que `print`): coincide con el `Display`
                     // que usa el intérprete en `to_string`.
                     let v = self.pop();
-                    let s = format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v);
-                    self.push(HeapValue::Str(s.into()));
+                    // M233: primitivos sin `String` intermedio (un string ya es su propia
+                    // representación: se comparte el Arc, cero asignaciones).
+                    let s = match &v {
+                        HeapValue::Str(s) => s.clone(),
+                        HeapValue::Int(i) => int_to_str(*i),
+                        _ => {
+                            let s = format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v);
+                            s.into()
+                        }
+                    };
+                    self.push(HeapValue::Str(s));
                 }
                 OpCode::ConcatN(n) => {
                     // V2 (bench políglota): concatenación n-aria — un solo String con la capacidad
@@ -1815,12 +1826,15 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s.len(),
                         _ => unreachable!("the checker guarantees strings"),
                     }).sum();
-                    let mut out = String::with_capacity(total);
-                    for v in &self.cur.stack[start..] {
-                        if let HeapValue::Str(s) = v { out.push_str(s); }
-                    }
+                    // M233: una sola asignación (el Arc); el buffer por hilo evita el String.
+                    let out = build_str(|b| {
+                        b.reserve(total);
+                        for v in &self.cur.stack[start..] {
+                            if let HeapValue::Str(s) = v { b.push_str(s); }
+                        }
+                    });
                     self.cur.stack.truncate(start);
-                    self.push(HeapValue::Str(out.into()));
+                    self.push(HeapValue::Str(out));
                 }
                 OpCode::SortPrim => {
                     // V5 (bench políglota): sort nativo de [int]/[string]/[char]. Devuelve un
@@ -1851,7 +1865,7 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(nh));
                 }
                 OpCode::Trim => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string().into())),
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().into())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::Split => {
@@ -1868,7 +1882,7 @@ impl<'a> Vm<'a> {
                     // (+4%: el barrido extra cuesta más que los reallocs amortizados) ganan. El
                     // camino genérico de `str::split` es el rápido; no reabrir sin re-medir.
                     let parts: Vec<HeapValue> =
-                        s.split(&*sep).map(|p| HeapValue::Str(p.to_string().into())).collect();
+                        s.split(&*sep).map(|p| HeapValue::Str(p.into())).collect();
                     // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.
                     let h = self.cur.heap.allocate(Obj::Array(parts));
                     self.push(HeapValue::Obj(h));
@@ -2323,7 +2337,12 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Int(i), HeapValue::Int(j)) = (s, i, j) else {
                         unreachable!("the checker guarantees string, int, int");
                     };
-                    self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j).into()));
+                    // M233: ASCII → tramo prestado, un solo Arc; el resto por `substring_chars`.
+                    let out: Arc<str> = match crate::builtins::substring_ascii(&s, i, j) {
+                        Some(slice) => slice.into(),
+                        None => crate::builtins::substring_chars(&s, i, j).into(),
+                    };
+                    self.push(HeapValue::Str(out));
                 }
                 // M19.2: sub-secuencia de bytes por octeto (con clamp). Orden en la pila: b, i, j.
                 OpCode::SubBytes => {
@@ -2386,14 +2405,16 @@ impl<'a> Vm<'a> {
                             HeapValue::Str(s) => s.len(),
                             _ => unreachable!("the checker guarantees [string]"),
                         }).sum::<usize>() + sep.len() * elems.len().saturating_sub(1);
-                        let mut out = String::with_capacity(total);
-                        for (i, v) in elems.iter().enumerate() {
-                            if i > 0 { out.push_str(&*sep); }
-                            if let HeapValue::Str(s) = v { out.push_str(s); }
-                        }
-                        out
+                        // M233: una sola asignación (el Arc) vía el buffer por hilo.
+                        build_str(|b| {
+                            b.reserve(total);
+                            for (i, v) in elems.iter().enumerate() {
+                                if i > 0 { b.push_str(&*sep); }
+                                if let HeapValue::Str(s) = v { b.push_str(s); }
+                            }
+                        })
                     };
-                    self.push(HeapValue::Str(out.into()));
+                    self.push(HeapValue::Str(out));
                 }
 
                 // --- Más arreglos (M11.7b) ---
@@ -4457,7 +4478,7 @@ impl<'a> Vm<'a> {
         }
     }
 
-    /// V11: la constante int del chunk sin materializarla (`const_to_heap`).
+    /// V11: la constante int del chunk sin materializarla (ni pasar por la tabla `consts`).
     #[inline(always)]
     fn const_int(&self, func: usize, c: usize) -> Option<i64> {
         match &self.program.functions[func].chunk.constants[c] {
@@ -4737,7 +4758,7 @@ impl<'a> Vm<'a> {
         }
         Ok(match (op, left, right) {
             // M11.1a: `+` concatena dos strings.
-            (Add, Str(a), Str(b)) => Str(format!("{a}{b}").into()),
+            (Add, Str(a), Str(b)) => Str(build_str(|o| { o.reserve(a.len() + b.len()); o.push_str(&a); o.push_str(&b); })),
             // M16.1b: `+` concatena dos bytes (inline, no son objetos del heap → van por aquí).
             (Add, Bytes(a), Bytes(b)) => {
                 let mut v = a;

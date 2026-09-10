@@ -1779,6 +1779,38 @@ hasta que el runtime generado recibió la misma caché (`__ray_char_at`/`__ray_c
 
 Ambos casos viven en `benchmarks/str_index.ray` y `str_index_utf8.ray` y en el gate de regresión.
 
+### Lo que costó el `Arc<str>` y cómo se recuperó (M233, sep 2026)
+
+La corrida completa del banco políglota del 10 sep (`results/2026-09-10-v1.14.0.md`) destapó el
+precio de M213 en la VM, atribuido por A/B de builds planos: v1.10.0→v1.11.2 = jsonserialize
+**+48 %**, logparse **+24 %**, wordcount **+15 %**; aritmética y árboles ±0. Perfilando con
+micro-bucles de 2 M iteraciones salieron TRES causas, ninguna era "el Arc" en sí:
+
+1. **`LoadConst` de string** clonaba el `String` de la constante y lo copiaba OTRA vez a `Arc<str>`
+   (dos asignaciones por carga). Ahora `CompiledFn::consts` guarda las constantes ya como
+   `HeapValue` (un `Arc` por programa) y cargar es un clon del `Arc`: 63→56 ms por 2 M cargas,
+   mejor que antes de M213.
+2. **Todo string construido** (`ConcatN`, `Add`, `join`, `to_string`, `split`, `trim`, `substring`)
+   nacía como `String` y se recopiaba al `Arc`. `build_str` escribe en un buffer por hilo
+   reutilizado y copia UNA vez; `split`/`trim`/`substring` ASCII toman el tramo prestado;
+   `to_string(int)` formatea en un buffer de pila (`int_to_str`), sin `fmt`.
+3. **`MapKey::Str` era `String`**: cada `get`/`insert`/`keys()` copiaba la clave. Ahora es el mismo
+   `Arc<str>` que el valor (cero copias; el intérprete-oráculo convierte desde su `String`).
+
+| VM release, banco políglota (mediana de 10) | v1.10.0 | v1.14.0 | M233 |
+|---|---|---|---|
+| jsonserialize | 78 ms | 116 ms | **100 ms** |
+| logparse | 76 ms | 94 ms | **83 ms** |
+| wordcount | 188 ms | 214 ms | **207 ms** |
+| jsondeserialize | 303 ms | 349 ms | **294 ms** |
+| `s[i]` 288k ASCII (gate) | 4,04 s | 0,09 s | **0,08 s** |
+
+Queda un suelo de ~+10–25 % en los bucles que crean muchos strings pequeños: medido en Rust con
+mimalloc, `Arc<str>` clone+drop cuesta 3,9 ns (dos operaciones atómicas) frente a 0,1 ns de `Rc`
+y 8,3 ns del clon de `String` de antes; en una interpolación de seis piezas son ~10 clones/drops.
+Bajarlo exige `Rc<str>` con las invariantes de aislamiento por fibra explícitas (transferencia por
+copia entre heaps, constantes sin refcount compartido) — anotado como arco propio en IDEAS §88.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

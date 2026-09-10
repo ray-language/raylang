@@ -527,6 +527,18 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
 
 /// Subcadena `[i, j)` por índice de **carácter**, con *clamp* al rango válido (M11.7a): así nunca
 /// falla en runtime (un `i`/`j` fuera de rango se recorta; `i > j` → `""`). Helper compartido.
+/// M233: el tramo `[i, j)` por CARÁCTER como préstamo cuando el string es ASCII (byte = carácter);
+/// `None` si no es ASCII (el llamador cae a `substring_chars`). Mismo clamp que aquella.
+pub fn substring_ascii(s: &str, i: i64, j: i64) -> Option<&str> {
+    if !s.is_ascii() {
+        return None;
+    }
+    let n = s.len() as i64;
+    let lo = i.clamp(0, n);
+    let hi = j.clamp(lo, n);
+    Some(&s[lo as usize..hi as usize])
+}
+
 pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
     // D1 (bench políglota, jsondeserialize): fast-path ASCII — corte por bytes con el mismo clamp
     // (sin materializar el `Vec<char>` del string entero por llamada).

@@ -942,7 +942,6 @@ pub struct UpvalueRef {
 }
 
 /// Una función compilada a bytecode.
-#[derive(Debug)]
 pub struct CompiledFn {
     pub name: String,
     pub arity: usize,
@@ -958,6 +957,31 @@ pub struct CompiledFn {
     /// Los upvalues de esta función: cómo construir su entorno al crearla (M4.2).
     pub upvalues: Vec<UpvalueRef>,
     pub chunk: Chunk,
+    /// M233: `chunk.constants` ya convertidas a valores de la VM (los strings como `Arc<str>`
+    /// compartidos): `LoadConst` clona el `Arc` en vez de reconstruir el string en cada carga.
+    pub consts: Vec<crate::gc::HeapValue>,
+}
+
+// `Debug` a mano: `consts` (HeapValue) no lo implementa y en un volcado sobra (es `chunk.constants`).
+impl std::fmt::Debug for CompiledFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledFn")
+            .field("name", &self.name)
+            .field("arity", &self.arity)
+            .field("num_locals", &self.num_locals)
+            .field("captured", &self.captured)
+            .field("has_captured", &self.has_captured)
+            .field("upvalues", &self.upvalues)
+            .field("chunk", &self.chunk)
+            .finish()
+    }
+}
+
+impl CompiledFn {
+    /// La tabla `consts` de un chunk (ver el campo).
+    pub fn consts_of(chunk: &Chunk) -> Vec<crate::gc::HeapValue> {
+        chunk.constants.iter().map(crate::gc::HeapValue::from_const).collect()
+    }
 }
 
 /// La definición de un struct, compilada: su nombre y sus campos en orden.

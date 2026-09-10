@@ -26,7 +26,7 @@
 //! 3. **Disparo**: se recolecta cuando el número de objetos vivos cruza un umbral
 //!    que **crece** tras cada recolección (estilo clox `nextGC`).
 
-use crate::runtime::MapKey;
+use crate::runtime::{MapKey, Value};
 use std::collections::{HashMap, VecDeque};
 
 /// Almacén interno de un `Map` en la VM (P0.1, perf): `HashMap` con el hasher **aHash** en vez del
@@ -82,6 +82,25 @@ pub enum HeapValue {
     /// Un objeto gestionado por el GC (arreglo, struct, closure o celda). El tipo
     /// concreto lo dice el `Obj` al que apunta el handle.
     Obj(Handle),
+}
+
+impl HeapValue {
+    /// M233: una constante del chunk como `HeapValue`, convertida UNA vez al compilar (la tabla
+    /// `CompiledFn::consts`). Antes cada carga de constante de string clonaba el `String` y lo
+    /// volvía a copiar a `Arc<str>` (dos asignaciones por `LoadConst`); ahora es un clon del `Arc`.
+    pub fn from_const(v: &Value) -> HeapValue {
+        match v {
+            Value::Int(n) => HeapValue::Int(*n),
+            Value::Float(x) => HeapValue::Float(*x),
+            Value::Bool(b) => HeapValue::Bool(*b),
+            Value::Str(s) => HeapValue::Str(s.as_str().into()),
+            Value::Char(c) => HeapValue::Char(*c),
+            Value::UInt(n, w) => HeapValue::UInt(*n, *w),
+            Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
+            Value::Unit => HeapValue::Unit,
+            _ => unreachable!("chunk constants are primitive"),
+        }
+    }
 }
 
 impl HeapValue {
@@ -253,7 +272,7 @@ fn obj_bytes(obj: &Obj) -> usize {
                 + m.iter()
                     .map(|(k, v)| {
                         let kb = match k {
-                            MapKey::Str(s) => s.capacity(),
+                            MapKey::Str(s) => s.len(),
                             MapKey::Bytes(b) => b.capacity(),
                             _ => 0,
                         };

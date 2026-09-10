@@ -450,6 +450,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     if t.needs_rt_tls {
         t.needs_net = true;
     }
+    // M232: regex.onig — misma tabla de handles que la VM (ray_runtime::regex::onig).
+    if t.needs_rt_regex {
+        out.push_str("fn __ray_onig_compile(pat: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
+        out.push_str("    let v: Vec<Rc<str>> = match ray_runtime::regex::onig::compile(pat) { Ok((id, names)) => { let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())]; v.extend(names.iter().map(|n| Rc::<str>::from(n.as_str()))); v } Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] };\n");
+        out.push_str("    Rc::new(std::cell::RefCell::new(v))\n}\n");
+        out.push_str("fn __ray_onig_search(id: i64, text: &str, from: i64, anchored: bool) -> Rc<std::cell::RefCell<Vec<i64>>> {\n");
+        out.push_str("    Rc::new(std::cell::RefCell::new(match ray_runtime::regex::onig::search(id, text, from, anchored) { Ok(Some(s)) => s, Ok(None) => Vec::new(), Err(_) => vec![-1] }))\n}\n");
+    }
     // M131: normalización Unicode — mismo código que la VM (ray_runtime::unicode). El Err (forma
     // desconocida; imposible desde los wrappers de std/text) aborta byte-idéntico a la VM.
     if t.needs_rt_unicode {

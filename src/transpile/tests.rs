@@ -71,6 +71,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ui_mount", "__ui_mount_bytes",
     // M229: foco.
     "__ui_focus",
+    // M232: regex.onig (dialecto Oniguruma en ray_runtime).
+    "__onig_compile", "__onig_search",
     // M148: menús + diálogos de archivo.
     "__ui_menu", "__ui_app_menu", "__ui_set_about", "__ui_dialog",
     // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.

@@ -82,7 +82,7 @@ unicode = ["dep:unicode-normalization"]
 # std/regex ejecutado), como crypto/tls/sqlite. `--without regex` NO stubbea: el fallback es la
 # Pike VM de std/regex transpilada tal cual (la implementación real). El parseo/validación del
 # patrón y sus errores siguen siendo los de std/regex (paridad byte-idéntica con la VM).
-regex = ["dep:regex"]
+regex = ["dep:regex", "dep:fancy-regex"]
 
 [dependencies]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
@@ -119,6 +119,10 @@ ahash = { version = "0.8", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 # R5 — regex 1.x: el motor de producción de Rust (NFA/DFA híbrido, literal optimizations).
 regex = { version = "1", optional = true }
+# M232 — fancy-regex 0.19: el dialecto Oniguruma de `regex.onig` (look-around, backrefs, `\G`,
+# atómicos, posesivos) por backtracking sobre el MISMO crate `regex` (delega cuando el patrón no
+# usa nada de eso). Rust puro, sin C; `backtrack_limit` acota el peor caso.
+fancy-regex = { version = "0.19", optional = true }
 # F1 — corosensei 0.2: corrutinas de pila propia (aarch64+x86_64, macOS/Linux/Windows), pila mmap con
 # página de guarda. El cambio de contexto en asm auditado de un solo crate, sin arrastre transitivo.
 corosensei = { version = "0.2", optional = true }

@@ -208,6 +208,7 @@ el caso de "el bug se ve en el paso 7 de 5 000". Coste M. A decidir junto a K1�
 | M217 | Lote I (herramientas, mensajes, docs) | CI headless sin `perl -e alarm`; `ray check` |
 | M218 | J1 (`json.parse_relaxed`) | `src/formats/json_relaxed.ray` desaparece |
 | M219 | J2 (`std/zip` lectura) | `src/formats/zip.ray` desaparece |
+| M232 | #67 (`regex.onig`: dialecto Oniguruma + `search_from`/`match_at` con capturas) | el motor regex propio (2 900 líneas) se sustituye por un adaptador; verificado con su corpus (6 184/6 226 compilan, 4 000/4 000 casos diferenciales) |
 | J3, K | yaml/plist, `return` expresión, `@derive(Clone)`, trazas, intérprete embebible | según decisión |
 
 Cada hito: rama + PR, SPEC antes si cambia el lenguaje (K1, K2), DESIGN con el porqué, CHANGELOG

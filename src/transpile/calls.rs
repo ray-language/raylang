@@ -2287,6 +2287,28 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M232: regex.onig — sin fallback raylang: con `--without regex` el build se rechaza.
+            "onig_compile" | "onig_search" if name.starts_with("__") => {
+                if self.exclude.contains("regex") {
+                    return Err("regex.onig (Oniguruma dialect) needs the `regex` runtime feature: drop `regex` from `--without` / `[native] without`".to_string());
+                }
+                self.needs_rt_regex = true;
+                if method == "onig_compile" {
+                    out.push_str("__ray_onig_compile(&*");
+                    self.emit_expr(out, eff[0])?;
+                    out.push(')');
+                } else {
+                    out.push_str("__ray_onig_search(");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &*");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", ");
+                    self.emit_expr(out, eff[2])?;
+                    out.push_str(", ");
+                    self.emit_expr(out, eff[3])?;
+                    out.push(')');
+                }
+            }
             "ui_focus" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_focus(");

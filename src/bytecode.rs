@@ -653,6 +653,10 @@ pub enum OpCode {
     UiMountBytes,
     /// M229: `__ui_focus(h)` — trae al frente y da el foco (['ok'] / ['err', msg]).
     UiFocus,
+    /// M232: `__onig_compile(pattern)` — dialecto Oniguruma (['ok', id, nombres…] / ['err', msg]).
+    OnigCompile,
+    /// M232: `__onig_search(id, text, from, anchored)` — spans por carácter ([] sin match, [-1] abortado).
+    OnigSearch,
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,

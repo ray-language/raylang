@@ -1173,6 +1173,40 @@ pub fn ui_focus(_h: i64) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M232: `regex.onig` — compila en la tabla de handles del runtime (fancy-regex, dialecto Oniguruma).
+/// Devuelve la respuesta etiquetada que comparten los tres motores: `["ok", id, nombres…]`.
+#[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+pub fn onig_compile(pattern: &str) -> Vec<String> {
+    match ray_runtime::regex::onig::compile(pattern) {
+        Ok((id, names)) => {
+            let mut v = vec!["ok".to_string(), id.to_string()];
+            v.extend(names);
+            v
+        }
+        Err(e) => vec!["err".to_string(), e],
+    }
+}
+#[cfg(not(all(feature = "regex", not(target_arch = "wasm32"))))]
+pub fn onig_compile(_pattern: &str) -> Vec<String> {
+    vec!["err".to_string(), ONIG_UNAVAILABLE.to_string()]
+}
+/// M232: una búsqueda (`anchored`: el match debe empezar en `from`). `[]` sin match; `[-1]` si el
+/// motor abandonó por el límite de backtracking (std/regex lo convierte en pánico con nombre).
+#[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+pub fn onig_search(id: i64, text: &str, from: i64, anchored: bool) -> Vec<i64> {
+    match ray_runtime::regex::onig::search(id, text, from, anchored) {
+        Ok(Some(spans)) => spans,
+        Ok(None) => Vec::new(),
+        Err(_) => vec![-1],
+    }
+}
+#[cfg(not(all(feature = "regex", not(target_arch = "wasm32"))))]
+pub fn onig_search(_id: i64, _text: &str, _from: i64, _anchored: bool) -> Vec<i64> {
+    vec![-1]
+}
+#[cfg(not(all(feature = "regex", not(target_arch = "wasm32"))))]
+const ONIG_UNAVAILABLE: &str = "regex: onig needs a toolchain built with the `regex` feature";
+
 /// M225: `ui.reply`/`ui.reply_json` — el literal JS se construye en el runtime en una pasada.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Result<(), String> {
@@ -3998,6 +4032,23 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_eval_js expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_eval_js expects a string (the JavaScript), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __onig_compile(pattern) -> [string] (M232): ["ok", id, nombre_0, nombre_1, …] o ["err", msg].
+    // El dialecto Oniguruma de `regex.onig` vive en ray_runtime (fancy-regex): sin espejo raylang.
+    Builtin { name: "__onig_compile", opcode: OpCode::OnigCompile, check: |a| {
+        arity(a, 1, "__onig_compile", " (pattern)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__onig_compile expects a string (the pattern), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __onig_search(id, text, from, anchored) -> [int] (M232): [s0, e0, s1, e1, …] por carácter
+    // (-1 para un grupo ausente), [] sin match, [-1] si se superó el límite de backtracking.
+    Builtin { name: "__onig_search", opcode: OpCode::OnigSearch, check: |a| {
+        arity(a, 4, "__onig_search", " (handle, text, from, anchored)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__onig_search expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__onig_search expects a string (the text), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__onig_search expects an int (from), not {}", a[2]))); }
+        if a[3] != Type::Bool { return Err((Some(3), format!("__onig_search expects a bool (anchored), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::Int)))
     } },
     // __ui_focus(h) -> [string] (M229): trae al frente y da el foco a la ventana `h`.
     Builtin { name: "__ui_focus", opcode: OpCode::UiFocus, check: |a| {

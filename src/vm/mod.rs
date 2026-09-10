@@ -3236,6 +3236,32 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 // M229: foco a una ventana abierta.
+                // M232: regex.onig — el motor vive en ray_runtime; aquí solo se materializa el array.
+                OpCode::OnigCompile => {
+                    let HeapValue::Str(pat) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = crate::builtins::onig_compile(&pat).into_iter().map(|s| HeapValue::Str(s.into())).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::OnigSearch => {
+                    let HeapValue::Bool(anchored) = self.pop() else {
+                        unreachable!("the checker guarantees a bool");
+                    };
+                    let HeapValue::Int(from) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let HeapValue::Str(text) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Int(id) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = crate::builtins::onig_search(id, &text, from, anchored).into_iter().map(HeapValue::Int).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiFocus => {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");

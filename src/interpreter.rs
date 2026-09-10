@@ -2123,6 +2123,22 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__onig_compile" => {
+                let arr = match &values[0] {
+                    Value::Str(p) => crate::builtins::onig_compile(p).into_iter().map(Value::Str).collect(),
+                    _ => unreachable!("the checker guarantees a string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__onig_search" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Int(id), Value::Str(t), Value::Int(from), Value::Bool(anch)) => {
+                        crate::builtins::onig_search(*id, t, *from, *anch).into_iter().map(Value::Int).collect()
+                    }
+                    _ => unreachable!("the checker guarantees int, string, int, bool"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_focus" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::ui_focus(*h) {

@@ -223,3 +223,203 @@ mod imp {
 
 #[cfg(feature = "regex")]
 pub use imp::*;
+
+/// M232 — `regex.onig`: el dialecto **Oniguruma** (el de los `.sublime-syntax`, Ruby, TextMate)
+/// sobre `fancy-regex`. A diferencia del resto de este módulo, aquí NO hay implementación de
+/// referencia en raylang: look-around y backreferences exigen backtracking y los tres motores
+/// (intérprete, VM, nativo) llaman a ESTE código, que es la fuente de verdad.
+///
+/// - Los patrones compilados viven en una tabla global por proceso, indexada por **handle**
+///   (`i64`) y deduplicada por patrón: compilar dos veces el mismo texto devuelve el mismo
+///   handle, así que la tabla crece con los patrones DISTINTOS del programa, no con las llamadas.
+///   Los actores (hilos distintos) comparten la tabla → `RwLock`, lectura en el camino caliente.
+/// - Semántica fija (Oniguruma): `^`/`$` son anclas de LÍNEA, `.` no casa `\n` salvo `(?m)`/`(?s)`,
+///   `\h` es dígito hexadecimal, `\G` es la posición `from` de `search_from`/`at` de `match_at`.
+/// - `match_at` es `\G(?:pat)` compilado aparte (perezoso): el motor no tiene búsqueda anclada
+///   a una posición, y envolver el patrón no altera la numeración de grupos.
+/// - Índices por CARÁCTER (como todo `std/regex`); el motor trabaja en bytes → conversión con
+///   fast-path ASCII.
+/// - `backtrack_limit`: un patrón catastrófico no cuelga al llamador; `search` devuelve `Err` y
+///   `std/regex` lo convierte en pánico con nombre (idéntico en los tres motores).
+#[cfg(feature = "regex")]
+pub mod onig {
+    use fancy_regex::{Regex, RegexBuilder};
+    use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock, RwLock};
+
+    /// Pasos de backtracking por búsqueda antes de abandonar (el orden del `DEFAULT_STEP_LIMIT`
+    /// del motor de ray-sublime, que nació con el mismo propósito).
+    pub const BACKTRACK_LIMIT: usize = 1_000_000;
+
+    struct Entry {
+        pattern: String,
+        rx: Arc<Regex>,
+        /// `\G(?:pat)` para `match_at`; se compila la primera vez que hace falta.
+        anchored: OnceLock<Arc<Regex>>,
+        names: Vec<String>,
+    }
+
+    #[derive(Default)]
+    struct Table {
+        by_pattern: HashMap<String, usize>,
+        entries: Vec<Arc<Entry>>,
+    }
+
+    fn table() -> &'static RwLock<Table> {
+        static TABLE: OnceLock<RwLock<Table>> = OnceLock::new();
+        TABLE.get_or_init(|| RwLock::new(Table::default()))
+    }
+
+    fn build(pat: &str) -> Result<Regex, String> {
+        RegexBuilder::new(pat)
+            .oniguruma_mode(true)
+            .multi_line(true)
+            .backtrack_limit(BACKTRACK_LIMIT)
+            .build()
+            .map_err(|e| format!("regex: {}", e.to_string().trim_start_matches("Error compiling regex: ")))
+    }
+
+    /// Compila `pat` (o reutiliza el handle si ya estaba). Devuelve `(handle, nombres)`: un
+    /// nombre por grupo, `[0]` = `""` (el match entero) y `""` para los grupos sin nombre.
+    pub fn compile(pat: &str) -> Result<(i64, Vec<String>), String> {
+        {
+            let t = table().read().unwrap();
+            if let Some(&i) = t.by_pattern.get(pat) {
+                return Ok((i as i64, t.entries[i].names.clone()));
+            }
+        }
+        let rx = build(pat)?;
+        let mut names = vec![String::new(); rx.captures_len()];
+        for (name, idx) in rx.capture_names().enumerate().filter_map(|(i, n)| n.map(|n| (n, i))) {
+            if idx < names.len() {
+                names[idx] = name.to_string();
+            }
+        }
+        let mut t = table().write().unwrap();
+        // Carrera benigna: otro hilo pudo insertarlo entre la lectura y la escritura.
+        if let Some(&i) = t.by_pattern.get(pat) {
+            return Ok((i as i64, t.entries[i].names.clone()));
+        }
+        let i = t.entries.len();
+        t.entries.push(Arc::new(Entry {
+            pattern: pat.to_string(),
+            rx: Arc::new(rx),
+            anchored: OnceLock::new(),
+            names: names.clone(),
+        }));
+        t.by_pattern.insert(pat.to_string(), i);
+        Ok((i as i64, names))
+    }
+
+    fn entry(id: i64) -> Option<Arc<Entry>> {
+        usize::try_from(id).ok().and_then(|i| table().read().unwrap().entries.get(i).cloned())
+    }
+
+    /// Offset de byte del índice de carácter `ci` (`None` si `ci` pasa del final).
+    fn byte_at(text: &str, ci: usize) -> Option<usize> {
+        if text.is_ascii() {
+            return (ci <= text.len()).then_some(ci);
+        }
+        if ci == 0 {
+            return Some(0);
+        }
+        text.char_indices().nth(ci).map(|(b, _)| b).or_else(|| (text.chars().count() == ci).then_some(text.len()))
+    }
+
+    /// Busca desde el carácter `from` (`anchored`: el match debe EMPEZAR en `from`). Devuelve los
+    /// spans `[s0, e0, s1, e1, …]` por carácter (`-1, -1` para un grupo que no participó), o
+    /// `None` sin match. `Err`: handle desconocido o límite de backtracking superado.
+    pub fn search(id: i64, text: &str, from: i64, anchored: bool) -> Result<Option<Vec<i64>>, String> {
+        let e = entry(id).ok_or_else(|| format!("regex: unknown onig handle {id}"))?;
+        let Some(from_b) = usize::try_from(from).ok().and_then(|f| byte_at(text, f)) else {
+            return Ok(None);
+        };
+        let rx = if anchored {
+            e.anchored
+                .get_or_init(|| Arc::new(build(&format!("\\G(?:{})", e.pattern)).expect("the plain pattern already compiled")))
+                .clone()
+        } else {
+            e.rx.clone()
+        };
+        let caps = match rx.captures_from_pos(text, from_b) {
+            Ok(Some(c)) => c,
+            Ok(None) => return Ok(None),
+            Err(fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::BacktrackLimitExceeded)) => {
+                return Err(format!("regex: backtrack limit exceeded ({BACKTRACK_LIMIT} steps) for pattern {:?}", e.pattern))
+            }
+            Err(err) => return Err(format!("regex: {err}")),
+        };
+        let ascii = text.is_ascii();
+        let mut out = Vec::with_capacity(caps.len() * 2);
+        // Los offsets crecen por grupo raramente en orden → contar desde 0 cada vez es O(n·g);
+        // con g pequeño y líneas cortas es más barato que una tabla. Fast-path ASCII: byte = char.
+        let ci = |b: usize| if ascii { b as i64 } else { text[..b].chars().count() as i64 };
+        for i in 0..caps.len() {
+            match caps.get(i) {
+                Some(m) => {
+                    out.push(ci(m.start()));
+                    out.push(ci(m.end()));
+                }
+                None => {
+                    out.push(-1);
+                    out.push(-1);
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn spans(pat: &str, text: &str, from: i64, anchored: bool) -> Option<Vec<i64>> {
+            let (id, _) = compile(pat).unwrap();
+            search(id, text, from, anchored).unwrap()
+        }
+
+        #[test]
+        fn lookaround_backrefs_and_named_groups() {
+            assert_eq!(spans(r"(?<=\$)\w+(?=\b)", "pay $amount now", 0, false), Some(vec![5, 11]));
+            assert_eq!(spans(r"(\w)\1", "abccd", 0, false), Some(vec![2, 4, 2, 3]));
+            let (_, names) = compile(r"(?<key>\w+)=(\d+)").unwrap();
+            assert_eq!(names, vec!["", "key", ""]);
+            assert_eq!(spans(r"(a)|(b)", "b", 0, false), Some(vec![0, 1, -1, -1, 0, 1]));
+        }
+
+        #[test]
+        fn g_anchor_and_match_at() {
+            assert_eq!(spans(r"\Gab", "xxab ab", 2, false), Some(vec![2, 4]));
+            assert_eq!(spans(r"\Gab", "xxab ab", 0, false), None);
+            assert_eq!(spans(r"ab", "xxab ab", 0, true), None);
+            assert_eq!(spans(r"ab", "xxab ab", 2, true), Some(vec![2, 4]));
+            assert_eq!(spans(r"ab", "xxab ab", 3, false), Some(vec![5, 7]));
+        }
+
+        #[test]
+        fn line_anchors_hex_and_possessive() {
+            assert_eq!(spans(r"^b$", "a\nb\nc", 0, false), Some(vec![2, 3]));
+            assert_eq!(spans(r"\h+", "zz1fG", 0, false), Some(vec![2, 4]));
+            assert_eq!(spans(r"a++a", "aaa", 0, false), None);
+            assert_eq!(spans(r"(?i:ab)c", "ABc", 0, false), Some(vec![0, 3]));
+        }
+
+        #[test]
+        fn char_indices_not_bytes() {
+            assert_eq!(spans(r"ñ+", "añññb", 0, false), Some(vec![1, 4]));
+            assert_eq!(spans(r"b", "añññb", 4, true), Some(vec![4, 5]));
+            assert_eq!(spans(r"b", "añññb", 9, false), None);
+        }
+
+        #[test]
+        fn errors_are_values_and_handles_dedupe() {
+            let err = compile(r"(?<=a+").unwrap_err();
+            assert!(err.starts_with("regex: "), "{err}");
+            assert!(compile(r"\1").is_err());
+            let (a, _) = compile("dedupe").unwrap();
+            let (b, _) = compile("dedupe").unwrap();
+            assert_eq!(a, b);
+            assert!(search(999_999, "x", 0, false).is_err());
+        }
+    }
+}

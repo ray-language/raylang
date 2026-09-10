@@ -1194,3 +1194,120 @@ pub fn captures_map(re: Regex, text: string) -> Option<Map<string, string>> {
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// M232 — el dialecto ONIGURUMA (`onig`): look-around, backreferences, `\G`, grupos atómicos,
+// posesivos, `\p{…}`, `\h`, flags en línea… lo que usan los `.sublime-syntax`, Ruby y TextMate.
+// No hay espejo raylang: el motor (fancy-regex sobre el crate regex) vive en ray_runtime y los
+// tres motores llaman al mismo código, así que la paridad es por construcción. El patrón
+// compilado es un HANDLE de una tabla por proceso (deduplicada por patrón): compila una vez,
+// busca muchas. Semántica Oniguruma: `^`/`$` son anclas de LÍNEA, `.` no casa `\n` salvo
+// `(?m)`/`(?s)`, `\h` es dígito hexadecimal.
+// ---------------------------------------------------------------------------
+/// One match of an Oniguruma pattern (see `onig`): character indices of the whole
+/// match and of every capture group (`groups[0]` is the whole match; a group that
+/// did not participate is `None`).
+pub struct Match {
+    start: int,
+    end: int,
+    groups: [Option<(int, int)>],
+}
+
+/// A compiled Oniguruma-dialect pattern (see `onig`). `names` has one entry per
+/// group (`[0]` and unnamed groups are `""`); `pattern` is the source text.
+pub struct Onig {
+    id: int,
+    pattern: string,
+    names: [string],
+}
+
+/// Compiles `pattern` in the ONIGURUMA dialect (look-around, backreferences, `\G`,
+/// atomic groups, possessive quantifiers, `\p{…}`, `\h`, inline flags, `&&`).
+/// Unlike `compile`, `^`/`$` are line anchors and `.` stops at `\n`. Err on a
+/// malformed pattern (a backreference to a group the pattern does not define is
+/// an error too). Compiling the same text twice reuses the same handle.
+pub fn onig(pattern: string) -> Result<Onig, string> {
+    let r = __onig_compile(pattern);
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    var names: [string] = [];
+    var i = 2;
+    while (i < r.len()) {
+        names.push(r[i]);
+        i = i + 1;
+    }
+    Result.Ok(Onig { id: r[1].parse_int().unwrap_or(-1), pattern: pattern, names: names })
+}
+
+fn onig_run(re: Onig, text: string, from: int, anchored: bool) -> Option<Match> {
+    let sp = __onig_search(re.id, text, from, anchored);
+    if (sp.len() == 0) {
+        return Option.None;
+    }
+    if (sp[0] == -1 && sp.len() == 1) {
+        panic("regex: backtrack limit exceeded for pattern " + re.pattern);
+    }
+    var groups: [Option<(int, int)>] = [];
+    var i = 0;
+    while (i + 1 < sp.len()) {
+        if (sp[i] < 0) {
+            groups.push(Option.None);
+        } else {
+            groups.push(Option.Some((sp[i], sp[i + 1])));
+        }
+        i = i + 2;
+    }
+    Option.Some(Match { start: sp[0], end: sp[1], groups: groups })
+}
+
+/// Matching over a compiled `Onig`. Positions are character indices. A search that
+/// exceeds the engine's backtracking budget (catastrophic pattern) panics with a
+/// named message instead of hanging.
+pub trait Scanner {
+    /// Leftmost match starting the scan at character `from` (`\G` matches at `from`).
+    /// `None` when there is no match at or after `from`, or `from` is past the end.
+    fn search_from(self, text: string, from: int) -> Option<Match>;
+    /// The match that STARTS exactly at character `at` (anchored: nothing is scanned),
+    /// or `None`. This is what a tokenizer wants when it tries each rule at its cursor.
+    fn match_at(self, text: string, at: int) -> Option<Match>;
+    /// Does the pattern match anywhere in `text`?
+    fn is_match(self, text: string) -> bool;
+}
+
+impl Scanner for Onig {
+    fn search_from(self, text: string, from: int) -> Option<Match> { onig_run(self, text, from, false) }
+
+    fn match_at(self, text: string, at: int) -> Option<Match> { onig_run(self, text, at, true) }
+
+    fn is_match(self, text: string) -> bool {
+        match (onig_run(self, text, 0, false)) {
+            Option.Some(_) => true,
+            Option.None => false,
+        }
+    }
+}
+
+/// The text of capture group `i` of `m` inside `text` (`0` = the whole match), or
+/// `None` when the group did not participate or `i` is out of range.
+pub fn group_str(m: Match, text: string, i: int) -> Option<string> {
+    if (i < 0 || i >= m.groups.len()) {
+        return Option.None;
+    }
+    match (m.groups[i]) {
+        Option.Some(span) => Option.Some(text.substring(span.0, span.1)),
+        Option.None => Option.None,
+    }
+}
+
+/// The index of the named group `name` in `re` (`(?<name>…)`), or `None`.
+pub fn group_index(re: Onig, name: string) -> Option<int> {
+    var i = 1;
+    while (i < re.names.len()) {
+        if (re.names[i] == name) {
+            return Option.Some(i);
+        }
+        i = i + 1;
+    }
+    Option.None
+}

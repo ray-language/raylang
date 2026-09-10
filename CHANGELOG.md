@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`regex.onig`: dialecto Oniguruma en `std/regex`** (M232). `onig(pattern) -> Result<Onig,
+  string>` acepta look-around, backreferences, `\G`, grupos atómicos, posesivos, `\p{…}`, `\h`,
+  flags en línea y `&&` — la sintaxis de los `.sublime-syntax`, Ruby y TextMate — con anclas de
+  línea `^`/`$`. Trait `Scanner`: `search_from(text, from)`, `match_at(text, at)` (anclado) e
+  `is_match`; `Match { start, end, groups }` por carácter, `group_str`, `group_index`. Motor
+  `fancy-regex` (Rust puro, sobre el mismo crate `regex`) en intérprete, VM y nativo; un patrón
+  catastrófico panica con nombre al superar 10⁶ pasos en vez de colgar. Con el corpus real de
+  ray-sublime (6 226 patrones): compilan los 6 184 válidos y los 4 000 casos diferenciales
+  coinciden con el oráculo. Con `--without regex` el nativo deja `onig` en el stub.
+
 ## 1.13.1 — 2026-09-10
 
 - **Devtools del webview** (M231): bajo `ray dev` y con `ray run --devtools` el inspector va

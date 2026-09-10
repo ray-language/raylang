@@ -961,6 +961,30 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
    `inflate` `deflate` `huffman` `protobuf` `uuid`.
 
+   `std/regex` trae **dos dialectos**: el propio (`compile`/`search`/…, motor lineal escrito en
+   raylang, sin look-around) y, desde M232, el **Oniguruma** de `regex.onig` — el que usan los
+   `.sublime-syntax`, Ruby y TextMate — con look-around, backreferences, `\G`, grupos atómicos y
+   posesivos, `\p{…}`, flags en línea. Va sobre el motor nativo (`fancy-regex`) en los tres
+   motores y está pensado para el bucle de un tokenizador: compila una vez y pregunta por posición.
+
+   ```rust
+   import std/regex;
+   let re = regex.onig("(?<key>\\w+)\\s*=\\s*(?=\\d)(\\d+)").unwrap();   // Err si el patrón es inválido
+   match (re.search_from(linea, 0)) {            // desde el carácter 0; \G casa ahí
+       Option.Some(m) => {
+           let clave = regex.group_str(m, linea, 1).unwrap_or("");
+           print("${m.start}-${m.end} ${clave}");
+       },
+       Option.None => print("sin match"),
+   }
+   re.match_at(linea, 4)                          // anclado: el match debe EMPEZAR en 4 (lo que quiere un tokenizador)
+   ```
+
+   Ojo a la semántica Oniguruma: `^`/`$` son anclas de **línea** y `.` no casa `\n` (salvo `(?m)`).
+   Un patrón catastrófico no cuelga el programa: al superar el presupuesto de backtracking la
+   búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
+   feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
+
 3. **Paquetes** (`packages/net`, `packages/db`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema

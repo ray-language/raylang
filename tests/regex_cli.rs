@@ -298,3 +298,152 @@ fn unsupported_constructs_are_rejected_at_compile() {
         assert_eq!(lines[cases.len()], "ok", "{flags:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// M232 — `regex.onig`: dialecto Oniguruma en ray_runtime (fancy-regex). Sin espejo raylang, la
+// paridad es por construcción: el mismo programa en intérprete, VM y nativo, byte a byte.
+// ---------------------------------------------------------------------------
+const ONIG_PROG: &str = r#"import std/regex;
+
+fn show(m: Option<regex.Match>) {
+    match (m) {
+        Option.Some(x) => print("${x.start}-${x.end} groups=${x.groups.len()}"),
+        Option.None => print("none"),
+    }
+}
+
+fn main() -> int {
+    let t = "  x = 1; total = 42";
+    let re = regex.onig("(?<key>\\w+)\\s*=\\s*(?=\\d)(\\d+)").unwrap();
+    print(re.names.join(","));
+    show(re.search_from(t, 5));
+    match (re.search_from(t, 5)) {
+        Option.Some(m) => {
+            print(regex.group_str(m, t, 1).unwrap_or("?"));
+            print(regex.group_str(m, t, 2).unwrap_or("?"));
+            print(regex.group_str(m, t, 7).unwrap_or("out"));
+        },
+        Option.None => print("none"),
+    }
+    print(regex.group_index(re, "key").unwrap_or(-1));
+    print(regex.group_index(re, "nope").unwrap_or(-1));
+    show(re.match_at("ab = 7", 1));
+    show(re.match_at(" ab = 7", 0));
+    let g = regex.onig("\\Gab").unwrap();
+    show(g.search_from("xxab ab", 2));
+    show(g.search_from("xxab ab", 0));
+    let br = regex.onig("(\\w)\\1").unwrap();
+    print(br.is_match("abccd"));
+    print(br.is_match("abcd"));
+    show(regex.onig("(?<=\\$)\\w+").unwrap().search_from("pay $amount now", 0));
+    show(regex.onig("^b$").unwrap().search_from("a\nb\nc", 0));
+    show(regex.onig("\\h+").unwrap().search_from("zz1fG", 0));
+    show(regex.onig("a++a").unwrap().search_from("aaa", 0));
+    show(regex.onig("(?i:ab)c").unwrap().search_from("ABc", 0));
+    show(regex.onig("(?>a+)b").unwrap().search_from("aaab", 0));
+    show(regex.onig("\\p{Lu}+").unwrap().search_from("abcDEFg", 0));
+    show(regex.onig("[a-z&&[^m]]+").unwrap().search_from("almo", 0));
+    show(regex.onig("ñ+").unwrap().search_from("añññb", 0));
+    show(regex.onig("b").unwrap().match_at("añññb", 4));
+    show(regex.onig("b").unwrap().search_from("añññb", 9));
+    match (regex.onig("(a)|(b)").unwrap().search_from("b", 0)) {
+        Option.Some(m) => { print(m.groups[1].is_none()); print(m.groups[2].is_some()); },
+        Option.None => print("none"),
+    }
+    match (regex.onig("(?<=a+")) { Result.Ok(_) => print("ok"), Result.Err(e) => print(e) }
+    match (regex.onig("(a)\\2")) { Result.Ok(_) => print("ok"), Result.Err(e) => print(e) }
+    match (regex.onig("[abc")) { Result.Ok(_) => print("ok"), Result.Err(e) => print(e) }
+    0
+}
+"#;
+
+const ONIG_WANT: &[&str] = &[
+    ",key,",
+    "9-19 groups=3",
+    "total",
+    "42",
+    "out",
+    "1",
+    "-1",
+    "1-6 groups=3",
+    "none",
+    "2-4 groups=1",
+    "none",
+    "true",
+    "false",
+    "5-11 groups=1",
+    "2-3 groups=1",
+    "2-4 groups=1",
+    "none",
+    "0-3 groups=1",
+    "0-4 groups=1",
+    "3-6 groups=1",
+    "0-2 groups=1",
+    "1-4 groups=1",
+    "4-5 groups=1",
+    "none",
+    "true",
+    "true",
+    "regex: Parsing error at position 6: Opening parenthesis without closing parenthesis",
+    "regex: Invalid back reference to group 2",
+    "regex: Parsing error at position 4: Invalid character class",
+];
+
+fn onig_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("raylang_test_regex_onig");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("prog.ray"), ONIG_PROG).unwrap();
+    dir
+}
+
+#[test]
+fn onig_dialect_matches_on_interpreter_and_vm() {
+    let dir = onig_dir();
+    for flags in [&[][..], &["--vm"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang")).args(flags).arg(dir.join("prog.ray")).output().unwrap();
+        assert!(out.status.success(), "{flags:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+        assert_eq!(lines, ONIG_WANT, "{flags:?}");
+    }
+}
+
+/// El nativo llama a la MISMA tabla de handles de ray_runtime: salida byte-idéntica a la VM.
+#[test]
+fn onig_dialect_matches_natively() {
+    if !Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        eprintln!("(sin rustc: se omite el nativo)");
+        return;
+    }
+    let dir = onig_dir();
+    let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+    let st = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .expect("build nativo");
+    assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+    let out = Command::new(&bin).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    assert_eq!(lines, ONIG_WANT, "nativo");
+}
+
+/// Un patrón catastrófico no cuelga: el motor abandona por el límite de backtracking y
+/// `std/regex` lo convierte en un pánico con nombre (igual en ambos motores).
+#[test]
+fn onig_backtrack_limit_panics_with_a_named_message() {
+    let dir = std::env::temp_dir().join("raylang_test_regex_onig_limit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let prog = dir.join("prog.ray");
+    std::fs::write(
+        &prog,
+        "import std/regex;\nfn main() -> int {\n    let re = regex.onig(\"^(a*)*\\\\1$\").unwrap();\n    print(re.is_match(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaac\"));\n    0\n}\n",
+    )
+    .unwrap();
+    for flags in [&[][..], &["--vm"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang")).args(flags).arg(&prog).output().unwrap();
+        assert!(!out.status.success(), "{flags:?}: debe fallar");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("regex: backtrack limit exceeded for pattern ^(a*)*\\1$"), "{flags:?}: {err}");
+    }
+}

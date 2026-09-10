@@ -12954,3 +12954,39 @@ shell generado por `ray bundle --devtools` lleva `inspectable = YES` (iOS 16.4+)
 `setWebContentsDebuggingEnabled(true)`, y se inspecciona desde el escritorio; sin el flag, la
 línea no existe en el proyecto generado. Headless lo deja en la traza (`[ui] devtools N on`),
 que es lo que la batería asevera.
+
+## 222. M232 — `regex.onig`: el dialecto Oniguruma (sep 2026)
+
+`std/regex` nació como motor lineal escrito en raylang (Thompson/Pike, R1–R7 lo aceleraron
+con el crate `regex` sin cambiar su semántica) y M211 le enseñó a **rechazar** con nombre lo que
+no implementa. El feedback #67 de ray-sublime puso el límite en números: de los 6 226 patrones
+reales de sus 482 sintaxis, el 39 % usa look-ahead, y su tokenizador —un motor Oniguruma propio
+de 2 900 líneas de raylang— gasta 140 µs por búsqueda donde el motor nativo gasta menos de uno.
+Pedían la sintaxis Oniguruma y un `search_from(re, text, from)` con capturas.
+
+**Por qué un segundo dialecto y no ampliar el primero.** Look-around y backreferences exigen
+backtracking; no hay forma de darles una implementación de referencia en raylang que corra en
+los tres motores con la paridad byte-idéntica que sostiene a `std/regex`. Y el dialecto propio
+tiene decisiones incompatibles con Oniguruma (`\b` es la letra b, `.` casa `\n`, `^` no es de
+línea) que sus usuarios ya dependen. Así que `onig` es otro tipo (`Onig`) con otra semántica —
+la de Oniguruma, la que esperan las gramáticas— y la fuente de verdad es **una sola
+implementación** en `ray_runtime::regex::onig` a la que llaman intérprete, VM y nativo. La
+paridad es por construcción, no por espejo; el precio es que sin la feature `regex` no hay
+fallback: el nativo con `--without regex` deja `onig` en el stub honesto de siempre.
+
+**Motor: `fancy-regex`**, elegido tras un spike con el corpus completo: Rust puro sobre el mismo
+crate `regex` (delega a él cuando el patrón no usa nada "fancy", el 59 % del corpus), con
+`oniguruma_mode`, `backtrack_limit` y `captures_from_pos`. Resultado: compilan 6 184 de 6 226
+(los 42 restantes son backreferences a grupos que el patrón no define — Sublime los rellena
+desde el `begin`, y es la app quien los sustituye antes de compilar), y los 4 000 casos
+diferenciales contra el oráculo Python coinciden al 100 %. `onig` (bindings C de Oniguruma) y
+`regress` (ECMAScript, sin `\G` ni atómicos) quedaron descartados.
+
+**Forma de la API.** Un handle en una tabla por proceso deduplicada por patrón (compila una vez,
+busca muchas; la tabla crece con los patrones distintos, no con las llamadas; `RwLock` porque
+los actores la comparten). `search_from` es `captures_from_pos` con `\G` = `from`; `match_at`
+compila perezosamente `\G(?:pat)` porque el motor no tiene búsqueda anclada a posición y envolver
+no altera la numeración de grupos. Índices por carácter como todo `std/regex` (fast-path ASCII).
+El presupuesto de backtracking (10⁶ pasos, el orden del límite que ya tenía el motor de la app)
+convierte el patrón catastrófico en un pánico con nombre, idéntico en los tres motores porque lo
+levanta el código raylang de `std/regex` a partir del centinela `[-1]`.

@@ -670,6 +670,29 @@ fn string_len_counts_characters() {
     assert!(rust.contains("let chars = if ascii { s.len() } else { s.chars().count() };"), "helper por caracteres: {}", rust);
 }
 
+/// M231: el inspector del webview solo existe en el binario si el build lo pidió (`--devtools`):
+/// con el flag, `main` llama a `ray_runtime::ui::set_devtools(true)`; sin él, no hay llamada y
+/// ningún entorno puede encenderlo. Secuencial dentro de UN test: el flag es global del proceso.
+#[test]
+fn native_devtools_are_baked_only_when_the_build_asks() {
+    // `import std/ui` necesita el loader (como el test de std/ffi).
+    let dir = std::env::temp_dir().join(format!("ray_devtools_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("main.ray"), "import std/ui;\nfn main() { let _ = ui.open(\"A\", \"http://127.0.0.1:1/\", 320, 200); }\n").unwrap();
+    let parse = || {
+        let mut prog = crate::loader::load(&dir.join("main.ray")).expect("load").program;
+        crate::checker::check(&mut prog).expect("check");
+        prog
+    };
+    crate::transpile::set_native_devtools(true);
+    let with = crate::transpile::transpile_entry(&parse(), &[], false, true, &[], false).expect("transpile").source;
+    crate::transpile::set_native_devtools(false);
+    let without = crate::transpile::transpile_entry(&parse(), &[], false, true, &[], false).expect("transpile").source;
+    assert!(with.contains("ray_runtime::ui::set_devtools(true)"), "con --devtools: {with}");
+    assert!(!without.contains("set_devtools"), "sin el flag no existe la llamada");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// M223 (ray-sublime #12): `s[i]` va por `__ray_char_at` (caché de una entrada por hilo: ASCII →
 /// byte directo; UTF-8 → desde la última posición hacia delante o atrás). Fuera de rango conserva el
 /// pánico del `unwrap`. Antes era `chars().nth(i)`: cuadrático en un bucle sobre el texto.

@@ -546,26 +546,30 @@ fn main() {
     );
 }
 
-/// M231 — devtools del webview: encendidas bajo `ray dev` (RAY_DEV_RELOAD) o RAY_UI_DEVTOOLS=1,
-/// apagadas sin nada y con RAY_UI_DEVTOOLS=0 aunque haya `ray dev`. Headless lo deja en la traza.
+/// M231 — devtools del webview en la toolchain: apagadas por defecto, encendidas con `ray run
+/// --devtools` o bajo `ray dev` (RAY_DEV_RELOAD). Headless lo deja en la traza. (En nativo lo
+/// decide el build: ver el test del transpilador.)
 #[test]
-fn devtools_follow_ray_dev_and_the_env_override() {
+fn devtools_follow_the_run_flag_and_ray_dev() {
     let path = tmp("devtools").join("main.ray");
     std::fs::write(&path, "import std/ui;\nfn main() {\n    match (ui.open(\"D\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Ok(h) => { print(\"opened\"); let _ = close(h); },\n        Result.Err(e) => print(e),\n    }\n}\n").unwrap();
-    let run = |vars: &[(&str, &str)]| -> String {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").env_remove("RAY_DEV_RELOAD").env_remove("RAY_UI_DEVTOOLS");
-        for (k, v) in vars {
-            cmd.env(k, v);
+    let run = |flag: bool, dev: bool| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ray"));
+        cmd.arg("run");
+        if flag {
+            cmd.arg("--devtools");
+        }
+        cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").env_remove("RAY_DEV_RELOAD");
+        if dev {
+            cmd.env("RAY_DEV_RELOAD", "1");
         }
         let out = cmd.stdin(std::process::Stdio::null()).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "opened\n");
         String::from_utf8_lossy(&out.stderr).into_owned()
     };
-    assert!(!run(&[]).contains("[ui] devtools"), "sin nada: apagadas");
-    assert!(run(&[("RAY_DEV_RELOAD", "1")]).contains("[ui] devtools 1 on"), "bajo ray dev: encendidas");
-    assert!(run(&[("RAY_UI_DEVTOOLS", "1")]).contains("[ui] devtools 1 on"), "RAY_UI_DEVTOOLS=1");
-    assert!(!run(&[("RAY_DEV_RELOAD", "1"), ("RAY_UI_DEVTOOLS", "0")]).contains("[ui] devtools"), "=0 gana a ray dev");
+    assert!(!run(false, false).contains("[ui] devtools"), "por defecto: apagadas");
+    assert!(run(true, false).contains("[ui] devtools 1 on"), "--devtools");
+    assert!(run(false, true).contains("[ui] devtools 1 on"), "bajo ray dev");
 }
 
 /// M226 — el esquema `ray://app/…`: los montajes se validan sin ventana (directorio inexistente y

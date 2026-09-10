@@ -1151,6 +1151,14 @@ pub fn ui_eval_js(_h: i64, _js: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M231: devtools del webview — lo fija la CLI (`ray dev`, `ray run --devtools`); nunca el entorno.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn set_ui_devtools(on: bool) {
+    ray_runtime::ui::set_devtools(on);
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn set_ui_devtools(_on: bool) {}
+
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_focus(h: i64) -> Result<(), String> {

@@ -510,15 +510,19 @@ fn headless() -> bool {
     }
 }
 
-/// M231: ¿herramientas de desarrollo del webview? `RAY_UI_DEVTOOLS=1` las enciende y `=0` las
-/// apaga; sin la variable, van encendidas bajo `ray dev` (que exporta `RAY_DEV_RELOAD`) y
-/// apagadas en cualquier otro arranque — un bundle de producción no expone el inspector.
+/// M231: ¿herramientas de desarrollo del webview? Lo decide el HOST, nunca el entorno: la
+/// toolchain `ray` las enciende bajo `ray dev` o `ray run --devtools`, y un binario nativo solo
+/// si se construyó con `--devtools` (el transpilador emite la llamada a `set_devtools(true)`;
+/// sin el flag no existe en el programa) — así un release no expone el inspector aunque alguien
+/// manipule variables de entorno.
+static DEVTOOLS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_devtools(on: bool) {
+    DEVTOOLS.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn devtools_enabled() -> bool {
-    match std::env::var("RAY_UI_DEVTOOLS").as_deref() {
-        Ok("0") | Ok("") => false,
-        Ok(_) => true,
-        Err(_) => std::env::var("RAY_DEV_RELOAD").is_ok(),
-    }
+    DEVTOOLS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Avisa a `ray dev` (una vez por proceso) de que este programa es una APP CON VENTANA: el hub
@@ -2273,7 +2277,7 @@ mod mac {
                     sel(b"init\0"),
                 );
                 // M231: el inspector web (menú contextual "Inspect Element" y el menú Develop de
-                // Safari) solo bajo `ray dev` / RAY_UI_DEVTOOLS: `developerExtrasEnabled` es una
+                // Safari) solo si el host lo pidió (`ray dev`, `--devtools`): `developerExtrasEnabled` es una
                 // preferencia por KVC (así lo hacen Electron/tauri) y `inspectable` (13.3+) además
                 // permite inspeccionar desde Safari; en producción ninguna de las dos.
                 let devtools = super::devtools_enabled();

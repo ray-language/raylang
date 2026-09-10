@@ -220,6 +220,15 @@ pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: b
 /// el driver del test). ray_start spawna el hilo del programa y RETORNA (no bloquea: el hilo 1
 /// es del shell — UIApplicationMain); el fin del programa NO mata al proceso (en móvil el
 /// shell vive), y el `exit()` explícito sí (documentado). Sin gate-loop de ui.
+/// M231: `ray build --native --devtools` / `ray bundle --devtools` — el binario nace con el inspector
+/// del webview encendido. Es una decisión de BUILD: sin el flag la llamada no se emite y ningún
+/// entorno puede encenderlo en un release. Se fija desde la CLI (precedente `vm::set_deterministic`).
+static NATIVE_DEVTOOLS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_native_devtools(on: bool) {
+    NATIVE_DEVTOOLS.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
@@ -476,6 +485,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     out.push_str("        let mut r = RL { cur: 0, max: 0 };\n");
     out.push_str("        if getrlimit(NOFILE, &mut r) == 0 { let o = r.max.min(cap); if o > r.cur { let n = RL { cur: o, max: r.max }; let _ = setrlimit(NOFILE, &n); } }\n");
     out.push_str("    }\n");
+    // M231: devtools horneadas solo con `--devtools` y solo si el programa usa std/ui.
+    if t.needs_rt_ui && NATIVE_DEVTOOLS.load(std::sync::atomic::Ordering::SeqCst) {
+        out.push_str("    ray_runtime::ui::set_devtools(true); // ray build --devtools\n");
+    }
     // FFI × fibras: el programa declara externs → el código C correrá sobre pilas de fibra, y el C
     // asume pilas de hilo grandes (los 128 KiB del default pueden quedarse cortos: la página de
     // guarda da un SIGSEGV limpio pero mudo). Default de 1 MiB — reserva VIRTUAL, solo cuestan las

@@ -93,7 +93,9 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MapKey {
     Int(i64),
-    Str(String),
+    /// M233: `Arc<str>` compartido con `HeapValue::Str` de la VM — la clave no se copia en cada
+    /// `get`/`insert`/`keys()`. El intérprete (oráculo) sí convierte desde su `String`.
+    Str(std::sync::Arc<str>),
     Char(char),
     Bool(bool),
     Bytes(Vec<u8>), // M16 (diferido): secuencia de octetos como clave (Hash/Eq/Ord fiables)
@@ -104,7 +106,7 @@ impl MapKey {
     pub fn from_value(v: &Value) -> MapKey {
         match v {
             Value::Int(n) => MapKey::Int(*n),
-            Value::Str(s) => MapKey::Str(s.clone()),
+            Value::Str(s) => MapKey::Str(s.as_str().into()),
             Value::Char(c) => MapKey::Char(*c),
             Value::Bool(b) => MapKey::Bool(*b),
             Value::Bytes(b) => MapKey::Bytes((**b).clone()),
@@ -116,7 +118,7 @@ impl MapKey {
     pub fn to_value(&self) -> Value {
         match self {
             MapKey::Int(n) => Value::Int(*n),
-            MapKey::Str(s) => Value::Str(s.clone()),
+            MapKey::Str(s) => Value::Str(s.to_string()),
             MapKey::Char(c) => Value::Char(*c),
             MapKey::Bool(b) => Value::Bool(*b),
             MapKey::Bytes(b) => Value::Bytes(Rc::new(b.clone())),

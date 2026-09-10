@@ -3409,3 +3409,20 @@ etapa; verificadas contra 1.10.0 y ordenadas en [docs/plan-ray-sublime.md](docs/
 Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
 los 6 226 patrones reales de sintaxis usan look-around. La entrada 31 (`fmt` rompe parches) no se
 reproduce con 1.10.0.
+
+## 88. `Rc<str>` en la VM con aislamiento por fibra explícito (sep 2026) — 💤 pendiente de decisión
+
+Origen: M233 (DESIGN §223) recuperó dos tercios del coste que M213 dejó en los bucles de strings,
+pero el tercio restante es el propio `Arc<str>`: 3,9 ns por clon+drop (dos atómicas) frente a
+0,1 ns de `Rc` y 8,3 ns del clon de `String` anterior (medido en Rust con mimalloc). En
+jsonserialize son ~10 clones/drops por iteración → +27 % frente a 1.10.0 aún.
+
+Qué haría falta para `Rc<str>`: (a) `unsafe impl Send` para la fibra/heap con la invariante "un
+string nunca es alcanzable desde dos fibras": `transfer_value` copia los `Str` al cruzar heaps
+(hoy comparte el `Arc`), y los valores aparcados en canales viajan ya transferidos; (b) las
+constantes (`CompiledFn::consts`, compartidas entre workers) no pueden ser `Rc`: o se copian al
+cargar (vuelve el memcpy de 1.10.0, 8 ns) o se representan sin refcount (`HeapValue::Lit(&'static
+str)` con el programa filtrado, o un índice a la tabla); (c) la caché de `s[i]` (thread-local
+que retiene el string) pasa a la fibra. Impacto: MEDIO (toca `gc`, `sched`, `transfer`, y un
+`unsafe` nuevo que hay que inventariar en SECURITY). Ganancia esperada: el +10–25 % restante en
+bucles de strings pequeños. Decisión del usuario; medir con `benchmarks/poly` antes y después.

@@ -1,6 +1,7 @@
 //! Conversión y formato de valores de la VM (movimiento puro; usar `git log --follow`).
 //!
-//! `const_to_heap`/`to_value` cruzan el borde constante-de-chunk ↔ heap y VM ↔ intérprete;
+//! `HeapValue::from_const` (gc.rs, M233)/`to_value` cruzan el borde constante-de-chunk ↔ heap y VM ↔
+//! intérprete; `build_str`/`int_to_str` construyen strings con una sola asignación (M233);
 //! `values_equal`/`format_value` son igualdad estructural y `Display`; `heap_to_key`/
 //! `key_to_heap` cruzan a/desde `MapKey` (M13.1).
 
@@ -12,21 +13,6 @@ pub(super) fn uint_heap(val: u64, width: u8) -> HeapValue {
     HeapValue::UInt(val & crate::runtime::uint_mask(width), width)
 }
 
-/// Convierte una constante del chunk (un `Value` del intérprete, siempre primitivo)
-/// al valor de la VM.
-pub(super) fn const_to_heap(v: &Value) -> HeapValue {
-    match v {
-        Value::Int(n) => HeapValue::Int(*n),
-        Value::Float(x) => HeapValue::Float(*x),
-        Value::Bool(b) => HeapValue::Bool(*b),
-        Value::Str(s) => HeapValue::Str(s.clone().into()),
-        Value::Char(c) => HeapValue::Char(*c),
-        Value::UInt(n, w) => HeapValue::UInt(*n, *w), // M28.3
-        Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
-        Value::Unit => HeapValue::Unit,
-        _ => unreachable!("chunk constants are primitive"),
-    }
-}
 
 /// Igualdad estructural entre valores de la VM (mira el heap). Las funciones y
 /// closures se comparan por identidad (el checker prohíbe `==` sobre ellas).
@@ -83,6 +69,47 @@ pub(super) fn enum_names<'a>(enums: &'a [CompiledEnum], enum_id: usize, tag: usi
 
 /// Formatea un valor de la VM como texto (siguiendo handles en el heap). Debe
 /// coincidir con el `Display` del `Value` del intérprete, para que `print` sea igual.
+/// M233: construye un `Arc<str>` con UNA sola asignación. M213 dejó `HeapValue::Str` como
+/// `Arc<str>`, pero cada string que nacía como `String` (concatenación, `to_string`, `join`)
+/// pagaba DOS asignaciones y dos copias (el `String` y luego `Arc::from(String)`), medido en el
+/// banco políglota como +48 % en jsonserialize y +24 % en logparse. Aquí el texto se escribe en
+/// un buffer por hilo que se reutiliza (sin asignar) y se copia una vez al `Arc`.
+/// El cierre no debe volver a llamar a `build_str` (el buffer está prestado).
+pub(super) fn build_str(f: impl FnOnce(&mut String)) -> std::sync::Arc<str> {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<String> = std::cell::RefCell::new(String::with_capacity(256));
+    }
+    SCRATCH.with(|b| {
+        let mut b = b.borrow_mut();
+        b.clear();
+        f(&mut b);
+        std::sync::Arc::<str>::from(b.as_str())
+    })
+}
+
+/// M233: `to_string(int)` sin `String` intermedio ni maquinaria de `fmt`: dígitos en un buffer de
+/// pila y UNA asignación (el `Arc`). Es el camino de `${i}` en las interpolaciones.
+pub(super) fn int_to_str(i: i64) -> std::sync::Arc<str> {
+    let mut buf = [0u8; 20];
+    let mut pos = buf.len();
+    let neg = i < 0;
+    let mut n = i.unsigned_abs();
+    loop {
+        pos -= 1;
+        buf[pos] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if neg {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    // Solo dígitos ASCII y '-': UTF-8 válido por construcción.
+    std::str::from_utf8(&buf[pos..]).expect("ASCII digits").into()
+}
+
 pub(super) fn format_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct], enums: &[CompiledEnum], v: &HeapValue) -> String {
     match v {
         HeapValue::Int(n) => n.to_string(),
@@ -212,7 +239,7 @@ pub(super) fn to_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct],
 pub(super) fn heap_to_key(v: HeapValue) -> MapKey {
     match v {
         HeapValue::Int(n) => MapKey::Int(n),
-        HeapValue::Str(s) => MapKey::Str(s.to_string()),
+        HeapValue::Str(s) => MapKey::Str(s.clone()),
         HeapValue::Char(c) => MapKey::Char(c),
         HeapValue::Bool(b) => MapKey::Bool(b),
         HeapValue::Bytes(b) => MapKey::Bytes(b),
@@ -224,7 +251,7 @@ pub(super) fn heap_to_key(v: HeapValue) -> MapKey {
 pub(super) fn key_to_heap(k: &MapKey) -> HeapValue {
     match k {
         MapKey::Int(n) => HeapValue::Int(*n),
-        MapKey::Str(s) => HeapValue::Str(s.clone().into()),
+        MapKey::Str(s) => HeapValue::Str(s.clone()),
         MapKey::Char(c) => HeapValue::Char(*c),
         MapKey::Bool(b) => HeapValue::Bool(*b),
         MapKey::Bytes(b) => HeapValue::Bytes(b.clone()),

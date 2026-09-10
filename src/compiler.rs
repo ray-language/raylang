@@ -254,6 +254,7 @@ impl<'a> Compiler<'a> {
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
         let has_captured = scope.captured_slots.iter().any(|&b| b);
+        let consts = CompiledFn::consts_of(&scope.chunk);
         self.functions[idx] = Some(CompiledFn {
             name,
             arity: params.len(),
@@ -262,6 +263,7 @@ impl<'a> Compiler<'a> {
             has_captured,
             upvalues: scope.upvalues,
             chunk: scope.chunk,
+            consts,
         });
         Ok(())
     }

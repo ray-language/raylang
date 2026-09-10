@@ -12990,3 +12990,32 @@ no altera la numeración de grupos. Índices por carácter como todo `std/regex`
 El presupuesto de backtracking (10⁶ pasos, el orden del límite que ya tenía el motor de la app)
 convierte el patrón catastrófico en un pánico con nombre, idéntico en los tres motores porque lo
 levanta el código raylang de `std/regex` a partir del centinela `[-1]`.
+
+## 223. M233 — recuperar lo que M213 dejó en el camino (sep 2026)
+
+M213 convirtió `HeapValue::Str` en `Arc<str>` para que `s[i]` dejara de ser cuadrático, y se
+midió solo eso. La corrida completa del banco políglota del 10 sep (`benchmarks/poly/results/`)
+mostró la otra cara: +48 % en jsonserialize, +24 % en logparse, +15 % en wordcount, atribuido a
+ese salto por A/B de builds planos (v1.10.0 → v1.11.2 → v1.14.0). La lección de método vuelve
+a ser la de M223: un cambio de representación se mide en el banco entero, no en el caso que lo
+motivó.
+
+**Diagnóstico** por micro-bucles (2 M iteraciones, `$CLAUDE_JOB_DIR/tmp/m233/micro2.ray`): la
+carga de una constante de string costaba dos asignaciones (clon del `String` del chunk + copia al
+`Arc`); todo string construido pagaba lo mismo (`String` y luego `Arc::from`); y `MapKey::Str`
+seguía siendo `String`, así que cada acceso a un `Map<string, _>` copiaba la clave. Nada de eso
+era "el Arc": eran las conversiones que quedaron alrededor.
+
+**Cambios.** (1) `CompiledFn::consts`: las constantes ya convertidas a `HeapValue` al compilar
+(el `Arc<str>` es `Send + Sync`, así que el `ProgRef` compartido entre workers sigue siendo sano;
+la nota de M38.3b se actualiza). (2) `vm::values::build_str`: un buffer por hilo reutilizado y una
+sola copia al `Arc` para `ConcatN`, `Add`, `join`; `int_to_str` con buffer de pila para
+`to_string(int)` e interpolaciones; `split`/`trim`/`substring` ASCII toman el tramo prestado
+(`builtins::substring_ascii`). (3) `MapKey::Str(Arc<str>)` compartido con el valor de la VM; el
+intérprete (oráculo) convierte desde su `String`, como ya hacía con `Bytes`.
+
+**Resultado** (PERFORMANCE.md): jsonserialize 116→100 ms, logparse 94→83, jsondeserialize
+349→294 (mejor que 1.10.0), `s[i]` intacto. El resto de la brecha con 1.10.0 (+10–25 % en bucles
+de strings pequeños) es el coste atómico del `Arc` (3,9 ns por clon+drop frente a 0,1 ns de
+`Rc`); pasar a `Rc<str>` exige hacer explícitas las invariantes de aislamiento por fibra
+(transferencia por copia, constantes sin refcount compartido) y es un arco aparte (IDEAS §88).

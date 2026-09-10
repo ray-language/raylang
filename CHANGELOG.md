@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.14.0 — 2026-09-10
 
 - **`regex.onig`: dialecto Oniguruma en `std/regex`** (M232). `onig(pattern) -> Result<Onig,
   string>` acepta look-around, backreferences, `\G`, grupos atómicos, posesivos, `\p{…}`, `\h`,

@@ -546,6 +546,28 @@ fn main() {
     );
 }
 
+/// M231 — devtools del webview: encendidas bajo `ray dev` (RAY_DEV_RELOAD) o RAY_UI_DEVTOOLS=1,
+/// apagadas sin nada y con RAY_UI_DEVTOOLS=0 aunque haya `ray dev`. Headless lo deja en la traza.
+#[test]
+fn devtools_follow_ray_dev_and_the_env_override() {
+    let path = tmp("devtools").join("main.ray");
+    std::fs::write(&path, "import std/ui;\nfn main() {\n    match (ui.open(\"D\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Ok(h) => { print(\"opened\"); let _ = close(h); },\n        Result.Err(e) => print(e),\n    }\n}\n").unwrap();
+    let run = |vars: &[(&str, &str)]| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").env_remove("RAY_DEV_RELOAD").env_remove("RAY_UI_DEVTOOLS");
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+        let out = cmd.stdin(std::process::Stdio::null()).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "opened\n");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    assert!(!run(&[]).contains("[ui] devtools"), "sin nada: apagadas");
+    assert!(run(&[("RAY_DEV_RELOAD", "1")]).contains("[ui] devtools 1 on"), "bajo ray dev: encendidas");
+    assert!(run(&[("RAY_UI_DEVTOOLS", "1")]).contains("[ui] devtools 1 on"), "RAY_UI_DEVTOOLS=1");
+    assert!(!run(&[("RAY_DEV_RELOAD", "1"), ("RAY_UI_DEVTOOLS", "0")]).contains("[ui] devtools"), "=0 gana a ray dev");
+}
+
 /// M226 — el esquema `ray://app/…`: los montajes se validan sin ventana (directorio inexistente y
 /// prefijo con `..` → Err; bytes en memoria → Ok) en ambos motores. El servicio real (Range, ETag,
 /// MIME, traversal) lo cubren los tests unitarios de `ray_runtime::ui::scheme`.

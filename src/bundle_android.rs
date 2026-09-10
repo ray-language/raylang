@@ -96,6 +96,7 @@ public class MainActivity extends Activity {
         WebView web = new WebView(this);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
+        /*RAY_DEVTOOLS*/
         web.addJavascriptInterface(new RayJs(), "RayAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -303,6 +304,23 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
 /// Genera el árbol del proyecto en `dir` (ya creado). Los `.so` los copia el llamador a
 /// `app/src/main/jniLibs/<abi>/`; `local.properties` lo escribe el llamador SOLO si no existe.
 /// M160: `icon` = true SOLO si el llamador ya generó los PNG (los copia él a `mipmap-*/`).
+#[cfg(test)]
+mod devtools_tests {
+    /// M231: `--devtools` deja `setWebContentsDebuggingEnabled(true)`; sin el flag, nada.
+    #[test]
+    fn devtools_flag_toggles_remote_debugging_in_the_shell() {
+        let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
+        for (devtools, want) in [(true, true), (false, false)] {
+            let _ = std::fs::remove_dir_all(&base);
+            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools).unwrap();
+            let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
+            assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
+            assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 pub fn write_project(
     dir: &Path,
     name: &str,
@@ -310,6 +328,7 @@ pub fn write_project(
     version: &str,
     abis: &str,
     icon: bool,
+    devtools: bool,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -324,7 +343,9 @@ pub fn write_project(
     write("app/src/main/AndroidManifest.xml", &android_manifest(icon))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
-    write("app/src/main/java/org/raylang/shell/MainActivity.java", MAIN_ACTIVITY_JAVA)?;
+    // M231: `--devtools` → depuración remota desde chrome://inspect (Chrome del escritorio).
+    let devtools_line = if devtools { "WebView.setWebContentsDebuggingEnabled(true); // ray bundle --devtools" } else { "" };
+    write("app/src/main/java/org/raylang/shell/MainActivity.java", &MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
     write("app/src/main/java/org/raylang/shell/RayBridge.java", RAY_BRIDGE_JAVA)?;
     write("README.md", README)?;
     Ok(())

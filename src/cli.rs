@@ -1310,7 +1310,9 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]]\n\
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--devtools]\n\
+  --devtools: the mobile shell's webview is inspectable from the desktop (Safari's Develop menu for iOS, \
+chrome://inspect for Android); never on without the flag. Desktop apps get devtools under `ray dev` or RAY_UI_DEVTOOLS=1.\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
 the flags override them. [app.plist] keys go verbatim into the macOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
@@ -1334,6 +1336,8 @@ fn cmd_bundle(args: &[String]) {
     // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
     let mut android = false;
     let mut android_abi_arg: Option<String> = None;
+    // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
+    let mut devtools = false;
     let mut file: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
@@ -1368,6 +1372,10 @@ fn cmd_bundle(args: &[String]) {
             }
             "--android" => {
                 android = true;
+                i += 1;
+            }
+            "--devtools" => {
+                devtools = true;
                 i += 1;
             }
             _ if a.starts_with('-') => {
@@ -1543,7 +1551,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some())
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools)
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -1651,7 +1659,7 @@ fn cmd_bundle(args: &[String]) {
         };
         place(build_dev, &dev_a, &kept_dev, proj.join("libs/libray_app.a"));
         place(build_sim, &sim_a, &kept_sim, proj.join("libs-sim/libray_app.a"));
-        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing) {
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, devtools) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
         }

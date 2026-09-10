@@ -134,6 +134,7 @@ static void ray_eval(const char *js) {
                                              injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                           forMainFrameOnly:YES]];
     rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds configuration:cfg];
+    /*RAY_DEVTOOLS*/
     rayWebView.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [vc.view addSubview:rayWebView];
@@ -324,12 +325,30 @@ const README: &str = r#"# App iOS generada por `ray bundle --ios`
 
 /// Genera el árbol del proyecto en `dir` (ya creado). Los `.a` los copia el llamador; la
 /// `signing` resuelta (manifest > preservada) va al xcconfig.
+#[cfg(test)]
+mod devtools_tests {
+    /// M231: `--devtools` deja `inspectable` en el shell; sin el flag la línea no existe.
+    #[test]
+    fn devtools_flag_toggles_inspectable_in_the_shell() {
+        let base = std::env::temp_dir().join(format!("ray_ios_devtools_{}", std::process::id()));
+        for (devtools, want) in [(true, true), (false, false)] {
+            let _ = std::fs::remove_dir_all(&base);
+            super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), devtools).unwrap();
+            let src = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
+            assert_eq!(src.contains("rayWebView.inspectable = YES"), want, "devtools={devtools}");
+            assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 pub fn write_project(
     dir: &Path,
     name: &str,
     bundle_id: &str,
     version: &str,
     signing: &Signing,
+    devtools: bool,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -342,7 +361,14 @@ pub fn write_project(
     write("Shell/AppDelegate.h", APP_DELEGATE_H)?;
     write("Shell/AppDelegate.m", APP_DELEGATE_M)?;
     write("Shell/SceneDelegate.h", SCENE_DELEGATE_H)?;
-    write("Shell/SceneDelegate.m", SCENE_DELEGATE_M)?;
+    // M231: `--devtools` → `inspectable` (iOS 16.4+): el Web Inspector de Safari (menú Develop del
+    // Mac) inspecciona la app en el dispositivo o el simulador. Nunca en un build sin el flag.
+    let devtools_line = if devtools {
+        "if (@available(iOS 16.4, *)) { rayWebView.inspectable = YES; } // ray bundle --devtools"
+    } else {
+        ""
+    };
+    write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
     write("Shell/Info.plist", INFO_PLIST)?;
     write("App.xcconfig", &xcconfig(name, bundle_id, version, signing))?;
     write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name))?;

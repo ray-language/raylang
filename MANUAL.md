@@ -1301,7 +1301,12 @@ match (ui.next_event()) {
 No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la primera ventana
 (AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). Bajo
 `ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
-que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. `close(h)`
+que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. Bajo `ray dev` el webview
+lleva además las **herramientas de desarrollo** (M231): botón derecho → "Inspect Element" (F12 en
+Windows), y en macOS la app aparece en el menú Develop de Safari. Fuera de `ray dev` van apagadas
+— un bundle no expone el inspector — salvo `RAY_UI_DEVTOOLS=1`; `=0` las apaga incluso en dev.
+En el móvil, `ray bundle --ios --devtools` (o `--android`) deja el shell inspeccionable desde el
+escritorio: Safari → Develop → el iPhone, o `chrome://inspect` para Android. `close(h)`
 cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
 con tus otros canales); `next_event_timeout(ms)` acota la espera.
 

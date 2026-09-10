@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.13.1 — 2026-09-10
 
 - **Devtools del webview** (M231): bajo `ray dev` y con `ray run --devtools` el inspector va
   encendido ("Inspect Element", F12; en macOS también el menú Develop de Safari). Un binario

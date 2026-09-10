@@ -92,10 +92,10 @@ Usage: ray <subcommand> [options]
 
 Project:
   new <name>        create a new project (ray.toml + src/main.ray)
-  run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
-  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
+  run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
+  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
@@ -517,6 +517,11 @@ fn cmd_run(args: &[String]) {
     if deterministic {
         crate::vm::set_deterministic(true);
     }
+    // M231: devtools del webview — `--devtools`, o bajo `ray dev` (el supervisor exporta
+    // RAY_DEV_RELOAD a su hijo `ray run`). Solo aquí, en la toolchain: un binario nativo lo decide
+    // en el build y no mira el entorno.
+    let (devtools, args) = take_flag_bool(&args, "--devtools");
+    crate::builtins::set_ui_devtools(devtools || env::var_os("RAY_DEV_RELOAD").is_some());
     let (use_interp, rest) = take_interp(&args);
     let (fuel, rest) = take_flag_num(&rest, "--fuel", "a number of instructions (e.g. --fuel 1000000)");
     let (heap, rest) = take_flag_num(&rest, "--heap", "a number of objects (e.g. --heap 1000000)");
@@ -778,6 +783,7 @@ fn cmd_dev(args: &[String]) {
 /// mismos flags que `ray run` consume; `None` = el default del proyecto (`src/main.ray`).
 fn dev_entry(args: &[String]) -> Option<String> {
     let (_det, a) = take_flag_bool(args, "--deterministic");
+    let (_devtools, a) = take_flag_bool(&a, "--devtools");
     let (_interp, a) = take_interp(&a);
     let (_fuel, a) = take_flag_num(&a, "--fuel", "");
     let (_heap, a) = take_flag_num(&a, "--heap", "");
@@ -1310,7 +1316,9 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]]\n\
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--devtools]\n\
+  --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
+desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
 the flags override them. [app.plist] keys go verbatim into the macOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
@@ -1334,6 +1342,8 @@ fn cmd_bundle(args: &[String]) {
     // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
     let mut android = false;
     let mut android_abi_arg: Option<String> = None;
+    // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
+    let mut devtools = false;
     let mut file: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
@@ -1368,6 +1378,11 @@ fn cmd_bundle(args: &[String]) {
             }
             "--android" => {
                 android = true;
+                i += 1;
+            }
+            "--devtools" => {
+                devtools = true;
+                crate::transpile::set_native_devtools(true); // el binario de escritorio también
                 i += 1;
             }
             _ if a.starts_with('-') => {
@@ -1543,7 +1558,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some())
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools)
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -1651,7 +1666,7 @@ fn cmd_bundle(args: &[String]) {
         };
         place(build_dev, &dev_a, &kept_dev, proj.join("libs/libray_app.a"));
         place(build_sim, &sim_a, &kept_sim, proj.join("libs-sim/libray_app.a"));
-        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing) {
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, devtools) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
         }
@@ -1978,6 +1993,10 @@ fn cmd_build(args: &[String]) {
     // `--lib` (§80b): emite una LIBRERÍA estática con la entrada C `ray_start()` en vez de un
     // binario — lo que un shell móvil (o cualquier host C) linkea. Exige --native.
     let lib_mode = args.iter().any(|a| a == "--lib");
+    // M231: `--devtools` hornea el inspector del webview en el binario (decisión de build).
+    if args.iter().any(|a| a == "--devtools") {
+        crate::transpile::set_native_devtools(true);
+    }
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa

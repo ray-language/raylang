@@ -12932,3 +12932,25 @@ máscara al crear —el botón nace deshabilitado, sin tocar `standardWindowButt
 Windows `WS_MINIMIZEBOX`; GTK3 no tiene control por ventana de ese botón y lo ignora, como
 `autosave`. El primitivo `__ui_open_with` pasa a once argumentos: el struct de raylang sigue siendo
 la única superficie que el usuario ve, y añadir un campo con default no rompe a nadie.
+
+## 221. M231 — devtools bajo `ray dev` (sep 2026)
+
+Depurar una app de `std/ui` era ciego: WKWebView y WebKitGTK nacen sin inspector, y WebView2
+con él, sin criterio. La primera versión lo decidía el runtime por variables de entorno
+(`RAY_UI_DEVTOOLS`, o `RAY_DEV_RELOAD` = "corro bajo `ray dev`"), y el usuario la tumbó con
+razón: un release aceptaría esas variables puestas a mano. La regla definitiva la decide **quien
+construye o quien lanza**, nunca el entorno del proceso: el runtime solo tiene un bit
+(`set_devtools`) que fija el host. La toolchain `ray` lo pone bajo `ray dev` (que sí lee
+`RAY_DEV_RELOAD`: es la toolchain, no una app) y con `ray run --devtools`; un binario nativo lo
+lleva únicamente si `ray build --native --devtools` / `ray bundle --devtools` lo hornearon — el
+transpilador emite `set_devtools(true)` en `main` solo entonces, así que sin el flag la llamada
+no existe en el programa y no hay nada que encender. Es la misma frontera que `--without`: lo que
+no se compila no se puede activar. Por plataforma: macOS pone `developerExtrasEnabled` en las
+preferencias de la configuration por KVC (la vía que usan Electron y tauri) y, si el sistema lo
+ofrece (`respondsToSelector:`, 13.3+), `inspectable`, que además publica la app en el menú
+Develop de Safari; GTK, `webkit_settings_set_enable_developer_extras` por `dlsym` opcional;
+WebView2, `SetAreDevToolsEnabled` explícito en ambos sentidos. En el móvil no hay `ray dev`: el
+shell generado por `ray bundle --devtools` lleva `inspectable = YES` (iOS 16.4+) o
+`setWebContentsDebuggingEnabled(true)`, y se inspecciona desde el escritorio; sin el flag, la
+línea no existe en el proyecto generado. Headless lo deja en la traza (`[ui] devtools N on`),
+que es lo que la batería asevera.

@@ -510,6 +510,21 @@ fn headless() -> bool {
     }
 }
 
+/// M231: ¿herramientas de desarrollo del webview? Lo decide el HOST, nunca el entorno: la
+/// toolchain `ray` las enciende bajo `ray dev` o `ray run --devtools`, y un binario nativo solo
+/// si se construyó con `--devtools` (el transpilador emite la llamada a `set_devtools(true)`;
+/// sin el flag no existe en el programa) — así un release no expone el inspector aunque alguien
+/// manipule variables de entorno.
+static DEVTOOLS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_devtools(on: bool) {
+    DEVTOOLS.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn devtools_enabled() -> bool {
+    DEVTOOLS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Avisa a `ray dev` (una vez por proceso) de que este programa es una APP CON VENTANA: el hub
 /// del supervisor vive en el puerto de `RAY_DEV_RELOAD` (el mismo canal del live-reload,
 /// precedente `dev_notify_ready` del webserver). Con eso, "la ventana se cerró y el programa
@@ -1013,6 +1028,9 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
         start_headless_exit_watchdog();
         if ui_trace() {
             eprintln!("[ui] open {id} {title} {url}");
+            if devtools_enabled() {
+                eprintln!("[ui] devtools {id} on");
+            }
         }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
         // M152: el inyector de MENSAJES para pruebas (precedente RAY_UI_PICK): con la
@@ -1457,6 +1475,9 @@ mod mac {
     type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
     // M159: isMainFrame (BOOL sin argumentos).
     type MsgBool = unsafe extern "C" fn(Id, Sel) -> u8;
+    // M231 (devtools): numberWithBool: / respondsToSelector:.
+    type MsgIdBool = unsafe extern "C" fn(Id, Sel, u8) -> Id;
+    type MsgBoolSel = unsafe extern "C" fn(Id, Sel, Sel) -> u8;
     // M226 (esquema ray://): initWithURL:statusCode:HTTPVersion:headerFields: / dataWithBytes:length:.
     type MsgInitHttpResponse = unsafe extern "C" fn(Id, Sel, Id, i64, Id, Id) -> Id;
     type MsgDataBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize) -> Id;
@@ -2255,6 +2276,19 @@ mod mac {
                     alloc(cls(b"WKWebViewConfiguration\0"), sel(b"alloc\0")),
                     sel(b"init\0"),
                 );
+                // M231: el inspector web (menú contextual "Inspect Element" y el menú Develop de
+                // Safari) solo si el host lo pidió (`ray dev`, `--devtools`): `developerExtrasEnabled` es una
+                // preferencia por KVC (así lo hacen Electron/tauri) y `inspectable` (13.3+) además
+                // permite inspeccionar desde Safari; en producción ninguna de las dos.
+                let devtools = super::devtools_enabled();
+                if devtools {
+                    let get_prefs: MsgId = std::mem::transmute(msg_send());
+                    let prefs = get_prefs(cfg, sel(b"preferences\0"));
+                    let number: MsgIdBool = std::mem::transmute(msg_send());
+                    let yes = number(cls(b"NSNumber\0"), sel(b"numberWithBool:\0"), 1);
+                    let set_kv: MsgVoidIdId = std::mem::transmute(msg_send());
+                    set_kv(prefs, sel(b"setValue:forKey:\0"), yes, nsstring("developerExtrasEnabled"));
+                }
                 let get_ucc: MsgId = std::mem::transmute(msg_send());
                 let ucc = get_ucc(cfg, sel(b"userContentController\0"));
                 let add_handler: MsgVoidIdId = std::mem::transmute(msg_send());
@@ -2292,6 +2326,12 @@ mod mac {
                 plain(cfg, sel(b"release\0")); // el webview posee su copia
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
+                }
+                if devtools {
+                    let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                    if responds(webview, sel(b"respondsToSelector:\0"), sel(b"setInspectable:\0")) != 0 {
+                        set_bool(webview, sel(b"setInspectable:\0"), 1);
+                    }
                 }
                 set_id(window, sel(b"setContentView:\0"), webview);
 
@@ -2593,7 +2633,12 @@ mod gtk {
         scheme: Option<SchemeApi>,
         // M229 — gtk_window_present (core GTK3; opcional por simetría).
         window_present: Option<FnWidgetOp>,
+        // M231 — devtools: webkit_web_view_get_settings + webkit_settings_set_enable_developer_extras.
+        view_get_settings: Option<FnViewGetSettings>,
+        settings_set_dev_extras: Option<FnSettingsSetBool>,
     }
+    type FnViewGetSettings = unsafe extern "C" fn(Widget) -> *mut c_void;
+    type FnSettingsSetBool = unsafe extern "C" fn(*mut c_void, i32);
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
     unsafe impl Send for Api {}
@@ -2762,6 +2807,14 @@ mod gtk {
                 window_present: {
                     let p = dlsym(gtk, c"gtk_window_present".as_ptr());
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnWidgetOp>(p))
+                },
+                view_get_settings: {
+                    let p = dlsym(webkit, c"webkit_web_view_get_settings".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnViewGetSettings>(p))
+                },
+                settings_set_dev_extras: {
+                    let p = dlsym(webkit, c"webkit_settings_set_enable_developer_extras".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSettingsSetBool>(p))
                 },
             })
         }
@@ -3276,6 +3329,15 @@ mod gtk {
                 };
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
+                }
+                // M231: el inspector de WebKitGTK (menú contextual "Inspect Element") solo en dev.
+                if super::devtools_enabled()
+                    && let (Some(get_settings), Some(set_extras)) = (api.view_get_settings, api.settings_set_dev_extras)
+                {
+                    let settings = get_settings(webview);
+                    if !settings.is_null() {
+                        set_extras(settings, 1);
+                    }
                 }
                 // M148: el hijo de la ventana es un GtkBox vertical — menubar (si hay menús
                 // declarados) arriba, webview expandido debajo. GTK posee todo el árbol.
@@ -4248,6 +4310,14 @@ mod win {
             let _ = controller.SetIsVisible(true);
             controller.CoreWebView2().map_err(|e| format!("ui: WebView2: {e}"))?
         };
+        // M231: DevTools (F12 / "Inspeccionar") solo en dev — WebView2 las trae ENCENDIDAS por
+        // defecto, así que en producción se apagan explícitamente.
+        // SAFETY: webview vivo en el hilo 1.
+        unsafe {
+            if let Ok(settings) = webview.Settings() {
+                let _ = settings.SetAreDevToolsEnabled(super::devtools_enabled());
+            }
+        }
         // El shim, antes de que cargue cualquier documento (fire-and-forget: no se espera el id).
         {
             let js = wide(&shim());

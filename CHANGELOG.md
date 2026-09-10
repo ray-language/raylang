@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Devtools del webview** (M231): bajo `ray dev` y con `ray run --devtools` el inspector va
+  encendido ("Inspect Element", F12; en macOS también el menú Develop de Safari). Un binario
+  nativo solo lo lleva si se construyó con `ray build --native --devtools` / `ray bundle
+  --devtools`: sin el flag la llamada no existe y ningún entorno puede encenderlo (Windows lo traía
+  encendido de fábrica: ahora va apagado). `--ios|--android --devtools` deja el shell móvil
+  inspeccionable desde el escritorio (Safari Develop / chrome://inspect).
+
 ## 1.13.0 — 2026-09-10
 
 - **`ui.focus(h)`** (M229, ray-sublime #65): trae al frente y da el foco a una ventana ya abierta

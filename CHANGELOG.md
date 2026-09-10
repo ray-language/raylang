@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.14.1 — 2026-09-10
 
 - **VM: strings y claves de `Map` sin copias de más** (M233). Recupera la mayor parte del coste
   que M213 (`Arc<str>`) dejó en la construcción de strings: constantes precompiladas como

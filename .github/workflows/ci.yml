@@ -173,7 +173,7 @@ jobs:
       # timeout con escalera CTRL_BREAK → Job Object, merge, tope) y la sesión con stdin abierto,
       # en VM, intérprete y binario nativo (antes, W2 rechazaba std/process en el nativo).
       - name: std/process en Windows (run, timeout, sesión; VM + intérprete + nativo)
-        run: cargo test --release --test process_windows_cli -- --nocapture
+        run: cargo test --release --test process_windows_cli --test process_pty_cli -- --nocapture
       # M177 (W7, paso S): std/ui compila en Windows y el backend headless funciona ahí (los tests
       # de ui dejan de ser ciegos); una ventana real sigue devolviendo el Err de plataforma.
       # M178: std/audio compila en Windows (WASAPI); el runner no tiene dispositivo, así que la

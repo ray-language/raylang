@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **ConPTY: el pseudo-terminal también en Windows** (M238). `Cmd.pty(cols, rows)` funciona
+  igual que en Linux y macOS: `CreatePseudoConsole` + `CreateProcessW` con la pseudoconsola,
+  Job Object para `kill`, `resize` con `ResizePseudoConsole`, y `out` cierra al terminar el
+  hijo (un vigía cierra la pseudoconsola, porque ConPTY no cierra el pipe solo). Igual en VM y
+  nativo. Por dentro, el runtime gana su propio tipo de hijo en Windows (`ChildProc`).
+
 ## 1.16.0 — 2026-09-11
 
 - **Pseudo-terminal en `std/process`** (M237, ray-sublime: el terminal del editor):

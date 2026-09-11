@@ -13121,3 +13121,26 @@ std — es el siguiente hito, no una nota al pie. (6) Verificación sin ventana:
 `stty size` devuelve las celdas pedidas, `tty` un `/dev/…`, un `resize` posterior llega al
 hijo, y `cat` bajo PTY devuelve el eco de lo escrito; unitarios en ray-runtime y CLI en VM y
 nativo.
+
+## 228. M238 — ConPTY: el pseudo-terminal en Windows (sep 2026)
+
+M237 dejó Windows con un `Err` honesto porque la vía cómoda no existe: `std::process::Command`
+no acepta `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` (`raw_attribute` sigue inestable) y no hay forma
+de envolver un HANDLE de proceso en un `Child` de std. Así que el runtime gana su propio tipo
+de hijo en Windows — `ChildProc::{Std, Raw}` con `id`/`try_wait`/`wait`/`raw_handle` — y todo
+lo que tocaba `std::process::Child` (el registro de handles, `run`, `try_wait`, los Job
+Objects, el nativo) pasa a ese tipo; en Unix `ChildProc` es un alias del `Child` de std y nada
+cambia.
+
+**ConPTY.** Dos pipes anónimos (`CreatePipe`), `CreatePseudoConsole(cols×rows, in_read,
+out_write)`, una lista de atributos con la pseudoconsola y `CreateProcessW` con
+`EXTENDED_STARTUPINFO_PRESENT` (línea de comandos citada con las reglas de
+`CommandLineToArgvW`, bloque de entorno UTF-16 solo si el llamador lo cambia, `cwd` de `Cmd`).
+El hijo entra en un Job Object como los de M175, así `kill(force)` sigue matando a los nietos.
+La diferencia de fondo con Unix: ConPTY **no cierra el pipe de salida** cuando el hijo termina,
+y las bombas de raylang cierran `out` por EOF. Un vigía (hilo con un `DuplicateHandle` del
+proceso) espera el fin del hijo y cierra la pseudoconsola, que es lo que hace llegar el EOF;
+`Pty` comparte ese HANDLE tras un mutex con `Option` para cerrarlo exactamente una vez, y
+`resize` sobre una pseudoconsola cerrada es `Err`. Verificación en el runner de Windows del CI
+(`process_pty_cli`): `cmd /c echo` bajo ConPTY llega por `out`, el `resize` responde, `out`
+cierra y `wait` da `code 0`, en VM y nativo.

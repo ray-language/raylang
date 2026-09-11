@@ -748,7 +748,7 @@ enum OpenHandle {
     /// pid. `close(h)` lo quita del mapa SIN matar ni cosechar (el `Drop` de `Child` no hace nada);
     /// la cosecha es de `__proc_try_wait` y la estructura la pone `std/process` (bombas + wait).
     #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
-    Child(std::process::Child),
+    Child(ray_runtime::process::ChildProc),
     /// M237: el maestro de un pseudo-terminal (`Cmd.pty(cols, rows)`), para `resize`. `close(h)`
     /// suelta ese dup; el hijo ve el HUP cuando se sueltan también los pipes de lectura/escritura.
     #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]

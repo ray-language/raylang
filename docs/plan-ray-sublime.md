@@ -214,7 +214,8 @@ el caso de "el bug se ve en el paso 7 de 5 000". Coste M. A decidir junto a K1�
 | M236 ✅ | #70 + #68 + **iconos en los ítems de menú** (chords en `shortcut`, `ui.separator()`, `enabled`/`checked` con `ui.set_menu_item`, `ui.menu_at`, `MenuItem.icon`) | menú `File` completo, en su sitio y con estado |
 | M235 | #69 (`platform()`, `fs.copy_all`, `ui.reveal`/`open_path`, portapapeles) | `src/fileops.ray` deja de adivinar la plataforma |
 | M236 | #70 + #68 + **iconos en los ítems de menú** (chords en `shortcut`, `ui.separator()`, `enabled`/`checked` con `ui.set_menu_item`, `ui.menu_at`, `MenuItem.icon`) | menú `File` completo, en su sitio y con estado |
-| M237 | pseudo-terminal en `std/process` (`Cmd.pty(cols, rows)`, `Proc.resize`; Linux/macOS; ConPTY en Windows = M238) | el terminal integrado del editor (etapa 6) |
+| M237 ✅ | pseudo-terminal en `std/process` (`Cmd.pty(cols, rows)`, `Proc.resize`; Linux/macOS) | el terminal integrado del editor (etapa 6) |
+| M238 | ConPTY: el mismo `Cmd.pty` en Windows (`CreatePseudoConsole` + `CreateProcessW` a mano, hijo propio en el runtime) | terminal integrado también en Windows |
 | J3, K | yaml/plist, `return` expresión, `@derive(Clone)`, trazas, intérprete embebible | según decisión |
 
 Cada hito: rama + PR, SPEC antes si cambia el lenguaje (K1, K2), DESIGN con el porqué, CHANGELOG

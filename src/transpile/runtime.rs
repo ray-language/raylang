@@ -527,7 +527,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // leer FUERA del lock, como Tcp) y el Child (vive aquí, no un pid crudo: try_wait que
         // cosecha lo elimina bajo el lock → kill posterior es no-op, jamás a un pid reusado).
         let process_variant = if t.needs_rt_process {
-            ", Pipe(std::sync::Arc<std::fs::File>), PipeW(std::sync::Arc<std::fs::File>), Child(std::process::Child), Pty(ray_runtime::process::Pty)"
+            ", Pipe(std::sync::Arc<std::fs::File>), PipeW(std::sync::Arc<std::fs::File>), Child(ray_runtime::process::ChildProc), Pty(ray_runtime::process::Pty)"
         } else {
             ""
         };

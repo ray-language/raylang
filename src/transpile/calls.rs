@@ -2498,6 +2498,29 @@ impl Transpiler {
             }
             // M100 v3: escritura en el stdin de un hijo vivo (`__ray_proc_write` espera a que el
             // pipe sea escribible, como la VM aparcando por interés de escritura).
+            "proc_spawn_pty" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_spawn_pty(&");
+                self.emit_expr(out, eff[0])?;
+                for (i, e) in eff.iter().enumerate().skip(1) {
+                    out.push_str(match i {
+                        1..=3 => ", &",
+                        _ => ", ",
+                    });
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
+            "proc_resize" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_resize(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
             "proc_write" if name.starts_with("__") && !self.exclude.contains("process") => {
                 self.needs_rt_process = true;
                 out.push_str("__ray_proc_write(");

@@ -46,6 +46,9 @@ pub struct Cmd {
     timeout: int,
     output_cap: int,
     merge: bool,
+    // M237: pseudo-terminal de cols×rows (0 = pipes normales).
+    pty_cols: int,
+    pty_rows: int,
 }
 
 /// Runs `program` with `args` (no shell — a pipeline is written `run("sh", ["-c", …])`,
@@ -70,7 +73,9 @@ pub fn cmd(program: string, args: [string]) -> Cmd {
         open_stdin: false,
         timeout: 0,
         output_cap: 16777216,
-        merge: false
+        merge: false,
+        pty_cols: 0,
+        pty_rows: 0
     }
 }
 
@@ -98,6 +103,13 @@ pub trait CmdOps {
     /// Sends stderr to the SAME pipe as stdout: the interleaving is the kernel's real order
     /// (`stderr` comes back empty; with `stream`, everything arrives on `Proc.out`).
     fn merge_output(self) -> Cmd;
+    /// Runs the child under a PSEUDO-TERMINAL of `cols`×`rows` instead of pipes (M237): the
+    /// child sees a real terminal (`tty`, colors, line discipline), `Proc.out` carries the
+    /// terminal stream with its VT sequences, `err` is closed (the terminal merges both), keys
+    /// go in with `write` (Ctrl-C is the byte `0x03`), and `resize` follows the window. Only
+    /// with `stream`; `stdin`/`merge_output` are ignored. Linux and macOS; Windows is an `Err`
+    /// until ConPTY lands.
+    fn pty(self, cols: int, rows: int) -> Cmd;
     /// Launches the command. Same promises as `process.run`.
     fn run(self) -> Result<Output, string>;
     /// Launches the command in STREAMING mode: the child's output arrives on `Proc.out`/`Proc.err`
@@ -151,6 +163,12 @@ impl CmdOps for Cmd {
         self
     }
 
+    fn pty(self, cols: int, rows: int) -> Cmd {
+        self.pty_cols = cols;
+        self.pty_rows = rows;
+        self
+    }
+
     fn run(self) -> Result<Output, string> {
         decode(
             __run(
@@ -169,6 +187,9 @@ impl CmdOps for Cmd {
     }
 
     fn stream(self) -> Result<Proc, string> {
+        if (self.pty_cols > 0 || self.pty_rows > 0) {
+            return stream_pty(self);
+        }
         let r = __proc_spawn(
             self.program,
             self.arg_list,
@@ -202,8 +223,36 @@ impl CmdOps for Cmd {
             // merge_output: no hay pipe de stderr; el canal nace cerrado (recv da None).
             close(err);
         }
-        Result.Ok(Proc { out: out, err: err, child: h_child, stdin_h: h_in })
+        Result.Ok(Proc { out: out, err: err, child: h_child, stdin_h: h_in, pty_h: 0 - 1 })
     }
+}
+
+// M237: el hijo bajo un pseudo-terminal: `out` trae el terminal entero (VT incluido), `err`
+// nace cerrado, `stdin_h` escribe teclas y `pty_h` es el maestro (para `resize`).
+fn stream_pty(c: Cmd) -> Result<Proc, string> {
+    let r = __proc_spawn_pty(
+        c.program,
+        c.arg_list,
+        c.work_dir,
+        c.env_pairs,
+        c.clear_env,
+        c.pty_cols,
+        c.pty_rows
+    );
+    if (r[0] == b"err") {
+        return Result.Err(text_of(r[1]));
+    }
+    let h_child = int_of(r[1]);
+    let h_in = int_of(r[2]);
+    let h_out = int_of(r[3]);
+    let h_pty = int_of(r[4]);
+    let out: Channel<bytes> = Channel.bounded(8);
+    let err: Channel<bytes> = Channel.bounded(8);
+    spawn(fn() {
+        pump(h_out, out);
+    });
+    close(err);
+    Result.Ok(Proc { out: out, err: err, child: h_child, stdin_h: h_in, pty_h: h_pty })
 }
 
 /// A child process in streaming mode. Receive its output from `out`/`err` (`recv` yields
@@ -219,6 +268,8 @@ pub struct Proc {
     // M100 v3: el handle del stdin ABIERTO del hijo (`-1` si no se pidió `stdin_pipe`). El nombre
     // difiere del método (`write`/`close_stdin`) por la resolución campo→método del UFCS.
     stdin_h: int,
+    // M237: el maestro del pseudo-terminal (`-1` sin `.pty()`), para `resize`.
+    pty_h: int,
 }
 
 /// The operations of a streaming process, in method-call style.
@@ -238,6 +289,10 @@ pub trait ProcOps {
     /// Closes the child's stdin: that close IS the EOF the child waits for (`sort`, `wc`, a
     /// server that ends its session). Idempotent; a no-op without `stdin_pipe()`.
     fn close_stdin(self);
+    /// Tells a child started with `pty(cols, rows)` that its terminal is now `cols`×`rows`
+    /// (the child gets `SIGWINCH`, as when a terminal window is resized). `Err` for a child
+    /// without a pty.
+    fn resize(self, cols: int, rows: int) -> Result<int, string>;
 }
 
 impl ProcOps for Proc {
@@ -283,6 +338,14 @@ impl ProcOps for Proc {
             close(self.stdin_h);
             self.stdin_h = 0 - 1;
         }
+    }
+
+    fn resize(self, cols: int, rows: int) -> Result<int, string> {
+        if (self.pty_h < 0) {
+            return Result.Err("this child has no pty (build it with .pty(cols, rows))");
+        }
+        let r = __proc_resize(self.pty_h, cols, rows);
+        if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
     }
 }
 

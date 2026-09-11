@@ -2808,6 +2808,49 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::ProcSpawnPty => {
+                    let rows = self.pop();
+                    let cols = self.pop();
+                    let env_clear = self.pop();
+                    let env = self.pop();
+                    let dir = self.pop();
+                    let args = self.pop();
+                    let program = self.pop();
+                    let (HeapValue::Str(program), HeapValue::Obj(ah), HeapValue::Str(dir),
+                        HeapValue::Obj(eh), HeapValue::Bool(env_clear), HeapValue::Int(cols), HeapValue::Int(rows)) =
+                        (program, args, dir, env, env_clear, cols, rows)
+                    else { unreachable!("the checker guarantees the __proc_spawn_pty signature") };
+                    let as_strings = |vm: &mut Self, h| -> Vec<String> {
+                        vm.as_array(h).iter().map(|v| match v {
+                            HeapValue::Str(s) => s.to_string(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        }).collect()
+                    };
+                    let opts = crate::builtins::run_opts_from_flat(&dir, as_strings(self, eh), env_clear, &[], false, false, 0, 0, false);
+                    let spawned = crate::builtins::proc_spawn_pty_handles(&program, &as_strings(self, ah), &opts, cols, rows);
+                    // Mismo atado al scope que __proc_spawn (2e).
+                    if let (Ok((h_child, _, _, _)), Some(scope)) = (&spawned, self.cur.scopes.last_mut()) {
+                        scope.procs.push(*h_child);
+                    }
+                    let elems = crate::builtins::proc_spawn_encode(spawned)
+                        .into_iter().map(HeapValue::Bytes).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ProcResize => {
+                    let rows = self.pop();
+                    let cols = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Int(cols), HeapValue::Int(rows)) = (handle, cols, rows) else {
+                        unreachable!("the checker guarantees ints");
+                    };
+                    let elems = match crate::builtins::proc_resize(handle, cols, rows) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::ProcTryWait => {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");

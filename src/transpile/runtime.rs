@@ -527,7 +527,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // leer FUERA del lock, como Tcp) y el Child (vive aquí, no un pid crudo: try_wait que
         // cosecha lo elimina bajo el lock → kill posterior es no-op, jamás a un pid reusado).
         let process_variant = if t.needs_rt_process {
-            ", Pipe(std::sync::Arc<std::fs::File>), PipeW(std::sync::Arc<std::fs::File>), Child(std::process::Child)"
+            ", Pipe(std::sync::Arc<std::fs::File>), PipeW(std::sync::Arc<std::fs::File>), Child(std::process::Child), Pty(ray_runtime::process::Pty)"
         } else {
             ""
         };
@@ -1386,6 +1386,25 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_in.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
             "        }\n",
             "        Err(e) => __ray_proc_err(e) } }\n",
+            // M237: pseudo-terminal — mismo registro; el cuarto handle es el maestro (resize).
+            "fn __ray_proc_spawn_pty(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, cols: i64, rows: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, &[], false, false, 0, 0, false);\n",
+            "    match ray_runtime::process::spawn_pty(program, &args, &opts, u16::try_from(cols).unwrap_or(0), u16::try_from(rows).unwrap_or(0)) {\n",
+            "        Ok((s, pty)) => {\n",
+            "            let h_child = __ray_reg_insert(__RayHandle::Child(s.child));\n",
+            "            let h_in = s.stdin.map_or(-1, |f| __ray_reg_insert(__RayHandle::PipeW(std::sync::Arc::new(f))));\n",
+            "            let h_out = s.out.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
+            "            let h_pty = __ray_reg_insert(__RayHandle::Pty(pty));\n",
+            "            __ray_proc_bind(h_child);\n",
+            "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_in.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_pty.to_string().as_bytes())])\n",
+            "        }\n",
+            "        Err(e) => __ray_proc_err(e) } }\n",
+            "fn __ray_proc_resize(h: i64, cols: i64, rows: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    let r = match reg.open.get(&h) { Some(__RayHandle::Pty(p)) => p.resize(u16::try_from(cols).unwrap_or(0), u16::try_from(rows).unwrap_or(0)), _ => Err(format!(\"handle {} is not a pty\", h)) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_proc_try_wait(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
             "    let mut reg = __ray_reg().lock().unwrap();\n",
             "    let Some(__RayHandle::Child(child)) = reg.open.get_mut(&h) else { return __ray_proc_err(format!(\"handle {} is not a child process\", h)); };\n",

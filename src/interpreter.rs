@@ -1557,6 +1557,31 @@ impl<'a> Interpreter<'a> {
                     .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__proc_spawn_pty" => {
+                let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
+                    Value::Bool(env_clear), Value::Int(cols), Value::Int(rows)) =
+                    (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6])
+                else { unreachable!("the checker guarantees the __proc_spawn_pty signature") };
+                let as_strings = |rc: &Rc<RefCell<Vec<Value>>>| -> Vec<String> {
+                    rc.borrow().iter().map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }).collect()
+                };
+                let opts = crate::builtins::run_opts_from_flat(dir, as_strings(env), *env_clear, &[], false, false, 0, 0, false);
+                let arr = crate::builtins::proc_spawn_encode(crate::builtins::proc_spawn_pty_handles(program, &as_strings(args), &opts, *cols, *rows))
+                    .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__proc_resize" => {
+                let (Value::Int(h), Value::Int(cols), Value::Int(rows)) = (&values[0], &values[1], &values[2])
+                else { unreachable!("the checker guarantees ints") };
+                let arr = match crate::builtins::proc_resize(*h, *cols, *rows) {
+                    Ok(()) => vec![Value::Str("ok".to_string())],
+                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__proc_try_wait" => {
                 let Value::Int(h) = &values[0] else { unreachable!("the checker guarantees an int") };
                 let arr = crate::builtins::proc_try_wait_encoded(*h)

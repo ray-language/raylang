@@ -80,6 +80,11 @@ Lo que raylang **garantiza por construcción**:
 `explorer`, `rundll32`) con la ruta como **argumento**, nunca por una shell: una ruta con espacios,
 comillas o `;` no se interpreta. Se exige que la ruta exista antes de lanzar nada; qué aplicación
 abre el sistema es decisión del escritorio del usuario, no del programa.
+### Pseudo-terminales (M237)
+
+`Cmd.pty(cols, rows)` no amplía lo que `std/process` ya permite (lanzar un programa con argv
+tipado, sin shell): solo cambia los pipes por un terminal. Es el programa quien decide lanzar la
+shell del usuario, como hace un editor con terminal integrado.
 
 ### Política de dependencias
 

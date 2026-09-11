@@ -749,6 +749,10 @@ enum OpenHandle {
     /// la cosecha es de `__proc_try_wait` y la estructura la pone `std/process` (bombas + wait).
     #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
     Child(std::process::Child),
+    /// M237: el maestro de un pseudo-terminal (`Cmd.pty(cols, rows)`), para `resize`. `close(h)`
+    /// suelta ese dup; el hijo ve el HUP cuando se sueltan también los pipes de lectura/escritura.
+    #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+    Pty(ray_runtime::process::Pty),
     /// M115.4: un watch de filesystem vivo (eventos de kernel vía notify, ray-runtime). En el
     /// registro común: `close(h)` lo quita y el `Drop` del watcher detiene sus hilos. La fibra
     /// aparca por el fd de su self-pipe (`FsWatcher::fd`), como un socket.
@@ -948,6 +952,8 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::PipeW(_)) => Err("the handle is a child's stdin; write it with proc_write".to_string()),
         #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
+        #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+        Some(OpenHandle::Pty(_)) => Err("the handle is a pty; write its stdin handle with proc_write".to_string()),
         #[cfg(all(feature = "watch", any(unix, windows), not(target_arch = "wasm32")))]
         Some(OpenHandle::Watch(_)) => Err("the handle is a filesystem watch; it is not writable".to_string()),
         #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
@@ -4495,6 +4501,28 @@ static BUILTINS: &[Builtin] = &[
         if a[8] != Type::Bool { return Err((Some(8), format!("__proc_spawn expects a bool (merge_output), not {}", a[8]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // __proc_spawn_pty(program, args, dir, env, env_clear, cols, rows) -> [bytes] (M237): como
+    // __proc_spawn bajo un pseudo-terminal: [b"ok", h_child, h_in, h_out, h_pty] o [b"err", msg].
+    Builtin { name: "__proc_spawn_pty", opcode: OpCode::ProcSpawnPty, check: |a| {
+        arity(a, 7, "__proc_spawn_pty", " (program, args, dir, env, env_clear, cols, rows)")?;
+        let str_arr = Type::Array(Box::new(Type::String));
+        if a[0] != Type::String { return Err((Some(0), format!("__proc_spawn_pty expects a string (the program), not {}", a[0]))); }
+        if a[1] != str_arr { return Err((Some(1), format!("__proc_spawn_pty expects a [string] (the arguments), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__proc_spawn_pty expects a string (the directory), not {}", a[2]))); }
+        if a[3] != str_arr { return Err((Some(3), format!("__proc_spawn_pty expects a [string] (the env pairs), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__proc_spawn_pty expects a bool (env_clear), not {}", a[4]))); }
+        if a[5] != Type::Int { return Err((Some(5), format!("__proc_spawn_pty expects an int (cols), not {}", a[5]))); }
+        if a[6] != Type::Int { return Err((Some(6), format!("__proc_spawn_pty expects an int (rows), not {}", a[6]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __proc_resize(h_pty, cols, rows) -> [string] (M237): ["ok"] / ["err", msg].
+    Builtin { name: "__proc_resize", opcode: OpCode::ProcResize, check: |a| {
+        arity(a, 3, "__proc_resize", " (handle, cols, rows)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_resize expects an int (the pty handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__proc_resize expects an int (cols), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__proc_resize expects an int (rows), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __proc_read(h) -> [bytes] (M100 v2): una lectura del pipe del hijo — [b"ok", datos] (vacío =
     // EOF) o [b"err", msg]. REUSA el opcode SocketReadBytes (la VM ya sabe leer un handle Pipe y
     // aparcar la fibra); el nombre propio existe para que el NATIVO emita su lector de pipes
@@ -5629,6 +5657,44 @@ pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Res
 #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
 pub fn proc_spawn_handles(program: &str, _args: &[String], _opts: &RunOpts) -> Result<(i64, i64, i64, i64), String> {
     Err(format!("{program}: running OS processes is not supported on this platform"))
+}
+
+/// M237: como `proc_spawn_handles` bajo un pseudo-terminal: `(h_child, h_in, h_out, h_pty)` —
+/// el cuarto handle es el maestro (`__proc_resize`), no un stderr (el terminal lo fusiona).
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+pub fn proc_spawn_pty_handles(program: &str, args: &[String], opts: &RunOpts, cols: i64, rows: i64) -> Result<(i64, i64, i64, i64), String> {
+    let (cols, rows) = (u16::try_from(cols).unwrap_or(0), u16::try_from(rows).unwrap_or(0));
+    let (s, pty) = ray_runtime::process::spawn_pty(program, args, opts, cols, rows)?;
+    let mut reg = registry().lock().unwrap();
+    let put = |reg: &mut FileRegistry, h: OpenHandle| -> i64 {
+        let id = reg.next;
+        reg.next += 1;
+        reg.open.insert(id, h);
+        id
+    };
+    let h_child = put(&mut reg, OpenHandle::Child(s.child));
+    let h_in = s.stdin.map_or(-1, |f| put(&mut reg, OpenHandle::PipeW(f)));
+    let h_out = s.out.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
+    let h_pty = put(&mut reg, OpenHandle::Pty(pty));
+    Ok((h_child, h_in, h_out, h_pty))
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn proc_spawn_pty_handles(program: &str, _args: &[String], _opts: &RunOpts, _cols: i64, _rows: i64) -> Result<(i64, i64, i64, i64), String> {
+    Err(format!("{program}: running OS processes is not supported on this platform"))
+}
+
+/// M237: `__proc_resize(h_pty, cols, rows)`.
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+pub fn proc_resize(h: i64, cols: i64, rows: i64) -> Result<(), String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Pty(p)) => p.resize(u16::try_from(cols).unwrap_or(0), u16::try_from(rows).unwrap_or(0)),
+        _ => Err(format!("handle {h} is not a pty")),
+    }
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn proc_resize(_h: i64, _cols: i64, _rows: i64) -> Result<(), String> {
+    Err("running OS processes is not supported on this platform".to_string())
 }
 
 /// El resultado de `proc_spawn_handles`, aplanado al arreglo etiquetado del builtin `__proc_spawn`:

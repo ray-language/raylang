@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Pseudo-terminal en `std/process`** (M237, ray-sublime: el terminal del editor):
+  `process.cmd(sh, args).pty(cols, rows).stream()` lanza el hijo bajo un PTY real en Linux y
+  macOS (`setsid` y terminal de control, `TERM`/`COLORTERM` puestos si faltan): `Proc.out` es
+  el flujo del terminal con sus secuencias VT, `write` manda las teclas, `Proc.resize(cols,
+  rows)` sigue a la ventana. Igual en VM y nativo. Windows devuelve un `Err` honesto hasta que
+  llegue ConPTY.
+
 ## 1.15.0 — 2026-09-11
 
 - **La app de escritorio habla con el sistema** (M235, ray-sublime #69): `platform()` en la

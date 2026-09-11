@@ -151,6 +151,190 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
     Ok(SpawnedChild { child, stdin, out, err })
 }
 
+/// M237 — el extremo MAESTRO de un pseudo-terminal (el "terminal" que ve el hijo). Se conserva
+/// para `resize` (`TIOCSWINSZ`); las lecturas/escrituras van por los `File` de `SpawnedChild`
+/// (dups del mismo fd). Al soltarse el último dup el hijo recibe `SIGHUP`, como al cerrar un
+/// terminal.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub struct Pty {
+    master: std::fs::File,
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[repr(C)]
+struct Winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+impl Pty {
+    /// Nuevo tamaño en celdas; el hijo recibe `SIGWINCH`.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        if cols == 0 || rows == 0 {
+            return Err(format!("pty: unsupported size {cols}x{rows}"));
+        }
+        let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        // SAFETY: ioctl variádico sobre el maestro propio con un winsize local vivo.
+        let r = unsafe { ioctl(std::os::fd::AsRawFd::as_raw_fd(&self.master), TIOCSWINSZ, &ws as *const Winsize) };
+        if r < 0 { Err(format!("pty: resize failed: {}", std::io::Error::last_os_error())) } else { Ok(()) }
+    }
+}
+
+/// M237 (ray-sublime, terminal del editor): lanza `program` bajo un PSEUDO-TERMINAL de
+/// `cols`×`rows` en vez de pipes. El hijo es líder de sesión con el esclavo como terminal de
+/// control (`setsid` + `TIOCSCTTY` en `pre_exec`; sin `fork` a mano), sus tres flujos son el
+/// esclavo, y el llamador lee y escribe por el maestro: `out` trae la salida con las secuencias
+/// VT del programa, `stdin` escribe teclas (Ctrl-C es el byte 0x03: lo interpreta la disciplina
+/// de línea, no hace falta API), `err` es `None` (el terminal lo fusiona). `TERM`/`COLORTERM`
+/// se ponen si el llamador no los da. `dir`/`env`/`env_clear` de `opts` aplican; `stdin`,
+/// `merge_output` y `stdin_open` se ignoran (el terminal ya es bidireccional). macOS abre el
+/// par con `openpty` (libSystem); Linux con `posix_openpt` (solo libc, sin `-lutil`).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn spawn_pty(program: &str, args: &[String], opts: &RunOpts, cols: u16, rows: u16) -> Result<(SpawnedChild, Pty), String> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    if cols == 0 || rows == 0 {
+        return Err(format!("pty: unsupported size {cols}x{rows}"));
+    }
+    let (master, slave) = open_pty_pair(cols, rows).map_err(|e| format!("{program}: pty: {e}"))?;
+    // SAFETY: fds recién abiertos y propios; `File` toma su propiedad.
+    let master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let dup = |f: &std::fs::File| f.try_clone().map_err(|e| format!("{program}: pty: {e}"));
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(d) = &opts.dir {
+        cmd.current_dir(d);
+    }
+    if opts.env_clear {
+        cmd.env_clear();
+    }
+    let has = |k: &str| opts.env.iter().any(|(ek, _)| ek == k);
+    if !has("TERM") {
+        cmd.env("TERM", "xterm-256color");
+    }
+    if !has("COLORTERM") {
+        cmd.env("COLORTERM", "truecolor");
+    }
+    for (k, v) in &opts.env {
+        cmd.env(k, v);
+    }
+    cmd.stdin(Stdio::from(dup(&slave)?));
+    cmd.stdout(Stdio::from(dup(&slave)?));
+    cmd.stderr(Stdio::from(dup(&slave)?));
+    // Sesión y terminal de control propios (el hijo será líder de grupo por `setsid`: la escalera
+    // de `kill_group` sigue valiendo con su pid).
+    // SAFETY: `pre_exec` corre en el hijo entre fork y exec: solo llamadas async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            if setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if ioctl(0, TIOCSCTTY, 0 as *const Winsize) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    drop(cmd);
+    drop(slave); // nuestra copia del esclavo: el hijo tiene las suyas; sin esto el EOF no llegaría
+
+    let out = dup(&master)?;
+    let stdin = dup(&master)?;
+    for f in [&out, &stdin, &master] {
+        let fd = f.as_raw_fd();
+        // SAFETY: fcntl variádica sobre fds propios (ver spawn_streamed).
+        unsafe {
+            let fl = fcntl_get(fd);
+            let _ = fcntl(fd, F_SETFL_P, fl | O_NONBLOCK_P);
+        }
+    }
+    Ok((SpawnedChild { child, stdin: Some(stdin), out: Some(out), err: None }, Pty { master }))
+}
+
+/// El par maestro/esclavo con el tamaño inicial ya puesto en el esclavo.
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+fn open_pty_pair(cols: u16, rows: u16) -> Result<(i32, i32), String> {
+    let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+    let (mut m, mut s) = (-1i32, -1i32);
+    // SAFETY: openpty de libSystem con punteros a locales vivas; termios nulo = defaults.
+    let r = unsafe { openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null(), &ws) };
+    if r < 0 { Err(std::io::Error::last_os_error().to_string()) } else { Ok((m, s)) }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn open_pty_pair(cols: u16, rows: u16) -> Result<(i32, i32), String> {
+    // SAFETY: llamadas POSIX documentadas sobre el fd maestro recién abierto; el nombre del
+    // esclavo se escribe en un buffer local con su tamaño.
+    unsafe {
+        let m = posix_openpt(O_RDWR | O_NOCTTY_P);
+        if m < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if grantpt(m) < 0 || unlockpt(m) < 0 {
+            let e = std::io::Error::last_os_error();
+            close_fd(m);
+            return Err(e.to_string());
+        }
+        let mut name = [0u8; 128];
+        if ptsname_r(m, name.as_mut_ptr() as *mut std::ffi::c_char, name.len()) != 0 {
+            let e = std::io::Error::last_os_error();
+            close_fd(m);
+            return Err(e.to_string());
+        }
+        let s = open(name.as_ptr() as *const std::ffi::c_char, O_RDWR | O_NOCTTY_P);
+        if s < 0 {
+            let e = std::io::Error::last_os_error();
+            close_fd(m);
+            return Err(e.to_string());
+        }
+        let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        let _ = ioctl(s, TIOCSWINSZ, &ws as *const Winsize);
+        Ok((m, s))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const O_RDWR: i32 = 2;
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+const TIOCSCTTY: u64 = 0x2000_7461;
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+const TIOCSWINSZ: u64 = 0x8008_7467;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const TIOCSCTTY: u64 = 0x540E;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const TIOCSWINSZ: u64 = 0x5414;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const O_NOCTTY_P: i32 = 0o400;
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    fn setsid() -> i32;
+    // Variádica a propósito (mismo motivo que fcntl en arm64).
+    fn ioctl(fd: i32, request: u64, ...) -> i32;
+}
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    fn openpty(amaster: *mut i32, aslave: *mut i32, name: *mut std::ffi::c_char, termp: *const std::ffi::c_void, winp: *const Winsize) -> i32;
+}
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    fn posix_openpt(flags: i32) -> i32;
+    fn grantpt(fd: i32) -> i32;
+    fn unlockpt(fd: i32) -> i32;
+    fn ptsname_r(fd: i32, buf: *mut std::ffi::c_char, len: usize) -> i32;
+    fn open(path: *const std::ffi::c_char, flags: i32, ...) -> i32;
+    #[link_name = "close"]
+    fn close_fd(fd: i32) -> i32;
+}
+
 /// `waitpid(WNOHANG)` del hijo: `Ok(None)` = sigue corriendo; `Ok(Some(exit))` = terminó (y quedó
 /// COSECHADO), con el mismo `Result<code, signal>` de `RunOutput`.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -525,6 +709,59 @@ mod process_tests {
     }
 
     // ENOENT en el spawn del streaming: mismo contrato que run (Err = no se pudo lanzar).
+    #[cfg(unix)]
+    fn drain(f: &mut std::fs::File, child: &mut std::process::Child) -> String {
+        use std::io::Read;
+        let mut out = Vec::new();
+        let start = std::time::Instant::now();
+        loop {
+            let mut buf = [0u8; 4096];
+            match f.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // El maestro da EIO al cerrar el esclavo en Linux; en macOS, EOF. Cortamos por
+                    // fin del hijo + vaciado, con un tope de 5 s.
+                    if child.try_wait().ok().flatten().is_some() {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        if let Ok(n) = f.read(&mut buf) { out.extend_from_slice(&buf[..n]); }
+                        break;
+                    }
+                    if start.elapsed() > std::time::Duration::from_secs(5) { break; }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_pty_gives_the_child_a_terminal_of_the_requested_size() {
+        let opts = crate::process::RunOpts { dir: None, env: Vec::new(), env_clear: false, stdin: None, stdin_open: false, timeout_ms: 0, max_output: 0, merge_output: false };
+        let (mut s, pty) = crate::process::spawn_pty("sh", &["-c".to_string(), "stty size; tty; printf hola".to_string()], &opts, 80, 24).unwrap();
+        let text = drain(s.out.as_mut().unwrap(), &mut s.child);
+        assert!(text.contains("24 80"), "{text:?}");
+        assert!(text.contains("/dev/"), "{text:?}");
+        assert!(text.contains("hola"), "{text:?}");
+        assert!(s.err.is_none());
+        let _ = pty.resize(100, 30);
+        let _ = s.child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_pty_resize_reaches_the_child() {
+        let opts = crate::process::RunOpts { dir: None, env: Vec::new(), env_clear: false, stdin: None, stdin_open: false, timeout_ms: 0, max_output: 0, merge_output: false };
+        let (mut s, pty) = crate::process::spawn_pty("sh", &["-c".to_string(), "sleep 0.4; stty size".to_string()], &opts, 80, 24).unwrap();
+        pty.resize(120, 40).unwrap();
+        let text = drain(s.out.as_mut().unwrap(), &mut s.child);
+        assert!(text.contains("40 120"), "{text:?}");
+        assert!(pty.resize(0, 5).is_err());
+        let _ = s.child.wait();
+    }
+
     #[test]
     fn spawn_streamed_enoent_is_err() {
         assert!(spawn_streamed("raylang-no-such-binary-v2", &[], &opts()).is_err());
@@ -861,6 +1098,23 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
 }
 
 /// `try_wait` del hijo: `Ok(None)` = sigue; `Ok(Some(exit))` = terminó (cosechado, job cerrado).
+/// M237: en Windows el pseudo-terminal (ConPTY) llega en el siguiente hito; hasta entonces un
+/// `Err` honesto, igual en los tres motores.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub struct Pty;
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+impl Pty {
+    pub fn resize(&self, _cols: u16, _rows: u16) -> Result<(), String> {
+        Err("pty: not supported on Windows yet".to_string())
+    }
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn spawn_pty(program: &str, _args: &[String], _opts: &RunOpts, _cols: u16, _rows: u16) -> Result<(SpawnedChild, Pty), String> {
+    Err(format!("{program}: pty: not supported on Windows yet (ConPTY is planned)"))
+}
+
 #[cfg(all(windows, not(target_arch = "wasm32")))]
 pub fn try_wait(child: &mut std::process::Child) -> Result<Option<Result<i32, i32>>, String> {
     match child.try_wait() {

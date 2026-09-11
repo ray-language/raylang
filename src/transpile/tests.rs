@@ -63,6 +63,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__run",
     // M100 v2: los primitivos del streaming (IDEAS §53.9) → helpers __ray_proc_* (fase 2c).
     "__proc_spawn", "__proc_read", "__proc_write", "__proc_try_wait", "__proc_kill",
+    // M237: pseudo-terminal.
+    "__proc_spawn_pty", "__proc_resize",
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_open_with", "__ui_eval_js", "__ui_next_event",
     // M225: reply/reply_json con el escape nativo.

@@ -13097,3 +13097,27 @@ la aplicación en macOS (`insertItem:atIndex:`, acotado) y desde el principio en
 `.bmp` por `LoadImageW` — lo honesto sin arrastrar WIC/GDI+. (7) `MenuItem` gana tres campos
 y rompe los literales existentes: es el precedente de `WindowOptions`, y `ui.item`/`ui.separator`
 dan los defaults. Va en una versión menor con la nota de cambio de superficie.
+## 227. M237 — pseudo-terminal en `std/process` (sep 2026)
+
+ray-sublime necesita un terminal integrado y `std/process` solo daba pipes: un `zsh` bajo
+pipes no es interactivo (sin `tty`, sin colores, sin disciplina de línea). Lo que hacía falta
+era un PTY con la MISMA forma que el streaming de M100: un hijo, un flujo de salida que aparca
+la fibra en el poller, un stdin escribible y `kill`/`wait` como siempre.
+
+**Decisiones.** (1) Es un modo del builder (`Cmd.pty(cols, rows)`), no un módulo nuevo: el
+`Proc` es el mismo tipo con `resize` como única operación extra; un programa que no lo pide no
+cambia en nada. (2) El par maestro/esclavo se abre con `openpty` en macOS (libSystem) y con
+`posix_openpt`/`grantpt`/`unlockpt`/`ptsname_r` en Linux (solo libc, sin enlazar `libutil`);
+el hijo nace con `Command` + `pre_exec` (`setsid` + `TIOCSCTTY`, sin `fork` a mano) y los tres
+flujos apuntan al esclavo; el padre lee y escribe por dups del maestro, no-bloqueantes, así que
+las bombas de raylang y el registro de handles son los de M100 tal cual (`out` = Pipe, `stdin`
+= PipeW). El cuarto handle es el maestro (`OpenHandle::Pty`) para `TIOCSWINSZ`. (3) Sin
+`process_group(0)` cuando hay PTY: `setsid` ya hace al hijo líder de grupo (y `setpgid` previo
+haría fallar `setsid`); la escalera de `kill_group` sigue valiendo por su pid. (4) `TERM=
+xterm-256color` y `COLORTERM=truecolor` solo si el llamador no los da. (5) Windows devuelve un
+`Err` honesto en los tres motores: ConPTY exige `CreateProcessW` a mano con la lista de
+atributos (std no expone `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`) y un `Child` que no es el de
+std — es el siguiente hito, no una nota al pie. (6) Verificación sin ventana: bajo el PTY,
+`stty size` devuelve las celdas pedidas, `tty` un `/dev/…`, un `resize` posterior llega al
+hijo, y `cat` bajo PTY devuelve el eco de lo escrito; unitarios en ray-runtime y CLI en VM y
+nativo.

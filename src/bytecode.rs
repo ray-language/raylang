@@ -684,6 +684,10 @@ pub enum OpCode {
     EmbedRead,
     /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).
     EmbedList,
+    /// M237: `__proc_spawn_pty(program, args, dir, env, env_clear, cols, rows)` → handles.
+    ProcSpawnPty,
+    /// M237: `__proc_resize(h_pty, cols, rows)` (['ok'] / ['err', msg]).
+    ProcResize,
     /// M234: `__embed_root()` — raíz en disco de los embebidos bajo la toolchain ("" si horneados).
     EmbedRoot,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.

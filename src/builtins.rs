@@ -307,6 +307,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "len" => "Returns the length of a collection: characters of a string, elements of an array, entries of a Map, or octets of a bytes value.",
         "push" => "Appends a value to the end of an array, in place (arrays have reference semantics).",
         "args" => "Returns the command-line arguments passed to the program (after the file path) as `[string]`.",
+        "platform" => "Returns the operating system the program runs on, as Rust names it: `\"macos\"`, `\"linux\"`, `\"windows\"` (and `\"ios\"`, `\"android\"`, … where those apply).",
         // --- Strings ---
         "trim" => "Returns a copy of the string with leading and trailing whitespace removed.",
         "split" => "Splits a string by a separator and returns the parts as `[string]`.",

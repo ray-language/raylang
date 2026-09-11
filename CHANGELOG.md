@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.16.1 — 2026-09-11
 
 - **ConPTY: el pseudo-terminal también en Windows** (M238). `Cmd.pty(cols, rows)` funciona
   igual que en Linux y macOS: `CreatePseudoConsole` + `CreateProcessW` con la pseudoconsola,

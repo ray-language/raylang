@@ -578,59 +578,65 @@ fn desktop_launch(kind: &str, path: &str) -> Result<(), String> {
         return Ok(());
     }
     let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let spawn = |program: &str, args: &[std::ffi::OsString]| -> Result<(), String> {
-        std::process::Command::new(program)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("ui: could not run {program}: {e}"))
-    };
+    desktop_spawn(kind, abs)
+}
+
+/// Arranca `program` con `args` sin esperar (sin shell; stdio al vacío).
+fn spawn_detached(program: &str, args: &[std::ffi::OsString]) -> Result<(), String> {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("ui: could not run {program}: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
+    if kind == "reveal" {
+        spawn_detached("open", &[std::ffi::OsString::from("-R"), abs.into_os_string()])
+    } else {
+        spawn_detached("open", &[abs.into_os_string()])
+    }
+}
+
+#[cfg(windows)]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
+    if kind == "reveal" {
+        let mut sel = std::ffi::OsString::from("/select,");
+        sel.push(abs.as_os_str());
+        spawn_detached("explorer.exe", &[sel])
+    } else {
+        spawn_detached("rundll32.exe", &[std::ffi::OsString::from("url.dll,FileProtocolHandler"), abs.into_os_string()])
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
     let os = |s: &str| std::ffi::OsString::from(s);
-    #[cfg(target_os = "macos")]
-    {
-        return if kind == "reveal" {
-            spawn("open", &[os("-R"), abs.into_os_string()])
-        } else {
-            spawn("open", &[abs.into_os_string()])
-        };
-    }
-    #[cfg(windows)]
-    {
-        return if kind == "reveal" {
-            let mut sel = std::ffi::OsString::from("/select,");
-            sel.push(abs.as_os_str());
-            spawn("explorer.exe", &[sel])
-        } else {
-            spawn("rundll32.exe", &[os("url.dll,FileProtocolHandler"), abs.into_os_string()])
-        };
-    }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        if kind == "reveal" {
-            let uri = format!("file://{}", abs.display());
-            let dbus = spawn(
-                "dbus-send",
-                &[
-                    os("--session"),
-                    os("--dest=org.freedesktop.FileManager1"),
-                    os("--type=method_call"),
-                    os("/org/freedesktop/FileManager1"),
-                    os("org.freedesktop.FileManager1.ShowItems"),
-                    os(&format!("array:string:{uri}")),
-                    os("string:"),
-                ],
-            );
-            if dbus.is_ok() {
-                return Ok(());
-            }
-            let parent = abs.parent().map(|d| d.to_path_buf()).unwrap_or(abs);
-            return spawn("xdg-open", &[parent.into_os_string()]);
+    if kind == "reveal" {
+        let uri = format!("file://{}", abs.display());
+        let dbus = spawn_detached(
+            "dbus-send",
+            &[
+                os("--session"),
+                os("--dest=org.freedesktop.FileManager1"),
+                os("--type=method_call"),
+                os("/org/freedesktop/FileManager1"),
+                os("org.freedesktop.FileManager1.ShowItems"),
+                os(&format!("array:string:{uri}")),
+                os("string:"),
+            ],
+        );
+        if dbus.is_ok() {
+            return Ok(());
         }
-        spawn("xdg-open", &[abs.into_os_string()])
+        let parent = abs.parent().map(|d| d.to_path_buf()).unwrap_or(abs);
+        return spawn_detached("xdg-open", &[parent.into_os_string()]);
     }
+    spawn_detached("xdg-open", &[abs.into_os_string()])
 }
 
 /// M235: portapapeles del sistema (texto). Funciona sin ventana en macOS y Windows (una TUI

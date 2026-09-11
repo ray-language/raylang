@@ -674,6 +674,8 @@ pub enum OpCode {
     EmbedRead,
     /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).
     EmbedList,
+    /// M234: `__embed_root()` — raíz en disco de los embebidos bajo la toolchain ("" si horneados).
+    EmbedRoot,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

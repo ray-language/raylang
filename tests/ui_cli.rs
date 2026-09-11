@@ -763,3 +763,104 @@ fn blocking_next_event_wakes_while_a_socket_is_parked() {
     assert_eq!(code, 0, "exit 0\n{out}");
     assert_eq!(out, "event: closed\ndone\n", "el next_event bloqueante despierta con un socket aparcado");
 }
+
+// ---------------------------------------------------------------------------
+// M234 — live-reload para apps de `std/ui` sin servidor HTTP: el runtime se suscribe al hub de
+// `ray dev` (puerto que fija la toolchain) y recarga sus ventanas; `mount_embed` monta el
+// directorio en vivo bajo la toolchain y los bytes horneados en el nativo.
+// ---------------------------------------------------------------------------
+
+/// Un hub SSE falso como el de `ray dev`: `GET /ui` → 204; cualquier otra petición recibe las
+/// cabeceras SSE y un `reload` al momento. Devuelve el puerto.
+fn fake_reload_hub() -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(300)));
+            let mut buf = [0u8; 256];
+            let n = s.read(&mut buf).unwrap_or(0);
+            if buf[..n].starts_with(b"GET /ui") {
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                continue;
+            }
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: connected\n\ndata: reload\n\n";
+            let _ = s.write_all(head.as_bytes());
+            let _ = s.flush();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                drop(s);
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn dev_reload_hub_reloads_ui_windows_without_a_webserver() {
+    let base = tmp("dev_reload");
+    let port = fake_reload_hub();
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    match (ui.open(\"T\", \"ray://app/index.html\", 320, 200)) {\n        Result.Ok(_) => { print(\"opened\"); let _ = ui.next_event(); print(\"never\"); },\n        Result.Err(e) => print(e),\n    }\n}\n",
+    )
+    .unwrap();
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .env("RAY_UI_EXIT_AFTER_MS", "1500")
+            .env("RAY_DEV_RELOAD", port.to_string())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "opened\n", "{engine:?}\n{err}");
+        assert!(err.contains("[ui] eval 1 location.reload()"), "{engine:?}: la ventana se recarga\n{err}");
+        assert!(err.contains("[ui] dev reload 1 windows"), "{engine:?}\n{err}");
+    }
+}
+
+#[test]
+fn mount_embed_serves_the_directory_live_under_the_toolchain_and_baked_natively() {
+    let base = tmp("mount_embed_live");
+    std::fs::create_dir_all(base.join("assets")).unwrap();
+    std::fs::write(base.join("assets/a.txt"), "hola").unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"embedlive\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"assets\"]\n").unwrap();
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    match (ui.mount_embed(\"\", \"assets\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n    match (ui.mount_embed(\"static\", \"assets\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n}\n",
+    )
+    .unwrap();
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 1\nok 1\n", "{engine:?}\n{err}");
+        assert!(err.contains("[ui] mount dir assets "), "{engine:?}: montaje en vivo del directorio\n{err}");
+        assert!(err.contains("[ui] mount dir static/assets "), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 1\nok 1\n", "nativo\n{err}");
+        assert!(!err.contains("[ui] mount dir"), "nativo: horneado, sin directorio en vivo\n{err}");
+    }
+}

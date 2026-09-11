@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray dev` recarga las apps de `std/ui` sin servidor HTTP** (M234, ray-sublime): el
+  live-reload solo llegaba a las páginas servidas por `net/webserver`; ahora el runtime se
+  suscribe al hub del supervisor (puerto que fija la toolchain, nunca un binario nativo) y
+  recarga todas las ventanas al emitirse `reload`. Y `ui.mount_embed` monta el directorio de
+  assets **en vivo** bajo `ray run`/`ray dev` (en el nativo siguen horneados), así que un
+  cambio en `assets/` se ve sin reiniciar el proceso. Nuevo builtin interno `__embed_root`.
+
 ## 1.14.1 — 2026-09-10
 
 - **VM: strings y claves de `Map` sin copias de más** (M233). Recupera la mayor parte del coste

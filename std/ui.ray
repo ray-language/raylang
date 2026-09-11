@@ -316,6 +316,26 @@ pub fn mount_embed(prefix: string, embed_prefix: string) -> Result<int, string> 
     var n = 0;
     var i = 1;
     while (i < names.len()) {
+        if (names[i].starts_with(embed_prefix)) {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    // M234: bajo la toolchain (`ray run`/`ray dev`) los embebidos viven en disco → se monta el
+    // directorio EN VIVO (streaming, Range, ETag), así una recarga de `ray dev` ve el asset
+    // nuevo sin reiniciar. En el binario nativo van horneados y se montan en memoria.
+    let root = __embed_root();
+    if (root != "") {
+        let target = if (prefix == "") { embed_prefix } else { prefix + "/" + embed_prefix };
+        let dir = if (embed_prefix == "") { root } else { root + "/" + embed_prefix };
+        return match (mount_dir(target, dir)) {
+            Result.Ok(_) => Result.Ok(n),
+            Result.Err(e) => Result.Err(e),
+        };
+    }
+    n = 0;
+    i = 1;
+    while (i < names.len()) {
         let name = names[i];
         if (name.starts_with(embed_prefix)) {
             let r = __embed_read(name);

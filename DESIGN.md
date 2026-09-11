@@ -13019,3 +13019,30 @@ intérprete (oráculo) convierte desde su `String`, como ya hacía con `Bytes`.
 de strings pequeños) es el coste atómico del `Arc` (3,9 ns por clon+drop frente a 0,1 ns de
 `Rc`); pasar a `Rc<str>` exige hacer explícitas las invariantes de aislamiento por fibra
 (transferencia por copia, constantes sin refcount compartido) y es un arco aparte (IDEAS §88).
+
+## 224. M234 — live-reload para apps de `std/ui` sin servidor (sep 2026)
+
+ray-sublime reportó que bajo `ray dev` "el hot reload no funciona". Tenía razón por partida
+doble. El live-reload de M92.4 se construyó sobre `net/webserver`: el supervisor abre un hub SSE
+y el webserver inyecta en cada HTML un `EventSource` que recarga la página al recibir `reload`.
+Una app que sirve su frontend por `ray://app` (M226) no pasa por el webserver: nadie escucha al
+hub, y el aviso `GET /ui` del runtime (M147b) solo servía para que `ray dev` saliera con la
+ventana. Segundo hueco: `mount_embed` leía los assets al arrancar y los montaba en memoria, así
+que una recarga habría mostrado los assets viejos hasta reiniciar el proceso.
+
+**Decisión: lo arregla raylang, la app no cambia.** (1) El runtime se suscribe al hub como un
+navegador más (`start_dev_reload_listener`) y en cada `reload` ejecuta `location.reload()` en
+todas sus ventanas por `eval_js` (que ya despacha al hilo principal de cada backend). El puerto
+lo fija la toolchain con `ui::set_dev_reload` desde `ray run` cuando corre bajo `ray dev` — la
+frontera de M231: un binario nativo no mira el entorno y no tiene nada que suscribir. El aviso
+`GET /ui` usa el mismo bit y deja de leer la variable. (2) `mount_embed` pregunta por
+`__embed_root()`: bajo la toolchain los embebidos viven en disco y se monta el DIRECTORIO
+(`mount_dir`, con streaming, Range y ETag), así que la recarga ve el asset nuevo; en el nativo
+el builtin devuelve `""` (el transpilador lo emite como literal) y se montan los bytes
+horneados, como hasta ahora. Diferencia asumida en desarrollo: `mount_dir` sirve también los
+archivos ocultos que `std/embed` excluye.
+
+Con esto el ciclo queda: cambio en `assets/` → `ray dev` no reinicia (ya era así), emite
+`reload` → la ventana recarga y el backend conserva su estado; cambio en un `.ray` → reinicio y
+ventana nueva. Headless deja trazas (`[ui] mount dir …`, `[ui] dev reload N windows`) y el test
+levanta un hub falso para afirmar la recarga en los dos motores y el horneado en el nativo.

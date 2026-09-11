@@ -2392,6 +2392,10 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M234: en el nativo los assets van horneados → no hay raíz en disco.
+            "embed_root" if name.starts_with("__") => {
+                out.push_str("Rc::<str>::from(\"\")");
+            }
             "embed_list" if name.starts_with("__") => {
                 self.needs_embed = true;
                 out.push_str("__ray_embed_list()");

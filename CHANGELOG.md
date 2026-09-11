@@ -12,6 +12,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   gestor freedesktop) y `clipboard_write`/`clipboard_read` (portapapeles del sistema, sin
   ventana en macOS y Windows). Sin shell en ningún caso; idéntico en los tres motores, con
   headless trazable.
+- **Menús completos en `std/ui`** (M236, ray-sublime #70 y #68): `MenuItem` gana `icon`,
+  `enabled` y `checked` (con `ui.item(tag, title, shortcut)` y `ui.separator()` para los
+  defaults); `shortcut` acepta chords (`"cmd+alt+s"`, `"ctrl+shift+p"`, `"f5"`, `"cmd+enter"`)
+  con `cmd` = Command en macOS y Ctrl en Linux/Windows; `ui.set_menu_item(tag, enabled,
+  checked)` cambia el estado después de crear el menú; `ui.menu_at(position, title, items)`
+  pone un menú donde quieras (`File` antes del Edit estándar de macOS). Iconos: ruta de
+  imagen o `sf:` (SF Symbols) en macOS, `.bmp` en Windows, `GtkImageMenuItem` en Linux.
+  **Cambio de superficie**: un literal `ui.MenuItem { … }` debe listar los tres campos nuevos
+  (o usar `ui.item`).
 
 ## 1.14.2 — 2026-09-10
 

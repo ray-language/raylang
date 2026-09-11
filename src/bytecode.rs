@@ -659,6 +659,10 @@ pub enum OpCode {
     UiDesktop,
     /// M235: `__ui_clipboard(op, text)` — portapapeles (['ok', texto] / ['err', msg]).
     UiClipboard,
+    /// M236: `__ui_menu_at(position, title, items)` (['ok'] / ['err', msg]).
+    UiMenuAt,
+    /// M236: `__ui_set_menu_item(tag, enabled, checked)` (['ok'] / ['err', msg]).
+    UiSetMenuItem,
     /// M232: `__onig_compile(pattern)` — dialecto Oniguruma (['ok', id, nombres…] / ['err', msg]).
     OnigCompile,
     /// M232: `__onig_search(id, text, from, anchored)` — spans por carácter ([] sin match, [-1] abortado).

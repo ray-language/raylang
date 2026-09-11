@@ -13071,3 +13071,29 @@ El portapapeles es NSPasteboard general (sin NSApplication ni hilo principal), G
 por `dlsym` en el hilo del loop (tras `ensure_app`; sin display, su error) y Win32
 `CF_UNICODETEXT` (sin ventana propietaria); headless guarda un buffer en proceso para que
 el test haga la ida y vuelta en los tres motores. Verificado real en macOS (`pbpaste`).
+## 226. M236 — menús completos: chords, separadores, estado, posición e iconos (sep 2026)
+
+El menú `File` de ray-sublime no cabía en M148: `shortcut` era un carácter (Cmd+tecla; mayúscula
+= Shift), sin Alt ni Ctrl, sin separadores, sin ítems grises ni marcados, y `ui.menu` solo
+appendeaba, así que `File` quedaba a la derecha del `Edit` que instala el runtime (#70, #68).
+El usuario pidió además iconos por ítem.
+
+**Decisiones.** (1) Un solo decodificador en el runtime (`MenuItemSpec`, borde
+`tag\ttitle\tshortcut\ticon\tenabled\tchecked`) compartido por los tres motores y los tres
+backends; el separador es tag vacío y título `-`. (2) Los chords se interpretan en un sitio
+(`parse_chord`) con una regla de portabilidad: `cmd` es la tecla primaria del escritorio
+(Command en macOS, Ctrl en Linux/Windows, como en Sublime), `ctrl` es Control en todos; un
+chord desconocido es `Err` al declarar el menú, también en headless, para que un test lo cace.
+El carácter suelto conserva el contrato de M148. (3) macOS pone `autoenablesItems` a NO en los
+submenús propios para que `enabled` mande; Windows deja de usar `MNS_NOCHECK` cuando hay
+marcas o iconos; GTK sigue click-only (aceleradores diferidos) y resuelve por `dlsym`
+opcional los widgets de check, imagen y separador. (4) `set_menu_item` actúa por tag: macOS
+guarda los NSMenuItem por tag; Linux/Windows actualizan los specs (ventanas futuras) y las
+barras vivas (`gtk_widget_set_sensitive`/`EnableMenuItem`/`CheckMenuItem`), saltando ventanas
+cerradas por su bandera de vida o `IsWindow`. (5) `menu_at` cuenta la posición tras el menú de
+la aplicación en macOS (`insertItem:atIndex:`, acotado) y desde el principio en los demás.
+(6) Iconos: `sf:` para SF Symbols y rutas de imagen (`NSImage`, 16×16) en macOS;
+`GtkImageMenuItem` en GTK si la lib lo trae (API deprecada pero presente en GTK 3); Windows solo
+`.bmp` por `LoadImageW` — lo honesto sin arrastrar WIC/GDI+. (7) `MenuItem` gana tres campos
+y rompe los literales existentes: es el precedente de `WindowOptions`, y `ui.item`/`ui.separator`
+dan los defaults. Va en una versión menor con la nota de cambio de superficie.

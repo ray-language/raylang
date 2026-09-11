@@ -181,12 +181,33 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 }
 
 /// One item of a custom menu: `tag` travels in the click event (`kind == "menu"`), `title` is
-/// what the menu shows, and `shortcut` is a single character for Cmd+key on macOS (uppercase
-/// adds Shift; empty = no shortcut; Linux v1 is click-only).
+/// what the menu shows. `shortcut` (M236) is a chord such as `"cmd+s"`, `"cmd+shift+s"`,
+/// `"ctrl+alt+p"`, `"f5"` or `"cmd+enter"` — `cmd` is Command on macOS and Ctrl on Linux and
+/// Windows (the desktop's primary key), `ctrl` is Control everywhere, `alt`/`option`, `shift`;
+/// keys: a character, `f1`..`f12`, `enter`, `escape`, `tab`, `space`, `backspace`, `delete`,
+/// arrows, `home`/`end`, `pageup`/`pagedown`. A single character keeps the old meaning
+/// (`"s"` = cmd+S, `"S"` = cmd+shift+S); empty = no shortcut; an unknown chord is an `Err` from
+/// `menu`. GTK menus stay click-only. `icon` (M236) is an image file path, or `"sf:<name>"`
+/// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
+/// and `checked` are the initial state — change them later with `set_menu_item`. Build items
+/// with `item(...)`/`separator()` to get the defaults.
 pub struct MenuItem {
     tag: string,
     title: string,
     shortcut: string,
+    icon: string,
+    enabled: bool,
+    checked: bool,
+}
+
+/// A menu item with the defaults: no icon, enabled, unchecked (M236).
+pub fn item(tag: string, title: string, shortcut: string) -> MenuItem {
+    MenuItem { tag: tag, title: title, shortcut: shortcut, icon: "", enabled: true, checked: false }
+}
+
+/// A separator line between groups of items (M236). It carries no tag and never emits an event.
+pub fn separator() -> MenuItem {
+    MenuItem { tag: "", title: "-", shortcut: "", icon: "", enabled: true, checked: false }
 }
 
 /// Adds one top-level menu with custom items. Clicking an item emits a `"menu"` event whose
@@ -206,10 +227,31 @@ fn encode_items(items: [MenuItem]) -> [string] {
     var i = 0;
     while (i < items.len()) {
         let it = items[i];
-        encoded.push(it.tag + "\t" + it.title + "\t" + it.shortcut);
+        let en = if (it.enabled) { "1" } else { "0" };
+        let ch = if (it.checked) { "1" } else { "0" };
+        encoded.push(
+            it.tag + "\t" + it.title + "\t" + it.shortcut + "\t" + it.icon + "\t" + en + "\t" + ch
+        );
         i = i + 1;
     }
     encoded
+}
+
+/// Like `menu`, at `position` in the menu bar (M236, ray-sublime #68): counted from the first
+/// menu after the application menu on macOS (`0` = right after it, before the standard Edit),
+/// and from the first menu on Linux and Windows. Out of range = at the end (`-1` = at the end).
+pub fn menu_at(position: int, title: string, items: [MenuItem]) -> Result<int, string> {
+    let r = __ui_menu_at(position, title, encode_items(items));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or
+/// not) and `checked` (the check mark). Works for custom and application-menu items, and for
+/// the windows opened afterwards on Linux and Windows (their bar is per window). `Err` for an
+/// unknown tag.
+pub fn set_menu_item(tag: string, enabled: bool, checked: bool) -> Result<int, string> {
+    let r = __ui_set_menu_item(tag, enabled, checked);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
 /// Declares the content of the native "About" panel that the `"role:about"` menu item of

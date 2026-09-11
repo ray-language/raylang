@@ -1406,6 +1406,282 @@ pub fn close_window(id: i64) {
 }
 
 
+/// M236 (ray-sublime #70/#68): un item de menú decodificado del borde de builtins
+/// ("tag\ttitle\tshortcut\ticon\tenabled\tchecked"; los campos que faltan toman su default).
+/// Separador = tag vacío y título "-".
+#[derive(Clone, Debug)]
+pub struct MenuItemSpec {
+    pub tag: String,
+    pub label: String,
+    pub shortcut: String,
+    pub icon: String,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+impl MenuItemSpec {
+    pub fn is_separator(&self) -> bool {
+        self.tag.is_empty() && self.label == "-"
+    }
+}
+
+/// M236: la tecla de un atajo de menú.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChordKey {
+    Char(char),
+    F(u8),
+    Enter,
+    Escape,
+    Tab,
+    Space,
+    Backspace,
+    Delete,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// M236: un atajo de menú ya interpretado. `cmd` es Command en macOS y Ctrl en Linux/Windows
+/// (la tecla "primaria" de cada escritorio, como en Sublime); `ctrl` es Control en todos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chord {
+    pub key: ChordKey,
+    pub cmd: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+/// M236: interpreta `shortcut`. Un solo carácter conserva el contrato de M148 (`"s"` = cmd+S,
+/// `"S"` = cmd+shift+S). Una cadena `mod+mod+tecla` acepta `cmd`/`command`/`super`/`meta`/
+/// `primary`, `ctrl`/`control`, `alt`/`option`, `shift`, y como tecla un carácter, `f1`..`f12`,
+/// `enter`/`return`, `escape`/`esc`, `tab`, `space`, `backspace`, `delete`, `up`/`down`/`left`/
+/// `right`, `home`/`end`, `pageup`/`pagedown`. `None` si no se entiende (el runtime lo rechaza
+/// con `Err` al declarar el menú, igual en headless).
+pub fn parse_chord(shortcut: &str) -> Option<Chord> {
+    let s = shortcut.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut cs = s.chars();
+    if let (Some(c), None) = (cs.next(), cs.next()) {
+        return Some(Chord { key: ChordKey::Char(c.to_lowercase().next().unwrap_or(c)), cmd: true, ctrl: false, alt: false, shift: c.is_uppercase() });
+    }
+    let parts: Vec<&str> = s.split('+').collect();
+    let (key_s, mods) = parts.split_last()?;
+    let mut ch = Chord { key: ChordKey::Space, cmd: false, ctrl: false, alt: false, shift: false };
+    for m in mods {
+        match m.trim().to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "super" | "meta" | "primary" => ch.cmd = true,
+            "ctrl" | "control" => ch.ctrl = true,
+            "alt" | "option" | "opt" => ch.alt = true,
+            "shift" => ch.shift = true,
+            _ => return None,
+        }
+    }
+    let k = key_s.trim().to_ascii_lowercase();
+    ch.key = match k.as_str() {
+        "enter" | "return" => ChordKey::Enter,
+        "escape" | "esc" => ChordKey::Escape,
+        "tab" => ChordKey::Tab,
+        "space" => ChordKey::Space,
+        "backspace" => ChordKey::Backspace,
+        "delete" | "del" => ChordKey::Delete,
+        "up" => ChordKey::Up,
+        "down" => ChordKey::Down,
+        "left" => ChordKey::Left,
+        "right" => ChordKey::Right,
+        "home" => ChordKey::Home,
+        "end" => ChordKey::End,
+        "pageup" => ChordKey::PageUp,
+        "pagedown" => ChordKey::PageDown,
+        _ => {
+            let mut kc = k.chars();
+            match (kc.next(), kc.next()) {
+                (Some(c), None) => ChordKey::Char(c),
+                _ => {
+                    let n: u8 = k.strip_prefix('f')?.parse().ok()?;
+                    if !(1..=12).contains(&n) {
+                        return None;
+                    }
+                    ChordKey::F(n)
+                }
+            }
+        }
+    };
+    Some(ch)
+}
+
+/// M236: el atajo como texto para una etiqueta de menú ("Ctrl+Alt+S"), con `cmd` escrito como `primary`.
+pub fn chord_label(ch: &Chord, primary: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if ch.ctrl { parts.push("Ctrl".to_string()); }
+    if ch.cmd { parts.push(primary.to_string()); }
+    if ch.alt { parts.push("Alt".to_string()); }
+    if ch.shift { parts.push("Shift".to_string()); }
+    parts.push(match ch.key {
+        ChordKey::Char(c) => c.to_uppercase().to_string(),
+        ChordKey::F(n) => format!("F{n}"),
+        ChordKey::Enter => "Enter".into(),
+        ChordKey::Escape => "Esc".into(),
+        ChordKey::Tab => "Tab".into(),
+        ChordKey::Space => "Space".into(),
+        ChordKey::Backspace => "Backspace".into(),
+        ChordKey::Delete => "Del".into(),
+        ChordKey::Up => "Up".into(),
+        ChordKey::Down => "Down".into(),
+        ChordKey::Left => "Left".into(),
+        ChordKey::Right => "Right".into(),
+        ChordKey::Home => "Home".into(),
+        ChordKey::End => "End".into(),
+        ChordKey::PageUp => "PgUp".into(),
+        ChordKey::PageDown => "PgDn".into(),
+    });
+    parts.join("+")
+}
+
+#[cfg(test)]
+mod chord_tests {
+    use super::{parse_chord, chord_label, ChordKey};
+
+    #[test]
+    fn legacy_single_char_keeps_its_meaning() {
+        let s = parse_chord("s").unwrap();
+        assert!(s.cmd && !s.shift && s.key == ChordKey::Char('s'));
+        let big = parse_chord("S").unwrap();
+        assert!(big.cmd && big.shift && big.key == ChordKey::Char('s'));
+    }
+
+    #[test]
+    fn chords_parse_modifiers_and_named_keys() {
+        let c = parse_chord("cmd+alt+s").unwrap();
+        assert!(c.cmd && c.alt && !c.ctrl && !c.shift && c.key == ChordKey::Char('s'));
+        let c = parse_chord("Ctrl+Shift+P").unwrap();
+        assert!(c.ctrl && c.shift && c.key == ChordKey::Char('p'));
+        assert_eq!(parse_chord("f5").unwrap().key, ChordKey::F(5));
+        assert_eq!(parse_chord("cmd+enter").unwrap().key, ChordKey::Enter);
+        assert_eq!(parse_chord("option+pagedown").unwrap().key, ChordKey::PageDown);
+        assert_eq!(chord_label(&parse_chord("cmd+alt+s").unwrap(), "Ctrl"), "Ctrl+Alt+S");
+        assert_eq!(chord_label(&parse_chord("ctrl+f5").unwrap(), "Cmd"), "Ctrl+F5");
+    }
+
+    #[test]
+    fn unknown_chords_are_rejected() {
+        assert!(parse_chord("").is_none());
+        assert!(parse_chord("hyper+s").is_none());
+        assert!(parse_chord("cmd+bogus").is_none());
+        assert!(parse_chord("f13").is_none());
+    }
+}
+
+fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        let mut p = it.split('\t');
+        let spec = MenuItemSpec {
+            tag: p.next().unwrap_or("").to_string(),
+            label: p.next().unwrap_or("").to_string(),
+            shortcut: p.next().unwrap_or("").to_string(),
+            icon: p.next().unwrap_or("").to_string(),
+            enabled: p.next().map(|s| s != "0").unwrap_or(true),
+            checked: p.next().map(|s| s == "1").unwrap_or(false),
+        };
+        if !spec.is_separator() && spec.tag.is_empty() {
+            return Err("ui: a menu item needs a non-empty tag".to_string());
+        }
+        if !spec.shortcut.is_empty() && parse_chord(&spec.shortcut).is_none() {
+            return Err(format!("ui: unsupported menu shortcut '{}'", spec.shortcut));
+        }
+        out.push(spec);
+    }
+    Ok(out)
+}
+
+/// M236: tags declarados en headless (para que `set_menu_item` valide igual que un backend real).
+fn headless_menu_tags() -> &'static Mutex<std::collections::HashSet<String>> {
+    static TAGS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    TAGS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// M236 (ray-sublime #68): como [`menu`], en la POSICIÓN `position` de la barra — contada desde
+/// el primer menú tras el de la aplicación en macOS (0 = justo después de él, antes del Edit
+/// estándar) y desde el primer menú en Linux/Windows. Fuera de rango = al final. `-1` = al final.
+pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), String> {
+    let decoded = decode_items(items)?;
+    if headless() {
+        let mut tags = headless_menu_tags().lock().unwrap();
+        for it in &decoded {
+            if !it.is_separator() {
+                tags.insert(it.tag.clone());
+            }
+        }
+        if ui_trace() {
+            eprintln!("[ui] menu {title} at {position} items {}", decoded.len());
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::add_menu(title, position, &decoded)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::add_menu(title, position, &decoded)
+    }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::add_menu(title, position, &decoded)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (title, position, decoded);
+        Err("ui: menus are not available on this platform".to_string())
+    }
+}
+
+/// M236 (ray-sublime #70): cambia el estado de un item ya declarado, por su tag: `enabled`
+/// (gris o no) y `checked` (marca). Vale para menús custom y del menú de aplicación, y para
+/// las ventanas que se abran después (Linux/Windows construyen la barra por ventana).
+pub fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("ui: set_menu_item needs a tag".to_string());
+    }
+    if headless() {
+        if !headless_menu_tags().lock().unwrap().contains(tag) {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        if ui_trace() {
+            eprintln!("[ui] menu item {tag} enabled={enabled} checked={checked}");
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return mac::set_menu_item(tag, enabled, checked);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return gtk::set_menu_item(tag, enabled, checked);
+    }
+    #[cfg(windows)]
+    {
+        return win::set_menu_item(tag, enabled, checked);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (enabled, checked);
+        Err("ui: menus are not available on this platform".to_string())
+    }
+}
+
 /// M148: añade UN menú de nivel superior con items custom. `items` llegan CODIFICADOS
 /// "tag\ttitle\tshortcut" (el borde de los builtins es [string]); la decodificación vive AQUÍ
 /// — compartida por los tres motores (el binario transpilado llama directo a este crate). Un
@@ -1413,37 +1689,29 @@ pub fn close_window(id: i64) {
 /// macOS: el menú es GLOBAL (la barra de la app); Linux/GTK: el menubar es POR VENTANA — los
 /// menús aplican a las ventanas abiertas DESPUÉS de esta llamada (documentado).
 pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
-    let decoded: Vec<(String, String, String)> = items
-        .iter()
-        .map(|it| {
-            let mut parts = it.splitn(3, '\t');
-            (
-                parts.next().unwrap_or("").to_string(),
-                parts.next().unwrap_or("").to_string(),
-                parts.next().unwrap_or("").to_string(),
-            )
-        })
-        .collect();
-    if decoded.iter().any(|(tag, _, _)| tag.is_empty()) {
-        return Err("ui: a menu item needs a non-empty tag".to_string());
-    }
+    menu_at(-1, title, items)
+}
+
+#[allow(dead_code)]
+fn menu_legacy_unused(title: &str, items: &[String]) -> Result<(), String> {
+    let decoded = decode_items(items)?;
     if headless() {
         return Ok(());
     }
     #[cfg(target_os = "macos")]
     {
         ensure_app()?;
-        mac::add_menu(title, &decoded)
+        mac::add_menu(title, -1, &decoded)
     }
     #[cfg(target_os = "linux")]
     {
         ensure_app()?;
-        gtk::add_menu(title, &decoded)
+        gtk::add_menu(title, -1, &decoded)
     }
     #[cfg(windows)]
     {
         ensure_app()?;
-        win::add_menu(title, &decoded)
+        win::add_menu(title, -1, &decoded)
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -1489,21 +1757,14 @@ pub fn set_about(name: &str, version: &str, description: &str, copyright: &str) 
 /// evento ("menu", 0, tag), "role:about" incluido (el programa muestra su propio about).
 /// Headless: no-op Ok. iOS: sin barra de menús.
 pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
-    let decoded: Vec<(String, String, String)> = items
-        .iter()
-        .map(|it| {
-            let mut parts = it.splitn(3, '\t');
-            (
-                parts.next().unwrap_or("").to_string(),
-                parts.next().unwrap_or("").to_string(),
-                parts.next().unwrap_or("").to_string(),
-            )
-        })
-        .collect();
-    if decoded.iter().any(|(tag, _, _)| tag.is_empty()) {
-        return Err("ui: a menu item needs a non-empty tag".to_string());
-    }
+    let decoded = decode_items(items)?;
     if headless() {
+        let mut tags = headless_menu_tags().lock().unwrap();
+        for it in &decoded {
+            if !it.is_separator() {
+                tags.insert(it.tag.clone());
+            }
+        }
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -1515,13 +1776,13 @@ pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
     {
         ensure_app()?;
         let title = if name.is_empty() { "App" } else { name };
-        gtk::add_menu(title, &decoded)
+        gtk::add_menu(title, -1, &decoded)
     }
     #[cfg(windows)]
     {
         ensure_app()?;
         let title = if name.is_empty() { "App" } else { name };
-        win::add_menu(title, &decoded)
+        win::add_menu(title, -1, &decoded)
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -1677,6 +1938,8 @@ mod mac {
     type MsgInitFrameCfg = unsafe extern "C" fn(Id, Sel, CGRect, Id) -> Id;
     type MsgVoidIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
     type MsgBoolId = unsafe extern "C" fn(Id, Sel, Id) -> u8;
+    /// M236: `imageWithSystemSymbolName:accessibilityDescription:` (devuelve Id).
+    type MsgIdIdIdRet = unsafe extern "C" fn(Id, Sel, Id, Id) -> Id;
     type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
     // M159: isMainFrame (BOOL sin argumentos).
     type MsgBool = unsafe extern "C" fn(Id, Sel) -> u8;
@@ -2190,10 +2453,134 @@ mod mac {
         TAGS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
     }
 
+    /// M236: tag del programa → NSMenuItems que lo llevan (para `set_menu_item`). Los items
+    /// se retienen (alloc/init sin release) mientras viva el proceso, como el resto del menú.
+    fn items_by_tag() -> &'static std::sync::Mutex<std::collections::HashMap<String, Vec<usize>>> {
+        static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<usize>>>> =
+            std::sync::OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    /// El `keyEquivalent` de un chord (la tecla como NSString) y su `keyEquivalentModifierMask`.
+    fn chord_equivalent(ch: &super::Chord) -> (String, i64) {
+        use super::ChordKey as K;
+        const CMD: i64 = 1 << 20;
+        const SHIFT: i64 = 1 << 17;
+        const ALT: i64 = 1 << 19;
+        const CTRL: i64 = 1 << 18;
+        let key = match ch.key {
+            K::Char(c) => c.to_string(),
+            K::F(n) => char::from_u32(0xF704 + (n as u32 - 1)).unwrap_or(' ').to_string(),
+            K::Enter => "\r".to_string(),
+            K::Escape => "\u{1b}".to_string(),
+            K::Tab => "\t".to_string(),
+            K::Space => " ".to_string(),
+            K::Backspace => "\u{8}".to_string(),
+            K::Delete => "\u{F728}".to_string(),
+            K::Up => "\u{F700}".to_string(),
+            K::Down => "\u{F701}".to_string(),
+            K::Left => "\u{F702}".to_string(),
+            K::Right => "\u{F703}".to_string(),
+            K::Home => "\u{F729}".to_string(),
+            K::End => "\u{F72B}".to_string(),
+            K::PageUp => "\u{F72C}".to_string(),
+            K::PageDown => "\u{F72D}".to_string(),
+        };
+        let mut mask = 0;
+        if ch.cmd { mask |= CMD; }
+        if ch.shift { mask |= SHIFT; }
+        if ch.alt { mask |= ALT; }
+        if ch.ctrl { mask |= CTRL; }
+        (key, mask)
+    }
+
+    /// M236: construye un NSMenuItem a partir del spec (separador, atajo, icono, estado) y lo
+    /// registra por tag. `action`: el selector del click (rayMenuAction: para los custom).
+    /// SAFETY: en el hilo principal, con la app lista.
+    unsafe fn make_item(target: Id, spec: &super::MenuItemSpec, action: Sel) -> Id {
+        unsafe {
+            let alloc: MsgId = std::mem::transmute(msg_send());
+            let class_item: MsgId = std::mem::transmute(msg_send());
+            let item_init: MsgMenuItemInit = std::mem::transmute(msg_send());
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+            let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+            let init_file: MsgIdId = std::mem::transmute(msg_send());
+            let symbol: MsgIdIdIdRet = std::mem::transmute(msg_send());
+            let set_size: MsgVoidSize = std::mem::transmute(msg_send());
+            if spec.is_separator() {
+                return class_item(cls(b"NSMenuItem\0"), sel(b"separatorItem\0"));
+            }
+            let chord = if spec.shortcut.is_empty() { None } else { super::parse_chord(&spec.shortcut) };
+            let (key, mask) = chord.map(|c| chord_equivalent(&c)).unwrap_or_default();
+            let item = item_init(
+                alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                sel(b"initWithTitle:action:keyEquivalent:\0"),
+                nsstring(&spec.label),
+                action,
+                nsstring(&key),
+            );
+            if chord.is_some() {
+                set_i64(item, sel(b"setKeyEquivalentModifierMask:\0"), mask);
+            }
+            set_id(item, sel(b"setTarget:\0"), target);
+            let n = {
+                let mut tags = menu_tags().lock().unwrap();
+                let n = tags.len() as i64 + 1;
+                tags.insert(n, spec.tag.clone());
+                n
+            };
+            set_i64(item, sel(b"setTag:\0"), n);
+            if !spec.enabled {
+                set_bool(item, sel(b"setEnabled:\0"), 0);
+            }
+            if spec.checked {
+                set_i64(item, sel(b"setState:\0"), 1);
+            }
+            if !spec.icon.is_empty() {
+                let image = if let Some(name) = spec.icon.strip_prefix("sf:") {
+                    symbol(cls(b"NSImage\0"), sel(b"imageWithSystemSymbolName:accessibilityDescription:\0"), nsstring(name), std::ptr::null_mut())
+                } else {
+                    let img = init_file(alloc(cls(b"NSImage\0"), sel(b"alloc\0")), sel(b"initWithContentsOfFile:\0"), nsstring(&spec.icon));
+                    if !img.is_null() {
+                        set_size(img, sel(b"setSize:\0"), CGSize { w: 16.0, h: 16.0 });
+                    }
+                    img
+                };
+                if !image.is_null() {
+                    set_id(item, sel(b"setImage:\0"), image);
+                }
+            }
+            items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push(item as usize);
+            item
+        }
+    }
+
+    /// M236: estado de un item por tag (en el hilo principal): `setEnabled:` + `setState:`.
+    pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
+        let tag = tag.to_string();
+        on_main_sync(move || {
+            let items = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
+            if items.is_empty() {
+                return Err(format!("ui: no menu item with tag '{tag}'"));
+            }
+            unsafe {
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                for it in items {
+                    set_bool(it as Id, sel(b"setEnabled:\0"), enabled as u8);
+                    set_i64(it as Id, sel(b"setState:\0"), if checked { 1 } else { 0 });
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// M148: appendea un menú de nivel superior con items custom (en el hilo principal). El
-    /// target es un singleton del delegate (autoenablesItems resuelve a favor: target que
-    /// responde al action sin validateMenuItem: = item HABILITADO — cero plomería extra).
-    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
+    /// target es un singleton del delegate. M236: `autoenablesItems` a NO en el submenú para
+    /// que `enabled` del spec y `set_menu_item` manden; `position` (-1 = al final; n = tras el
+    /// menú de aplicación + n, acotado) para poner File antes del Edit estándar (#68).
+    pub(super) fn add_menu(title: &str, position: i64, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let title = title.to_string();
         let items = items.to_vec();
         on_main_sync(move || {
@@ -2231,26 +2618,23 @@ mod mac {
                     sel(b"initWithTitle:\0"),
                     nsstring(&title),
                 );
-                for (tag, label, shortcut) in &items {
-                    let item = item_init(
-                        alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
-                        sel(b"initWithTitle:action:keyEquivalent:\0"),
-                        nsstring(label),
-                        sel(b"rayMenuAction:\0"),
-                        nsstring(shortcut),
-                    );
-                    set_target(item, sel(b"setTarget:\0"), target);
-                    let n = {
-                        let mut tags = menu_tags().lock().unwrap();
-                        let n = tags.len() as i64 + 1;
-                        tags.insert(n, tag.clone());
-                        n
-                    };
-                    set_tag(item, sel(b"setTag:\0"), n);
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                set_bool(menu, sel(b"setAutoenablesItems:\0"), 0);
+                for spec in &items {
+                    let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
                     add(menu, sel(b"addItem:\0"), item);
                 }
                 set_submenu(bar_item, sel(b"setSubmenu:\0"), menu);
-                add(main_menu as Id, sel(b"addItem:\0"), bar_item);
+                if position < 0 {
+                    add(main_menu as Id, sel(b"addItem:\0"), bar_item);
+                } else {
+                    let count: MsgI64 = std::mem::transmute(msg_send());
+                    let insert_at: MsgVoidIdI64 = std::mem::transmute(msg_send());
+                    let n = count(main_menu as Id, sel(b"numberOfItems\0"));
+                    let idx = (position + 1).clamp(1, n.max(1));
+                    insert_at(main_menu as Id, sel(b"insertItem:atIndex:\0"), bar_item, idx);
+                }
+                let _ = (&set_target, &set_tag);
             }
             Ok(())
         })
@@ -2263,7 +2647,7 @@ mod mac {
     /// de glfw/SDL). Un item con tag "role:about" instala el "About" NATIVO
     /// (orderFrontStandardAboutPanel: por la responder chain — target nil = NSApp lo valida y
     /// habilita; NO emite evento); el resto emite ("menu", 0, tag) como los menús custom.
-    pub(super) fn set_app_menu(name: &str, items: &[(String, String, String)]) -> Result<(), String> {
+    pub(super) fn set_app_menu(name: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let name = name.to_string();
         let items = items.to_vec();
         on_main_sync(move || {
@@ -2279,7 +2663,6 @@ mod mac {
                 let submenu_of: MsgId = std::mem::transmute(msg_send());
                 let insert_at: MsgVoidIdI64 = std::mem::transmute(msg_send());
                 let set_id: MsgVoidId = std::mem::transmute(msg_send());
-                let set_tag: MsgVoidI64 = std::mem::transmute(msg_send());
                 let class_item: MsgId = std::mem::transmute(msg_send());
 
                 let app_item = item_at(main_menu as Id, sel(b"itemAtIndex:\0"), 0);
@@ -2298,7 +2681,8 @@ mod mac {
                     TARGET.store(target as usize, std::sync::atomic::Ordering::SeqCst);
                 }
                 let mut idx: i64 = 0;
-                for (tag, label, shortcut) in &items {
+                for spec in &items {
+                    let (tag, label) = (&spec.tag, &spec.label);
                     let item = if tag == "role:about" {
                         let title = if label.is_empty() { "About".to_string() } else { label.clone() };
                         // M155: action propia con target (el singleton del delegate) — al
@@ -2313,22 +2697,7 @@ mod mac {
                         set_id(item, sel(b"setTarget:\0"), target);
                         item
                     } else {
-                        let item = item_init(
-                            alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
-                            sel(b"initWithTitle:action:keyEquivalent:\0"),
-                            nsstring(label),
-                            sel(b"rayMenuAction:\0"),
-                            nsstring(shortcut),
-                        );
-                        set_id(item, sel(b"setTarget:\0"), target);
-                        let n = {
-                            let mut tags = menu_tags().lock().unwrap();
-                            let n = tags.len() as i64 + 1;
-                            tags.insert(n, tag.clone());
-                            n
-                        };
-                        set_tag(item, sel(b"setTag:\0"), n);
-                        item
+                        make_item(target, spec, sel(b"rayMenuAction:\0"))
                     };
                     insert_at(app_menu, sel(b"insertItem:atIndex:\0"), item, idx);
                     idx += 1;
@@ -3301,8 +3670,8 @@ mod gtk {
     /// del global de macOS): cada `open_window` construye el suyo de estos specs; los menús
     /// aplican a las ventanas abiertas DESPUÉS de `ui.menu()` (documentado). v1 sin
     /// aceleradores de teclado en Linux (GtkAccelGroup diferido): click-only.
-    /// Un menú declarado: (título, items (tag, label)).
-    type MenuSpec = (String, Vec<(String, String)>);
+    /// Un menú declarado: (título, items).
+    type MenuSpec = (String, Vec<super::MenuItemSpec>);
 
     fn menu_specs() -> &'static std::sync::Mutex<Vec<MenuSpec>> {
         static SPECS: std::sync::OnceLock<std::sync::Mutex<Vec<MenuSpec>>> =
@@ -3310,12 +3679,104 @@ mod gtk {
         SPECS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
     }
 
-    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
-        menu_specs().lock().unwrap().push((
-            title.to_string(),
-            items.iter().map(|(tag, label, _shortcut)| (tag.clone(), label.clone())).collect(),
-        ));
+    /// M236: `position` (-1 = al final) inserta el spec en la barra de las ventanas futuras.
+    pub(super) fn add_menu(title: &str, position: i64, items: &[super::MenuItemSpec]) -> Result<(), String> {
+        let mut specs = menu_specs().lock().unwrap();
+        let spec = (title.to_string(), items.to_vec());
+        if position < 0 || position as usize >= specs.len() {
+            specs.push(spec);
+        } else {
+            specs.insert(position as usize, spec);
+        }
         Ok(())
+    }
+
+    /// M236: tag → widgets vivos que lo llevan (con la bandera de vida de su ventana).
+    type TagWidgets = std::collections::HashMap<String, Vec<(usize, Arc<AtomicBool>)>>;
+    fn items_by_tag() -> &'static std::sync::Mutex<TagWidgets> {
+        static M: std::sync::OnceLock<std::sync::Mutex<TagWidgets>> = std::sync::OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    /// Símbolos opcionales de los items (separador, check, sensible, imagen); si faltan, el item
+    /// cae al plano.
+    struct ItemApi {
+        separator_new: Option<FnWidgetNew0>,
+        check_new: Option<FnItemNewLabel>,
+        check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
+        set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
+        image_item_new: Option<FnItemNewLabel>,
+        image_new_from_file: Option<unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>,
+        image_item_set_image: Option<FnWidgetPair>,
+        image_item_always_show: Option<unsafe extern "C" fn(Widget, i32)>,
+    }
+    unsafe impl Send for ItemApi {}
+    unsafe impl Sync for ItemApi {}
+
+    fn item_api() -> &'static ItemApi {
+        static API: std::sync::OnceLock<ItemApi> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            // SAFETY: literal NUL-terminado; la lib ya está cargada por `api()`; dlsym no retiene nada.
+            let gtk = unsafe { dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+            let opt = |name: &std::ffi::CStr| -> Option<*mut c_void> {
+                if gtk.is_null() { return None; }
+                let p = unsafe { dlsym(gtk, name.as_ptr()) };
+                (!p.is_null()).then_some(p)
+            };
+            // SAFETY: firmas C documentadas de GTK 3.
+            unsafe {
+                ItemApi {
+                    separator_new: opt(c"gtk_separator_menu_item_new").map(|p| std::mem::transmute::<*mut c_void, FnWidgetNew0>(p)),
+                    check_new: opt(c"gtk_check_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
+                    check_set_active: opt(c"gtk_check_menu_item_set_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_sensitive: opt(c"gtk_widget_set_sensitive").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    image_item_new: opt(c"gtk_image_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
+                    image_new_from_file: opt(c"gtk_image_new_from_file").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>(p)),
+                    image_item_set_image: opt(c"gtk_image_menu_item_set_image").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
+                    image_item_always_show: opt(c"gtk_image_menu_item_set_always_show_image").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                }
+            }
+        })
+    }
+
+    /// M236: estado por tag — specs (ventanas futuras) + widgets vivos (en el hilo del loop).
+    pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
+        let tag = tag.to_string();
+        let mut known = false;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
+            for it in items.iter_mut() {
+                if it.tag == tag {
+                    it.enabled = enabled;
+                    it.checked = checked;
+                    known = true;
+                }
+            }
+        }
+        let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
+        if !known && live.is_empty() {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        if live.is_empty() {
+            return Ok(());
+        }
+        on_main_sync(move || {
+            let ia = item_api();
+            // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
+            unsafe {
+                for (w, alive) in live {
+                    if !alive.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    if let Some(f) = ia.set_sensitive {
+                        f(w as Widget, enabled as i32);
+                    }
+                    if let Some(f) = ia.check_set_active {
+                        f(w as Widget, checked as i32);
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     /// El contexto del handler `activate` de un item: su tag (liberado por el GClosureNotify).
@@ -3335,20 +3796,46 @@ mod gtk {
     }
 
     // Construye el menubar de los specs vigentes (en el hilo del loop). None si no hay menús.
-    unsafe fn build_menubar(api: &Api) -> Option<Widget> {
+    unsafe fn build_menubar(api: &Api, alive: Arc<AtomicBool>) -> Option<Widget> {
         let specs = menu_specs().lock().unwrap().clone();
         if specs.is_empty() {
             return None;
         }
+        let ia = item_api();
         unsafe {
             let bar = (api.menu_bar_new)();
             for (title, items) in &specs {
                 let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
                 let top = (api.menu_item_new_with_label)(title_c.as_ptr());
                 let menu = (api.menu_new)();
-                for (tag, label) in items {
+                for spec in items {
+                    if spec.is_separator() {
+                        if let Some(sep_new) = ia.separator_new {
+                            (api.menu_shell_append)(menu, sep_new());
+                        }
+                        continue;
+                    }
+                    let (tag, label) = (&spec.tag, &spec.label);
                     let label_c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
-                    let item = (api.menu_item_new_with_label)(label_c.as_ptr());
+                    // M236: check → GtkCheckMenuItem; icono → GtkImageMenuItem (si la lib lo trae).
+                    let image_api = if spec.icon.is_empty() { None } else { ia.image_item_new.zip(ia.image_new_from_file).zip(ia.image_item_set_image) };
+                    let item = if let Some(check_new) = ia.check_new.filter(|_| spec.checked) {
+                        let w = check_new(label_c.as_ptr());
+                        if let Some(f) = ia.check_set_active { f(w, 1); }
+                        w
+                    } else if let Some(((item_new, image_new), set_image)) = image_api {
+                        let w = item_new(label_c.as_ptr());
+                        let path_c = std::ffi::CString::new(spec.icon.replace('\0', "")).unwrap();
+                        set_image(w, image_new(path_c.as_ptr()));
+                        if let Some(f) = ia.image_item_always_show { f(w, 1); }
+                        w
+                    } else {
+                        (api.menu_item_new_with_label)(label_c.as_ptr())
+                    };
+                    if !spec.enabled && let Some(f) = ia.set_sensitive {
+                        f(item, 0);
+                    }
+                    items_by_tag().lock().unwrap().entry(tag.clone()).or_default().push((item as usize, alive.clone()));
                     let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone() }));
                     (api.signal_connect)(
                         item,
@@ -3504,6 +3991,7 @@ mod gtk {
         let (width, height) = (opts.width, opts.height);
         let alive = Arc::new(AtomicBool::new(true));
         let alive2 = alive.clone();
+        let alive_for_menu = alive.clone();
         let (window, webview) = on_main_sync(move || {
             let api = api().as_ref().map_err(|e| e.clone())?;
             unsafe {
@@ -3588,7 +4076,7 @@ mod gtk {
                 // declarados) arriba, webview expandido debajo. GTK posee todo el árbol.
                 const ORIENTATION_VERTICAL: i32 = 1;
                 let content = (api.box_new)(ORIENTATION_VERTICAL, 0);
-                if let Some(bar) = build_menubar(api) {
+                if let Some(bar) = build_menubar(api, alive_for_menu.clone()) {
                     (api.box_pack_start)(content, bar, 0, 0, 0);
                 }
                 (api.box_pack_start)(content, webview, 1, 1, 0);
@@ -4198,7 +4686,7 @@ mod win {
     use std::sync::{Arc, OnceLock};
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use webview2_com::AcceleratorKeyPressedEventHandler;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
     use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -4234,7 +4722,7 @@ mod win {
         menu_tags: HashMap<u16, String>,
         /// M183: atajos (código VK, con Shift, tag) — los atiende `AcceleratorKeyPressed` del
         /// webview, porque el teclado del webview NO llega a la ventana anfitriona.
-        accels: Vec<(u16, bool, String)>,
+        accels: Accels,
         /// M210: tamaño mínimo de la VENTANA (área cliente mínima + marco), para WM_GETMINMAXINFO;
         /// (0, 0) = sin mínimo.
         min_track: (i32, i32),
@@ -4472,30 +4960,103 @@ mod win {
     /// de `ui.menu()`). Un menú declarado: (título, items (tag, label, atajo)). M183: el atajo
     /// (`shortcut` de MenuItem, un carácter; mayúscula = con Shift) se muestra como `Ctrl+X` y va
     /// a la tabla de aceleradores de la ventana.
-    type MenuSpec = (String, Vec<(String, String, String)>);
+    type MenuSpec = (String, Vec<super::MenuItemSpec>);
     fn menu_specs() -> &'static std::sync::Mutex<Vec<MenuSpec>> {
         static SPECS: OnceLock<std::sync::Mutex<Vec<MenuSpec>>> = OnceLock::new();
         SPECS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
     }
-    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
-        let spec: MenuSpec = (title.to_string(), items.iter().map(|(tag, label, key)| (tag.clone(), label.clone(), key.clone())).collect());
-        menu_specs().lock().unwrap().push(spec);
+    /// M236: `position` (-1 = al final) inserta el spec en la barra de las ventanas que se abran
+    /// después (la barra de Windows es por ventana, como la de GTK).
+    pub(super) fn add_menu(title: &str, position: i64, items: &[super::MenuItemSpec]) -> Result<(), String> {
+        let spec: MenuSpec = (title.to_string(), items.to_vec());
+        let mut specs = menu_specs().lock().unwrap();
+        if position < 0 || position as usize >= specs.len() {
+            specs.push(spec);
+        } else {
+            specs.insert(position as usize, spec);
+        }
         Ok(())
+    }
+
+    /// M236: tag → (hwnd, id de comando) de cada ventana que construyó el item, para
+    /// `set_menu_item` (las ventanas muertas se saltan con `IsWindow`).
+    type TagItems = HashMap<String, Vec<(usize, u16)>>;
+    fn items_by_tag() -> &'static std::sync::Mutex<TagItems> {
+        static M: OnceLock<std::sync::Mutex<TagItems>> = OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+    }
+
+    /// M236: estado por tag — en los specs (ventanas futuras) y en las barras vivas.
+    pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
+        let tag = tag.to_string();
+        let mut known = false;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
+            for it in items.iter_mut() {
+                if it.tag == tag {
+                    it.enabled = enabled;
+                    it.checked = checked;
+                    known = true;
+                }
+            }
+        }
+        let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
+        if !known && live.is_empty() {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        if live.is_empty() {
+            return Ok(());
+        }
+        on_main_sync(move || {
+            // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas.
+            unsafe {
+                for (hwnd, id) in live {
+                    let hwnd = HWND(hwnd as *mut _);
+                    if !IsWindow(Some(hwnd)).as_bool() {
+                        continue;
+                    }
+                    let menu = GetMenu(hwnd);
+                    if menu.is_invalid() {
+                        continue;
+                    }
+                    let _ = EnableMenuItem(menu, id as u32, MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED });
+                    let _ = CheckMenuItem(menu, id as u32, (MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED }).0);
+                    let _ = DrawMenuBar(hwnd);
+                }
+            }
+            Ok(())
+        })
     }
 
     /// El atajo de un item (`shortcut` de un carácter) como (texto para el menú, ACCEL). Minúscula
     /// → Ctrl+X; mayúscula → Ctrl+Shift+X. Solo letras y dígitos (los códigos VK coinciden con el
     /// ASCII en mayúsculas); otra cosa se ignora.
     fn accel_for(key: &str, cmd: u16) -> Option<(String, ACCEL)> {
-        let c = key.chars().next().filter(|c| c.is_ascii_alphanumeric() && key.chars().count() == 1)?;
-        let shift = c.is_ascii_uppercase();
-        let up = c.to_ascii_uppercase();
-        let mut fvirt = FVIRTKEY | FCONTROL;
-        if shift {
-            fvirt |= FSHIFT;
-        }
-        let text = if shift { format!("Ctrl+Shift+{up}") } else { format!("Ctrl+{up}") };
-        Some((text, ACCEL { fVirt: fvirt, key: up as u16, cmd }))
+        use super::ChordKey as K;
+        let ch = super::parse_chord(key)?;
+        let vk: u16 = match ch.key {
+            K::Char(c) if c.is_ascii_alphanumeric() => c.to_ascii_uppercase() as u16,
+            K::Char(_) => return None, // signos: sin código VK portable
+            K::F(n) => 0x70 + (n as u16 - 1),
+            K::Enter => 0x0D,
+            K::Escape => 0x1B,
+            K::Tab => 0x09,
+            K::Space => 0x20,
+            K::Backspace => 0x08,
+            K::Delete => 0x2E,
+            K::Up => 0x26,
+            K::Down => 0x28,
+            K::Left => 0x25,
+            K::Right => 0x27,
+            K::Home => 0x24,
+            K::End => 0x23,
+            K::PageUp => 0x21,
+            K::PageDown => 0x22,
+        };
+        let mut fvirt = FVIRTKEY;
+        if ch.cmd || ch.ctrl { fvirt |= FCONTROL; }
+        if ch.alt { fvirt |= FALT; }
+        if ch.shift { fvirt |= FSHIFT; }
+        Some((super::chord_label(&ch, "Ctrl"), ACCEL { fVirt: fvirt, key: vk, cmd }))
     }
 
     /// hwnd (usize) → HACCEL (como isize) de cada ventana viva con aceleradores; lo consulta el
@@ -4509,9 +5070,11 @@ mod win {
     /// id de comando → tag. Corre en el hilo 1. M183: los items con atajo muestran `Ctrl+X` y
     /// alimentan la tabla de aceleradores de la ventana; la barra va sin la columna de check
     /// (`MNS_NOCHECK`: `MenuItem` no tiene `checked`/`icon`, y el hueco vacío se veía como sangría).
-    unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Vec<(u16, bool, String)>) {
+    /// (código VK, ctrl, alt, shift, tag) de cada atajo de la ventana.
+    type Accels = Vec<(u16, bool, bool, bool, String)>;
+    unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Accels) {
         let mut tags = HashMap::new();
-        let mut keys: Vec<(u16, bool, String)> = Vec::new();
+        let mut keys: Accels = Vec::new();
         let specs = menu_specs().lock().unwrap().clone();
         if specs.is_empty() {
             return (tags, keys);
@@ -4521,30 +5084,49 @@ mod win {
         unsafe {
             let Ok(bar) = CreateMenu() else { return (tags, keys) };
             let mut next_id = MENU_ID_BASE;
+            let any_check = specs.iter().any(|(_, items)| items.iter().any(|it| it.checked || !it.icon.is_empty()));
             for (title, items) in specs {
                 let Ok(popup) = CreatePopupMenu() else { continue };
-                for (tag, label, key) in items {
-                    let label = match accel_for(&key, next_id) {
+                for spec in items {
+                    if spec.is_separator() {
+                        let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
+                        continue;
+                    }
+                    let label = match accel_for(&spec.shortcut, next_id) {
                         Some((text, accel)) => {
-                            keys.push((accel.key, (accel.fVirt & FSHIFT).0 != 0, tag.clone()));
+                            keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
                             accels.push(accel);
-                            format!("{label}\t{text}")
+                            format!("{}\t{text}", spec.label)
                         }
-                        None => label,
+                        None => spec.label.clone(),
                     };
-                    let _ = AppendMenuW(popup, MF_STRING, next_id as usize, PCWSTR(wide(&label).as_ptr()));
-                    tags.insert(next_id, tag);
+                    let mut flags = MF_STRING;
+                    if !spec.enabled { flags |= MF_GRAYED; }
+                    if spec.checked { flags |= MF_CHECKED; }
+                    let _ = AppendMenuW(popup, flags, next_id as usize, PCWSTR(wide(&label).as_ptr()));
+                    // M236: icono — solo .bmp por LoadImageW (otros formatos se ignoran, documentado).
+                    if spec.icon.to_ascii_lowercase().ends_with(".bmp")
+                        && let Ok(h) = LoadImageW(None, PCWSTR(wide(&spec.icon).as_ptr()), IMAGE_BITMAP, 16, 16, LR_LOADFROMFILE)
+                    {
+                        let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_BITMAP, ..Default::default() };
+                        info.hbmpItem = windows::Win32::Graphics::Gdi::HBITMAP(h.0);
+                        let _ = SetMenuItemInfoW(popup, next_id as u32, false, &info);
+                    }
+                    items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push((hwnd.0 as usize, next_id));
+                    tags.insert(next_id, spec.tag);
                     next_id = next_id.wrapping_add(1);
                 }
                 let _ = AppendMenuW(bar, MF_POPUP, popup.0 as usize, PCWSTR(wide(&title).as_ptr()));
             }
-            let info = MENUINFO {
-                cbSize: std::mem::size_of::<MENUINFO>() as u32,
-                fMask: MIM_STYLE | MIM_APPLYTOSUBMENUS,
-                dwStyle: MNS_NOCHECK,
-                ..Default::default()
-            };
-            let _ = SetMenuInfo(bar, &info);
+            if !any_check {
+                let info = MENUINFO {
+                    cbSize: std::mem::size_of::<MENUINFO>() as u32,
+                    fMask: MIM_STYLE | MIM_APPLYTOSUBMENUS,
+                    dwStyle: MNS_NOCHECK,
+                    ..Default::default()
+                };
+                let _ = SetMenuInfo(bar, &info);
+            }
             let _ = SetMenu(hwnd, Some(bar));
             if !accels.is_empty() {
                 if let Ok(table) = CreateAcceleratorTableW(&accels) {
@@ -4739,13 +5321,15 @@ mod win {
                             if args.KeyEventKind(&mut kind).is_ok()
                                 && (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
                                 && args.VirtualKey(&mut vk).is_ok()
-                                && GetKeyState(VK_CONTROL.0 as i32) < 0
                             {
+                                // M236: chords completos — Ctrl/Alt/Shift se comparan exactos.
+                                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                                let alt = GetKeyState(VK_MENU.0 as i32) < 0;
                                 let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
                                 let ctx_ptr = GetWindowLongPtrW(HWND(hwnd_key as *mut _), GWLP_USERDATA) as *mut WinCtx;
                                 if !ctx_ptr.is_null() {
                                     let ctx = &*ctx_ptr;
-                                    if let Some((_, _, tag)) = ctx.accels.iter().find(|(k, s, _)| *k as u32 == vk && *s == shift) {
+                                    if let Some((_, _, _, _, tag)) = ctx.accels.iter().find(|(k, c, a, s, _)| *k as u32 == vk && *c == ctrl && *a == alt && *s == shift) {
                                         super::push_event("menu", 0, tag);
                                         let _ = args.SetHandled(true);
                                     }

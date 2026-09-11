@@ -1422,6 +1422,7 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M147: las claves del espacio embed → ["ok", clave…] o ["err", msg].
+            "__embed_root" => Value::Str(crate::builtins::embed_root()),
             "__embed_list" => {
                 let arr = match crate::builtins::embed_list() {
                     Ok(keys) => {

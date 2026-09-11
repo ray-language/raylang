@@ -522,6 +522,11 @@ fn cmd_run(args: &[String]) {
     // en el build y no mira el entorno.
     let (devtools, args) = take_flag_bool(&args, "--devtools");
     crate::builtins::set_ui_devtools(devtools || env::var_os("RAY_DEV_RELOAD").is_some());
+    // M234: el puerto del hub de live-reload pasa al runtime desde AQUÍ (la toolchain): una app de
+    // `std/ui` sin webserver recarga sus ventanas cuando `ray dev` lo emite.
+    if let Some(port) = env::var("RAY_DEV_RELOAD").ok().and_then(|p| p.parse::<u16>().ok()) {
+        crate::builtins::set_ui_dev_reload(port);
+    }
     let (use_interp, rest) = take_interp(&args);
     let (fuel, rest) = take_flag_num(&rest, "--fuel", "a number of instructions (e.g. --fuel 1000000)");
     let (heap, rest) = take_flag_num(&rest, "--heap", "a number of objects (e.g. --heap 1000000)");
@@ -601,7 +606,7 @@ fn cmd_dev(args: &[String]) {
     if let Some(p) = reload_port {
         // La coletilla importa: para una app de consola el hub es INERTE (solo el webserver
         // inyecta el snippet, y solo al servir HTML) — sin ella la línea confunde en una TUI.
-        eprintln!("[dev] web live-reload on http://127.0.0.1:{p} (only used when the app serves HTML)");
+        eprintln!("[dev] web live-reload on http://127.0.0.1:{p} (pages served by net/webserver and std/ui windows)");
     }
 
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`

@@ -2150,6 +2150,9 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 // M147: las claves del espacio embed → ["ok", clave…] o ["err", msg].
+                OpCode::EmbedRoot => {
+                    self.push(HeapValue::Str(crate::builtins::embed_root().into()));
+                }
                 OpCode::EmbedList => {
                     let elems = match crate::builtins::embed_list() {
                         Ok(keys) => {

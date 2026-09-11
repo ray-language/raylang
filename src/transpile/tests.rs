@@ -77,6 +77,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ui_menu", "__ui_app_menu", "__ui_set_about", "__ui_dialog",
     // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.
     "__embed_read", "__embed_list",
+    // M234: raíz en disco de los embebidos (siempre "" en el nativo).
+    "__embed_root",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que

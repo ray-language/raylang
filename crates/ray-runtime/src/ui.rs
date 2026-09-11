@@ -533,12 +533,11 @@ pub fn devtools_enabled() -> bool {
 fn notify_dev_windowed() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let Ok(port) = std::env::var("RAY_DEV_RELOAD") else {
+        // M234: el puerto lo fija la toolchain (`ray run` bajo `ray dev`), no el entorno.
+        let Some(port) = dev_reload_port() else {
             return;
         };
-        let Ok(port) = port.parse::<u16>() else {
-            return;
-        };
+        start_dev_reload_listener(port);
         // Aparte del hilo llamador: un connect que se cuelgue no debe retrasar la ventana.
         std::thread::spawn(move || {
             use std::io::Write;
@@ -549,6 +548,68 @@ fn notify_dev_windowed() {
                 let _ = s.write_all(b"GET /ui HTTP/1.0\r\n\r\n");
             }
         });
+    });
+}
+
+/// M234: puerto del hub de live-reload de `ray dev` (0 = ninguno). Lo fija la toolchain
+/// (`ray run` cuando corre bajo `ray dev`), nunca el entorno del proceso ni un binario nativo:
+/// la misma frontera que las devtools (M231).
+static DEV_RELOAD: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+pub fn set_dev_reload(port: u16) {
+    DEV_RELOAD.store(port, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn dev_reload_port() -> Option<u16> {
+    match DEV_RELOAD.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        p => Some(p),
+    }
+}
+
+/// M234: recarga la página de TODAS las ventanas abiertas (`location.reload()` por `eval_js`,
+/// que ya despacha al hilo principal de cada backend). Devuelve cuántas.
+pub fn reload_all_windows() -> usize {
+    let ids: Vec<i64> = windows().lock().unwrap().keys().copied().collect();
+    let mut n = 0;
+    for id in ids {
+        if eval_js(id, "location.reload()").is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// M234 — live-reload para apps de `std/ui` sin servidor HTTP. El hub SSE de `ray dev` solo
+/// llegaba a las páginas servidas por `net/webserver` (que inyecta un `EventSource`); una app
+/// que sirve por `ray://` no pasa por ahí. Aquí el propio runtime se suscribe al hub como un
+/// navegador más y, en cada `reload`, recarga sus ventanas. Si el hub se cae (terminó `ray dev`)
+/// el hilo reintenta con calma y muere con el proceso; el hilo nunca bloquea la ventana.
+fn start_dev_reload_listener(port: u16) {
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        loop {
+            let Ok(mut s) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)) else {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            };
+            if s.write_all(b"GET /events HTTP/1.0\r\n\r\n").is_err() {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+            let reader = BufReader::new(s);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if line.trim() == "data: reload" {
+                    let n = reload_all_windows();
+                    if ui_trace() {
+                        eprintln!("[ui] dev reload {n} windows");
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     });
 }
 
@@ -653,6 +714,9 @@ pub mod scheme {
 
     /// Monta `dir` bajo `ray://app/<prefix>/`. `dir` debe existir y ser un directorio.
     pub fn mount_dir(prefix: &str, dir: &str) -> Result<(), String> {
+        if super::ui_trace() {
+            eprintln!("[ui] mount dir {prefix} {dir}");
+        }
         let prefix = normalize(prefix)?;
         let canonical = std::fs::canonicalize(dir).map_err(|e| format!("ui: cannot mount '{dir}': {e}"))?;
         if !canonical.is_dir() {

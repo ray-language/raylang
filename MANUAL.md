@@ -2650,8 +2650,10 @@ milisegundos, el ciclo editar→ver es de decenas de ms desde el guardado. Al te
 cerraste tú con su propia tecla → `ray dev` **sale con ella**, sin teclas extra; un **script** que
 termina queda a la espera del siguiente cambio para re-correr (el contrato del modo watch; una
 sola **`q`** sale), y un programa que **crashea** también espera — editas el fix y se relanza
-solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: solo el
-webserver inyecta el snippet, y solo al servir HTML.
+solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: lo usan
+el webserver (inyecta el snippet al servir HTML) y las ventanas de `std/ui` (M234: el runtime se
+suscribe al hub y recarga la página; `mount_embed` sirve los assets del disco en vivo, así que
+un cambio en `assets/` se ve sin reiniciar el proceso ni perder el estado del backend).
 
 **`ray test --watch`** es el mismo bucle aplicado al runner: re-corre **solo las suites cuyo
 grafo de imports alcanza el archivo cambiado** (el anuncio lleva el conteo; `ray.toml`, un
@@ -2674,9 +2676,11 @@ percibido es el de una compilación (ms). Tu `tcp_listen`/`serve` no cambia: ado
 de forma transparente cuando el `host:port` coincide. (El estado en memoria del programa **se resetea**
 por reload; si quieres estado persistente entre reloads, guárdalo en un `sqlite.connect("dev.db")`.)
 
-Y **live-reload del navegador**: en una sesión con `--port`, `ray dev` levanta un canal SSE lateral e
+Y **live-reload del navegador**: `ray dev` levanta un canal SSE lateral e
 **inyecta** en tus respuestas HTML (del paquete `webserver`) un `<script>` que **refresca la página**
-sola cuando un cambio compila y reinicia. No tocas nada; en producción no se inyecta. (Es un canal
+sola cuando un cambio compila y reinicia; una app de escritorio de `std/ui` (sin servidor, por
+`ray://app`) se suscribe sola desde el runtime y recarga sus ventanas igual (M234). No tocas nada;
+en producción no se inyecta ni se suscribe. (Es un canal
 solo-de-dev, distinto del SSE de tu aplicación: tu `sse_open`/`sse_event` sigue en tu puerto, intacto.)
 
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre

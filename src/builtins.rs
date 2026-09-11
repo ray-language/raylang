@@ -1171,6 +1171,28 @@ pub fn set_ui_devtools(on: bool) {
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn set_ui_devtools(_on: bool) {}
 
+/// M234: puerto del hub de live-reload de `ray dev` — lo fija la CLI (`ray run` bajo `ray dev`).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn set_ui_dev_reload(port: u16) {
+    ray_runtime::ui::set_dev_reload(port);
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn set_ui_dev_reload(_port: u16) {}
+
+/// M234: la raíz EN DISCO de los assets embebidos cuando el programa corre bajo la toolchain
+/// (`ray run`/`ray dev` leen `[native] embed` del proyecto en vivo); `""` sin configuración. El
+/// binario nativo lleva los assets horneados y devuelve siempre `""` (ver el transpilador).
+pub fn embed_root() -> String {
+    let Some((root, _)) = embed_config().get() else {
+        return String::new();
+    };
+    let s = root.to_string_lossy().into_owned();
+    // Windows: `canonicalize` devuelve la forma `\\?\C:\…` (extended-length), que no admite `/` al
+    // concatenar en raylang; sin el prefijo, Win32 acepta separadores mixtos y `mount_dir` vuelve a
+    // canonicalizar.
+    s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+}
+
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_focus(h: i64) -> Result<(), String> {
@@ -4142,6 +4164,12 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__embed_read", " (path)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__embed_read expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __embed_root() -> string (M234): raíz en disco de los embebidos bajo la toolchain; "" si van
+    // horneados (nativo) o no hay configuración. `ui.mount_embed` monta el directorio en vivo con ella.
+    Builtin { name: "__embed_root", opcode: OpCode::EmbedRoot, check: |a| {
+        nullary(a, "__embed_root")?;
+        Ok(Type::String)
     } },
     // __embed_list() -> [string] (M147): ["ok", clave…] (orden lexicográfico) o ["err", msg].
     Builtin { name: "__embed_list", opcode: OpCode::EmbedList, check: |a| {

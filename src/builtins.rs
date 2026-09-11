@@ -1193,6 +1193,39 @@ pub fn embed_root() -> String {
     s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
 }
 
+/// M235: `platform()` — el SO del proceso ("macos" | "linux" | "windows" | …, el nombre de Rust).
+pub fn platform_name() -> &'static str {
+    std::env::consts::OS
+}
+
+/// M235: `ui.open_path`/`ui.reveal` — el escritorio abre o revela una ruta (sin shell).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_desktop(kind: &str, path: &str) -> Result<(), String> {
+    match kind {
+        "open_path" => ray_runtime::ui::open_path(path),
+        "reveal" => ray_runtime::ui::reveal_path(path),
+        other => Err(format!("ui: unknown desktop action '{other}'")),
+    }
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_desktop(_kind: &str, _path: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M235: `ui.clipboard_write`/`ui.clipboard_read` — texto del portapapeles del sistema.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_clipboard(op: &str, text: &str) -> Result<String, String> {
+    match op {
+        "write" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()),
+        "read" => ray_runtime::ui::clipboard_read(),
+        other => Err(format!("ui: unknown clipboard op '{other}'")),
+    }
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_clipboard(_op: &str, _text: &str) -> Result<String, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_focus(h: i64) -> Result<(), String> {
@@ -3767,6 +3800,11 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "args")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // M235 (ray-sublime #69): platform() -> string — "macos" | "linux" | "windows" | … (std::env::consts::OS).
+    Builtin { name: "platform", opcode: OpCode::Platform, check: |a| {
+        nullary(a, "platform")?;
+        Ok(Type::String)
+    } },
     // M88.1: signals() -> Channel<int> — el canal de señales del SO (SIGTERM/SIGINT).
     // Singleton del proceso; compone con recv/select como cualquier canal. Solo VM.
     Builtin { name: "signals", opcode: OpCode::Signals, check: |a| {
@@ -4083,6 +4121,20 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::Int { return Err((Some(2), format!("__onig_search expects an int (from), not {}", a[2]))); }
         if a[3] != Type::Bool { return Err((Some(3), format!("__onig_search expects a bool (anchored), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    // __ui_desktop(kind, path) -> [string] (M235): "open_path" | "reveal" → ["ok"] / ["err", msg].
+    Builtin { name: "__ui_desktop", opcode: OpCode::UiDesktop, check: |a| {
+        arity(a, 2, "__ui_desktop", " (kind, path)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_desktop expects a string (the kind), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_desktop expects a string (the path), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_clipboard(op, text) -> [string] (M235): "write" → ["ok"]; "read" → ["ok", texto]; ["err", msg].
+    Builtin { name: "__ui_clipboard", opcode: OpCode::UiClipboard, check: |a| {
+        arity(a, 2, "__ui_clipboard", " (op, text)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_clipboard expects a string (the op), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_clipboard expects a string (the text), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_focus(h) -> [string] (M229): trae al frente y da el foco a la ventana `h`.
     Builtin { name: "__ui_focus", opcode: OpCode::UiFocus, check: |a| {

@@ -950,7 +950,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    import std/math;          // math.gcd(12, 18), math.PI, math.clamp(x, 0, 10)
    import std/text;          // text.capitalize("hola"), text.nfd("café") — normalización Unicode
    import std/sort;          // sort.binary_search(xs, 42), sort.dedup(xs)
-   import std/fs;            // fs.read_file("x.txt") -> Result<string, string>
+   import std/fs;            // fs.read_file("x.txt") -> Result<string, string>, fs.copy_all(src, dst)
    import std/json;          // json.parse(s) -> Result<Json, string>, json.stringify(j)
    import std/regex;         // regex.find_all("\\d+", texto)
    import std/csv;           // csv.parse_csv(src) -> Result<[[string]], string>
@@ -960,6 +960,12 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    El catálogo: `math` `text` `sort` `fs` `net` `process` `time` `units` `random` `crypto` `resilience`
    `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
    `inflate` `deflate` `huffman` `protobuf` `uuid`.
+
+   Una app de escritorio (`std/ui`) habla con el sistema sin rodeos (M235): `platform()` en la
+   prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
+   archivo con su aplicación, `ui.reveal(p)` lo muestra en el gestor de archivos y
+   `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
+   app de terminal en macOS y Windows). Nada de eso pasa por una shell.
 
    `std/regex` trae **dos dialectos**: el propio (`compile`/`search`/…, motor lineal escrito en
    raylang, sin look-around) y, desde M232, el **Oniguruma** de `regex.onig` — el que usan los

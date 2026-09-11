@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **La app de escritorio habla con el sistema** (M235, ray-sublime #69): `platform()` en la
+  prelude (`"macos"`/`"linux"`/`"windows"`); `fs.copy_all(src, dst)`, espejo de `remove_all`;
+  y en `std/ui`: `open_path(path)` (la aplicación asociada), `reveal(path)` (Finder/Explorer/
+  gestor freedesktop) y `clipboard_write`/`clipboard_read` (portapapeles del sistema, sin
+  ventana en macOS y Windows). Sin shell en ningún caso; idéntico en los tres motores, con
+  headless trazable.
+
 ## 1.14.2 — 2026-09-10
 
 - **`ray dev` recarga las apps de `std/ui` sin servidor HTTP** (M234, ray-sublime): el

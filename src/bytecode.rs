@@ -653,6 +653,12 @@ pub enum OpCode {
     UiMountBytes,
     /// M229: `__ui_focus(h)` — trae al frente y da el foco (['ok'] / ['err', msg]).
     UiFocus,
+    /// M235: `platform()` — el SO ("macos" | "linux" | "windows" | …).
+    Platform,
+    /// M235: `__ui_desktop(kind, path)` — abrir/revelar en el escritorio (['ok'] / ['err', msg]).
+    UiDesktop,
+    /// M235: `__ui_clipboard(op, text)` — portapapeles (['ok', texto] / ['err', msg]).
+    UiClipboard,
     /// M232: `__onig_compile(pattern)` — dialecto Oniguruma (['ok', id, nombres…] / ['err', msg]).
     OnigCompile,
     /// M232: `__onig_search(id, text, from, anchored)` — spans por carácter ([] sin match, [-1] abortado).

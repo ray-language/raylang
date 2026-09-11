@@ -2504,6 +2504,7 @@ fn is_known_builtin(name: string) -> bool {
         || name == "__write_file"
         || name == "__exists"
         || name == "args"
+        || name == "platform"
         || name == "__pop"
         || name == "char_code"
 }
@@ -2644,6 +2645,9 @@ fn check_named_call(
     }
     if (name == "args") {
         return check_args_builtin(c, cargs, line, col);
+    }
+    if (name == "platform") {
+        return check_platform_builtin(c, cargs, line, col);
     }
     if (name == "__pop") {
         return check_pop_prim(c, cargs, line, col);
@@ -3079,6 +3083,21 @@ fn check_args_builtin(c: Checker, cargs: [Expr], line: int, col: int) -> Result<
         );
     }
     Result.Ok(Type.TArray(Type.TString))
+}
+
+// platform() -> string (M235): el SO del proceso, sin argumentos.
+fn check_platform_builtin(
+    c: Checker,
+    cargs: [Expr],
+    line: int,
+    col: int
+) -> Result<Type, TypeError> {
+    if (cargs.len() != 0) {
+        return Result.Err(
+            terr(line, col, "platform expects no arguments, received " + to_string(cargs.len()))
+        );
+    }
+    Result.Ok(Type.TString)
 }
 
 // __exists(ruta: string) -> bool (M14.6d; M50.1: __x): total, no falla.

@@ -139,6 +139,54 @@ pub fn copy_file(src: string, dst: string) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Copies the directory tree at `src` into `dst` (M235; the mirror of `remove_all`): `dst` is
+/// created if missing, files are overwritten, subdirectories recurse. `Ok(files_copied)` or the
+/// first `Err(message)`. Copying a single file is `copy_file`.
+pub fn copy_all(src: string, dst: string) -> Result<int, string> {
+    if (!is_dir(src)) {
+        return Result.Err("fs: copy_all: '" + src + "' is not a directory");
+    }
+    if (!is_dir(dst)) {
+        match (mkdir(dst)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+        }
+    }
+    let names = match (list_dir(src)) {
+        Result.Ok(ns) => ns,
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
+    };
+    var n = 0;
+    for name in names {
+        let from = src + "/" + name;
+        let to = dst + "/" + name;
+        if (is_dir(from)) {
+            match (copy_all(from, to)) {
+                Result.Ok(k) => {
+                    n = n + k;
+                },
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+            }
+        } else {
+            match (copy_file(from, to)) {
+                Result.Ok(_) => {
+                    n = n + 1;
+                },
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+            }
+        }
+    }
+    Result.Ok(n)
+}
+
 /// Size of a file in bytes; `Ok(size)` or `Err(message)` (a directory is an error).
 pub fn file_size(path: string) -> Result<int, string> {
     let r = __file_size(path);

@@ -74,6 +74,13 @@ Lo que raylang **garantiza por construcción**:
     `run`/`build` con deps git/`path:`), y el opt-out es explícito: `index = ""` en
     `ray.toml` o `RAY_INDEX` vacía (builds herméticos/CI sin red).
 
+### Procesos que lanza `std/ui` (M235)
+
+`ui.open_path`/`ui.reveal` arrancan el lanzador del escritorio (`open`, `xdg-open`, `dbus-send`,
+`explorer`, `rundll32`) con la ruta como **argumento**, nunca por una shell: una ruta con espacios,
+comillas o `;` no se interpreta. Se exige que la ruta exista antes de lanzar nada; qué aplicación
+abre el sistema es decisión del escritorio del usuario, no del programa.
+
 ### Política de dependencias
 
 raylang **no** es cero-dependencias: es **dependencias escogidas, acotadas y justificadas**. La

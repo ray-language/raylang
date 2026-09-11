@@ -2140,6 +2140,27 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "platform" => Value::Str(crate::builtins::platform_name().to_string()),
+            "__ui_desktop" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(k), Value::Str(p)) => match crate::builtins::ui_desktop(k, p) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_clipboard" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(op), Value::Str(t)) => match crate::builtins::ui_clipboard(op, t) {
+                        Ok(s) => vec![Value::Str("ok".to_string()), Value::Str(s)],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_focus" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::ui_focus(*h) {

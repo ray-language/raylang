@@ -1009,8 +1009,9 @@ impl Transpiler {
         // `std::fs::*` (módulo std/fs) → I/O de archivos con `std::fs`/`std::io` de Rust (Ok/Err como la VM).
         // Excepción M115.3: stat/chmod NO se interceptan aquí — sus wrappers se emiten (el intercept
         // es a nivel de primitivo `__stat`/`__chmod`, abajo), así el struct `Stat` vive en raylang.
+        // M235: copy_all es raylang puro sobre is_dir/mkdir/list_dir/copy_file → su cuerpo se emite.
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout") {
+            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all") {
                 return self.emit_fs(out, ffn, &eff);
             }
         }
@@ -1098,6 +1099,10 @@ impl Transpiler {
         match method {
             // args() → [string]: los argumentos de línea de comandos tras el binario. La VM devuelve
             // argv tras el `.ray`; el nativo, tras el binario (`skip(1)`) → equivalen. Repr = arreglo.
+            // M235: el SO como literal del target de compilación.
+            "platform" => {
+                out.push_str("Rc::<str>::from(std::env::consts::OS)");
+            }
             "args" => {
                 out.push_str(
                     "Rc::new(std::cell::RefCell::new(std::env::args().skip(1)\
@@ -2309,6 +2314,14 @@ impl Transpiler {
                     out.push(')');
                 }
             }
+            "ui_desktop" | "ui_clipboard" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str(if method == "ui_desktop" { "__ray_ui_desktop(&*" } else { "__ray_ui_clipboard(&*" });
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "ui_focus" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_focus(");
@@ -2580,7 +2593,7 @@ impl Transpiler {
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
                 // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
                 if let Some(ffn) = n.strip_prefix("std::fs::")
-                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout")
+                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all")
                 {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),

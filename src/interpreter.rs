@@ -2186,6 +2186,16 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_set_titlebar" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(c)) => match crate::builtins::ui_set_titlebar(*h, c) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees int, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_focus" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::ui_focus(*h) {

@@ -1183,7 +1183,14 @@ pub fn set_ui_dev_reload(_port: u16) {}
 /// (`ray run`/`ray dev` leen `[native] embed` del proyecto en vivo); `""` sin configuración. El
 /// binario nativo lleva los assets horneados y devuelve siempre `""` (ver el transpilador).
 pub fn embed_root() -> String {
-    embed_config().get().map(|(root, _)| root.to_string_lossy().into_owned()).unwrap_or_default()
+    let Some((root, _)) = embed_config().get() else {
+        return String::new();
+    };
+    let s = root.to_string_lossy().into_owned();
+    // Windows: `canonicalize` devuelve la forma `\\?\C:\…` (extended-length), que no admite `/` al
+    // concatenar en raylang; sin el prefijo, Win32 acepta separadores mixtos y `mount_dir` vuelve a
+    // canonicalizar.
+    s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
 }
 
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.

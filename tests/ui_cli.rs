@@ -786,10 +786,15 @@ fn fake_reload_hub() -> u16 {
                 let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
                 continue;
             }
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: connected\n\ndata: reload\n\n";
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: connected\n\n";
             let _ = s.write_all(head.as_bytes());
             let _ = s.flush();
+            // El runtime se suscribe al abrir la ventana, ANTES de registrarla: como haría `ray dev`
+            // (que solo emite al cambiar un archivo), el `reload` llega un poco después.
             std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                let _ = s.write_all(b"data: reload\n\n");
+                let _ = s.flush();
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 drop(s);
             });

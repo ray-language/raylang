@@ -326,6 +326,16 @@ pub fn focus(h: int) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Changes the title bar color of an OPEN window (M239): `"#rrggbb"` tints it like
+/// `WindowOptions.titlebar_color` does at creation (macOS: transparent bar over the window
+/// background with a light or dark appearance by luminance; Windows 11: `DWMWA_CAPTION_COLOR`),
+/// `""` restores the system bar. Follows a theme change without reopening the window. Linux
+/// ignores it, as at creation. `Err` for a malformed color or a closed window.
+pub fn set_titlebar_color(h: int, color: string) -> Result<int, string> {
+    let r = __ui_set_titlebar(h, color);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Opens `path` (a file or directory) with the application the desktop associates to it
 /// (M235): `open` on macOS, the default handler on Windows, `xdg-open` on freedesktop. No shell
 /// is involved (the path is an argument). Err when the path does not exist or the launcher

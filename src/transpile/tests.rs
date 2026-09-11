@@ -73,6 +73,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ui_mount", "__ui_mount_bytes",
     // M229: foco.
     "__ui_focus",
+    // M239: barra de título en caliente.
+    "__ui_set_titlebar",
     // M235: escritorio y portapapeles; `platform` es un literal del target.
     "__ui_desktop", "__ui_clipboard", "platform",
     // M236: menús con posición y estado por tag.

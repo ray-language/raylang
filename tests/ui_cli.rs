@@ -968,3 +968,42 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+// ---------------------------------------------------------------------------
+// M239 — `ui.set_titlebar_color` en caliente: valida el formato y el handle igual que un
+// backend real; headless deja traza. Tres motores.
+// ---------------------------------------------------------------------------
+#[test]
+fn titlebar_color_changes_on_an_open_window_on_all_three_engines() {
+    let base = tmp("titlebar_setter");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    let h = ui.open(\"T\", \"ray://app/index.html\", 320, 200).unwrap();\n    match (ui.set_titlebar_color(h, \"#1e1e2e\")) { Result.Ok(_) => print(\"tinted\"), Result.Err(e) => print(e) }\n    match (ui.set_titlebar_color(h, \"\")) { Result.Ok(_) => print(\"system\"), Result.Err(e) => print(e) }\n    match (ui.set_titlebar_color(h, \"red\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    match (ui.set_titlebar_color(99, \"#000000\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    close(h);\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "tinted\nsystem\nui: unsupported titlebar color 'red' (expected #rrggbb)\nui: not an open window\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] titlebar 1 #1e1e2e") && err.contains("[ui] titlebar 1 system"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

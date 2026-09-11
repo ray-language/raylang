@@ -653,6 +653,8 @@ pub enum OpCode {
     UiMountBytes,
     /// M229: `__ui_focus(h)` — trae al frente y da el foco (['ok'] / ['err', msg]).
     UiFocus,
+    /// M239: `__ui_set_titlebar(h, color)` (['ok'] / ['err', msg]).
+    UiSetTitlebar,
     /// M235: `platform()` — el SO ("macos" | "linux" | "windows" | …).
     Platform,
     /// M235: `__ui_desktop(kind, path)` — abrir/revelar en el escritorio (['ok'] / ['err', msg]).

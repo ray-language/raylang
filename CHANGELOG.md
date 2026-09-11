@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ui.set_titlebar_color(h, color)`** (M239, ray-sublime): el color de la barra de título de
+  una ventana ya abierta, en caliente — `"#rrggbb"` la tiñe como `WindowOptions.titlebar_color`
+  y `""` devuelve la del sistema — para seguir al tema del editor sin reabrir la ventana
+  (macOS y Windows 11; Linux lo ignora, como al abrir).
+
 ## 1.16.1 — 2026-09-11
 
 - **ConPTY: el pseudo-terminal también en Windows** (M238). `Cmd.pty(cols, rows)` funciona

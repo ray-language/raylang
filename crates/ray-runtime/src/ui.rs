@@ -692,6 +692,50 @@ fn headless_clipboard() -> &'static Mutex<String> {
     CLIP.get_or_init(|| Mutex::new(String::new()))
 }
 
+/// M239: cambia el color de la barra de título de una ventana ABIERTA (`#rrggbb`), o la
+/// devuelve a la del sistema con `""`. Mismo efecto que `WindowOptions.titlebar_color` de
+/// `open_with`, aplicado en caliente: sigue al tema del editor sin reabrir la ventana. Linux lo
+/// ignora (como al abrir); headless valida el formato y deja traza.
+pub fn set_titlebar_color(id: i64, color: &str) -> Result<(), String> {
+    let rgb = if color.is_empty() {
+        None
+    } else {
+        Some(parse_rgb(color).ok_or_else(|| format!("ui: unsupported titlebar color '{color}' (expected #rrggbb)"))?)
+    };
+    let map = windows().lock().unwrap();
+    match map.get(&id) {
+        None => Err("ui: not an open window".to_string()),
+        Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
+        Some(WinState { win: Win::Headless, .. }) => {
+            if ui_trace() {
+                eprintln!("[ui] titlebar {id} {}", if color.is_empty() { "system" } else { color });
+            }
+            Ok(())
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Some(WinState { win: Win::Shell, .. }) => Ok(()),
+        #[cfg(target_os = "macos")]
+        Some(WinState { win: Win::Mac { window, .. }, .. }) => {
+            let w = *window;
+            drop(map);
+            mac::set_titlebar_async(w, rgb);
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { .. }, .. }) => {
+            let _ = rgb; // GTK no tiñe la barra (la pinta el shell); igual que al abrir
+            Ok(())
+        }
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, alive }, .. }) => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::set_titlebar_async(h, alive, rgb);
+            Ok(())
+        }
+    }
+}
+
 /// M234: puerto del hub de live-reload de `ray dev` (0 = ninguno). Lo fija la toolchain
 /// (`ray run` cuando corre bajo `ray dev`), nunca el entorno del proceso ni un binario nativo:
 /// la misma frontera que las devtools (M231).
@@ -2812,22 +2856,7 @@ mod mac {
                 // la apariencia (Aqua/DarkAqua) sale de la luminancia para que el título y los
                 // controles contrasten. La página pinta su propio fondo opaco encima.
                 if let Some(rgb) = super::parse_rgb(&opts.titlebar_color) {
-                    let color_with: MsgIdColor = std::mem::transmute(msg_send());
-                    let color = color_with(
-                        cls(b"NSColor\0"),
-                        sel(b"colorWithSRGBRed:green:blue:alpha:\0"),
-                        rgb.0 as f64 / 255.0,
-                        rgb.1 as f64 / 255.0,
-                        rgb.2 as f64 / 255.0,
-                        1.0,
-                    );
-                    set_id(window, sel(b"setBackgroundColor:\0"), color);
-                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
-                    let name = if super::is_dark(rgb) { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" };
-                    let appearance = id_id(cls(b"NSAppearance\0"), sel(b"appearanceNamed:\0"), nsstring(name));
-                    if !appearance.is_null() {
-                        set_id(window, sel(b"setAppearance:\0"), appearance);
-                    }
+                    apply_titlebar(window, Some(rgb));
                 }
 
                 // M152: el delegate nace ANTES del webview — el puente IPC lo registra como
@@ -3003,6 +3032,51 @@ mod mac {
             }
             Ok(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
         }
+    }
+
+    /// M224/M239: la barra de título del color pedido (transparente sobre el fondo de la ventana,
+    /// apariencia por luminancia) o, con `None`, la del sistema (fondo estándar, sin transparencia,
+    /// apariencia heredada). SAFETY: en el hilo principal, sobre una NSWindow viva.
+    unsafe fn apply_titlebar(window: Id, rgb: Option<(u8, u8, u8)>) {
+        unsafe {
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+            let id_id: MsgIdId = std::mem::transmute(msg_send());
+            let class_item: MsgId = std::mem::transmute(msg_send());
+            match rgb {
+                Some(rgb) => {
+                    let color_with: MsgIdColor = std::mem::transmute(msg_send());
+                    let color = color_with(
+                        cls(b"NSColor\0"),
+                        sel(b"colorWithSRGBRed:green:blue:alpha:\0"),
+                        rgb.0 as f64 / 255.0,
+                        rgb.1 as f64 / 255.0,
+                        rgb.2 as f64 / 255.0,
+                        1.0,
+                    );
+                    set_id(window, sel(b"setBackgroundColor:\0"), color);
+                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
+                    let name = if super::is_dark(rgb) { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" };
+                    let appearance = id_id(cls(b"NSAppearance\0"), sel(b"appearanceNamed:\0"), nsstring(name));
+                    if !appearance.is_null() {
+                        set_id(window, sel(b"setAppearance:\0"), appearance);
+                    }
+                }
+                None => {
+                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 0);
+                    set_id(window, sel(b"setAppearance:\0"), std::ptr::null_mut());
+                    let default = class_item(cls(b"NSColor\0"), sel(b"windowBackgroundColor\0"));
+                    if !default.is_null() {
+                        set_id(window, sel(b"setBackgroundColor:\0"), default);
+                    }
+                }
+            }
+        }
+    }
+
+    /// M239: `set_titlebar_color` sobre una ventana abierta (en el hilo principal).
+    pub(super) fn set_titlebar_async(window: usize, rgb: Option<(u8, u8, u8)>) {
+        on_main(move || unsafe { apply_titlebar(window as Id, rgb) });
     }
 
     pub(super) fn focus_window_async(window: usize) {
@@ -5401,10 +5475,8 @@ mod win {
                 .map_err(|e| format!("ui: could not create the window: {e}"))?;
                 // M224: color de la barra de título (Windows 11+; en Windows 10 el atributo no
                 // existe y DWM devuelve error → se ignora: la barra queda la del sistema).
-                if let Some((r, g, b)) = super::parse_rgb(&opts.titlebar_color) {
-                    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR};
-                    let colorref: u32 = (r as u32) | ((g as u32) << 8) | ((b as u32) << 16);
-                    let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &colorref as *const u32 as *const std::ffi::c_void, 4);
+                if let Some(rgb) = super::parse_rgb(&opts.titlebar_color) {
+                    apply_titlebar(hwnd, Some(rgb));
                 }
                 let (menu_tags, accels) = build_menubar(hwnd);
                 let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track });
@@ -5522,6 +5594,30 @@ mod win {
             let _ = CloseClipboard();
             r
         }
+    }
+
+    /// M224/M239: `DWMWA_CAPTION_COLOR` del color pedido, o `DWMWA_COLOR_DEFAULT` con `None`
+    /// (Windows 11+; en Windows 10 DWM devuelve error y se ignora). SAFETY: hwnd vivo, hilo 1.
+    unsafe fn apply_titlebar(hwnd: HWND, rgb: Option<(u8, u8, u8)>) {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR};
+        let colorref: u32 = match rgb {
+            Some((r, g, b)) => (r as u32) | ((g as u32) << 8) | ((b as u32) << 16),
+            None => 0xFFFF_FFFF, // DWMWA_COLOR_DEFAULT
+        };
+        // SAFETY: atributo documentado con un u32 local vivo durante la llamada.
+        unsafe {
+            let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &colorref as *const u32 as *const std::ffi::c_void, 4);
+        }
+    }
+
+    /// M239: `set_titlebar_color` sobre una ventana abierta (en el hilo 1).
+    pub(super) fn set_titlebar_async(hwnd: usize, alive: Arc<AtomicBool>, rgb: Option<(u8, u8, u8)>) {
+        on_main(move || {
+            if alive.load(Ordering::SeqCst) {
+                // SAFETY: la bandera de vida garantiza que el hwnd sigue siendo nuestro.
+                unsafe { apply_titlebar(HWND(hwnd as *mut _), rgb) };
+            }
+        });
     }
 
     pub(super) fn focus_window_async(hwnd: usize, alive: Arc<AtomicBool>) {

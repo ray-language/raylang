@@ -13144,3 +13144,14 @@ proceso) espera el fin del hijo y cierra la pseudoconsola, que es lo que hace ll
 `resize` sobre una pseudoconsola cerrada es `Err`. Verificación en el runner de Windows del CI
 (`process_pty_cli`): `cmd /c echo` bajo ConPTY llega por `out`, el `resize` responde, `out`
 cierra y `wait` da `code 0`, en VM y nativo.
+## 229. M239 — el color de la barra de título, en caliente (sep 2026)
+
+M224 dejó `titlebar_color` como campo de `WindowOptions`: se fijaba al abrir y no había setter,
+así que un editor que cambia de tema tenía que reabrir la ventana. Nada de lo que hace M224 es
+de creación — en macOS son `setTitlebarAppearsTransparent:`, `setBackgroundColor:` y
+`setAppearance:` sobre la `NSWindow`; en Windows, `DwmSetWindowAttribute(DWMWA_CAPTION_COLOR)`
+sobre el `hwnd` — así que `ui.set_titlebar_color(h, color)` es ese mismo código factorizado
+(`apply_titlebar`) y despachado al hilo principal, como `focus`. `""` deshace: en macOS quita la
+transparencia, pone la apariencia a `nil` (hereda) y el fondo `windowBackgroundColor`; en
+Windows manda `DWMWA_COLOR_DEFAULT`. La validación es la de `open_with` y vale en headless,
+que además deja traza — el test corre en los tres motores.

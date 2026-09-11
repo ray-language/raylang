@@ -1048,6 +1048,7 @@ mod win {
     const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
     const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
     const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+    const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
 
     /// M238: un argumento como lo espera `CommandLineToArgvW` (las mismas reglas que std).
     fn quote_arg(arg: &str, out: &mut Vec<u16>) {
@@ -1162,6 +1163,11 @@ mod win {
             let cwd = opts.dir.as_deref().map(wide);
             let mut si: StartupInfoExW = std::mem::zeroed();
             si.si.cb = std::mem::size_of::<StartupInfoExW>() as u32;
+            // STARTF_USESTDHANDLES con los tres handles a NULL: sin esto, CreateProcess duplica
+            // los handles estándar del padre en el hijo aunque bInheritHandles sea FALSE (si no son
+            // de consola, p. ej. un pipe bajo `ray dev` o en un test), y el hijo escribe ahí en vez
+            // de en la pseudoconsola. Es lo que hace Alacritty; con NULL el hijo toma los de ConPTY.
+            si.si.flags = STARTF_USESTDHANDLES;
             si.attrs = list.as_mut_ptr() as *mut _;
             let mut pi: ProcessInformation = std::mem::zeroed();
             let flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP;

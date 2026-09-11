@@ -791,6 +791,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::reply(h, id, value, as_json) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M235: escritorio (abrir/revelar) y portapapeles.
+            "fn __ray_ui_desktop(kind: &str, path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r = match kind { \"open_path\" => ray_runtime::ui::open_path(path), \"reveal\" => ray_runtime::ui::reveal_path(path), other => Err(format!(\"ui: unknown desktop action '{other}'\")) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "fn __ray_ui_clipboard(op: &str, text: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r = match op { \"write\" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()), \"read\" => ray_runtime::ui::clipboard_read(), other => Err(format!(\"ui: unknown clipboard op '{other}'\")) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M229: foco a una ventana abierta.
             "fn __ray_ui_focus(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",

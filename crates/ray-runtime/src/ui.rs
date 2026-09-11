@@ -551,6 +551,147 @@ fn notify_dev_windowed() {
     });
 }
 
+/// M235 (ray-sublime #69): abrir `path` con la aplicación asociada del sistema. Sin shell: el
+/// lanzador de cada plataforma recibe la ruta como argumento (`open`, `xdg-open`,
+/// `rundll32 url.dll,FileProtocolHandler`). Best-effort: se comprueba que la ruta exista y que
+/// el lanzador arranque; lo que haga el escritorio después no se observa.
+pub fn open_path(path: &str) -> Result<(), String> {
+    desktop_launch("open_path", path)
+}
+
+/// M235: revelar `path` en el gestor de archivos (Finder `open -R`, Explorer `/select,`,
+/// freedesktop `FileManager1.ShowItems` por `dbus-send` con `xdg-open` del directorio padre como
+/// respaldo).
+pub fn reveal_path(path: &str) -> Result<(), String> {
+    desktop_launch("reveal", path)
+}
+
+fn desktop_launch(kind: &str, path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if path.is_empty() || !p.exists() {
+        return Err(format!("ui: no such path '{path}'"));
+    }
+    if headless() {
+        if ui_trace() {
+            eprintln!("[ui] {kind} {path}");
+        }
+        return Ok(());
+    }
+    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    desktop_spawn(kind, abs)
+}
+
+/// Arranca `program` con `args` sin esperar (sin shell; stdio al vacío).
+fn spawn_detached(program: &str, args: &[std::ffi::OsString]) -> Result<(), String> {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("ui: could not run {program}: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
+    if kind == "reveal" {
+        spawn_detached("open", &[std::ffi::OsString::from("-R"), abs.into_os_string()])
+    } else {
+        spawn_detached("open", &[abs.into_os_string()])
+    }
+}
+
+#[cfg(windows)]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
+    if kind == "reveal" {
+        let mut sel = std::ffi::OsString::from("/select,");
+        sel.push(abs.as_os_str());
+        spawn_detached("explorer.exe", &[sel])
+    } else {
+        spawn_detached("rundll32.exe", &[std::ffi::OsString::from("url.dll,FileProtocolHandler"), abs.into_os_string()])
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn desktop_spawn(kind: &str, abs: std::path::PathBuf) -> Result<(), String> {
+    let os = |s: &str| std::ffi::OsString::from(s);
+    if kind == "reveal" {
+        let uri = format!("file://{}", abs.display());
+        let dbus = spawn_detached(
+            "dbus-send",
+            &[
+                os("--session"),
+                os("--dest=org.freedesktop.FileManager1"),
+                os("--type=method_call"),
+                os("/org/freedesktop/FileManager1"),
+                os("org.freedesktop.FileManager1.ShowItems"),
+                os(&format!("array:string:{uri}")),
+                os("string:"),
+            ],
+        );
+        if dbus.is_ok() {
+            return Ok(());
+        }
+        let parent = abs.parent().map(|d| d.to_path_buf()).unwrap_or(abs);
+        return spawn_detached("xdg-open", &[parent.into_os_string()]);
+    }
+    spawn_detached("xdg-open", &[abs.into_os_string()])
+}
+
+/// M235: portapapeles del sistema (texto). Funciona sin ventana en macOS y Windows (una TUI
+/// puede copiar); en Linux exige sesión gráfica (GTK). Headless: un buffer en proceso, para que
+/// un test pueda hacer la ida y vuelta.
+pub fn clipboard_write(text: &str) -> Result<(), String> {
+    if headless() {
+        if ui_trace() {
+            eprintln!("[ui] clipboard write {} bytes", text.len());
+        }
+        *headless_clipboard().lock().unwrap() = text.to_string();
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return mac::clipboard_write(text);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return gtk::clipboard_write(text);
+    }
+    #[cfg(windows)]
+    {
+        return win::clipboard_write(text);
+    }
+    #[allow(unreachable_code)]
+    Err("ui: clipboard is not available on this platform".to_string())
+}
+
+/// M235: el texto del portapapeles (`""` si no hay texto).
+pub fn clipboard_read() -> Result<String, String> {
+    if headless() {
+        return Ok(headless_clipboard().lock().unwrap().clone());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return mac::clipboard_read();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return gtk::clipboard_read();
+    }
+    #[cfg(windows)]
+    {
+        return win::clipboard_read();
+    }
+    #[allow(unreachable_code)]
+    Err("ui: clipboard is not available on this platform".to_string())
+}
+
+fn headless_clipboard() -> &'static Mutex<String> {
+    static CLIP: OnceLock<Mutex<String>> = OnceLock::new();
+    CLIP.get_or_init(|| Mutex::new(String::new()))
+}
+
 /// M234: puerto del hub de live-reload de `ray dev` (0 = ninguno). Lo fija la toolchain
 /// (`ray run` cuando corre bajo `ray dev`), nunca el entorno del proceso ni un binario nativo:
 /// la misma frontera que las devtools (M231).
@@ -2455,6 +2596,46 @@ mod mac {
 
     /// Cierra y LIBERA la ventana en el hilo principal, asíncrono (llamable desde un Drop).
     /// M229: trae la ventana al frente con foco (y activa la app: sin bundle puede estar detrás).
+    /// M235: NSPasteboard general — no necesita NSApplication ni hilo principal.
+    pub(super) fn clipboard_write(text: &str) -> Result<(), String> {
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let clear: MsgI64 = std::mem::transmute(msg_send());
+            let set: MsgIdIdId = std::mem::transmute(msg_send());
+            let pb = get(cls(b"NSPasteboard\0"), sel(b"generalPasteboard\0"));
+            if pb.is_null() {
+                return Err("ui: clipboard unavailable".to_string());
+            }
+            let _ = clear(pb, sel(b"clearContents\0"));
+            let ty = nsstring("public.utf8-plain-text");
+            let s = nsstring(text);
+            set(pb, sel(b"setString:forType:\0"), s, ty);
+        }
+        Ok(())
+    }
+
+    pub(super) fn clipboard_read() -> Result<String, String> {
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let get_t: MsgIdId = std::mem::transmute(msg_send());
+            let utf8: MsgCStr = std::mem::transmute(msg_send());
+            let pb = get(cls(b"NSPasteboard\0"), sel(b"generalPasteboard\0"));
+            if pb.is_null() {
+                return Err("ui: clipboard unavailable".to_string());
+            }
+            let ty = nsstring("public.utf8-plain-text");
+            let s = get_t(pb, sel(b"stringForType:\0"), ty);
+            if s.is_null() {
+                return Ok(String::new());
+            }
+            let c = utf8(s, sel(b"UTF8String\0"));
+            if c.is_null() {
+                return Ok(String::new());
+            }
+            Ok(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
+        }
+    }
+
     pub(super) fn focus_window_async(window: usize) {
         on_main(move || unsafe {
             let set_id: MsgVoidId = std::mem::transmute(msg_send());
@@ -3479,6 +3660,81 @@ mod gtk {
     }
 
     /// M229: `gtk_window_present` — desminimiza, sube y da el foco (el WM puede solo parpadear).
+    /// M235: portapapeles por `dlsym` (GtkClipboard del átomo CLIPBOARD), en el hilo del loop
+    /// de GTK (`ensure_app` lo arranca; sin display devuelve su error).
+    struct ClipApi {
+        get: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+        atom: unsafe extern "C" fn(*const std::ffi::c_char, i32) -> *mut c_void,
+        set_text: unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, i32),
+        store: unsafe extern "C" fn(*mut c_void),
+        wait_text: unsafe extern "C" fn(*mut c_void) -> *mut std::ffi::c_char,
+        free: unsafe extern "C" fn(*mut c_void),
+    }
+    unsafe impl Send for ClipApi {}
+    unsafe impl Sync for ClipApi {}
+
+    fn clip_api() -> &'static Result<ClipApi, String> {
+        static API: std::sync::OnceLock<Result<ClipApi, String>> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            // SAFETY: literal NUL-terminado; el handle de gtk ya está cargado (ensure_app) y dlopen
+            // solo incrementa su cuenta.
+            let gtk = unsafe { dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+            if gtk.is_null() {
+                return Err("ui: libgtk-3 not found".to_string());
+            }
+            // SAFETY: los punteros vienen de dlsym con las firmas C documentadas de GTK 3/GDK/GLib.
+            unsafe {
+                Ok(ClipApi {
+                    get: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> *mut c_void>(sym(gtk, c"gtk_clipboard_get")?),
+                    atom: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*const std::ffi::c_char, i32) -> *mut c_void>(sym(gtk, c"gdk_atom_intern")?),
+                    set_text: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, i32)>(sym(gtk, c"gtk_clipboard_set_text")?),
+                    store: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(sym(gtk, c"gtk_clipboard_store")?),
+                    wait_text: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> *mut std::ffi::c_char>(sym(gtk, c"gtk_clipboard_wait_for_text")?),
+                    free: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(sym(gtk, c"g_free")?),
+                })
+            }
+        })
+    }
+
+    fn clipboard_handle(api: &ClipApi) -> Result<*mut c_void, String> {
+        // SAFETY: literal NUL-terminado; GTK devuelve un singleton que no se libera.
+        let cb = unsafe { (api.get)((api.atom)(c"CLIPBOARD".as_ptr(), 0)) };
+        if cb.is_null() { Err("ui: clipboard unavailable (no display)".to_string()) } else { Ok(cb) }
+    }
+
+    pub(super) fn clipboard_write(text: &str) -> Result<(), String> {
+        super::ensure_app()?;
+        let text = std::ffi::CString::new(text).map_err(|_| "ui: clipboard text with NUL".to_string())?;
+        on_main_sync(move || {
+            let api = clip_api().as_ref().map_err(|e| e.clone())?;
+            let cb = clipboard_handle(api)?;
+            // SAFETY: cb es el singleton; text vive hasta después de la llamada (GTK copia).
+            unsafe {
+                (api.set_text)(cb, text.as_ptr(), -1);
+                (api.store)(cb);
+            }
+            Ok(())
+        })
+    }
+
+    pub(super) fn clipboard_read() -> Result<String, String> {
+        super::ensure_app()?;
+        on_main_sync(move || {
+            let api = clip_api().as_ref().map_err(|e| e.clone())?;
+            let cb = clipboard_handle(api)?;
+            // SAFETY: wait_for_text devuelve un buffer propio (o NULL) que se libera con g_free.
+            unsafe {
+                let p = (api.wait_text)(cb);
+                if p.is_null() {
+                    return Ok(String::new());
+                }
+                let s = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+                (api.free)(p as *mut c_void);
+                Ok(s)
+            }
+        })
+    }
+
     pub(super) fn focus_window_async(window: usize, alive: Arc<AtomicBool>) {
         on_main(move || {
             if !alive.load(Ordering::SeqCst) {
@@ -4626,6 +4882,64 @@ mod win {
     }
 
     /// M229: restaura si está minimizada y la trae al frente con foco.
+    /// M235: portapapeles Win32 (CF_UNICODETEXT) — sin ventana propietaria ni hilo principal.
+    pub(super) fn clipboard_write(text: &str) -> Result<(), String> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        use windows::Win32::System::Ole::CF_UNICODETEXT;
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: llamadas Win32 documentadas; el bloque global queda en manos del sistema tras
+        // SetClipboardData (no se libera aquí).
+        unsafe {
+            OpenClipboard(None).map_err(|e| format!("ui: clipboard: {e}"))?;
+            let r = (|| -> Result<(), String> {
+                EmptyClipboard().map_err(|e| format!("ui: clipboard: {e}"))?;
+                let h = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).map_err(|e| format!("ui: clipboard: {e}"))?;
+                let p = GlobalLock(h) as *mut u16;
+                if p.is_null() {
+                    return Err("ui: clipboard: GlobalLock failed".to_string());
+                }
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
+                let _ = GlobalUnlock(h);
+                SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(h.0))).map_err(|e| format!("ui: clipboard: {e}"))?;
+                Ok(())
+            })();
+            let _ = CloseClipboard();
+            r
+        }
+    }
+
+    pub(super) fn clipboard_read() -> Result<String, String> {
+        use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+        use windows::Win32::Foundation::HGLOBAL;
+        use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+        use windows::Win32::System::Ole::CF_UNICODETEXT;
+        // SAFETY: llamadas Win32 documentadas; el bloque pertenece al portapapeles y solo se lee.
+        unsafe {
+            OpenClipboard(None).map_err(|e| format!("ui: clipboard: {e}"))?;
+            let r = (|| -> Result<String, String> {
+                let Ok(h) = GetClipboardData(CF_UNICODETEXT.0 as u32) else {
+                    return Ok(String::new()); // sin texto en el portapapeles
+                };
+                let g = HGLOBAL(h.0);
+                let p = GlobalLock(g) as *const u16;
+                if p.is_null() {
+                    return Ok(String::new());
+                }
+                let mut n = 0;
+                while *p.add(n) != 0 {
+                    n += 1;
+                }
+                let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+                let _ = GlobalUnlock(g);
+                Ok(s)
+            })();
+            let _ = CloseClipboard();
+            r
+        }
+    }
+
     pub(super) fn focus_window_async(hwnd: usize, alive: Arc<AtomicBool>) {
         on_main(move || {
             if !alive.load(Ordering::SeqCst) {

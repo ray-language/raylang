@@ -13046,3 +13046,28 @@ Con esto el ciclo queda: cambio en `assets/` → `ray dev` no reinicia (ya era a
 `reload` → la ventana recarga y el backend conserva su estado; cambio en un `.ray` → reinicio y
 ventana nueva. Headless deja trazas (`[ui] mount dir …`, `[ui] dev reload N windows`) y el test
 levanta un hub falso para afirmar la recarga en los dos motores y el horneado en el nativo.
+
+## 225. M235 — la app de escritorio habla con el sistema (sep 2026)
+
+ray-sublime (#69) resolvía tres cosas a mano que toda app de escritorio necesita: adivinar la
+plataforma olfateando `/System/Library/CoreServices` y `WINDIR`, copiar árboles con doce
+líneas de recursión, y lanzar `open -R`/`explorer`/`xdg-open` por `std/process` para revelar
+un archivo, con el portapapeles atado al webview (`navigator.clipboard`), que una app de
+terminal no tiene.
+
+**Decisiones.** `platform()` es un builtin de la prelude y devuelve los nombres de
+`std::env::consts::OS` tal cual (no inventamos un catálogo: `"macos"`, `"linux"`,
+`"windows"`, y lo que Rust diga en iOS/Android/BSD); en el nativo es un literal del target,
+y el selfhost lo espeja llamando al del host. `fs.copy_all` es raylang puro sobre
+`is_dir`/`mkdir`/`list_dir`/`copy_file` — por eso el transpilador lo saca de la tabla de
+intercepción de `std::fs` (como `stat`/`chmod`/`watch`) y emite su cuerpo. Las tres
+llamadas de escritorio viven en `ray_runtime::ui` y **no pasan por una shell**: el lanzador
+de cada plataforma recibe la ruta como argumento (`open`, `open -R`, `xdg-open`,
+`rundll32 url.dll,FileProtocolHandler`, `explorer /select,`), y en freedesktop revelar
+prueba primero `org.freedesktop.FileManager1.ShowItems` por `dbus-send` y cae a `xdg-open`
+del directorio padre. Se valida que la ruta exista (vale igual en headless) y que el
+lanzador arranque; lo que el escritorio haga después no es observable, y se documenta así.
+El portapapeles es NSPasteboard general (sin NSApplication ni hilo principal), GtkClipboard
+por `dlsym` en el hilo del loop (tras `ensure_app`; sin display, su error) y Win32
+`CF_UNICODETEXT` (sin ventana propietaria); headless guarda un buffer en proceso para que
+el test haga la ida y vuelta en los tres motores. Verificado real en macOS (`pbpaste`).

@@ -135,7 +135,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         || (name.starts_with("std::fs::")
             && !matches!(
                 name,
-                "std::fs::stat" | "std::fs::chmod" | "std::fs::watch" | "std::fs::next_event" | "std::fs::next_event_timeout"
+                "std::fs::stat" | "std::fs::chmod" | "std::fs::watch" | "std::fs::next_event" | "std::fs::next_event_timeout" | "std::fs::copy_all"
             ))
     {
         return true;

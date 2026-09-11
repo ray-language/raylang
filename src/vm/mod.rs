@@ -3286,6 +3286,37 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::Platform => {
+                    self.push(HeapValue::Str(crate::builtins::platform_name().into()));
+                }
+                OpCode::UiDesktop => {
+                    let HeapValue::Str(path) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Str(kind) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = match crate::builtins::ui_desktop(&kind, &path) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::UiClipboard => {
+                    let HeapValue::Str(text) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Str(op) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = match crate::builtins::ui_clipboard(&op, &text) {
+                        Ok(s) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(s.into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiFocus => {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");

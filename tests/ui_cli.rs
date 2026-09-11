@@ -869,3 +869,43 @@ fn mount_embed_serves_the_directory_live_under_the_toolchain_and_baked_natively(
         assert!(!err.contains("[ui] mount dir"), "nativo: horneado, sin directorio en vivo\n{err}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// M235 (ray-sublime #69) — escritorio y portapapeles: `ui.open_path`/`ui.reveal` validan la ruta y
+// en headless dejan traza; el portapapeles headless es un buffer en proceso (ida y vuelta).
+// ---------------------------------------------------------------------------
+#[test]
+fn desktop_actions_and_clipboard_on_all_three_engines() {
+    let base = tmp("desktop_clip");
+    std::fs::write(base.join("note.txt"), "x").unwrap();
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    match (ui.reveal(\"note.txt\")) { Result.Ok(_) => print(\"revealed\"), Result.Err(e) => print(e) }\n    match (ui.open_path(\"note.txt\")) { Result.Ok(_) => print(\"opened\"), Result.Err(e) => print(e) }\n    match (ui.open_path(\"missing.txt\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    match (ui.reveal(\"\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    match (ui.clipboard_write(\"hola ✓\")) { Result.Ok(_) => print(\"wrote\"), Result.Err(e) => print(e) }\n    match (ui.clipboard_read()) { Result.Ok(s) => print(\"read: \" + s), Result.Err(e) => print(e) }\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "revealed\nopened\nui: no such path 'missing.txt'\nui: no such path ''\nwrote\nread: hola ✓\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] reveal note.txt") && err.contains("[ui] open_path note.txt"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

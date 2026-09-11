@@ -284,6 +284,36 @@ pub fn focus(h: int) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Opens `path` (a file or directory) with the application the desktop associates to it
+/// (M235): `open` on macOS, the default handler on Windows, `xdg-open` on freedesktop. No shell
+/// is involved (the path is an argument). Err when the path does not exist or the launcher
+/// cannot start; what the desktop does afterwards is not observable.
+pub fn open_path(path: string) -> Result<int, string> {
+    let r = __ui_desktop("open_path", path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Reveals `path` in the system file manager, selected (M235): Finder (`open -R`), Explorer
+/// (`/select,`), or the freedesktop `FileManager1.ShowItems` call with `xdg-open` of the parent
+/// directory as fallback. Err when the path does not exist.
+pub fn reveal(path: string) -> Result<int, string> {
+    let r = __ui_desktop("reveal", path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Puts `text` on the system clipboard (M235). Works without a window on macOS and Windows (a
+/// terminal app can copy); on Linux it needs a graphical session (GTK).
+pub fn clipboard_write(text: string) -> Result<int, string> {
+    let r = __ui_clipboard("write", text);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The text on the system clipboard, or `""` when it holds no text (M235).
+pub fn clipboard_read() -> Result<string, string> {
+    let r = __ui_clipboard("read", "");
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 /// M226 — the `ray://app/…` scheme: the page loads its files straight from the process, with no
 /// local TCP server (no port another app on the machine could reach, no local-network permission
 /// in the bundle) and streamed in chunks (Range, ETag/304, MIME by extension). Mount BEFORE the

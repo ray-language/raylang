@@ -71,6 +71,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ui_mount", "__ui_mount_bytes",
     // M229: foco.
     "__ui_focus",
+    // M235: escritorio y portapapeles; `platform` es un literal del target.
+    "__ui_desktop", "__ui_clipboard", "platform",
     // M232: regex.onig (dialecto Oniguruma en ray_runtime).
     "__onig_compile", "__onig_search",
     // M148: menús + diálogos de archivo.

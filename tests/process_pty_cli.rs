@@ -83,16 +83,60 @@ fn pty_gives_the_child_a_terminal_natively() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo");
 }
 
+/// M238: ConPTY — el hijo ve una consola (`echo` y `mode con` responden), el resize llega y
+/// `out` cierra al terminar el hijo (el vigía cierra la pseudoconsola). VM y nativo.
+#[cfg(windows)]
+const PROG_WIN: &str = r#"import std/process;
+
+fn collect(p: process.Proc) -> string {
+    var acc = "";
+    var going = true;
+    while (going) {
+        match (p.out.recv()) {
+            Option.Some(chunk) => { acc = acc + from_utf8(chunk).unwrap_or("?"); },
+            Option.None => { going = false; },
+        }
+    }
+    acc
+}
+
+fn main() -> int {
+    let p = process.cmd("cmd", ["/c", "echo hola-pty"]).pty(80, 24).stream().unwrap();
+    print(p.resize(100, 30).is_ok());
+    let text = collect(p);
+    print(text.contains("hola-pty"));
+    print(p.err.recv().is_none());
+    match (p.wait()) { process.Exit.Code(c) => print("code ${c}"), process.Exit.Signal(s) => print("signal ${s}") }
+    let plain = process.cmd("cmd", ["/c", "echo x"]).stream().unwrap();
+    print(plain.resize(1, 1).is_err());
+    let _ = collect(plain);
+    let _ = plain.wait();
+    print(process.cmd("cmd", ["/c", "echo x"]).pty(0, 24).stream().is_err());
+    0
+}
+"#;
+
+#[cfg(windows)]
+const WANT_WIN: &str = "true\ntrue\ntrue\ncode 0\ntrue\ntrue\n";
+
 #[cfg(windows)]
 #[test]
-fn pty_is_an_honest_err_on_windows() {
+fn conpty_gives_the_child_a_console_on_the_vm_and_natively() {
     let d = dir("win");
-    std::fs::write(
-        d.join("prog.ray"),
-        "import std/process;\nfn main() -> int {\n    match (process.cmd(\"cmd\", [\"/c\", \"echo x\"]).pty(80, 24).stream()) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    0\n}\n",
-    )
-    .unwrap();
+    std::fs::write(d.join("prog.ray"), PROG_WIN).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("not supported on Windows yet"), "{}", String::from_utf8_lossy(&out.stdout));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), WANT_WIN, "vm");
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = d.join("prog_bin.exe");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&d)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&d).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT_WIN, "nativo");
+    }
 }

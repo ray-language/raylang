@@ -61,9 +61,14 @@ pub struct RunOutput {
 /// v1 (`run` lo drena con `poll(2)`) y la v2 (streaming: cada motor registra los pipes como
 /// handles y las bombas en raylang los leen aparcando la fibra). `err` es `None` con
 /// `merge_output` (todo llega por `out`).
+/// M238: el hijo de `spawn_streamed`/`spawn_pty`. En Unix es el `Child` de std tal cual; en
+/// Windows un enum (std, o el proceso CRUDO que crea `CreateProcessW` bajo ConPTY).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub type ChildProc = std::process::Child;
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub struct SpawnedChild {
-    pub child: std::process::Child,
+    pub child: ChildProc,
     /// M100 v3: el extremo de ESCRITURA del stdin del hijo (no-bloqueante), solo con
     /// `opts.stdin_open`. `None` = stdin cerrado/`/dev/null`, como en la v2.
     pub stdin: Option<std::fs::File>,
@@ -236,7 +241,7 @@ pub fn spawn_pty(program: &str, args: &[String], opts: &RunOpts, cols: u16, rows
             if setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            if ioctl(0, TIOCSCTTY, 0 as *const Winsize) < 0 {
+            if ioctl(0, TIOCSCTTY, std::ptr::null::<Winsize>()) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -874,9 +879,99 @@ mod process_tests {
 //   sin fd del scheduler (M170) y reintenta. La escritura al stdin del hijo es bloqueante.
 // - `stdin` por defecto es NUL; `merge_output` es el mismo `std::io::pipe` + `try_clone`.
 
+/// M238: el hijo en Windows — el `Child` de std (pipes) o el proceso crudo de ConPTY (std no
+/// puede envolver un HANDLE de proceso ni pasar `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`: su
+/// `raw_attribute` sigue siendo inestable). Misma superficie que usan el registro, `run` y el
+/// nativo: `id`, `try_wait`, `wait`, `raw_handle`.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub enum ChildProc {
+    Std(std::process::Child),
+    Raw(RawChild),
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub struct RawChild {
+    process: usize,
+    pid: u32,
+    exit: Option<u32>,
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+impl Drop for RawChild {
+    fn drop(&mut self) {
+        // SAFETY: handle de proceso propio (CreateProcessW), cerrado una sola vez.
+        unsafe { win::CloseHandle(self.process) };
+    }
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+impl ChildProc {
+    pub fn id(&self) -> u32 {
+        match self {
+            ChildProc::Std(c) => c.id(),
+            ChildProc::Raw(r) => r.pid,
+        }
+    }
+
+    /// El HANDLE del proceso (para `WaitForSingleObject`/Job Objects).
+    pub fn raw_handle(&self) -> usize {
+        use std::os::windows::io::AsRawHandle;
+        match self {
+            ChildProc::Std(c) => c.as_raw_handle() as usize,
+            ChildProc::Raw(r) => r.process,
+        }
+    }
+
+    /// `None` = sigue corriendo; `Some(code)` = terminó con ese código crudo (sin cosechar dos veces).
+    pub fn try_wait(&mut self) -> std::io::Result<Option<u32>> {
+        match self {
+            ChildProc::Std(c) => Ok(c.try_wait()?.map(|st| st.code().unwrap_or(-1) as u32)),
+            ChildProc::Raw(r) => {
+                if let Some(code) = r.exit {
+                    return Ok(Some(code));
+                }
+                // SAFETY: handle de proceso vivo; `code` es una local.
+                unsafe {
+                    if win::WaitForSingleObject(r.process, 0) == win::WAIT_TIMEOUT {
+                        return Ok(None);
+                    }
+                    let mut code = 0u32;
+                    if win::GetExitCodeProcess(r.process, &mut code) == 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    r.exit = Some(code);
+                    Ok(Some(code))
+                }
+            }
+        }
+    }
+
+    /// Espera el fin del hijo y devuelve su código crudo.
+    pub fn wait(&mut self) -> std::io::Result<u32> {
+        match self {
+            ChildProc::Std(c) => Ok(c.wait()?.code().unwrap_or(-1) as u32),
+            ChildProc::Raw(r) => {
+                if let Some(code) = r.exit {
+                    return Ok(code);
+                }
+                // SAFETY: como en try_wait; INFINITE = sin plazo.
+                unsafe {
+                    win::WaitForSingleObject(r.process, u32::MAX);
+                    let mut code = 0u32;
+                    if win::GetExitCodeProcess(r.process, &mut code) == 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    r.exit = Some(code);
+                    Ok(code)
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(windows, not(target_arch = "wasm32")))]
 pub struct SpawnedChild {
-    pub child: std::process::Child,
+    pub child: ChildProc,
     /// M100 v3: el extremo de ESCRITURA del stdin del hijo (bloqueante en Windows), solo con
     /// `opts.stdin_open`.
     pub stdin: Option<std::fs::File>,
@@ -896,9 +991,243 @@ mod win {
         fn AssignProcessToJobObject(job: usize, process: usize) -> i32;
         fn TerminateJobObject(job: usize, exit_code: u32) -> i32;
         fn GenerateConsoleCtrlEvent(event: u32, process_group_id: u32) -> i32;
-        fn WaitForSingleObject(handle: usize, ms: u32) -> u32;
-        fn CloseHandle(handle: usize) -> i32;
+        pub fn WaitForSingleObject(handle: usize, ms: u32) -> u32;
+        pub fn CloseHandle(handle: usize) -> i32;
         fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
+        // M238 (ConPTY)
+        pub fn GetExitCodeProcess(process: usize, code: *mut u32) -> i32;
+        fn CreatePipe(read: *mut usize, write: *mut usize, attrs: *const core::ffi::c_void, size: u32) -> i32;
+        fn CreatePseudoConsole(size: Coord, input: usize, output: usize, flags: u32, hpc: *mut usize) -> i32;
+        fn ResizePseudoConsole(hpc: usize, size: Coord) -> i32;
+        fn ClosePseudoConsole(hpc: usize);
+        fn InitializeProcThreadAttributeList(list: *mut core::ffi::c_void, count: u32, flags: u32, size: *mut usize) -> i32;
+        fn UpdateProcThreadAttribute(list: *mut core::ffi::c_void, flags: u32, attr: usize, value: *const core::ffi::c_void, size: usize, prev: *mut core::ffi::c_void, ret: *mut usize) -> i32;
+        fn DeleteProcThreadAttributeList(list: *mut core::ffi::c_void);
+        fn CreateProcessW(app: *const u16, cmdline: *mut u16, pattrs: *const core::ffi::c_void, tattrs: *const core::ffi::c_void, inherit: i32, flags: u32, env: *const core::ffi::c_void, cwd: *const u16, si: *const StartupInfoExW, pi: *mut ProcessInformation) -> i32;
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Coord {
+        pub x: i16,
+        pub y: i16,
+    }
+    #[repr(C)]
+    struct StartupInfoW {
+        cb: u32,
+        reserved: *mut u16,
+        desktop: *mut u16,
+        title: *mut u16,
+        x: u32,
+        y: u32,
+        x_size: u32,
+        y_size: u32,
+        x_count_chars: u32,
+        y_count_chars: u32,
+        fill_attribute: u32,
+        flags: u32,
+        show_window: u16,
+        cb_reserved2: u16,
+        reserved2: *mut u8,
+        std_input: usize,
+        std_output: usize,
+        std_error: usize,
+    }
+    #[repr(C)]
+    struct StartupInfoExW {
+        si: StartupInfoW,
+        attrs: *mut core::ffi::c_void,
+    }
+    #[repr(C)]
+    struct ProcessInformation {
+        process: usize,
+        thread: usize,
+        pid: u32,
+        tid: u32,
+    }
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+    const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+
+    /// M238: un argumento como lo espera `CommandLineToArgvW` (las mismas reglas que std).
+    fn quote_arg(arg: &str, out: &mut Vec<u16>) {
+        let needs = arg.is_empty() || arg.chars().any(|c| c == ' ' || c == '\t' || c == '"');
+        if !needs {
+            out.extend(arg.encode_utf16());
+            return;
+        }
+        out.push(b'"' as u16);
+        let mut backslashes = 0;
+        for c in arg.chars() {
+            if c == '\\' {
+                backslashes += 1;
+                out.push(b'\\' as u16);
+                continue;
+            }
+            if c == '"' {
+                for _ in 0..=backslashes {
+                    out.push(b'\\' as u16);
+                }
+            }
+            backslashes = 0;
+            let mut buf = [0u16; 2];
+            out.extend_from_slice(c.encode_utf16(&mut buf));
+        }
+        for _ in 0..backslashes {
+            out.push(b'\\' as u16);
+        }
+        out.push(b'"' as u16);
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// El bloque de entorno UTF-16 (`K=V\0…\0\0`) si el llamador lo cambia; `None` = heredar.
+    fn env_block(opts: &super::RunOpts) -> Option<Vec<u16>> {
+        if opts.env.is_empty() && !opts.env_clear {
+            return None;
+        }
+        let mut vars: Vec<(String, String)> = if opts.env_clear {
+            Vec::new()
+        } else {
+            std::env::vars().collect()
+        };
+        for (k, v) in &opts.env {
+            vars.retain(|(ek, _)| !ek.eq_ignore_ascii_case(k));
+            vars.push((k.clone(), v.clone()));
+        }
+        let mut block = Vec::new();
+        for (k, v) in vars {
+            block.extend(format!("{k}={v}").encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        Some(block)
+    }
+
+    /// M238: el pseudo-terminal de Windows (ConPTY). Lanza `program` con sus pipes de entrada y
+    /// salida detrás de una pseudoconsola de `cols`×`rows`; el proceso lo crea `CreateProcessW`
+    /// con `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`. Un hilo espera el fin del hijo y cierra la
+    /// pseudoconsola: así el pipe de salida llega a EOF (ConPTY no lo cierra solo), que es lo que
+    /// las bombas de raylang esperan para cerrar `out`.
+    pub fn spawn_pty(program: &str, args: &[String], opts: &super::RunOpts, cols: u16, rows: u16) -> Result<(super::SpawnedChild, super::Pty), String> {
+        use std::os::windows::io::FromRawHandle;
+        let err = |what: &str| format!("{program}: pty: {what}: {}", std::io::Error::last_os_error());
+        // SAFETY: llamadas Win32 documentadas con punteros a locales vivas; los handles se cierran
+        // una sola vez (los que ConPTY duplica, aquí; los del hijo, en RawChild/File).
+        unsafe {
+            let (mut in_r, mut in_w, mut out_r, mut out_w) = (0usize, 0usize, 0usize, 0usize);
+            if CreatePipe(&mut in_r, &mut in_w, std::ptr::null(), 0) == 0 {
+                return Err(err("CreatePipe"));
+            }
+            if CreatePipe(&mut out_r, &mut out_w, std::ptr::null(), 0) == 0 {
+                CloseHandle(in_r);
+                CloseHandle(in_w);
+                return Err(err("CreatePipe"));
+            }
+            let mut hpc = 0usize;
+            let hr = CreatePseudoConsole(Coord { x: cols as i16, y: rows as i16 }, in_r, out_w, 0, &mut hpc);
+            // ConPTY duplica sus extremos: los nuestros se cierran ya.
+            CloseHandle(in_r);
+            CloseHandle(out_w);
+            if hr < 0 {
+                CloseHandle(in_w);
+                CloseHandle(out_r);
+                return Err(format!("{program}: pty: CreatePseudoConsole failed (HRESULT {hr:#x})"));
+            }
+            let mut size = 0usize;
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+            let mut list = vec![0u8; size.max(1)];
+            if InitializeProcThreadAttributeList(list.as_mut_ptr() as *mut _, 1, 0, &mut size) == 0
+                || UpdateProcThreadAttribute(list.as_mut_ptr() as *mut _, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, &hpc as *const usize as *const _, std::mem::size_of::<usize>(), std::ptr::null_mut(), std::ptr::null_mut()) == 0
+            {
+                let e = err("attribute list");
+                ClosePseudoConsole(hpc);
+                CloseHandle(in_w);
+                CloseHandle(out_r);
+                return Err(e);
+            }
+            let mut cmdline = Vec::new();
+            quote_arg(program, &mut cmdline);
+            for a in args {
+                cmdline.push(b' ' as u16);
+                quote_arg(a, &mut cmdline);
+            }
+            cmdline.push(0);
+            let env = env_block(opts);
+            let cwd = opts.dir.as_deref().map(wide);
+            let mut si: StartupInfoExW = std::mem::zeroed();
+            si.si.cb = std::mem::size_of::<StartupInfoExW>() as u32;
+            si.attrs = list.as_mut_ptr() as *mut _;
+            let mut pi: ProcessInformation = std::mem::zeroed();
+            let flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP;
+            let ok = CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                flags,
+                env.as_ref().map_or(std::ptr::null(), |e| e.as_ptr() as *const _),
+                cwd.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                &si,
+                &mut pi,
+            );
+            DeleteProcThreadAttributeList(list.as_mut_ptr() as *mut _);
+            if ok == 0 {
+                let e = format!("{program}: {}", std::io::Error::last_os_error());
+                ClosePseudoConsole(hpc);
+                CloseHandle(in_w);
+                CloseHandle(out_r);
+                return Err(e);
+            }
+            CloseHandle(pi.thread);
+            attach_job(pi.pid, pi.process);
+            let pty = super::Pty { hpc: std::sync::Arc::new(std::sync::Mutex::new(Some(hpc))) };
+            // El vigía: al terminar el hijo, cierra la pseudoconsola → EOF en `out`.
+            let shared = pty.hpc.clone();
+            let mut waiter = 0usize;
+            let me = GetCurrentProcess();
+            if DuplicateHandle(me, pi.process, me, &mut waiter, 0, 0, 2 /* DUPLICATE_SAME_ACCESS */) != 0 {
+                std::thread::spawn(move || {
+                    WaitForSingleObject(waiter, u32::MAX);
+                    CloseHandle(waiter);
+                    // Deja a ConPTY vaciar lo pendiente antes de cerrar.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    if let Some(h) = shared.lock().unwrap().take() {
+                        ClosePseudoConsole(h);
+                    }
+                });
+            }
+            let out = std::fs::File::from_raw_handle(out_r as *mut _);
+            let stdin = std::fs::File::from_raw_handle(in_w as *mut _);
+            let child = super::ChildProc::Raw(super::RawChild { process: pi.process, pid: pi.pid, exit: None });
+            Ok((super::SpawnedChild { child, stdin: Some(stdin), out: Some(out), err: None }, pty))
+        }
+    }
+
+    pub fn pty_resize(pty: &super::Pty, cols: u16, rows: u16) -> Result<(), String> {
+        let guard = pty.hpc.lock().unwrap();
+        let Some(h) = *guard else {
+            return Err("pty: the pseudoconsole is closed".to_string());
+        };
+        // SAFETY: handle de pseudoconsola vivo (protegido por el mutex).
+        let hr = unsafe { ResizePseudoConsole(h, Coord { x: cols as i16, y: rows as i16 }) };
+        if hr < 0 { Err(format!("pty: resize failed (HRESULT {hr:#x})")) } else { Ok(()) }
+    }
+
+    pub fn pty_close(pty: &mut super::Pty) {
+        if let Some(h) = pty.hpc.lock().unwrap().take() {
+            // SAFETY: cerrado una sola vez (el Option lo garantiza frente al vigía).
+            unsafe { ClosePseudoConsole(h) };
+        }
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> usize;
+        fn DuplicateHandle(src_process: usize, src: usize, dst_process: usize, dst: *mut usize, access: u32, inherit: i32, options: u32) -> i32;
     }
 
     pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -953,8 +1282,7 @@ mod win {
 
     /// Crea un job con kill-on-close, mete al hijo y lo registra por pid. Un fallo no es fatal: el
     /// hijo corre igual (solo pierde la garantía sobre sus nietos).
-    pub fn attach_job(child: &std::process::Child) {
-        use std::os::windows::io::AsRawHandle;
+    pub fn attach_job(pid: u32, process: usize) {
         // SAFETY: llamadas a kernel32 con una estructura `repr(C)` a cero salvo el flag; el handle
         // del job se retiene en el mapa hasta cosechar.
         unsafe {
@@ -970,12 +1298,12 @@ mod win {
                 &info as *const _ as *const core::ffi::c_void,
                 std::mem::size_of::<ExtendedLimitInformation>() as u32,
             ) != 0
-                && AssignProcessToJobObject(job, child.as_raw_handle() as usize) != 0;
+                && AssignProcessToJobObject(job, process) != 0;
             if !ok {
                 CloseHandle(job);
                 return;
             }
-            if let Some(old) = with_jobs(|m| m.insert(child.id(), job)) {
+            if let Some(old) = with_jobs(|m| m.insert(pid, job)) {
                 CloseHandle(old);
             }
         }
@@ -1006,10 +1334,9 @@ mod win {
     }
 
     /// Espera hasta `ms` a que el proceso termine (`true` = terminó).
-    pub fn wait_process(child: &std::process::Child, ms: u32) -> bool {
-        use std::os::windows::io::AsRawHandle;
-        // SAFETY: espera sobre el handle que posee `Child`.
-        unsafe { WaitForSingleObject(child.as_raw_handle() as usize, ms) != WAIT_TIMEOUT }
+    pub fn wait_process(child: &super::ChildProc, ms: u32) -> bool {
+        // SAFETY: espera sobre el handle que posee el hijo (std o crudo).
+        unsafe { WaitForSingleObject(child.raw_handle(), ms) != WAIT_TIMEOUT }
     }
 
     /// Octetos disponibles en un pipe sin bloquear; `Err(BrokenPipe)` si el otro extremo cerró.
@@ -1028,8 +1355,8 @@ mod win {
     }
 
     /// El `Result<code, signal>` de un estado de salida de Windows (ver la cabecera del módulo).
-    pub fn exit_of(status: std::process::ExitStatus) -> Result<i32, i32> {
-        let code = status.code().unwrap_or(-1);
+    pub fn exit_of(code: u32) -> Result<i32, i32> {
+        let code = code as i32;
         match code as u32 {
             EXIT_KILLED => Err(9),
             EXIT_TERMED => Err(15),
@@ -1080,7 +1407,10 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
     cmd.creation_flags(win::CREATE_NEW_PROCESS_GROUP);
     let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
     drop(cmd);
-    win::attach_job(&child);
+    {
+        use std::os::windows::io::AsRawHandle;
+        win::attach_job(child.id(), child.as_raw_handle() as usize);
+    }
 
     let child_stdin = child.stdin.take();
     let mut stdin = None;
@@ -1094,34 +1424,49 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
         None => child.stdout.take().map(|p| std::fs::File::from(OwnedHandle::from(p))),
     };
     let err = child.stderr.take().map(|p| std::fs::File::from(OwnedHandle::from(p)));
-    Ok(SpawnedChild { child, stdin, out, err })
+    Ok(SpawnedChild { child: ChildProc::Std(child), stdin, out, err })
 }
 
 /// `try_wait` del hijo: `Ok(None)` = sigue; `Ok(Some(exit))` = terminó (cosechado, job cerrado).
-/// M237: en Windows el pseudo-terminal (ConPTY) llega en el siguiente hito; hasta entonces un
-/// `Err` honesto, igual en los tres motores.
+/// M238: la pseudoconsola de Windows (ConPTY). El HANDLE va tras un mutex compartido con el
+/// vigía que la cierra al terminar el hijo (para que `out` llegue a EOF), así se cierra una vez.
 #[cfg(all(windows, not(target_arch = "wasm32")))]
-pub struct Pty;
+pub struct Pty {
+    hpc: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+}
 
 #[cfg(all(windows, not(target_arch = "wasm32")))]
 impl Pty {
-    pub fn resize(&self, _cols: u16, _rows: u16) -> Result<(), String> {
-        Err("pty: not supported on Windows yet".to_string())
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        if cols == 0 || rows == 0 {
+            return Err(format!("pty: unsupported size {cols}x{rows}"));
+        }
+        win::pty_resize(self, cols, rows)
     }
 }
 
 #[cfg(all(windows, not(target_arch = "wasm32")))]
-pub fn spawn_pty(program: &str, _args: &[String], _opts: &RunOpts, _cols: u16, _rows: u16) -> Result<(SpawnedChild, Pty), String> {
-    Err(format!("{program}: pty: not supported on Windows yet (ConPTY is planned)"))
+impl Drop for Pty {
+    fn drop(&mut self) {
+        win::pty_close(self);
+    }
 }
 
 #[cfg(all(windows, not(target_arch = "wasm32")))]
-pub fn try_wait(child: &mut std::process::Child) -> Result<Option<Result<i32, i32>>, String> {
+pub fn spawn_pty(program: &str, args: &[String], opts: &RunOpts, cols: u16, rows: u16) -> Result<(SpawnedChild, Pty), String> {
+    if cols == 0 || rows == 0 {
+        return Err(format!("pty: unsupported size {cols}x{rows}"));
+    }
+    win::spawn_pty(program, args, opts, cols, rows)
+}
+
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn try_wait(child: &mut ChildProc) -> Result<Option<Result<i32, i32>>, String> {
     match child.try_wait() {
         Ok(None) => Ok(None),
-        Ok(Some(status)) => {
+        Ok(Some(code)) => {
             win::release_job(child.id());
-            Ok(Some(win::exit_of(status)))
+            Ok(Some(win::exit_of(code)))
         }
         Err(e) => Err(e.to_string()),
     }
@@ -1183,9 +1528,9 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
             }
         }
     }
-    let status = child.wait().map_err(|e| format!("{program}: {e}"))?;
+    let code = child.wait().map_err(|e| format!("{program}: {e}"))?;
     win::release_job(pid); // cierra el job: mata a los nietos que sigan vivos y libera los pipes
     let (stdout, t1) = out_thread.join().unwrap_or((Vec::new(), false));
     let (stderr, t2) = err_thread.join().unwrap_or((Vec::new(), false));
-    Ok(RunOutput { exit: win::exit_of(status), stdout, stderr, timed_out, truncated: t1 || t2 })
+    Ok(RunOutput { exit: win::exit_of(code), stdout, stderr, timed_out, truncated: t1 || t2 })
 }

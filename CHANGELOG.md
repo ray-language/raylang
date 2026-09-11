@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.17.0 — 2026-09-11
 
 - **`ui.set_titlebar_color(h, color)`** (M239, ray-sublime): el color de la barra de título de
   una ventana ya abierta, en caliente — `"#rrggbb"` la tiñe como `WindowOptions.titlebar_color`

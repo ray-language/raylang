@@ -1227,6 +1227,24 @@ pub fn ui_clipboard(_op: &str, _text: &str) -> Result<String, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M236: `ui.menu_at` / `ui.set_menu_item`.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_menu_at(position: i64, title: &str, items: &[String]) -> Result<(), String> {
+    ray_runtime::ui::menu_at(position, title, items)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_menu_at(_position: i64, _title: &str, _items: &[String]) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
+    ray_runtime::ui::set_menu_item(tag, enabled, checked)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_set_menu_item(_tag: &str, _enabled: bool, _checked: bool) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_focus(h: i64) -> Result<(), String> {
@@ -4135,6 +4153,22 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_clipboard", " (op, text)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__ui_clipboard expects a string (the op), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_clipboard expects a string (the text), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_menu_at(position, title, items) -> [string] (M236): como __ui_menu, en la posición dada (-1 = al final).
+    Builtin { name: "__ui_menu_at", opcode: OpCode::UiMenuAt, check: |a| {
+        arity(a, 3, "__ui_menu_at", " (position, title, items)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_menu_at expects an int (the position), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_menu_at expects a string (the title), not {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__ui_menu_at expects [string] (the items), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_set_menu_item(tag, enabled, checked) -> [string] (M236): estado de un item por tag.
+    Builtin { name: "__ui_set_menu_item", opcode: OpCode::UiSetMenuItem, check: |a| {
+        arity(a, 3, "__ui_set_menu_item", " (tag, enabled, checked)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_set_menu_item expects a string (the tag), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__ui_set_menu_item expects a bool (enabled), not {}", a[1]))); }
+        if a[2] != Type::Bool { return Err((Some(2), format!("__ui_set_menu_item expects a bool (checked), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_focus(h) -> [string] (M229): trae al frente y da el foco a la ventana `h`.

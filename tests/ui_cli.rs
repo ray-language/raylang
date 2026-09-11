@@ -255,21 +255,21 @@ const MENU_PROG: &str = r#"import std/ui;
 
 fn main() {
     let items = [
-        ui.MenuItem { tag: "new", title: "New", shortcut: "n" },
-        ui.MenuItem { tag: "quit", title: "Quit Game", shortcut: "" },
+        ui.item("new", "New", "n"),
+        ui.item("quit", "Quit Game", ""),
     ];
     print("menu ok: " + to_string(ui.menu("Game", items).is_ok()));
     print("about ok: " + to_string(ui.set_about("Demo", "Version 1.0", "A demo app", "(c) 2026 Demo").is_ok()));
     let app_items = [
-        ui.MenuItem { tag: "role:about", title: "About Demo", shortcut: "" },
-        ui.MenuItem { tag: "settings", title: "Settings...", shortcut: "," },
+        ui.item("role:about", "About Demo", ""),
+        ui.item("settings", "Settings...", ","),
     ];
     print("app_menu ok: " + to_string(ui.app_menu("Demo", app_items).is_ok()));
-    match (ui.app_menu("Demo", [ui.MenuItem { tag: "", title: "x", shortcut: "" }])) {
+    match (ui.app_menu("Demo", [ui.item("", "x", "")])) {
         Result.Ok(_) => print("bad: app_menu empty tag accepted"),
         Result.Err(e) => print("app_menu empty tag rejected: " + to_string(e.contains("non-empty tag"))),
     }
-    match (ui.menu("Bad", [ui.MenuItem { tag: "", title: "x", shortcut: "" }])) {
+    match (ui.menu("Bad", [ui.item("", "x", "")])) {
         Result.Ok(_) => print("bad: empty tag accepted"),
         Result.Err(e) => print("empty tag rejected: " + to_string(e.contains("non-empty tag"))),
     }
@@ -896,6 +896,65 @@ fn desktop_actions_and_clipboard_on_all_three_engines() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
         assert!(err.contains("[ui] reveal note.txt") && err.contains("[ui] open_path note.txt"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M236 (ray-sublime #70/#68) — menús: chords en `shortcut`, separadores, estado por tag y
+// posición. Headless valida igual que un backend real (chords, tags) y deja traza.
+// ---------------------------------------------------------------------------
+#[test]
+fn menu_chords_separators_state_and_position_on_all_three_engines() {
+    let base = tmp("menus_m236");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn main() {
+    var save = ui.item("save", "Save", "cmd+s");
+    var save_all = ui.item("save_all", "Save All", "cmd+alt+s");
+    save_all.icon = "sf:square.and.arrow.down.on.square";
+    var wrap = ui.item("wrap", "Word Wrap", "");
+    wrap.checked = true;
+    var close = ui.item("close", "Close File", "cmd+w");
+    close.enabled = false;
+    let items = [save, save_all, ui.separator(), ui.item("reopen", "Reopen Closed File", "cmd+shift+t"), ui.item("go", "Go to Line", "ctrl+g"), ui.item("run", "Run", "f5"), wrap, close];
+    match (ui.menu_at(0, "File", items)) { Result.Ok(_) => print("file ok"), Result.Err(e) => print(e) }
+    match (ui.menu("Bad", [ui.item("x", "X", "cmd+bogus")])) { Result.Ok(_) => print("bad accepted"), Result.Err(e) => print(e) }
+    match (ui.menu("Bad", [ui.item("x", "X", "hyper+s")])) { Result.Ok(_) => print("bad accepted"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("save", false, false)) { Result.Ok(_) => print("save disabled"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("wrap", true, false)) { Result.Ok(_) => print("wrap unchecked"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("nope", true, false)) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("", true, false)) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    match (ui.menu("Legacy", [ui.item("n", "New", "n"), ui.item("s", "Shifted", "S")])) { Result.Ok(_) => print("legacy ok"), Result.Err(e) => print(e) }
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "file ok\nui: unsupported menu shortcut 'cmd+bogus'\nui: unsupported menu shortcut 'hyper+s'\nsave disabled\nwrap unchecked\nui: no menu item with tag 'nope'\nui: set_menu_item needs a tag\nlegacy ok\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] menu File at 0 items 8"), "{engine:?}\n{err}");
+        assert!(err.contains("[ui] menu item save enabled=false checked=false"), "{engine:?}\n{err}");
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
         let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));

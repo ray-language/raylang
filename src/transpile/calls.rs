@@ -2372,6 +2372,26 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            "ui_menu_at" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_menu_at(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "ui_set_menu_item" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_set_menu_item(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
             "ui_app_menu" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_app_menu(&*");

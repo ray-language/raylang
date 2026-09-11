@@ -211,7 +211,7 @@ el caso de "el bug se ve en el paso 7 de 5 000". Coste M. A decidir junto a K1�
 | M232 | #67 (`regex.onig`: dialecto Oniguruma + `search_from`/`match_at` con capturas) | el motor regex propio (2 900 líneas) se sustituye por un adaptador; verificado con su corpus (6 184/6 226 compilan, 4 000/4 000 casos diferenciales) |
 | M234 | defecto: live-reload de `ray dev` para apps `std/ui` sin servidor (runtime suscrito al hub + `mount_embed` en vivo) | editar `assets/` recarga la ventana sin reiniciar |
 | M235 ✅ | #69 (`platform()`, `fs.copy_all`, `ui.reveal`/`open_path`, `clipboard_write`/`clipboard_read`) | `src/fileops.ray` deja de adivinar la plataforma; el portapapeles sin webview |
-| M236 | #70 + #68 + **iconos en los ítems de menú** (chords en `shortcut`, `ui.separator()`, `enabled`/`checked` con `ui.set_menu_item`, `ui.menu_at`, `MenuItem.icon`) | menú `File` completo, en su sitio y con estado |
+| M236 ✅ | #70 + #68 + **iconos en los ítems de menú** (chords en `shortcut`, `ui.separator()`, `enabled`/`checked` con `ui.set_menu_item`, `ui.menu_at`, `MenuItem.icon`) | menú `File` completo, en su sitio y con estado |
 | J3, K | yaml/plist, `return` expresión, `@derive(Clone)`, trazas, intérprete embebible | según decisión |
 
 Cada hito: rama + PR, SPEC antes si cambia el lenguaje (K1, K2), DESIGN con el porqué, CHANGELOG

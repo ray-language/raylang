@@ -815,6 +815,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Ok(()) => vec![Rc::<str>::from(\"ok\")],\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
+            // M236: menú en posición + estado de un item por tag.
+            "fn __ray_ui_menu_at(position: i64, title: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::menu_at(position, title, &its) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "fn __ray_ui_set_menu_item(tag: &str, enabled: bool, checked: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::set_menu_item(tag, enabled, checked) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_app_menu(name: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::app_menu(name, &its) {\n",

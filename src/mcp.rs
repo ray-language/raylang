@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn ray_doc_covers_std_types_with_fields_and_variants() {
         let d = doc_text("ui.MenuItem");
-        assert!(d.contains("struct MenuItem { tag: string, title: string, shortcut: string }"), "{d}");
+        assert!(d.contains("struct MenuItem { tag: string, title: string, shortcut: string, icon: string, enabled: bool, checked: bool }"), "{d}");
         assert!(d.contains("One item of a custom menu"), "la /// del struct: {d}");
         let d = doc_text("process.Exit");
         assert!(d.starts_with("std/process: enum Exit {"), "{d}");

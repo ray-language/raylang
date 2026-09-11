@@ -2211,6 +2211,36 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_menu_at" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Int(position), Value::Str(title), Value::Array(items)) => {
+                        let items: Vec<String> = items
+                            .borrow()
+                            .iter()
+                            .map(|v| match v {
+                                Value::Str(s) => s.clone(),
+                                _ => unreachable!("the checker guarantees [string]"),
+                            })
+                            .collect();
+                        match crate::builtins::ui_menu_at(*position, title, &items) {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (int, string, [string])"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_set_menu_item" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Str(tag), Value::Bool(en), Value::Bool(ch)) => match crate::builtins::ui_set_menu_item(tag, *en, *ch) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (string, bool, bool)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_menu" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(title), Value::Array(items)) => {

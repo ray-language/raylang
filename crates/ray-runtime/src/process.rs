@@ -1128,7 +1128,9 @@ mod win {
             }
             let mut hpc = 0usize;
             let hr = CreatePseudoConsole(Coord { x: cols as i16, y: rows as i16 }, in_r, out_w, 0, &mut hpc);
-            // ConPTY duplica sus extremos: los nuestros se cierran ya.
+            // ConPTY duplica sus extremos: los nuestros se cierran ya. OJO: el atributo lleva el
+            // VALOR del HPCON como lpValue (como en el EchoCon de Microsoft), no un puntero a él —
+            // con el puntero el hijo arranca sin consola válida y muere con 0xC0000142.
             CloseHandle(in_r);
             CloseHandle(out_w);
             if hr < 0 {
@@ -1140,7 +1142,7 @@ mod win {
             InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
             let mut list = vec![0u8; size.max(1)];
             if InitializeProcThreadAttributeList(list.as_mut_ptr() as *mut _, 1, 0, &mut size) == 0
-                || UpdateProcThreadAttribute(list.as_mut_ptr() as *mut _, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, &hpc as *const usize as *const _, std::mem::size_of::<usize>(), std::ptr::null_mut(), std::ptr::null_mut()) == 0
+                || UpdateProcThreadAttribute(list.as_mut_ptr() as *mut _, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hpc as *const core::ffi::c_void, std::mem::size_of::<usize>(), std::ptr::null_mut(), std::ptr::null_mut()) == 0
             {
                 let e = err("attribute list");
                 ClosePseudoConsole(hpc);

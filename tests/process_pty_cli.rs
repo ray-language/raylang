@@ -104,6 +104,7 @@ fn main() -> int {
     let p = process.cmd("cmd", ["/c", "echo hola-pty"]).pty(80, 24).stream().unwrap();
     print(p.resize(100, 30).is_ok());
     let text = collect(p);
+    print("OUT=" + to_string(text.len()) + ":" + text.replace("\r", "<CR>").replace("\n", "<LF>").replace("\x1b", "<ESC>"));
     print(text.contains("hola-pty"));
     print(p.err.recv().is_none());
     match (p.wait()) { process.Exit.Code(c) => print("code ${c}"), process.Exit.Signal(s) => print("signal ${s}") }
@@ -120,13 +121,19 @@ fn main() -> int {
 const WANT_WIN: &str = "true\ntrue\ntrue\ncode 0\ntrue\ntrue\n";
 
 #[cfg(windows)]
+fn strip_out(s: &str) -> String {
+    s.lines().filter(|l| !l.starts_with("OUT=")).map(|l| format!("{l}\n")).collect()
+}
+
+#[cfg(windows)]
 #[test]
 fn conpty_gives_the_child_a_console_on_the_vm_and_natively() {
     let d = dir("win");
     std::fs::write(d.join("prog.ray"), PROG_WIN).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), WANT_WIN, "vm");
+    let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(strip_out(&raw), WANT_WIN, "vm\n{raw}");
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
         let bin = d.join("prog_bin.exe");
         let st = Command::new(env!("CARGO_BIN_EXE_ray"))
@@ -137,6 +144,7 @@ fn conpty_gives_the_child_a_console_on_the_vm_and_natively() {
         assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
         let out = Command::new(&bin).current_dir(&d).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT_WIN, "nativo");
+        let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(strip_out(&raw), WANT_WIN, "nativo\n{raw}");
     }
 }

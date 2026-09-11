@@ -1140,7 +1140,8 @@ mod win {
             }
             let mut size = 0usize;
             InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
-            let mut list = vec![0u8; size.max(1)];
+            // Alineado a 8: la lista de atributos guarda punteros.
+            let mut list = vec![0u64; size.div_ceil(8).max(1)];
             if InitializeProcThreadAttributeList(list.as_mut_ptr() as *mut _, 1, 0, &mut size) == 0
                 || UpdateProcThreadAttribute(list.as_mut_ptr() as *mut _, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hpc as *const core::ffi::c_void, std::mem::size_of::<usize>(), std::ptr::null_mut(), std::ptr::null_mut()) == 0
             {

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.16.0 — 2026-09-11
 
 - **Pseudo-terminal en `std/process`** (M237, ray-sublime: el terminal del editor):
   `process.cmd(sh, args).pty(cols, rows).stream()` lanza el hijo bajo un PTY real en Linux y

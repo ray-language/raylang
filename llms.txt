@@ -161,7 +161,7 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
 ## Stdlib map — three calling conventions (getting this wrong = 'not declared')
 
 1. **Free global builtins** (no import, called free-form): `print eprint to_string
-   panic assert assert_eq args env input parse_int parse_float from_utf8 bytes_of
+   panic assert assert_eq args env platform input parse_int parse_float from_utf8 bytes_of
    sort sort_by sort_by_key get char_code char_from_code try_call` and the concurrency set (`spawn send
    recv try_recv join try_join scope select select_timeout close signals`).
 2. **Method builtins** (RECEIVER form ONLY — the free form is `function 'x' not
@@ -178,8 +178,10 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*
    crypto.chacha20poly1305_seal/open crypto.random_bytes crypto.x25519_public_key/
    x25519_shared_secret` (raw DH → always `crypto.hkdf_sha256` before AEAD) ·
-   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.remove_all(p) fs.make_temp_dir(prefix)` · `time.now() time.sleep(ms)` ·
-   `random.below(n)`.
+   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.is_dir(p) fs.list_dir(p) fs.mkdir(p)
+   fs.copy_file(a, b) fs.copy_all(src, dst) fs.remove_all(p) fs.make_temp_dir(prefix)` ·
+   `time.now() time.sleep(ms)` · `random.below(n)`. There is NO `os` module: the operating
+   system is the free builtin `platform()` → `"macos"` | `"linux"` | `"windows"`.
 
 Generic collections are MODULE functions: `import std/collections/deque;` then
 `deque.push_back(d, x)` — and, since 1.10.0, also `d.push_back(x)`: UFCS resolves against
@@ -221,6 +223,27 @@ draining) and `p.kill(force)` (signal to the process GROUP; no-op after wait). W
 `.merge_output()`, everything arrives on `out` and `err` starts closed. Inside a
 `scope`, the process is a scope child: a failing sibling kills+reaps its process
 group, and a never-`wait()`ed process is killed+reaped on scope exit.
+Pseudo-terminal (1.16+, Linux/macOS/Windows): `.pty(cols, rows).stream()` runs the child
+under a real terminal — `p.out` carries the VT stream, `p.write(bytes)` sends keys
+(Ctrl-C = `b"\x03"`), `p.resize(cols, rows)` follows the window; `err` starts closed.
+
+Regex: `std/regex` has two dialects — its own linear engine (`regex.compile`,
+`find`, `captures`, no look-around) and, since 1.14.0, the Oniguruma dialect of
+`.sublime-syntax`/Ruby: `let re = regex.onig(pattern).unwrap(); re.search_from(text, from)`
+/ `re.match_at(text, at)` → `Option<regex.Match { start, end, groups }>` with look-around,
+backreferences, `\\G`, atomic groups; `regex.group_str(m, text, i)`.
+
+Desktop apps (`import std/ui;`, a native window with the system webview; headless in
+tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h))`
+(`WindowOptions` also has `min_width min_height resizable center autosave
+titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.focus(h)`,
+`ui.eval_js(h, js)`, requests from the page via `ui.next_event()` + `ui.reply(h, id, s)` /
+`ui.reply_json`; serve the frontend from the process with `ui.mount_embed("", "assets")`
+(+ `mount_dir`, `mount_bytes`) and open `ray://app/index.html` — no local HTTP server; menus:
+`ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
+…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.app_menu`, `MenuItem.icon`; desktop:
+`ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray
+dev` the window live-reloads on asset changes and the webview devtools are on.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map); `bytes_of([int])` vs `to_bytes(string)`;
@@ -250,7 +273,7 @@ up to 20 diagnostics per run.
 
 ```
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
-ray dev file.ray            # run + auto-restart on saved changes (hot reload)
+ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray fmt file.ray            # canonical formatting

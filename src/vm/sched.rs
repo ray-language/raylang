@@ -38,6 +38,8 @@ pub(super) struct Fiber {
     /// otro) porque es una pila, y son POR FIBRA: un `spawn` dentro de un `try_call` no hereda el
     /// marcador (su fallo lo captura su `Task`, como siempre).
     pub(super) try_markers: Vec<TryMarker>,
+    /// M240: pila de marcos perfilados (vacía y sin coste con el perfil apagado).
+    pub(super) prof: super::profile::FiberProfile,
     /// M190: un error que la fibra debe LANZAR al reanudarse, en la posición de la instrucción que la
     /// aparcó. Lo deja `close` en cada emisor bloqueado en un canal acotado: antes `close` con emisor
     /// bloqueado era error en el sitio del close (y "acotado" y "se cierra para terminar" eran

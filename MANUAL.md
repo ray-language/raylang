@@ -2669,6 +2669,16 @@ guardado sin cambios reales se ignora, y `q` sale. No hay check-before-restart: 
 corrida muestra el diagnóstico si algo no compila. `ray test` acepta además varias suites
 explícitas (`ray test a.ray b.ray [filtro]`).
 
+**`ray profile archivo.ray`** (M240) corre el programa en la VM con el perfilador por función y,
+al terminar, imprime en stderr una tabla ordenada por **tiempo propio** (la función sin sus
+hijos): propio, %, inclusivo, llamadas y media por llamada. Es la herramienta para el "¿dónde
+se va el tiempo?" que antes había que hacer a mano con `time.monotonic_nanos()`: los
+builtins (`split`, `to_string`, `get`…) no son funciones y su coste aparece en el propio de
+quien los llama, así que una función con mucho propio y pocas llamadas es un bucle caro, y
+una con muchas llamadas y poco propio es candidata a llamar menos. `--json --out perfil.json`
+deja el informe en un archivo para compararlo entre corridas; `--top N` acorta la tabla. Solo VM
+(en el nativo usa `perf`/Instruments); el informe sale también tras `exit()` o un error.
+
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**
 (no tira un servidor que funciona por un cambio roto). Además hace **debounce** de una ráfaga de

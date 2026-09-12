@@ -274,6 +274,7 @@ up to 20 diagnostics per run.
 ```
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
+ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray fmt file.ray            # canonical formatting

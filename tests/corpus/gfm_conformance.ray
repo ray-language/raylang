@@ -1,0 +1,56 @@
+// Runner de conformidad de std/markdown contra el spec de GFM (tests/corpus/gfm_spec.json,
+// extraído del spec.txt de cmark-gfm). Imprime "PASS <id>" / "FAIL <id>" por ejemplo y un
+// resumen por sección; lo consume tests/markdown_cli.rs como trinquete (los que pasan no
+// pueden volver a fallar). Uso: ray run tests/corpus/gfm_conformance.ray [--show N]
+import std/fs;
+import std/json;
+import std/markdown;
+
+fn main() -> int {
+    let src = fs.read_file("tests/corpus/gfm_spec.json").unwrap();
+    let doc = json.parse(src).unwrap();
+    let cases = json.as_array(doc).unwrap();
+    let a = args();
+    var show = 0 - 1;
+    if (a.len() >= 2 && a[0] == "--show") {
+        show = a[1].parse_int().unwrap_or(0 - 1);
+    }
+    var by_section: Map<string, int> = Map.new();
+    var total_section: Map<string, int> = Map.new();
+    var sections: [string] = [];
+    var pass = 0;
+    for c in cases {
+        let id = json.get_int(c, "id").unwrap_or(0);
+        let section = json.get_string(c, "section").unwrap_or("");
+        let md = json.get_string(c, "markdown").unwrap_or("");
+        let want = json.get_string(c, "html").unwrap_or("");
+        if (!total_section.contains_key(section)) {
+            sections.push(section);
+        }
+        total_section.add_to(section, 1);
+        let got = markdown.to_html(md);
+        let ok = got == want;
+        if (ok) {
+            pass = pass + 1;
+            by_section.add_to(section, 1);
+            print("PASS ${id}");
+        } else {
+            print("FAIL ${id}");
+        }
+        if (id == show) {
+            print("--- markdown ---");
+            print(md);
+            print("--- want ---");
+            print(want);
+            print("--- got ---");
+            print(got);
+        }
+    }
+    print("SUMMARY ${pass}/${cases.len()}");
+    for s in sections {
+        let p = get(by_section, s).unwrap_or(0);
+        let t = get(total_section, s).unwrap_or(0);
+        print("SECTION ${p}/${t} ${s}");
+    }
+    0
+}

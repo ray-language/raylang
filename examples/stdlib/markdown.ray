@@ -26,6 +26,14 @@ pub enum Inline {
     Link([Inline], string),
     // alt, src
     Image(string, string),
+    // M241 (GFM): ~~tachado~~
+    Strike([Inline]),
+    // M241: salto duro (dos espacios o '\' al final de línea) → <br />
+    HardBreak,
+    // M241 (GFM): la casilla de un ítem de tarea, al principio del ítem
+    Check(bool),
+    // M241 (GFM): referencia a una nota al pie [^etiqueta]
+    FootnoteRef(string),
 }
 
 // Un bloque del documento.
@@ -43,6 +51,13 @@ pub enum Block {
     Rule,
     // Tabla GFM: alineación por columna ("" | "left" | "center" | "right"), cabecera, filas.
     Table([string], [[Inline]], [[[Inline]]]),
+    // M241: párrafo de un ítem de lista APRETADA (se renderiza sin <p>, como CommonMark)
+    Plain([Inline]),
+    // M241 (GitHub): aviso `> [!NOTE]` … — tipo ("note" | "tip" | "important" | "warning" |
+    // "caution") y contenido
+    Alert(string, [Block]),
+    // M241 (GFM): definición de nota al pie `[^etiqueta]: …` (van al final del documento)
+    FootnoteDef(string, [Block]),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -51,23 +66,18 @@ pub enum Block {
 
 /// Parses a Markdown document into its block-level AST.
 pub fn parse(md: string) -> [Block] {
-    var lines = md.split("\n");
-    // Un documento terminado en '\n' produce una línea vacía FANTASMA al partir (no es una línea
-    // del documento): fuera — si no, una cerca sin cerrar la absorbería como línea de código.
-    if (lines.len() > 0 && lines[lines.len() - 1] == "") {
-        let _ = lines.pop();
-    }
-    parse_blocks(lines)
+    parse_document(md).0
 }
 
-// ¿Cuántos espacios de sangría tiene la línea?
-fn indent_of(line: string) -> int {
-    var i = 0;
-    while (i < line.len() && line[i] == ' ') {
-        i = i + 1;
-    }
-    i
-}
+// ---------------------------------------------------------------------------------------------
+// M241 — Fase 1: la ESTRUCTURA de bloques, port del algoritmo de CommonMark (apéndice A del
+// spec, la misma forma que commonmark.js): una pila de bloques abiertos; cada línea primero
+// intenta CONTINUAR los contenedores abiertos (cita `>`, ítem por sangría), luego ABRIR bloques
+// nuevos en orden de prioridad, y al final cae en la hoja abierta (párrafo, cerca, código
+// sangrado, tabla) o cierra lo que no casó. Las listas deciden apretada/suelta al cerrarse.
+// Extensiones GFM: tablas, ítems de tarea, avisos `[!NOTE]`, definiciones de notas al pie.
+// Fuera a propósito: bloques HTML (el HTML se escapa: política de seguridad de M111).
+// ---------------------------------------------------------------------------------------------
 
 // ¿La línea es una regla horizontal? (3+ de -, * o _, solos, con espacios opcionales)
 fn is_rule(line: string) -> bool {
@@ -99,27 +109,6 @@ fn heading_level(line: string) -> int {
         i = i + 1;
     }
     if (i >= 1 && i <= 6 && i < line.len() && line[i] == ' ') { i } else { 0 }
-}
-
-// El marcador de lista de la línea (ya sin sangría): "" si no es ítem; "-" | "*" | "+" | "1."
-// (cualquier número). Exige un espacio tras el marcador.
-fn list_marker(t: string) -> string {
-    if (t.len() >= 2 && (t[0] == '-' || t[0] == '*' || t[0] == '+') && t[1] == ' ') {
-        return to_string(t[0]);
-    }
-    var i = 0;
-    while (i < t.len() && t[i] >= '0' && t[i] <= '9') {
-        i = i + 1;
-    }
-    if (i >= 1 && i + 1 < t.len() && t[i] == '.' && t[i + 1] == ' ') {
-        return t.substring(0, i + 1);
-    }
-    ""
-}
-
-// El contenido del ítem tras su marcador (t ya viene sin sangría).
-fn after_marker(t: string, marker: string) -> string {
-    t.substring(marker.len() + 1, t.len())
 }
 
 // ¿La línea es la FILA SEPARADORA de una tabla GFM? (solo |, -, :, espacios; al menos un -).
@@ -186,189 +175,1191 @@ fn align_of(sep: string) -> string {
     }
 }
 
-fn parse_blocks(lines: [string]) -> [Block] {
-    var out: [Block] = [];
+const K_DOC: int = 0;
+
+const K_QUOTE: int = 1;
+
+const K_LIST: int = 2;
+
+const K_ITEM: int = 3;
+
+const K_PARA: int = 4;
+
+const K_FENCE: int = 5;
+
+const K_INDENT: int = 6;
+
+const K_HEADING: int = 7;
+
+const K_RULE: int = 8;
+
+const K_TABLE: int = 9;
+
+const K_FOOT: int = 10;
+
+// Un nodo del árbol de bloques (referencia: el árbol y la pila comparten los mismos objetos).
+struct Node {
+    kind: int,
+    children: [Node],
+    lines: [string],
+    open: bool,
+    last_line_blank: bool,
+    ordered: bool,
+    start: int,
+    bullet: string,
+    tight: bool,
+    checked: int,
+    marker_offset: int,
+    padding: int,
+    fence_char: char,
+    fence_len: int,
+    fence_indent: int,
+    info: string,
+    level: int,
+    label: string,
+    aligns: [string],
+}
+
+fn node(kind: int) -> Node {
+    let cs: [Node] = [];
+    let ls: [string] = [];
+    let al: [string] = [];
+    Node {
+        kind: kind,
+        children: cs,
+        lines: ls,
+        open: true,
+        last_line_blank: false,
+        ordered: false,
+        start: 1,
+        bullet: "",
+        tight: true,
+        checked: 0 - 1,
+        marker_offset: 0,
+        padding: 0,
+        fence_char: ' ',
+        fence_len: 0,
+        fence_indent: 0,
+        info: "",
+        level: 0,
+        label: "",
+        aligns: al
+    }
+}
+
+fn accepts_children(kind: int) -> bool {
+    kind == K_DOC || kind == K_QUOTE || kind == K_ITEM || kind == K_FOOT
+}
+
+// ¿`parent` puede contener directamente un `child`? Una lista solo contiene ítems; un ítem
+// solo va dentro de una lista; el resto de contenedores admite cualquier otro bloque.
+fn can_contain(parent: int, child: int) -> bool {
+    if (parent == K_LIST) {
+        return child == K_ITEM;
+    }
+    if (child == K_ITEM) {
+        return false;
+    }
+    accepts_children(parent)
+}
+
+// El estado del parser de bloques: la línea en curso y la pila de bloques abiertos.
+struct Parser {
+    doc: Node,
+    stack: [Node],
+    line: string,
+    pos: int,
+    next_nonspace: int,
+    indent: int,
+    blank: bool,
+    refs: Map<string, [string]>,
+    footnotes: [Node],
+}
+
+// Tabs de la SANGRÍA inicial → espacios con paradas de 4 (CommonMark cuenta la sangría en
+// columnas); los tabs dentro del contenido se conservan.
+fn expand_tabs(line: string) -> string {
+    if (!line.contains("\t")) {
+        return line;
+    }
+    var out = "";
+    var col = 0;
     var i = 0;
-    while (i < lines.len()) {
-        let line = lines[i];
-        let t = line.trim();
-        if (t == "") {
+    var leading = true;
+    while (i < line.len()) {
+        let c = line[i];
+        if (c != ' ' && c != '\t') {
+            leading = false;
+        }
+        if (c == '\t' && leading) {
+            let n = 4 - col % 4;
+            var k = 0;
+            while (k < n) {
+                out = out + " ";
+                k = k + 1;
+            }
+            col = col + n;
+        } else {
+            out = out + to_string(c);
+            col = col + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn find_next_nonspace(p: Parser) {
+    var i = p.pos;
+    while (i < p.line.len() && p.line[i] == ' ') {
+        i = i + 1;
+    }
+    p.next_nonspace = i;
+    p.indent = i - p.pos;
+    p.blank = i >= p.line.len();
+}
+
+fn rest_from(p: Parser, at: int) -> string {
+    if (at >= p.line.len()) { "" } else { p.line.substring(at, p.line.len()) }
+}
+
+fn tip(p: Parser) -> Node {
+    p.stack[p.stack.len() - 1]
+}
+
+// Cierra el bloque abierto más profundo (lo saca de la pila y lo finaliza).
+fn close_tip(p: Parser) {
+    let t = p.stack.pop();
+    match (t) {
+        Option.Some(n) => {
+            finalize(p, n);
+        },
+        Option.None => { },
+    }
+}
+
+fn close_to(p: Parser, keep: int) {
+    while (p.stack.len() > keep) {
+        close_tip(p);
+    }
+}
+
+fn add_child(p: Parser, kind: int) -> Node {
+    let n = node(kind);
+    // Cierra lo que no pueda contener al nuevo (párrafo/hoja abierta; una lista si el nuevo no
+    // es ítem).
+    while (!can_contain(tip(p).kind, kind)) {
+        close_tip(p);
+    }
+    tip(p).children.push(n);
+    p.stack.push(n);
+    n
+}
+
+// ¿La línea (desde `at`) es una regla horizontal?
+fn is_thematic(p: Parser, at: int) -> bool {
+    let t = rest_from(p, at);
+    is_rule(t)
+}
+
+// Marcador de ítem en `at`: devuelve [tipo ("bullet"|"ordered"), marcador, ancho, start] o [] .
+fn scan_marker(p: Parser, at: int) -> [string] {
+    let none: [string] = [];
+    if (at >= p.line.len()) {
+        return none;
+    }
+    let c = p.line[at];
+    var width = 0;
+    var kind = "";
+    var bullet = "";
+    var start = "1";
+    if (c == '-' || c == '*' || c == '+') {
+        width = 1;
+        kind = "bullet";
+        bullet = to_string(c);
+    } else {
+        var i = at;
+        while (i < p.line.len() && p.line[i] >= '0' && p.line[i] <= '9' && i - at < 9) {
             i = i + 1;
-        } else if (t.starts_with("```")) {
-            // Código cercado: hasta el cierre (o el fin del documento, con lenidad).
-            let lang = t.substring(3, t.len()).trim();
-            var body = "";
-            var first = true;
-            i = i + 1;
-            var open = true;
-            while (open && i < lines.len()) {
-                if (lines[i].trim().starts_with("```")) {
-                    open = false;
-                } else {
-                    body = if (first) { lines[i] } else { body + "\n" + lines[i] };
-                    first = false;
-                }
+        }
+        if (i == at || i >= p.line.len() || !(p.line[i] == '.' || p.line[i] == ')')) {
+            return none;
+        }
+        width = i - at + 1;
+        kind = "ordered";
+        bullet = to_string(p.line[i]);
+        start = p.line.substring(at, i);
+    }
+    // Tras el marcador: espacio o fin de línea.
+    if (at + width < p.line.len() && p.line[at + width] != ' ') {
+        return none;
+    }
+    [kind, bullet, to_string(width), start]
+}
+
+// ¿La línea es la fila separadora de una tabla con `n` columnas?
+fn is_delimiter_row(t: string, n: int) -> bool {
+    if (!is_table_separator(t)) {
+        return false;
+    }
+    let cells = split_row(t);
+    if (cells.len() != n) {
+        return false;
+    }
+    var i = 0;
+    while (i < cells.len()) {
+        let c = cells[i];
+        var k = 0;
+        var dashes = 0;
+        while (k < c.len()) {
+            if (c[k] == '-') {
+                dashes = dashes + 1;
+            } else if (c[k] != ':' || (k != 0 && k != c.len() - 1)) {
+                return false;
+            }
+            k = k + 1;
+        }
+        if (dashes == 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// ¿La línea puede continuar el contenedor `c`? 0 = sí (consume el prefijo), 1 = no,
+// 2 = la línea cierra una cerca (consumida entera).
+fn continue_block(p: Parser, c: Node) -> int {
+    find_next_nonspace(p);
+    let k = c.kind;
+    if (k == K_QUOTE) {
+        if (p.indent <= 3 && p.next_nonspace < p.line.len() && p.line[p.next_nonspace] == '>') {
+            p.pos = p.next_nonspace + 1;
+            if (p.pos < p.line.len() && p.line[p.pos] == ' ') {
+                p.pos = p.pos + 1;
+            }
+            return 0;
+        }
+        return 1;
+    }
+    if (k == K_ITEM || k == K_FOOT) {
+        if (p.blank) {
+            // Un ítem que empezó vacío no puede seguir con otra línea en blanco.
+            if (c.children.len() == 0 && c.lines.len() == 0 && k == K_ITEM) {
+                return 1;
+            }
+            p.pos = p.next_nonspace;
+            return 0;
+        }
+        if (p.indent >= c.marker_offset + c.padding) {
+            p.pos = p.pos + c.marker_offset + c.padding;
+            return 0;
+        }
+        return 1;
+    }
+    if (k == K_FENCE) {
+        // ¿Cierre? Misma cerca, ≥ largo, solo espacios detrás.
+        if (p.indent <= 3
+            && p.next_nonspace < p.line.len()
+            && p.line[p.next_nonspace] == c.fence_char) {
+            var i = p.next_nonspace;
+            var n = 0;
+            while (i < p.line.len() && p.line[i] == c.fence_char) {
+                n = n + 1;
                 i = i + 1;
             }
-            out.push(Block.Code(lang, body));
-        } else if (heading_level(t) > 0) {
-            let lvl = heading_level(t);
-            // Se admite (y recorta) el cierre opcional "## título ##".
-            var text = t.substring(lvl + 1, t.len()).trim();
+            if (n >= c.fence_len && rest_from(p, i).trim() == "") {
+                return 2;
+            }
+        }
+        // Continúa: se quita hasta fence_indent espacios de sangría.
+        var s = 0;
+        while (s < c.fence_indent && p.pos < p.line.len() && p.line[p.pos] == ' ') {
+            p.pos = p.pos + 1;
+            s = s + 1;
+        }
+        return 0;
+    }
+    if (k == K_INDENT) {
+        if (p.indent >= 4) {
+            p.pos = p.pos + 4;
+            return 0;
+        }
+        if (p.blank) {
+            p.pos = p.next_nonspace;
+            return 0;
+        }
+        return 1;
+    }
+    if (k == K_HEADING || k == K_RULE) {
+        return 1;
+    }
+    if (k == K_TABLE) {
+        // Una tabla sigue mientras la línea no esté en blanco (otros bloques la cortan al
+        // intentar abrirse).
+        if (p.blank) {
+            return 1;
+        }
+        return 0;
+    }
+    // Párrafo y lista: la continuación la deciden sus hijos o la continuación perezosa.
+    0
+}
+
+// Intenta abrir bloques nuevos en la posición actual. Devuelve 0 = ninguno, 1 = contenedor
+// (seguir probando dentro), 2 = hoja (parar).
+fn try_start(p: Parser, keep: int) -> int {
+    find_next_nonspace(p);
+    let t = tip(p);
+    let para_open = t.kind == K_PARA && t.open;
+    // ¿El párrafo abierto es el último bloque CASADO? (setext/tabla no aplican a una
+    // continuación perezosa)
+    let para_matched = para_open && p.stack.len() == keep;
+    // Sangrado ≥ 4: código sangrado, salvo continuando un párrafo o en blanco.
+    if (p.indent >= 4) {
+        if (para_open || p.blank) {
+            return 0;
+        }
+        p.pos = p.pos + 4;
+        close_to(p, keep);
+        let code = add_child(p, K_INDENT);
+        code.lines.push(rest_from(p, p.pos));
+        return 2;
+    }
+    if (p.blank) {
+        return 0;
+    }
+    let c = p.line[p.next_nonspace];
+    // Cita.
+    if (c == '>') {
+        p.pos = p.next_nonspace + 1;
+        if (p.pos < p.line.len() && p.line[p.pos] == ' ') {
+            p.pos = p.pos + 1;
+        }
+        close_to(p, keep);
+        add_child(p, K_QUOTE);
+        return 1;
+    }
+    // Encabezado ATX.
+    if (c == '#') {
+        let rest = rest_from(p, p.next_nonspace);
+        let lvl = heading_level(rest + " ");
+        if (lvl > 0) {
+            p.pos = p.line.len();
+            close_to(p, keep);
+            let h = add_child(p, K_HEADING);
+            h.level = lvl;
+            var text = rest.substring(lvl, rest.len()).trim();
+            // Cierre opcional `## título ##`.
             var end = text.len();
             while (end > 0 && text[end - 1] == '#') {
                 end = end - 1;
             }
-            if (end < text.len() && end > 0 && text[end - 1] == ' ') {
+            if (end == 0) {
+                text = "";
+            } else if (end < text.len() && text[end - 1] == ' ') {
                 text = text.substring(0, end).trim();
             }
-            out.push(Block.Heading(lvl, parse_inline(text)));
-            i = i + 1;
-        } else if (is_rule(t)) {
-            out.push(Block.Rule);
-            i = i + 1;
-        } else if (t.starts_with(">")) {
-            // Cita: se juntan las líneas ">" contiguas, se les quita el prefijo y se recurre.
-            var inner: [string] = [];
-            while (i < lines.len() && lines[i].trim().starts_with(">")) {
-                let q = lines[i].trim();
-                var content = q.substring(1, q.len());
-                if (content.starts_with(" ")) {
-                    content = content.substring(1, content.len());
-                }
-                inner.push(content);
-                i = i + 1;
-            }
-            out.push(Block.Quote(parse_blocks(inner)));
-        } else if (list_marker(t) != "" && indent_of(line) == 0) {
-            // Lista: ítems al nivel 0; las líneas sangradas 2+ bajo un ítem son su continuación
-            // (párrafos extra o sub-listas), y se re-parsean recursivamente sin la sangría.
-            let ordered = list_marker(t)[0] >= '0' && list_marker(t)[0] <= '9';
-            // El número del PRIMER marcador es el inicio de la lista (<ol start>, CommonMark);
-            // los de los demás ítems se ignoran (también CommonMark).
-            var start = 1;
-            if (ordered) {
-                let first_mk = list_marker(t);
-                match (parse_int(first_mk.substring(0, first_mk.len() - 1))) {
-                    Option.Some(n) => {
-                        start = n;
-                    },
-                    Option.None => { },
-                }
-            }
-            var items: [[Block]] = [];
-            var go = true;
-            while (go && i < lines.len()) {
-                let cur = lines[i];
-                let ct = cur.trim();
-                if (ct == "") {
-                    // Una línea en blanco solo termina la lista si lo siguiente no es ítem ni
-                    // continuación sangrada.
-                    if (i + 1 < lines.len()
-                        && (list_marker(lines[i + 1].trim()) != "" && indent_of(lines[i + 1]) == 0
-                            || indent_of(lines[i + 1]) >= 2 && lines[i + 1].trim() != "")) {
-                        i = i + 1;
-                    } else {
-                        go = false;
-                    }
-                } else if (list_marker(ct) != "" && indent_of(cur) == 0) {
-                    let mk = list_marker(ct);
-                    // Cambio de TIPO de marcador (ordenada ↔ no ordenada): empieza otra lista.
-                    let mk_ordered = mk[0] >= '0' && mk[0] <= '9';
-                    if (mk_ordered != ordered) {
-                        go = false;
-                    } else {
-                        var item_lines: [string] = [after_marker(ct, mk)];
-                        i = i + 1;
-                        var more = true;
-                        while (more && i < lines.len()) {
-                            let nx = lines[i];
-                            if (nx.trim() != "" && indent_of(nx) >= 2) {
-                                item_lines.push(nx.substring(2, nx.len()));
-                                i = i + 1;
-                            } else if (nx.trim() == ""
-                                && i + 1 < lines.len()
-                                && lines[i + 1].trim() != ""
-                                && indent_of(lines[i + 1]) >= 2) {
-                                item_lines.push("");
-                                i = i + 1;
-                            } else {
-                                more = false;
-                            }
-                        }
-                        items.push(parse_blocks(item_lines));
-                    }
-                } else {
-                    go = false;
-                }
-            }
-            out.push(Block.List(ordered, start, items));
-        } else if (t.contains("|")
-            && i + 1 < lines.len()
-            && is_table_separator(lines[i + 1].trim())
-            && split_row(t).len() == split_row(lines[i + 1].trim()).len()
-            && split_row(t).len() >= 1) {
-            // Tabla GFM: cabecera + fila separadora con el MISMO número de columnas; las filas
-            // siguientes duran mientras contengan '|'. Filas cortas se rellenan, largas se recortan.
-            let header_cells = split_row(t);
-            let sep_cells = split_row(lines[i + 1].trim());
-            var aligns: [string] = [];
-            var header: [[Inline]] = [];
-            var c = 0;
-            while (c < header_cells.len()) {
-                aligns.push(align_of(sep_cells[c]));
-                header.push(parse_inline(header_cells[c]));
-                c = c + 1;
-            }
-            var rows: [[[Inline]]] = [];
-            i = i + 2;
-            var more_rows = true;
-            while (more_rows && i < lines.len()) {
-                let rt = lines[i].trim();
-                if (rt == "" || !rt.contains("|")) {
-                    more_rows = false;
-                } else {
-                    let cells = split_row(rt);
-                    var row: [[Inline]] = [];
-                    var k = 0;
-                    while (k < header_cells.len()) {
-                        if (k < cells.len()) {
-                            row.push(parse_inline(cells[k]));
-                        } else {
-                            let empty: [Inline] = [];
-                            row.push(empty);  // fila corta: celda vacía
-                        }
-                        k = k + 1;
-                    }
-                    rows.push(row);
-                    i = i + 1;
-                }
-            }
-            out.push(Block.Table(aligns, header, rows));
-        } else {
-            // Párrafo: líneas contiguas hasta un blanco u otro bloque.
-            var text = t;
-            i = i + 1;
-            var more = true;
-            while (more && i < lines.len()) {
-                let nx = lines[i].trim();
-                if (nx == ""
-                    || nx.starts_with("```")
-                    || heading_level(nx) > 0
-                    || is_rule(nx)
-                    || nx.starts_with(">")
-                    || list_marker(nx) != "" && indent_of(lines[i]) == 0
-                    || nx.contains("|")
-                        && i + 1 < lines.len()
-                        && is_table_separator(lines[i + 1].trim())) {
-                    more = false;
-                } else {
-                    text = text + "\n" + nx;
-                    i = i + 1;
-                }
-            }
-            out.push(Block.Paragraph(parse_inline(text)));
+            h.lines.push(text);
+            close_tip(p);
+            return 2;
         }
+    }
+    // Cerca ``` o ~~~ (3+, sin backticks en el info de una cerca de backticks).
+    if (c == '`' || c == '~') {
+        var i = p.next_nonspace;
+        while (i < p.line.len() && p.line[i] == c) {
+            i = i + 1;
+        }
+        let n = i - p.next_nonspace;
+        let info = rest_from(p, i).trim();
+        if (n >= 3 && !(c == '`' && info.contains("`"))) {
+            close_to(p, keep);
+            let f = add_child(p, K_FENCE);
+            f.fence_char = c;
+            f.fence_len = n;
+            f.fence_indent = p.indent;
+            f.info = unescape_backslashes(info);
+            p.pos = p.line.len();
+            return 2;
+        }
+    }
+    // Subrayado setext bajo un párrafo abierto.
+    if (para_matched && (c == '=' || c == '-')) {
+        let rest = rest_from(p, p.next_nonspace).trim();
+        var only = true;
+        var k = 0;
+        while (k < rest.len()) {
+            if (rest[k] != c) {
+                only = false;
+            }
+            k = k + 1;
+        }
+        if (only && rest.len() > 0) {
+            // Ojo: `---` cierra el párrafo como <h2> solo si el párrafo es hijo del contenedor
+            // en curso (no una continuación perezosa).
+            if (true) {
+                let para = t;
+                para.kind = K_HEADING;
+                para.level = if (c == '=') { 1 } else { 2 };
+                // Las definiciones de referencia al inicio ya se extraen al finalizar.
+                p.pos = p.line.len();
+                close_tip(p);
+                return 2;
+            }
+        }
+    }
+    // Regla horizontal.
+    if ((c == '-' || c == '*' || c == '_') && is_thematic(p, p.next_nonspace)) {
+        p.pos = p.line.len();
+        close_to(p, keep);
+        add_child(p, K_RULE);
+        close_tip(p);
+        return 2;
+    }
+    // Ítem de lista.
+    let mk = scan_marker(p, p.next_nonspace);
+    if (mk.len() == 4) {
+        let ordered = mk[0] == "ordered";
+        let width = mk[2].parse_int().unwrap_or(1);
+        let start_n = mk[3].parse_int().unwrap_or(1);
+        // Espacios tras el marcador: 1..4 forman parte del marcador; 5+ = código sangrado
+        // dentro del ítem (padding = ancho + 1); línea vacía tras el marcador = padding + 1.
+        var after = p.next_nonspace + width;
+        var spaces = 0;
+        while (after < p.line.len() && p.line[after] == ' ') {
+            spaces = spaces + 1;
+            after = after + 1;
+        }
+        let empty_item = after >= p.line.len();
+        var padding = width + spaces;
+        if (spaces >= 5 || spaces == 0 || empty_item) {
+            padding = width + 1;
+        }
+        // Un ítem vacío u ordenado que no empieza en 1 no interrumpe un párrafo.
+        if (para_matched && (empty_item || (ordered && start_n != 1))) {
+            return 0;
+        }
+        // Un `*`/`-` que también es regla ya se atendió arriba.
+        let marker_offset = p.indent;
+        // ¿Continúa la lista abierta (mismo tipo) o empieza otra? (lo no casado se cierra antes)
+        close_to(p, keep);
+        let cur = tip(p);
+        var need_list = true;
+        if (cur.kind == K_LIST && cur.ordered == ordered && cur.bullet == mk[1]) {
+            need_list = false;
+        }
+        if (need_list) {
+            let l = add_child(p, K_LIST);
+            l.ordered = ordered;
+            l.bullet = mk[1];
+            l.start = start_n;
+            l.marker_offset = marker_offset;
+        }
+        p.pos = if (empty_item) { p.line.len() } else { p.next_nonspace + padding };
+        let it = add_child(p, K_ITEM);
+        it.marker_offset = marker_offset;
+        it.padding = padding;
+        // Ítem de tarea GFM: `[ ]`/`[x]` + espacio al principio del contenido.
+        let body = rest_from(p, p.pos);
+        if (body.len() >= 4 && body[0] == '[' && body[2] == ']' && body[3] == ' ') {
+            if (body[1] == ' ') {
+                it.checked = 0;
+                p.pos = p.pos + 4;
+            } else if (body[1] == 'x' || body[1] == 'X') {
+                it.checked = 1;
+                p.pos = p.pos + 4;
+            }
+        }
+        return 1;
+    }
+    // Definición de nota al pie GFM: `[^etiqueta]: texto` (el contenido sigue sangrado 4).
+    if (c == '['
+        && p.next_nonspace + 2 < p.line.len()
+        && p.line[p.next_nonspace + 1] == '^'
+        && !para_open) {
+        let rest = rest_from(p, p.next_nonspace);
+        let close = match (rest.index_of("]:")) {
+            Option.Some(k) => k,
+            Option.None => 0 - 1,
+        };
+        if (close > 2) {
+            let label = rest.substring(2, close);
+            if (!label.contains(" ")) {
+                close_to(p, keep);
+                let f = add_child(p, K_FOOT);
+                f.label = label;
+                f.marker_offset = p.indent;
+                f.padding = 4;
+                p.footnotes.push(f);
+                p.pos = p.next_nonspace + close + 2;
+                if (p.pos < p.line.len() && p.line[p.pos] == ' ') {
+                    p.pos = p.pos + 1;
+                }
+                return 1;
+            }
+        }
+    }
+    // Tabla GFM: la fila separadora bajo un párrafo de UNA línea con el mismo número de celdas.
+    if (para_matched && t.lines.len() == 1 && (c == '|' || c == '-' || c == ':')) {
+        let rest = rest_from(p, p.next_nonspace).trim();
+        let ncols = split_row(t.lines[0].trim()).len();
+        if (t.lines[0].contains("|") && is_delimiter_row(rest, ncols)) {
+            t.kind = K_TABLE;
+            let seps = split_row(rest);
+            var k = 0;
+            while (k < seps.len()) {
+                t.aligns.push(align_of(seps[k]));
+                k = k + 1;
+            }
+            p.pos = p.line.len();
+            return 2;
+        }
+    }
+    0
+}
+
+fn unescape_backslashes(s: string) -> string {
+    if (!s.contains("\\")) {
+        return s;
+    }
+    var out = "";
+    var i = 0;
+    while (i < s.len()) {
+        if (s[i] == '\\' && i + 1 < s.len() && is_ascii_punct(s[i + 1])) {
+            out = out + to_string(s[i + 1]);
+            i = i + 2;
+        } else {
+            out = out + to_string(s[i]);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn is_ascii_punct(c: char) -> bool {
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".contains(to_string(c))
+}
+
+// Finaliza un bloque al cerrarse: definiciones de referencia, apretado/suelto, avisos.
+fn finalize(p: Parser, n: Node) {
+    n.open = false;
+    if (n.kind == K_PARA) {
+        extract_ref_defs(p, n);
+    } else if (n.kind == K_LIST) {
+        // Suelta si hay líneas en blanco entre ítems, o dentro de un ítem entre sus bloques.
+        var tight = true;
+        var i = 0;
+        while (i < n.children.len()) {
+            let it = n.children[i];
+            if (i < n.children.len() - 1 && ends_with_blank(it)) {
+                tight = false;
+            }
+            var j = 0;
+            while (j < it.children.len()) {
+                if (j < it.children.len() - 1 && ends_with_blank(it.children[j])) {
+                    tight = false;
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        n.tight = tight;
+    } else if (n.kind == K_QUOTE) {
+        // Aviso de GitHub: la primera línea del primer párrafo es exactamente `[!KIND]`.
+        if (n.children.len() > 0 && n.children[0].kind == K_PARA && n.children[0].lines.len() > 0) {
+            let first = n.children[0].lines[0].trim();
+            let kind = alert_kind(first);
+            if (kind != "") {
+                n.label = kind;
+                let para = n.children[0];
+                var rest: [string] = [];
+                var k = 1;
+                while (k < para.lines.len()) {
+                    rest.push(para.lines[k]);
+                    k = k + 1;
+                }
+                if (rest.len() == 0) {
+                    var others: [Node] = [];
+                    var m = 1;
+                    while (m < n.children.len()) {
+                        others.push(n.children[m]);
+                        m = m + 1;
+                    }
+                    n.children = others;
+                } else {
+                    para.lines = rest;
+                }
+            }
+        }
+    }
+}
+
+fn alert_kind(line: string) -> string {
+    let kinds = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
+    var i = 0;
+    while (i < kinds.len()) {
+        if (line == "[!" + kinds[i] + "]") {
+            return kinds[i].to_lower();
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn ends_with_blank(n: Node) -> bool {
+    if (n.last_line_blank) {
+        return true;
+    }
+    if ((n.kind == K_LIST || n.kind == K_ITEM) && n.children.len() > 0) {
+        return ends_with_blank(n.children[n.children.len() - 1]);
+    }
+    false
+}
+
+// Definiciones de referencia `[etiqueta]: destino "título"` al principio de un párrafo: se
+// guardan (la primera gana) y se quitan del párrafo.
+fn extract_ref_defs(p: Parser, para: Node) {
+    var again = true;
+    while (again && para.lines.len() > 0) {
+        again = false;
+        let text = join_lines(para.lines);
+        match (parse_ref_def(text)) {
+            Option.Some(d) => {
+                // d.0 etiqueta, d.1 destino, d.2 título, d.3 caracteres consumidos
+                let key = normalize_label(d.0);
+                if (!p.refs.contains_key(key)) {
+                    p.refs.insert(key, [d.1, d.2]);
+                }
+                let rest = text.substring(d.3, text.len());
+                para.lines = if (rest.trim() == "") { [] } else { split_lines(rest) };
+                again = true;
+            },
+            Option.None => { },
+        }
+    }
+}
+
+fn join_lines(ls: [string]) -> string {
+    var out = "";
+    var i = 0;
+    while (i < ls.len()) {
+        out = if (i == 0) { ls[0] } else { out + "\n" + ls[i] };
+        i = i + 1;
+    }
+    out
+}
+
+fn split_lines(s: string) -> [string] {
+    var out: [string] = [];
+    for l in s.split("\n") {
+        out.push(l);
+    }
+    // Sin la primera línea vacía que deja el corte tras la definición.
+    while (out.len() > 0 && out[0].trim() == "") {
+        var rest: [string] = [];
+        var i = 1;
+        while (i < out.len()) {
+            rest.push(out[i]);
+            i = i + 1;
+        }
+        out = rest;
+    }
+    out
+}
+
+/// Normalizes a reference label (case fold + collapsed whitespace), as CommonMark does.
+pub fn normalize_label(s: string) -> string {
+    var out = "";
+    var space = false;
+    for c in s.trim().to_lower().chars() {
+        if (c == ' ' || c == '\n' || c == '\t') {
+            space = true;
+        } else {
+            if (space && out != "") {
+                out = out + " ";
+            }
+            space = false;
+            out = out + to_string(c);
+        }
+    }
+    out
+}
+
+// `[label]: dest "title"` (título opcional, entre "", '' o ()) al principio de `text`; devuelve
+// (etiqueta, destino, título, consumido) o None.
+fn parse_ref_def(text: string) -> Option<(string, string, string, int)> {
+    var i = 0;
+    while (i < text.len() && text[i] == ' ' && i < 3) {
+        i = i + 1;
+    }
+    if (i >= text.len() || text[i] != '[') {
+        return Option.None;
+    }
+    // Etiqueta hasta `]` no escapado (sin `[` dentro, no vacía).
+    var j = i + 1;
+    var label = "";
+    var closed = false;
+    while (j < text.len() && !closed) {
+        let c = text[j];
+        if (c == '\\' && j + 1 < text.len()) {
+            label = label + text.substring(j, j + 2);
+            j = j + 2;
+        } else if (c == ']') {
+            closed = true;
+        } else if (c == '[') {
+            return Option.None;
+        } else {
+            label = label + to_string(c);
+            j = j + 1;
+        }
+    }
+    if (!closed || label.trim() == "" || label.len() > 999) {
+        return Option.None;
+    }
+    j = j + 1;
+    if (j >= text.len() || text[j] != ':') {
+        return Option.None;
+    }
+    j = j + 1;
+    // Espacios (con como mucho un salto de línea).
+    var nl = 0;
+    while (j < text.len() && (text[j] == ' ' || text[j] == '\n')) {
+        if (text[j] == '\n') {
+            nl = nl + 1;
+        }
+        j = j + 1;
+    }
+    if (nl > 1 || j >= text.len()) {
+        return Option.None;
+    }
+    // Destino: <…> o sin espacios.
+    var dest = "";
+    if (text[j] == '<') {
+        var k = j + 1;
+        while (k < text.len() && text[k] != '>' && text[k] != '\n') {
+            if (text[k] == '\\' && k + 1 < text.len()) {
+                dest = dest + text.substring(k, k + 2);
+                k = k + 2;
+            } else {
+                dest = dest + to_string(text[k]);
+                k = k + 1;
+            }
+        }
+        if (k >= text.len() || text[k] != '>') {
+            return Option.None;
+        }
+        j = k + 1;
+    } else {
+        var k = j;
+        var depth = 0;
+        while (k < text.len() && text[k] != ' ' && text[k] != '\n') {
+            if (text[k] == '\\' && k + 1 < text.len()) {
+                dest = dest + text.substring(k, k + 2);
+                k = k + 2;
+            } else {
+                if (text[k] == '(') {
+                    depth = depth + 1;
+                } else if (text[k] == ')') {
+                    if (depth == 0) {
+                        return Option.None;
+                    }
+                    depth = depth - 1;
+                } else if (text[k] < ' ') {
+                    return Option.None;
+                }
+                dest = dest + to_string(text[k]);
+                k = k + 1;
+            }
+        }
+        if (dest == "" || depth != 0) {
+            return Option.None;
+        }
+        j = k;
+    }
+    // Título opcional en la misma línea o la siguiente.
+    let after_dest = j;
+    var nl2 = 0;
+    var m = j;
+    while (m < text.len() && (text[m] == ' ' || text[m] == '\n')) {
+        if (text[m] == '\n') {
+            nl2 = nl2 + 1;
+        }
+        m = m + 1;
+    }
+    var title = "";
+    var end = after_dest;
+    var have_title = false;
+    if (m < text.len()
+        && nl2 <= 1
+        && m > after_dest
+        && (text[m] == '"' || text[m] == '\'' || text[m] == '(')) {
+        let open = text[m];
+        let close = if (open == '(') { ')' } else { open };
+        var k = m + 1;
+        var t = "";
+        var ok = false;
+        while (k < text.len() && !ok) {
+            if (text[k] == '\\' && k + 1 < text.len()) {
+                t = t + text.substring(k, k + 2);
+                k = k + 2;
+            } else if (text[k] == close) {
+                ok = true;
+            } else {
+                t = t + to_string(text[k]);
+                k = k + 1;
+            }
+        }
+        if (ok) {
+            // Tras el título solo espacios hasta el fin de línea.
+            var z = k + 1;
+            while (z < text.len() && text[z] == ' ') {
+                z = z + 1;
+            }
+            if (z >= text.len() || text[z] == '\n') {
+                title = t;
+                have_title = true;
+                end = z;
+            }
+        }
+    }
+    if (!have_title) {
+        // Sin título: tras el destino solo espacios hasta el fin de línea.
+        var z = after_dest;
+        while (z < text.len() && text[z] == ' ') {
+            z = z + 1;
+        }
+        if (z < text.len() && text[z] != '\n') {
+            return Option.None;
+        }
+        end = z;
+    }
+    if (end < text.len() && text[end] == '\n') {
+        end = end + 1;
+    }
+    Option.Some((label, unescape_backslashes(dest), unescape_backslashes(title), end))
+}
+
+// Procesa una línea del documento (el corazón del algoritmo).
+fn incorporate_line(p: Parser, raw: string) {
+    p.line = expand_tabs(raw);
+    p.pos = 0;
+    var all_matched = true;
+    var depth = 1;
+    var finished = false;
+    while (depth < p.stack.len() && all_matched && !finished) {
+        let r = continue_block(p, p.stack[depth]);
+        if (r == 0) {
+            depth = depth + 1;
+        } else if (r == 2) {
+            // Cierre de cerca: la línea se consume y el bloque se cierra.
+            close_to(p, depth);
+            finished = true;
+        } else {
+            all_matched = false;
+        }
+    }
+    if (finished) {
+        return;
+    }
+    let last_matched = depth;
+    var t = p.stack[depth - 1];
+    // Abrir bloques nuevos mientras el contenedor en curso los admita (y no estemos en una
+    // hoja que absorbe líneas).
+    var container_depth = depth;
+    var leaf_taken = false;
+    var may_open = true;
+    if (tip_is_absorbing(p, last_matched)) {
+        may_open = false;
+    }
+    while (may_open && !leaf_taken) {
+        let r = try_start(p, container_depth);
+        if (r == 0) {
+            may_open = false;
+        } else if (r == 2) {
+            leaf_taken = true;
+        } else {
+            container_depth = p.stack.len();
+            all_matched = true;
+        }
+        if (r != 0 && !leaf_taken) {
+            // Un contenedor nuevo desplaza lo que quedaba sin casar.
+            t = tip(p);
+        }
+    }
+    if (leaf_taken) {
+        return;
+    }
+    find_next_nonspace(p);
+    let cur = tip(p);
+    if (!all_matched && !p.blank && cur.kind == K_PARA) {
+        // Continuación perezosa del párrafo.
+        cur.lines.push(rest_from(p, p.next_nonspace));
+        return;
+    }
+    // Cierra lo que no casó y añade la línea a la hoja abierta (o abre un párrafo).
+    if (!all_matched) {
+        close_to(p, last_matched);
+    }
+    let tp = tip(p);
+    if (tp.kind == K_FENCE || tp.kind == K_INDENT) {
+        tp.lines.push(rest_from(p, p.pos));
+    } else if (tp.kind == K_TABLE) {
+        tp.lines.push(rest_from(p, p.next_nonspace));
+    } else if (p.blank) {
+        // Línea en blanco: marca al bloque más profundo (regla de commonmark.js), salvo cita,
+        // cerca, o el ítem cuya PRIMERA línea es la vacía.
+        let mark = !(tp.kind == K_QUOTE
+            || tp.kind == K_FENCE
+            || (tp.kind == K_ITEM && tp.children.len() == 0 && tp.lines.len() == 0 && just_opened(p, tp)));
+        tp.last_line_blank = mark;
+        // Los ancestros no acaban en blanco: el blanco está dentro de un hijo.
+        var k = 0;
+        while (k < p.stack.len() - 1) {
+            p.stack[k].last_line_blank = false;
+            k = k + 1;
+        }
+        if (tp.kind == K_PARA) {
+            close_tip(p);
+        }
+    } else if (tp.kind == K_PARA) {
+        tp.lines.push(rest_from(p, p.next_nonspace));
+    } else {
+        // Cualquier otro tip (contenedor, o una lista cuyo ítem no casó): párrafo nuevo —
+        // add_child cierra lo que no pueda contenerlo.
+        let para = add_child(p, K_PARA);
+        para.lines.push(rest_from(p, p.next_nonspace));
+    }
+}
+
+// ¿La hoja abierta absorbe la línea sin intentar abrir bloques? (cerca y código sangrado)
+fn tip_is_absorbing(p: Parser, last_matched: int) -> bool {
+    let t = tip(p);
+    last_matched == p.stack.len() && (t.kind == K_FENCE || t.kind == K_INDENT)
+}
+
+fn just_opened(p: Parser, n: Node) -> bool {
+    n.marker_offset + n.padding <= p.line.len() && n.children.len() == 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fase 2: del árbol de estructura al AST público (los inlines se parsean aquí, con las
+// definiciones de referencia ya recogidas del documento entero).
+// ---------------------------------------------------------------------------------------------
+
+fn parse_document(md: string) -> ([Block], Map<string, [string]>) {
+    let refs: Map<string, [string]> = Map.new();
+    let foots: [Node] = [];
+    let root = node(K_DOC);
+    let p = Parser {
+        doc: root,
+        stack: [root],
+        line: "",
+        pos: 0,
+        next_nonspace: 0,
+        indent: 0,
+        blank: true,
+        refs: refs,
+        footnotes: foots
+    };
+    var lines = md.split("\n");
+    if (lines.len() > 0 && lines[lines.len() - 1] == "") {
+        let _ = lines.pop();
+    }
+    for l in lines {
+        incorporate_line(p, l.replace("\r", ""));
+    }
+    close_to(p, 0);
+    var blocks = lower_children(p, root, false);
+    var i = 0;
+    while (i < p.footnotes.len()) {
+        let f = p.footnotes[i];
+        blocks.push(Block.FootnoteDef(f.label, lower_children(p, f, false)));
+        i = i + 1;
+    }
+    (blocks, p.refs)
+}
+
+fn lower_children(p: Parser, n: Node, tight: bool) -> [Block] {
+    var out: [Block] = [];
+    var i = 0;
+    while (i < n.children.len()) {
+        let c = n.children[i];
+        if (c.kind != K_FOOT) {
+            match (lower(p, c, tight)) {
+                Option.Some(b) => {
+                    out.push(b);
+                },
+                Option.None => { },
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn lower(p: Parser, n: Node, tight: bool) -> Option<Block> {
+    let k = n.kind;
+    if (k == K_PARA) {
+        if (n.lines.len() == 0) {
+            return Option.None;
+        }
+        let text = paragraph_text(n.lines);
+        let xs = parse_inline_refs(text, p.refs);
+        return Option.Some(if (tight) { Block.Plain(xs) } else { Block.Paragraph(xs) });
+    }
+    if (k == K_HEADING) {
+        let text = if (n.lines.len() == 1) { n.lines[0] } else { paragraph_text(n.lines) };
+        return Option.Some(Block.Heading(n.level, parse_inline_refs(text.trim(), p.refs)));
+    }
+    if (k == K_RULE) {
+        return Option.Some(Block.Rule);
+    }
+    if (k == K_FENCE) {
+        let lang = first_word(n.info);
+        return Option.Some(Block.Code(lang, code_text(n.lines, false)));
+    }
+    if (k == K_INDENT) {
+        return Option.Some(Block.Code("", code_text(n.lines, true)));
+    }
+    if (k == K_QUOTE) {
+        let inner = lower_children(p, n, false);
+        if (n.label != "") {
+            return Option.Some(Block.Alert(n.label, inner));
+        }
+        return Option.Some(Block.Quote(inner));
+    }
+    if (k == K_LIST) {
+        var items: [[Block]] = [];
+        var i = 0;
+        while (i < n.children.len()) {
+            let it = n.children[i];
+            var blocks = lower_children(p, it, n.tight);
+            if (it.checked >= 0) {
+                blocks = with_checkbox(blocks, it.checked == 1);
+            }
+            items.push(blocks);
+            i = i + 1;
+        }
+        return Option.Some(Block.List(n.ordered, n.start, items));
+    }
+    if (k == K_TABLE) {
+        let header_cells = split_row(n.lines[0].trim());
+        var header: [[Inline]] = [];
+        var c = 0;
+        while (c < header_cells.len()) {
+            header.push(parse_inline_refs(header_cells[c], p.refs));
+            c = c + 1;
+        }
+        var rows: [[[Inline]]] = [];
+        var r = 1;
+        while (r < n.lines.len()) {
+            let cells = split_row(n.lines[r].trim());
+            var row: [[Inline]] = [];
+            var j = 0;
+            while (j < header_cells.len()) {
+                if (j < cells.len()) {
+                    row.push(parse_inline_refs(cells[j], p.refs));
+                } else {
+                    let empty: [Inline] = [];
+                    row.push(empty);
+                }
+                j = j + 1;
+            }
+            rows.push(row);
+            r = r + 1;
+        }
+        return Option.Some(Block.Table(n.aligns, header, rows));
+    }
+    Option.None
+}
+
+// La casilla de tarea va al principio del primer párrafo del ítem (como GitHub).
+fn with_checkbox(blocks: [Block], checked: bool) -> [Block] {
+    if (blocks.len() == 0) {
+        return [Block.Plain([Inline.Check(checked)])];
+    }
+    var out: [Block] = [];
+    var i = 0;
+    while (i < blocks.len()) {
+        if (i == 0) {
+            match (blocks[0]) {
+                Block.Plain(xs) => {
+                    out.push(Block.Plain(prepend_check(xs, checked)));
+                },
+                Block.Paragraph(xs) => {
+                    out.push(Block.Paragraph(prepend_check(xs, checked)));
+                },
+                _ => {
+                    out.push(blocks[0]);
+                },
+            }
+        } else {
+            out.push(blocks[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn prepend_check(xs: [Inline], checked: bool) -> [Inline] {
+    var out: [Inline] = [Inline.Check(checked)];
+    for x in xs {
+        out.push(x);
+    }
+    out
+}
+
+// El texto de un párrafo: cada línea sin su sangría inicial, unidas por '\n' (los saltos
+// suaves y duros los decide el parser inline).
+fn paragraph_text(ls: [string]) -> string {
+    var out = "";
+    var i = 0;
+    while (i < ls.len()) {
+        let l = ltrim(ls[i]);
+        out = if (i == 0) { l } else { out + "\n" + l };
+        i = i + 1;
+    }
+    rtrim(out)
+}
+
+fn ltrim(s: string) -> string {
+    var i = 0;
+    while (i < s.len() && (s[i] == ' ' || s[i] == '\t')) {
+        i = i + 1;
+    }
+    s.substring(i, s.len())
+}
+
+fn rtrim(s: string) -> string {
+    var j = s.len();
+    while (j > 0 && (s[j - 1] == ' ' || s[j - 1] == '\t')) {
+        j = j - 1;
+    }
+    s.substring(0, j)
+}
+
+fn first_word(s: string) -> string {
+    let t = s.trim();
+    match (t.index_of(" ")) {
+        Option.Some(sp) => t.substring(0, sp),
+        Option.None => t,
+    }
+}
+
+// El texto de un bloque de código: las líneas y un '\n' final (si hay alguna). El código
+// sangrado pierde sus líneas en blanco finales.
+fn code_text(ls: [string], strip_trailing_blank: bool) -> string {
+    var n = ls.len();
+    if (strip_trailing_blank) {
+        while (n > 0 && ls[n - 1].trim() == "") {
+            n = n - 1;
+        }
+    }
+    var out = "";
+    var i = 0;
+    while (i < n) {
+        out = out + ls[i] + "\n";
+        i = i + 1;
     }
     out
 }
@@ -446,6 +1437,12 @@ fn matches_at(s: string, i: int, needle: string) -> bool {
         k = k + 1;
     }
     true
+}
+
+// M241: los inlines con las definiciones de referencia del documento (M242 las usará para
+// `[texto][etiqueta]`; hoy delega).
+fn parse_inline_refs(s: string, refs: Map<string, [string]>) -> [Inline] {
+    parse_inline(s)
 }
 
 /// Parses inline Markdown (emphasis, strong, code spans, links, images, escapes) into `Inline`s.
@@ -609,6 +1606,14 @@ fn inline_plain_text(xs: [Inline]) -> string {
             Inline.Image(alt, _) => {
                 out = out + alt;
             },
+            Inline.Strike(inner) => {
+                out = out + inline_plain_text(inner);
+            },
+            Inline.HardBreak => {
+                out = out + "\n";
+            },
+            Inline.Check(_) => { },
+            Inline.FootnoteRef(_) => { },
         }
         i = i + 1;
     }
@@ -672,7 +1677,30 @@ fn render_inlines(xs: [Inline]) -> string {
                     + escape_html(safe_url(src))
                     + "\" alt=\""
                     + escape_html(alt)
-                    + "\">";
+                    + "\" />";
+            },
+            Inline.Strike(inner) => {
+                out = out + "<del>" + render_inlines(inner) + "</del>";
+            },
+            Inline.HardBreak => {
+                out = out + "<br />\n";
+            },
+            Inline.Check(on) => {
+                out = out + if (on) {
+                    "<input checked=\"\" disabled=\"\" type=\"checkbox\"> "
+                } else {
+                    "<input disabled=\"\" type=\"checkbox\"> "
+                };
+            },
+            Inline.FootnoteRef(label) => {
+                out = out
+                    + "<sup><a href=\"#fn-"
+                    + escape_html(label)
+                    + "\" id=\"fnref-"
+                    + escape_html(label)
+                    + "\">"
+                    + escape_html(label)
+                    + "</a></sup>";
             },
         }
         i = i + 1;
@@ -680,130 +1708,174 @@ fn render_inlines(xs: [Inline]) -> string {
     out
 }
 
-// Los inlines de un párrafo suelto dentro de un ítem de lista se renderizan SIN <p> si son el
-// único bloque del ítem (listas "apretadas", el estilo por defecto de CommonMark para v1).
-fn render_item(blocks: [Block]) -> string {
-    if (blocks.len() == 0) {
-        return "";
-    }
-    match (blocks[0]) {
-        Block.Paragraph(xs) => {
-            // El primer párrafo va desnudo; lo que siga (sub-listas, código…) se renderiza normal.
-            var out = render_inlines(xs);
-            if (blocks.len() > 1) {
-                var rest: [Block] = [];
-                var k = 1;
-                while (k < blocks.len()) {
-                    rest.push(blocks[k]);
-                    k = k + 1;
-                }
-                out = out + "\n" + render_blocks(rest);
-            }
-            out
-        },
-        _ => render_blocks(blocks),
-    }
-}
-
 /// Renders a parsed document back to HTML.
 pub fn render(blocks: [Block]) -> string {
-    render_blocks(blocks)
+    var main: [Block] = [];
+    var foots: [Block] = [];
+    for b in blocks {
+        match (b) {
+            Block.FootnoteDef(_, _) => {
+                foots.push(b);
+            },
+            _ => {
+                main.push(b);
+            },
+        }
+    }
+    var out = render_blocks(main);
+    if (foots.len() > 0) {
+        out = out + "<section class=\"footnotes\">\n<ol>\n";
+        for f in foots {
+            match (f) {
+                Block.FootnoteDef(label, body) => {
+                    out = out
+                        + "<li id=\"fn-"
+                        + escape_html(label)
+                        + "\">\n"
+                        + render_blocks(body)
+                        + "<a href=\"#fnref-"
+                        + escape_html(label)
+                        + "\" class=\"footnote-backref\">↩</a>\n</li>\n";
+                },
+                _ => { },
+            }
+        }
+        out = out + "</ol>\n</section>\n";
+    }
+    out
 }
 
 fn render_blocks(blocks: [Block]) -> string {
     var out = "";
     var i = 0;
     while (i < blocks.len()) {
-        match (blocks[i]) {
-            Block.Heading(lvl, xs) => {
-                out = out
-                    + "<h"
-                    + to_string(lvl)
-                    + ">"
-                    + render_inlines(xs)
-                    + "</h"
-                    + to_string(lvl)
-                    + ">\n";
-            },
-            Block.Paragraph(xs) => {
-                out = out + "<p>" + render_inlines(xs) + "</p>\n";
-            },
-            Block.Code(lang, body) => {
-                // M111.c: una cerca ```mermaid emite el contenedor que mermaid.js busca en la
-                // página (<pre class="mermaid">, texto escapado) — el render del diagrama es
-                // client-side; reimplementarlo server-side no tiene sentido. En el AST sigue
-                // siendo Block.Code("mermaid", …): quien renderice distinto decide él.
-                if (lang == "mermaid") {
-                    out = out + "<pre class=\"mermaid\">" + escape_html(body) + "\n</pre>\n";
-                } else {
-                    let cls = if (lang == "") {
-                        ""
-                    } else {
-                        " class=\"language-" + escape_html(lang) + "\""
-                    };
-                    out = out + "<pre><code" + cls + ">" + escape_html(body) + "\n</code></pre>\n";
-                }
-            },
-            Block.Quote(inner) => {
-                out = out + "<blockquote>\n" + render_blocks(inner) + "</blockquote>\n";
-            },
-            Block.List(ordered, start, items) => {
-                let tag = if (ordered) { "ol" } else { "ul" };
-                let attrs = if (ordered && start != 1) {
-                    " start=\"" + to_string(start) + "\""
-                } else {
+        out = out + render_block(blocks[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// El HTML de un bloque, terminado en '\n' (convenciones del spec de CommonMark).
+fn render_block(b: Block) -> string {
+    match (b) {
+        Block.Heading(lvl, xs) => {
+            "<h" + to_string(lvl) + ">" + render_inlines(xs) + "</h" + to_string(lvl) + ">\n"
+        },
+        Block.Paragraph(xs) => "<p>" + render_inlines(xs) + "</p>\n",
+        Block.Plain(xs) => render_inlines(xs) + "\n",
+        Block.Code(lang, body) => {
+            // M111.c: una cerca ```mermaid emite el contenedor que mermaid.js busca en la
+            // página (<pre class="mermaid">, texto escapado) — el render del diagrama es
+            // client-side; reimplementarlo server-side no tiene sentido. En el AST sigue
+            // siendo Block.Code("mermaid", …): quien renderice distinto decide él.
+            if (lang == "mermaid") {
+                "<pre class=\"mermaid\">" + escape_html(body) + "</pre>\n"
+            } else {
+                let cls = if (lang == "") {
                     ""
+                } else {
+                    " class=\"language-" + escape_html(lang) + "\""
                 };
-                out = out + "<" + tag + attrs + ">\n";
-                var k = 0;
-                while (k < items.len()) {
-                    out = out + "<li>" + render_item(items[k]) + "</li>\n";
-                    k = k + 1;
-                }
-                out = out + "</" + tag + ">\n";
-            },
-            Block.Rule => {
-                out = out + "<hr>\n";
-            },
-            Block.Table(aligns, header, rows) => {
-                out = out + "<table>\n<thead>\n<tr>";
-                var c = 0;
-                while (c < header.len()) {
-                    out = out
-                        + "<th"
-                        + align_attr(aligns[c])
-                        + ">"
-                        + render_inlines(header[c])
-                        + "</th>";
-                    c = c + 1;
-                }
-                out = out + "</tr>\n</thead>\n";
-                if (rows.len() > 0) {
-                    out = out + "<tbody>\n";
-                    var r = 0;
-                    while (r < rows.len()) {
-                        out = out + "<tr>";
-                        var k = 0;
-                        while (k < rows[r].len()) {
-                            out = out
-                                + "<td"
-                                + align_attr(aligns[k])
-                                + ">"
-                                + render_inlines(rows[r][k])
-                                + "</td>";
-                            k = k + 1;
-                        }
-                        out = out + "</tr>\n";
-                        r = r + 1;
+                "<pre><code" + cls + ">" + escape_html(body) + "</code></pre>\n"
+            }
+        },
+        Block.Quote(inner) => "<blockquote>\n" + render_blocks(inner) + "</blockquote>\n",
+        Block.Alert(kind, inner) => {
+            "<div class=\"markdown-alert markdown-alert-"
+                + kind
+                + "\">\n<p class=\"markdown-alert-title\">"
+                + capitalize(kind)
+                + "</p>\n"
+                + render_blocks(inner)
+                + "</div>\n"
+        },
+        Block.List(ordered, start, items) => {
+            let tag = if (ordered) { "ol" } else { "ul" };
+            let attrs = if (ordered && start != 1) {
+                " start=\"" + to_string(start) + "\""
+            } else {
+                ""
+            };
+            var out = "<" + tag + attrs + ">\n";
+            var k = 0;
+            while (k < items.len()) {
+                out = out + render_item(items[k]);
+                k = k + 1;
+            }
+            out + "</" + tag + ">\n"
+        },
+        Block.Rule => "<hr />\n",
+        Block.Table(aligns, header, rows) => {
+            var out = "<table>\n<thead>\n<tr>\n";
+            var c = 0;
+            while (c < header.len()) {
+                out = out
+                    + "<th"
+                    + align_attr(aligns[c])
+                    + ">"
+                    + render_inlines(header[c])
+                    + "</th>\n";
+                c = c + 1;
+            }
+            out = out + "</tr>\n</thead>\n";
+            if (rows.len() > 0) {
+                out = out + "<tbody>\n";
+                var r = 0;
+                while (r < rows.len()) {
+                    out = out + "<tr>\n";
+                    var k = 0;
+                    while (k < rows[r].len()) {
+                        out = out
+                            + "<td"
+                            + align_attr(aligns[k])
+                            + ">"
+                            + render_inlines(rows[r][k])
+                            + "</td>\n";
+                        k = k + 1;
                     }
-                    out = out + "</tbody>\n";
+                    out = out + "</tr>\n";
+                    r = r + 1;
                 }
-                out = out + "</table>\n";
+                out = out + "</tbody>\n";
+            }
+            out + "</table>\n"
+        },
+        Block.FootnoteDef(_, _) => "",
+    }
+}
+
+fn capitalize(s: string) -> string {
+    if (s == "") { s } else { s.substring(0, 1).to_upper() + s.substring(1, s.len()) }
+}
+
+// Un ítem: `<li>` pegado al texto en las listas apretadas, en línea propia en las sueltas.
+fn render_item(blocks: [Block]) -> string {
+    if (blocks.len() == 0) {
+        return "<li></li>\n";
+    }
+    var out = "<li>";
+    var i = 0;
+    while (i < blocks.len()) {
+        let html = render_block(blocks[i]);
+        match (blocks[i]) {
+            Block.Plain(_) => {
+                // Texto apretado: sin '\n' antes; el '\n' de cierre solo si sigue otro bloque.
+                let text = html.substring(0, html.len() - 1);
+                out = out + text;
+                if (i + 1 < blocks.len()) {
+                    out = out + "\n";
+                }
+            },
+            _ => {
+                if (i == 0) {
+                    out = out + "\n";
+                }
+                out = out + html;
             },
         }
         i = i + 1;
     }
-    out
+    out + "</li>\n"
 }
 
 /// Converts Markdown straight to HTML (`render(parse(md))`).

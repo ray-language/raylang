@@ -30,6 +30,14 @@ fn cell_text(cell: [markdown.Inline]) -> string {
                 out = out + cell_text(kids);
             },
             markdown.Inline.Image(alt, src) => { },
+            markdown.Inline.Strike(kids) => {
+                out = out + cell_text(kids);
+            },
+            markdown.Inline.HardBreak => {
+                out = out + " ";
+            },
+            markdown.Inline.Check(_) => { },
+            markdown.Inline.FootnoteRef(_) => { },
         }
     }
     out

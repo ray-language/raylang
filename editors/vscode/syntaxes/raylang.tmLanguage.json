@@ -168,7 +168,7 @@
     "builtins": {
       "comment": "Builtins + funciones del prelude de uso común (M11–M13). No es exhaustivo; el resto se colorea por la regla de llamada. Solo con '(' detrás para no chocar con variables.",
       "name": "support.function.builtin.raylang",
-      "match": "\\b(print|eprint|pop|to_string|bytes_of|join|index_of|position|sort|map|filter|fold|map_new|get|remove|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int)\\b(?=\\s*\\()"
+      "match": "\\b(print|eprint|to_string|panic|assert|assert_eq|args|env|platform|input|parse_int|parse_float|from_utf8|bytes_of|sort|sort_by|sort_by_key|get|char_code|char_from_code|try_call|exit|spawn|send|recv|try_recv|try_send|join|try_join|scope|select|select_timeout|close|signals|add_to|len|trim|split|chars|contains|replace|starts_with|ends_with|to_upper|to_lower|substring|repeat|index_of|to_bytes|push|pop|reverse|position|map|filter|fold|iter|insert|contains_key|keys|values|sub_bytes|remove)\\b(?=\\s*\\()"
     },
     "types": {
       "name": "support.type.primitive.raylang",
@@ -205,7 +205,7 @@
     },
     "pipeline-target": {
       "comment": "El objetivo de un pipeline desnudo (`x |> doble`) es una función aunque no lleve '('. Se excluyen los builtins: en `|> map(...)` el paréntesis ya los colorea como tales.",
-      "match": "(\\|>)\\s*(?!(?:print|map|filter|fold|to_string|eprint|input|read_int|parse_int|args|env|read_file|write_file)\\b)([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "(\\|>)\\s*(?!(?:print|eprint|to_string|panic|assert|assert_eq|args|env|platform|input|parse_int|parse_float|from_utf8|bytes_of|sort|sort_by|sort_by_key|get|char_code|char_from_code|try_call|exit|spawn|send|recv|try_recv|try_send|join|try_join|scope|select|select_timeout|close|signals|add_to|len|trim|split|chars|contains|replace|starts_with|ends_with|to_upper|to_lower|substring|repeat|index_of|to_bytes|push|pop|reverse|position|map|filter|fold|iter|insert|contains_key|keys|values|sub_bytes|remove)\\b)([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.operator.raylang" },
         "2": { "name": "entity.name.function.raylang" }

@@ -51,7 +51,7 @@ VSCode, que sí es TypeScript a compilar).
 ## Tests de la gramática (`tests/syntax_test_raylang.ray`)
 
 La gramática tiene sus aserciones en el formato estándar de Sublime: cada línea de código va
-seguida de comentarios `// ^^^ scope` que dicen qué scope se espera en esas columnas (M243, 881
+seguida de comentarios `// ^^^ scope` que dicen qué scope se espera en esas columnas (M243, 947
 aserciones sobre todos los contextos: comentarios y `///`, strings con escapes e interpolación,
 templates, bytes, chars, anotaciones, definiciones, `impl … for`, `extern … blocking`, genéricos,
 `match`, `if let`, literales con base y sufijo, exponentes, builtins, pipelines, operadores). El

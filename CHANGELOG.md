@@ -6,8 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Gramáticas de editor: una sola lista de builtins** (M244, ray-sublime #75). Las gramáticas de
+  Sublime y VSCode pintaban como llamada normal once builtins libres (`exit`, `from_utf8`,
+  `char_code`, `char_from_code`, `sort_by`, `sort_by_key`, `try_call`, `try_recv`, `try_join`,
+  `select_timeout`, `signals`) y arrastraban tres nombres muertos; la regla de pipeline de
+  VSCode tenía además su propia lista, desfasada. Ahora las dos gramáticas usan la misma
+  alternancia (builtins libres de `llms.txt` + builtins de receptor) y el CI la contrasta con
+  `llms.txt`.
 - **Gramáticas de editor con aserciones** (M243, ray-sublime). `editors/sublime/tests/syntax_test_raylang.ray`:
-  881 aserciones `// ^^^ scope` en el formato estándar de Sublime, que cubren todos los contextos
+  947 aserciones `// ^^^ scope` en el formato estándar de Sublime, que cubren todos los contextos
   y son a la vez un programa raylang válido (el CI lo compila y corre, verifica que cada scope
   exista en las dos gramáticas y que toda palabra clave del lexer tenga regla). Al escribirlas
   salieron huecos en las gramáticas de Sublime y VSCode, corregidos en tándem: `///` como

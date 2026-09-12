@@ -13256,5 +13256,5 @@ alineación de los carets: el archivo queda **excluido explícitamente** del che
 canónica en `tests/fmt_policy.rs`, pero no de sus invariantes semánticas (parsea, AST y
 comentarios sobreviven al formateo). (5) Convención confirmada por la aserción, no cambiada:
 un nombre en mayúscula seguido de `(` es tipo/variante (`Some(3)`), no llamada. Resultado:
-881/881 en el tokenizador de ray-sublime, y las dos gramáticas corregidas en tándem.
+947/947 en el tokenizador de ray-sublime, y las dos gramáticas corregidas en tándem.
 

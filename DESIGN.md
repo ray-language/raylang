@@ -13258,3 +13258,19 @@ comentarios sobreviven al formateo). (5) Convención confirmada por la aserción
 un nombre en mayúscula seguido de `(` es tipo/variante (`Some(3)`), no llamada. Resultado:
 947/947 en el tokenizador de ray-sublime, y las dos gramáticas corregidas en tándem.
 
+## 234. M245 — búsqueda en `bytes` y `monotonic_millis` (sep 2026)
+
+ray-sublime (#71) escribió su cliente LSP sobre `std/process` sin pedir nada nuevo: `Proc.out`
+como canal de `bytes`, `write(bytes)` de vuelta, 300 líneas. Lo único que faltó fue encontrar el
+`\r\n\r\n` que cierra la cabecera: `bytes` tenía `len`, `sub_bytes`, `contains` y `to_string`, y
+el bucle `buf.sub_bytes(i, i + 4) == sep` asigna una rebanada por cada byte que llega del
+servidor. **Decisión**: `b.index_of(needle) -> Option<int>` y `b.starts_with(prefix)` como
+métodos de `bytes` en el prelude sobre dos primitivos nuevos (`__bytes_index_of` → `[int]`,
+`__bytes_starts_with`), con el mismo contrato que sus homónimos de `string` salvo la unidad (índice
+de OCTETO, no de carácter) y el helper `builtins::bytes_index_of` compartido por VM e intérprete
+(el nativo lo emite en línea con `windows().position`, ramificando por el tipo del receptor como
+ya hace `contains`). Aguja vacía → `Some(0)`, prefijo vacío → `true`, como en `string`. De paso,
+`time.monotonic_millis()`: `monotonic()` devuelve ms pero el nombre no lo dice, y al lado de
+`monotonic_nanos` se leía como ambiguo; el alias con unidad no cambia nada y quita la duda. Los
+tres motores dan la misma salida (`tests/bytes_search_cli.rs`).
+

@@ -172,7 +172,7 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
    `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
    m.values()` — but reading is the FREE `get(m, k) -> Option<V>` · bytes
-   `b.len() b.sub_bytes(i, j)`. (`sort(xs)` is free, so `xs.sort()` also works.)
+   `b.len() b.sub_bytes(i, j) b.index_of(needle) b.starts_with(prefix)` (octet index, no allocation). (`sort(xs)` is free, so `xs.sort()` also works.)
 3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
    are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*

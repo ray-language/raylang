@@ -20,6 +20,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__sort_prim", "__index_of_or", "__parse_int_or",
     "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
     "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
+    "__bytes_index_of", "__bytes_starts_with",
     "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",
     // Math (interceptados vía `std::math::*` en el sitio del wrapper).
     "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",

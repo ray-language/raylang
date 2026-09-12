@@ -533,6 +533,8 @@ print(b.len());                          // 6 (¡octetos, no caracteres!)
 print(b[0]);                             // 115 — indexar da el octeto como int
 let s = from_utf8(b);                    // bytes -> Result<string, string>
 let corte = b.sub_bytes(0, 3);           // rebanada [0, 3)
+let fin = b.index_of("\r\n\r\n".to_bytes()); // Option<int>: índice de octeto, sin asignar (M245)
+let es_http = b.starts_with("HTTP/".to_bytes());
 let crudo = bytes_of([72, 111, 108, 97]); // [int] -> bytes
 print(crudo);                            // se imprime en hex: 486f6c61
 let dos = b"AB" + b"\x00\xff";           // literal b"…" y concatenación

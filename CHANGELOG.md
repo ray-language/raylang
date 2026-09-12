@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Mapa destilado del MCP al día** (`raylang://llms.txt`): recoge la superficie entregada
+  desde 1.11 — `platform()` (no existe un módulo `os`), `fs.copy_all`/`copy_file`/`list_dir`,
+  el pseudo-terminal de `std/process`, `regex.onig` y `std/ui` (`ray://`, menús completos,
+  `open_path`/`reveal`, portapapeles, `set_titlebar_color`, live-reload y devtools bajo
+  `ray dev`). Los agentes que leen ese mapa antes que `ray_doc` volvían a "no existe".
+
 ## 1.17.0 — 2026-09-11
 
 - **`ui.set_titlebar_color(h, color)`** (M239, ray-sublime): el color de la barra de título de

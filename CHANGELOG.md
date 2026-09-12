@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.17.1 — 2026-09-11
 
 - **Mapa destilado del MCP al día** (`raylang://llms.txt`): recoge la superficie entregada
   desde 1.11 — `platform()` (no existe un módulo `os`), `fs.copy_all`/`copy_file`/`list_dir`,

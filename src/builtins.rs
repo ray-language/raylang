@@ -559,6 +559,34 @@ pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
 /// Sub-secuencia `[i, j)` de `bytes` por índice de **octeto**, con *clamp* al rango válido (M19.2): el
 /// análogo de `substring_chars` para datos binarios → nunca falla en runtime. Helper compartido por
 /// ambos motores (`sub_bytes`). Es lo que permite cortar cabeceras (texto) de cuerpo (binario) en HTTP.
+/// M245: índice de octeto de la primera ocurrencia de `needle` en `b` (`Some(0)` si la aguja es
+/// vacía), sin asignar. Compartido por los tres motores (el nativo la emite en línea con la misma
+/// semántica).
+pub fn bytes_index_of(b: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if needle.len() > b.len() {
+        return None;
+    }
+    let first = needle[0];
+    let last = b.len() - needle.len();
+    let mut i = 0;
+    while i <= last {
+        match b[i..=last].iter().position(|&x| x == first) {
+            Some(k) => {
+                let at = i + k;
+                if &b[at..at + needle.len()] == needle {
+                    return Some(at);
+                }
+                i = at + 1;
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
 pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
     let n = b.len() as i64;
     let lo = i.clamp(0, n);
@@ -3414,6 +3442,20 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Int { return Err((Some(1), format!("__sub_bytes expects an int as start, not {}", a[1]))); }
         if a[2] != Type::Int { return Err((Some(2), format!("__sub_bytes expects an int as end, not {}", a[2]))); }
         Ok(Type::Bytes)
+    } },
+    // M245 (ray-sublime #71): búsqueda de subsecuencia en bytes, simétrica de la de string.
+    // __bytes_index_of(b, needle) -> [int] ([] si no aparece; [i] índice de OCTETO); prelude → Option.
+    Builtin { name: "__bytes_index_of", opcode: OpCode::BytesIndexOf, check: |a| {
+        arity(a, 2, "__bytes_index_of", " (bytes, needle)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__bytes_index_of expects bytes, not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__bytes_index_of expects bytes as needle, not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    Builtin { name: "__bytes_starts_with", opcode: OpCode::BytesStartsWith, check: |a| {
+        arity(a, 2, "__bytes_starts_with", " (bytes, prefix)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__bytes_starts_with expects bytes, not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__bytes_starts_with expects bytes as prefix, not {}", a[1]))); }
+        Ok(Type::Bool)
     } },
     // bytes_of(xs) -> bytes (M19.3c): construye bytes a partir de un [int] (cada elemento se trunca a
     // octeto con `& 255`). Es el **dual del indexado** `b[i]` (que ya lee un octeto como int, M16.1a):

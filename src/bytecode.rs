@@ -376,6 +376,12 @@ pub enum OpCode {
     /// Saca `j`, `i` y los `bytes`; empuja la sub-secuencia `[i, j)` por índice de **octeto** (con
     /// *clamp*). Builtin `sub_bytes` (M19.2). Análogo binario de `Substring`; lo usa el HTTP sobre bytes.
     SubBytes,
+    /// Saca la aguja y los `bytes`; empuja `[i]` (índice de octeto de la primera ocurrencia) o
+    /// `[]`. Primitivo `__bytes_index_of` (M245); el prelude → `Option<int>`. Búsqueda por
+    /// subsecuencia sin asignar (lo que un reensamblado de tramas hace por cada byte que llega).
+    BytesIndexOf,
+    /// Saca el prefijo y los `bytes`; empuja `bool`. Primitivo `__bytes_starts_with` (M245).
+    BytesStartsWith,
     /// Saca un `[int]` (objeto del heap); empuja `bytes` con cada elemento truncado a octeto
     /// (`& 255`). Builtin `bytes_of` (M19.3c); dual del indexado, para construir tramas/cabeceras.
     BytesOf,

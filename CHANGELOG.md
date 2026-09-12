@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`bytes.index_of` / `bytes.starts_with` y `time.monotonic_millis`** (M245, ray-sublime #71).
+  Búsqueda de subsecuencia y de prefijo sobre `bytes`, simétricas de las de `string` y sin
+  asignar (el reensamblado de tramas `Content-Length`/`\r\n\r\n` de un cliente LSP era un bucle
+  de `sub_bytes` por byte recibido); idénticas en los tres motores. `time.monotonic_millis()` es
+  el alias con unidad de `monotonic()` (junto a `monotonic_nanos`).
 - **Gramáticas de editor: una sola lista de builtins** (M244, ray-sublime #75). Las gramáticas de
   Sublime y VSCode pintaban como llamada normal once builtins libres (`exit`, `from_utf8`,
   `char_code`, `char_from_code`, `sort_by`, `sort_by_key`, `try_call`, `try_recv`, `try_join`,

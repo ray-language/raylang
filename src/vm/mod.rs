@@ -2373,6 +2373,28 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
                 }
+                // M245: búsqueda de subsecuencia / prefijo en bytes (sin asignar).
+                OpCode::BytesIndexOf => {
+                    let needle = self.pop();
+                    let b = self.pop();
+                    let (HeapValue::Bytes(b), HeapValue::Bytes(needle)) = (b, needle) else {
+                        unreachable!("the checker guarantees bytes, bytes");
+                    };
+                    let elems = match crate::builtins::bytes_index_of(&b, &needle) {
+                        Some(i) => vec![HeapValue::Int(i as i64)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::BytesStartsWith => {
+                    let prefix = self.pop();
+                    let b = self.pop();
+                    let (HeapValue::Bytes(b), HeapValue::Bytes(prefix)) = (b, prefix) else {
+                        unreachable!("the checker guarantees bytes, bytes");
+                    };
+                    self.push(HeapValue::Bool(b.starts_with(&prefix)));
+                }
                 // M19.3c: construye bytes a partir de un [int] (objeto del heap), truncando a octeto.
                 OpCode::BytesOf => {
                     let HeapValue::Obj(h) = self.pop() else {

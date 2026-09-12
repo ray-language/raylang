@@ -24,6 +24,11 @@ pub fn monotonic() -> int { __monotonic() }
 /// arbitrary origin, not comparable across processes, never persist a reading.
 pub fn monotonic_nanos() -> int { __monotonic_nanos() }
 
+/// The same reading as `monotonic`, with the unit in the name (M245): `monotonic_millis()` and
+/// `monotonic()` agree — the alias exists so that code reads `monotonic_millis() - t0` next to
+/// `monotonic_nanos()` without having to remember which unit the bare name uses.
+pub fn monotonic_millis() -> int { __monotonic() }
+
 /// Suspends the current fiber for at least `ms` milliseconds (`ms <= 0` returns immediately).
 /// **Cooperative in the VM** (M57.2): the fiber parks and other fibers keep running — sleeping
 /// inside a server does not stall other connections. In the interpreter (single-threaded oracle)

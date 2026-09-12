@@ -243,10 +243,23 @@ impl StrOps for string {
 trait BytesOps {
     /// The byte slice `[start, end)` by octet index (clamped).
     fn sub_bytes(self, start: int, end: int) -> bytes;
+    /// Octet index of the first occurrence of `needle` (`Some(0)` for an empty needle), or `None`.
+    /// Searches without allocating: the frame reassembly of any header-framed protocol is one call.
+    fn index_of(self, needle: bytes) -> Option<int>;
+    /// Whether the bytes begin with `prefix` (an empty prefix always matches).
+    fn starts_with(self, prefix: bytes) -> bool;
 }
 
 impl BytesOps for bytes {
     fn sub_bytes(self, start: int, end: int) -> bytes { __sub_bytes(self, start, end) }
+
+    // M245 (ray-sublime #71): simétricos de los de string.
+    fn index_of(self, needle: bytes) -> Option<int> {
+        let r = __bytes_index_of(self, needle);
+        if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+    }
+
+    fn starts_with(self, prefix: bytes) -> bool { __bytes_starts_with(self, prefix) }
 }
 
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum

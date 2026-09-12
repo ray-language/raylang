@@ -1639,6 +1639,21 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees bytes, int, int"),
             },
+            // M245: búsqueda de subsecuencia / prefijo en bytes.
+            "__bytes_index_of" => match (&values[0], &values[1]) {
+                (Value::Bytes(b), Value::Bytes(needle)) => {
+                    let elems = match crate::builtins::bytes_index_of(b, needle) {
+                        Some(i) => vec![Value::Int(i as i64)],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees bytes, bytes"),
+            },
+            "__bytes_starts_with" => match (&values[0], &values[1]) {
+                (Value::Bytes(b), Value::Bytes(prefix)) => Value::Bool(b.starts_with(prefix)),
+                _ => unreachable!("the checker guarantees bytes, bytes"),
+            },
             // bytes_of (M19.3c): [int] → bytes, cada elemento truncado a octeto (`& 255`).
             "bytes_of" => match &values[0] {
                 Value::Array(xs) => {

@@ -645,7 +645,8 @@ impl Transpiler {
             "now" => out.push_str(
                 "(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|__d| __d.as_millis() as i64).unwrap_or(0))",
             ),
-            "monotonic" => {
+            // M245: `monotonic_millis` es el alias con unidad de `monotonic`.
+            "monotonic" | "monotonic_millis" => {
                 self.needs_time_rng = true;
                 out.push_str("__ray_monotonic()");
             }
@@ -1018,7 +1019,7 @@ impl Transpiler {
         // `std::time::{now,monotonic,sleep}`/`std::random::{next,below,seed}` → reloj + PRNG de Rust (no
         // deterministas → casan por propiedades). El resto de std/time|random es raylang puro → pasa de largo.
         if let Some(tfn) = name.strip_prefix("std::time::") {
-            if matches!(tfn, "now" | "monotonic" | "monotonic_nanos" | "sleep") {
+            if matches!(tfn, "now" | "monotonic" | "monotonic_millis" | "monotonic_nanos" | "sleep") {
                 return self.emit_time(out, tfn, &eff);
             }
         }
@@ -1189,6 +1190,25 @@ impl Transpiler {
                 out.push_str(".trim())");
             }
             // index_of(s, sub) -> Option<int>: índice por carácter de la subcadena (helper del preámbulo).
+            // M245: `b.index_of(needle)` / `b.starts_with(prefix)` sobre bytes (mismo nombre que en
+            // string: se ramifica por el tipo del receptor, como `contains`).
+            "index_of" | "bytes_index_of" if method == "bytes_index_of" || matches!(self.type_of(eff[0])?, Type::Bytes) => {
+                out.push_str("{ let __rt_b: &[u8] = &*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_n: &[u8] = &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(
+                    "; if __rt_n.is_empty() { Some(0i64) } else if __rt_n.len() > __rt_b.len() { None } else { \
+                     __rt_b.windows(__rt_n.len()).position(|__w| __w == __rt_n).map(|__i| __i as i64) } }",
+                );
+            }
+            "starts_with" | "bytes_starts_with" if method == "bytes_starts_with" || matches!(self.type_of(eff[0])?, Type::Bytes) => {
+                out.push_str("(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").starts_with(&*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "index_of" => {
                 // N-D2: `index_of(s.substring(a, b), aguja)` busca sobre el SLICE, sin materializar
                 // la subcadena (`after_name` en el patrón de parsing manual copiaba toda la cola).

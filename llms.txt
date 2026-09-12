@@ -227,6 +227,10 @@ Pseudo-terminal (1.16+, Linux/macOS/Windows): `.pty(cols, rows).stream()` runs t
 under a real terminal — `p.out` carries the VT stream, `p.write(bytes)` sends keys
 (Ctrl-C = `b"\x03"`), `p.resize(cols, rows)` follows the window; `err` starts closed.
 
+Markdown: `std/markdown` (`markdown.to_html(md)`, `parse(md) -> [Block]`) is CommonMark + GFM
+(setext, task items, alerts `[!NOTE]`, footnotes, tables, tight/loose lists), verified against
+the cmark-gfm spec; HTML in the source is escaped, never passed through.
+
 Regex: `std/regex` has two dialects — its own linear engine (`regex.compile`,
 `find`, `captures`, no look-around) and, since 1.14.0, the Oniguruma dialect of
 `.sublime-syntax`/Ruby: `let re = regex.onig(pattern).unwrap(); re.search_from(text, from)`

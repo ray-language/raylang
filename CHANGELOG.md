@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/markdown`: bloques CommonMark + GFM** (M241, ray-sublime). El parser de bloques es un
+  port del algoritmo de CommonMark (contenedores abiertos, continuación perezosa, sangría real
+  de los ítems, listas apretadas y sueltas, definiciones de referencia) con las extensiones
+  GFM: setext, código sangrado, avisos `[!NOTE]`, ítems de tarea, notas al pie. Verificado
+  contra el spec de cmark-gfm (672 ejemplos, trinquete en CI): de 193 a 361, con setext,
+  citas, código sangrado, tablas y tareas al 100 %; los inlines llegan en M242.
+  **Cambios visibles**: el AST gana variantes (`Block.Plain/Alert/FootnoteDef`,
+  `Inline.Strike/HardBreak/Check/FootnoteRef`) — un `match` exhaustivo sobre el AST necesita
+  brazos nuevos o `_` — y el HTML sigue las convenciones del spec (`<hr />`, `<img … />`,
+  celdas de tabla en línea propia, `<li>` pegado en listas apretadas).
+
 ## 1.18.0 — 2026-09-12
 
 - **`ray profile`** (M240, ray-sublime #67): perfilador por función de la VM. Corre el

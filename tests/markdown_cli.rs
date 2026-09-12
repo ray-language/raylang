@@ -64,7 +64,7 @@ fn targeted_cases() {
         ("[x](http://a/b(1))", "<p><a href=\"http://a/b(1)\">x</a></p>\n"),
         // javascript:/vbscript:/data: no-imagen → "#"; data:image pasa.
         ("[x](javascript:alert(1))", "<p><a href=\"#\">x</a></p>\n"),
-        ("![a](data:text/html;base64,xxx)", "<p><img src=\"#\" alt=\"a\"></p>\n"),
+        ("![a](data:text/html;base64,xxx)", "<p><img src=\"#\" alt=\"a\" /></p>\n"),
         // Cambio de tipo de marcador = listas separadas.
         ("- a\n- b\n\n1. c\n", "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n<ol>\n<li>c</li>\n</ol>\n"),
         // Cerca sin cerrar: lenidad hasta el final.
@@ -80,20 +80,20 @@ fn targeted_cases() {
         // Negrita con guiones bajos y énfasis anidado.
         ("__b _i_ b__", "<p><strong>b <em>i</em> b</strong></p>\n"),
         // Regla con espacios.
-        ("- - -\n", "<hr>\n"),
+        ("- - -\n", "<hr />\n"),
         // Documento vacío.
         ("", ""),
         // Tablas GFM (M111.b): alineaciones, pipe escapado, fila corta rellenada.
         (
             "| a | b |\n|:--|--:|\n| 1 | 2 |\n| solo |\n",
-            "<table>\n<thead>\n<tr><th align=\"left\">a</th><th align=\"right\">b</th></tr>\n</thead>\n<tbody>\n<tr><td align=\"left\">1</td><td align=\"right\">2</td></tr>\n<tr><td align=\"left\">solo</td><td align=\"right\"></td></tr>\n</tbody>\n</table>\n",
+            "<table>\n<thead>\n<tr>\n<th align=\"left\">a</th>\n<th align=\"right\">b</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"left\">1</td>\n<td align=\"right\">2</td>\n</tr>\n<tr>\n<td align=\"left\">solo</td>\n<td align=\"right\"></td>\n</tr>\n</tbody>\n</table>\n",
         ),
         // Sin fila separadora no hay tabla: párrafo normal.
         ("a | b\nc | d\n", "<p>a | b\nc | d</p>\n"),
         // Nº de columnas de cabecera ≠ separadora → no es tabla.
         ("| a | b |\n|---|\n", "<p>| a | b |\n|---|</p>\n"),
         // Cabecera sin cuerpo.
-        ("| x |\n|---|\n", "<table>\n<thead>\n<tr><th>x</th></tr>\n</thead>\n</table>\n"),
+        ("| x |\n|---|\n", "<table>\n<thead>\n<tr>\n<th>x</th>\n</tr>\n</thead>\n</table>\n"),
         // Mermaid (M111.c): el contenedor que mermaid.js busca, con el texto ESCAPADO — el
         // diagrama lo renderiza la página (client-side), no el parser.
         (
@@ -134,4 +134,37 @@ fn ast_is_directly_consumable() {
         assert_eq!(code, 0, "{engine}\n{err}");
         assert_eq!(out, "h1pl2\n", "{engine}");
     }
+}
+
+/// M241 — conformidad con el spec de GFM (tests/corpus/gfm_spec.json, extraído del spec.txt de
+/// cmark-gfm): `tests/corpus/gfm_conformance.ray` imprime PASS/FAIL por ejemplo. TRINQUETE: todo
+/// ejemplo listado en `gfm_expected_pass.txt` debe seguir pasando (una regresión falla aquí);
+/// los que pasen de nuevo se anuncian para añadirlos a la lista.
+#[test]
+fn gfm_spec_conformance_never_regresses() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["run", "tests/corpus/gfm_conformance.ray"])
+        .current_dir(root)
+        .output()
+        .expect("corre el runner de conformidad");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    let passing: std::collections::BTreeSet<u32> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("PASS ").and_then(|n| n.trim().parse().ok()))
+        .collect();
+    let expected: std::collections::BTreeSet<u32> = std::fs::read_to_string(format!("{root}/tests/corpus/gfm_expected_pass.txt"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    let regressed: Vec<&u32> = expected.difference(&passing).collect();
+    assert!(regressed.is_empty(), "ejemplos del spec que pasaban y ya no: {regressed:?}");
+    let new: Vec<&u32> = passing.difference(&expected).collect();
+    if !new.is_empty() {
+        eprintln!("(gfm) {} ejemplo(s) nuevos pasan; añádelos a tests/corpus/gfm_expected_pass.txt: {new:?}", new.len());
+    }
+    let summary = text.lines().find(|l| l.starts_with("SUMMARY ")).unwrap_or("");
+    eprintln!("(gfm) {summary}");
 }

@@ -13176,3 +13176,32 @@ sale una sola vez, desde `run_program*` (Ok o Err) y desde `process_exit` (un `e
 mitad de programa era la forma habitual de acabar en el editor). (6) `main` no entra por
 `Call`: se abre a mano al encolar su fibra, y cuenta como la primera. Solo VM: el nativo ya
 tiene `perf`/Instruments, y el intérprete es el oráculo, no el motor de producto.
+
+## 231. M241 — `std/markdown` como CommonMark: la capa de bloques (sep 2026)
+
+ray-sublime tuvo que escribir su propio renderer de markdown (900 líneas de JS en el
+webview, "como GitHub lo renderiza") porque `std/markdown` (M111) era un subconjunto ad hoc,
+línea a línea, sin setext, tareas, notas al pie ni avisos. Integrar ese código no tenía
+sentido — es JS del DOM, y la stdlib corre en tres motores — pero sí su gramática, y con
+una vara de medir que no teníamos: el `spec.txt` de cmark-gfm, que trae CommonMark entero
+más las extensiones GFM como pares markdown→HTML (672 ejemplos, extraídos a
+`tests/corpus/gfm_spec.json`).
+
+**Decisiones.** (1) El parser de bloques se reescribe como port del algoritmo del apéndice A
+del spec (la forma de commonmark.js): pila de bloques abiertos; cada línea primero continúa
+los contenedores (cita, ítem por sangría, cerca, código sangrado), luego abre bloques nuevos
+por prioridad cerrando antes lo que no casó, y al final cae en la hoja abierta o es
+continuación perezosa de un párrafo. Las listas deciden apretada/suelta al cerrarse
+(`last_line_blank` por nodo, propagado como en commonmark.js). Las definiciones de referencia
+se extraen al cerrar cada párrafo y viven en el documento: por eso hay dos fases (estructura
+con texto crudo; luego inlines con las referencias ya conocidas). (2) El AST público se
+extiende sin romper las variantes existentes (`Plain` para el párrafo apretado, `Alert`,
+`FootnoteDef`; `Strike`, `HardBreak`, `Check`, `FootnoteRef`), pero un `match` exhaustivo
+sobre él necesita brazos nuevos: es un cambio visible y va en el CHANGELOG. (3) El HTML
+adopta las convenciones del spec (`<hr />`, `<img />`, `<li>` pegado, celdas en línea propia)
+para que el corpus sea comparación exacta y no una normalización que perdona. (4) Los bloques
+HTML quedan fuera a propósito (43 ejemplos): el HTML se escapa desde M111, y GitHub también
+lo sanea. (5) Trinquete en CI: `gfm_expected_pass.txt` lista lo que pasa; una regresión falla,
+un avance se anuncia para incorporarlo. De 193 a 361 ejemplos; lo que queda es casi todo
+inline (énfasis por pila de delimitadores, enlaces con referencias, autolinks, entidades,
+saltos duros): M242.

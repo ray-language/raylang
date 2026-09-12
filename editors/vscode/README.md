@@ -120,7 +120,7 @@ directorio de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux (compila primero: make vscode desde la raíz del repo)
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.17.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.18.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```

@@ -146,7 +146,12 @@ fn every_tracked_ray_file_is_a_fixed_point_of_the_formatter() {
             unparsed.push(rel);
             continue;
         };
-        if once != source {
+        // Exclusión explícita (M243): el archivo de aserciones de la gramática de Sublime alinea
+        // cada `// ^^^ scope` con la columna de la línea de código anterior; reindentar o mover
+        // esos comentarios rompe las aserciones, así que no se le exige ser canónico. Sí se le
+        // exigen las propiedades semánticas de abajo (parsea, el AST y los comentarios sobreviven).
+        let syntax_test = rel.starts_with("editors/sublime/tests/syntax_test_");
+        if once != source && !syntax_test {
             unformatted.push(rel.clone());
         }
         // Propiedades semánticas: formatear no altera el programa ni sus comentarios.

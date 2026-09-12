@@ -13232,4 +13232,29 @@ extensiones, con la de la extensión: tres ejemplos se contradicen y se pierden 
 (7) El HTML crudo inline sigue escapándose (política de M111): los 20 ejemplos de "Raw HTML"
 y los 43 de bloques HTML son el techo conocido. De 361 a 595/672; los 77 que faltan son HTML
 crudo (75) y dos casos de tabs dentro de contenedores.
+## 233. M243 — la gramática de Sublime con aserciones (sep 2026)
+
+Cada paquete de sintaxis serio (Java, C#, Markdown, los de fábrica de Sublime) lleva un
+`syntax_test_*.ext` con miles de `^^^ scope` escritos por quien escribió la gramática; raylang
+no tenía ninguno: la gramática de 187 líneas se validaba mirando un `.ray` coloreado, y cada
+sintaxis nueva del lenguaje (sufijos `u64`, `0x…`, `\u{…}`, `extern … blocking`, `unit`) se
+quedó sin regla sin que nadie lo notara. Y ray-sublime mide la cobertura de su tokenizador
+justo con ese corpus (176 153 fallos sobre 520 015 aserciones de fábrica): sin archivo,
+raylang era un lenguaje "asumido" en el editor, no medido.
+
+**Decisiones.** (1) El archivo se **genera** desde una tabla (línea de código → tokens y
+scopes) para que las columnas de los carets sean exactas; la salida versionada es el archivo
+plano, en el formato que Sublime y ray-sublime ya entienden. (2) Es además un **programa
+raylang válido** — las aserciones son comentarios — y el CI lo compila y lo corre: así la
+gramática no puede aseverar sobre sintaxis que el lenguaje no acepta. (3) Sin motor de
+Sublime en el CI, la guarda de Rust sostiene lo verificable sin él: cabecera, programa
+válido, cada scope aseverado presente en LAS DOS gramáticas (el README promete scopes
+idénticos en Sublime y VSCode, y esto lo hace cumplir), y cada palabra clave del lexer con
+regla. La ejecución real de las aserciones queda en Sublime (Build) y en ray-sublime, que
+suma el archivo a su corpus. (4) `ray fmt` reindenta y mueve comentarios, lo que rompe la
+alineación de los carets: el archivo queda **excluido explícitamente** del check de forma
+canónica en `tests/fmt_policy.rs`, pero no de sus invariantes semánticas (parsea, AST y
+comentarios sobreviven al formateo). (5) Convención confirmada por la aserción, no cambiada:
+un nombre en mayúscula seguido de `(` es tipo/variante (`Some(3)`), no llamada. Resultado:
+881/881 en el tokenizador de ray-sublime, y las dos gramáticas corregidas en tándem.
 

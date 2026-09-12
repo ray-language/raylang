@@ -18,6 +18,9 @@ scope: source.raylang
 
 variables:
   ident: '[A-Za-z_][A-Za-z0-9_]*'
+  # Escapes de string/char (M118): \n \t \r \0 \\ \" \' \$ \xNN \u{H…H}.
+  escape: '\\(u\{[0-9A-Fa-f]+\}|x[0-9A-Fa-f]{2}|.)'
+  int_suffix: '(?:u8|u32|u64)?'
   user_type: '[A-Z][A-Za-z0-9_]*'
   # Builtins + funciones del prelude de uso común (M11–M13). No exhaustivo; el resto lo colorea
   # la regla de llamada. Mismo conjunto que la gramática de VSCode.
@@ -38,6 +41,9 @@ contexts:
     - include: operators
 
   comments:
+    # `///` es documentación (visible en LSP/raydoc): scope propio, además del de comentario.
+    - match: '///.*$'
+      scope: comment.line.documentation.raylang
     - match: '//.*$'
       scope: comment.line.double-slash.raylang
 
@@ -47,7 +53,7 @@ contexts:
       scope: punctuation.definition.string.begin.raylang
       push:
         - meta_scope: string.quoted.other.template.raylang
-        - match: '\\.'
+        - match: '{{escape}}'
           scope: constant.character.escape.raylang
         - match: '\$\{'
           scope: punctuation.section.interpolation.begin.raylang support.function.builtin.raylang
@@ -73,7 +79,7 @@ contexts:
         - meta_scope: string.quoted.double.raylang
         # Escapes: \n \t \r \\ \" y \$ (un '$' literal, para un '${' sin interpolar). Va primero:
         # así '\${' se toma como '$' escapado + '{' literal, sin abrir interpolación.
-        - match: '\\.'
+        - match: '{{escape}}'
           scope: constant.character.escape.raylang
         # Interpolación: el '$' solo es especial seguido de '{'. El interior se resalta como código.
         - match: '\$\{'
@@ -103,7 +109,7 @@ contexts:
       scope: punctuation.definition.string.begin.raylang storage.type.string.byte.raylang
       push:
         - meta_scope: string.quoted.double.byte.raylang
-        - match: '\\(x[0-9A-Fa-f]{2}|.)'
+        - match: '{{escape}}'
           scope: constant.character.escape.raylang
         - match: '"'
           scope: punctuation.definition.string.end.raylang
@@ -111,7 +117,7 @@ contexts:
 
   characters:
     # Literal de carácter `'a'` (M11.4c): un code point, con escapes `\n \t \r \\ \'`.
-    - match: "'(\\\\.|[^'\\\\])'"
+    - match: "'({{escape}}|[^'\\\\])'"
       scope: constant.character.raylang
 
   annotations:
@@ -132,6 +138,11 @@ contexts:
         2: entity.name.type.raylang
         3: keyword.control.raylang
         4: entity.name.type.raylang
+    # `extern "lib" [blocking] { … }` (M41): bloque FFI; 'blocking' es contextual.
+    - match: '\b(extern)\b'
+      scope: storage.modifier.raylang
+    - match: '\b(blocking)\b(?=\s*\{)'
+      scope: storage.modifier.raylang
     # `fn fib`: definición de función.
     - match: '\b(fn)\s+({{ident}})'
       captures:
@@ -151,7 +162,7 @@ contexts:
       scope: support.function.builtin.raylang
 
   types:
-    - match: '\b(int|float|bool|string|char|bytes|u8|u32|u64)\b'
+    - match: '\b(int|float|bool|string|char|bytes|unit|ptr|u8|u32|u64)\b'
       scope: support.type.primitive.raylang
     # Constante en SCREAMING_SNAKE (2+ chars, todo mayúsculas): PI, MAX_INTENTOS. Antes del tipo de
     # usuario para ganar; una sola letra (T/E/K) queda como type param.
@@ -164,9 +175,19 @@ contexts:
   literals:
     - match: '\b(true|false)\b'
       scope: constant.language.boolean.raylang
+    # Con prefijo de base (M118): 0xFF, 0o17, 0b1010; sufijo u8/u32/u64 opcional (M192).
+    - match: '\b0[xX][0-9A-Fa-f]+{{int_suffix}}\b'
+      scope: constant.numeric.integer.raylang
+    - match: '\b0[oO][0-7]+{{int_suffix}}\b'
+      scope: constant.numeric.integer.raylang
+    - match: '\b0[bB][01]+{{int_suffix}}\b'
+      scope: constant.numeric.integer.raylang
+    # Flotante: con punto y/o exponente (`1.5`, `1e3`, `1.5e-3`, `2E+10`).
+    - match: '\b[0-9]+(\.[0-9]+)?[eE][+-]?[0-9]+\b'
+      scope: constant.numeric.float.raylang
     - match: '\b[0-9]+\.[0-9]+\b'
       scope: constant.numeric.float.raylang
-    - match: '\b[0-9]+\b'
+    - match: '\b[0-9]+{{int_suffix}}\b'
       scope: constant.numeric.integer.raylang
 
   calls:

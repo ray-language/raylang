@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/markdown`: inlines CommonMark + GFM** (M242, ray-sublime). La capa inline es un port
+  del algoritmo del spec: pila de delimitadores para `*`/`_`/`~~` (flanqueo, regla del
+  múltiplo de 3, negrita anidada aplanada como cmark-gfm), code spans por tiras de backticks,
+  escapes, las 2125 entidades HTML5 y referencias numéricas, enlaces e imágenes inline, por
+  referencia (completa, colapsada, atajo) y con **título**, autolinks `<…>` y los extendidos
+  de GFM (`www.`, `http(s)://`, `ftp://`, correos), saltos duros y blandos, notas al pie
+  `[^x]`, URLs percent-encoded como cmark. Corpus: de 361 a **595/672**; lo que queda es HTML
+  crudo (escapado a propósito) y dos casos de tabs. **Cambio visible**: `Inline.Link` e
+  `Inline.Image` ganan un tercer campo, el título (`""` si no hay) — un `match` sobre ellos
+  necesita el campo nuevo.
 - **`std/markdown`: bloques CommonMark + GFM** (M241, ray-sublime). El parser de bloques es un
   port del algoritmo de CommonMark (contenedores abiertos, continuación perezosa, sangría real
   de los ítems, listas apretadas y sueltas, definiciones de referencia) con las extensiones

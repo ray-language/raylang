@@ -228,8 +228,10 @@ under a real terminal — `p.out` carries the VT stream, `p.write(bytes)` sends 
 (Ctrl-C = `b"\x03"`), `p.resize(cols, rows)` follows the window; `err` starts closed.
 
 Markdown: `std/markdown` (`markdown.to_html(md)`, `parse(md) -> [Block]`) is CommonMark + GFM
-(setext, task items, alerts `[!NOTE]`, footnotes, tables, tight/loose lists), verified against
-the cmark-gfm spec; HTML in the source is escaped, never passed through.
+(setext, task items, alerts `[!NOTE]`, footnotes, tables, tight/loose lists; inline: delimiter-
+stack emphasis, entities, reference links with titles, autolinks incl. bare `www.`/`http://`
+and emails, hard breaks), 595/672 of the cmark-gfm spec; HTML in the source is escaped, never
+passed through. `Inline.Link([Inline], href, title)` / `Inline.Image(alt, src, title)`.
 
 Regex: `std/regex` has two dialects — its own linear engine (`regex.compile`,
 `find`, `captures`, no look-around) and, since 1.14.0, the Oniguruma dialect of

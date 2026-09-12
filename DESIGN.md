@@ -13205,3 +13205,31 @@ lo sanea. (5) Trinquete en CI: `gfm_expected_pass.txt` lista lo que pasa; una re
 un avance se anuncia para incorporarlo. De 193 a 361 ejemplos; lo que queda es casi todo
 inline (énfasis por pila de delimitadores, enlaces con referencias, autolinks, entidades,
 saltos duros): M242.
+
+## 232. M242 — `std/markdown` como CommonMark: la capa inline (sep 2026)
+
+La segunda mitad de §231. El parser inline de M111 era un bucle con búsqueda del cierre más
+cercano — suficiente para `*x*` y `[a](b)`, inútil para `*foo**bar**baz*`, `[foo][ref]` o
+`&ouml;`. Con el corpus ya en CI, la vara es la misma: pasar ejemplos sin perdonar nada.
+
+**Decisiones.** (1) Port del apéndice A del spec en dos fases: una pasada que tokeniza (texto,
+code spans, escapes, entidades, autolinks, saltos) y registra delimitadores (`*`/`_`/`~` con su
+flanqueo) y corchetes; y `process_emphasis`, que empareja closer→opener con la regla del
+múltiplo de 3. Sobre arrays en vez de lista enlazada: al casar un par, los tokens entre medias
+se bajan a inlines y se sustituyen por el nodo (los delimitadores sueltos vuelven a texto), lo
+que elimina "los delimitadores entre ambos" gratis. (2) Los enlaces se resuelven al ver `]`
+(inline → referencia completa/colapsada/atajo → nota al pie), corriendo `process_emphasis`
+solo sobre el tramo del enlace y desactivando los `[` anteriores: sin enlaces anidados, como
+el spec. (3) `Link` e `Image` ganan el título: era el único hueco del AST frente al spec y se
+prefirió romper la variante ahora (raycode/ray-sublime tienen `match` exhaustivos, avisados)
+a arrastrar un `LinkTitled` paralelo. (4) Entidades: la tabla HTML5 completa (2125) va
+embebida como un string `;nombre=cp[,cp]` y se busca por substring — sin construir un mapa por
+documento, sin coste si el texto no tiene `&`. (5) cmark-gfm difiere de CommonMark en un
+punto: `****foo****` es un solo `<strong>`; se sigue a cmark-gfm (es lo que GitHub renderiza y
+lo que dice el corpus) aplanando la negrita directamente anidada en negrita. (6) Los autolinks
+extendidos de GFM se activan siempre (el corpus mezcla la sección core, generada sin
+extensiones, con la de la extensión: tres ejemplos se contradicen y se pierden a propósito).
+(7) El HTML crudo inline sigue escapándose (política de M111): los 20 ejemplos de "Raw HTML"
+y los 43 de bloques HTML son el techo conocido. De 361 a 595/672; los 77 que faltan son HTML
+crudo (75) y dos casos de tabs dentro de contenedores.
+

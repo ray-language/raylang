@@ -26,10 +26,10 @@ fn cell_text(cell: [markdown.Inline]) -> string {
             markdown.Inline.Emph(kids) => {
                 out = out + cell_text(kids);
             },
-            markdown.Inline.Link(kids, href) => {
+            markdown.Inline.Link(kids, href, _) => {
                 out = out + cell_text(kids);
             },
-            markdown.Inline.Image(alt, src) => { },
+            markdown.Inline.Image(alt, src, _) => { },
             markdown.Inline.Strike(kids) => {
                 out = out + cell_text(kids);
             },

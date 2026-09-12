@@ -1,0 +1,373 @@
+// SYNTAX TEST "Packages/raylang/raylang.sublime-syntax"
+// Aserciones de la gramática de Sublime (M243). Cada línea de código va seguida de sus
+// scopes esperados; el archivo es además un programa raylang válido (lo compila el CI).
+
+// un comentario de línea
+//<- comment.line.double-slash.raylang
+/// documentación visible en el LSP
+//<- comment.line.documentation.raylang
+import std/json as j;
+//<- keyword.control.raylang
+//              ^^ keyword.control.raylang
+
+@derive(Eq)
+//<- storage.modifier.annotation.raylang
+//      ^^ entity.name.type.raylang
+pub struct Point {
+//<- storage.type.raylang
+//  ^^^^^^ storage.type.raylang
+//         ^^^^^ entity.name.type.raylang
+    x: int,
+//     ^^^ support.type.primitive.raylang
+    y: float,
+//     ^^^^^ support.type.primitive.raylang
+}
+
+enum Shape {
+//<- storage.type.raylang
+//   ^^^^^ entity.name.type.raylang
+    Circle(float),
+//  ^^^^^^ entity.name.type.raylang
+//         ^^^^^ support.type.primitive.raylang
+    Rect(float, float),
+//  ^^^^ entity.name.type.raylang
+}
+
+trait Show {
+//<- storage.type.raylang
+//    ^^^^ entity.name.type.raylang
+    fn show(self) -> string;
+//  ^^ storage.type.function.raylang
+//     ^^^^ entity.name.function.raylang
+//          ^^^^ variable.language.self.raylang
+//                ^^ keyword.operator.raylang
+//                   ^^^^^^ support.type.primitive.raylang
+}
+
+impl Show for Point {
+//<- storage.type.raylang
+//   ^^^^ entity.name.type.raylang
+//        ^^^ keyword.control.raylang
+//            ^^^^^ entity.name.type.raylang
+    fn show(self) -> string {
+//  ^^ storage.type.function.raylang
+//     ^^^^ entity.name.function.raylang
+//          ^^^^ variable.language.self.raylang
+        "(${self.x}, ${self.y})"
+//      ^ punctuation.definition.string.begin.raylang
+//        ^^ punctuation.section.interpolation.begin.raylang
+//          ^^^^ variable.language.self.raylang
+//                ^ punctuation.section.interpolation.end.raylang
+//                             ^ punctuation.definition.string.end.raylang
+    }
+}
+
+const MAX_ITEMS: int = 10;
+//<- storage.type.raylang
+//    ^^^^^^^^^ constant.other.raylang
+//               ^^^ support.type.primitive.raylang
+//                   ^ keyword.operator.raylang
+//                     ^^ constant.numeric.integer.raylang
+const PI2: float = 6.28;
+//    ^^^ constant.other.raylang
+//                 ^^^^ constant.numeric.float.raylang
+
+fn area(s: Shape) -> float {
+//<- storage.type.function.raylang
+// ^^^^ entity.name.function.raylang
+//         ^^^^^ entity.name.type.raylang
+//                   ^^^^^ support.type.primitive.raylang
+    match (s) {
+//  ^^^^^ keyword.control.raylang
+        Shape.Circle(r) => 3.14 * r * r,
+//      ^^^^^ entity.name.type.raylang
+//            ^^^^^^ entity.name.type.raylang
+//                      ^^ keyword.operator.raylang
+//                         ^^^^ constant.numeric.float.raylang
+//                              ^ keyword.operator.raylang
+        Shape.Rect(w, h) => w * h,
+//            ^^^^ entity.name.type.raylang
+    }
+}
+
+fn largest<T: Ord>(xs: [T], first: T) -> T {
+// ^^^^^^^ entity.name.function.raylang
+//         ^ entity.name.type.raylang
+//            ^^^ entity.name.type.raylang
+//                      ^ entity.name.type.raylang
+    var best = first;
+//  ^^^ storage.type.raylang
+    for x in xs {
+//  ^^^ keyword.control.raylang
+//        ^^ keyword.control.raylang
+        if (best.less(x)) {
+//      ^^ keyword.control.raylang
+//               ^^^^ entity.name.function.raylang
+            best = x;
+        }
+    }
+    return best;
+//  ^^^^^^ keyword.control.raylang
+}
+
+fn describe(v: dyn Show) -> string {
+//             ^^^ storage.type.raylang
+//                 ^^^^ entity.name.type.raylang
+    v.show()
+}
+
+fn main() -> int {
+//<- storage.type.function.raylang
+// ^^^^ entity.name.function.raylang
+//           ^^^ support.type.primitive.raylang
+    let p = Point { x: 1, y: 2.5 };
+//  ^^^ storage.type.raylang
+//          ^^^^^ entity.name.type.raylang
+//                     ^ constant.numeric.integer.raylang
+//                           ^^^ constant.numeric.float.raylang
+    let ok: bool = true && !false;
+//          ^^^^ support.type.primitive.raylang
+//                 ^^^^ constant.language.boolean.raylang
+//                      ^^ keyword.operator.raylang
+//                         ^ keyword.operator.raylang
+//                          ^^^^^ constant.language.boolean.raylang
+    let big = 0xFF + 0o17 + 0b1010;
+//            ^^^^ constant.numeric.integer.raylang
+//                   ^^^^ constant.numeric.integer.raylang
+//                          ^^^^^^ constant.numeric.integer.raylang
+    let small: u8 = 255u8;
+//             ^^ support.type.primitive.raylang
+//                  ^^^^^ constant.numeric.integer.raylang
+    let wide: u64 = 7u64;
+//            ^^^ support.type.primitive.raylang
+//                  ^^^^ constant.numeric.integer.raylang
+    let expo = 1e3;
+//             ^^^ constant.numeric.float.raylang
+    let tiny = 1.5e-3 + 2E+10;
+//             ^^^^^^ constant.numeric.float.raylang
+//                      ^^^^^ constant.numeric.float.raylang
+    let b: bytes = b"\x41\n";
+//         ^^^^^ support.type.primitive.raylang
+//                 ^^ string.quoted.double.byte.raylang
+//                   ^^^^ constant.character.escape.raylang
+//                       ^^ constant.character.escape.raylang
+    let c: char = '\n';
+//         ^^^^ support.type.primitive.raylang
+//                ^^^^ constant.character.raylang
+    let d = '\u{1F600}';
+//          ^^^^^^^^^^^ constant.character.raylang
+    let e = 'z';
+//          ^^^ constant.character.raylang
+    let s = "tab\t and \"quotes\" and \u{00e9}";
+//          ^ punctuation.definition.string.begin.raylang
+//              ^^ constant.character.escape.raylang
+//                     ^^ constant.character.escape.raylang
+//                                    ^^^^^^^^ constant.character.escape.raylang
+//                                            ^ punctuation.definition.string.end.raylang
+    let t = "sum ${big + 1} and ${p.show()}";
+//               ^^ punctuation.section.interpolation.begin.raylang
+//                 ^^^ meta.interpolation.raylang
+//                     ^ keyword.operator.raylang
+//                       ^ constant.numeric.integer.raylang
+//                        ^ punctuation.section.interpolation.end.raylang
+//                              ^^ punctuation.section.interpolation.begin.raylang
+//                                  ^^^^ entity.name.function.raylang
+//                                        ^ punctuation.section.interpolation.end.raylang
+    let lit = "no \${interp} here";
+//                ^^ constant.character.escape.raylang
+//                  ^^^^^^^^ string.quoted.double.raylang
+    let tpl = `raw "quotes" ${p.x}`;
+//            ^ string.quoted.other.template.raylang
+//                 ^^^^^^^^ string.quoted.other.template.raylang
+//                          ^^ punctuation.section.interpolation.begin.raylang
+//                               ^ punctuation.section.interpolation.end.raylang
+    let ptr_ish: Option<int> = Option.Some(3);
+//               ^^^^^^ entity.name.type.raylang
+//                      ^^^ support.type.primitive.raylang
+//                             ^^^^^^ entity.name.type.raylang
+//                                    ^^^^ entity.name.type.raylang
+//                                         ^ constant.numeric.integer.raylang
+    if let Option.Some(n) = ptr_ish {
+//  ^^ keyword.control.raylang
+//     ^^^ storage.type.raylang
+//         ^^^^^^ entity.name.type.raylang
+//                ^^^^ entity.name.type.raylang
+//                        ^ keyword.operator.raylang
+        print("n = ${n}");
+//      ^^^^^ support.function.builtin.raylang
+//            ^ punctuation.definition.string.begin.raylang
+//                 ^^ punctuation.section.interpolation.begin.raylang
+    } else {
+//    ^^^^ keyword.control.raylang
+        eprint("none");
+//      ^^^^^^ support.function.builtin.raylang
+    }
+    let sq = fn(n: int) -> int { n * n };
+//           ^^ storage.type.raylang
+//                 ^^^ support.type.primitive.raylang
+//                      ^^ keyword.operator.raylang
+//                                 ^ keyword.operator.raylang
+    let m: Map<string, int> = Map.new();
+//         ^^^ entity.name.type.raylang
+//             ^^^^^^ support.type.primitive.raylang
+//                            ^^^ entity.name.type.raylang
+//                                ^^^ entity.name.function.raylang
+    let total = [1, 2, 3] |> sum_all;
+//                        ^^ keyword.operator.raylang
+//                           ^^^^^^^ entity.name.function.raylang
+    let doubled = [1, 2] |> map(sq);
+//                       ^^ keyword.operator.raylang
+//                          ^^^ support.function.builtin.raylang
+    var i = 0;
+//  ^^^ storage.type.raylang
+//          ^ constant.numeric.integer.raylang
+    while (i < MAX_ITEMS) {
+//  ^^^^^ keyword.control.raylang
+//           ^ keyword.operator.raylang
+//             ^^^^^^^^^ constant.other.raylang
+        i = i + 1;
+//            ^ keyword.operator.raylang
+        if (i % 2 == 0) { continue; }
+//            ^ keyword.operator.raylang
+//                ^^ keyword.operator.raylang
+//                        ^^^^^^^^ keyword.control.raylang
+        if (i >= 8) { break; }
+//            ^^ keyword.operator.raylang
+//                    ^^^^^ keyword.control.raylang
+    }
+    for k in 0..3 {
+//  ^^^ keyword.control.raylang
+//        ^^ keyword.control.raylang
+//           ^ constant.numeric.integer.raylang
+//            ^^ keyword.operator.raylang
+//              ^ constant.numeric.integer.raylang
+        let bits = (k << 1) | (k >> 1) ^ ~k & 1;
+//                    ^^ keyword.operator.raylang
+//                          ^ keyword.operator.raylang
+//                               ^^ keyword.operator.raylang
+//                                     ^ keyword.operator.raylang
+//                                       ^ keyword.operator.raylang
+//                                          ^ keyword.operator.raylang
+        let f = k as float;
+//                ^^ keyword.control.raylang
+//                   ^^^^^ support.type.primitive.raylang
+        print(f);
+//      ^^^^^ support.function.builtin.raylang
+    }
+    let r: Result<int, string> = Result.Ok(total);
+//         ^^^^^^ entity.name.type.raylang
+//                               ^^^^^^ entity.name.type.raylang
+//                                      ^^ entity.name.type.raylang
+    let v = unwrap_or_zero(r);
+//          ^^^^^^^^^^^^^^ entity.name.function.raylang
+    let t = spawn(fn() -> int { area(Shape.Circle(1.0)) as int });
+//          ^^^^^ support.function.builtin.raylang
+//                ^^ storage.type.raylang
+//                              ^^^^ entity.name.function.raylang
+//                                   ^^^^^ entity.name.type.raylang
+//                                         ^^^^^^ entity.name.type.raylang
+//                                                ^^^ constant.numeric.float.raylang
+    let joined = join(t);
+//               ^^^^ support.function.builtin.raylang
+    let lenf = p.show().len();
+//               ^^^^ entity.name.function.raylang
+//                      ^^^ entity.name.function.raylang
+    let big2: u64 = 9u32 as u64;
+//            ^^^ support.type.primitive.raylang
+//                  ^^^^ constant.numeric.integer.raylang
+//                       ^^ keyword.control.raylang
+//                          ^^^ support.type.primitive.raylang
+    describe(p);
+//  ^^^^^^^^ entity.name.function.raylang
+    // Convención: un nombre en mayúscula es un tipo/variante aunque se llame (Some(3), Point {…}).
+    Self_like();
+//  ^^^^^^^^^ entity.name.type.raylang
+    let q = Point { x: 2, y: 0.5 }.x;
+//          ^^^^^ entity.name.type.raylang
+    print(to_string(largest([1, 2, 3], 0)) + j.stringify(j.parse("1").unwrap()));
+//  ^^^^^ support.function.builtin.raylang
+//        ^^^^^^^^^ support.function.builtin.raylang
+//                  ^^^^^^^ entity.name.function.raylang
+//                                             ^^^^^^^^^ entity.name.function.raylang
+//                                                         ^^^^^ entity.name.function.raylang
+    if (ok && v > 0 || !ok) { print(i + q + lenf + joined + d.char_code() + c.char_code() + e.char_code()); }
+//                  ^^ keyword.operator.raylang
+    let _ = (s, lit, tpl, b, tiny, doubled, big2, sq, e, m, small, wide, expo);
+//      ^ source.raylang
+    return 0;
+//  ^^^^^^ keyword.control.raylang
+//         ^ constant.numeric.integer.raylang
+}
+
+fn unwrap_or_zero(r: Result<int, string>) -> int {
+// ^^^^^^^^^^^^^^ entity.name.function.raylang
+//                   ^^^^^^ entity.name.type.raylang
+    match (r) { Result.Ok(v) => v, Result.Err(_) => 0 }
+//  ^^^^^ keyword.control.raylang
+//              ^^^^^^ entity.name.type.raylang
+//                     ^^ entity.name.type.raylang
+//                           ^^ keyword.operator.raylang
+//                                        ^^^ entity.name.type.raylang
+}
+
+fn first_char(s: string) -> Result<char, string> {
+// ^^^^^^^^^^ entity.name.function.raylang
+//                          ^^^^^^ entity.name.type.raylang
+//                                 ^^^^ support.type.primitive.raylang
+    let head: Option<char> = if (s.len() > 0) { Option.Some(s[0]) } else { Option.None };
+//            ^^^^^^ entity.name.type.raylang
+//                   ^^^^ support.type.primitive.raylang
+//                                 ^^^ entity.name.function.raylang
+//                                              ^^^^^^ entity.name.type.raylang
+//                                                     ^^^^ entity.name.type.raylang
+//                                                                         ^^^^^^ entity.name.type.raylang
+//                                                                                ^^^^ entity.name.type.raylang
+    let c = head.ok_or("empty")?;
+//               ^^^^^ entity.name.function.raylang
+//                     ^^^^^^^ string.quoted.double.raylang
+//                             ^ keyword.operator.raylang
+    Result.Ok(c)
+//  ^^^^^^ entity.name.type.raylang
+//         ^^ entity.name.type.raylang
+}
+
+fn sum_all(xs: [int]) -> int {
+// ^^^^^^^ entity.name.function.raylang
+//              ^^^ support.type.primitive.raylang
+    xs.fold(0, fn(acc: int, x: int) -> int { acc + x })
+//     ^^^^ support.function.builtin.raylang
+//          ^ constant.numeric.integer.raylang
+//             ^^ storage.type.raylang
+}
+
+fn Self_like() { }
+//<- storage.type.function.raylang
+// ^^^^^^^^^ entity.name.function.raylang
+
+@test
+//<- storage.modifier.annotation.raylang
+fn area_of_rect() {
+//<- storage.type.function.raylang
+// ^^^^^^^^^^^^ entity.name.function.raylang
+    assert_eq(area(Shape.Rect(2.0, 3.0)), 6.0);
+//  ^^^^^^^^^ support.function.builtin.raylang
+//            ^^^^ entity.name.function.raylang
+//                 ^^^^^ entity.name.type.raylang
+//                       ^^^^ entity.name.type.raylang
+}
+
+extern "libm" {
+//<- storage.modifier.raylang
+//     ^^^^^^ string.quoted.double.raylang
+    fn cbrt(x: float) -> float;
+//  ^^ storage.type.function.raylang
+//     ^^^^ entity.name.function.raylang
+//             ^^^^^ support.type.primitive.raylang
+}
+
+extern "libc" blocking {
+//<- storage.modifier.raylang
+//            ^^^^^^^^ storage.modifier.raylang
+    fn getpid() -> int;
+//     ^^^^^^ entity.name.function.raylang
+}

@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Gramáticas de editor con aserciones** (M243, ray-sublime). `editors/sublime/tests/syntax_test_raylang.ray`:
+  881 aserciones `// ^^^ scope` en el formato estándar de Sublime, que cubren todos los contextos
+  y son a la vez un programa raylang válido (el CI lo compila y corre, verifica que cada scope
+  exista en las dos gramáticas y que toda palabra clave del lexer tenga regla). Al escribirlas
+  salieron huecos en las gramáticas de Sublime y VSCode, corregidos en tándem: `///` como
+  `comment.line.documentation`, escapes `\u{…}`/`\xNN` completos en strings y chars, literales
+  `0x`/`0o`/`0b`, sufijos `u8`/`u32`/`u64` y exponentes, tipos `unit`/`ptr`, `extern`/`blocking`,
+  y los delimitadores de string con su `punctuation.definition.string` en VSCode. Se ejecutan en
+  Sublime (Build) y en el tokenizador de ray-sublime.
+
 ## 1.19.0 — 2026-09-12
 
 - **`std/markdown`: inlines CommonMark + GFM** (M242, ray-sublime). La capa inline es un port

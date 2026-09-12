@@ -14,6 +14,7 @@
     { "include": "#trait-definition" },
     { "include": "#impl-definition" },
     { "include": "#function-definition" },
+    { "include": "#extern" },
     { "include": "#keywords-control" },
     { "include": "#self" },
     { "include": "#storage" },
@@ -29,16 +30,20 @@
   ],
   "repository": {
     "comments": {
-      "name": "comment.line.double-slash.raylang",
-      "match": "//.*$"
+      "patterns": [
+        { "name": "comment.line.documentation.raylang", "match": "///.*$" },
+        { "name": "comment.line.double-slash.raylang", "match": "//.*$" }
+      ]
     },
     "template-strings": {
       "comment": "Backticks (M95): string donde la comilla doble es literal, multil\u00ednea, con la misma interpolaci\u00f3n ${}. Escapes: \\` y \\$.",
       "name": "string.quoted.other.template.raylang",
       "begin": "`",
       "end": "`",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.raylang" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.raylang" } },
       "patterns": [
-        { "name": "constant.character.escape.raylang", "match": "\\\\." },
+        { "name": "constant.character.escape.raylang", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|x[0-9A-Fa-f]{2}|.)" },
         { "include": "#interpolation" }
       ]
     },
@@ -46,11 +51,13 @@
       "name": "string.quoted.double.raylang",
       "begin": "\"",
       "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.raylang" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.raylang" } },
       "patterns": [
         {
           "comment": "Escapes: \\n \\t \\r \\\\ \\\" y \\$ (un '$' literal, para un '${' sin interpolar).",
           "name": "constant.character.escape.raylang",
-          "match": "\\\\."
+          "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|x[0-9A-Fa-f]{2}|.)"
         },
         { "include": "#interpolation" }
       ]
@@ -78,21 +85,29 @@
       "name": "string.quoted.double.byte.raylang",
       "begin": "b\"",
       "end": "\"",
-      "beginCaptures": { "0": { "name": "storage.type.string.byte.raylang" } },
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.raylang storage.type.string.byte.raylang" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.raylang" } },
       "patterns": [
         {
           "name": "constant.character.escape.raylang",
-          "match": "\\\\(x[0-9A-Fa-f]{2}|.)"
+          "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|x[0-9A-Fa-f]{2}|.)"
         }
       ]
     },
     "characters": {
       "comment": "Literal de carácter `'a'` (M11.4c): un code point, con escapes `\\n \\t \\r \\\\ \\'`.",
       "name": "string.quoted.single.raylang",
-      "match": "'(\\\\.|[^'\\\\])'",
+      "match": "'(\\\\(u\\{[0-9A-Fa-f]+\\}|x[0-9A-Fa-f]{2}|.)|[^'\\\\])'",
       "captures": {
         "0": { "name": "constant.character.raylang" }
       }
+    },
+    "extern": {
+      "comment": "`extern \"lib\" [blocking] { … }` (M41): bloque FFI; 'blocking' es contextual.",
+      "patterns": [
+        { "name": "storage.modifier.raylang", "match": "\\b(extern)\\b" },
+        { "name": "storage.modifier.raylang", "match": "\\b(blocking)\\b(?=\\s*\\{)" }
+      ]
     },
     "annotation": {
       "comment": "Anotación @nombre (M10.1): @test, @derive, ... Los argumentos (p. ej. @derive(Eq)) caen en sus propias reglas (tipos de usuario).",
@@ -157,7 +172,7 @@
     },
     "types": {
       "name": "support.type.primitive.raylang",
-      "match": "\\b(int|float|bool|string|char|bytes|u8|u32|u64)\\b"
+      "match": "\\b(int|float|bool|string|char|bytes|unit|ptr|u8|u32|u64)\\b"
     },
     "constants": {
       "comment": "Constantes en SCREAMING_SNAKE (2+ caracteres, todo mayúsculas/dígitos/_): PI, MAX_INTENTOS. Antes de #user-types para ganar; una sola letra (T/E/K) queda como type param.",
@@ -174,14 +189,12 @@
     },
     "numbers": {
       "patterns": [
-        {
-          "name": "constant.numeric.float.raylang",
-          "match": "\\b[0-9]+\\.[0-9]+\\b"
-        },
-        {
-          "name": "constant.numeric.integer.raylang",
-          "match": "\\b[0-9]+\\b"
-        }
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[xX][0-9A-Fa-f]+(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[oO][0-7]+(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[bB][01]+(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9]+(\\.[0-9]+)?[eE][+-]?[0-9]+\\b" },
+        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b[0-9]+(?:u8|u32|u64)?\\b" }
       ]
     },
     "function-call": {

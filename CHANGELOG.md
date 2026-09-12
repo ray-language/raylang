@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.20.0 — 2026-09-12
 
 - **`bytes.index_of` / `bytes.starts_with` y `time.monotonic_millis`** (M245, ray-sublime #71).
   Búsqueda de subsecuencia y de prefijo sobre `bytes`, simétricas de las de `string` y sin

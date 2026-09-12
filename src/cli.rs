@@ -54,6 +54,7 @@ fn run() {
     match rest.first().map(String::as_str) {
         Some("new") => cmd_new(&rest[1..]),
         Some("run") => cmd_run(&rest[1..]),
+        Some("profile") => cmd_profile(&rest[1..]),
         Some("dev") => cmd_dev(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         // M217 (ray-sublime #10): `ray check` = `ray build` sin flags de nativo — la costumbre de otros lenguajes.
@@ -93,6 +94,7 @@ Usage: ray <subcommand> [options]
 Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
+  profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
@@ -510,6 +512,35 @@ fn cmd_upgrade(args: &[String]) {
 
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
 /// `src/main.ray` (convención de proyecto). Los args tras el archivo van a `args()`.
+/// M240: `ray profile [file] [--json] [--out FILE] [--top N] [args...]` — corre el programa en la
+/// VM con el perfilador por función y emite el informe al terminar (stderr, o `--out`). Solo VM.
+fn cmd_profile(args: &[String]) {
+    if args.iter().any(|a| a == "--interp") {
+        eprintln!("ray profile runs on the VM only (drop --interp)");
+        process::exit(64);
+    }
+    let (json, args) = take_flag_bool(args, "--json");
+    let (out, args) = take_flag_value(&args, "--out");
+    let (top, args) = take_flag_num(&args, "--top", "a number of rows (e.g. --top 20)");
+    crate::vm::profile::enable(crate::vm::profile::Config { json, out, top: top.unwrap_or(0) as usize });
+    cmd_run(&args)
+}
+
+/// Extrae `--flag VALUE` de cualquier posición; `(None, args)` si no está.
+fn take_flag_value(args: &[String], flag: &str) -> (Option<String>, Vec<String>) {
+    let mut out = Vec::with_capacity(args.len());
+    let mut value = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == flag {
+            value = it.next().cloned();
+        } else {
+            out.push(a.clone());
+        }
+    }
+    (value, out)
+}
+
 fn cmd_run(args: &[String]) {
     // M38.4: `--deterministic` fuerza el scheduler M:1 reproducible (un hilo, orden FIFO), aunque el default
     // sea multicore. Útil para salida reproducible; inocuo con `--interp` (ya es secuencial).

@@ -118,7 +118,9 @@ unsafe impl Sync for ProgRef<'_> {}
 /// Ejecuta un programa compilado (empezando por `main`) y devuelve su resultado.
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
-    let result = vm.run()?;
+    let result = vm.run();
+    profile::report_if_enabled(); // M240 (también tras un error en tiempo de ejecución)
+    let result = result?;
     vm.print_gc_stats_if_requested(); // M37.1
     Ok(to_value(&vm.cur.heap, &program.structs, &program.enums, &result))
 }
@@ -141,7 +143,9 @@ pub fn run_program_with_limit(
     if let Some(n) = heap_cap {
         vm.cur.heap.set_max_live(n);
     }
-    let result = vm.run()?;
+    let result = vm.run();
+    profile::report_if_enabled(); // M240
+    let result = result?;
     vm.print_gc_stats_if_requested(); // M37.1
     Ok(to_value(&vm.cur.heap, &program.structs, &program.enums, &result))
 }
@@ -225,6 +229,9 @@ struct Vm<'a> {
 
 impl<'a> Vm<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
+        if profile::enabled() {
+            profile::register_program(program.functions.iter().map(|f| f.name.clone()));
+        }
         Vm {
             program,
             cur: Fiber {
@@ -238,6 +245,7 @@ impl<'a> Vm<'a> {
                 unit_enums: Default::default(),
                 try_markers: Vec::new(),
                 pending_error: None,
+                prof: Default::default(),
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             fuel: u64::MAX, // sin límite por defecto
@@ -285,6 +293,11 @@ impl<'a> Vm<'a> {
         let mut main_fiber = std::mem::take(&mut self.cur); // is_main: true, heap con el tope preconfigurado
         build_locals(self.program, &mut main_fiber.heap, &mut main_fiber.locals, main);
         main_fiber.frames.push(CallFrame { function: main, ip: 0, locals_base: 0, upvalues: Vec::new(), stack_base: 0 });
+        if profile::enabled() {
+            // M240: main no entra por `Call`; se abre aquí y cuenta como la primera fibra.
+            main_fiber.prof.enter(main, 1);
+            profile::note_fiber();
+        }
         self.sched().ready.push_back(main_fiber);
 
         let n = num_workers(self.program);
@@ -1240,8 +1253,11 @@ impl<'a> Vm<'a> {
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
-                            try_markers: Vec::new(), pending_error: None,
+                            try_markers: Vec::new(), pending_error: None, prof: Default::default(),
                         });
+                        if profile::enabled() {
+                            profile::note_fiber();
+                        }
                         task
                     };
                     if let (Some(task), Some(scope)) = (task, self.cur.scopes.last_mut()) {
@@ -4310,6 +4326,9 @@ impl<'a> Vm<'a> {
                     self.cur.frames.push(CallFrame {
                         function: *idx, ip: 0, locals_base: base, upvalues: Vec::new(), stack_base: self.cur.stack.len(),
                     });
+                    if profile::enabled() {
+                        self.cur.prof.enter(*idx, self.cur.frames.len());
+                    }
                 }
                 // M13.3b: llamada en cola — REUTILIZA el marco actual (no crece la pila de marcos).
                 // En posición de cola, el valor de esta llamada es el de la función actual, así que
@@ -4324,6 +4343,10 @@ impl<'a> Vm<'a> {
                     for i in (0..*argc).rev() {
                         let v = self.pop();
                         self.put_arg_at(nbase + i, v);
+                    }
+                    if profile::enabled() {
+                        self.cur.prof.leave(self.cur.frames.len());
+                        self.cur.prof.enter(*idx, self.cur.frames.len());
                     }
                     self.cur.frames[fi].function = *idx;
                     self.cur.frames[fi].ip = 0;
@@ -4356,6 +4379,9 @@ impl<'a> Vm<'a> {
                     self.cur.frames.push(CallFrame {
                         function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len(),
                     });
+                    if profile::enabled() {
+                        self.cur.prof.enter(fn_idx, self.cur.frames.len());
+                    }
                 }
                 // M97.2: `__try_call(f)` — llama a `f` en ESTA fibra dejando un marcador de
                 // recuperación. La llamada en sí es la de `CallValue` con 0 argumentos; lo único
@@ -4385,6 +4411,9 @@ impl<'a> Vm<'a> {
                     self.cur.frames.push(CallFrame {
                         function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len(),
                     });
+                    if profile::enabled() {
+                        self.cur.prof.enter(fn_idx, self.cur.frames.len());
+                    }
                 }
                 // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
                 OpCode::TailCallValue(argc) => {
@@ -4404,6 +4433,10 @@ impl<'a> Vm<'a> {
                     let nbase = self.push_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
                         self.put_arg_at(nbase + *argc - 1 - j, val);
+                    }
+                    if profile::enabled() {
+                        self.cur.prof.leave(self.cur.frames.len());
+                        self.cur.prof.enter(fn_idx, self.cur.frames.len());
                     }
                     self.cur.frames[fi].function = fn_idx;
                     self.cur.frames[fi].ip = 0;
@@ -4434,6 +4467,9 @@ impl<'a> Vm<'a> {
 
                 OpCode::Return => {
                     let mut result = self.pop();
+                    if profile::enabled() {
+                        self.cur.prof.leave(self.cur.frames.len());
+                    }
                     if let Some(frame) = self.cur.frames.pop() {
                         // El `Return` que baja `?` ocurre en mitad de una expresión: los operandos
                         // pendientes de este marco quedan por encima de su base y hay que descartarlos,
@@ -5055,6 +5091,8 @@ mod tests;
 /// en caracteres, y la última pareja (índice de carácter, offset de byte) para que el acceso
 /// secuencial hacia delante o hacia atrás sea O(1) amortizado en texto no-ASCII. El acceso
 /// aleatorio en no-ASCII sigue siendo O(distancia).
+pub mod profile;
+
 mod str_cache {
     use std::cell::RefCell;
     use std::sync::Arc;

@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray profile`** (M240, ray-sublime #67): perfilador por función de la VM. Corre el
+  programa y, al terminar (también tras `exit()` o un error), imprime una tabla por función
+  con tiempo propio, %, tiempo inclusivo, llamadas y media por llamada, ordenada por tiempo
+  propio; `--json --out archivo` para comparar corridas, `--top N` para acortar. Instrumentado
+  en el camino de llamada: apagado no cuesta nada; encendido, dos lecturas de reloj por
+  llamada.
+
 ## 1.17.1 — 2026-09-11
 
 - **Mapa destilado del MCP al día** (`raylang://llms.txt`): recoge la superficie entregada

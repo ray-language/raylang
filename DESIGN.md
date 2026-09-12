@@ -13155,3 +13155,24 @@ sobre el `hwnd` — así que `ui.set_titlebar_color(h, color)` es ese mismo cód
 transparencia, pone la apariencia a `nil` (hereda) y el fondo `windowBackgroundColor`; en
 Windows manda `DWMWA_COLOR_DEFAULT`. La validación es la de `open_with` y vale en headless,
 que además deja traza — el test corre en los tres motores.
+
+## 230. M240 — `ray profile`: el perfilador por función de la VM (sep 2026)
+
+El análisis del highlighter de ray-sublime (#67) se hizo a mano, instrumentando con
+`time.monotonic_nanos()`; lo que faltaba era la herramienta. Decisiones: (1) instrumentado, no
+por muestreo — determinista, exacto en llamadas, y trivial de implementar sobre la VM: un
+`AtomicBool` relajado en `Call`/`TailCall`/`CallValue`/`TailCallValue`/`Return` (apagado, un
+`load` por llamada) y, encendido, una pila de marcos perfilados paralela a `Fiber.frames`
+que se auto-realinea si un desenrollado por error se llevó marcos. (2) Tiempo PROPIO e
+INCLUSIVO: el propio resta los hijos ya cerrados; el inclusivo se cuenta una vez por
+activación externa (contador de activaciones vivas por función y fibra), así una recursión
+profunda no infla el inclusivo por nivel. (3) Los builtins no son funciones: su coste cae
+en el propio del llamador, que es lo útil (`split` caro = "esa función hace demasiados
+split"). (4) Una llamada en cola reutiliza el marco → cierra el del llamador antes de abrir
+el nuevo; el tiempo del llamador no incluye la llamada en cola. Documentado, no arreglado:
+es la semántica de la recursión de cola en O(1) marcos. (5) La tabla común la protege un
+mutex tomado por retorno (solo con el perfil activo; las fibras suman en ella) y el informe
+sale una sola vez, desde `run_program*` (Ok o Err) y desde `process_exit` (un `exit()` a
+mitad de programa era la forma habitual de acabar en el editor). (6) `main` no entra por
+`Call`: se abre a mano al encolar su fibra, y cuenta como la primera. Solo VM: el nativo ya
+tiene `perf`/Instruments, y el intérprete es el oráculo, no el motor de producto.

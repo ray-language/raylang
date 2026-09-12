@@ -1836,6 +1836,7 @@ pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> {
 /// pendiente no se pierde). Compartido por intérprete y VM; el nativo emite su propio helper.
 pub fn process_exit(code: i64) -> ! {
     use std::io::Write;
+    crate::vm::profile::report_if_enabled(); // M240: `exit()` no se traga el perfil
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(code as i32)

@@ -271,7 +271,7 @@ fn main() -> int {
 //               ^^^^ support.function.builtin.raylang
     let lenf = p.show().len();
 //               ^^^^ entity.name.function.raylang
-//                      ^^^ entity.name.function.raylang
+//                      ^^^ support.function.builtin.raylang
     let big2: u64 = 9u32 as u64;
 //            ^^^ support.type.primitive.raylang
 //                  ^^^^ constant.numeric.integer.raylang
@@ -279,6 +279,18 @@ fn main() -> int {
 //                          ^^^ support.type.primitive.raylang
     describe(p);
 //  ^^^^^^^^ entity.name.function.raylang
+    let raw = from_utf8("hi".to_bytes()).unwrap_or("");
+//            ^^^^^^^^^ support.function.builtin.raylang
+//                           ^^^^^^^^ support.function.builtin.raylang
+//                                       ^^^^^^^^^ entity.name.function.raylang
+    let cp = char_from_code(char_code(c)).is_some();
+//           ^^^^^^^^^^^^^^ support.function.builtin.raylang
+//                          ^^^^^^^^^ support.function.builtin.raylang
+//                                        ^^^^^^^ entity.name.function.raylang
+    let sorted = sort_by([3, 1], fn(a: int, b: int) -> bool { a < b });
+//               ^^^^^^^ support.function.builtin.raylang
+//                               ^^ storage.type.raylang
+//                                                              ^ keyword.operator.raylang
     // Convención: un nombre en mayúscula es un tipo/variante aunque se llame (Some(3), Point {…}).
     Self_like();
 //  ^^^^^^^^^ entity.name.type.raylang
@@ -292,7 +304,7 @@ fn main() -> int {
 //                                                         ^^^^^ entity.name.function.raylang
     if (ok && v > 0 || !ok) { print(i + q + lenf + joined + d.char_code() + c.char_code() + e.char_code()); }
 //                  ^^ keyword.operator.raylang
-    let _ = (s, lit, tpl, b, tiny, doubled, big2, sq, e, m, small, wide, expo);
+    let _ = (s, lit, tpl, b, tiny, doubled, big2, sq, e, m, small, wide, expo, raw, cp, sorted);
 //      ^ source.raylang
     return 0;
 //  ^^^^^^ keyword.control.raylang
@@ -317,7 +329,7 @@ fn first_char(s: string) -> Result<char, string> {
     let head: Option<char> = if (s.len() > 0) { Option.Some(s[0]) } else { Option.None };
 //            ^^^^^^ entity.name.type.raylang
 //                   ^^^^ support.type.primitive.raylang
-//                                 ^^^ entity.name.function.raylang
+//                                 ^^^ support.function.builtin.raylang
 //                                              ^^^^^^ entity.name.type.raylang
 //                                                     ^^^^ entity.name.type.raylang
 //                                                                         ^^^^^^ entity.name.type.raylang

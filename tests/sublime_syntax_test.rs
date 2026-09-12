@@ -84,3 +84,36 @@ fn every_lexer_keyword_is_in_the_sublime_grammar() {
     let missing: Vec<&&str> = keywords.iter().filter(|k| !sublime.contains(&format!("{k}|")) && !sublime.contains(&format!("|{k})")) && !sublime.contains(&format!("({k})")) && !sublime.contains(&format!("({k}|"))).collect();
     assert!(missing.is_empty(), "palabras clave del lexer sin regla en la gramática de Sublime: {missing:?}");
 }
+
+/// M244 (ray-sublime #75): la lista `builtins` de las gramáticas es UNA y contiene todos los
+/// builtins libres que documenta `llms.txt` (sección "Free global builtins" + concurrencia);
+/// la regla de pipeline de VSCode reusa la misma alternancia.
+#[test]
+fn the_builtin_list_matches_llms_txt_in_both_grammars() {
+    let llms = read("llms.txt");
+    let start = llms.find("**Free global builtins**").expect("sección de builtins libres en llms.txt");
+    let section = &llms[start..];
+    let end = section.find("\n2. ").expect("fin de la sección");
+    let section = &section[..end];
+    let mut free: Vec<&str> = section
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .flat_map(|chunk| chunk.split_whitespace())
+        .filter(|w| w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .collect();
+    free.sort();
+    free.dedup();
+    assert!(free.len() >= 25, "llms.txt cambió de forma: {free:?}");
+    let sublime = read(SUBLIME);
+    let sublime_list = sublime
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("builtins: '").map(|r| r.trim_end_matches('\'').to_string()))
+        .expect("variable builtins en la gramática de Sublime");
+    let vscode = read(VSCODE);
+    let vscode_lists = vscode.matches(sublime_list.as_str()).count();
+    assert_eq!(vscode_lists, 2, "VSCode debe usar la MISMA alternancia en builtins y pipeline-target");
+    let names: Vec<&str> = sublime_list.split('|').collect();
+    let missing: Vec<&&str> = free.iter().filter(|f| !names.contains(f)).collect();
+    assert!(missing.is_empty(), "builtins libres de llms.txt ausentes en la gramática: {missing:?}");
+}

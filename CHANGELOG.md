@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.19.0 — 2026-09-12
 
 - **`std/markdown`: inlines CommonMark + GFM** (M242, ray-sublime). La capa inline es un port
   del algoritmo del spec: pila de delimitadores para `*`/`_`/`~~` (flanqueo, regla del

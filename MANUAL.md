@@ -1916,6 +1916,19 @@ fn main() -> int {
 La clave pública va en `ray.toml` (`[app] public_key = "<hex>"`) y `ray bundle` la hornea; bajo
 `ray run` la app es `"dev"`: `check` funciona y `apply` devuelve `Err`.
 
+Del lado del publicador, dos comandos (M248):
+
+```sh
+ray keygen                      # una vez: semilla en ~/.ray/keys/<app-id>.key, pública al ray.toml
+ray release -o dist             # por plataforma: zip del bundle + update.json + update.json.sig
+ray release -o dist --publish   # además: gh release create/upload; URLs a releases/download/<tag>/
+```
+
+`ray release` conserva en `update.json` los artefactos de otras plataformas de la misma versión,
+así que se corre en cada máquina (o job de CI, con `RAY_SIGNING_KEY`) sobre el mismo `dist/`. La
+app consulta un URL fijo: con GitHub Releases,
+`https://github.com/<org>/<repo>/releases/latest/download/update.json`.
+
 ### Criptografía y canal seguro (`std/crypto`)
 
 Para un Diffie-Hellman clásico, RSA o un JWT RS256 hace falta aritmética de enteros grandes:

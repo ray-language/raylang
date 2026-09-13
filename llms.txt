@@ -238,6 +238,8 @@ by `<platform>-<arch>` = `platform() + "-" + arch()`, each with `url`, hex `sha2
 `Ok(Some(release))` / `Err`; `update.download(release)` (verifies sha256+size) →
 `update.apply(pkg)` (atomic swap of the bundle; `Err` under `ray run`) → `update.relaunch()`.
 `update.current()` is the baked version or `"dev"`; call `update.cleanup()` at startup.
+Publisher side: `ray keygen` (once; writes `[app] public_key`) and `ray release -o dist
+[--publish]` (bundle → zip + signed update.json; run once per platform over the same dist/).
 
 Markdown: `std/markdown` (`markdown.to_html(md)`, `parse(md) -> [Block]`) is CommonMark + GFM
 (setext, task items, alerts `[!NOTE]`, footnotes, tables, tight/loose lists; inline: delimiter-

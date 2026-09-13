@@ -482,7 +482,24 @@ pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, 
             return Result.Err("update: manifest is not UTF-8: " + e);
         },
     };
-    let r = parse_manifest(text, platform_key())?;
+    var r = parse_manifest(text, platform_key())?;
+    // Una URL relativa (`MyApp-2.0.0-macos-aarch64.zip`, lo que escribe `ray release` sin
+    // `--base-url`) se resuelve contra el directorio del manifiesto.
+    if (!r.url.starts_with("http://") && !r.url.starts_with("https://")) {
+        let base = if (r.url.starts_with("/")) {
+            origin_of_url(manifest_url)
+        } else {
+            dir_of_url(manifest_url)
+        };
+        r = Release {
+            version: r.version,
+            notes: r.notes,
+            min_version: r.min_version,
+            url: base + r.url,
+            sha256: r.sha256,
+            size: r.size
+        };
+    }
     let cur = current();
     if (cur != "dev" && compare_versions(r.version, cur) <= 0) {
         return Result.Ok(Option.None);
@@ -499,6 +516,30 @@ pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, 
         );
     }
     Result.Ok(Option.Some(r))
+}
+
+// `https://host:port` de una URL (para resolver rutas absolutas `/x`).
+fn origin_of_url(url: string) -> string {
+    let scheme_end = match (url.index_of("://")) {
+        Option.Some(i) => i + 3,
+        Option.None => 0,
+    };
+    match (url.substring(scheme_end, url.len()).index_of("/")) {
+        Option.Some(i) => url.substring(0, scheme_end + i),
+        Option.None => url,
+    }
+}
+
+fn dir_of_url(url: string) -> string {
+    var last = 0 - 1;
+    var i = 0;
+    while (i < url.len()) {
+        if (url[i] == '/' && i > 8) {
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (last < 0) { url + "/" } else { url.substring(0, last + 1) }
 }
 
 /// `check_with(url, "")`: the baked public key.

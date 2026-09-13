@@ -74,6 +74,9 @@ fn run() {
         Some("mcp") => mcp::run(),
         Some("repl") | None => repl::run(),
         Some("upgrade") => cmd_upgrade(&rest[1..]),
+        Some("__release-program") => run_release_program_inner(&rest[1..]),
+        Some("keygen") => cmd_app_keygen(&rest[1..]),
+        Some("release") => cmd_release(&rest[1..]),
         Some("toolchain") => crate::toolchain::run(&rest[1..]),
         Some("version") | Some("--version") | Some("-V") => {
             println!("raylang {}", env!("CARGO_PKG_VERSION"));
@@ -122,6 +125,8 @@ Tooling:
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
+  keygen            create the app's Ed25519 signing key (M248, std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
+  release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL]
   toolchain <cmd>   Rust toolchain for `build --native` (M171): `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
   version           the language version
   help              this help
@@ -285,6 +290,293 @@ fn sh_capture(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String
 /// servidor está escrito EN raylang (`src/serve.ray`, embebido como la stdlib) y corre en la VM;
 /// aquí solo se parsean los argumentos y se le pasan como `args()`.
 const SERVE_RAY: &str = include_str!("serve.ray");
+/// M248: `ray keygen` / `ray release` — el lado del publicador de std/update, en raylang.
+const RELEASE_RAY: &str = include_str!("release.ray");
+
+/// Corre el programa embebido de release con `args` y devuelve su stdout (líneas `k=v`) o el
+/// código de salida con el que falló (su stderr ya se mostró).
+fn run_release_program(args: Vec<String>) -> Result<String, i32> {
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let mut cmd = process::Command::new(exe);
+    cmd.arg("__release-program");
+    cmd.args(&args);
+    let out = cmd.output().map_err(|_| 70)?;
+    // El stderr del programa (sus mensajes `keygen:`/`release:`) es el nuestro.
+    eprint!("{}", String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() {
+        return Err(out.status.code().unwrap_or(70));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// El programa embebido, corriendo en la VM con los args dados (subproceso de `ray keygen` /
+/// `ray release`: así el proceso padre sigue siendo la CLI de Rust y este solo produce datos).
+fn run_release_program_inner(args: &[String]) {
+    runtime::set_program_args(args.to_vec());
+    let loaded = match loader::load_source(Path::new("ray-release.ray"), RELEASE_RAY, &[]) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("internal error loading the embedded release program: {}", e.message);
+            process::exit(70);
+        }
+    };
+    let (mut program, locate, multi) = locate_of(loaded);
+    check_or_exit(&mut program, &locate, multi);
+    let compiled = match compiler::compile_program(&program) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("internal error compiling the embedded release program: {e}");
+            process::exit(70);
+        }
+    };
+    match vm::run_program_with_limit(&compiled, None, None) {
+        Ok(Value::Int(code)) => process::exit((code & 0xFF) as i32),
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!("ray release: {e}");
+            process::exit(70);
+        }
+    }
+}
+
+/// Un valor `k=v` de la salida del programa embebido.
+fn kv(out: &str, key: &str) -> Option<String> {
+    out.lines().find_map(|l| l.strip_prefix(&format!("{key}=")).map(|v| v.trim().to_string()))
+}
+
+/// El directorio de claves: `RAY_KEYS_DIR` o `~/.ray/keys`.
+fn keys_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("RAY_KEYS_DIR") {
+        return PathBuf::from(d);
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    home.join(".ray").join("keys")
+}
+
+/// El id de la app del `ray.toml` del cwd (`[app] id`, o el nombre del paquete), y el manifiesto.
+fn app_identity(dir: &Path) -> Option<(Manifest, String)> {
+    let m = Manifest::load(dir).ok().flatten()?;
+    let id = m.app_id.clone().unwrap_or_else(|| m.name.clone());
+    Some((m, id))
+}
+
+/// M248: `ray keygen [--app-id X] [--force]` — crea la clave Ed25519 de firma de la app y deja la
+/// pública en `[app] public_key` del ray.toml (la semilla nunca sale de ~/.ray/keys). Distinta
+/// de `ray registry keygen` (la clave de PUBLICACIÓN de paquetes): esta firma manifiestos de app.
+fn cmd_app_keygen(args: &[String]) {
+    let (app_id_arg, rest) = take_flag_value(args, "--app-id");
+    let (force, rest) = take_flag_bool(&rest, "--force");
+    if !rest.is_empty() {
+        eprintln!("usage: ray keygen [--app-id X] [--force]");
+        process::exit(64);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let identity = app_identity(&cwd);
+    let app_id = app_id_arg.or_else(|| identity.as_ref().map(|(_, id)| id.clone())).unwrap_or_else(|| {
+        eprintln!("keygen: no ray.toml here; pass --app-id <id>");
+        process::exit(64);
+    });
+    let dir = keys_dir();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("keygen: could not create '{}': {e}", dir.display());
+        process::exit(73);
+    }
+    let key_path = dir.join(format!("{app_id}.key"));
+    if key_path.exists() && !force {
+        eprintln!("keygen: '{}' already exists (use --force to replace it — apps in the field would stop trusting your manifests)", key_path.display());
+        process::exit(73);
+    }
+    let out = run_release_program(vec!["keygen".into(), key_path.to_string_lossy().into_owned()]).unwrap_or_else(|code| process::exit(code));
+    let public_key = kv(&out, "public_key").unwrap_or_default();
+    println!("signing key: {}", key_path.display());
+    println!("public key:  {public_key}");
+    if let Some((m, _)) = identity {
+        match write_public_key(&m.root.join("ray.toml"), &public_key) {
+            Ok(()) => println!("ray.toml: [app] public_key updated"),
+            Err(e) => eprintln!("keygen: could not update ray.toml ({e}); add under [app]: public_key = \"{public_key}\""),
+        }
+    } else {
+        println!("add to the app's ray.toml under [app]: public_key = \"{public_key}\"");
+    }
+}
+
+/// Escribe/reemplaza `public_key = "…"` en la sección `[app]` del ray.toml (la crea si falta).
+fn write_public_key(path: &Path, public_key: &str) -> Result<(), String> {
+    let src = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+    let mut in_app = false;
+    let mut app_start: Option<usize> = None;
+    let mut replaced = false;
+    for (i, line) in lines.iter_mut().enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_app = t == "[app]";
+            if in_app {
+                app_start = Some(i);
+            }
+            continue;
+        }
+        if in_app && t.starts_with("public_key") {
+            *line = format!("public_key = \"{public_key}\"");
+            replaced = true;
+        }
+    }
+    if !replaced {
+        match app_start {
+            Some(i) => lines.insert(i + 1, format!("public_key = \"{public_key}\"")),
+            None => {
+                if !lines.last().is_some_and(|l| l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push("[app]".into());
+                lines.push(format!("public_key = \"{public_key}\""));
+            }
+        }
+    }
+    fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+/// M248: `ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX]
+/// [--without list] [--publish [--tag vX]]` — bundle + zip + manifiesto firmado, listos para subir.
+fn cmd_release(args: &[String]) {
+    let (out_arg, rest) = take_flag_value(args, "-o");
+    let (notes, rest) = take_flag_value(&rest, "--notes");
+    let (min_version, rest) = take_flag_value(&rest, "--min-version");
+    let (base_url_arg, rest) = take_flag_value(&rest, "--base-url");
+    let (key_arg, rest) = take_flag_value(&rest, "--key");
+    let (without, rest) = take_flag_value(&rest, "--without");
+    let (tag_arg, rest) = take_flag_value(&rest, "--tag");
+    let (publish, rest) = take_flag_bool(&rest, "--publish");
+    if rest.len() > 1 || rest.iter().any(|a| a.starts_with("--")) {
+        eprintln!("usage: ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX] [--without list] [--publish] [--tag vX.Y.Z]");
+        process::exit(64);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let (manifest, app_id) = match rest.first() {
+        Some(p) => {
+            let dir = Path::new(p).parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| cwd.clone());
+            let dir = dir.canonicalize().unwrap_or(dir);
+            app_identity(&dir)
+        }
+        None => app_identity(&cwd),
+    }
+    .unwrap_or_else(|| {
+        eprintln!("release: needs a ray.toml ([package] version, [app] id/public_key)");
+        process::exit(64);
+    });
+    let entry = rest.first().cloned().unwrap_or_else(|| manifest.root.join(&manifest.entry).to_string_lossy().into_owned());
+    let version = manifest.version.clone();
+    let name = manifest.app_name.clone().unwrap_or_else(|| manifest.name.clone());
+    let expected_pk = manifest.app_public_key.clone().unwrap_or_default();
+    // La clave: --key, RAY_SIGNING_KEY, o el archivo de `ray keygen`.
+    let seed_hex = key_arg
+        .or_else(|| std::env::var("RAY_SIGNING_KEY").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| fs::read_to_string(keys_dir().join(format!("{app_id}.key"))).ok())
+        .unwrap_or_else(|| {
+            eprintln!("release: no signing key for '{app_id}' — run 'ray keygen' (or pass --key / RAY_SIGNING_KEY)");
+            process::exit(64);
+        });
+    // La clave debe ser la horneada en la app, y se comprueba ANTES de compilar el bundle.
+    if !expected_pk.is_empty()
+        && let Some(seed) = hex_decode(seed_hex.trim())
+        && let Some(pk) = crate::builtins::ed25519_public_key(&seed)
+    {
+        let pk_hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
+        if pk_hex != expected_pk.to_lowercase() {
+            eprintln!("release: the signing key does not match [app] public_key in ray.toml ({pk_hex} vs {expected_pk}); the app would reject this manifest");
+            process::exit(65);
+        }
+    }
+    let dist = out_arg.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("dist"));
+    let tag = tag_arg.unwrap_or_else(|| format!("v{version}"));
+    // Con --publish y sin --base-url, los artefactos apuntan a la Release de GitHub del repo.
+    let base_url = base_url_arg.or_else(|| {
+        if !publish {
+            return None;
+        }
+        let remote = sh_capture("git", &["remote", "get-url", "origin"], Some(&manifest.root)).ok()?;
+        github_slug(remote.trim()).map(|slug| format!("https://github.com/{slug}/releases/download/{tag}/"))
+    });
+    // 1. El bundle, en un directorio de trabajo.
+    let work = std::env::temp_dir().join(format!("ray-release-{}", process::id()));
+    let _ = fs::remove_dir_all(&work);
+    if let Err(e) = fs::create_dir_all(&work) {
+        eprintln!("release: could not create '{}': {e}", work.display());
+        process::exit(73);
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let mut bundle = process::Command::new(exe);
+    bundle.arg("bundle").arg(&entry).arg("-o").arg(&work);
+    if let Some(w) = &without {
+        bundle.arg("--without").arg(w);
+    }
+    let status = bundle.status().unwrap_or_else(|e| {
+        eprintln!("release: could not run ray bundle: {e}");
+        process::exit(70);
+    });
+    if !status.success() {
+        let _ = fs::remove_dir_all(&work);
+        process::exit(status.code().unwrap_or(70));
+    }
+    let bundle_dir = if cfg!(target_os = "macos") { work.join(format!("{name}.app")) } else { work.join(&name) };
+    if !bundle_dir.is_dir() {
+        eprintln!("release: bundle not found at '{}'", bundle_dir.display());
+        process::exit(70);
+    }
+    // 2. Zip + manifiesto + firma (programa embebido).
+    let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let out = run_release_program(vec![
+        "release".into(),
+        bundle_dir.to_string_lossy().into_owned(),
+        dist.to_string_lossy().into_owned(),
+        name.clone(),
+        version.clone(),
+        app_id.clone(),
+        seed_hex.trim().to_string(),
+        notes.unwrap_or_default(),
+        min_version.unwrap_or_default(),
+        base_url.clone().unwrap_or_default(),
+        key.clone(),
+        expected_pk,
+    ]);
+    let _ = fs::remove_dir_all(&work);
+    let out = out.unwrap_or_else(|code| process::exit(code));
+    let zip = kv(&out, "zip").unwrap_or_default();
+    println!("ok: {zip} ({} bytes, sha256 {})", kv(&out, "size").unwrap_or_default(), kv(&out, "sha256").unwrap_or_default());
+    println!("ok: {}/update.json + update.json.sig ({} artifact(s) for {version})", dist.display(), kv(&out, "artifacts").unwrap_or_default());
+    // 3. --publish: la Release de GitHub del tag (creada si falta) recibe los tres archivos.
+    if publish {
+        let manifest_path = dist.join("update.json");
+        let sig_path = dist.join("update.json.sig");
+        let title = format!("{name} {version}");
+        let _ = sh_capture("gh", &["release", "create", &tag, "--title", &title, "--notes", &format!("{name} {version}")], Some(&manifest.root));
+        let files = [zip.as_str(), &manifest_path.to_string_lossy(), &sig_path.to_string_lossy()];
+        let mut argv = vec!["release", "upload", &tag, "--clobber"];
+        argv.extend(files.iter().copied());
+        match sh_capture("gh", &argv, Some(&manifest.root)) {
+            Ok(_) => println!("published: release {tag} ({})", base_url.unwrap_or_default()),
+            Err(e) => {
+                eprintln!("release: gh release upload failed: {e}");
+                process::exit(69);
+            }
+        }
+    } else if base_url.is_none() {
+        println!("note: artifact URLs are relative to update.json (serve dist/ as a directory, or pass --base-url / --publish)");
+    }
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+/// `owner/repo` de una URL de remoto de GitHub (ssh o https).
+fn github_slug(remote: &str) -> Option<String> {
+    let rest = remote.strip_prefix("git@github.com:").or_else(|| remote.strip_prefix("https://github.com/"))?;
+    Some(rest.trim_end_matches(".git").trim_end_matches('/').to_string())
+}
 
 fn cmd_serve(args: &[String]) {
     let mut dir: Option<String> = None;
@@ -3924,7 +4216,8 @@ fn legacy(rest: &[String]) {
         let moved = match first.as_str() {
             "publish" => Some("ray registry publish"),
             "yank" => Some("ray registry yank"),
-            "keygen" => Some("ray registry keygen"),
+            // M248: `ray keygen` vuelve a existir (la clave de firma de la APP; la de publicación
+            // de paquetes sigue en `ray registry keygen`), así que ya no redirige.
             "index-verify" => Some("ray registry verify"),
             "templ" => Some("ray build --templates-only"),
             _ => None,

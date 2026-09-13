@@ -3360,7 +3360,6 @@ fn moved_subcommands_point_to_their_new_home() {
     for (old, new) in [
         ("publish", "ray registry publish"),
         ("yank", "ray registry yank"),
-        ("keygen", "ray registry keygen"),
         ("index-verify", "ray registry verify"),
         ("templ", "ray build --templates-only"),
     ] {

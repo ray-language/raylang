@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray keygen` y `ray release`** (M248, IDEAS §89): el lado del publicador de `std/update`.
+  `keygen` crea la clave Ed25519 de firma de la app (`~/.ray/keys/<app-id>.key`) y deja la
+  pública en `[app] public_key`; `release` corre `ray bundle`, comprime el bundle en un zip con
+  un solo directorio raíz, escribe `update.json` (conservando los artefactos de otras
+  plataformas de la misma versión) y lo firma; `--publish` sube los tres archivos a la Release
+  de GitHub del tag. Se niega a firmar con una clave distinta de la horneada. Escrito en raylang
+  (programa embebido, como `ray serve`): zip/deflate, sha256 y Ed25519 son los de la stdlib.
 - **`std/update`: auto-actualización de apps** (M247, IDEAS §89). Contrato estándar: manifiesto
   `update.json` (artefactos por `<platform>-<arch>`, `sha256`, `size`, `min_version`) firmado con
   Ed25519 en `update.json.sig`, clave pública horneada en la app (`[app] public_key` del ray.toml),

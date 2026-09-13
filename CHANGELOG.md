@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/update`: auto-actualización de apps** (M247, IDEAS §89). Contrato estándar: manifiesto
+  `update.json` (artefactos por `<platform>-<arch>`, `sha256`, `size`, `min_version`) firmado con
+  Ed25519 en `update.json.sig`, clave pública horneada en la app (`[app] public_key` del ray.toml),
+  y la librería `check` → `download` (verifica sha256 y tamaño) → `apply` (swap atómico del
+  bundle en macOS/Linux; renombrado `*.old` + copia en Windows) → `relaunch`, con `current()`
+  honesto (`"dev"` bajo `ray run`) y `cleanup()`. Builtin **`arch()`** junto a `platform()`.
+  Tres motores; probado de punta a punta contra un servidor local (`tests/update_cli.rs`).
 - **`std/process`: relanzarse y desacoplar** (M246, IDEAS §89, ray-sublime "New Window").
   `Cmd.spawn_detached() -> Result<int, string>` lanza un hijo que **sobrevive al padre** (sesión
   propia, stdio al dispositivo nulo, sin Job Object ni atadura a `scope`; devuelve el pid) y

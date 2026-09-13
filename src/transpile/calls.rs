@@ -1104,6 +1104,14 @@ impl Transpiler {
             "platform" => {
                 out.push_str("Rc::<str>::from(std::env::consts::OS)");
             }
+            "arch" => {
+                out.push_str("Rc::<str>::from(std::env::consts::ARCH)");
+            }
+            // M247: la identidad de la app va HORNEADA (no hay ray.toml junto a un binario).
+            "app_info" if name.starts_with("__") => {
+                let [id, version, key] = crate::transpile::native_app_info();
+                write!(out, "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from({id:?}), Rc::<str>::from({version:?}), Rc::<str>::from({key:?})]))").unwrap();
+            }
             "args" => {
                 out.push_str(
                     "Rc::new(std::cell::RefCell::new(std::env::args().skip(1)\

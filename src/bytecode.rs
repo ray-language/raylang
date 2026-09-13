@@ -697,6 +697,11 @@ pub enum OpCode {
     /// M246: `__proc_spawn_detached(program, args, dir, env, env_clear)` → `["ok", pid]` /
     /// `["err", msg]`: el hijo sobrevive al padre (sesión propia, stdio a null, sin scope).
     ProcSpawnDetached,
+    /// M247: `arch()` → `"aarch64"` / `"x86_64"` (como lo nombra Rust); junto a `platform()`.
+    Arch,
+    /// M247: `__app_info()` → `[id, version, public_key]` de la app (del `ray.toml` bajo `ray run`;
+    /// horneado como literal en el nativo/bundle; los tres vacíos = programa suelto).
+    AppInfo,
     /// M246: `__self_command()` → la línea de comandos que reproduce este programa (la fija la
     /// toolchain: `[ray, "run", entrada]` bajo `ray run`; el nativo emite `[exe]`).
     SelfCommand,

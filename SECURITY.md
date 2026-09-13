@@ -129,6 +129,17 @@ La **única** vía por la que un programa raylang puede salirse de las garantía
 de Rust. El *playground* web y las builds `wasm32` **no** incluyen FFI (ni red/TLS/cripto), y un
 binario construido sin la feature `ffi` no puede cargar código nativo en absoluto.
 
+### Auto-actualización (`std/update`, M247)
+
+La confianza es la **clave pública horneada** en la app (`[app] public_key`), no el transporte:
+el manifiesto se acepta solo si su firma Ed25519 (`update.json.sig`, sobre los bytes crudos)
+verifica con esa clave; sin clave o sin firma, `check` falla. El artefacto se verifica por
+`sha256` y tamaño **antes** de escribirse en la instalación, y solo se aceptan `.zip` con un
+único directorio raíz y sin rutas `..`. La clave privada nunca pasa por raylang en la app: vive
+en la máquina que publica (`ray release`, M248). Lo que NO cubre: un atacante con la clave
+privada (rotarla = publicar una versión con la clave nueva mientras la vieja siga vigente) y la
+firma del binario ante el SO (Gatekeeper/SmartScreen: M249).
+
 ### Ejecutar procesos del sistema (`std/process`)
 
 `std/process` lanza procesos del SO, y está diseñado para que el error clásico no sea el camino

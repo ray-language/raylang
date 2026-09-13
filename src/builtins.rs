@@ -308,6 +308,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "push" => "Appends a value to the end of an array, in place (arrays have reference semantics).",
         "args" => "Returns the command-line arguments passed to the program (after the file path) as `[string]`.",
         "platform" => "Returns the operating system the program runs on, as Rust names it: `\"macos\"`, `\"linux\"`, `\"windows\"` (and `\"ios\"`, `\"android\"`, … where those apply).",
+        "arch" => "Returns the CPU architecture the program runs on, as Rust names it: `\"aarch64\"`, `\"x86_64\"`. With `platform()` it forms the `<platform>-<arch>` key of an update manifest.",
         // --- Strings ---
         "trim" => "Returns a copy of the string with leading and trailing whitespace removed.",
         "split" => "Splits a string by a separator and returns the parts as `[string]`.",
@@ -1422,6 +1423,23 @@ fn embed_config() -> &'static std::sync::OnceLock<(std::path::PathBuf, Vec<Strin
     static CONFIG: std::sync::OnceLock<(std::path::PathBuf, Vec<String>)> =
         std::sync::OnceLock::new();
     &CONFIG
+}
+
+/// M247: la arquitectura como la nombra Rust (`aarch64`, `x86_64`).
+pub fn arch_name() -> &'static str {
+    std::env::consts::ARCH
+}
+
+/// M247: `[id, version, public_key]` de la app bajo la VM/intérprete — lo fija la CLI desde el
+/// `ray.toml` (`[app] id`, `[package] version`, `[app] public_key`); sin fijar, tres vacíos.
+static APP_INFO: std::sync::OnceLock<[String; 3]> = std::sync::OnceLock::new();
+
+pub fn set_app_info(id: String, version: String, public_key: String) {
+    let _ = APP_INFO.set([id, version, public_key]);
+}
+
+pub fn app_info() -> [String; 3] {
+    APP_INFO.get().cloned().unwrap_or_default()
 }
 
 pub fn set_embed_config(root: std::path::PathBuf, dirs: Vec<String>) {
@@ -3886,6 +3904,16 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "platform", opcode: OpCode::Platform, check: |a| {
         nullary(a, "platform")?;
         Ok(Type::String)
+    } },
+    // M247: arch() -> string — la arquitectura de la CPU como la nombra Rust ("aarch64", "x86_64").
+    Builtin { name: "arch", opcode: OpCode::Arch, check: |a| {
+        nullary(a, "arch")?;
+        Ok(Type::String)
+    } },
+    // M247: __app_info() -> [string] ([id, version, public_key]); std/update → current()/app_id().
+    Builtin { name: "__app_info", opcode: OpCode::AppInfo, check: |a| {
+        nullary(a, "__app_info")?;
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     // M88.1: signals() -> Channel<int> — el canal de señales del SO (SIGTERM/SIGINT).
     // Singleton del proceso; compone con recv/select como cualquier canal. Solo VM.

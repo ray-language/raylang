@@ -3443,8 +3443,8 @@ la toolchain, con firma y notarización en `ray bundle`. Cuatro hitos:
   padre. Tres motores; Windows verificado en la VM.
 - **M247 — `std/update` y el manifiesto** (M). Formato `update.json`: `app` (id), `version`,
   `notes`, `min_version`, `artifacts` por `<platform>-<arch>` (`url`, `sha256`, `size`) y
-  `signature` Ed25519 sobre los bytes canónicos del manifiesto; clave pública incrustada en la
-  app (`[app] public_key` en ray.toml → bundle). Librería: `check(url, public_key) ->
+  firma Ed25519 en el archivo hermano `update.json.sig` (hex, sobre los BYTES del manifiesto: sin
+  canonicalizar); clave pública incrustada en la app (`[app] public_key` en ray.toml → bundle). Librería: `check(url, public_key) ->
   Result<Option<Release>, string>` (None = al día; compara con `current()`), `download(release)
   -> Result<Package, string>` (a temporal; verifica tamaño y sha256), `apply(pkg) -> Result<unit,
   string>` (macOS: `.app` nuevo junto al viejo + `rename` atómico; Windows: `app.exe →

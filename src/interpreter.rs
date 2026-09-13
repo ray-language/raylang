@@ -2201,6 +2201,11 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "platform" => Value::Str(crate::builtins::platform_name().to_string()),
+            "arch" => Value::Str(crate::builtins::arch_name().to_string()),
+            "__app_info" => {
+                let arr = crate::builtins::app_info().into_iter().map(Value::Str).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_desktop" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(k), Value::Str(p)) => match crate::builtins::ui_desktop(k, p) {

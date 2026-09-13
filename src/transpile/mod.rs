@@ -229,6 +229,18 @@ pub fn set_native_devtools(on: bool) {
     NATIVE_DEVTOOLS.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// M247: `[id, version, public_key]` que `ray build --native`/`ray bundle` hornean como literal
+/// de `__app_info()` (del `ray.toml` del proyecto); sin fijar, tres vacíos (programa suelto).
+static NATIVE_APP_INFO: std::sync::Mutex<Option<[String; 3]>> = std::sync::Mutex::new(None);
+
+pub fn set_native_app_info(id: String, version: String, public_key: String) {
+    *NATIVE_APP_INFO.lock().unwrap() = Some([id, version, public_key]);
+}
+
+pub fn native_app_info() -> [String; 3] {
+    NATIVE_APP_INFO.lock().unwrap().clone().unwrap_or_default()
+}
+
 pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();

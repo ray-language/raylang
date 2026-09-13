@@ -68,6 +68,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_spawn_pty", "__proc_resize",
     // M246: lanzamiento desacoplado y relanzamiento.
     "__proc_spawn_detached", "__self_command",
+    // M247: identidad de la app horneada.
+    "__app_info",
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_open_with", "__ui_eval_js", "__ui_next_event",
     // M225: reply/reply_json con el escape nativo.
@@ -79,7 +81,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // M239: barra de título en caliente.
     "__ui_set_titlebar",
     // M235: escritorio y portapapeles; `platform` es un literal del target.
-    "__ui_desktop", "__ui_clipboard", "platform",
+    "__ui_desktop", "__ui_clipboard", "platform", "arch",
     // M236: menús con posición y estado por tag.
     "__ui_menu_at", "__ui_set_menu_item",
     // M232: regex.onig (dialecto Oniguruma en ray_runtime).

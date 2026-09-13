@@ -3426,3 +3426,46 @@ str)` con el programa filtrado, o un índice a la tabla); (c) la caché de `s[i]
 que retiene el string) pasa a la fibra. Impacto: MEDIO (toca `gc`, `sched`, `transfer`, y un
 `unsafe` nuevo que hay que inventariar en SECURITY). Ganancia esperada: el +10–25 % restante en
 bucles de strings pequeños. Decisión del usuario; medir con `benchmarks/poly` antes y después.
+
+## 89. Auto-actualización de apps: `std/update`, manifiesto firmado y `ray release` (sep 2026) — 🚧 en curso
+
+Origen: ray-sublime pidió "New Window" y el análisis mostró que un proceso nuevo necesita dos
+cosas que raylang no tiene (saber cómo relanzarse y lanzar un hijo que sobreviva al padre); la
+misma pareja es la mitad de un updater, y **toda app de escritorio construida con raylang va a
+necesitar actualizarse**. Decisión (13 sep 2026, con el usuario): estandarizarlo en el lenguaje y
+la toolchain, con firma y notarización en `ray bundle`. Cuatro hitos:
+
+- **M246 — relanzarse y desacoplar** (S/M). `process.self_command() -> [string]`: la línea de
+  comandos que reproduce este programa (nativo/bundle → `[exe]`; `ray run`/`ray dev` →
+  `[ray, "run", entrada]`, honesto con el motor). `Cmd.spawn_detached() -> Result<int, string>`:
+  lanza y se olvida (pid); Unix `setsid` + stdio a `/dev/null` sin bombas ni grupo compartido;
+  Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` y sin Job Object: el hijo sobrevive al
+  padre. Tres motores; Windows verificado en la VM.
+- **M247 — `std/update` y el manifiesto** (M). Formato `update.json`: `app` (id), `version`,
+  `notes`, `min_version`, `artifacts` por `<platform>-<arch>` (`url`, `sha256`, `size`) y
+  `signature` Ed25519 sobre los bytes canónicos del manifiesto; clave pública incrustada en la
+  app (`[app] public_key` en ray.toml → bundle). Librería: `check(url, public_key) ->
+  Result<Option<Release>, string>` (None = al día; compara con `current()`), `download(release)
+  -> Result<Package, string>` (a temporal; verifica tamaño y sha256), `apply(pkg) -> Result<unit,
+  string>` (macOS: `.app` nuevo junto al viejo + `rename` atómico; Windows: `app.exe →
+  app.old.exe`, copiar, limpiar en el siguiente arranque; Linux: `rename` del directorio; bajo
+  `ray run` → `Err("not a bundled app")`), `relaunch()` (M246), `current() -> Version` (la
+  versión del bundle o `"dev"`). Política fuera: la app decide cuándo preguntar. Builtin
+  `arch()` junto a `platform()`. Primer consumidor: `ray upgrade` reescrito encima (dogfood).
+- **M248 — `ray release`** (M). `ray keygen` (clave Ed25519 en `~/.ray/keys/<app-id>`, la pública
+  a `ray.toml [app] public_key`); `ray release` empaqueta por plataforma con nombre canónico
+  (`<name>-<version>-<platform>-<arch>.zip`), calcula sha256, firma y escribe `update.json`;
+  `--publish` opcional vía `gh release`. Cero infraestructura: el contrato termina en "estos
+  archivos en una URL".
+- **M249 — firma y notarización en `ray bundle`** (M/L). macOS: `codesign` con Developer ID
+  (`[app] sign = "Developer ID Application: …"`, entitlements mínimos, hardened runtime) +
+  `notarytool submit --wait` + `stapler` (credenciales por keychain profile: `[app] notary =
+  "perfil"`); sin firma → ad-hoc como hoy, con aviso. Windows: `signtool` con certificado si `[app]
+  sign` lo indica (opcional; sin él, SmartScreen avisa). Necesario para que `update.apply` en
+  macOS 15+ no pida aprobación manual en cada versión.
+
+Fuera de v1: deltas binarios, canales beta (segundo manifiesto: trivial después), rollback
+automático (queda `app.old` en Windows y el bundle anterior renombrado en macOS/Linux hasta el
+siguiente arranque). Riesgos: notarización exige cuenta Apple Developer y red en el CI de la app;
+el reemplazo del bundle en macOS con la app abierta depende de que el Finder no la tenga
+"traducida" (rename del directorio padre es atómico en APFS).

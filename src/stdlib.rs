@@ -75,6 +75,7 @@ const MODULES: &[(&str, &str)] = &[
     // Compresión (M40.7c). `deflate` → `std/inflate` (namespacado en el ejemplo).
     ("std/inflate", include_str!("../examples/web/inflate.ray")),
     ("std/zip", include_str!("../std/zip.ray")), // M219
+    ("std/update", include_str!("../std/update.ray")), // M247
     ("std/deflate", include_str!("../examples/web/deflate.ray")),
     ("std/huffman", include_str!("../examples/web/huffman.ray")),
     // Procesamiento de texto/datos (M40.7d): librerías puras de `examples/stdlib/` (todas hojas).

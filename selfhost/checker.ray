@@ -2505,6 +2505,7 @@ fn is_known_builtin(name: string) -> bool {
         || name == "__exists"
         || name == "args"
         || name == "platform"
+        || name == "arch"
         || name == "__pop"
         || name == "char_code"
 }

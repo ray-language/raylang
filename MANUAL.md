@@ -1888,6 +1888,34 @@ let estado = p.wait();
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 
+### Auto-actualización (`std/update`)
+
+Publica dos archivos en una URL fija —`update.json` y su firma `update.json.sig`— y un `.zip`
+por plataforma; `ray release` (M248) los genera. En la app:
+
+```rust
+import std/update;
+
+fn main() -> int {
+    let _ = update.cleanup();                       // restos de la actualización anterior
+    match (update.check("https://example.dev/myapp/update.json")) {
+        Result.Ok(Option.Some(r)) => {
+            // La app decide: preguntar, o actualizar sola.
+            let pkg = update.download(r).unwrap();  // verifica sha256 y tamaño
+            let _ = update.apply(pkg).unwrap();     // swap atómico del bundle
+            let _ = update.relaunch();              // instancia nueva, desacoplada
+            return 0;
+        },
+        Result.Ok(Option.None) => { },              // al día
+        Result.Err(e) => eprint(e),                 // sin red, firma inválida, min_version…
+    }
+    0
+}
+```
+
+La clave pública va en `ray.toml` (`[app] public_key = "<hex>"`) y `ray bundle` la hornea; bajo
+`ray run` la app es `"dev"`: `check` funciona y `apply` devuelve `Err`.
+
 ### Criptografía y canal seguro (`std/crypto`)
 
 Para un Diffie-Hellman clásico, RSA o un JWT RS256 hace falta aritmética de enteros grandes:

@@ -75,6 +75,10 @@ pub struct Manifest {
     pub app_name: Option<String>,
     pub app_icon: Option<String>,
     pub app_id: Option<String>,
+    /// M247 (IDEAS §89): `[app] public_key` — la clave pública Ed25519 (hex) con la que la app
+    /// verifica el manifiesto de actualización (`std/update`); `ray bundle`/`build --native` la
+    /// hornean en el binario y `ray run` la lee de aquí. `None` = la app no verifica firmas.
+    pub app_public_key: Option<String>,
     /// M209 (feedback 26 de ray-remote): `[app.plist]` — claves extra que `ray bundle` vuelca tal
     /// cual al `Info.plist` del `.app` (macOS), en orden de declaración. `"texto"` → `<string>`,
     /// `true`/`false` sin comillas → `<true/>`/`<false/>`. Sin ella, `ray bundle` no daba forma de
@@ -142,6 +146,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_name = None;
     let mut app_icon = None;
     let mut app_id = None;
+    let mut app_public_key = None;
     let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
     let mut android_application_id = None;
     let mut app_description = None;
@@ -223,6 +228,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "name" => app_name = Some(as_string()?),
                 "icon" => app_icon = Some(as_string()?),
                 "id" => app_id = Some(as_string()?),
+                // M247: clave pública Ed25519 (hex) del manifiesto de actualización.
+                "public_key" => app_public_key = Some(as_string()?),
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
             "android" => {
@@ -274,6 +281,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_id,
         app_plist,
         app_description,
+        app_public_key,
     })
 }
 

@@ -1,0 +1,781 @@
+// std/update — auto-actualización de apps (M247, IDEAS §89).
+//
+// El contrato en tres capas: (1) un MANIFIESTO `update.json` publicado en una URL fija, firmado
+// con Ed25519 en un archivo hermano `update.json.sig` (hex de la firma sobre los BYTES del
+// manifiesto: sin canonicalización, sin ambigüedad); (2) esta librería, que verifica, descarga,
+// aplica y relanza; (3) `ray release` (M248), que produce manifiesto, firma y artefactos.
+//
+// Seguridad por diseño: la clave pública va HORNEADA en la app (`[app] public_key` del ray.toml
+// → `__app_info()`), así que ni TLS ni la URL son la confianza: un CDN o un repositorio
+// comprometido no puede colar un binario. El artefacto se verifica por `sha256` y tamaño antes
+// de tocar el disco de la instalación. Política fuera: la app decide cuándo preguntar.
+//
+// Bajo `ray run`/`ray dev` la app es "dev": `check` funciona (para probar el flujo) y `apply`
+// devuelve `Err` — honesto con el motor, como `process.self_command()`.
+
+import std/net;
+import std/fs;
+import std/zip;
+import std/crypto;
+import std/json;
+import std/process;
+import std/time;
+
+/// A published release, as described by a verified manifest for THIS platform.
+pub struct Release {
+    /// Version of the release (semver).
+    version: string,
+    /// URL of the release notes (may be empty).
+    notes: string,
+    /// Minimum installed version that can update directly to this one ("" = any).
+    min_version: string,
+    /// URL of the artifact for `<platform>-<arch>`.
+    url: string,
+    /// Hex SHA-256 of the artifact.
+    sha256: string,
+    /// Size of the artifact in bytes.
+    size: int,
+}
+
+/// A downloaded and verified artifact (a `.zip` holding the bundle's top-level directory).
+pub struct Package {
+    release: Release,
+    /// Path of the verified `.zip` in a temporary directory.
+    path: string,
+}
+
+// ── Identidad ──────────────────────────────────────────────────────────────────────────────
+
+/// The app id (`[app] id` of ray.toml, baked into a bundle); "" for a plain program.
+pub fn app_id() -> string {
+    __app_info()[0]
+}
+
+/// The running version: `[package] version` baked into the bundle, or `"dev"` under `ray run`.
+pub fn current() -> string {
+    let v = __app_info()[1];
+    if (v == "" || process.self_command().len() > 1) { "dev" } else { v }
+}
+
+/// The baked Ed25519 public key (hex), "" if the app does not verify manifests.
+pub fn public_key() -> string {
+    __app_info()[2]
+}
+
+/// The manifest key of this machine: `<platform>-<arch>` (e.g. `macos-aarch64`).
+pub fn platform_key() -> string {
+    platform() + "-" + arch()
+}
+
+// ── Versiones ──────────────────────────────────────────────────────────────────────────────
+
+fn version_parts(v: string) -> [int] {
+    var s = v;
+    if (s.starts_with("v")) {
+        s = s.substring(1, s.len());
+    }
+    // Un sufijo de pre-release (`1.2.0-beta.1`) no cuenta para el orden.
+    match (s.index_of("-")) {
+        Option.Some(i) => {
+            s = s.substring(0, i);
+        },
+        Option.None => { },
+    }
+    var out: [int] = [];
+    for p in s.split(".") {
+        out.push(parse_int(p.trim()).unwrap_or(0));
+    }
+    while (out.len() < 3) {
+        out.push(0);
+    }
+    out
+}
+
+/// Semver order: negative if `a < b`, zero if equal, positive if `a > b` (pre-release tags ignored).
+pub fn compare_versions(a: string, b: string) -> int {
+    let pa = version_parts(a);
+    let pb = version_parts(b);
+    var i = 0;
+    while (i < 3) {
+        if (pa[i] != pb[i]) {
+            return pa[i] - pb[i];
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// ── Hex ────────────────────────────────────────────────────────────────────────────────────
+
+fn hex_val(c: char) -> int {
+    let n = char_code(c);
+    if (n >= 48 && n <= 57) {
+        n - 48
+    } else if (n >= 97 && n <= 102) {
+        n - 87
+    } else if (n >= 65 && n <= 70) {
+        n - 55
+    } else {
+        0 - 1
+    }
+}
+
+/// Decodes a hex string into bytes (`None` on odd length or a non-hex digit).
+pub fn from_hex(s: string) -> Option<bytes> {
+    if (s.len() % 2 != 0) {
+        return Option.None;
+    }
+    var out: [int] = [];
+    var i = 0;
+    while (i < s.len()) {
+        let hi = hex_val(s[i]);
+        let lo = hex_val(s[i + 1]);
+        if (hi < 0 || lo < 0) {
+            return Option.None;
+        }
+        out.push(hi * 16 + lo);
+        i = i + 2;
+    }
+    Option.Some(bytes_of(out))
+}
+
+/// Encodes bytes as lowercase hex.
+pub fn to_hex(b: bytes) -> string {
+    let digits = "0123456789abcdef";
+    var out = "";
+    var i = 0;
+    while (i < b.len()) {
+        out = out + to_string(digits[b[i] / 16]) + to_string(digits[b[i] % 16]);
+        i = i + 1;
+    }
+    out
+}
+
+// ── HTTP GET mínimo (con redirecciones) ────────────────────────────────────────────────────
+//
+// `std/net` trae sockets y TLS pero no un cliente HTTP (vive en el paquete `net`); un updater
+// necesita un GET con redirecciones (GitHub Releases responde 302 al CDN) y nada más.
+
+struct Url {
+    host: string,
+    port: int,
+    path: string,
+    tls: bool,
+}
+
+fn parse_url(url: string) -> Result<Url, string> {
+    var rest = "";
+    var port = 80;
+    var tls = false;
+    if (url.starts_with("https://")) {
+        rest = url.substring(8, url.len());
+        port = 443;
+        tls = true;
+    } else if (url.starts_with("http://")) {
+        rest = url.substring(7, url.len());
+    } else {
+        return Result.Err("update: only http:// or https:// URLs are supported: " + url);
+    }
+    var hostport = rest;
+    var path = "/";
+    match (rest.index_of("/")) {
+        Option.Some(i) => {
+            hostport = rest.substring(0, i);
+            path = rest.substring(i, rest.len());
+        },
+        Option.None => { },
+    }
+    var host = hostport;
+    match (hostport.index_of(":")) {
+        Option.Some(i) => {
+            host = hostport.substring(0, i);
+            match (parse_int(hostport.substring(i + 1, hostport.len()))) {
+                Option.Some(n) => {
+                    port = n;
+                },
+                Option.None => {
+                    return Result.Err("update: invalid port in " + url);
+                },
+            }
+        },
+        Option.None => { },
+    }
+    Result.Ok(Url { host: host, port: port, path: path, tls: tls })
+}
+
+fn read_all(h: int, deadline: int) -> Result<bytes, string> {
+    var acc: bytes = b"";
+    while (true) {
+        let remaining = deadline - time.monotonic();
+        if (remaining <= 0) {
+            return Result.Err("update: read timeout");
+        }
+        net.set_read_timeout(h, remaining);
+        match (net.socket_read_bytes(h)) {
+            Result.Ok(chunk) => {
+                if (chunk.len() == 0) {
+                    return Result.Ok(acc);
+                }
+                acc = acc + chunk;
+            },
+            Result.Err(e) => {
+                return Result.Err("update: " + e);
+            },
+        }
+    }
+    Result.Ok(acc)
+}
+
+fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
+    var n = 0;
+    var i = start;
+    while (i < end) {
+        let c = b[i];
+        if (c == 59) {
+            return n;
+        }
+        let v = if (c >= 48 && c <= 57) {
+            c - 48
+        } else if (c >= 97 && c <= 102) {
+            c - 87
+        } else if (c >= 65 && c <= 70) {
+            c - 55
+        } else {
+            0 - 1
+        };
+        if (v < 0) {
+            return n;
+        }
+        n = n * 16 + v;
+        i = i + 1;
+    }
+    n
+}
+
+fn decode_chunked(body: bytes) -> Result<bytes, string> {
+    let crlf = b"\r\n";
+    var out: bytes = b"";
+    var pos = 0;
+    while (pos < body.len()) {
+        let line_end = match (body.sub_bytes(pos, body.len()).index_of(crlf)) {
+            Option.Some(i) => pos + i,
+            Option.None => 0 - 1,
+        };
+        if (line_end < 0) {
+            return Result.Err("update: malformed chunked body");
+        }
+        let size = parse_chunk_size(body, pos, line_end);
+        pos = line_end + 2;
+        if (size <= 0) {
+            return Result.Ok(out);
+        }
+        if (pos + size > body.len()) {
+            return Result.Err("update: truncated chunk");
+        }
+        out = out + body.sub_bytes(pos, pos + size);
+        pos = pos + size + 2;
+    }
+    Result.Ok(out)
+}
+
+// (status, cabeceras en minúsculas, cuerpo) de una respuesta completa.
+fn parse_response(raw: bytes) -> Result<(int, Map<string, string>, bytes), string> {
+    let sep = match (raw.index_of(b"\r\n\r\n")) {
+        Option.Some(i) => i,
+        Option.None => 0 - 1,
+    };
+    if (sep < 0) {
+        return Result.Err("update: malformed HTTP response");
+    }
+    let head = match (from_utf8(raw.sub_bytes(0, sep))) {
+        Result.Ok(t) => t,
+        Result.Err(_) => "",
+    };
+    let lines = head.split("\r\n");
+    let parts = lines[0].split(" ");
+    if (parts.len() < 2) {
+        return Result.Err("update: malformed status line");
+    }
+    let status = parse_int(parts[1]).unwrap_or(0);
+    var headers: Map<string, string> = Map.new();
+    var i = 1;
+    while (i < lines.len()) {
+        match (lines[i].index_of(":")) {
+            Option.Some(c) => {
+                headers.insert(
+                    lines[i].substring(0, c).trim().to_lower(),
+                    lines[i].substring(c + 1, lines[i].len()).trim()
+                );
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    var body = raw.sub_bytes(sep + 4, raw.len());
+    if (headers.get_or("transfer-encoding", "").to_lower() == "chunked") {
+        body = decode_chunked(body)?;
+    }
+    Result.Ok((status, headers, body))
+}
+
+fn fetch_once(url: string) -> Result<(int, Map<string, string>, bytes), string> {
+    let u = parse_url(url)?;
+    let h = if (u.tls) {
+        net.tls_connect(u.host, u.port)?
+    } else {
+        net.tcp_connect(u.host, u.port)?
+    };
+    let port_suffix = if ((u.tls && u.port == 443) || (!u.tls && u.port == 80)) {
+        ""
+    } else {
+        ":" + to_string(u.port)
+    };
+    let req = "GET "
+        + u.path
+        + " HTTP/1.1\r\nHost: "
+        + u.host
+        + port_suffix
+        + "\r\nUser-Agent: raylang-update\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    match (net.socket_write(h, req)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            close(h);
+            return Result.Err("update: " + e);
+        },
+    }
+    let raw = read_all(h, time.monotonic() + 60000);
+    close(h);
+    parse_response(raw?)
+}
+
+fn absolutize(base: string, loc: string) -> string {
+    if (loc.starts_with("http://") || loc.starts_with("https://")) {
+        return loc;
+    }
+    match (parse_url(base)) {
+        Result.Ok(u) => {
+            let scheme = if (u.tls) { "https://" } else { "http://" };
+            scheme
+                + u.host
+                + ":"
+                + to_string(u.port) + if (loc.starts_with("/")) {
+                loc
+            } else {
+                "/" + loc
+            }
+        },
+        Result.Err(_) => loc,
+    }
+}
+
+/// GET with up to 5 redirects; `Ok(body)` on 200, `Err` otherwise. Good enough for a manifest
+/// and an artifact on any static host or GitHub Releases (which redirects to its CDN).
+pub fn http_get(url: string) -> Result<bytes, string> {
+    var current = url;
+    var hops = 0;
+    while (hops <= 5) {
+        let r = fetch_once(current)?;
+        let status = r.0;
+        if (status == 200) {
+            return Result.Ok(r.2);
+        }
+        if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+            // Anotado: el transpilador nativo no infiere el Map desde un campo de tupla.
+            let headers: Map<string, string> = r.1;
+            match (headers.get("location")) {
+                Option.Some(loc) => {
+                    current = absolutize(current, loc);
+                },
+                Option.None => {
+                    return Result.Err("update: redirect without Location from " + current);
+                },
+            }
+            hops = hops + 1;
+        } else {
+            return Result.Err("update: HTTP " + to_string(status) + " from " + current);
+        }
+    }
+    Result.Err("update: too many redirects")
+}
+
+// ── Manifiesto ─────────────────────────────────────────────────────────────────────────────
+
+/// Verifies the Ed25519 signature (hex, from `update.json.sig`) of the raw manifest bytes with
+/// the public key (hex). An empty key or signature fails: an unsigned manifest is never trusted.
+pub fn verify_signature(manifest: bytes, signature_hex: string, public_key_hex: string) -> bool {
+    match (from_hex(public_key_hex.trim())) {
+        Option.Some(pk) => {
+            match (from_hex(signature_hex.trim())) {
+                Option.Some(sig) => pk.len() == 32 && sig.len() == 64 && crypto.ed25519_verify(pk, manifest, sig),
+                Option.None => false,
+            }
+        },
+        Option.None => false,
+    }
+}
+
+/// Parses a (verified) manifest and picks the artifact for `key` (`<platform>-<arch>`).
+/// `Err` if the manifest is malformed or has no artifact for this platform.
+pub fn parse_manifest(text: string, key: string) -> Result<Release, string> {
+    let j = match (json.parse(text)) {
+        Result.Ok(j) => j,
+        Result.Err(e) => {
+            return Result.Err("update: malformed manifest: " + e);
+        },
+    };
+    let version = match (json.get_string(j, "version")) {
+        Option.Some(v) => v,
+        Option.None => {
+            return Result.Err("update: manifest without 'version'");
+        },
+    };
+    let artifacts = match (json.get_object(j, "artifacts")) {
+        Option.Some(m) => m,
+        Option.None => {
+            return Result.Err("update: manifest without 'artifacts'");
+        },
+    };
+    let art = match (artifacts.get(key)) {
+        Option.Some(a) => a,
+        Option.None => {
+            return Result.Err("update: no artifact for " + key + " in version " + version);
+        },
+    };
+    let url = json.get_string(art, "url").unwrap_or("");
+    let sha = json.get_string(art, "sha256").unwrap_or("");
+    let size = json.get_int(art, "size").unwrap_or(0);
+    if (url == "" || sha.len() != 64 || size <= 0) {
+        return Result.Err("update: artifact for " + key + " needs url, sha256 (hex) and size");
+    }
+    Result.Ok(
+        Release {
+            version: version,
+            notes: json.get_string(j, "notes").unwrap_or(""),
+            min_version: json.get_string(j, "min_version").unwrap_or(""),
+            url: url,
+            sha256: sha.to_lower(),
+            size: size
+        }
+    )
+}
+
+/// Fetches `manifest_url` and `manifest_url + ".sig"`, verifies the signature with the baked
+/// public key (or `key` if given), and compares with `current()`: `Ok(None)` = up to date;
+/// `Ok(Some(release))` = a newer version for this platform; `Err` = could not check, the
+/// manifest is not trusted, or the installed version is older than `min_version`.
+pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, string> {
+    let pk = if (key != "") { key } else { public_key() };
+    if (pk == "") {
+        return Result.Err("update: no public key (set [app] public_key in ray.toml)");
+    }
+    let manifest = http_get(manifest_url)?;
+    let sig = http_get(manifest_url + ".sig")?;
+    let sig_hex = match (from_utf8(sig)) {
+        Result.Ok(t) => t.trim(),
+        Result.Err(_) => "",
+    };
+    if (!verify_signature(manifest, sig_hex, pk)) {
+        return Result.Err(
+            "update: the manifest signature does not verify (wrong key, tampered or unsigned)"
+        );
+    }
+    let text = match (from_utf8(manifest)) {
+        Result.Ok(t) => t,
+        Result.Err(e) => {
+            return Result.Err("update: manifest is not UTF-8: " + e);
+        },
+    };
+    let r = parse_manifest(text, platform_key())?;
+    let cur = current();
+    if (cur != "dev" && compare_versions(r.version, cur) <= 0) {
+        return Result.Ok(Option.None);
+    }
+    if (cur != "dev" && r.min_version != "" && compare_versions(cur, r.min_version) < 0) {
+        return Result.Err(
+            "update: version "
+                + r.version
+                + " requires at least "
+                + r.min_version
+                + " installed (this is "
+                + cur
+                + ")"
+        );
+    }
+    Result.Ok(Option.Some(r))
+}
+
+/// `check_with(url, "")`: the baked public key.
+pub fn check(manifest_url: string) -> Result<Option<Release>, string> {
+    check_with(manifest_url, "")
+}
+
+// ── Descarga ───────────────────────────────────────────────────────────────────────────────
+
+/// Downloads the artifact to a temporary directory and verifies size and SHA-256 BEFORE
+/// returning it: a `Package` is always a verified one.
+pub fn download(r: Release) -> Result<Package, string> {
+    let data = http_get(r.url)?;
+    verify_package_bytes(r, data)?;
+    let dir = fs.make_temp_dir("ray-update")?;
+    let path = dir + "/" + file_name_of(r.url);
+    fs.write_file_bytes(path, data)?;
+    Result.Ok(Package { release: r, path: path })
+}
+
+/// Verifies `data` against the release's size and sha256 (what `download` does before saving);
+/// `Ok(size)` when it matches.
+pub fn verify_package_bytes(r: Release, data: bytes) -> Result<int, string> {
+    if (data.len() != r.size) {
+        return Result.Err(
+            "update: artifact size is " + to_string(data.len()) + ", expected " + to_string(r.size)
+        );
+    }
+    let digest = to_hex(crypto.sha256(data));
+    if (digest != r.sha256) {
+        return Result.Err("update: artifact sha256 mismatch (" + digest + " vs " + r.sha256 + ")");
+    }
+    Result.Ok(data.len())
+}
+
+fn file_name_of(url: string) -> string {
+    var name = url;
+    var again = true;
+    while (again) {
+        match (name.index_of("/")) {
+            Option.Some(i) => {
+                name = name.substring(i + 1, name.len());
+            },
+            Option.None => {
+                again = false;
+            },
+        }
+    }
+    match (name.index_of("?")) {
+        Option.Some(i) => name.substring(0, i),
+        Option.None => if (name == "") { "artifact.zip" } else { name },
+    }
+}
+
+// ── Instalación ────────────────────────────────────────────────────────────────────────────
+
+/// Where this app is installed, derived from the running executable: the `.app` on macOS, the
+/// bundle directory on Linux/Windows. `None` under `ray run` (nothing to replace).
+pub fn install_root() -> Option<string> {
+    let c = process.self_command();
+    if (c.len() != 1 || current() == "dev") {
+        return Option.None;
+    }
+    let exe = c[0];
+    if (platform() == "macos") {
+        match (exe.index_of(".app/Contents/MacOS/")) {
+            Option.Some(i) => Option.Some(exe.substring(0, i + 4)),
+            Option.None => Option.Some(parent_of(exe)),
+        }
+    } else {
+        Option.Some(parent_of(exe))
+    }
+}
+
+fn parent_of(path: string) -> string {
+    var p = path.replace("\\", "/");
+    var last = 0 - 1;
+    var i = 0;
+    while (i < p.len()) {
+        if (p[i] == '/') {
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (last <= 0) { "." } else { p.substring(0, last) }
+}
+
+fn base_name(path: string) -> string {
+    let p = path.replace("\\", "/");
+    match (p.index_of("/")) {
+        Option.Some(_) => {
+            let parent = parent_of(p);
+            p.substring(parent.len() + 1, p.len())
+        },
+        Option.None => p,
+    }
+}
+
+// Extrae el zip a `dest` (creándolo); rechaza rutas con `..` o absolutas. Devuelve el nombre del
+// directorio raíz del archivo (todas las entradas deben colgar de uno solo).
+fn extract(zip_path: string, dest: string) -> Result<string, string> {
+    let data = fs.read_file_bytes(zip_path)?;
+    let a = zip.open(data)?;
+    var top = "";
+    for e in zip.entries(a) {
+        let name = e.name.replace("\\", "/");
+        if (name.starts_with("/") || name.contains("../") || name == "..") {
+            return Result.Err("update: unsafe path in artifact: " + name);
+        }
+        let first = match (name.index_of("/")) {
+            Option.Some(i) => name.substring(0, i),
+            Option.None => "",
+        };
+        if (first == "") {
+            return Result.Err(
+                "update: the artifact must contain a single top-level directory (found "
+                    + name
+                    + ")"
+            );
+        }
+        if (top == "") {
+            top = first;
+        } else if (top != first) {
+            return Result.Err(
+                "update: the artifact must contain a single top-level directory ("
+                    + top
+                    + " and "
+                    + first
+                    + ")"
+            );
+        }
+        let target = dest + "/" + name;
+        if (name.ends_with("/")) {
+            let _ = fs.mkdir(target);
+        } else {
+            let _ = fs.mkdir(parent_of(target));
+            let content = zip.read_entry(a, e)?;
+            fs.write_file_bytes(target, content)?;
+            // Los ejecutables de un bundle: el zip no conserva modos; `Contents/MacOS/*` y el
+            // binario de la raíz del directorio (Linux) vuelven a ser ejecutables.
+            if (platform() != "windows"
+                && (name.contains("/Contents/MacOS/") || parent_of(name) == top)) {
+                let _ = fs.chmod(target, 493);
+            }
+        }
+    }
+    if (top == "") {
+        return Result.Err("update: empty artifact");
+    }
+    Result.Ok(top)
+}
+
+/// Installs the package over `root` (the path `install_root()` returns): extracts next to it,
+/// then swaps atomically — macOS/Linux rename the whole directory (the running app keeps its
+/// open files; the previous one stays as `<root>.old` until `cleanup()`); Windows cannot
+/// replace a running `.exe`, so files in use are renamed to `*.old` and the new ones copied in
+/// place. Returns the installed root. Call `relaunch()` afterwards.
+pub fn apply_at(p: Package, root: string) -> Result<string, string> {
+    let parent = parent_of(root);
+    let staging = root + ".new";
+    let _ = fs.remove_all(staging);
+    fs.mkdir(staging)?;
+    let top = extract(p.path, staging)?;
+    let fresh = staging + "/" + top;
+    if (platform() == "windows") {
+        // En su sitio: lo que esté en uso no se puede borrar pero SÍ renombrar.
+        replace_tree(fresh, root)?;
+        let _ = fs.remove_all(staging);
+        return Result.Ok(root);
+    }
+    let old = root + ".old";
+    let _ = fs.remove_all(old);
+    fs.rename(root, old)?;
+    match (fs.rename(fresh, root)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            // Deshacer: el viejo vuelve a su sitio.
+            let _ = fs.rename(old, root);
+            let _ = fs.remove_all(staging);
+            return Result.Err("update: could not install into " + parent + ": " + e);
+        },
+    }
+    let _ = fs.remove_all(staging);
+    Result.Ok(root)
+}
+
+// Windows: copia `src` sobre `dst` archivo a archivo; un destino que no se deja sobrescribir (el
+// .exe en ejecución, una DLL cargada) se renombra a `<archivo>.old` antes. Devuelve archivos copiados.
+fn replace_tree(src: string, dst: string) -> Result<int, string> {
+    var copied = 0;
+    let _ = fs.mkdir(dst);
+    for name in fs.list_dir(src)? {
+        let s = src + "/" + name;
+        let d = dst + "/" + name;
+        if (fs.is_dir(s)) {
+            copied = copied + replace_tree(s, d)?;
+        } else {
+            if (fs.exists(d)) {
+                match (fs.remove_file(d)) {
+                    Result.Ok(_) => { },
+                    Result.Err(_) => {
+                        let _ = fs.remove_file(d + ".old");
+                        fs.rename(d, d + ".old")?;
+                    },
+                }
+            }
+            fs.copy_file(s, d)?;
+            copied = copied + 1;
+        }
+    }
+    Result.Ok(copied)
+}
+
+/// `apply_at(p, install_root())`; `Err` under `ray run` (nothing to replace).
+pub fn apply(p: Package) -> Result<string, string> {
+    match (install_root()) {
+        Option.Some(root) => apply_at(p, root),
+        Option.None => Result.Err("update: not a bundled app (running under ray run/dev); nothing to replace"),
+    }
+}
+
+/// Removes what a previous `apply` left behind (`<root>.old`, `*.old` files). Call it at
+/// startup: right after an update the old files may still be in use by the exiting process.
+pub fn cleanup() -> int {
+    var removed = 0;
+    match (install_root()) {
+        Option.Some(root) => {
+            if (fs.exists(root + ".old")) {
+                match (fs.remove_all(root + ".old")) {
+                    Result.Ok(_) => {
+                        removed = removed + 1;
+                    },
+                    Result.Err(_) => { },
+                }
+            }
+            removed = removed + remove_old_files(root);
+        },
+        Option.None => { },
+    }
+    removed
+}
+
+fn remove_old_files(dir: string) -> int {
+    var removed = 0;
+    match (fs.list_dir(dir)) {
+        Result.Ok(names) => {
+            for name in names {
+                let p = dir + "/" + name;
+                if (fs.is_dir(p)) {
+                    removed = removed + remove_old_files(p);
+                } else if (name.ends_with(".old")) {
+                    match (fs.remove_file(p)) {
+                        Result.Ok(_) => {
+                            removed = removed + 1;
+                        },
+                        Result.Err(_) => { },
+                    }
+                }
+            }
+        },
+        Result.Err(_) => { },
+    }
+    removed
+}
+
+/// Starts a fresh instance of this app (detached: it outlives us) and returns its pid; the caller
+/// then exits. Under `ray run` it relaunches `ray run <entry>`, so the flow can be rehearsed.
+pub fn relaunch() -> Result<int, string> {
+    let c = process.self_command();
+    var rest: [string] = [];
+    var i = 1;
+    while (i < c.len()) {
+        rest.push(c[i]);
+        i = i + 1;
+    }
+    process.cmd(c[0], rest).spawn_detached()
+}

@@ -3397,6 +3397,14 @@ impl<'a> Vm<'a> {
                 OpCode::Platform => {
                     self.push(HeapValue::Str(crate::builtins::platform_name().into()));
                 }
+                OpCode::Arch => {
+                    self.push(HeapValue::Str(crate::builtins::arch_name().into()));
+                }
+                OpCode::AppInfo => {
+                    let items: Vec<HeapValue> = crate::builtins::app_info().into_iter().map(|a| HeapValue::Str(a.into())).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(items));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiDesktop => {
                     let HeapValue::Str(path) = self.pop() else {
                         unreachable!("the checker guarantees a string");

@@ -1720,6 +1720,7 @@ fn cmd_bundle(args: &[String]) {
     }
     // M186: el binario que empaquetamos es el que el build ESCRIBIÓ (en Windows, `bin.exe`), no el
     // nombre que le pedimos.
+    configure_native_app_info(&path); // M247
     let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {
@@ -2112,6 +2113,7 @@ fn cmd_build(args: &[String]) {
     check_or_exit(&mut program, &locate, multi);
     if native {
         let embed = collect_embed(&path, embed_arg.as_deref());
+        configure_native_app_info(&path); // M247
         build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed, lib_mode);
         return;
     }
@@ -4224,11 +4226,34 @@ pub(crate) fn configure_embed(entry: &str) {
         _ => std::path::PathBuf::from("."),
     };
     let dir = dir.canonicalize().unwrap_or(dir);
-    if let Ok(Some(m)) = Manifest::load(&dir)
-        && !m.native_embed.is_empty()
-    {
-        let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
-        crate::builtins::set_embed_config(root, m.native_embed);
+    if let Ok(Some(m)) = Manifest::load(&dir) {
+        // M247: identidad de la app para std/update (`current()`, `app_id()`, clave pública).
+        crate::builtins::set_app_info(
+            m.app_id.clone().unwrap_or_default(),
+            m.version.clone(),
+            m.app_public_key.clone().unwrap_or_default(),
+        );
+        if !m.native_embed.is_empty() {
+            let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
+            crate::builtins::set_embed_config(root, m.native_embed);
+        }
+    }
+}
+
+/// M247: hornea `[id, version, public_key]` del `ray.toml` de la entrada en el binario nativo
+/// (`__app_info()`); sin manifiesto, un programa suelto (tres vacíos).
+pub(crate) fn configure_native_app_info(entry: &str) {
+    let dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+    if let Ok(Some(m)) = Manifest::load(&dir) {
+        crate::transpile::set_native_app_info(
+            m.app_id.clone().unwrap_or_default(),
+            m.version.clone(),
+            m.app_public_key.clone().unwrap_or_default(),
+        );
     }
 }
 

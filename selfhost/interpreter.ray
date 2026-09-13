@@ -774,6 +774,7 @@ pub fn is_builtin(name: string) -> bool {
         || name == "exists"
         || name == "args"
         || name == "platform"
+        || name == "arch"
         || name == "__pop"
         || name == "char_code"
 }
@@ -1084,6 +1085,9 @@ pub fn dispatch_builtin(
     }
     if (name == "platform") {
         return Result.Ok(Value.VStr(platform()));
+    }
+    if (name == "arch") {
+        return Result.Ok(Value.VStr(arch()));
     }
     if (name == "__pop") {
         // Muta el arreglo compartido quitando el último (vía el `pop` del host); devuelve [] o [x].

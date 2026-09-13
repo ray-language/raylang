@@ -13294,3 +13294,30 @@ recomendación sigue siendo multi-ventana en el mismo proceso, y esto es el puen
 del updater. Test en tres motores (`tests/process_detached_cli.rs`): el hijo escribe un marcador
 después de que el padre haya terminado.
 
+## 236. M247 — `std/update`: el contrato de auto-actualización (sep 2026)
+
+Segundo hito de IDEAS §89. Lo que estandariza no es una librería sino un **formato** y una
+**cadena de confianza**; la librería es la consecuencia.
+
+**Decisiones.** (1) Firma **separada**, sobre los bytes crudos: `update.json.sig` (hex Ed25519)
+al lado de `update.json`. Firmar "el manifiesto sin el campo signature" exige canonicalizar JSON
+en tres motores y en la toolchain; firmar bytes no exige nada y cualquier `sha256sum`/`openssl`
+lo reproduce. (2) La clave pública viaja **horneada** (`[app] public_key` → `__app_info()`): la
+confianza no depende de TLS ni de la URL, un CDN o un repo comprometidos no pueden colar un
+binario; sin clave, `check` falla en vez de aceptar sin firma. (3) `current()` honesto: bajo
+`ray run` es `"dev"` y `apply` es `Err`, pero `check`/`download` funcionan para ensayar el flujo;
+`__app_info` lo fija la CLI desde el ray.toml en la VM y el transpilador lo hornea como literal
+(mismo patrón que devtools, §221). (4) El GET va dentro de `std/update` (decisión del usuario,
+opción 1 de tres): `std/net` no tiene cliente HTTP y el paquete `net` no puede ser dependencia de
+la stdlib; son 120 líneas (HTTP/1.1, `Connection: close`, chunked, 5 redirecciones) — lo justo
+para GitHub Releases. (5) `apply` por plataforma: macOS y Linux extraen junto al bundle y hacen
+`rename` atómico (la app en ejecución conserva sus archivos abiertos; el anterior queda en
+`<root>.old` hasta `cleanup()`); Windows no puede borrar un `.exe` en uso pero sí renombrarlo, así
+que renombra a `*.old` y copia encima. El artefacto es un `.zip` con un único directorio raíz y
+rutas sin `..`; el zip no conserva modos, así que `Contents/MacOS/*` y el binario raíz vuelven a
+`0755`. (6) Hex y no base64 para `sha256` y firma: raylang no tiene base64 en `std`, y hex no
+tiene variantes. (7) La migración de `ray upgrade` queda para M248: hasta que `ray release`
+genere un manifiesto firmado de raylang no hay nada honesto que consumir. Gotcha del nativo
+encontrado de paso: `r.1.get(k)` sobre una tupla con `Map` no infiere el tipo en el transpilador
+(cae en stub); anotar el `let` lo resuelve.
+

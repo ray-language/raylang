@@ -1924,6 +1924,12 @@ ray release -o dist             # por plataforma: zip del bundle + update.json +
 ray release -o dist --publish   # además: gh release create/upload; URLs a releases/download/<tag>/
 ```
 
+Para que macOS 15+ abra la app actualizada sin pedir aprobación, el bundle va firmado y
+notarizado (M249): en `ray.toml`, `[app] sign = "Developer ID Application: Tu Nombre (TEAM)"` y
+`[app] notary = "perfil"` (creado una vez con `xcrun notarytool store-credentials perfil`);
+`ray bundle`/`ray release` firman con hardened runtime, verifican, notarizan y grapan. En Windows,
+`[app] sign` es el sujeto del certificado o un `.pfx` para `signtool`.
+
 `ray release` conserva en `update.json` los artefactos de otras plataformas de la misma versión,
 así que se corre en cada máquina (o job de CI, con `RAY_SIGNING_KEY`) sobre el mismo `dist/`. La
 app consulta un URL fijo: con GitHub Releases,

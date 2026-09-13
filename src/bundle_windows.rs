@@ -26,7 +26,7 @@ use std::process::Command;
 /// Empaqueta `bin` (el binario nativo ya construido) como `<out_dir>\<name>\`. Devuelve el
 /// directorio del bundle; los fallos que impiden el bundle son `Err` (el CLI sale 74); el icono
 /// y el acceso directo son best-effort con aviso, como el codesign ad-hoc de macOS.
-pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>, icon: Option<&Path>, bin: &Path) -> Result<PathBuf, String> {
+pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>, icon: Option<&Path>, bin: &Path, sign: Option<&str>) -> Result<PathBuf, String> {
     let dir = out_dir.join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("could not create '{}': {e}", dir.display()))?;
@@ -49,8 +49,50 @@ pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>
     if let Err(e) = write_shortcut(&dir, name, &exe) {
         eprintln!("bundle: warning: could not write the shortcut ({e}); continuing without it");
     }
+    // M249: firma Authenticode con signtool (sujeto del certificado en el almacén, o un .pfx).
+    if let Some(identity) = sign {
+        sign_exe(&exe, identity)?;
+        println!("ok: signed '{}' ({identity})", exe.display());
+    }
     println!("ok: bundle '{}'", dir.display());
     Ok(dir)
+}
+
+/// `signtool sign /fd SHA256 /td SHA256 /tr <timestamp> [/f x.pfx /p $RAY_SIGN_PFX_PASSWORD | /n sujeto] exe`.
+/// signtool viene con el Windows SDK; se busca en el PATH y en las rutas típicas del SDK.
+fn sign_exe(exe: &Path, identity: &str) -> Result<(), String> {
+    let signtool = find_signtool().ok_or("signtool.exe not found (install the Windows SDK or put signtool on PATH)")?;
+    let mut cmd = Command::new(signtool);
+    cmd.args(["sign", "/fd", "SHA256", "/td", "SHA256", "/tr", "http://timestamp.digicert.com"]);
+    if identity.to_ascii_lowercase().ends_with(".pfx") {
+        cmd.args(["/f", identity]);
+        if let Ok(p) = std::env::var("RAY_SIGN_PFX_PASSWORD") {
+            cmd.args(["/p", &p]);
+        }
+    } else {
+        cmd.args(["/n", identity]);
+    }
+    cmd.arg(exe);
+    let out = cmd.output().map_err(|e| format!("could not run signtool: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("signtool failed:\n{}{}", String::from_utf8_lossy(&out.stdout).trim(), String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(())
+}
+
+fn find_signtool() -> Option<PathBuf> {
+    if let Ok(out) = Command::new("where").arg("signtool").output()
+        && out.status.success()
+        && let Some(line) = String::from_utf8_lossy(&out.stdout).lines().next()
+        && !line.trim().is_empty()
+    {
+        return Some(PathBuf::from(line.trim()));
+    }
+    let kits = PathBuf::from(std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:/Program Files (x86)".into())).join("Windows Kits/10/bin");
+    let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+    let mut versions: Vec<PathBuf> = fs::read_dir(&kits).ok()?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    versions.sort();
+    versions.into_iter().rev().map(|v| v.join(arch).join("signtool.exe")).find(|p| p.is_file())
 }
 
 const RT_ICON: u16 = 3;

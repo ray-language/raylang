@@ -101,7 +101,7 @@ Project:
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
+  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -446,9 +446,12 @@ fn cmd_release(args: &[String]) {
     let (key_arg, rest) = take_flag_value(&rest, "--key");
     let (without, rest) = take_flag_value(&rest, "--without");
     let (tag_arg, rest) = take_flag_value(&rest, "--tag");
+    let (sign_arg, rest) = take_flag_value(&rest, "--sign");
+    let (notary_arg, rest) = take_flag_value(&rest, "--notary");
+    let (entitlements_arg, rest) = take_flag_value(&rest, "--entitlements");
     let (publish, rest) = take_flag_bool(&rest, "--publish");
     if rest.len() > 1 || rest.iter().any(|a| a.starts_with("--")) {
-        eprintln!("usage: ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX] [--without list] [--publish] [--tag vX.Y.Z]");
+        eprintln!("usage: ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX] [--without list] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist] [--publish] [--tag vX.Y.Z]");
         process::exit(64);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -509,6 +512,11 @@ fn cmd_release(args: &[String]) {
     bundle.arg("bundle").arg(&entry).arg("-o").arg(&work);
     if let Some(w) = &without {
         bundle.arg("--without").arg(w);
+    }
+    for (flag, v) in [("--sign", &sign_arg), ("--notary", &notary_arg), ("--entitlements", &entitlements_arg)] {
+        if let Some(v) = v {
+            bundle.arg(flag).arg(v);
+        }
     }
     let status = bundle.status().unwrap_or_else(|e| {
         eprintln!("release: could not run ray bundle: {e}");
@@ -1644,7 +1652,11 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--devtools]\n\
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--devtools] \
+[--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
+  --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
+password in RAY_SIGN_PFX_PASSWORD); --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
+Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
@@ -1656,6 +1668,10 @@ fn cmd_bundle(args: &[String]) {
     // ignoraba en silencio (`--bogus` hacía un bundle normal; `--help` compilaba 17 s en release
     // y no enseñaba nada). Un flag que no se conoce es error 64 con el uso; `--help` imprime el uso.
     let mut name_arg: Option<String> = None;
+    // M249: firma y notarización.
+    let mut sign_arg: Option<String> = None;
+    let mut notary_arg: Option<String> = None;
+    let mut entitlements_arg: Option<String> = None;
     let mut icon_arg: Option<String> = None;
     let mut id_arg: Option<String> = None;
     let mut out_arg: Option<String> = None;
@@ -1698,6 +1714,9 @@ fn cmd_bundle(args: &[String]) {
             "--id" => value(&mut id_arg, &mut i),
             "-o" => value(&mut out_arg, &mut i),
             "--without" => value(&mut without_arg, &mut i),
+            "--sign" => value(&mut sign_arg, &mut i),
+            "--notary" => value(&mut notary_arg, &mut i),
+            "--entitlements" => value(&mut entitlements_arg, &mut i),
             "--ios-target" => value(&mut ios_target_arg, &mut i),
             "--android-abi" => value(&mut android_abi_arg, &mut i),
             "--ios" => {
@@ -2028,12 +2047,15 @@ fn cmd_bundle(args: &[String]) {
                 crate::manifest::PlistValue::Str(format!("{name} connects to devices on your local network.")),
             ));
         }
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &tmp_bin);
+        let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &tmp_bin, &signing);
     } else if cfg!(unix) {
         bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
     } else if cfg!(windows) {
         // M180 (W7d): `<name><name>.exe` (subsistema WINDOWS + icono + VERSIONINFO como
         // recursos) y el acceso directo `<name>.lnk`.
+        #[cfg_attr(not(windows), allow(unused_variables))]
+        let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
         #[cfg(windows)]
         if let Err(e) = crate::bundle_windows::bundle(
             &out_dir,
@@ -2042,6 +2064,7 @@ fn cmd_bundle(args: &[String]) {
             manifest.as_ref().and_then(|m| m.app_copyright.as_deref()),
             icon.as_deref().map(Path::new),
             &tmp_bin,
+            signing.identity.as_deref(),
         ) {
             eprintln!("bundle: {e}");
             process::exit(74);
@@ -2071,7 +2094,118 @@ fn plist_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], bin: &Path) {
+/// M249: qué firma lleva el bundle. Prioridad: flag → variable de entorno → `[app]` del ray.toml.
+pub(crate) struct Signing {
+    pub identity: Option<String>,
+    pub notary: Option<String>,
+    pub entitlements: Option<PathBuf>,
+}
+
+fn signing_config(manifest: Option<&Manifest>, sign: Option<String>, notary: Option<String>, entitlements: Option<String>) -> Signing {
+    let env_nonempty = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let identity = sign.or_else(|| env_nonempty("RAY_SIGN_IDENTITY")).or_else(|| manifest.and_then(|m| m.app_sign.clone()));
+    let notary = notary.or_else(|| env_nonempty("RAY_NOTARY_PROFILE")).or_else(|| manifest.and_then(|m| m.app_notary.clone()));
+    let entitlements = entitlements
+        .map(PathBuf::from)
+        .or_else(|| manifest.and_then(|m| m.app_entitlements.as_ref().map(|e| m.root.join(e))));
+    Signing { identity, notary, entitlements }
+}
+
+/// M249: firma el `.app` con una identidad real (hardened runtime + timestamp + entitlements),
+/// verifica la firma y, con perfil de notaría, lo somete a Apple y grapa el ticket. Un fallo aquí
+/// es error (74): un bundle a medio firmar no es distribuible y no debe pasar como "ok".
+fn sign_and_notarize_macos(app: &Path, signing: &Signing) {
+    let Some(identity) = signing.identity.as_deref() else {
+        // Sin identidad: firma ad-hoc best-effort (deja el .app internamente consistente en
+        // arm64 tras mover el binario); no distribuible firmado — macOS 15+ pedirá aprobación.
+        let _ = process::Command::new("codesign").args(["--force", "--deep", "-s", "-"]).arg(app).output();
+        return;
+    };
+    // Entitlements: los del proyecto o un plist vacío (una app raylang no necesita excepciones al
+    // hardened runtime: sin JIT, sin librerías sin firmar).
+    let entitlements = match &signing.entitlements {
+        Some(p) => p.clone(),
+        None => {
+            let p = std::env::temp_dir().join(format!("ray-entitlements-{}.plist", process::id()));
+            let _ = fs::write(
+                &p,
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+                 \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict/>\n</plist>\n",
+            );
+            p
+        }
+    };
+    let sign = process::Command::new("codesign")
+        .args(["--force", "--deep", "--options", "runtime", "--timestamp", "--entitlements"])
+        .arg(&entitlements)
+        .args(["-s", identity])
+        .arg(app)
+        .output();
+    match sign {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            eprintln!("bundle: codesign failed with identity '{identity}':\n{}", String::from_utf8_lossy(&o.stderr).trim());
+            eprintln!("(identities available: security find-identity -v -p codesigning)");
+            process::exit(74);
+        }
+        Err(e) => {
+            eprintln!("bundle: could not run codesign: {e}");
+            process::exit(74);
+        }
+    }
+    match process::Command::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(app).output() {
+        Ok(o) if o.status.success() => println!("ok: signed '{}' ({identity}, hardened runtime)", app.display()),
+        Ok(o) => {
+            eprintln!("bundle: the signature does not verify:\n{}", String::from_utf8_lossy(&o.stderr).trim());
+            process::exit(74);
+        }
+        Err(e) => {
+            eprintln!("bundle: could not run codesign --verify: {e}");
+            process::exit(74);
+        }
+    }
+    let Some(profile) = signing.notary.as_deref() else {
+        return;
+    };
+    // Notarización: Apple recibe un zip del .app (ditto conserva los atributos), espera el
+    // veredicto y grapa el ticket al .app para que Gatekeeper no necesite red.
+    let zip = std::env::temp_dir().join(format!("ray-notarize-{}.zip", process::id()));
+    let _ = fs::remove_file(&zip);
+    if let Err(e) = sh_capture("ditto", &["-c", "-k", "--keepParent", &app.to_string_lossy(), &zip.to_string_lossy()], None) {
+        eprintln!("bundle: could not zip the app for notarization: {e}");
+        process::exit(74);
+    }
+    println!("notarizing '{}' with keychain profile '{profile}' (this waits for Apple)…", app.display());
+    let submit = process::Command::new("xcrun")
+        .args(["notarytool", "submit"])
+        .arg(&zip)
+        .args(["--keychain-profile", profile, "--wait"])
+        .output();
+    let _ = fs::remove_file(&zip);
+    match submit {
+        Ok(o) => {
+            let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            if !o.status.success() || !text.contains("status: Accepted") {
+                eprintln!("bundle: notarization did not succeed:\n{}", text.trim());
+                eprintln!("(details: xcrun notarytool log <submission-id> --keychain-profile {profile})");
+                process::exit(74);
+            }
+        }
+        Err(e) => {
+            eprintln!("bundle: could not run notarytool: {e}");
+            process::exit(74);
+        }
+    }
+    match sh_capture("xcrun", &["stapler", "staple", &app.to_string_lossy()], None) {
+        Ok(_) => println!("ok: notarized and stapled '{}'", app.display()),
+        Err(e) => {
+            eprintln!("bundle: stapler failed: {e}");
+            process::exit(74);
+        }
+    }
+}
+
+fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], bin: &Path, signing: &Signing) {
     let app = out_dir.join(format!("{name}.app"));
     let _ = fs::remove_dir_all(&app);
     let macos_dir = app.join("Contents/MacOS");
@@ -2128,12 +2262,8 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
         eprintln!("bundle: could not write Info.plist: {e}");
         process::exit(74);
     }
-    // Firma ad-hoc best-effort: sin identidad (no distribuible firmado), pero deja el .app
-    // internamente consistente en arm64 tras mover el binario.
-    let _ = process::Command::new("codesign")
-        .args(["--force", "--deep", "-s", "-"])
-        .arg(&app)
-        .output();
+    // M249: firma real (+ notarización) si hay identidad; ad-hoc si no.
+    sign_and_notarize_macos(&app, signing);
     println!("ok: bundle '{}'", app.display());
 }
 

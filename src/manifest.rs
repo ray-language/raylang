@@ -79,6 +79,18 @@ pub struct Manifest {
     /// verifica el manifiesto de actualización (`std/update`); `ray bundle`/`build --native` la
     /// hornean en el binario y `ray run` la lee de aquí. `None` = la app no verifica firmas.
     pub app_public_key: Option<String>,
+    /// M249 (IDEAS §89): `[app] sign` — la identidad de firma del bundle: en macOS el nombre del
+    /// certificado (`"Developer ID Application: Nombre (TEAM)"`), en Windows el sujeto del
+    /// certificado o la ruta de un `.pfx` (contraseña en `RAY_SIGN_PFX_PASSWORD`). Sin ella, el
+    /// `.app` va con firma ad-hoc y el `.exe` sin firmar. `RAY_SIGN_IDENTITY` / `--sign` la pisan.
+    pub app_sign: Option<String>,
+    /// M249: `[app] notary` — el perfil de keychain de `notarytool` (`xcrun notarytool
+    /// store-credentials <perfil>`) con el que `ray bundle` notariza y grapa el `.app` firmado.
+    /// `RAY_NOTARY_PROFILE` / `--notary` lo pisan.
+    pub app_notary: Option<String>,
+    /// M249: `[app] entitlements` — ruta (relativa al proyecto) de un plist de entitlements para
+    /// la firma con hardened runtime; sin ella, uno vacío (lo que una app raylang necesita).
+    pub app_entitlements: Option<String>,
     /// M209 (feedback 26 de ray-remote): `[app.plist]` — claves extra que `ray bundle` vuelca tal
     /// cual al `Info.plist` del `.app` (macOS), en orden de declaración. `"texto"` → `<string>`,
     /// `true`/`false` sin comillas → `<true/>`/`<false/>`. Sin ella, `ray bundle` no daba forma de
@@ -147,6 +159,9 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_icon = None;
     let mut app_id = None;
     let mut app_public_key = None;
+    let mut app_sign = None;
+    let mut app_notary = None;
+    let mut app_entitlements = None;
     let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
     let mut android_application_id = None;
     let mut app_description = None;
@@ -230,6 +245,10 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "id" => app_id = Some(as_string()?),
                 // M247: clave pública Ed25519 (hex) del manifiesto de actualización.
                 "public_key" => app_public_key = Some(as_string()?),
+                // M249: firma y notarización del bundle.
+                "sign" => app_sign = Some(as_string()?),
+                "notary" => app_notary = Some(as_string()?),
+                "entitlements" => app_entitlements = Some(as_string()?),
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
             "android" => {
@@ -282,6 +301,9 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_plist,
         app_description,
         app_public_key,
+        app_sign,
+        app_notary,
+        app_entitlements,
     })
 }
 

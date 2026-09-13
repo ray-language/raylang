@@ -13339,3 +13339,21 @@ sube con `gh`. (5) `ray keygen` es distinto de `ray registry keygen` (clave de p
 paquetes): dos confianzas distintas, dos claves. Pendiente para después de la revisión del
 usuario: migrar `ray upgrade` a este contrato (exige la clave de raylang en el CI de release).
 
+## 238. M249 — firma y notarización en `ray bundle` (sep 2026)
+
+Cierre de IDEAS §89: sin esto, `update.apply` en macOS 15+ termina en "la app no se puede abrir"
+en cada versión. **Decisiones.** (1) Configuración por tres vías con prioridad flag → entorno →
+`ray.toml` (`[app] sign/notary/entitlements`), para que el desarrollador la escriba una vez y el
+CI la inyecte por variables. (2) Hardened runtime y timestamp SIEMPRE que se firma con identidad:
+son requisito de la notarización, y una app raylang no necesita excepciones (sin JIT, sin
+librerías sin firmar) → entitlements vacíos por defecto, plist propio si hace falta. (3) La firma
+se **verifica** (`--verify --deep --strict`) y un fallo es error 74: un bundle a medio firmar que
+pasara como "ok" es peor que ninguno. (4) La notarización exige `Accepted` y grapa el ticket
+(`stapler`): así Gatekeeper no necesita red al abrir, y `ray release` empaqueta el `.app` ya
+grapado (la firma va dentro del zip). (5) Sin identidad, ad-hoc como hasta ahora: el flujo de
+desarrollo no cambia. (6) Windows con `signtool` (sujeto o `.pfx`, timestamp RFC 3161); Linux
+no firma (no hay convención). Verificado en esta máquina con una identidad "Apple Development"
+(`flags=0x10000(runtime)`, timestamp, verify OK); la notarización real queda para cuando el
+usuario cree el perfil de `notarytool` con su cuenta. Test `tests/bundle_sign_cli.rs` (macOS;
+se salta sin identidad, como en el CI).
+

@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Firma y notarización en `ray bundle`** (M249, IDEAS §89). `--sign IDENTIDAD` / `[app] sign` /
+  `RAY_SIGN_IDENTITY`: `codesign` con hardened runtime, timestamp y entitlements (plist propio o
+  vacío), verificado con `--strict` (un fallo es error 74, no un bundle "ok" a medias);
+  `--notary PERFIL` / `[app] notary` / `RAY_NOTARY_PROFILE`: `notarytool submit --wait` +
+  `stapler`. Windows: `signtool` con sujeto o `.pfx`. `ray release` acepta los mismos flags. Sin
+  identidad, todo sigue como antes (ad-hoc).
 - **`ray keygen` y `ray release`** (M248, IDEAS §89): el lado del publicador de `std/update`.
   `keygen` crea la clave Ed25519 de firma de la app (`~/.ray/keys/<app-id>.key`) y deja la
   pública en `[app] public_key`; `release` corre `ray bundle`, comprime el bundle en un zip con

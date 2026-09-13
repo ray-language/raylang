@@ -13321,3 +13321,21 @@ genere un manifiesto firmado de raylang no hay nada honesto que consumir. Gotcha
 encontrado de paso: `r.1.get(k)` sobre una tupla con `Map` no infiere el tipo en el transpilador
 (cae en stub); anotar el `let` lo resuelve.
 
+## 237. M248 — `ray keygen` y `ray release`: publicar sin infraestructura (sep 2026)
+
+Tercer hito de IDEAS §89. **Decisiones.** (1) El publicador está escrito en **raylang**
+(`src/release.ray`, embebido como `ray serve`) y la CLI de Rust solo orquesta: corre `ray bundle`,
+localiza el bundle, lanza el programa como subproceso con argumentos y relee su `k=v`. Motivo: el
+zip (deflate), el sha256 y la firma Ed25519 ya están en la stdlib, y así el formato que produce
+la toolchain es exactamente el que `std/update` consume — un solo código para el escritor de
+zip con directorio central y modos unix. (2) Un `dist/` acumulativo: `update.json` conserva los
+artefactos de OTRAS plataformas de la MISMA versión, así que la matriz de plataformas es correr
+`ray release` en cada máquina sobre el mismo directorio (o en CI con `RAY_SIGNING_KEY`); una
+versión nueva empieza de cero. (3) La clave se comprueba contra `[app] public_key` ANTES de
+compilar el bundle: firmar con otra clave produciría un manifiesto que las apps rechazan. (4)
+URLs relativas por defecto (y `std/update` las resuelve contra el manifiesto): sirve cualquier
+directorio estático; `--publish` las hace absolutas a `releases/download/<tag>/` del remoto y
+sube con `gh`. (5) `ray keygen` es distinto de `ray registry keygen` (clave de publicación de
+paquetes): dos confianzas distintas, dos claves. Pendiente para después de la revisión del
+usuario: migrar `ray upgrade` a este contrato (exige la clave de raylang en el CI de release).
+

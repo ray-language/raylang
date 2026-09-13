@@ -1,0 +1,356 @@
+// ray release / ray keygen — el lado del publicador de std/update (M248, IDEAS §89).
+//
+// Programa raylang embebido en la toolchain (como `ray serve`): la CLI empaqueta la app con
+// `ray bundle` y delega aquí lo que es puro dato — el zip del bundle (deflate), su sha256 y
+// tamaño, el manifiesto `update.json` (fusionando los artefactos de otras plataformas de la misma
+// versión) y la firma Ed25519 en `update.json.sig`. Argumentos (args()):
+//
+//   keygen <ruta_clave>                       → escribe la semilla (hex) y devuelve la pública
+//   release <bundle_dir> <dist> <name> <version> <app_id> <seed_hex> <notes> <min_version>
+//           <base_url> <platform_key> <expected_public_key>
+//
+// Salida: líneas `key=valor` que la CLI relee (public_key, zip, sha256, size, manifest).
+
+import std/fs;
+import std/crypto;
+import std/deflate;
+import std/json;
+import std/update;
+
+// ── CRC-32 (IEEE), el del formato zip ──────────────────────────────────────────────────────
+
+fn crc32(data: bytes) -> int {
+    var crc = 4294967295;
+    var i = 0;
+    while (i < data.len()) {
+        crc = crc ^ data[i];
+        var k = 0;
+        while (k < 8) {
+            if (crc % 2 == 1) {
+                crc = (crc / 2) ^ 3988292384;
+            } else {
+                crc = crc / 2;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    crc ^ 4294967295
+}
+
+fn le16(n: int) -> bytes {
+    bytes_of([n % 256, (n / 256) % 256])
+}
+
+fn le32(n: int) -> bytes {
+    bytes_of([n % 256, (n / 256) % 256, (n / 65536) % 256, (n / 16777216) % 256])
+}
+
+// ── Zip del bundle: un único directorio raíz, deflate, modos unix en el directorio central ─
+
+struct ZipEntry {
+    name: string,
+    is_dir: bool,
+    executable: bool,
+    data: bytes,
+}
+
+fn collect(root: string, rel: string, top: string, out: [ZipEntry]) -> Result<int, string> {
+    var n = 0;
+    for name in sort(
+        fs.list_dir(root)?
+    ) {
+        let path = root + "/" + name;
+        let entry_name = if (rel == "") { top + "/" + name } else { rel + "/" + name };
+        if (fs.is_dir(path)) {
+            out.push(
+                ZipEntry { name: entry_name + "/", is_dir: true, executable: false, data: b"" }
+            );
+            n = n + 1 + collect(path, entry_name, top, out)?;
+        } else {
+            let data = fs.read_file_bytes(path)?;
+            // Ejecutables: lo que está bajo Contents/MacOS o en la raíz del bundle (Linux), o el .exe.
+            let exe = entry_name.contains("/Contents/MacOS/")
+                || (rel == top && !name.contains("."))
+                || name.ends_with(".exe");
+            out.push(ZipEntry { name: entry_name, is_dir: false, executable: exe, data: data });
+            n = n + 1;
+        }
+    }
+    Result.Ok(n)
+}
+
+fn write_zip(entries: [ZipEntry]) -> bytes {
+    var out: bytes = b"";
+    var central: bytes = b"";
+    for e in entries {
+        let offset = out.len();
+        let crc = if (e.is_dir) { 0 } else { crc32(e.data) };
+        let method = if (e.is_dir || e.data.len() < 64) { 0 } else { 8 };
+        let payload = if (method == 8) { deflate.deflate_raw(e.data) } else { e.data };
+        let name = e.name.to_bytes();
+        // Cabecera local: firma, versión 20, flags 0, método, fecha/hora 0, crc, tamaños, longitudes.
+        out = out
+            + b"PK\x03\x04"
+            + le16(20)
+            + le16(0)
+            + le16(method)
+            + le16(0)
+            + le16(0)
+            + le32(crc)
+            + le32(payload.len())
+            + le32(e.data.len())
+            + le16(name.len())
+            + le16(0)
+            + name
+            + payload;
+        // Central: "hecho por" unix (3) v20 → los atributos externos llevan el modo POSIX.
+        let mode = if (e.is_dir) { 16877 } else if (e.executable) { 33261 } else { 33188 };
+        let external = mode * 65536 + if (e.is_dir) { 16 } else { 0 };
+        central = central
+            + b"PK\x01\x02"
+            + le16(3 * 256 + 20)
+            + le16(20)
+            + le16(0)
+            + le16(method)
+            + le16(0)
+            + le16(0)
+            + le32(crc)
+            + le32(payload.len())
+            + le32(e.data.len())
+            + le16(name.len())
+            + le16(0)
+            + le16(0)
+            + le16(0)
+            + le16(0)
+            + le32(external)
+            + le32(offset)
+            + name;
+    }
+    let cd_offset = out.len();
+    out
+        + central
+        + b"PK\x05\x06"
+        + le16(0)
+        + le16(0)
+        + le16(entries.len())
+        + le16(entries.len())
+        + le32(central.len())
+        + le32(cd_offset)
+        + le16(0)
+}
+
+// ── Manifiesto ─────────────────────────────────────────────────────────────────────────────
+
+fn jstr(s: string) -> string {
+    json.stringify(json.Json.JStr(s))
+}
+
+// Los artefactos de OTRAS plataformas de la MISMA versión que ya estén en dist/update.json.
+fn previous_artifacts(path: string, version: string, mine: string) -> [string] {
+    var kept: [string] = [];
+    let text = match (fs.read_file(path)) {
+        Result.Ok(t) => t,
+        Result.Err(_) => "",
+    };
+    if (text == "") {
+        return kept;
+    }
+    let j = match (json.parse(text)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => {
+            return kept;
+        },
+    };
+    if (json.get_string(j, "version").unwrap_or("") != version) {
+        return kept;
+    }
+    match (json.get_object(j, "artifacts")) {
+        Option.Some(arts) => {
+            for key in sort(arts.keys()) {
+                if (key != mine) {
+                    match (arts.get(key)) {
+                        Option.Some(a) => {
+                            kept.push("    " + jstr(key) + ": " + json.stringify(a));
+                        },
+                        Option.None => { },
+                    }
+                }
+            }
+        },
+        Option.None => { },
+    }
+    kept
+}
+
+fn cmd_keygen(a: [string]) -> int {
+    let path = a[1];
+    let seed = crypto.random_bytes(32);
+    let pk = match (crypto.ed25519_public_key(seed)) {
+        Option.Some(p) => p,
+        Option.None => {
+            eprint("keygen: could not derive the public key");
+            return 70;
+        },
+    };
+    match (fs.write_file(path, update.to_hex(seed) + "\n")) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("keygen: " + e);
+            return 73;
+        },
+    }
+    let _ = fs.chmod(path, 384);
+    print("public_key=" + update.to_hex(pk));
+    0
+}
+
+fn cmd_release(a: [string]) -> int {
+    let bundle_dir = a[1];
+    let dist = a[2];
+    let name = a[3];
+    let version = a[4];
+    let app_id = a[5];
+    let seed_hex = a[6];
+    let notes = a[7];
+    let min_version = a[8];
+    let base_url = a[9];
+    let key = a[10];
+    let expected_pk = a[11];
+    let seed = match (update.from_hex(seed_hex.trim())) {
+        Option.Some(s) => s,
+        Option.None => {
+            eprint("release: the signing key is not a hex seed");
+            return 65;
+        },
+    };
+    let pk = match (crypto.ed25519_public_key(seed)) {
+        Option.Some(p) => update.to_hex(p),
+        Option.None => {
+            eprint("release: the signing key is not a valid Ed25519 seed (32 bytes)");
+            return 65;
+        },
+    };
+    if (expected_pk != "" && expected_pk.to_lower() != pk) {
+        eprint(
+            "release: the signing key does not match [app] public_key in ray.toml ("
+                + pk
+                + " vs "
+                + expected_pk
+                + "); the app would reject this manifest"
+        );
+        return 65;
+    }
+    // 1. El zip del bundle, con su directorio raíz.
+    let top = base_name(bundle_dir);
+    var entries: [ZipEntry] = [];
+    entries.push(ZipEntry { name: top + "/", is_dir: true, executable: false, data: b"" });
+    match (collect(bundle_dir, "", top, entries)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("release: " + e);
+            return 74;
+        },
+    }
+    let zip = write_zip(entries);
+    let zip_name = name + "-" + version + "-" + key + ".zip";
+    let _ = fs.mkdir(dist);
+    match (fs.write_file_bytes(dist + "/" + zip_name, zip)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("release: " + e);
+            return 73;
+        },
+    }
+    let sha = update.to_hex(crypto.sha256(zip));
+    // 2. El manifiesto: los artefactos de esta versión ya publicados desde otras plataformas se
+    //    conservan; el de esta plataforma se reemplaza.
+    let manifest_path = dist + "/update.json";
+    var arts = previous_artifacts(manifest_path, version, key);
+    let url = if (base_url == "") {
+        zip_name
+    } else if (base_url.ends_with("/")) {
+        base_url + zip_name
+    } else {
+        base_url + "/" + zip_name
+    };
+    arts.push(
+        "    "
+            + jstr(key)
+            + ": {\"url\": "
+            + jstr(url)
+            + ", \"sha256\": "
+            + jstr(sha)
+            + ", \"size\": "
+            + to_string(zip.len())
+            + "}"
+    );
+    let manifest = "{\n  \"app\": "
+        + jstr(app_id)
+        + ",\n  \"version\": "
+        + jstr(version)
+        + ",\n  \"notes\": "
+        + jstr(notes)
+        + ",\n  \"min_version\": "
+        + jstr(min_version)
+        + ",\n  \"artifacts\": {\n"
+        + arts.join(",\n")
+        + "\n  }\n}\n";
+    match (fs.write_file(manifest_path, manifest)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("release: " + e);
+            return 73;
+        },
+    }
+    // 3. La firma, sobre los bytes exactos del archivo.
+    let sig = match (crypto.ed25519_sign(seed, manifest.to_bytes())) {
+        Option.Some(s) => update.to_hex(s),
+        Option.None => {
+            eprint("release: could not sign the manifest");
+            return 70;
+        },
+    };
+    match (fs.write_file(manifest_path + ".sig", sig + "\n")) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("release: " + e);
+            return 73;
+        },
+    }
+    print("public_key=" + pk);
+    print("zip=" + dist + "/" + zip_name);
+    print("sha256=" + sha);
+    print("size=" + to_string(zip.len()));
+    print("manifest=" + manifest_path);
+    print("artifacts=" + to_string(arts.len()));
+    0
+}
+
+fn base_name(path: string) -> string {
+    var p = path.replace("\\", "/");
+    while (p.ends_with("/")) {
+        p = p.substring(0, p.len() - 1);
+    }
+    var last = 0 - 1;
+    var i = 0;
+    while (i < p.len()) {
+        if (p[i] == '/') {
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (last < 0) { p } else { p.substring(last + 1, p.len()) }
+}
+
+fn main() -> int {
+    let a = args();
+    if (a.len() >= 2 && a[0] == "keygen") {
+        return cmd_keygen(a);
+    }
+    if (a.len() >= 12 && a[0] == "release") {
+        return cmd_release(a);
+    }
+    eprint("ray-release: bad arguments");
+    64
+}

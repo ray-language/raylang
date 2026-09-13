@@ -13,8 +13,9 @@ fn ray(dir: &Path, keys: &Path, args: &[&str]) -> (String, String, bool) {
     (String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string(), out.status.success())
 }
 
-fn project() -> (PathBuf, PathBuf) {
-    let base = std::env::temp_dir().join(format!("raylang_test_release_{}", std::process::id()));
+fn project(name: &str) -> (PathBuf, PathBuf) {
+    // Un directorio (y un RAY_KEYS_DIR) por test: los dos corren en paralelo en el mismo proceso.
+    let base = std::env::temp_dir().join(format!("raylang_test_release_{name}"));
     let _ = std::fs::remove_dir_all(&base);
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -55,7 +56,7 @@ fn main() -> int {
 
 #[test]
 fn keygen_then_release_produces_a_signed_manifest_the_app_verifies() {
-    let (app, keys) = project();
+    let (app, keys) = project("flow");
     // keygen: semilla protegida + pública en ray.toml; una segunda vez sin --force se niega.
     let (out, err, ok) = ray(&app, &keys, &["keygen"]);
     assert!(ok, "keygen: {out}{err}");
@@ -109,7 +110,7 @@ fn keygen_then_release_produces_a_signed_manifest_the_app_verifies() {
 
 #[test]
 fn release_refuses_a_key_that_does_not_match_the_baked_public_key() {
-    let (app, keys) = project();
+    let (app, keys) = project("refuse");
     let (_, _, ok) = ray(&app, &keys, &["keygen"]);
     assert!(ok);
     let other = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";

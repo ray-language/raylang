@@ -2846,6 +2846,33 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M246: lanzamiento desacoplado — sin handles ni atadura al scope.
+                OpCode::ProcSpawnDetached => {
+                    let env_clear = self.pop();
+                    let env = self.pop();
+                    let dir = self.pop();
+                    let args = self.pop();
+                    let program = self.pop();
+                    let (HeapValue::Str(program), HeapValue::Obj(ah), HeapValue::Str(dir), HeapValue::Obj(eh), HeapValue::Bool(env_clear)) =
+                        (program, args, dir, env, env_clear)
+                    else { unreachable!("the checker guarantees the __proc_spawn_detached signature") };
+                    let as_strings = |vm: &mut Self, h| -> Vec<String> {
+                        vm.as_array(h).iter().map(|v| match v {
+                            HeapValue::Str(s) => s.to_string(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        }).collect()
+                    };
+                    let opts = crate::builtins::run_opts_from_flat(&dir, as_strings(self, eh), env_clear, &[], false, false, 0, 0, false);
+                    let elems: Vec<HeapValue> = crate::builtins::proc_spawn_detached_encoded(&program, &as_strings(self, ah), &opts)
+                        .into_iter().map(HeapValue::Bytes).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::SelfCommand => {
+                    let items: Vec<HeapValue> = crate::runtime::self_command().into_iter().map(|a| HeapValue::Str(a.into())).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(items));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::ProcSpawnPty => {
                     let rows = self.pop();
                     let cols = self.pop();

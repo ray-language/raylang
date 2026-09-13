@@ -356,6 +356,42 @@ pub fn try_wait(child: &mut std::process::Child) -> Result<Option<Result<i32, i3
 }
 
 /// Señal al GRUPO del hijo (creado con `process_group(0)`): `SIGTERM`, o `SIGKILL` con `force`.
+/// M246: lanza `program` y se OLVIDA de él: el hijo sobrevive al padre. Sesión propia (`setsid`
+/// en `pre_exec`: ni grupo ni terminal de control compartidos, así que ningún kill de grupo ni
+/// `SIGHUP` del padre le llega), los tres flujos a `/dev/null` (jamás heredados: un hijo que
+/// escribiera en nuestro stdout tras morir nosotros sería un fantasma), sin Job/scope. Un hilo
+/// aparte lo cosecha cuando termine para no dejar zombis mientras el padre viva. Devuelve el pid.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn spawn_detached(program: &str, args: &[String], opts: &RunOpts) -> Result<u32, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(d) = &opts.dir {
+        cmd.current_dir(d);
+    }
+    if opts.env_clear {
+        cmd.env_clear();
+    }
+    for (k, v) in &opts.env {
+        cmd.env(k, v);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: `setsid` es async-signal-safe y no toca memoria del padre.
+    unsafe {
+        cmd.pre_exec(|| if setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    let pid = child.id();
+    std::thread::Builder::new()
+        .name("ray-detached-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map_err(|e| format!("{program}: {e}"))?;
+    Ok(pid)
+}
+
 /// Para el timeout compuesto por el llamador y la cancelación estructural de la v2.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub fn kill_group(pid: i32, force: bool) {
@@ -1240,6 +1276,8 @@ mod win {
     }
 
     pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    /// M246: el hijo no hereda la consola (ni la crea).
+    pub const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CTRL_BREAK_EVENT: u32 = 1;
     const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
@@ -1479,6 +1517,30 @@ pub fn try_wait(child: &mut ChildProc) -> Result<Option<Result<i32, i32>>, Strin
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// M246: lanza `program` y se olvida de él (ver la versión Unix). `DETACHED_PROCESS` (sin consola
+/// heredada) + `CREATE_NEW_PROCESS_GROUP` (ningún CTRL_BREAK nuestro le llega), SIN Job Object
+/// (que lo mataría al cerrarse el nuestro), los tres flujos a NUL. Devuelve el pid.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn spawn_detached(program: &str, args: &[String], opts: &RunOpts) -> Result<u32, String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(d) = &opts.dir {
+        cmd.current_dir(d);
+    }
+    if opts.env_clear {
+        cmd.env_clear();
+    }
+    for (k, v) in &opts.env {
+        cmd.env(k, v);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.creation_flags(win::DETACHED_PROCESS | win::CREATE_NEW_PROCESS_GROUP);
+    let child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    Ok(child.id())
 }
 
 /// La escalera sobre el GRUPO del hijo (ver la cabecera): `force` termina el job; si no, `CTRL_BREAK`.

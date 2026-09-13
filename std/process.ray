@@ -51,6 +51,11 @@ pub struct Cmd {
     pty_rows: int,
 }
 
+/// The command line that reproduces THIS program, honest with the engine: a native binary or a
+/// bundled app gives `[exe]`; under `ray run`/`ray dev` it gives `[ray, "run", entry]` (with
+/// `--interp` when that engine is in use). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
+pub fn self_command() -> [string] { __self_command() }
+
 /// Runs `program` with `args` (no shell — a pipeline is written `run("sh", ["-c", …])`,
 /// visibly). `Ok(Output)` even when the child failed or died by signal; `Err(message)` only
 /// when it could not launch.
@@ -118,6 +123,10 @@ pub trait CmdOps {
     /// `timeout_ms`/`max_output` do NOT apply here (compose a deadline + `kill` yourself; the
     /// bounded channel IS the cap). VM and native binaries only (like all spawn/channel code).
     fn stream(self) -> Result<Proc, string>;
+    /// Launches the command and FORGETS it: the child outlives this process (own session, no
+    /// shared process group, stdio to the null device, not tied to any scope). Returns its pid.
+    /// This is how an app relaunches itself (see `self_command`) or hands off to an updater.
+    fn spawn_detached(self) -> Result<int, string>;
 }
 
 impl CmdOps for Cmd {
@@ -184,6 +193,18 @@ impl CmdOps for Cmd {
                 self.merge
             )
         )
+    }
+
+    // M246: sin handles ni bombas — el hijo no es nuestro.
+    fn spawn_detached(self) -> Result<int, string> {
+        let r = __proc_spawn_detached(
+            self.program,
+            self.arg_list,
+            self.work_dir,
+            self.env_pairs,
+            self.clear_env
+        );
+        if (r[0] == b"err") { Result.Err(text_of(r[1])) } else { Result.Ok(int_of(r[1])) }
     }
 
     fn stream(self) -> Result<Proc, string> {

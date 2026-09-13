@@ -2526,6 +2526,23 @@ impl Transpiler {
             }
             // M100 v3: escritura en el stdin de un hijo vivo (`__ray_proc_write` espera a que el
             // pipe sea escribible, como la VM aparcando por interés de escritura).
+            // M246: lanzamiento desacoplado (sin handles) y línea de comandos propia.
+            "proc_spawn_detached" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_spawn_detached(&");
+                self.emit_expr(out, eff[0])?;
+                for (i, e) in eff.iter().enumerate().skip(1) {
+                    out.push_str(if (1..=3).contains(&i) { ", &" } else { ", " });
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
+            "self_command" if name.starts_with("__") => {
+                // Nativo/bundle: el propio ejecutable. (Bajo `ray run` es la VM quien responde.)
+                out.push_str(
+                    "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default())]))",
+                );
+            }
             "proc_spawn_pty" if name.starts_with("__") && !self.exclude.contains("process") => {
                 self.needs_rt_process = true;
                 out.push_str("__ray_proc_spawn_pty(&");

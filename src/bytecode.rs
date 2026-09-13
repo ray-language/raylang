@@ -694,6 +694,12 @@ pub enum OpCode {
     EmbedList,
     /// M237: `__proc_spawn_pty(program, args, dir, env, env_clear, cols, rows)` → handles.
     ProcSpawnPty,
+    /// M246: `__proc_spawn_detached(program, args, dir, env, env_clear)` → `["ok", pid]` /
+    /// `["err", msg]`: el hijo sobrevive al padre (sesión propia, stdio a null, sin scope).
+    ProcSpawnDetached,
+    /// M246: `__self_command()` → la línea de comandos que reproduce este programa (la fija la
+    /// toolchain: `[ray, "run", entrada]` bajo `ray run`; el nativo emite `[exe]`).
+    SelfCommand,
     /// M237: `__proc_resize(h_pty, cols, rows)` (['ok'] / ['err', msg]).
     ProcResize,
     /// M234: `__embed_root()` — raíz en disco de los embebidos bajo la toolchain ("" si horneados).

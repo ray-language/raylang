@@ -4328,6 +4328,23 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "__embed_root")?;
         Ok(Type::String)
     } },
+    // M246: __proc_spawn_detached(program, args, dir, env, env_clear) -> [bytes] (["ok", pid] o
+    // ["err", msg]): lanza y se olvida; el hijo sobrevive al padre. std/process → Cmd.spawn_detached.
+    Builtin { name: "__proc_spawn_detached", opcode: OpCode::ProcSpawnDetached, check: |a| {
+        arity(a, 5, "__proc_spawn_detached", " (program, args, dir, env, env_clear)")?;
+        let str_arr = Type::Array(Box::new(Type::String));
+        if a[0] != Type::String { return Err((Some(0), format!("__proc_spawn_detached expects a string (the program), not {}", a[0]))); }
+        if a[1] != str_arr { return Err((Some(1), format!("__proc_spawn_detached expects a [string] (the arguments), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__proc_spawn_detached expects a string (the directory, \"\" = inherited), not {}", a[2]))); }
+        if a[3] != str_arr { return Err((Some(3), format!("__proc_spawn_detached expects a [string] (the flattened env pairs), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__proc_spawn_detached expects a bool (env_clear), not {}", a[4]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M246: __self_command() -> [string]: cómo relanzar este programa (std/process → self_command).
+    Builtin { name: "__self_command", opcode: OpCode::SelfCommand, check: |a| {
+        nullary(a, "__self_command")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __embed_list() -> [string] (M147): ["ok", clave…] (orden lexicográfico) o ["err", msg].
     Builtin { name: "__embed_list", opcode: OpCode::EmbedList, check: |a| {
         nullary(a, "__embed_list")?;
@@ -5716,6 +5733,20 @@ pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Res
     let h_out = s.out.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
     let h_err = s.err.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
     Ok((h_child, h_in, h_out, h_err))
+}
+
+/// M246: `["ok", pid]` / `["err", msg]` de un lanzamiento desacoplado (mismo codificado que el
+/// resto de `__proc_*`, sin handles: el hijo no es nuestro).
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+pub fn proc_spawn_detached_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec<Vec<u8>> {
+    match ray_runtime::process::spawn_detached(program, args, opts) {
+        Ok(pid) => vec![b"ok".to_vec(), pid.to_string().into_bytes()],
+        Err(e) => vec![b"err".to_vec(), e.into_bytes()],
+    }
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn proc_spawn_detached_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<u8>> {
+    vec![b"err".to_vec(), format!("{program}: std/process is not available on this platform").into_bytes()]
 }
 
 #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]

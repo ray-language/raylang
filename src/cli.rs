@@ -479,7 +479,7 @@ fn cmd_release(args: &[String]) {
     // La clave debe ser la horneada en la app, y se comprueba ANTES de compilar el bundle.
     if !expected_pk.is_empty()
         && let Some(seed) = hex_decode(seed_hex.trim())
-        && let Some(pk) = ray_runtime::crypto::ed25519_public_key(&seed)
+        && let Some(pk) = crate::builtins::ed25519_public_key(&seed)
     {
         let pk_hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
         if pk_hex != expected_pk.to_lowercase() {
@@ -4216,7 +4216,8 @@ fn legacy(rest: &[String]) {
         let moved = match first.as_str() {
             "publish" => Some("ray registry publish"),
             "yank" => Some("ray registry yank"),
-            "keygen" => Some("ray registry keygen"),
+            // M248: `ray keygen` vuelve a existir (la clave de firma de la APP; la de publicación
+            // de paquetes sigue en `ray registry keygen`), así que ya no redirige.
             "index-verify" => Some("ray registry verify"),
             "templ" => Some("ray build --templates-only"),
             _ => None,

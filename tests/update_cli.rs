@@ -124,8 +124,9 @@ const OTHER_SEED: &str = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6
 /// Monta el escenario: un artefacto con la app "2.0.0" para esta plataforma, el manifiesto y su
 /// firma en `served/`, el proyecto de la app (ray.toml con [app] id/public_key, version 1.0.0) y
 /// una "instalación" vieja en `install/MyApp` para `apply_at`.
-fn scenario() -> (PathBuf, u16, String) {
-    let base = std::env::temp_dir().join(format!("raylang_test_update_{}", std::process::id()));
+fn scenario(name: &str) -> (PathBuf, u16, String) {
+    // Un directorio por test: los dos corren en paralelo dentro del mismo proceso.
+    let base = std::env::temp_dir().join(format!("raylang_test_update_{name}"));
     let _ = std::fs::remove_dir_all(&base);
     let served = base.join("served");
     std::fs::create_dir_all(&served).unwrap();
@@ -179,9 +180,9 @@ fn main() -> int {
         Option.None => { print("up to date?"); return 1; },
     };
     print(r.version + " " + r.notes + " " + r.min_version + " " + to_string(r.size));
-    // Las URLs del artefacto son relativas en este escenario.
-    let rel = update.Release { version: r.version, notes: r.notes, min_version: r.min_version, url: base + r.url, sha256: r.sha256, size: r.size };
-    let pkg = match (update.download(rel)) {
+    // La URL del artefacto era `/redir/…` en el manifiesto: check la resolvió contra el origen.
+    print(r.url.starts_with(base + "/redir/"));
+    let pkg = match (update.download(r)) {
         Result.Ok(p) => p,
         Result.Err(e) => { print(e); return 1; },
     };
@@ -201,8 +202,7 @@ fn main() -> int {
         Result.Ok(o) => {
             match (o) {
                 Option.Some(t) => {
-                    let trel = update.Release { version: t.version, notes: t.notes, min_version: t.min_version, url: base + t.url, sha256: t.sha256, size: t.size };
-                    match (update.download(trel)) { Result.Ok(_) => print("tampered accepted"), Result.Err(e) => print(e.contains("sha256")) }
+                    match (update.download(t)) { Result.Ok(_) => print("tampered accepted"), Result.Err(e) => print(e.contains("sha256")) }
                 },
                 Option.None => print("tampered none"),
             }
@@ -232,7 +232,7 @@ fn fresh_install(base: &Path, name: &str) -> PathBuf {
 }
 
 fn want(current: &str) -> String {
-    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\n")
+    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ntrue\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\n")
 }
 
 fn normalize(s: &str) -> String {
@@ -254,7 +254,7 @@ fn normalize(s: &str) -> String {
 
 #[test]
 fn update_flow_on_vm_and_interpreter() {
-    let (base, port, _) = scenario();
+    let (base, port, _) = scenario("engines");
     let app = base.join("app");
     let url = format!("http://127.0.0.1:{port}");
     for (label, engine) in [("vm", &["run", "src/main.ray"][..]), ("interp", &["run", "--interp", "src/main.ray"][..])] {
@@ -271,7 +271,7 @@ fn update_flow_on_vm_and_interpreter() {
 
 #[test]
 fn update_flow_natively_with_the_baked_identity() {
-    let (base, port, _) = scenario();
+    let (base, port, _) = scenario("native");
     let app = base.join("app");
     let bin = app.join(if cfg!(windows) { "myapp.exe" } else { "myapp" });
     let (_, err, ok) = ray(&app, &["build", "--native", "src/main.ray", "-o", bin.to_str().unwrap(), "--without", "mimalloc,ahash,fibers"]);

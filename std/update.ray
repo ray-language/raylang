@@ -486,11 +486,16 @@ pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, 
     // Una URL relativa (`MyApp-2.0.0-macos-aarch64.zip`, lo que escribe `ray release` sin
     // `--base-url`) se resuelve contra el directorio del manifiesto.
     if (!r.url.starts_with("http://") && !r.url.starts_with("https://")) {
+        let base = if (r.url.starts_with("/")) {
+            origin_of_url(manifest_url)
+        } else {
+            dir_of_url(manifest_url)
+        };
         r = Release {
             version: r.version,
             notes: r.notes,
             min_version: r.min_version,
-            url: dir_of_url(manifest_url) + r.url,
+            url: base + r.url,
             sha256: r.sha256,
             size: r.size
         };
@@ -511,6 +516,18 @@ pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, 
         );
     }
     Result.Ok(Option.Some(r))
+}
+
+// `https://host:port` de una URL (para resolver rutas absolutas `/x`).
+fn origin_of_url(url: string) -> string {
+    let scheme_end = match (url.index_of("://")) {
+        Option.Some(i) => i + 3,
+        Option.None => 0,
+    };
+    match (url.substring(scheme_end, url.len()).index_of("/")) {
+        Option.Some(i) => url.substring(0, scheme_end + i),
+        Option.None => url,
+    }
 }
 
 fn dir_of_url(url: string) -> string {

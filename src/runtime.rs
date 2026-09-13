@@ -301,6 +301,21 @@ pub fn program_args() -> &'static [String] {
     PROGRAM_ARGS.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// M246: la línea de comandos que reproduce este programa. La fija la CLI al arrancar (`ray run`
+/// → `[ray, "run", entrada]`, con `--interp` si aplica); sin fijar (REPL, tests) es `[exe]`.
+static SELF_COMMAND: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+pub fn set_self_command(argv: Vec<String>) {
+    let _ = SELF_COMMAND.set(argv);
+}
+
+pub fn self_command() -> Vec<String> {
+    match SELF_COMMAND.get() {
+        Some(v) => v.clone(),
+        None => vec![std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "ray".into())],
+    }
+}
+
 /// Profundidad máxima de llamadas anidadas antes de cortar con un error limpio
 /// (M13.3a). La **comparten ambos motores** —el intérprete cuenta llamadas a
 /// `call_body`; la VM cuenta marcos (`CallFrame`)— para que coincidan en la

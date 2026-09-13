@@ -1557,6 +1557,26 @@ impl<'a> Interpreter<'a> {
                     .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M246: lanzamiento desacoplado y relanzamiento.
+            "__proc_spawn_detached" => {
+                let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env), Value::Bool(env_clear)) =
+                    (&values[0], &values[1], &values[2], &values[3], &values[4])
+                else { unreachable!("the checker guarantees the __proc_spawn_detached signature") };
+                let as_strings = |rc: &Rc<RefCell<Vec<Value>>>| -> Vec<String> {
+                    rc.borrow().iter().map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }).collect()
+                };
+                let opts = crate::builtins::run_opts_from_flat(dir, as_strings(env), *env_clear, &[], false, false, 0, 0, false);
+                let arr = crate::builtins::proc_spawn_detached_encoded(program, &as_strings(args), &opts)
+                    .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__self_command" => {
+                let arr = crate::runtime::self_command().into_iter().map(Value::Str).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__proc_spawn_pty" => {
                 let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
                     Value::Bool(env_clear), Value::Int(cols), Value::Int(rows)) =

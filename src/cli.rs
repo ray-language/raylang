@@ -4238,6 +4238,15 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         process::exit(64);
     }
     runtime::set_program_args(prog_args);
+    // M246: cómo relanzarse (`process.self_command()`): la toolchain + `run` + la entrada absoluta.
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "ray".into());
+    let entry = Path::new(path).canonicalize().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string());
+    let mut argv = vec![exe, "run".to_string()];
+    if use_interp {
+        argv.push("--interp".to_string());
+    }
+    argv.push(entry);
+    runtime::set_self_command(argv);
     configure_embed(path);
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);

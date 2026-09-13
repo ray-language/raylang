@@ -1391,6 +1391,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_in.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
             "        }\n",
             "        Err(e) => __ray_proc_err(e) } }\n",
+            // M246: lanzamiento desacoplado — sin registro: el hijo no es nuestro.
+            "fn __ray_proc_spawn_detached(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, &[], false, false, 0, 0, false);\n",
+            "    match ray_runtime::process::spawn_detached(program, &args, &opts) {\n",
+            "        Ok(pid) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(pid.to_string().as_bytes())]),\n",
+            "        Err(e) => __ray_proc_err(e) } }\n",
             // M237: pseudo-terminal — mismo registro; el cuarto handle es el maestro (resize).
             "fn __ray_proc_spawn_pty(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, cols: i64, rows: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
             "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",

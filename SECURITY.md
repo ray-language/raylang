@@ -218,6 +218,9 @@ documentada:
   tubería de despertar es un socket UDP conectado a sí mismo (`send`/`recv` de un octeto sobre un
   socket propio no-bloqueante) y el sueño fino usa un *waitable timer* (handles propios, cerrados).
   Los SOCKET viajan como i32 (valores pequeños de Winsock).
+- **`crates/ray-runtime/src/process.rs`** (M246) — `spawn_detached`: `pre_exec` con `setsid` (async-signal-safe,
+  no toca memoria del padre); el hijo queda FUERA de la cancelación estructural a propósito (es la
+  única vía por la que un hijo sobrevive al padre, y se llama así para que se vea).
 - **`crates/ray-runtime/src/process.rs`** — `fcntl` variádico, `poll(2)` y `kill` al **grupo** del
   hijo (siempre un grupo creado por nosotros con `process_group(0)`). En Windows (M175): Job Object
   por hijo (`CreateJobObjectW`/`SetInformationJobObject` con estructura `repr(C)` a cero salvo el flag,

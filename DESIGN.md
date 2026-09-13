@@ -13274,3 +13274,23 @@ ya hace `contains`). Aguja vacía → `Some(0)`, prefijo vacío → `true`, como
 `monotonic_nanos` se leía como ambiguo; el alias con unidad no cambia nada y quita la duda. Los
 tres motores dan la misma salida (`tests/bytes_search_cli.rs`).
 
+## 235. M246 — relanzarse y desacoplar: `self_command` y `spawn_detached` (sep 2026)
+
+ray-sublime quiso "New Window" y encontró que un proceso nuevo era imposible por dos ausencias:
+`args()` no lleva `argv[0]` (y bajo `ray run` el ejecutable es la toolchain, no la app) y
+`std/process` está diseñado a propósito para que ningún hijo sobreviva al padre (grupo propio,
+Job Object con `KILL_ON_JOB_CLOSE`, bombas por fibra, atadura al `scope`). La misma pareja es la
+mitad de un updater (IDEAS §89), así que se hace como superficie general.
+
+**Decisiones.** (1) `self_command()` en vez de `exe_path()`: un `exe_path` mentiría bajo la VM
+(`ray`); la línea de comandos completa es honesta con el motor — la fija la CLI en `run_file`
+(`[ray, "run", [--interp], entrada absoluta]`) y el nativo emite `[current_exe]` como literal,
+sin que la app sepa cómo la lanzaron. (2) `spawn_detached` es un primitivo aparte, no un flag de
+`stream`: no devuelve handles (el hijo no es nuestro), no monta bombas ni se ata al scope; Unix
+= `setsid` en `pre_exec` + stdio a `/dev/null` + un hilo que lo cosecha (sin zombis mientras el
+padre viva); Windows = `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` y sin Job Object. (3)
+Política fuera: la app decide si la instancia nueva comparte estado; para un editor la
+recomendación sigue siendo multi-ventana en el mismo proceso, y esto es el puente y el ladrillo
+del updater. Test en tres motores (`tests/process_detached_cli.rs`): el hijo escribe un marcador
+después de que el padre haya terminado.
+

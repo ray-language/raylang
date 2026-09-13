@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/process`: relanzarse y desacoplar** (M246, IDEAS §89, ray-sublime "New Window").
+  `Cmd.spawn_detached() -> Result<int, string>` lanza un hijo que **sobrevive al padre** (sesión
+  propia, stdio al dispositivo nulo, sin Job Object ni atadura a `scope`; devuelve el pid) y
+  `process.self_command() -> [string]` da la línea de comandos que reproduce el programa, honesta
+  con el motor (`[exe]` en nativo/bundle; `[ray, "run", entrada]` bajo la toolchain). Juntos:
+  `cmd(c[0], resto).spawn_detached()` abre otra instancia o entrega el control a un updater.
+  Idénticos en los tres motores; Unix y Windows.
+
 ## 1.20.0 — 2026-09-12
 
 - **`bytes.index_of` / `bytes.starts_with` y `time.monotonic_millis`** (M245, ray-sublime #71).

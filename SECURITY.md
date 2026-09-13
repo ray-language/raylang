@@ -137,8 +137,10 @@ verifica con esa clave; sin clave o sin firma, `check` falla. El artefacto se ve
 `sha256` y tamaño **antes** de escribirse en la instalación, y solo se aceptan `.zip` con un
 único directorio raíz y sin rutas `..`. La clave privada nunca pasa por raylang en la app: vive
 en la máquina que publica (`ray release`, M248). Lo que NO cubre: un atacante con la clave
-privada (rotarla = publicar una versión con la clave nueva mientras la vieja siga vigente) y la
-firma del binario ante el SO (Gatekeeper/SmartScreen: M249).
+privada (rotarla = publicar una versión con la clave nueva mientras la vieja siga vigente). La
+firma ante el SO la pone `ray bundle` (M249): `codesign` con hardened runtime + notarización en
+macOS, `signtool` en Windows; la identidad y el perfil de notaría se configuran por `ray.toml`,
+flags o entorno, y las credenciales viven en el keychain/almacén del sistema, nunca en el repo.
 
 ### Ejecutar procesos del sistema (`std/process`)
 

@@ -683,7 +683,8 @@ fn a_real_request_reply_roundtrip_completes() {
 }
 
 /// M179 (W7c): una ventana REAL en Windows — Win32 + WebView2. Abre `about:blank`, evalúa JS,
-/// cierra y espera el evento `closed`. Exige el WebView2 Runtime (viene con Windows 11 / Edge) y
+/// cierra y espera el evento `closed` (desde M252 la ventana real emite antes `focused` al
+/// activarse — WM_ACTIVATE — y el programa lo salta). Exige el WebView2 Runtime (viene con Windows 11 / Edge) y
 /// una sesión de escritorio (el runner de GitHub la tiene); sin runtime, `open` devuelve un `Err`
 /// que nombra el WebView2 Runtime y el test lo reporta como salto explícito.
 #[cfg(windows)]
@@ -692,7 +693,7 @@ fn on_windows_a_real_window_opens_evaluates_and_closes() {
     let base = tmp("win_real");
     std::fs::write(
         base.join("prog.ray"),
-        "import std/ui;\n\nfn main() {\n    match (ui.open(\"ray test\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open err: \" + e),\n        Result.Ok(h) => {\n            print(\"eval ok: \" + to_string(ui.eval_js(h, \"document.title = 'x'\").is_ok()));\n            let _ = close(h);\n            match (ui.next_event_timeout(5000)) {\n                Result.Ok(o) => match (o) {\n                    Option.Some(e) => print(\"event: \" + e.kind),\n                    Option.None => print(\"no event\"),\n                },\n                Result.Err(e) => print(\"err: \" + e),\n            }\n        },\n    }\n}\n",
+        "import std/ui;\n\nfn main() {\n    match (ui.open(\"ray test\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open err: \" + e),\n        Result.Ok(h) => {\n            print(\"eval ok: \" + to_string(ui.eval_js(h, \"document.title = 'x'\").is_ok()));\n            let _ = close(h);\n            var kind = \"focused\";\n            var tries = 0;\n            while (kind == \"focused\" && tries < 5) {\n                match (ui.next_event_timeout(5000)) {\n                    Result.Ok(o) => match (o) {\n                        Option.Some(e) => kind = e.kind,\n                        Option.None => kind = \"none\",\n                    },\n                    Result.Err(e) => kind = \"err: \" + e,\n                }\n                tries = tries + 1;\n            }\n            print(\"event: \" + kind);\n        },\n    }\n}\n",
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ray"))

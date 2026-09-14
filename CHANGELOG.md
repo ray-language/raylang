@@ -6,6 +6,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## 1.21.0 — 2026-09-14
 
+- **Dependencias**: rustls 0.23.45 (RUSTSEC-2026-0285, aceptación de mensajes de handshake TLS 1.3 fuera de su nivel de cifrado; severidad media).
 - **`std/ui`: evento `"focused"` y ventana en el evento `"menu"`** (M252, ray-sublime #76). Con
   varias ventanas, "Save" no sabía a cuál iba: ahora el evento `menu` lleva la ventana clave y
   hay un evento `focused` cada vez que una ventana pasa a ser la activa (al abrir, en `focus`,

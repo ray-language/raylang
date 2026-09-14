@@ -245,6 +245,17 @@ pub fn menu_at(position: int, title: string, items: [MenuItem]) -> Result<int, s
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Replaces the contents of the top-level menu titled `title` with `items` (M250,
+/// ray-sublime): the old items disappear (their tags no longer exist for `set_menu_item`) and
+/// the new ones take their place, in the same position of the bar — the way to change titles
+/// and shortcuts after the fact (a keymap preset, a "recent files" list). Immediate on macOS;
+/// on Linux and Windows it rebuilds the bar of every open window and applies to the windows
+/// opened afterwards. `Err` if no menu has that title (`menu`/`menu_at` create one).
+pub fn replace_menu(title: string, items: [MenuItem]) -> Result<int, string> {
+    let r = __ui_replace_menu(title, encode_items(items));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or
 /// not) and `checked` (the check mark). Works for custom and application-menu items, and for
 /// the windows opened afterwards on Linux and Windows (their bar is per window). `Err` for an

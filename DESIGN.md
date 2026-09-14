@@ -13357,3 +13357,20 @@ no firma (no hay convención). Verificado en esta máquina con una identidad "Ap
 usuario cree el perfil de `notarytool` con su cuenta. Test `tests/bundle_sign_cli.rs` (macOS;
 se salta sin identidad, como en el CI).
 
+## 239. M250 — `ui.replace_menu`: editar un menú nativo después de creado (sep 2026)
+
+ray-sublime va a tener presets de atajos (Sublime, VS Code, vim) y el menú View debe enseñar
+los del preset activo; hasta hoy un menú era de solo escritura: `menu`/`menu_at` lo creaban,
+`set_menu_item` solo tocaba `enabled`/`checked`. **Decisión**: una sola primitiva de
+reemplazo por título (`replace_menu(title, items)`) en vez de mutadores por ítem (`set_title`,
+`set_shortcut`, `insert`, `remove`): cubre todos los casos con una llamada atómica, no obliga
+a la app a llevar la cuenta de índices y se implementa igual en los tres backends. macOS:
+`indexOfItemWithTitle:` → `submenu` → `removeAllItems` + `make_item` de los nuevos, purgando
+del registro por tag los items viejos (si no, `set_menu_item` tocaría objetos liberados).
+GTK y Windows: la barra es por ventana — se reemplaza el spec (ventanas futuras) y se
+reconstruye la barra de cada ventana viva en el hilo del loop (GTK: destruir la vieja, construir
+y reordenar al índice 0; Windows: `build_menubar` nuevo, `WinCtx` con tags y aceleradores al día,
+tabla de aceleradores y `HMENU` viejos destruidos). Headless registra los títulos para responder
+`Err` a uno desconocido como los backends reales. Verificado en la barra real de macOS y por
+cross-check en los targets de Linux y Windows.
+

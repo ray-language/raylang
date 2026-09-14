@@ -824,6 +824,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_ui_menu_at(position: i64, title: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::menu_at(position, title, &its) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M250: reemplazo del contenido de un menú existente.
+            "fn __ray_ui_replace_menu(title: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::replace_menu(title, &its) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_set_menu_item(tag: &str, enabled: bool, checked: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::set_menu_item(tag, enabled, checked) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_app_menu(name: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

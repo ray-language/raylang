@@ -1652,12 +1652,64 @@ fn headless_menu_tags() -> &'static Mutex<std::collections::HashSet<String>> {
     TAGS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+/// M250: los títulos de menú declarados en headless (para que `replace_menu` distinga un menú
+/// existente de uno desconocido, como los backends reales).
+fn headless_menu_titles() -> &'static Mutex<std::collections::HashSet<String>> {
+    static TITLES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    TITLES.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// M250 (ray-sublime): reemplaza el CONTENIDO del menú de nivel superior titulado `title` por
+/// `items` — mismo codificado que [`menu`]. Los ítems viejos desaparecen (sus tags dejan de
+/// existir para `set_menu_item`) y los nuevos quedan registrados. macOS: en la barra global, en
+/// el acto; Linux/Windows: en las barras de las ventanas vivas y en las que se abran después.
+/// `Err` si no hay un menú con ese título (para crear uno está `menu`/`menu_at`).
+pub fn replace_menu(title: &str, items: &[String]) -> Result<(), String> {
+    let decoded = decode_items(items)?;
+    if headless() {
+        if !headless_menu_titles().lock().unwrap().contains(title) {
+            return Err(format!("ui: no menu titled '{title}'"));
+        }
+        let mut tags = headless_menu_tags().lock().unwrap();
+        for it in &decoded {
+            if !it.is_separator() {
+                tags.insert(it.tag.clone());
+            }
+        }
+        if ui_trace() {
+            eprintln!("[ui] replace menu {title} items {}", decoded.len());
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::replace_menu(title, &decoded)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::replace_menu(title, &decoded)
+    }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::replace_menu(title, &decoded)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (title, decoded);
+        Err("ui: menus are not available on this platform".to_string())
+    }
+}
+
 /// M236 (ray-sublime #68): como [`menu`], en la POSICIÓN `position` de la barra — contada desde
 /// el primer menú tras el de la aplicación en macOS (0 = justo después de él, antes del Edit
 /// estándar) y desde el primer menú en Linux/Windows. Fuera de rango = al final. `-1` = al final.
 pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), String> {
     let decoded = decode_items(items)?;
     if headless() {
+        headless_menu_titles().lock().unwrap().insert(title.to_string());
         let mut tags = headless_menu_tags().lock().unwrap();
         for it in &decoded {
             if !it.is_separator() {
@@ -1975,6 +2027,7 @@ mod mac {
     type MsgI64 = unsafe extern "C" fn(Id, Sel) -> i64;
     // M151: itemAtIndex: / insertItem:atIndex: (menú de aplicación).
     type MsgIdI64 = unsafe extern "C" fn(Id, Sel, i64) -> Id;
+    type MsgI64Id = unsafe extern "C" fn(Id, Sel, Id) -> i64;
     type MsgVoidIdI64 = unsafe extern "C" fn(Id, Sel, Id, i64);
     type MsgCStr = unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char;
     // M152 (puente IPC): initWithFrame:configuration: / addScriptMessageHandler:name: /
@@ -2620,6 +2673,71 @@ mod mac {
         })
     }
 
+    /// El target singleton de los items de menú (una instancia del delegate), creado en main la
+    /// primera vez; compartido por `add_menu`, `set_app_menu` y `replace_menu` (M250).
+    unsafe fn menu_target() -> Id {
+        static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
+        if target.is_null() {
+            // SAFETY: mensajes de alloc/init estándar sobre la clase del delegate.
+            unsafe {
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                target = init(alloc(delegate_class(), sel(b"alloc\0")), sel(b"init\0"));
+            }
+            TARGET.store(target as usize, std::sync::atomic::Ordering::SeqCst);
+        }
+        target
+    }
+
+    /// M250: reemplaza los ítems del submenú del menú de barra titulado `title`, en el hilo
+    /// principal: vacía el NSMenu (`removeAllItems`), purga del registro por tag los items que
+    /// contenía y añade los nuevos con `make_item` (que los registra). El NSMenu y el item de la
+    /// barra son los mismos objetos: la posición en la barra no cambia.
+    pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
+        let title = title.to_string();
+        let items = items.to_vec();
+        on_main_sync(move || {
+            let main_menu = MAIN_MENU.load(std::sync::atomic::Ordering::SeqCst);
+            if main_menu == 0 {
+                return Err("ui: the menu bar is not ready".to_string());
+            }
+            unsafe {
+                let index_of: MsgI64Id = std::mem::transmute(msg_send());
+                let item_at: MsgIdI64 = std::mem::transmute(msg_send());
+                let submenu_of: MsgId = std::mem::transmute(msg_send());
+                let count: MsgI64 = std::mem::transmute(msg_send());
+                let remove_all: MsgVoid = std::mem::transmute(msg_send());
+                let add: MsgVoidId = std::mem::transmute(msg_send());
+                let idx = index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&title));
+                if idx < 0 {
+                    return Err(format!("ui: no menu titled '{title}'"));
+                }
+                let bar_item = item_at(main_menu as Id, sel(b"itemAtIndex:\0"), idx);
+                let menu = submenu_of(bar_item, sel(b"submenu\0"));
+                if menu.is_null() {
+                    return Err(format!("ui: the menu '{title}' has no submenu"));
+                }
+                let n = count(menu, sel(b"numberOfItems\0"));
+                let old: Vec<usize> = (0..n).map(|i| item_at(menu, sel(b"itemAtIndex:\0"), i) as usize).collect();
+                {
+                    let mut reg = items_by_tag().lock().unwrap();
+                    for v in reg.values_mut() {
+                        v.retain(|p| !old.contains(p));
+                    }
+                    reg.retain(|_, v| !v.is_empty());
+                }
+                remove_all(menu, sel(b"removeAllItems\0"));
+                let target = menu_target();
+                for spec in &items {
+                    let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
+                    add(menu, sel(b"addItem:\0"), item);
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// M148: appendea un menú de nivel superior con items custom (en el hilo principal). El
     /// target es un singleton del delegate. M236: `autoenablesItems` a NO en el submenú para
     /// que `enabled` del spec y `set_menu_item` manden; `position` (-1 = al final; n = tras el
@@ -2642,13 +2760,8 @@ mod mac {
                 let set_target: MsgVoidId = std::mem::transmute(msg_send());
                 let set_tag: MsgVoidI64 = std::mem::transmute(msg_send());
 
-                // El target singleton (una instancia del delegate), creado aquí en main.
-                static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
-                if target.is_null() {
-                    target = init(alloc(delegate_class(), sel(b"alloc\0")), sel(b"init\0"));
-                    TARGET.store(target as usize, std::sync::atomic::Ordering::SeqCst);
-                }
+                let target = menu_target();
+                let _ = &init;
 
                 let bar_item = item_init(
                     alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
@@ -3144,6 +3257,8 @@ mod gtk {
     type FnSetTitle = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
     type FnSetDefaultSize = unsafe extern "C" fn(Widget, i32, i32);
     type FnContainerAdd = unsafe extern "C" fn(Widget, Widget);
+    /// M250: `gtk_box_reorder_child(box, child, position)`.
+    type FnBoxReorder = unsafe extern "C" fn(Widget, Widget, i32);
     type FnWidgetOp = unsafe extern "C" fn(Widget);
     type FnIdleAdd = unsafe extern "C" fn(extern "C" fn(*mut c_void) -> i32, *mut c_void) -> u32;
     type FnSignalConnect = unsafe extern "C" fn(
@@ -3281,6 +3396,7 @@ mod gtk {
         container_add: FnContainerAdd,
         show_all: FnWidgetOp,
         destroy: FnWidgetOp,
+        box_reorder_child: FnBoxReorder,
         idle_add: FnIdleAdd,
         signal_connect: FnSignalConnect,
         webview_new: FnWebViewNew,
@@ -3410,6 +3526,7 @@ mod gtk {
                 container_add: std::mem::transmute::<*mut c_void, FnContainerAdd>(sym(gtk, c"gtk_container_add")?),
                 show_all: std::mem::transmute::<*mut c_void, FnWidgetOp>(sym(gtk, c"gtk_widget_show_all")?),
                 destroy: std::mem::transmute::<*mut c_void, FnWidgetOp>(sym(gtk, c"gtk_widget_destroy")?),
+                box_reorder_child: std::mem::transmute::<*mut c_void, FnBoxReorder>(sym(gtk, c"gtk_box_reorder_child")?),
                 idle_add: std::mem::transmute::<*mut c_void, FnIdleAdd>(sym(gtk, c"g_idle_add")?),
                 signal_connect: std::mem::transmute::<*mut c_void, FnSignalConnect>(sym(gtk, c"g_signal_connect_data")?),
                 webview_new: std::mem::transmute::<*mut c_void, FnWebViewNew>(sym(webkit, c"webkit_web_view_new")?),
@@ -3767,6 +3884,58 @@ mod gtk {
 
     /// M236: tag → widgets vivos que lo llevan (con la bandera de vida de su ventana).
     type TagWidgets = std::collections::HashMap<String, Vec<(usize, Arc<AtomicBool>)>>;
+
+    /// M250: las barras de menú vivas — (caja de contenido, barra, vida de la ventana) — para
+    /// reconstruirlas cuando un menú se reemplaza.
+    type LiveBars = Vec<(usize, usize, Arc<AtomicBool>)>;
+    fn live_bars() -> &'static std::sync::Mutex<LiveBars> {
+        static B: std::sync::OnceLock<std::sync::Mutex<LiveBars>> = std::sync::OnceLock::new();
+        B.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+    }
+
+    /// M250: reemplaza el spec del menú `title` (ventanas futuras) y reconstruye la barra de
+    /// cada ventana viva en el hilo del loop: se destruye la barra vieja (y se purgan del
+    /// registro por tag los widgets de esa ventana), se construye una nueva de los specs y se
+    /// empaqueta arriba del todo.
+    pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
+        {
+            let mut specs = menu_specs().lock().unwrap();
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == title) else {
+                return Err(format!("ui: no menu titled '{title}'"));
+            };
+            entry.1 = items.to_vec();
+        }
+        on_main_sync(move || {
+            let api = api().as_ref().map_err(|e| e.clone())?;
+            let bars = live_bars().lock().unwrap().clone();
+            for (content, bar, alive) in bars {
+                if !alive.load(Ordering::SeqCst) {
+                    continue;
+                }
+                {
+                    let mut reg = items_by_tag().lock().unwrap();
+                    for v in reg.values_mut() {
+                        v.retain(|(_, a)| !Arc::ptr_eq(a, &alive));
+                    }
+                    reg.retain(|_, v| !v.is_empty());
+                }
+                // SAFETY: widgets de ventanas propias vivas, en el hilo del loop.
+                unsafe {
+                    (api.destroy)(bar as Widget);
+                    let new_bar = build_menubar(api, alive.clone());
+                    let mut live = live_bars().lock().unwrap();
+                    live.retain(|(c, _, _)| *c != content);
+                    if let Some(b) = new_bar {
+                        (api.box_pack_start)(content as Widget, b, 0, 0, 0);
+                        (api.box_reorder_child)(content as Widget, b, 0);
+                        (api.show_all)(b);
+                        live.push((content, b as usize, alive.clone()));
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
     fn items_by_tag() -> &'static std::sync::Mutex<TagWidgets> {
         static M: std::sync::OnceLock<std::sync::Mutex<TagWidgets>> = std::sync::OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
@@ -4152,6 +4321,7 @@ mod gtk {
                 let content = (api.box_new)(ORIENTATION_VERTICAL, 0);
                 if let Some(bar) = build_menubar(api, alive_for_menu.clone()) {
                     (api.box_pack_start)(content, bar, 0, 0, 0);
+                    live_bars().lock().unwrap().push((content as usize, bar as usize, alive_for_menu.clone()));
                 }
                 (api.box_pack_start)(content, webview, 1, 1, 0);
                 (api.container_add)(window, content);
@@ -5055,6 +5225,55 @@ mod win {
     /// M236: tag → (hwnd, id de comando) de cada ventana que construyó el item, para
     /// `set_menu_item` (las ventanas muertas se saltan con `IsWindow`).
     type TagItems = HashMap<String, Vec<(usize, u16)>>;
+
+    /// M250: reemplaza el spec del menú `title` (ventanas futuras) y reconstruye la barra de
+    /// cada ventana viva en el hilo 1: barra y tabla de aceleradores nuevas, `WinCtx` al día
+    /// (tags y atajos) y la barra vieja destruida.
+    pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
+        {
+            let mut specs = menu_specs().lock().unwrap();
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == title) else {
+                return Err(format!("ui: no menu titled '{title}'"));
+            };
+            entry.1 = items.to_vec();
+        }
+        on_main_sync(move || {
+            let mut hwnds: Vec<usize> = items_by_tag().lock().unwrap().values().flatten().map(|(h, _)| *h).collect();
+            hwnds.sort_unstable();
+            hwnds.dedup();
+            for h in hwnds {
+                let hwnd = HWND(h as *mut _);
+                // SAFETY: ventanas propias (IsWindow descarta las destruidas); todo en el hilo 1.
+                unsafe {
+                    if !IsWindow(Some(hwnd)).as_bool() {
+                        continue;
+                    }
+                    {
+                        let mut reg = items_by_tag().lock().unwrap();
+                        for v in reg.values_mut() {
+                            v.retain(|(hh, _)| *hh != h);
+                        }
+                        reg.retain(|_, v| !v.is_empty());
+                    }
+                    let old_menu = GetMenu(hwnd);
+                    if let Some(table) = accel_tables().lock().unwrap().remove(&h) {
+                        let _ = DestroyAcceleratorTable(HACCEL(table as *mut _));
+                    }
+                    let (menu_tags, accels) = build_menubar(hwnd);
+                    let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
+                    if !ctx_ptr.is_null() {
+                        (*ctx_ptr).menu_tags = menu_tags;
+                        (*ctx_ptr).accels = accels;
+                    }
+                    let _ = DrawMenuBar(hwnd);
+                    if !old_menu.is_invalid() {
+                        let _ = DestroyMenu(old_menu);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
     fn items_by_tag() -> &'static std::sync::Mutex<TagItems> {
         static M: OnceLock<std::sync::Mutex<TagItems>> = OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(HashMap::new()))

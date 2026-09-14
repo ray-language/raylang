@@ -1271,6 +1271,15 @@ pub fn ui_menu_at(position: i64, title: &str, items: &[String]) -> Result<(), St
 pub fn ui_menu_at(_position: i64, _title: &str, _items: &[String]) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
+/// M250: `ui.replace_menu`.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_replace_menu(title: &str, items: &[String]) -> Result<(), String> {
+    ray_runtime::ui::replace_menu(title, items)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_replace_menu(_title: &str, _items: &[String]) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
     ray_runtime::ui::set_menu_item(tag, enabled, checked)
@@ -4252,6 +4261,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_menu_at expects an int (the position), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_menu_at expects a string (the title), not {}", a[1]))); }
         if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__ui_menu_at expects [string] (the items), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_replace_menu(title, items) -> [string] (M250): reemplaza los items del menú con ese título.
+    Builtin { name: "__ui_replace_menu", opcode: OpCode::UiReplaceMenu, check: |a| {
+        arity(a, 2, "__ui_replace_menu", " (title, items)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_replace_menu expects a string (the title), not {}", a[0]))); }
+        if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_replace_menu expects [string] (the items), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_set_menu_item(tag, enabled, checked) -> [string] (M236): estado de un item por tag.

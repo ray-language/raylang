@@ -669,6 +669,8 @@ pub enum OpCode {
     UiClipboard,
     /// M236: `__ui_menu_at(position, title, items)` (['ok'] / ['err', msg]).
     UiMenuAt,
+    /// M250: `__ui_replace_menu(title, items)` — reemplaza el contenido de un menú existente.
+    UiReplaceMenu,
     /// M236: `__ui_set_menu_item(tag, enabled, checked)` (['ok'] / ['err', msg]).
     UiSetMenuItem,
     /// M232: `__onig_compile(pattern)` — dialecto Oniguruma (['ok', id, nombres…] / ['err', msg]).

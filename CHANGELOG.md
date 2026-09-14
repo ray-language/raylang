@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ui.replace_menu(title, items)`** (M250, ray-sublime): el contenido de un menú nativo se
+  puede cambiar después de creado — títulos, atajos e ítems (un preset de atajos, una lista de
+  recientes). Los tags viejos dejan de existir y los nuevos quedan vivos para `set_menu_item`.
+  En macOS opera sobre el mismo `NSMenu` (la posición en la barra no cambia); en Linux y
+  Windows reconstruye la barra de cada ventana abierta y aplica a las siguientes. Tres motores.
 - **Firma y notarización en `ray bundle`** (M249, IDEAS §89). `--sign IDENTIDAD` / `[app] sign` /
   `RAY_SIGN_IDENTITY`: `codesign` con hardened runtime, timestamp y entitlements (plist propio o
   vacío), verificado con `--strict` (un fallo es error 74, no un bundle "ok" a medias);

@@ -1007,3 +1007,51 @@ fn titlebar_color_changes_on_an_open_window_on_all_three_engines() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+// ---------------------------------------------------------------------------
+// M250 (ray-sublime) — `ui.replace_menu`: el contenido de un menú existente cambia después de
+// creado (títulos, atajos, ítems); los tags viejos desaparecen, los nuevos existen; un título
+// desconocido es `Err`. Headless deja traza; VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn replace_menu_swaps_the_items_of_an_existing_menu_on_all_three_engines() {
+    let base = tmp("menus_m250");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn main() {
+    match (ui.menu_at(0, "View", [ui.item("sidebar", "Side Bar", "cmd+k"), ui.item("panel", "Panel", "cmd+j")])) { Result.Ok(_) => print("view ok"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("panel", true, true)) { Result.Ok(_) => print("panel checked"), Result.Err(e) => print(e) }
+    match (ui.replace_menu("View", [ui.item("sidebar", "Side Bar   ⌘K ⌘B", ""), ui.separator(), ui.item("terminal", "Terminal", "ctrl+`")])) { Result.Ok(_) => print("view replaced"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("terminal", true, false)) { Result.Ok(_) => print("terminal live"), Result.Err(e) => print(e) }
+    match (ui.replace_menu("Nope", [ui.item("x", "X", "")])) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    match (ui.replace_menu("View", [ui.item("x", "X", "cmd+bogus")])) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "view ok\npanel checked\nview replaced\nterminal live\nui: no menu titled 'Nope'\nui: unsupported menu shortcut 'cmd+bogus'\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] replace menu View items 3"), "traza headless: {err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

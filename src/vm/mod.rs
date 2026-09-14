@@ -3529,6 +3529,29 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::UiReplaceMenu => {
+                    let items = self.pop();
+                    let HeapValue::Str(title) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Obj(ih) = items else {
+                        unreachable!("the checker guarantees a [string]");
+                    };
+                    let items: Vec<String> = self
+                        .as_array(ih)
+                        .iter()
+                        .map(|v| match v {
+                            HeapValue::Str(s) => s.to_string(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        })
+                        .collect();
+                    let elems = match crate::builtins::ui_replace_menu(&title, &items) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiSetMenuItem => {
                     let HeapValue::Bool(checked) = self.pop() else {
                         unreachable!("the checker guarantees a bool");

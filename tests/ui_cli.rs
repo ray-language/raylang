@@ -1055,3 +1055,49 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+// ---------------------------------------------------------------------------
+// M252 (ray-sublime #76) — el evento `focused`: abrir una ventana la hace clave (evento con su
+// handle), `focus(h)` lo vuelve a emitir, y la ventana de un `menu` es la clave. Headless espeja
+// a los backends reales; VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn focused_events_follow_open_and_focus_on_all_three_engines() {
+    let base = tmp("focused_m252");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show(e: ui.UiEvent) {
+    print(e.kind + " " + to_string(e.window) + " [" + e.tag + "]");
+}
+fn main() {
+    let a = ui.open("A", "http://127.0.0.1:1/", 400, 300).unwrap();
+    let b = ui.open("B", "http://127.0.0.1:1/", 400, 300).unwrap();
+    show(ui.next_event().unwrap());
+    show(ui.next_event().unwrap());
+    let _ = ui.focus(a);
+    show(ui.next_event().unwrap());
+    print(to_string(a) + " " + to_string(b));
+    close(b);
+    show(ui.next_event().unwrap());
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "focused 1 []\nfocused 2 []\nfocused 1 []\n1 2\nclosed 2 []\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

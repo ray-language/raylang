@@ -1282,6 +1282,10 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
             }
         }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
+        // M252 (ray-sublime #76): una ventana recién abierta es la clave — como en los backends
+        // reales (macOS la hace key al abrir y el delegate lo notifica).
+        headless_key_window().store(id, std::sync::atomic::Ordering::SeqCst);
+        push_event("focused", id, "");
         // M152: el inyector de MENSAJES para pruebas (precedente RAY_UI_PICK): con la
         // variable seteada y no vacía, cada ventana headless "recibe" ese window.ray.send
         // al abrir — la batería de 3 motores asevera el kind "message" byte-idéntico.
@@ -1397,6 +1401,9 @@ pub fn focus_window(id: i64) -> Result<(), String> {
             if ui_trace() {
                 eprintln!("[ui] focus {id}");
             }
+            // M252: enfocar hace clave a la ventana y lo notifica, como los backends reales.
+            headless_key_window().store(id, std::sync::atomic::Ordering::SeqCst);
+            push_event("focused", id, "");
             Ok(())
         }
         #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
@@ -1647,6 +1654,13 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
 }
 
 /// M236: tags declarados en headless (para que `set_menu_item` valide igual que un backend real).
+/// M252: la ventana clave en headless (la última abierta o enfocada; 0 = ninguna), lo que el
+/// evento `menu` lleva en `window` en los backends reales.
+fn headless_key_window() -> &'static std::sync::atomic::AtomicI64 {
+    static K: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    &K
+}
+
 fn headless_menu_tags() -> &'static Mutex<std::collections::HashSet<String>> {
     static TAGS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     TAGS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
@@ -2380,9 +2394,44 @@ mod mac {
         }) as Id
     }
 
+    /// El id del programa de una NSWindow viva (solo entradas Mac del registro), o None.
+    fn window_id_of(win: Id) -> Option<i64> {
+        let map = super::windows().lock().unwrap();
+        map.iter().find_map(|(id, w)| match &w.win {
+            Win::Mac { window, .. } if *window == win as usize => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// M252: el id de la ventana clave de la app (`[NSApp keyWindow]`), o 0. Hilo principal.
+    fn key_window_id() -> i64 {
+        // SAFETY: mensajes estándar de NSApplication en el hilo principal.
+        let key = unsafe {
+            let shared: MsgId = std::mem::transmute(msg_send());
+            let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+            if app.is_null() {
+                return 0;
+            }
+            shared(app, sel(b"keyWindow\0"))
+        };
+        if key.is_null() { 0 } else { window_id_of(key).unwrap_or(0) }
+    }
+
     fn delegate_class() -> Id {
         static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *CLASS.get_or_init(|| {
+            // M252 (ray-sublime #76): `windowDidBecomeKey:` → ("focused", id, ""). Mismo mapa
+            // ventana → id que el cierre.
+            extern "C" fn window_did_become_key(_this: Id, _sel: Sel, notification: Id) {
+                // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
+                let win = unsafe {
+                    let object: MsgId = std::mem::transmute(msg_send());
+                    object(notification, sel(b"object\0"))
+                };
+                if let Some(id) = window_id_of(win) {
+                    super::push_event("focused", id, "");
+                }
+            }
             extern "C" fn window_will_close(_this: Id, _sel: Sel, notification: Id) {
                 // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
                 let win = unsafe {
@@ -2410,7 +2459,8 @@ mod mac {
                     get_tag(sender, sel(b"tag\0"))
                 };
                 if let Some(tag) = menu_tags().lock().unwrap().get(&n) {
-                    super::push_event("menu", 0, tag);
+                    // M252: la ventana clave (la que mira quien hace clic); 0 si no hay ninguna.
+                    super::push_event("menu", key_window_id(), tag);
                 }
             }
             // M152: el puente IPC — userContentController:didReceiveScriptMessage: (4 args).
@@ -2523,6 +2573,13 @@ mod mac {
                     cls_new,
                     sel(b"rayMenuAction:\0"),
                     menu_action as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                // M252: la ventana que pasa a ser la clave → evento ("focused", id, "").
+                class_addMethod(
+                    cls_new,
+                    sel(b"windowDidBecomeKey:\0"),
+                    window_did_become_key as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
                 );
                 class_addMethod(
@@ -3887,7 +3944,7 @@ mod gtk {
 
     /// M250: las barras de menú vivas — (caja de contenido, barra, vida de la ventana) — para
     /// reconstruirlas cuando un menú se reemplaza.
-    type LiveBars = Vec<(usize, usize, Arc<AtomicBool>)>;
+    type LiveBars = Vec<(usize, usize, Arc<AtomicBool>, i64)>;
     fn live_bars() -> &'static std::sync::Mutex<LiveBars> {
         static B: std::sync::OnceLock<std::sync::Mutex<LiveBars>> = std::sync::OnceLock::new();
         B.get_or_init(|| std::sync::Mutex::new(Vec::new()))
@@ -3908,7 +3965,7 @@ mod gtk {
         on_main_sync(move || {
             let api = api().as_ref().map_err(|e| e.clone())?;
             let bars = live_bars().lock().unwrap().clone();
-            for (content, bar, alive) in bars {
+            for (content, bar, alive, id) in bars {
                 if !alive.load(Ordering::SeqCst) {
                     continue;
                 }
@@ -3922,14 +3979,14 @@ mod gtk {
                 // SAFETY: widgets de ventanas propias vivas, en el hilo del loop.
                 unsafe {
                     (api.destroy)(bar as Widget);
-                    let new_bar = build_menubar(api, alive.clone());
+                    let new_bar = build_menubar(api, alive.clone(), id);
                     let mut live = live_bars().lock().unwrap();
-                    live.retain(|(c, _, _)| *c != content);
+                    live.retain(|(c, _, _, _)| *c != content);
                     if let Some(b) = new_bar {
                         (api.box_pack_start)(content as Widget, b, 0, 0, 0);
                         (api.box_reorder_child)(content as Widget, b, 0);
                         (api.show_all)(b);
-                        live.push((content, b as usize, alive.clone()));
+                        live.push((content, b as usize, alive.clone(), id));
                     }
                 }
             }
@@ -3952,6 +4009,8 @@ mod gtk {
         image_new_from_file: Option<unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>,
         image_item_set_image: Option<FnWidgetPair>,
         image_item_always_show: Option<unsafe extern "C" fn(Widget, i32)>,
+        /// M252: `gtk_window_is_active` (para el evento `focused`).
+        window_is_active: Option<unsafe extern "C" fn(Widget) -> i32>,
     }
     unsafe impl Send for ItemApi {}
     unsafe impl Sync for ItemApi {}
@@ -3977,6 +4036,7 @@ mod gtk {
                     image_new_from_file: opt(c"gtk_image_new_from_file").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>(p)),
                     image_item_set_image: opt(c"gtk_image_menu_item_set_image").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
                     image_item_always_show: opt(c"gtk_image_menu_item_set_always_show_image").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    window_is_active: opt(c"gtk_window_is_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> i32>(p)),
                 }
             }
         })
@@ -4025,12 +4085,37 @@ mod gtk {
     /// El contexto del handler `activate` de un item: su tag (liberado por el GClosureNotify).
     struct MenuCtx {
         tag: String,
+        /// M252: la ventana dueña de esta barra (los menús son por ventana en GTK).
+        window: i64,
     }
 
     extern "C" fn on_menu_activate(_w: Widget, data: *mut c_void) {
         // SAFETY: `data` es el MenuCtx de build_menubar; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const MenuCtx) };
-        super::push_event("menu", 0, &ctx.tag);
+        super::push_event("menu", ctx.window, &ctx.tag);
+    }
+
+    /// M252: `notify::is-active` de la ventana → ("focused", id, "") cuando pasa a activa.
+    struct FocusCtx {
+        id: i64,
+    }
+
+    extern "C" fn on_is_active(window: Widget, _pspec: *mut c_void, data: *mut c_void) {
+        // SAFETY: `data` es el FocusCtx de open_window; vive hasta el GClosureNotify.
+        let ctx = unsafe { &*(data as *const FocusCtx) };
+        let active = match item_api().window_is_active {
+            // SAFETY: la ventana está viva (la señal viene de ella).
+            Some(f) => (unsafe { f(window) }) != 0,
+            None => true,
+        };
+        if active {
+            super::push_event("focused", ctx.id, "");
+        }
+    }
+
+    extern "C" fn drop_focus_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut FocusCtx) });
     }
 
     extern "C" fn drop_menu_ctx(data: *mut c_void, _closure: *mut c_void) {
@@ -4039,7 +4124,7 @@ mod gtk {
     }
 
     // Construye el menubar de los specs vigentes (en el hilo del loop). None si no hay menús.
-    unsafe fn build_menubar(api: &Api, alive: Arc<AtomicBool>) -> Option<Widget> {
+    unsafe fn build_menubar(api: &Api, alive: Arc<AtomicBool>, window: i64) -> Option<Widget> {
         let specs = menu_specs().lock().unwrap().clone();
         if specs.is_empty() {
             return None;
@@ -4079,7 +4164,7 @@ mod gtk {
                         f(item, 0);
                     }
                     items_by_tag().lock().unwrap().entry(tag.clone()).or_default().push((item as usize, alive.clone()));
-                    let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone() }));
+                    let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone(), window }));
                     (api.signal_connect)(
                         item,
                         c"activate".as_ptr(),
@@ -4319,10 +4404,21 @@ mod gtk {
                 // declarados) arriba, webview expandido debajo. GTK posee todo el árbol.
                 const ORIENTATION_VERTICAL: i32 = 1;
                 let content = (api.box_new)(ORIENTATION_VERTICAL, 0);
-                if let Some(bar) = build_menubar(api, alive_for_menu.clone()) {
+                if let Some(bar) = build_menubar(api, alive_for_menu.clone(), id) {
                     (api.box_pack_start)(content, bar, 0, 0, 0);
-                    live_bars().lock().unwrap().push((content as usize, bar as usize, alive_for_menu.clone()));
+                    live_bars().lock().unwrap().push((content as usize, bar as usize, alive_for_menu.clone(), id));
                 }
+                // M252: la ventana activa → evento `focused` (notify::is-active: handler de 3
+                // args y retorno void, como el puente IPC).
+                let focus_ctx = Box::into_raw(Box::new(FocusCtx { id }));
+                (api.signal_connect3)(
+                    window,
+                    c"notify::is-active".as_ptr(),
+                    on_is_active,
+                    focus_ctx as *mut c_void,
+                    drop_focus_ctx,
+                    0,
+                );
                 (api.box_pack_start)(content, webview, 1, 1, 0);
                 (api.container_add)(window, content);
                 (api.load_uri)(webview, url.as_ptr());
@@ -5023,9 +5119,19 @@ mod win {
                     // SAFETY: como arriba.
                     let ctx = unsafe { &*ctx_ptr };
                     if let Some(tag) = ctx.menu_tags.get(&id) {
-                        super::push_event("menu", 0, tag);
+                        super::push_event("menu", ctx.id, tag);
                         return LRESULT(0);
                     }
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            // M252: la ventana pasa a activa → ("focused", id, "").
+            WM_ACTIVATE => {
+                if (wparam.0 & 0xFFFF) != 0 && !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    let ctx = unsafe { &*ctx_ptr };
+                    super::push_event("focused", ctx.id, "");
                 }
                 // SAFETY: reenvío estándar.
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -5623,7 +5729,7 @@ mod win {
                                 if !ctx_ptr.is_null() {
                                     let ctx = &*ctx_ptr;
                                     if let Some((_, _, _, _, tag)) = ctx.accels.iter().find(|(k, c, a, s, _)| *k as u32 == vk && *c == ctrl && *a == alt && *s == shift) {
-                                        super::push_event("menu", 0, tag);
+                                        super::push_event("menu", ctx.id, tag);
                                         let _ = args.SetHandled(true);
                                     }
                                 }

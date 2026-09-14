@@ -11,11 +11,14 @@
 
 /// One UI event. `kind` is "closed" (the window left the screen — the red button and
 /// `close(h)` both report here, exactly once per window; `tag` is empty), "menu" (a custom
-/// menu item was clicked: `tag` carries the item's tag and `window` is 0 — menus belong to the
-/// app, not to one window), or "message" (the page called `window.ray.send(text)`: `tag`
-/// carries the text — strings only, NULs removed by the bridge; `window` is the window's
-/// handle on desktop and 0 on iOS). `window` is the window's handle for per-window events.
-/// In headless mode the env var RAY_UI_MSG injects one "message" per opened window (tests).
+/// menu item was chosen: `tag` is the item's tag; `window` is the handle of the window that
+/// was key/active at that moment — M252 — or 0 when none is, e.g. with every window closed),
+/// "focused" (M252: `window` became the key/active one — on open, on `focus(h)` and whenever
+/// the user brings it to the front; use it to know which window a menu action refers to and to
+/// refresh on regaining focus), or "message" (the page called `window.ray.send(text)`: `tag`
+/// is the text and `window` the sender).
+/// In headless mode a window is "focused" when opened and when `focus(h)` is called, and the
+/// env var RAY_UI_MSG injects one "message" per opened window (tests).
 pub struct UiEvent {
     kind: string,
     window: int,

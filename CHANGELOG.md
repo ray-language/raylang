@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui`: evento `"focused"` y ventana en el evento `"menu"`** (M252, ray-sublime #76). Con
+  varias ventanas, "Save" no sabía a cuál iba: ahora el evento `menu` lleva la ventana clave y
+  hay un evento `focused` cada vez que una ventana pasa a ser la activa (al abrir, en `focus`,
+  cuando el usuario la trae al frente) — también sirve para revisar cambios en disco al volver.
+  macOS (`windowDidBecomeKey:`), Linux (`notify::is-active`), Windows (`WM_ACTIVATE`); headless
+  lo espeja al abrir y en `focus`. Tres motores.
 - **`ui.replace_menu(title, items)`** (M250, ray-sublime): el contenido de un menú nativo se
   puede cambiar después de creado — títulos, atajos e ítems (un preset de atajos, una lista de
   recientes). Los tags viejos dejan de existir y los nuevos quedan vivos para `set_menu_item`.

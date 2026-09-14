@@ -85,7 +85,7 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 ### Compresión (M40.7c)
 
 - **`std/inflate`** — `inflate_raw`/`zlib_inflate`/`gunzip` (DEFLATE/zlib/gzip), `crc32`.
-- **`std/deflate`** — `deflate_raw`/`zlib_compress`/`gzip_compress` (sobre `std/inflate` para el CRC).
+- **`std/deflate`** — `deflate_raw`/`zlib_compress`/`gzip_compress` (sobre `std/inflate` para el CRC). M253: con el runtime (`miniz_oxide`) cuando el build lo trae; el encoder raylang de respaldo.
 - **`std/zip`** — lectura de archivos ZIP (M219): `open`/`entries`/`find`/`read`/`read_entry`; STORE y DEFLATE sobre `std/inflate`.
 - **`std/huffman`** — `huffman_encode`/`huffman_decode`.
 

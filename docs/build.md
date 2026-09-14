@@ -143,6 +143,8 @@ wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el buil
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
 máquina); `--without mimalloc,ahash,fibers` recupera el `rustc` pelado (sin Cargo/red).
 `--without bigint` (M195) deja `std/bigint` devolviendo `Err` en vez de enlazar `num-bigint`.
+`--without deflate` (M253) deja `std/deflate`/`std/inflate` con su algoritmo en raylang (mismo
+resultado descomprimido, otro stream comprimido, mucho más lento) en vez de enlazar `miniz_oxide`.
 
 **Regex acelerado (R5, jul 2026).** Si el programa usa `std/regex`, el nativo enlaza el crate `regex` de Rust vía `ray-runtime` (feature detectada por uso): mismo comportamiento que la Pike VM de la librería (dialecto traducido, validación raylang) a velocidad de Rust — medido 570→71 ms en el bench regex, por delante de Go. `--without regex` recupera la Pike VM transpilada (raylang puro).
 

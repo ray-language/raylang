@@ -1811,6 +1811,17 @@ y 8,3 ns del clon de `String` de antes; en una interpolación de seis piezas son
 Bajarlo exige `Rc<str>` con las invariantes de aislamiento por fibra explícitas (transferencia por
 copia entre heaps, constantes sin refcount compartido) — anotado como arco propio en IDEAS §88.
 
+### Bucles sobre `bytes` en la VM: el caso `std/deflate` (M253, sep 2026)
+
+Dato para el arco P3: el LZ77 de `std/deflate` en la VM comprimía 500 KB en **241 s** frente a
+**64 ms** del mismo programa transpilado (~4000×), y `crc32` 4 s frente a 1 ms. El perfil señala
+`match_len` (un millón de llamadas a 4,4 µs: un `while` de comparación `data[p+l] == data[i+l]`
+sobre `bytes`), es decir, el coste por llamada + indexación de `bytes` + aritmética en el bucle
+interno. Se resolvió por runtime (`miniz_oxide`, DESIGN §241) porque era el cuello de `ray
+release`, pero la medida queda como referencia de lo que cuesta un bucle de octetos en la VM
+hoy: es el tipo de micro-bucle que una superinstrucción de indexación/comparación de `bytes` o
+el inlining de funciones pequeñas atacarían.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

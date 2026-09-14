@@ -1874,6 +1874,17 @@ pub fn bigint_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>
     Err("bigint is not available in this build (feature 'bigint')".to_string())
 }
 
+/// M253: la primitiva acelerada de `std/deflate`/`std/inflate` (ver ray_runtime::deflate). `None` = "no
+/// disponible en este build": los módulos raylang caen a su propio algoritmo.
+#[cfg(all(feature = "deflate", not(target_arch = "wasm32")))]
+pub fn deflate_op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
+    ray_runtime::deflate::op(name, data, n)
+}
+#[cfg(any(not(feature = "deflate"), target_arch = "wasm32"))]
+pub fn deflate_op(_name: &str, _data: &[u8], _n: i64) -> Option<Vec<u8>> {
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn hasher_new(_alg: &str) -> Result<i64, String> {
     Err("incremental hashing is not available on this platform".to_string())
@@ -3221,6 +3232,16 @@ static BUILTINS: &[Builtin] = &[
         for (i, t) in a.iter().enumerate().skip(1) {
             if *t != Type::Bytes { return Err((Some(i), format!("__bigint_op expects bytes, not {}", t))); }
         }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M253: __deflate_op(op, data, n) -> [bytes]: [resultado] | [] (no disponible → std/deflate y std/inflate
+    // usan su algoritmo en raylang). op = "deflate" (n = nivel) | "inflate" (n = tope de salida) | "crc32" |
+    // "adler32" (4 octetos big-endian).
+    Builtin { name: "__deflate_op", opcode: OpCode::DeflateOp, check: |a| {
+        arity(a, 3, "__deflate_op", " (op, data, n)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__deflate_op expects a string (the operation), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__deflate_op expects bytes, not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__deflate_op expects an int, not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__hasher_new", opcode: OpCode::HasherNew, check: |a| {

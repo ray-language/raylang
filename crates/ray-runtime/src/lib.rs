@@ -10,6 +10,7 @@
 
 pub mod audio;
 pub mod bigint;
+pub mod deflate;
 pub mod crypto;
 // F1 (arco de concurrencia nativa): a diferencia del resto de módulos, `fibers` NO tiene stub sin
 // feature — el runtime emitido solo lo referencia cuando la feature va activa (el modelo de respaldo

@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/deflate` y `std/inflate` con runtime de producción** (M253). `ray release` comprimía el
+  bundle con el LZ77 escrito en raylang corriendo en la VM: 500 KB tardaban 241 s (el CI de Linux
+  pasó de 14 a 52 min por `tests/release_cli.rs`). Ahora `deflate_raw`, `inflate_raw` (y sus formas
+  `_limit`), `crc32` y `adler32` llaman primero a la primitiva `__deflate_op` (miniz_oxide, Rust puro
+  sin `unsafe`): 500 KB en 71 ms en la VM, bytes idénticos en los tres motores. El algoritmo en
+  raylang sigue como respaldo (slim, wasm/playground, `--without deflate`, streams que miniz
+  rechaza — así los mensajes de error no cambian). La API es la misma; el stream comprimido es
+  otro (nivel 6 de miniz, ~13 % más pequeño) y sigue siendo DEFLATE estándar.
+
 ## 1.21.0 — 2026-09-14
 
 - **Dependencias**: rustls 0.23.45 (RUSTSEC-2026-0285, aceptación de mensajes de handshake TLS 1.3 fuera de su nivel de cifrado; severidad media).

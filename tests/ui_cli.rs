@@ -683,7 +683,8 @@ fn a_real_request_reply_roundtrip_completes() {
 }
 
 /// M179 (W7c): una ventana REAL en Windows — Win32 + WebView2. Abre `about:blank`, evalúa JS,
-/// cierra y espera el evento `closed`. Exige el WebView2 Runtime (viene con Windows 11 / Edge) y
+/// cierra y espera el evento `closed` (desde M252 la ventana real emite antes `focused` al
+/// activarse — WM_ACTIVATE — y el programa lo salta). Exige el WebView2 Runtime (viene con Windows 11 / Edge) y
 /// una sesión de escritorio (el runner de GitHub la tiene); sin runtime, `open` devuelve un `Err`
 /// que nombra el WebView2 Runtime y el test lo reporta como salto explícito.
 #[cfg(windows)]
@@ -692,7 +693,7 @@ fn on_windows_a_real_window_opens_evaluates_and_closes() {
     let base = tmp("win_real");
     std::fs::write(
         base.join("prog.ray"),
-        "import std/ui;\n\nfn main() {\n    match (ui.open(\"ray test\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open err: \" + e),\n        Result.Ok(h) => {\n            print(\"eval ok: \" + to_string(ui.eval_js(h, \"document.title = 'x'\").is_ok()));\n            let _ = close(h);\n            match (ui.next_event_timeout(5000)) {\n                Result.Ok(o) => match (o) {\n                    Option.Some(e) => print(\"event: \" + e.kind),\n                    Option.None => print(\"no event\"),\n                },\n                Result.Err(e) => print(\"err: \" + e),\n            }\n        },\n    }\n}\n",
+        "import std/ui;\n\nfn main() {\n    match (ui.open(\"ray test\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open err: \" + e),\n        Result.Ok(h) => {\n            print(\"eval ok: \" + to_string(ui.eval_js(h, \"document.title = 'x'\").is_ok()));\n            let _ = close(h);\n            var kind = \"focused\";\n            var tries = 0;\n            while (kind == \"focused\" && tries < 5) {\n                match (ui.next_event_timeout(5000)) {\n                    Result.Ok(o) => match (o) {\n                        Option.Some(e) => { kind = e.kind; },\n                        Option.None => { kind = \"none\"; },\n                    },\n                    Result.Err(e) => { kind = \"err: \" + e; },\n                }\n                tries = tries + 1;\n            }\n            print(\"event: \" + kind);\n        },\n    }\n}\n",
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ray"))
@@ -1042,6 +1043,52 @@ fn main() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
         assert!(err.contains("[ui] replace menu View items 3"), "traza headless: {err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M252 (ray-sublime #76) — el evento `focused`: `focus(h)` lo emite con el handle (abrir no
+// produce eventos en headless: la cola queda en silencio, ver las pruebas del aparcado).
+// VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn focused_events_follow_open_and_focus_on_all_three_engines() {
+    let base = tmp("focused_m252");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show(e: ui.UiEvent) {
+    print(e.kind + " " + to_string(e.window) + " [" + e.tag + "]");
+}
+fn main() {
+    let a = ui.open("A", "http://127.0.0.1:1/", 400, 300).unwrap();
+    let b = ui.open("B", "http://127.0.0.1:1/", 400, 300).unwrap();
+    let _ = ui.focus(b);
+    show(ui.next_event().unwrap());
+    let _ = ui.focus(a);
+    show(ui.next_event().unwrap());
+    print(to_string(a) + " " + to_string(b));
+    close(b);
+    show(ui.next_event().unwrap());
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "focused 2 []\nfocused 1 []\n1 2\nclosed 2 []\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{}", String::from_utf8_lossy(&out.stderr));
     }
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
         let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));

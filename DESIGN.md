@@ -13374,3 +13374,24 @@ tabla de aceleradores y `HMENU` viejos destruidos). Headless registra los títul
 `Err` a uno desconocido como los backends reales. Verificado en la barra real de macOS y por
 cross-check en los targets de Linux y Windows.
 
+## 240. M252 — `focused` y la ventana del evento `menu` (sep 2026)
+
+ray-sublime (#76) tiene varias ventanas y los menús son de la app: `UiEvent.menu` llegaba con
+`window: 0` y la app deducía la ventana con un `{"cmd": "focused"}` por IPC desde la página —
+una muleta que depende de que el webview reciba foco. **Decisiones.** (1) Las dos cosas que
+pedían, porque se necesitan juntas: el evento `menu` lleva la ventana clave del momento
+(quien hace clic en la barra está mirando una ventana; macOS `[NSApp keyWindow]` cruzado con
+el registro; en GTK y Windows la barra es por ventana y el contexto ya la conoce) y un evento
+`focused` cuando una ventana pasa a ser la activa (macOS `windowDidBecomeKey:` en el delegate
+que ya recibía `windowWillClose:`; GTK `notify::is-active` + `gtk_window_is_active`, handler
+de tres argumentos y retorno void como el puente IPC — `focus-in-event` devolvería un gboolean
+que no podemos garantizar; Windows `WM_ACTIVATE`). (2) Semántica honesta: `focused` es lo que
+el sistema dice, no lo que la app pidió — `focus(h)` lo produce porque la ventana pasa a key,
+no porque se llamó. (3) Headless lo emite en `focus(h)` — y NO al abrir: seis pruebas del aparcado
+y del apagado por inactividad cuentan con que `open` deja la cola en silencio, y esa
+invariante vale más que espejar el `focused` inicial de macOS; así el contrato sigue siendo
+verificable en los tres motores sin sesión gráfica. Límite conocido: en macOS un proceso que
+no está en primer plano (lanzado desde otra sesión) no consigue activar la app y ninguna
+ventana pasa a key, así que no emite `focused` — no es un fallo del evento, es Gatekeeper de
+foco; en la app real (bundle en primer plano) fluye.
+

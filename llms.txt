@@ -261,7 +261,10 @@ titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.f
 `ui.reply_json`; serve the frontend from the process with `ui.mount_embed("", "assets")`
 (+ `mount_dir`, `mount_bytes`) and open `ray://app/index.html` — no local HTTP server; menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
-…)`, `ui.set_menu_item(tag, enabled, checked); `ui.replace_menu(title, items)` swaps a menu's contents after creation (new titles/shortcuts; old tags vanish)`, `ui.app_menu`, `MenuItem.icon`; desktop:
+…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
+contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
+events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
+(page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray
 dev` the window live-reloads on asset changes and the webview devtools are on.
 

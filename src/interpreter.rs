@@ -1291,6 +1291,16 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
             },
+            "__deflate_op" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(op), Value::Bytes(data), Value::Int(n)) => {
+                    let elems = match crate::builtins::deflate_op(op, data, *n) {
+                        Some(r) => vec![Value::Bytes(Rc::new(r))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees (string, bytes, int)"),
+            },
             "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("the checker guarantees bytes"),

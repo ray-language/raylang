@@ -1,5 +1,8 @@
 // INFLATE — descompresión DEFLATE (RFC 1951) + envoltorios gzip (RFC 1952) y zlib (RFC 1950),
-// escrita EN raylang. Cero runtime nuevo: bit-stream sobre `bytes` + los operadores bit a bit (M19.3a).
+// escrita EN raylang: bit-stream sobre `bytes` + los operadores bit a bit (M19.3a). M253: `inflate_raw`
+// (y sus formas `_limit`) y `crc32` prueban PRIMERO la primitiva del runtime (`__deflate_op`,
+// miniz_oxide); cuando no está, o el stream es inválido, responde el código de abajo — así los mensajes
+// de error siguen siendo los de siempre. El modo incremental (`inflate_stream`) es solo raylang.
 // Importable: `from inflate import inflate_raw, gunzip, zlib_inflate, crc32;`.
 //
 // Es el algoritmo más complejo de la stdlib de raylang: decodificación Huffman canónica + referencias
@@ -481,6 +484,10 @@ pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
 /// Like `inflate_raw`, but caps the decompressed output at `max_out` bytes: a stream that
 /// would expand beyond the cap returns `Err` (decompression-bomb protection).
 pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
+    let fast = __deflate_op("inflate", data, max_out);
+    if (fast.len() == 1) {
+        return Result.Ok(fast[0]);
+    }
     var s = Inflater { data: data, pos: 0, bitpos: 0, out: [], limit: max_out };
     match (inflate_blocks(s)) {
         Result.Ok(_) => Result.Ok(bytes_of(s.out)),
@@ -537,6 +544,11 @@ fn crc32_bits(data: bytes) -> int {
 /// Computes the CRC-32 checksum (RFC 1952, reflected polynomial 0xEDB88320) of the bytes,
 /// as used in the gzip trailer. Table-driven (one byte per step) for inputs >= 256 bytes.
 pub fn crc32(data: bytes) -> int {
+    let fast = __deflate_op("crc32", data, 0);
+    if (fast.len() == 1) {
+        let r = fast[0];
+        return r[0] << 24 | r[1] << 16 | r[2] << 8 | r[3];
+    }
     let n = data.len();
     if (n < 256) {
         return crc32_bits(data);

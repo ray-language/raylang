@@ -1972,6 +1972,21 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::DeflateOp => {
+                    // M253: pop en orden inverso (n, data, op). `[]` = sin runtime → el módulo raylang sigue solo.
+                    let n = self.pop();
+                    let data = self.pop();
+                    let op = self.pop();
+                    let elems = match (&op, &data, &n) {
+                        (HeapValue::Str(op), HeapValue::Bytes(data), HeapValue::Int(n)) => match crate::builtins::deflate_op(op, data, *n) {
+                            Some(r) => vec![HeapValue::Bytes(r)],
+                            None => vec![],
+                        },
+                        _ => unreachable!("the checker guarantees (string, bytes, int)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::HasherNew => match self.pop() {
                     HeapValue::Str(alg) => {
                         let elems = match crate::builtins::hasher_new(&alg) {

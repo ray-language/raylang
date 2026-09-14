@@ -13395,3 +13395,30 @@ no está en primer plano (lanzado desde otra sesión) no consigue activar la app
 ventana pasa a key, así que no emite `focused` — no es un fallo del evento, es Gatekeeper de
 foco; en la app real (bundle en primer plano) fluye.
 
+
+## 241. M253 — `std/deflate` sobre el runtime: el LZ77 en raylang era el cuello de `ray release` (sep 2026)
+
+Al publicar 1.21.0 el job de Linux del CI pasó de 14 a 52 minutos y la sospecha inicial (el
+LTO del bundle) resultó falsa: `ray bundle` tarda 3 s. La suite `tests/release_cli.rs` tardaba
+38 minutos porque `ray release` corre su programa embebido en la VM y ahí `deflate.deflate_raw`
+comprimía 500 KB en 241 s (100 KB → 8 s, 200 KB → 31 s: superlineal, las cadenas de hash llegan
+al tope de 256). El mismo programa compilado a nativo: 64 ms. El perfil (`ray profile`) lo
+atribuía a `match_len` (61 %, un millón de llamadas a 4,4 µs), es decir, al coste por llamada e
+indexación de `bytes` en la VM, no a un fallo del algoritmo.
+
+Dos salidas: heurísticas de zlib en el código raylang (`nice_length`, cadena de 32) — 5–10× y
+seguirían siendo decenas de segundos por cada 500 KB, inaceptable para una app real de 20 MB —
+o un runtime de producción. Se eligió lo segundo con el patrón de M195 (`std/bigint`): una
+sola primitiva `__deflate_op(op, data, n) -> [bytes]` en `ray-runtime` tras la feature `deflate`
+(`miniz_oxide`, Rust puro, sin `unsafe`; también `crc32` y `adler32`, que en raylang costaban
+4 s por 500 KB), con `[]` como "no disponible". La decisión de diseño que importa: **los módulos
+raylang no se borran, quedan como respaldo**. `deflate_raw`/`inflate_raw_limit`/`crc32`/`adler32`
+prueban la primitiva y, si responde `[]`, siguen con su propio código. Eso mantiene el
+playground wasm y el build slim funcionando sin la feature, `--without deflate` en nativo, y —
+para inflate — los mensajes de error de siempre (un stream inválido hace que miniz falle y el
+camino raylang lo reporte con su texto). El modo incremental (`inflate_stream`) sigue siendo solo
+raylang: su estado vive en el programa.
+
+Medido: 500 KB en 71 ms en la VM y el intérprete, byte-idéntico al nativo; `release_cli` pasa
+de 38 minutos a segundos. Lo que cambia hacia fuera: el stream comprimido es el de miniz (nivel
+6, ~13 % más pequeño) — sigue siendo DEFLATE estándar y todo lo que lo leía lo sigue leyendo.

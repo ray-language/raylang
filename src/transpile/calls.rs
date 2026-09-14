@@ -2044,6 +2044,22 @@ impl Transpiler {
             // M126: hasher incremental — el estado vive en ray_runtime::crypto (el MISMO registro
             // por-proceso que usa la VM: mismos digests por construcción). Arreglos etiquetados,
             // como los wrappers de std/crypto esperan.
+            // M253: __deflate_op(op, data, n) -> [bytes] ([r] | []). Con `--without deflate` no hay crate
+            // detrás: el sitio emite `[]` y std/deflate/std/inflate caen a su algoritmo en raylang.
+            "deflate_op" if name.starts_with("__") => {
+                if self.exclude.contains("deflate") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(Vec::<Rc<[u8]>>::new()))");
+                } else {
+                    self.needs_rt_deflate = true;
+                    out.push_str("{ match ray_runtime::deflate::op(&");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", ");
+                    self.emit_expr(out, eff[2])?;
+                    out.push_str(") { Some(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(__rt_r)])), None => Rc::new(std::cell::RefCell::new(Vec::<Rc<[u8]>>::new())) } }");
+                }
+            }
             // M195: __bigint_op(op, a, b, c) -> [bytes] (["ok", r] | ["err", msg]). Con `--without
             // bigint` no hay crate detrás: el sitio emite el Err-valor directamente.
             "bigint_op" if name.starts_with("__") => {

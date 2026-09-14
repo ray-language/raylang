@@ -35,6 +35,10 @@ x509 = ["dep:x509-parser"]
 # `num-bigint` — ya estaba en el árbol vía x509-parser. NO es de tiempo constante (vale para el DH/RSA
 # de un cliente, no para claves de servidor bajo ataque de temporización; SECURITY.md).
 bigint = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
+# M253 — DEFLATE/INFLATE de producción (`std/deflate`, `std/inflate`) sobre `miniz_oxide` (Rust puro, sin
+# `unsafe`): el LZ77 escrito en raylang queda como respaldo (sin feature, wasm32, `--without deflate`).
+# Motivo: `ray release` comprimía el bundle en la VM a ~2 KB/s. CRC-32/Adler-32 a mano en el mismo módulo.
+deflate = ["dep:miniz_oxide"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
@@ -103,6 +107,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 x509-parser = { version = "0.17", optional = true }
 # M195 — std/bigint (feature `bigint`).
 num-bigint = { version = "0.4", optional = true }
+# M253 — miniz_oxide 0.8: DEFLATE/INFLATE en Rust puro (el backend de flate2), determinista → oráculo VM↔nativo.
+miniz_oxide = { version = "0.8", optional = true }
 num-traits = { version = "0.2", optional = true }
 num-integer = { version = "0.1", optional = true }
 webpki-roots = { version = "0.26", optional = true }

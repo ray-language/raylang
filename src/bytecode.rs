@@ -287,6 +287,8 @@ pub enum OpCode {
     /// M126: hasher incremental (new -> update* -> final; final consume el handle).
     /// M195: `__bigint_op(op, a, b, c)` → `[bytes]` (`["ok", r]` / `["err", msg]`). Solo VM.
     BigIntOp,
+    /// M253: `__deflate_op(op, data, n)` → `[bytes]` (`[r]` / `[]` = no disponible). Solo VM.
+    DeflateOp,
     HasherNew,
     HasherUpdate,
     HasherFinal,

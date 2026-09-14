@@ -17,7 +17,7 @@
 /// the user brings it to the front; use it to know which window a menu action refers to and to
 /// refresh on regaining focus), or "message" (the page called `window.ray.send(text)`: `tag`
 /// is the text and `window` the sender).
-/// In headless mode a window is "focused" when opened and when `focus(h)` is called, and the
+/// In headless mode opening a window produces no event; `focus(h)` emits "focused", and the
 /// env var RAY_UI_MSG injects one "message" per opened window (tests).
 pub struct UiEvent {
     kind: string,

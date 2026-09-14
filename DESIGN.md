@@ -13387,7 +13387,9 @@ que ya recibía `windowWillClose:`; GTK `notify::is-active` + `gtk_window_is_act
 de tres argumentos y retorno void como el puente IPC — `focus-in-event` devolvería un gboolean
 que no podemos garantizar; Windows `WM_ACTIVATE`). (2) Semántica honesta: `focused` es lo que
 el sistema dice, no lo que la app pidió — `focus(h)` lo produce porque la ventana pasa a key,
-no porque se llamó. (3) Headless lo espeja (al abrir y en `focus`) para que el contrato sea
+no porque se llamó. (3) Headless lo emite en `focus(h)` — y NO al abrir: seis pruebas del aparcado
+y del apagado por inactividad cuentan con que `open` deja la cola en silencio, y esa
+invariante vale más que espejar el `focused` inicial de macOS; así el contrato sigue siendo
 verificable en los tres motores sin sesión gráfica. Límite conocido: en macOS un proceso que
 no está en primer plano (lanzado desde otra sesión) no consigue activar la app y ninguna
 ventana pasa a key, así que no emite `focused` — no es un fallo del evento, es Gatekeeper de

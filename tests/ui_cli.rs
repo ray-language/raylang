@@ -1057,9 +1057,9 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// M252 (ray-sublime #76) — el evento `focused`: abrir una ventana la hace clave (evento con su
-// handle), `focus(h)` lo vuelve a emitir, y la ventana de un `menu` es la clave. Headless espeja
-// a los backends reales; VM, intérprete y nativo.
+// M252 (ray-sublime #76) — el evento `focused`: `focus(h)` lo emite con el handle (abrir no
+// produce eventos en headless: la cola queda en silencio, ver las pruebas del aparcado).
+// VM, intérprete y nativo.
 // ---------------------------------------------------------------------------
 #[test]
 fn focused_events_follow_open_and_focus_on_all_three_engines() {
@@ -1073,7 +1073,7 @@ fn show(e: ui.UiEvent) {
 fn main() {
     let a = ui.open("A", "http://127.0.0.1:1/", 400, 300).unwrap();
     let b = ui.open("B", "http://127.0.0.1:1/", 400, 300).unwrap();
-    show(ui.next_event().unwrap());
+    let _ = ui.focus(b);
     show(ui.next_event().unwrap());
     let _ = ui.focus(a);
     show(ui.next_event().unwrap());
@@ -1084,7 +1084,7 @@ fn main() {
 "##,
     )
     .unwrap();
-    const WANT: &str = "focused 1 []\nfocused 2 []\nfocused 1 []\n1 2\nclosed 2 []\n";
+    const WANT: &str = "focused 2 []\nfocused 1 []\n1 2\nclosed 2 []\n";
     for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
         let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{}", String::from_utf8_lossy(&out.stderr));

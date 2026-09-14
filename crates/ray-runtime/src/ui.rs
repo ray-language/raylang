@@ -1282,10 +1282,10 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
             }
         }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
-        // M252 (ray-sublime #76): una ventana recién abierta es la clave — como en los backends
-        // reales (macOS la hace key al abrir y el delegate lo notifica).
+        // M252 (ray-sublime #76): la ventana recién abierta pasa a ser la clave headless, pero
+        // NO emite `focused`: abrir no produce eventos en headless (las pruebas del aparcado
+        // cuentan con una cola en silencio tras `open`); `focus(h)` sí lo emite.
         headless_key_window().store(id, std::sync::atomic::Ordering::SeqCst);
-        push_event("focused", id, "");
         // M152: el inyector de MENSAJES para pruebas (precedente RAY_UI_PICK): con la
         // variable seteada y no vacía, cada ventana headless "recibe" ese window.ray.send
         // al abrir — la batería de 3 motores asevera el kind "message" byte-idéntico.

@@ -13422,3 +13422,35 @@ raylang: su estado vive en el programa.
 Medido: 500 KB en 71 ms en la VM y el intérprete, byte-idéntico al nativo; `release_cli` pasa
 de 38 minutos a segundos. Lo que cambia hacia fuera: el stream comprimido es el de miniz (nivel
 6, ~13 % más pequeño) — sigue siendo DEFLATE estándar y todo lo que lo leía lo sigue leyendo.
+
+## 242. M254 — Una fibra ocupada en CPU congelaba los plazos de las demás (sep 2026)
+
+ray-sublime (IDEAS §88 de la app) trajo el caso con medición: `ui.next_event_timeout(100)` esperando
+6 s mientras un worker de resaltado leía por delante con `select_timeout([reqs], 0)` en bucle, y un
+repro aislado — `select_timeout(50)` en una fibra, otra ocupada 1,5 s — que en 1,5 s veía **un**
+solo timeout, a los 1500 ms. Los fibers corrían en paralelo; lo que no corría en paralelo era el
+servicio de los timers. Reproducido aquí en los dos motores, con **dos causas distintas**:
+
+- **VM.** `poll_next` tiene dos ramas cuando no hay fibra lista: con `running == 0` llama a
+  `io_wait` (que expira plazos, pregunta al poller y despierta); con `running > 0` ("otro worker
+  ejecuta y podría producir trabajo") dormía 50 µs y reintentaba **sin mirar plazos ni E/S**.
+  Es decir: los timers y los sockets aparcados solo se atendían cuando *todos* los workers
+  estaban ociosos — una sola fibra en CPU congelaba `sleep`/`select_timeout`/`next_event_timeout`
+  y también las conexiones de un servidor. El arreglo extrae el paso 0 de `io_wait`
+  (`expire_deadlines`) y añade `io_poll_once`: la misma pasada **sin bloquear** (poller con
+  timeout 0, esperas sin fd, señales), que la rama `running > 0` ejecuta antes de dormir, acotada
+  a ~1 vez por ms en total (`last_io_poll`) para que N−1 workers ociosos no disparen `poll(2)`
+  cada 50 µs. Medido: 30 timeouts de 50 ms en 1,5 s, peor espera 53 ms (antes 1 y 1500).
+- **Nativo.** El reactor sí venció el plazo a tiempo; el despertar fue a la cola del worker de
+  origen de la fibra — y ese worker estaba ejecutando la fibra ocupada. La fijación no se toca
+  (es corrección, §F1: TLS cacheado por LLVM), pero el `home` se elegía por **round-robin ciego**:
+  la fibra nº k y la nº k+N compartían worker aunque las de en medio hubieran terminado. Ahora
+  `pick_home` elige el worker con **menos fibras vivas** (contador por worker: sube en `spawn`,
+  baja al terminar; empate → round-robin). Dos fibras concurrentes solo comparten worker cuando
+  hay más fibras vivas que workers — ahí la espera es inherente (palomar) y queda documentada.
+
+Lo que **no** se arregla y se documenta en la SPEC: con N = 1 (o más fibras en CPU que workers) una
+fibra que no cede retrasa a las de su worker; el remedio del programa es ceder periódicamente
+(`time.sleep(1)`), justo lo que ray-sublime hizo como vuelta. La imprecisión de
+`next_event_timeout` en reposo que la misma traza menciona (100 ms pedidos, 125–575 medidos) no se
+reprodujo con este repro y queda como observación aparte.

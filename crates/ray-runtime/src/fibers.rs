@@ -7,7 +7,7 @@
 //!   (cero coloreado); la pila es `mmap` con página de guarda, así que la RESERVA (128 KiB por
 //!   defecto) es virtual y solo cuestan las páginas tocadas (medido: 4-12 KiB en `net/webserver`).
 //! - **Workers**: N hilos (= cores, o `RAYLANG_THREADS`), cada uno con SU cola. Una fibra queda
-//!   FIJADA al worker que le toca al nacer (round-robin) y siempre reanuda en ÉL. No es una
+//!   FIJADA al worker que le toca al nacer y siempre reanuda en ÉL. No es una
 //!   preferencia: es CORRECCIÓN. Con opt3+LTO, LLVM cachea la dirección de un thread-local a
 //!   través del cambio de contexto (el asm de corosensei no le dice que el hilo puede cambiar);
 //!   una fibra que migrara escribiría en los TLS del hilo ANTIGUO — UB real, cazado por el test
@@ -16,6 +16,14 @@
 //!   hazard clásico de las corrutinas stackful compiladas; Go lo evita porque SU compilador
 //!   conoce los puntos de cesión — nosotros no controlamos LLVM.) Robar trabajo entre workers
 //!   queda PROHIBIDO por lo mismo, no "pendiente".
+//!   El worker de origen se elige al nacer como el que MENOS fibras vivas tiene fijadas (empate:
+//!   round-robin). M254 (ray-sublime IDEAS §88): con round-robin puro, la fibra nº k y la nº k+N
+//!   compartían worker aunque las de en medio hubieran terminado; si una de las dos computa sin
+//!   ceder, la otra no reanuda —su despertar del reactor llega a tiempo, pero a una cola que nadie
+//!   atiende— y sus `sleep`/`select_timeout` vencen tarde (medido: 1500 ms para un plazo de 50).
+//!   Repartir por fibras VIVAS hace que dos fibras concurrentes solo compartan worker cuando hay
+//!   más fibras vivas que workers; ahí la fijación sigue mandando: una fibra ocupada en CPU
+//!   retrasa a sus vecinas de worker hasta que cede (documentado en SPEC §concurrencia).
 //! - **Reactor**: un hilo con kqueue/epoll **persistente** (a diferencia de `src/poll.rs` de la VM,
 //!   que crea y destruye el poller en cada llamada) + una tubería de despertar (CLOEXEC, como la
 //!   auditoría de IDEAS §53.4) + temporizadores para `sleep`.
@@ -219,8 +227,11 @@ struct Scheduler {
     /// Una cola POR WORKER (fijación de fibras, ver el doc del módulo). El sharding además evita
     /// la contención de una cola global.
     queues: Vec<WorkerQueue>,
-    /// Reparto round-robin de fibras nuevas entre workers.
+    /// Desempate round-robin del reparto de fibras nuevas entre workers.
     next_home: std::sync::atomic::AtomicUsize,
+    /// Fibras VIVAS fijadas a cada worker (M254): sube en `spawn`, baja al terminar la fibra. Es la
+    /// carga que decide el `home` de una fibra nueva (el mínimo; ver el doc del módulo).
+    alive: Vec<std::sync::atomic::AtomicUsize>,
     /// Buzón del reactor: los workers dejan aquí los aparcados y tocan la tubería.
     inbox: Mutex<Vec<Op>>,
     /// Extremo de escritura de la tubería de despertar del reactor.
@@ -228,6 +239,31 @@ struct Scheduler {
 }
 
 impl Scheduler {
+    /// M254: elige el worker de origen de una fibra nueva — el de MENOS fibras vivas fijadas; el
+    /// empate lo rompe un cursor round-robin (así, con todos a cero, el reparto sigue siendo
+    /// circular). Lectura relajada de N contadores: una carrera solo puede dar un reparto
+    /// ligeramente peor, nunca incorrecto (la fijación es al valor devuelto, no al mínimo).
+    fn pick_home(&self) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        let n = self.queues.len();
+        let start = self.next_home.fetch_add(1, Relaxed) % n;
+        let mut best = start;
+        let mut best_load = usize::MAX;
+        for k in 0..n {
+            let w = (start + k) % n;
+            let load = self.alive[w].load(Relaxed);
+            if load < best_load {
+                best = w;
+                best_load = load;
+                if load == 0 {
+                    break;
+                }
+            }
+        }
+        self.alive[best].fetch_add(1, Relaxed);
+        best
+    }
+
     /// Encola una fibra LISTA en la cola de su worker de origen (nunca en otra).
     fn enqueue(&self, t: Task) {
         let wq = &self.queues[t.home];
@@ -295,6 +331,7 @@ fn sched() -> &'static Scheduler {
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
             queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new() }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
+            alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
             wake_wr,
         }));
@@ -334,7 +371,7 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
         f();
     });
     let s = sched();
-    let home = s.next_home.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % s.queues.len();
+    let home = s.pick_home();
     let task = Task { co, done: done.clone(), local: None, timed_out: false, home };
     s.enqueue(task);
     JoinHandle { done }
@@ -662,8 +699,14 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
                 }
                 Park::Yield => s.enqueue(task),
             },
-            Ok(CoroutineResult::Return(())) => finish(&task.done, Ok(())),
-            Err(p) => finish(&task.done, Err(panic_msg(&*p))),
+            Ok(CoroutineResult::Return(())) => {
+                s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                finish(&task.done, Ok(()));
+            }
+            Err(p) => {
+                s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                finish(&task.done, Err(panic_msg(&*p)));
+            }
         }
     }
 }
@@ -1726,6 +1769,46 @@ mod tests {
         for h in handles {
             h.join().expect("la fibra durmiente termina");
         }
+    }
+
+    /// M254 (ray-sublime IDEAS §88): una fibra ocupada en CPU no debe retrasar los timers de las
+    /// demás. Con round-robin puro, la fibra nº k y la nº k+N caían en el mismo worker aunque las
+    /// de en medio hubieran terminado, y la durmiente no reanudaba hasta que la ocupada cedía
+    /// (1500 ms para un plazo de 50). Con el reparto por fibras VIVAS, la ocupada va a otro worker.
+    /// Con un solo worker (RAYLANG_THREADS=1) la fijación hace inevitable la espera: se omite.
+    #[test]
+    fn a_cpu_bound_fiber_does_not_delay_the_sleeps_of_others() {
+        if sched().queues.len() < 2 {
+            return;
+        }
+        let worst = Arc::new(Mutex::new(Duration::ZERO));
+        let w = worst.clone();
+        let sleeper = spawn(move || {
+            for _ in 0..10 {
+                let t0 = Instant::now();
+                fiber_sleep(20);
+                let waited = t0.elapsed();
+                let mut g = w.lock().unwrap();
+                if waited > *g {
+                    *g = waited;
+                }
+            }
+        });
+        // Relleno de vida corta: con round-robin ciego devolvía el cursor al worker de la durmiente.
+        let pads: Vec<_> = (0..(sched().queues.len() * 2)).map(|_| spawn(|| {})).collect();
+        for p in pads {
+            p.join().expect("el relleno termina");
+        }
+        let busy = spawn(|| {
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(600) {
+                std::hint::spin_loop();
+            }
+        });
+        sleeper.join().expect("la durmiente termina");
+        busy.join().expect("la ocupada termina");
+        let worst = *worst.lock().unwrap();
+        assert!(worst < Duration::from_millis(400), "un sleep de 20 ms esperó {worst:?} junto a una fibra ocupada 600 ms");
     }
 
     #[test]

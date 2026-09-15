@@ -294,6 +294,11 @@ Medido sobre el `plaintext` del bench, A/B intercalado ×3, misma sesión, `-c 1
    hazard clásico de las corrutinas stackful compiladas (Go lo evita porque su compilador conoce
    los puntos de cesión). La fijación lo elimina de raíz: cualquier TLS cacheado sigue siendo del
    hilo correcto. Consecuencia: **el robo de trabajo queda PROHIBIDO, no pendiente.**
+   Corolario (M254, DESIGN §242): el worker de origen decide quién puede retrasar a quién. Se
+   elegía por round-robin ciego, y una fibra ocupada en CPU retrasaba a la vecina que le tocó por
+   el módulo aunque hubiera workers libres; ahora se elige el worker con **menos fibras vivas**
+   (contador por worker), así dos fibras concurrentes solo comparten worker cuando hay más fibras
+   vivas que workers.
 2. **Con fijación, ninguna espera dentro de una fibra puede bloquear el hilo**: una hermana fijada
    al mismo worker no correría jamás (interbloqueo). Todas las esperas del runtime emitido pasan
    por `__ray_cv_wait`, que con fibras suelta el lock, CEDE el turno y re-toma (F3 lo hará por

@@ -959,3 +959,52 @@ fn main() -> int {
     assert!(err.contains("requires the VM"), "stderr no pide la VM: {err}");
     assert_eq!(code, 70);
 }
+
+/// M254 (ray-sublime IDEAS §88): una fibra ocupada en CPU no debe congelar los plazos de las demás
+/// en el scheduler M:N. Antes, los deadlines (`sleep`, `select_timeout`, lecturas con plazo) solo se
+/// expiraban en `io_wait`, que exige que NINGÚN worker ejecute: junto a una fibra ocupada 1,5 s,
+/// `select_timeout(50)` vencía una sola vez, a los 1500 ms. Con N = 2 workers (uno ocupado, uno
+/// ocioso que ahora sondea plazos y E/S), los 50 ms se cumplen con margen. (Con N = 1 la espera es
+/// inherente al modelo cooperativo — SPEC §concurrencia — y no se prueba aquí.)
+#[test]
+fn a_cpu_bound_fiber_does_not_delay_select_timeout_of_others() {
+    let src = r#"
+import std/time;
+fn busy(ms: int) {
+    let t0 = time.monotonic();
+    var x = 0;
+    while (time.monotonic() - t0 < ms) { x = x + 1; }
+}
+fn main() -> int {
+    let reqs: Channel<int> = Channel.new();
+    let a: Task<int> = spawn(fn() -> int {
+        var worst = 0;
+        var fired = 0;
+        let t0 = time.monotonic();
+        while (time.monotonic() - t0 < 600) {
+            let t1 = time.monotonic();
+            let r = select_timeout([reqs], 20);
+            let waited = time.monotonic() - t1;
+            if (waited > worst) { worst = waited; }
+            fired = fired + 1;
+        }
+        print("fired=" + fired.to_string() + " worst=" + worst.to_string());
+        worst
+    });
+    let b: Task<int> = spawn(fn() -> int { busy(600); 0 });
+    let w = join(a);
+    join(b);
+    if (w < 300) { 0 } else { 1 }
+}
+"#;
+    let mut path = std::env::temp_dir();
+    path.push("conc_cpu_bound_timers.ray");
+    std::fs::File::create(&path).expect("crea").write_all(src.as_bytes()).expect("escribe");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .env("RAYLANG_THREADS", "2")
+        .arg(&path)
+        .output()
+        .expect("lanza raylang");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "un plazo de 20 ms esperó 300 ms o más junto a una fibra ocupada: {stdout}");
+}

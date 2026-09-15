@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Los plazos de una fibra ya no dependen de que las demás cedan** (M254, cazado por ray-sublime).
+  En la VM multicore, una sola fibra ocupada en CPU congelaba `time.sleep`, `select_timeout`,
+  `ui.next_event_timeout`, las lecturas con plazo y los sockets aparcados de TODAS las demás hasta
+  que ella misma cedía (`select_timeout(50)` junto a un cálculo de 1,5 s: un solo timeout, a los
+  1500 ms): el worker ocioso ahora atiende plazos vencidos y E/S lista mientras otro ejecuta. En el
+  binario nativo, el worker de origen de cada fibra se elige entre los de menos fibras vivas (antes
+  round-robin ciego, que emparejaba una fibra con la ocupada aunque hubiera workers libres). Con
+  `RAYLANG_THREADS=1` la espera sigue siendo inherente al modelo cooperativo (SPEC §concurrencia).
+
 ## 1.22.0 — 2026-09-14
 
 - **`std/deflate` y `std/inflate` con runtime de producción** (M253). `ray release` comprimía el

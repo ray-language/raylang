@@ -2537,7 +2537,10 @@ aplicación — ver la guía del framework).
 ### Determinismo y límites
 
 - `ray run --deterministic` (o `RAYLANG_THREADS=1`): un solo hilo, orden FIFO — salida reproducible
-  (tests).
+  (tests). Con un solo worker no hay quien reanude a las demás mientras una fibra computa: un
+  trabajo largo de CPU que conviva con un bucle de eventos (`select_timeout`, `ui.next_event_timeout`)
+  debe ceder de vez en cuando (`time.sleep(1)`). Con varios workers los plazos de las otras fibras
+  se cumplen aunque una no ceda.
 - `ray run --fuel N` / `--heap N`: límites de instrucciones y de objetos vivos, para embeber raylang
   confinado (un bucle infinito o una fuga no cuelgan al anfitrión).
 - La concurrencia requiere la **VM** (el default); `--interp` es el oráculo secuencial de desarrollo.

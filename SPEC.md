@@ -453,6 +453,17 @@ resultado de `select` entre varios canales listos a la vez. Un programa cuya sal
 reproducible debe fijar N = 1 o sincronizar por canales. La cancelación es **cooperativa** (actúa
 en los puntos de cesión), nunca preemptiva.
 
+**Plazos y fibras ocupadas.** No hay preempción: una fibra que computa sin ceder ocupa su worker
+hasta que cede (E/S, canal, `sleep`, `yield`). Los **plazos** de las demás fibras (`time.sleep`,
+`select_timeout`, `io.read_timeout`, `net.set_read_timeout`, `ui.next_event_timeout`) y sus
+despertares por E/S **no dependen** de que esa fibra ceda mientras haya **otro worker** que pueda
+reanudarlas: en la VM, cualquier worker ocioso atiende los plazos vencidos y la E/S lista (con
+precisión de ~1 ms); en el binario nativo, el reactor los atiende en su propio hilo y la fibra
+reanuda en su worker de origen, que se elige al nacer entre los de **menos fibras vivas**. Con
+**N = 1**, o cuando hay más fibras ocupadas en CPU que workers, una fibra que no cede sí retrasa a
+las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de eventos debe
+**ceder periódicamente** (`time.sleep(1)` o `yield`).
+
 - `spawn(f: fn() -> T) -> Task<T>` lanza una fibra (no cede). `join(t: Task<T>) -> T` bloquea
   hasta que termina y **re-lanza** su fallo; `try_join(t) -> Result<T, string>` lo devuelve como
   valor en vez de re-lanzarlo.

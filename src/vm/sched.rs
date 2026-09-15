@@ -188,6 +188,11 @@ pub(super) struct Shared {
     /// primer aparcado y lo borra al resolver (canal listo o timeout). Un `select_deadlines` no vacío
     /// es señal de "esperando un plazo": impide declarar deadlock y acota el sueño del scheduler.
     pub(super) select_deadlines: std::collections::HashMap<usize, std::time::Instant>,
+    /// M254: instante del último sondeo no bloqueante de plazos/E/S hecho por un worker OCIOSO
+    /// mientras otro ejecuta (`io_poll_once`). Acota ese sondeo a ~1 por ms en TOTAL (no por
+    /// worker): los timers de las fibras aparcadas vencen con precisión de ~1 ms sin que N-1
+    /// workers ociosos disparen `poll(2)` cada 50 µs.
+    pub(super) last_io_poll: Option<std::time::Instant>,
     /// M38.3b paso 3: el **resultado del programa**, fijado UNA vez (semántica Go: cuando `main` retorna, todo
     /// el programa termina; o un error fatal / deadlock). Su presencia es la **señal de apagado**: los demás
     /// workers, al verla, se detienen. El orquestador lo lee tras unir a los hilos.
@@ -390,6 +395,19 @@ impl<'a> Vm<'a> {
                 return Err(e);
             }
             // Otro worker ejecuta y podría desbloquearnos trabajo: espera un poco y reintenta.
+            // M254 (ray-sublime IDEAS §88): ANTES de esperar, atiende los plazos vencidos y la E/S
+            // ya lista de las fibras aparcadas. Hasta aquí eso solo lo hacía `io_wait`, que exige
+            // `running == 0`: una sola fibra ocupada en CPU congelaba los `sleep`/`select_timeout`/
+            // `next_event_timeout` y los sockets de TODAS las demás hasta que ella misma cediera
+            // (medido: `select_timeout(50)` esperando 1500 ms junto a una fibra ocupada 1,5 s).
+            let now = std::time::Instant::now();
+            let due = sh.last_io_poll.is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_millis(1));
+            if due {
+                sh.last_io_poll = Some(now);
+                if Self::io_poll_once(&mut sh) {
+                    continue; // dejó fibras en `ready`; reintenta el pop
+                }
+            }
             drop(sh);
             std::thread::sleep(std::time::Duration::from_micros(SPIN_SLEEP_US));
         }
@@ -574,53 +592,135 @@ impl<'a> Vm<'a> {
     /// poller espera como mucho hasta el más próximo; al vencer, se **marca el handle**
     /// (`mark_read_timeout`) y se despierta la fibra: su lectura re-ejecutada consume la marca y
     /// devuelve el error de timeout. Sin deadlines, la espera sigue siendo infinita (idéntico a M17).
+    /// Paso 0 de `io_wait` (M254: también lo usa `io_poll_once`): expira los deadlines vencidos y
+    /// despierta sus fibras. Una espera de LECTURA (handle >= 0) se marca (su lectura re-ejecutada
+    /// devuelve el timeout); un SLEEP (M57.2: fd/handle = -1, sin re-ejecución) simplemente continúa
+    /// tras dormir. M116.1: expira también los `select_timeout` vencidos — un select aparcado
+    /// (`Waiting::Select`) cuyo deadline (por `on`, el handle del arreglo) ya pasó → marca el timeout
+    /// (su opcode re-ejecutado lo consume y devuelve None) y despierta la fibra. El deadline se BORRA
+    /// de `select_deadlines` aquí (ya no está pendiente); si el opcode re-escaneara y re-aparcara,
+    /// pondría uno nuevo — pero al haber vencido devuelve None, no re-aparca.
+    /// Devuelve si dejó alguna fibra en `ready`.
+    fn expire_deadlines(shared: &mut Shared, now: std::time::Instant) -> bool {
+        let mut woke = false;
+        let mut i = 0;
+        while i < shared.io_parked.len() {
+            if shared.io_parked[i].deadline.is_some_and(|d| d <= now) {
+                let p = shared.io_parked.remove(i);
+                if p.handle >= 0 {
+                    crate::builtins::mark_read_timeout(p.handle);
+                }
+                shared.ready.push_back(p.fiber);
+                woke = true;
+            } else {
+                i += 1;
+            }
+        }
+        let mut i = 0;
+        while i < shared.parked.len() {
+            let on = shared.parked[i].on;
+            let due = matches!(shared.parked[i].waiting, Waiting::Select)
+                && shared.select_deadlines.get(&on).is_some_and(|d| *d <= now);
+            if due {
+                shared.select_deadlines.remove(&on);
+                crate::builtins::mark_read_timeout(on as i64);
+                let p = shared.parked.remove(i);
+                shared.ready.push_back(p.fiber);
+                woke = true;
+            } else {
+                i += 1;
+            }
+        }
+        woke
+    }
+
+    /// M254: sondeo **no bloqueante** de plazos y E/S, para el worker OCIOSO mientras otro ejecuta
+    /// (`poll_next`, rama `running > 0`). Es `io_wait` sin esperar: expira los deadlines vencidos,
+    /// pregunta al poller con timeout 0 por los sockets aparcados (y el self-pipe de señales) y
+    /// despierta las esperas sin fd cuya fuente ya tiene algo (cola de eventos de UI, watch). Sin
+    /// poller (`Unsupported`) cae al mismo respaldo cooperativo de `io_wait` (re-encolar las fibras
+    /// con fd, con las guardas de stdin/UI/watch) — el llamador lo acota a ~1 vez por ms, la misma
+    /// cadencia del respaldo. Devuelve si dejó alguna fibra en `ready`.
+    pub(super) fn io_poll_once(shared: &mut Shared) -> bool {
+        let now = std::time::Instant::now();
+        let mut woke = Self::expire_deadlines(shared, now);
+        if crate::builtins::signals_pending() {
+            Self::deliver_signals(shared);
+        }
+        let mut read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
+        if shared.signal_chan.is_some() && shared.signal_fd >= 0 {
+            read_fds.push(shared.signal_fd);
+        }
+        let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
+        if !read_fds.is_empty() || !write_fds.is_empty() {
+            match crate::poll::wait(&read_fds, &write_fds, 0) {
+                crate::poll::PollResult::Ready(ready) if !ready.is_empty() => {
+                    if shared.signal_chan.is_some() && ready.contains(&shared.signal_fd) {
+                        Self::deliver_signals(shared);
+                    }
+                    let mut woken: Vec<IoParked> = Vec::new();
+                    let mut i = 0;
+                    while i < shared.io_parked.len() {
+                        if shared.io_parked[i].fd >= 0 && ready.contains(&shared.io_parked[i].fd) {
+                            woken.push(shared.io_parked.remove(i));
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    woke |= !woken.is_empty();
+                    Self::wake_parked(shared, woken);
+                }
+                crate::poll::PollResult::Ready(_) => {}
+                crate::poll::PollResult::Unsupported => {
+                    woke |= Self::wake_io_fallback(shared);
+                }
+            }
+        }
+        woke |= Self::wake_ready_without_fd(shared);
+        woke || !shared.ready.is_empty()
+    }
+
+    /// Respaldo cooperativo de M15.5 (sin poller, o EINTR sin deadlines): despierta solo las fibras
+    /// CON fd (retry); las durmientes esperan su deadline (las expira `expire_deadlines`). Nota: sin
+    /// poller los deadlines de LECTURA no vencen (cada re-aparcado los renueva); macOS/Linux no caen
+    /// aquí. Devuelve si despertó a alguna. (M254: compartido por `io_wait` e `io_poll_once`.)
+    fn wake_io_fallback(shared: &mut Shared) -> bool {
+        let mut woken: Vec<IoParked> = Vec::new();
+        let mut i = 0;
+        while i < shared.io_parked.len() {
+            // E/S con fd (unix sin poller / EINTR) o sin fd (M170, no-unix); los sleeps (handle -1) no.
+            // M173 (Windows): stdin (pseudo-handle 0) se despierta SOLO si hay algo que leer —
+            // el respaldo puede consultarlo (`stdin_ready(0)` es real ahí). Si se despertara a
+            // ciegas, su opcode re-aparcaría con un plazo NUEVO cada 1 ms y `read_timeout` no
+            // vencería jamás; aparcada, el paso 0 expira su deadline como corresponde.
+            let p = &shared.io_parked[i];
+            let is_stdin = p.handle == crate::builtins::STDIN_PSEUDO_HANDLE && p.pending_write.is_none();
+            let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE; // M177: ídem para la UI
+            // M181: un watch de fs sin fd (Windows) solo despierta con evento en cola.
+            let watch_idle = p.fd < 0 && crate::builtins::watch_has_pending(p.handle) == Some(false);
+            if (p.fd >= 0 || p.handle >= 0)
+                && (!is_stdin || crate::builtins::stdin_ready(0))
+                && (!is_ui || crate::builtins::ui_has_event())
+                && !watch_idle
+            {
+                woken.push(shared.io_parked.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        if woken.is_empty() {
+            return false;
+        }
+        Self::wake_parked(shared, woken);
+        true
+    }
+
     pub(super) fn io_wait(shared: &mut Shared) {
         loop {
-            // 0) Expira los deadlines vencidos y despierta sus fibras. Una espera de LECTURA
-            //    (handle >= 0) se marca (su lectura re-ejecutada devuelve el timeout); un SLEEP
-            //    (M57.2: fd/handle = -1, sin re-ejecución) simplemente continúa tras dormir.
-            //    Si expiró alguna, ya hay una fibra lista → volver.
+            // 0) Expira los deadlines vencidos (E/S con plazo, sleeps y select_timeout) y despierta
+            //    sus fibras. Si expiró alguna, ya hay una fibra lista → volver.
             let now = std::time::Instant::now();
-            let mut expired: Vec<IoParked> = Vec::new();
-            let mut i = 0;
-            while i < shared.io_parked.len() {
-                if shared.io_parked[i].deadline.is_some_and(|d| d <= now) {
-                    expired.push(shared.io_parked.remove(i));
-                } else {
-                    i += 1;
-                }
-            }
-            if !expired.is_empty() {
-                for p in expired {
-                    if p.handle >= 0 {
-                        crate::builtins::mark_read_timeout(p.handle);
-                    }
-                    shared.ready.push_back(p.fiber);
-                }
-                return;
-            }
-            // M116.1: expira los `select_timeout` vencidos. Un select aparcado (`Waiting::Select`)
-            // cuyo deadline (por `on`, el handle del arreglo) ya pasó → marca el timeout (su opcode
-            // re-ejecutado lo consume y devuelve None) y despierta la fibra. El deadline se BORRA de
-            // `select_deadlines` aquí (ya no está pendiente); si el opcode re-escaneara y re-aparcara,
-            // pondría uno nuevo — pero al haber vencido devuelve None, no re-aparca.
-            let mut woke_select = false;
-            let mut i = 0;
-            while i < shared.parked.len() {
-                let on = shared.parked[i].on;
-                let due = matches!(shared.parked[i].waiting, Waiting::Select)
-                    && shared.select_deadlines.get(&on).is_some_and(|d| *d <= now);
-                if due {
-                    shared.select_deadlines.remove(&on);
-                    crate::builtins::mark_read_timeout(on as i64);
-                    let p = shared.parked.remove(i);
-                    shared.ready.push_back(p.fiber);
-                    woke_select = true;
-                } else {
-                    i += 1;
-                }
-            }
-            if woke_select {
+            if Self::expire_deadlines(shared, now) {
                 return;
             }
 
@@ -734,36 +834,12 @@ impl<'a> Vm<'a> {
                     continue;
                 }
             }
-            // Respaldo (sin poller, o EINTR sin deadlines): busy-poll cooperativo de M15.5 —
-            // despierta solo las fibras CON fd (retry); las durmientes esperan su deadline (las
-            // expira el paso 0 en vueltas siguientes). Nota: sin poller los deadlines de LECTURA
-            // no vencen (cada re-aparcado los renueva); macOS/Linux no caen aquí.
+            // Respaldo (sin poller, o EINTR sin deadlines): busy-poll cooperativo de M15.5 (ver
+            // `wake_io_fallback`): duerme 1 ms y re-encola las fibras con fd. Si no despertó a
+            // nadie (todo stdin/UI/watch sin datos), la vuelta siguiente expira plazos y reintenta.
             crate::builtins::sleep_millis(1);
-            let mut woken: Vec<IoParked> = Vec::new();
-            let mut i = 0;
-            while i < shared.io_parked.len() {
-                // E/S con fd (unix sin poller / EINTR) o sin fd (M170, no-unix); los sleeps (handle -1) no.
-                // M173 (Windows): stdin (pseudo-handle 0) se despierta SOLO si hay algo que leer —
-                // el respaldo puede consultarlo (`stdin_ready(0)` es real ahí). Si se despertara a
-                // ciegas, su opcode re-aparcaría con un plazo NUEVO cada 1 ms y `read_timeout` no
-                // vencería jamás; aparcada, el paso 0 expira su deadline como corresponde.
-                let p = &shared.io_parked[i];
-                let is_stdin = p.handle == crate::builtins::STDIN_PSEUDO_HANDLE && p.pending_write.is_none();
-                let is_ui = p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE; // M177: ídem para la UI
-                // M181: un watch de fs sin fd (Windows) solo despierta con evento en cola.
-                let watch_idle = p.fd < 0 && crate::builtins::watch_has_pending(p.handle) == Some(false);
-                if (p.fd >= 0 || p.handle >= 0)
-                    && (!is_stdin || crate::builtins::stdin_ready(0))
-                    && (!is_ui || crate::builtins::ui_has_event())
-                    && !watch_idle
-                {
-                    woken.push(shared.io_parked.remove(i));
-                } else {
-                    i += 1;
-                }
-            }
-            Self::wake_parked(shared, woken);
-            return;
+            Self::wake_io_fallback(shared);
+            return; // (aunque no despertara a nadie: `poll_next` reevalúa apagado/señales y vuelve)
         }
     }
 

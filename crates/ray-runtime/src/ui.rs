@@ -1494,6 +1494,56 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     }
 }
 
+/// M259 (ray-sublime): menú CONTEXTUAL — los `items` (mismo codificado que `menu`) aparecen en la
+/// posición actual del puntero, sobre la ventana `id`. La llamada vuelve en cuanto el menú se
+/// muestra; la elección llega como evento `("menu", id, tag)` — los roles estándar (M255) actúan
+/// en nativo. El menú vive lo que dura abierto: sus tags se registran mientras (para
+/// `set_menu_item`) y se purgan al cerrarse. Patrón típico: la página captura `contextmenu`,
+/// manda un `"message"` y el programa responde con `popup_menu`. `Err` con ventana
+/// cerrada/desconocida o item inválido. Headless: registra los tags + traza.
+pub fn popup_menu(id: i64, items: &[String]) -> Result<(), String> {
+    let decoded = decode_items(items)?;
+    let map = windows().lock().unwrap();
+    match map.get(&id) {
+        None => Err("ui: not an open window".to_string()),
+        Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
+        Some(WinState { win: Win::Headless, .. }) => {
+            let mut tags = headless_menu_tags().lock().unwrap();
+            for it in &decoded {
+                if !it.is_separator() {
+                    tags.insert(it.tag.clone());
+                }
+            }
+            if ui_trace() {
+                eprintln!("[ui] popup {id} items {}", decoded.len());
+            }
+            Ok(())
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Some(WinState { win: Win::Shell, .. }) => Err("ui: context menus are not available on mobile (v1)".to_string()),
+        #[cfg(target_os = "macos")]
+        Some(WinState { win: Win::Mac { .. }, .. }) => {
+            drop(map);
+            mac::popup_menu(&decoded);
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { window, alive, .. }, .. }) => {
+            let (w, alive) = (*window, alive.clone());
+            drop(map);
+            gtk::popup_menu(w, alive, id, &decoded);
+            Ok(())
+        }
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, alive }, .. }) => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::popup_menu(h, alive, &decoded);
+            Ok(())
+        }
+    }
+}
+
 pub fn focus_window(id: i64) -> Result<(), String> {
     let map = windows().lock().unwrap();
     match map.get(&id) {
@@ -2345,11 +2395,20 @@ mod mac {
     /// M210: `setContentMinSize:` recibe un NSSize (dos f64, misma forma que CGSize).
     #[repr(C)]
     #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
     struct CGSize {
         w: f64,
         h: f64,
     }
     type MsgVoidSize = unsafe extern "C" fn(Id, Sel, CGSize);
+    /// M259: `[NSEvent mouseLocation]` (NSPoint por valor) y `popUpMenuPositioningItem:atLocation:inView:`.
+    type MsgPoint = unsafe extern "C" fn(Id, Sel) -> CGPoint;
+    type MsgPopup = unsafe extern "C" fn(Id, Sel, Id, CGPoint, Id) -> u8;
     /// M224: `colorWithSRGBRed:green:blue:alpha:` (cuatro CGFloat).
     type MsgIdColor = unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id;
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
@@ -3159,6 +3218,40 @@ mod mac {
     /// target es un singleton del delegate. M236: `autoenablesItems` a NO en el submenú para
     /// que `enabled` del spec y `set_menu_item` manden; `position` (-1 = al final; n = tras el
     /// menú de aplicación + n, acotado) para poner File antes del Edit estándar (#68).
+    /// M259: menú contextual en la posición del puntero (coordenadas de pantalla: `inView` nil).
+    /// El tracking corre en el hilo principal dentro del bloque; al cerrarse se purgan sus items
+    /// del registro por tag (como `replace_menu`).
+    pub(super) fn popup_menu(items: &[super::MenuItemSpec]) {
+        let items = items.to_vec();
+        on_main(move || {
+            // SAFETY: mensajes estándar de AppKit en el hilo principal.
+            unsafe {
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init_title: MsgIdId = std::mem::transmute(msg_send());
+                let add: MsgVoidId = std::mem::transmute(msg_send());
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                let mouse: MsgPoint = std::mem::transmute(msg_send());
+                let popup: MsgPopup = std::mem::transmute(msg_send());
+                let target = menu_target();
+                let menu = init_title(alloc(cls(b"NSMenu\0"), sel(b"alloc\0")), sel(b"initWithTitle:\0"), nsstring(""));
+                set_bool(menu, sel(b"setAutoenablesItems:\0"), 0);
+                let mut made: Vec<usize> = Vec::with_capacity(items.len());
+                for spec in &items {
+                    let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
+                    made.push(item as usize);
+                    add(menu, sel(b"addItem:\0"), item);
+                }
+                let at = mouse(cls(b"NSEvent\0"), sel(b"mouseLocation\0"));
+                popup(menu, sel(b"popUpMenuPositioningItem:atLocation:inView:\0"), std::ptr::null_mut(), at, std::ptr::null_mut());
+                let mut reg = items_by_tag().lock().unwrap();
+                for v in reg.values_mut() {
+                    v.retain(|p| !made.contains(p));
+                }
+                reg.retain(|_, v| !v.is_empty());
+            }
+        });
+    }
+
     pub(super) fn add_menu(title: &str, position: i64, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let title = title.to_string();
         let items = items.to_vec();
@@ -4475,6 +4568,10 @@ mod gtk {
         window_is_active: Option<unsafe extern "C" fn(Widget) -> i32>,
         /// M255: `webkit_web_view_execute_editing_command(view, "Cut")` — los roles de edición.
         execute_editing_command: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
+        /// M259: menú contextual — `gtk_menu_popup_at_pointer` (3.22+) o el `gtk_menu_popup` clásico.
+        menu_popup_at_pointer: Option<unsafe extern "C" fn(Widget, *mut c_void)>,
+        menu_popup: Option<unsafe extern "C" fn(Widget, Widget, Widget, *mut c_void, *mut c_void, u32, u32)>,
+        menu_attach_to_widget: Option<unsafe extern "C" fn(Widget, Widget, *mut c_void)>,
     }
     unsafe impl Send for ItemApi {}
     unsafe impl Sync for ItemApi {}
@@ -4512,6 +4609,9 @@ mod gtk {
                     image_item_always_show: opt(c"gtk_image_menu_item_set_always_show_image").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                     window_is_active: opt(c"gtk_window_is_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> i32>(p)),
                     execute_editing_command: opt_webkit(c"webkit_web_view_execute_editing_command").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
+                    menu_popup_at_pointer: opt(c"gtk_menu_popup_at_pointer").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut c_void)>(p)),
+                    menu_popup: opt(c"gtk_menu_popup").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, Widget, Widget, *mut c_void, *mut c_void, u32, u32)>(p)),
+                    menu_attach_to_widget: opt(c"gtk_menu_attach_to_widget").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, Widget, *mut c_void)>(p)),
                 }
             }
         })
@@ -4632,50 +4732,127 @@ mod gtk {
                 let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
                 let top = (api.menu_item_new_with_label)(title_c.as_ptr());
                 let menu = (api.menu_new)();
-                for spec in items {
-                    if spec.is_separator() {
-                        if let Some(sep_new) = ia.separator_new {
-                            (api.menu_shell_append)(menu, sep_new());
-                        }
-                        continue;
-                    }
-                    let (tag, label) = (&spec.tag, &spec.label);
-                    let label_c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
-                    // M236: check → GtkCheckMenuItem; icono → GtkImageMenuItem (si la lib lo trae).
-                    let image_api = if spec.icon.is_empty() { None } else { ia.image_item_new.zip(ia.image_new_from_file).zip(ia.image_item_set_image) };
-                    let item = if let Some(check_new) = ia.check_new.filter(|_| spec.checked) {
-                        let w = check_new(label_c.as_ptr());
-                        if let Some(f) = ia.check_set_active { f(w, 1); }
-                        w
-                    } else if let Some(((item_new, image_new), set_image)) = image_api {
-                        let w = item_new(label_c.as_ptr());
-                        let path_c = std::ffi::CString::new(spec.icon.replace('\0', "")).unwrap();
-                        set_image(w, image_new(path_c.as_ptr()));
-                        if let Some(f) = ia.image_item_always_show { f(w, 1); }
-                        w
-                    } else {
-                        (api.menu_item_new_with_label)(label_c.as_ptr())
-                    };
-                    if !spec.enabled && let Some(f) = ia.set_sensitive {
-                        f(item, 0);
-                    }
-                    items_by_tag().lock().unwrap().entry(tag.clone()).or_default().push((item as usize, alive.clone()));
-                    let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone(), window }));
-                    (api.signal_connect)(
-                        item,
-                        c"activate".as_ptr(),
-                        on_menu_activate,
-                        ctx as *mut c_void,
-                        drop_menu_ctx,
-                        0,
-                    );
-                    (api.menu_shell_append)(menu, item);
-                }
+                append_items(api, menu, items, &alive, window);
                 (api.menu_item_set_submenu)(top, menu);
                 (api.menu_shell_append)(bar, top);
             }
             Some(bar)
         }
+    }
+
+    /// Construye los items de `specs` dentro de `menu` (barra o contextual, M259) y los registra
+    /// por tag; devuelve los widgets creados (para purgarlos si el menú es efímero).
+    unsafe fn append_items(api: &Api, menu: Widget, specs: &[super::MenuItemSpec], alive: &Arc<AtomicBool>, window: i64) -> Vec<usize> {
+        let ia = item_api();
+        let mut made = Vec::with_capacity(specs.len());
+        unsafe {
+            for spec in specs {
+                if spec.is_separator() {
+                    if let Some(sep_new) = ia.separator_new {
+                        (api.menu_shell_append)(menu, sep_new());
+                    }
+                    continue;
+                }
+                let (tag, label) = (&spec.tag, &spec.label);
+                let label_c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
+                // M236: check → GtkCheckMenuItem; icono → GtkImageMenuItem (si la lib lo trae).
+                let image_api = if spec.icon.is_empty() { None } else { ia.image_item_new.zip(ia.image_new_from_file).zip(ia.image_item_set_image) };
+                let item = if let Some(check_new) = ia.check_new.filter(|_| spec.checked) {
+                    let w = check_new(label_c.as_ptr());
+                    if let Some(f) = ia.check_set_active { f(w, 1); }
+                    w
+                } else if let Some(((item_new, image_new), set_image)) = image_api {
+                    let w = item_new(label_c.as_ptr());
+                    let path_c = std::ffi::CString::new(spec.icon.replace('\0', "")).unwrap();
+                    set_image(w, image_new(path_c.as_ptr()));
+                    if let Some(f) = ia.image_item_always_show { f(w, 1); }
+                    w
+                } else {
+                    (api.menu_item_new_with_label)(label_c.as_ptr())
+                };
+                if !spec.enabled && let Some(f) = ia.set_sensitive {
+                    f(item, 0);
+                }
+                items_by_tag().lock().unwrap().entry(tag.clone()).or_default().push((item as usize, alive.clone()));
+                let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone(), window }));
+                (api.signal_connect)(
+                    item,
+                    c"activate".as_ptr(),
+                    on_menu_activate,
+                    ctx as *mut c_void,
+                    drop_menu_ctx,
+                    0,
+                );
+                (api.menu_shell_append)(menu, item);
+                made.push(item as usize);
+            }
+        }
+        made
+    }
+
+    /// M259: el contexto del `deactivate` de un menú contextual — el menú y sus items, para
+    /// purgar el registro por tag y destruir el menú (en un idle: nunca dentro de su propia señal).
+    struct PopupCtx {
+        menu: usize,
+        items: Vec<usize>,
+    }
+
+    extern "C" fn on_popup_deactivate(_w: Widget, data: *mut c_void) {
+        // SAFETY: `data` es el PopupCtx de popup_menu; vive hasta el GClosureNotify.
+        let ctx = unsafe { &*(data as *const PopupCtx) };
+        {
+            let mut reg = items_by_tag().lock().unwrap();
+            for v in reg.values_mut() {
+                v.retain(|(p, _)| !ctx.items.contains(p));
+            }
+            reg.retain(|_, v| !v.is_empty());
+        }
+        if let Ok(api) = api().as_ref() {
+            // SAFETY: idle_add con el widget como dato; `destroy_widget_idle` lo destruye una vez.
+            unsafe { (api.idle_add)(destroy_widget_idle, ctx.menu as *mut c_void) };
+        }
+    }
+
+    extern "C" fn destroy_widget_idle(data: *mut c_void) -> i32 {
+        if let Ok(api) = api().as_ref() {
+            // SAFETY: hilo gtk; el widget es el menú contextual ya desactivado.
+            unsafe { (api.destroy)(data as Widget) };
+        }
+        0 // G_SOURCE_REMOVE
+    }
+
+    extern "C" fn drop_popup_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut PopupCtx) });
+    }
+
+    /// M259: menú contextual en la posición del puntero (`gtk_menu_popup_at_pointer`, 3.22+; el
+    /// `gtk_menu_popup` clásico de respaldo). Se destruye al desactivarse.
+    pub(super) fn popup_menu(window: usize, alive: Arc<AtomicBool>, id: i64, items: &[super::MenuItemSpec]) {
+        let items = items.to_vec();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(api) = api().as_ref() else { return };
+            let ia = item_api();
+            // SAFETY: hilo gtk, ventana viva (alive); widgets recién creados.
+            unsafe {
+                let menu = (api.menu_new)();
+                let made = append_items(api, menu, &items, &alive, id);
+                if let Some(attach) = ia.menu_attach_to_widget {
+                    attach(menu, window as Widget, std::ptr::null_mut());
+                }
+                (api.show_all)(menu);
+                let ctx = Box::into_raw(Box::new(PopupCtx { menu: menu as usize, items: made }));
+                (api.signal_connect)(menu, c"deactivate".as_ptr(), on_popup_deactivate, ctx as *mut c_void, drop_popup_ctx, 0);
+                if let Some(popup) = ia.menu_popup_at_pointer {
+                    popup(menu, std::ptr::null_mut());
+                } else if let Some(popup) = ia.menu_popup {
+                    popup(menu, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0, 0);
+                }
+            }
+        });
     }
 
     /// M148: diálogo de archivo con el chooser NATIVO (3.20+; en libs más viejas, Err limpio).
@@ -6150,6 +6327,107 @@ mod win {
     /// (`MNS_NOCHECK`: `MenuItem` no tiene `checked`/`icon`, y el hueco vacío se veía como sangría).
     /// (código VK, ctrl, alt, shift, tag) de cada atajo de la ventana.
     type Accels = Vec<(u16, bool, bool, bool, String)>;
+    /// Añade los items de `specs` a `popup` (submenú de la barra, o menú contextual — M259):
+    /// atajos como texto (+ acelerador salvo roles, M255), estado, icono .bmp, registro por tag.
+    unsafe fn append_items(
+        popup: HMENU,
+        specs: &[super::MenuItemSpec],
+        hwnd: HWND,
+        tags: &mut HashMap<u16, String>,
+        keys: &mut Accels,
+        accels: &mut Vec<ACCEL>,
+        next_id: &mut u16,
+    ) {
+        // SAFETY: menú propio recién creado; Windows lo posee al asignarse a la ventana/mostrarse.
+        unsafe {
+            for spec in specs {
+                if spec.is_separator() {
+                    let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
+                    continue;
+                }
+                // M255: el atajo de un rol estándar se MUESTRA pero no se registra como
+                // acelerador — la tecla debe seguir llegando al webview, que ya la atiende
+                // de forma nativa (interceptarla rompería el Ctrl+C real).
+                let is_role = spec.edit_role().is_some();
+                let label = match accel_for(&spec.shortcut, *next_id) {
+                    Some((text, accel)) => {
+                        if !is_role {
+                            keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
+                            accels.push(accel);
+                        }
+                        format!("{}\t{text}", spec.label)
+                    }
+                    None => spec.label.clone(),
+                };
+                let mut flags = MF_STRING;
+                if !spec.enabled { flags |= MF_GRAYED; }
+                if spec.checked { flags |= MF_CHECKED; }
+                let _ = AppendMenuW(popup, flags, *next_id as usize, PCWSTR(wide(&label).as_ptr()));
+                // M236: icono — solo .bmp por LoadImageW (otros formatos se ignoran, documentado).
+                if spec.icon.to_ascii_lowercase().ends_with(".bmp")
+                    && let Ok(h) = LoadImageW(None, PCWSTR(wide(&spec.icon).as_ptr()), IMAGE_BITMAP, 16, 16, LR_LOADFROMFILE)
+                {
+                    let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_BITMAP, ..Default::default() };
+                    info.hbmpItem = windows::Win32::Graphics::Gdi::HBITMAP(h.0);
+                    let _ = SetMenuItemInfoW(popup, *next_id as u32, false, &info);
+                }
+                items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push((hwnd.0 as usize, *next_id));
+                tags.insert(*next_id, spec.tag.clone());
+                *next_id = next_id.wrapping_add(1);
+            }
+        }
+    }
+
+    /// M259: ids de comando de los menús CONTEXTUALES (rango propio, cíclico: un popup vive lo
+    /// que está abierto y sus ids se purgan al cerrarse).
+    const POPUP_ID_BASE: u16 = 40000;
+    static POPUP_NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(POPUP_ID_BASE);
+
+    /// M259: menú contextual en la posición del cursor (`TrackPopupMenuEx` sin RETURNCMD: la
+    /// elección llega como WM_COMMAND a la ventana, igual que la barra). Bloquea el hilo 1 mientras
+    /// está abierto (es un bucle modal del sistema); al cerrarse se purgan sus tags.
+    pub(super) fn popup_menu(hwnd: usize, alive: Arc<AtomicBool>, items: &[super::MenuItemSpec]) {
+        let items = items.to_vec();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: hilo 1; el ctx vive mientras `alive` (WM_DESTROY lo apaga antes de liberar).
+            unsafe {
+                let hwnd = HWND(hwnd as *mut _);
+                let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
+                if ctx_ptr.is_null() {
+                    return;
+                }
+                let ctx = &mut *ctx_ptr;
+                let Ok(popup) = CreatePopupMenu() else { return };
+                let n = items.iter().filter(|it| !it.is_separator()).count() as u16;
+                let mut first = POPUP_NEXT.fetch_add(n, Ordering::Relaxed);
+                if first < POPUP_ID_BASE || first.wrapping_add(n) < first {
+                    POPUP_NEXT.store(POPUP_ID_BASE + n, Ordering::Relaxed);
+                    first = POPUP_ID_BASE;
+                }
+                let mut next_id = first;
+                let (mut keys, mut accels) = (Vec::new(), Vec::new());
+                append_items(popup, &items, hwnd, &mut ctx.menu_tags, &mut keys, &mut accels, &mut next_id);
+                let mut pt = windows::Win32::Foundation::POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = SetForegroundWindow(hwnd);
+                let _ = TrackPopupMenuEx(popup, (TPM_LEFTALIGN | TPM_RIGHTBUTTON).0, pt.x, pt.y, hwnd, None);
+                let _ = DestroyMenu(popup);
+                // El WM_COMMAND de la elección ya se entregó (sin RETURNCMD llega durante la llamada).
+                for id in first..next_id {
+                    ctx.menu_tags.remove(&id);
+                }
+                let mut reg = items_by_tag().lock().unwrap();
+                for v in reg.values_mut() {
+                    v.retain(|(h, id)| !(*h == hwnd.0 as usize && (first..next_id).contains(id)));
+                }
+                reg.retain(|_, v| !v.is_empty());
+            }
+        });
+    }
+
     unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Accels) {
         let mut tags = HashMap::new();
         let mut keys: Accels = Vec::new();
@@ -6165,41 +6443,7 @@ mod win {
             let any_check = specs.iter().any(|(_, items)| items.iter().any(|it| it.checked || !it.icon.is_empty()));
             for (title, items) in specs {
                 let Ok(popup) = CreatePopupMenu() else { continue };
-                for spec in items {
-                    if spec.is_separator() {
-                        let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
-                        continue;
-                    }
-                    // M255: el atajo de un rol estándar se MUESTRA pero no se registra como
-                    // acelerador — la tecla debe seguir llegando al webview, que ya la atiende
-                    // de forma nativa (interceptarla rompería el Ctrl+C real).
-                    let is_role = spec.edit_role().is_some();
-                    let label = match accel_for(&spec.shortcut, next_id) {
-                        Some((text, accel)) => {
-                            if !is_role {
-                                keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
-                                accels.push(accel);
-                            }
-                            format!("{}\t{text}", spec.label)
-                        }
-                        None => spec.label.clone(),
-                    };
-                    let mut flags = MF_STRING;
-                    if !spec.enabled { flags |= MF_GRAYED; }
-                    if spec.checked { flags |= MF_CHECKED; }
-                    let _ = AppendMenuW(popup, flags, next_id as usize, PCWSTR(wide(&label).as_ptr()));
-                    // M236: icono — solo .bmp por LoadImageW (otros formatos se ignoran, documentado).
-                    if spec.icon.to_ascii_lowercase().ends_with(".bmp")
-                        && let Ok(h) = LoadImageW(None, PCWSTR(wide(&spec.icon).as_ptr()), IMAGE_BITMAP, 16, 16, LR_LOADFROMFILE)
-                    {
-                        let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_BITMAP, ..Default::default() };
-                        info.hbmpItem = windows::Win32::Graphics::Gdi::HBITMAP(h.0);
-                        let _ = SetMenuItemInfoW(popup, next_id as u32, false, &info);
-                    }
-                    items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push((hwnd.0 as usize, next_id));
-                    tags.insert(next_id, spec.tag);
-                    next_id = next_id.wrapping_add(1);
-                }
+                append_items(popup, &items, hwnd, &mut tags, &mut keys, &mut accels, &mut next_id);
                 let _ = AppendMenuW(bar, MF_POPUP, popup.0 as usize, PCWSTR(wide(&title).as_ptr()));
             }
             if !any_check {

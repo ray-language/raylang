@@ -13563,3 +13563,27 @@ Verificado: tres motores en headless (`tests/ui_cli.rs`), humo real en macOS (NS
 botones y estilo warning, NSOpenPanel con filtros y selección múltiple: ambos se abren y
 bloquean como deben; se mataron desde fuera porque no hay quien pulse). Linux y Windows compilan
 en el CI; efecto real pendiente de máquina.
+
+## 246. M259 — Menú contextual nativo (sep 2026)
+
+Tercer paso del arco de escritorio (M257 ciclo de vida, M258 diálogos). El clic derecho ocurre
+DENTRO del webview, así que el runtime no puede saber por sí solo qué se pulsó ni qué menú toca:
+el diseño acepta eso y hace del menú contextual una operación que el programa **pide** —
+`popup_menu(h, items)` — con la página como origen (`contextmenu` → `window.ray.send` →
+evento `"message"` → `popup_menu`). A cambio, el menú reutiliza todo lo de la barra: los mismos
+`MenuItem`, el mismo evento `"menu"` con `window` = h, los roles estándar de M255 y
+`set_menu_item` por tag mientras está abierto.
+
+Por backend: macOS `popUpMenuPositioningItem:atLocation:inView:` con `inView` nil y
+`[NSEvent mouseLocation]` (coordenadas de pantalla; el tracking corre en el bloque despachado
+al hilo principal, y al volver se purgan sus items del registro por tag, como `replace_menu`).
+GTK: la construcción de items de `build_menubar` se extrae a `append_items` y el menú se muestra
+con `gtk_menu_popup_at_pointer` (3.22+; `gtk_menu_popup` clásico de respaldo); se destruye en un
+idle tras `deactivate` — nunca dentro de su propia señal — y el registro por tag se purga ahí
+(sus widgets mueren antes que la ventana: dejarlos sería un use-after-free en `set_menu_item`).
+Windows: mismo `append_items` que la barra, ids en un rango propio (40000+, cíclico),
+`TrackPopupMenuEx` sin `TPM_RETURNCMD` para que la elección llegue por `WM_COMMAND` como la
+barra (y así los roles de M255 también funcionan), `DestroyMenu` y purga de tags al volver.
+
+Verificado: tres motores en headless (`tests/ui_cli.rs`); Linux y Windows compilan en el CI.
+El humo real en macOS requiere un clic derecho humano: pendiente de ray-sublime.

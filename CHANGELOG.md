@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Menú contextual nativo** (M259, ray-sublime). `ui.popup_menu(h, items)` muestra los mismos
+  `MenuItem` de la barra (roles estándar incluidos) en la posición del puntero sobre la ventana `h`;
+  la elección llega como evento `"menu"`. macOS `NSMenu` en el puntero, GTK
+  `gtk_menu_popup_at_pointer`, Windows `TrackPopupMenuEx`.
+
 - **Diálogos de mensaje nativos y opciones en los diálogos de archivo** (M258, ray-sublime).
   `ui.message(title, text, buttons)` muestra la alerta del sistema con 1 a 3 botones con tus
   etiquetas y devuelve el índice pulsado (cerrar con Esc = el último botón); `ui.message_styled`

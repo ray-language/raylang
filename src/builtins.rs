@@ -1596,6 +1596,20 @@ pub fn ui_dialog_with(_kind: &str, _title: &str, _dir: &str, _suggested: &str, _
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M259: `__ui_popup_menu(h, items)` — menú contextual en el puntero, sobre la ventana `h`.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_popup_menu(h: i64, items: &[String]) -> Result<(), String> {
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::popup_menu(win, items)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_popup_menu(_h: i64, _items: &[String]) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M258: `__ui_message(title, text, style, buttons)` — diálogo de mensaje modal; índice pulsado.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
@@ -4434,6 +4448,13 @@ static BUILTINS: &[Builtin] = &[
         }
         if a[4] != Type::Array(Box::new(Type::String)) { return Err((Some(4), format!("__ui_dialog_with expects [string] (the filters), not {}", a[4]))); }
         if a[5] != Type::Bool { return Err((Some(5), format!("__ui_dialog_with expects a bool (multiple), not {}", a[5]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_popup_menu(h, items) -> [string] (M259): menú contextual en el puntero (['ok'] / ['err', msg]).
+    Builtin { name: "__ui_popup_menu", opcode: OpCode::UiPopupMenu, check: |a| {
+        arity(a, 2, "__ui_popup_menu", " (handle, items)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_popup_menu expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_popup_menu expects [string] (the items), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_message(title, text, style, buttons) -> [string] (M258): ["ok", index] / ["err", msg]. MODAL.

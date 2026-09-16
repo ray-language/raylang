@@ -1507,9 +1507,8 @@ opciones: título, carpeta inicial, nombre sugerido, filtros por extensión y se
 
 ```rust
 match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
-    Result.Ok(0) => save(),
-    Result.Ok(1) => close(w),
-    _ => {},                                   // Cancel o Esc: la ventana se queda
+    Result.Ok(i) => if (i == 0) { save(); } else if (i == 1) { close(w); },   // 2 (Cancel o Esc): se queda
+    Result.Err(e) => print(e),
 }
 var o = ui.file_options();
 o.title = "Open a source file";

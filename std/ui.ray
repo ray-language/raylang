@@ -479,7 +479,8 @@ pub fn save_file_with(o: FileDialogOptions) -> Result<Option<string>, string> {
 ///
 /// ```raylang
 /// match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
-///     Result.Ok(0) => save(), Result.Ok(1) => discard(), _ => {},
+///     Result.Ok(i) => if (i == 0) { save(); } else if (i == 1) { discard(); },
+///     Result.Err(e) => print(e),
 /// }
 /// ```
 pub fn message(title: string, text: string, buttons: [string]) -> Result<int, string> {

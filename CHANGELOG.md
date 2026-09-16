@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.24.0 — 2026-09-16
 
 - **Tipos de ventana y geometría en caliente** (M260). `WindowOptions` gana `kind`
   (`"document"`, `"panel"` — paleta de utilidad flotante sobre la app —, `"borderless"` — sin marco

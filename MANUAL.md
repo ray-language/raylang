@@ -1474,6 +1474,30 @@ En Linux no existe ese menú global: los items van como un menú normal titulado
 — `"role:about"` incluido — emiten el evento `"menu"` (muestra tu propio about). Llámalo una
 vez, antes de abrir ventanas.
 
+Una app de documentos necesita tres cosas más de la ventana nativa (M257): el **título** cambia
+con el documento, el botón de cerrar muestra el **punto de "modificado"** en macOS, y cerrar o
+salir con cambios sin guardar debe **preguntar** antes. Por defecto cerrar es inmediato (llega
+`"closed"`); con `intercept_close(h, true)` el intento del usuario — botón, ⌘W/Alt+F4, el gestor
+de ventanas — llega como evento `"close_requested"` y la ventana sigue abierta hasta que tú
+llames `close(h)` (que siempre cierra). `intercept_quit(true)` hace lo mismo con ⌘Q en macOS:
+llega `"quit_requested"` con `window` 0 y la app sigue viva hasta que `main` retorna.
+
+```rust
+let w = ui.open("Editor", "ray://app/index.html", 1024, 720)?;
+ui.set_title(w, "main.ray — Editor")?;
+ui.set_edited(w, true)?;            // el punto en el botón rojo (Linux/Windows lo ignoran)
+ui.intercept_close(w, true)?;
+ui.intercept_quit(true)?;
+while (true) {
+    let e = ui.next_event()?;
+    if (e.kind == "close_requested") {
+        if (!dirty || ask_save_changes()) { close(e.window); }   // si no, la ventana se queda
+    }
+    if (e.kind == "quit_requested") { if (save_all()) { return 0; } }
+    if (e.kind == "closed") { return 0; }
+}
+```
+
 El **menú Edit** también es tuyo (M255). Sus items estándar funcionan por acciones nativas del
 sistema (el portapapeles y el undo del webview viven ahí), así que reemplazarlo con items
 corrientes los perdería. Los **roles estándar** lo evitan: un item con tag `"role:undo"`,

@@ -349,6 +349,9 @@ struct WinState {
     win: Win,
     /// ¿Ya se emitió su evento `closed`? (El botón rojo y `close(h)` convergen aquí: una vez.)
     closed: bool,
+    /// M257: si el cierre del USUARIO (botón, ⌘W/Alt+F4, WM del sistema) debe convertirse en el
+    /// evento `close_requested` en vez de cerrar. `close(h)` siempre cierra (es el programa).
+    intercept_close: bool,
 }
 
 /// Clave del mapa: el ID DEL LLAMADOR (el handle del registro del host) — así los eventos
@@ -1281,7 +1284,7 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
                 eprintln!("[ui] devtools {id} on");
             }
         }
-        windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
+        windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false, intercept_close: false });
         // M252 (ray-sublime #76): la ventana recién abierta pasa a ser la clave headless, pero
         // NO emite `focused`: abrir no produce eventos en headless (las pruebas del aparcado
         // cuentan con una cola en silencio tras `open`); `focus(h)` sí lo emite.
@@ -1302,7 +1305,7 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
     if shell::active() {
         shell::open(title, url);
-        windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false });
+        windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false, intercept_close: false });
         return Ok(());
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -1313,21 +1316,21 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     {
         ensure_app()?;
         let mw = mac::open_window(title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: mw, closed: false });
+        windows().lock().unwrap().insert(id, WinState { win: mw, closed: false, intercept_close: false });
         Ok(())
     }
     #[cfg(target_os = "linux")]
     {
         ensure_app()?;
         let gw = gtk::open_window(id, title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: gw, closed: false });
+        windows().lock().unwrap().insert(id, WinState { win: gw, closed: false, intercept_close: false });
         Ok(())
     }
     #[cfg(windows)]
     {
         ensure_app()?;
         let ww = win::open_window(id, title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: ww, closed: false });
+        windows().lock().unwrap().insert(id, WinState { win: ww, closed: false, intercept_close: false });
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
@@ -1392,6 +1395,105 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
 /// M229 (ray-sublime #65): trae al frente y da el foco a una ventana ya abierta: `makeKeyAndOrderFront`
 /// y activar la app en macOS, `gtk_window_present` en GTK, restaurar y `SetForegroundWindow` en Windows.
 /// `window.focus()` por `eval_js` no levanta la ventana NATIVA (solo el foco del documento).
+/// M257: ¿debe interceptarse el cierre de `id` pedido por el USUARIO? Si la ventana tiene
+/// `intercept_close`, emite `("close_requested", id, "")` y devuelve `true` (el backend NO
+/// cierra); si no, `false` (cierre normal → `closed`). Lo llaman `windowShouldClose:` (macOS),
+/// `delete-event` (GTK) y `WM_CLOSE` (Windows).
+fn close_requested(id: i64) -> bool {
+    let intercept = matches!(windows().lock().unwrap().get(&id), Some(WinState { intercept_close: true, closed: false, .. }));
+    if intercept {
+        push_event("close_requested", id, "");
+    }
+    intercept
+}
+
+/// M257: ¿debe interceptarse la salida de la app pedida por el usuario (⌘Q / Quit del menú de la
+/// app en macOS)? Con `intercept_quit` activo emite `("quit_requested", 0, "")` y devuelve
+/// `true` (la app sigue viva; el programa decide: cerrar ventanas y retornar de `main`).
+static INTERCEPT_QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn quit_requested() -> bool {
+    let intercept = INTERCEPT_QUIT.load(std::sync::atomic::Ordering::SeqCst);
+    if intercept {
+        push_event("quit_requested", 0, "");
+    }
+    intercept
+}
+
+/// M257 (ray-sublime): operaciones sobre una ventana ABIERTA por nombre — una sola primitiva
+/// (`__ui_window(h, op, arg)`) para lo pequeño y frecuente:
+/// - `set_title` (`arg` = título): `setTitle:` / `gtk_window_set_title` / `SetWindowTextW`.
+/// - `set_edited` (`arg` = "1"/"0"): el punto de "documento modificado" del botón de cerrar de
+///   macOS (`setDocumentEdited:`); Linux y Windows no lo tienen y lo ignoran.
+/// - `intercept_close` (`arg` = "1"/"0"): el cierre del usuario pasa a emitir `close_requested`
+///   (ver `close_requested`); `close(h)` sigue cerrando.
+/// - `intercept_quit` (`arg` = "1"/"0"; `id` se ignora): ⌘Q emite `quit_requested` en vez de
+///   terminar (macOS; Linux y Windows no tienen salida de app aparte de cerrar ventanas).
+///
+/// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
+pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
+    let on = arg == "1" || arg == "true";
+    if op == "intercept_quit" {
+        INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
+        if ui_trace() {
+            eprintln!("[ui] intercept quit {}", if on { "on" } else { "off" });
+        }
+        return Ok(());
+    }
+    if !matches!(op, "set_title" | "set_edited" | "intercept_close") {
+        return Err(format!("ui: unknown window operation '{op}'"));
+    }
+    let mut map = windows().lock().unwrap();
+    let Some(state) = map.get_mut(&id).filter(|w| !w.closed) else {
+        return Err("ui: not an open window".to_string());
+    };
+    if op == "intercept_close" {
+        state.intercept_close = on;
+        if ui_trace() {
+            eprintln!("[ui] intercept close {id} {}", if on { "on" } else { "off" });
+        }
+        return Ok(());
+    }
+    match &state.win {
+        Win::Headless => {
+            if ui_trace() {
+                match op {
+                    "set_title" => eprintln!("[ui] title {id} {arg}"),
+                    _ => eprintln!("[ui] edited {id} {on}"),
+                }
+            }
+            Ok(())
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Win::Shell => Ok(()),
+        #[cfg(target_os = "macos")]
+        Win::Mac { window, .. } => {
+            let w = *window;
+            drop(map);
+            if op == "set_title" { mac::set_title_async(w, arg) } else { mac::set_edited_async(w, on) }
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Win::Gtk { window, alive, .. } => {
+            let (w, alive) = (*window, alive.clone());
+            drop(map);
+            if op == "set_title" {
+                gtk::set_title_async(w, alive, arg);
+            }
+            Ok(())
+        }
+        #[cfg(windows)]
+        Win::Windows { hwnd, alive } => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            if op == "set_title" {
+                win::set_title_async(h, alive, arg);
+            }
+            Ok(())
+        }
+    }
+}
+
 pub fn focus_window(id: i64) -> Result<(), String> {
     let map = windows().lock().unwrap();
     match map.get(&id) {
@@ -2298,6 +2400,10 @@ mod mac {
             }
             let set_policy: MsgBoolInt = std::mem::transmute(msg_send());
             set_policy(app, sel(b"setActivationPolicy:\0"), POLICY_REGULAR);
+            // M257: el delegate de NSApp (misma instancia singleton que sirve a menús y
+            // ventanas) — para `applicationShouldTerminate:` (intercept_quit).
+            let set_delegate: MsgVoidId = std::mem::transmute(msg_send());
+            set_delegate(app, sel(b"setDelegate:\0"), menu_target());
             // M148: el menú ESTÁNDAR, automático. Sin menú principal, los key equivalents no
             // viajan (⌘C/⌘V/⌘X muertos en los campos de texto del webview — el bug real que
             // esto arregla). Item 0 = menú de la app POR POSICIÓN (Hide ⌘H, Quit ⌘Q); Edit
@@ -2573,6 +2679,21 @@ mod mac {
                     super::push_event("focused", id, "");
                 }
             }
+            // M257: el cierre pedido por el USUARIO (botón rojo, ⌘W → performClose:) pregunta
+            // antes: con `intercept_close` se emite `close_requested` y se responde NO (la
+            // ventana sigue). `close(h)` va por `[window close]`, que no pasa por aquí.
+            extern "C" fn window_should_close(_this: Id, _sel: Sel, sender: Id) -> bool {
+                match window_id_of(sender) {
+                    Some(id) => !super::close_requested(id),
+                    None => true,
+                }
+            }
+            // M257: ⌘Q / Quit del menú de la app → `applicationShouldTerminate:` (el delegate
+            // de NSApp es esta misma instancia, ver init_app). Con `intercept_quit`: evento
+            // `quit_requested` y NSTerminateCancel (0); si no, NSTerminateNow (1).
+            extern "C" fn application_should_terminate(_this: Id, _sel: Sel, _app: Id) -> u64 {
+                if super::quit_requested() { 0 } else { 1 }
+            }
             extern "C" fn window_will_close(_this: Id, _sel: Sel, notification: Id) {
                 // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
                 let win = unsafe {
@@ -2715,6 +2836,19 @@ mod mac {
                     sel(b"rayMenuAction:\0"),
                     menu_action as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
+                );
+                // M257: interceptar cierre y salida.
+                class_addMethod(
+                    cls_new,
+                    sel(b"windowShouldClose:\0"),
+                    window_should_close as extern "C" fn(Id, Sel, Id) -> bool as *const c_void,
+                    c"B@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"applicationShouldTerminate:\0"),
+                    application_should_terminate as extern "C" fn(Id, Sel, Id) -> u64 as *const c_void,
+                    c"Q@:@".as_ptr(),
                 );
                 // M252: la ventana que pasa a ser la clave → evento ("focused", id, "").
                 class_addMethod(
@@ -3400,6 +3534,30 @@ mod mac {
         on_main(move || unsafe { apply_titlebar(window as Id, rgb) });
     }
 
+    /// M257: `setTitle:` en el hilo principal.
+    pub(super) fn set_title_async(window: usize, title: &str) {
+        let title = title.to_string();
+        on_main(move || {
+            // SAFETY: mensaje estándar de NSWindow en el hilo principal (ventana viva o ya
+            // liberada por el sistema: `[window close]` no invalida el puntero hasta el drop).
+            unsafe {
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                set_id(window as Id, sel(b"setTitle:\0"), nsstring(&title));
+            }
+        });
+    }
+
+    /// M257: `setDocumentEdited:` — el punto de "modificado" en el botón de cerrar.
+    pub(super) fn set_edited_async(window: usize, edited: bool) {
+        on_main(move || {
+            // SAFETY: mensaje estándar de NSWindow en el hilo principal.
+            unsafe {
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                set_bool(window as Id, sel(b"setDocumentEdited:\0"), edited as u8);
+            }
+        });
+    }
+
     pub(super) fn focus_window_async(window: usize) {
         on_main(move || unsafe {
             let set_id: MsgVoidId = std::mem::transmute(msg_send());
@@ -3484,6 +3642,16 @@ mod gtk {
         Widget,
         *const std::ffi::c_char,
         extern "C" fn(Widget, *mut c_void, *mut c_void),
+        *mut c_void,
+        extern "C" fn(*mut c_void, *mut c_void),
+        i32,
+    ) -> u64;
+    // M257 — `delete-event`: handler de TRES args (widget, GdkEvent*, user_data) con retorno
+    // gboolean (TRUE = no cerrar). Mismo símbolo, otro alias (el precedente de FnSignalConnect3).
+    type FnSignalConnectRet = unsafe extern "C" fn(
+        Widget,
+        *const std::ffi::c_char,
+        extern "C" fn(Widget, *mut c_void, *mut c_void) -> i32,
         *mut c_void,
         extern "C" fn(*mut c_void, *mut c_void),
         i32,
@@ -3630,6 +3798,8 @@ mod gtk {
         // M152 — puente IPC (todos opcionales: si alguno falta, la ventana nace SIN puente —
         // no romper ui.open en distros viejas por una feature nueva; webkit2gtk ≥2.22 los trae).
         signal_connect3: FnSignalConnect3,
+        /// M257: `g_signal_connect_data` para handlers con retorno gboolean (`delete-event`).
+        signal_connect_ret: FnSignalConnectRet,
         ucm_new: Option<FnUcmNew>,
         set_resizable: Option<FnSetResizable>,
         set_size_request: Option<FnSetSizeRequest>,
@@ -3769,6 +3939,7 @@ mod gtk {
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetCurrentName>(p))
                 },
                 signal_connect3: std::mem::transmute::<*mut c_void, FnSignalConnect3>(sym(gtk, c"g_signal_connect_data")?),
+                signal_connect_ret: std::mem::transmute::<*mut c_void, FnSignalConnectRet>(sym(gtk, c"g_signal_connect_data")?),
                 ucm_new: {
                     let p = dlsym(webkit, c"webkit_user_content_manager_new".as_ptr());
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUcmNew>(p))
@@ -4441,6 +4612,15 @@ mod gtk {
         super::mark_closed(ctx.id);
     }
 
+    /// M257: `delete-event` — el cierre pedido por el usuario (botón del WM, Alt+F4). Con
+    /// `intercept_close` emite `close_requested` y devuelve TRUE (GTK no destruye); `close(h)`
+    /// va por `gtk_widget_destroy`, que no emite delete-event.
+    extern "C" fn on_delete_event(_w: Widget, _event: *mut c_void, data: *mut c_void) -> i32 {
+        // SAFETY: `data` es el DestroyCtx propio de esta señal; vive hasta su GClosureNotify.
+        let ctx = unsafe { &*(data as *const DestroyCtx) };
+        if super::close_requested(ctx.id) { 1 } else { 0 }
+    }
+
     extern "C" fn drop_destroy_ctx(data: *mut c_void, _closure: *mut c_void) {
         // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
         drop(unsafe { Box::from_raw(data as *mut DestroyCtx) });
@@ -4607,6 +4787,15 @@ mod gtk {
                 (api.box_pack_start)(content, webview, 1, 1, 0);
                 (api.container_add)(window, content);
                 (api.load_uri)(webview, url.as_ptr());
+                let delete_ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2.clone() }));
+                (api.signal_connect_ret)(
+                    window,
+                    c"delete-event".as_ptr(),
+                    on_delete_event,
+                    delete_ctx as *mut c_void,
+                    drop_destroy_ctx,
+                    0,
+                );
                 let ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2 }));
                 (api.signal_connect)(
                     window,
@@ -4661,6 +4850,19 @@ mod gtk {
 
     /// Destruye la ventana en el hilo del loop, asíncrono (llamable desde un Drop). El handler
     /// de `destroy` apaga `alive`; si el WM ya la destruyó, la closure no toca nada.
+    /// M257: `gtk_window_set_title` en el hilo gtk.
+    pub(super) fn set_title_async(window: usize, alive: Arc<AtomicBool>, title: &str) {
+        let title = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(api) = api().as_ref() else { return };
+            // SAFETY: ventana viva (alive) en el hilo del loop; GTK copia el título.
+            unsafe { (api.set_title)(window as Widget, title.as_ptr()) };
+        });
+    }
+
     pub(super) fn close_window_async(window: usize, alive: Arc<AtomicBool>) {
         on_main(move || {
             if !alive.load(Ordering::SeqCst) {
@@ -5335,6 +5537,15 @@ mod win {
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_CLOSE => {
+                // M257: el cierre pedido por el usuario (X, Alt+F4) — con `intercept_close`
+                // emite `close_requested` y no destruye; `close(h)` va por DestroyWindow directo.
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    let ctx = unsafe { &*ctx_ptr };
+                    if super::close_requested(ctx.id) {
+                        return LRESULT(0);
+                    }
+                }
                 // SAFETY: destruir la ventana dispara WM_DESTROY, que hace la limpieza.
                 unsafe {
                     let _ = DestroyWindow(hwnd);
@@ -6075,6 +6286,21 @@ mod win {
                 let _ = wv.CallDevToolsProtocolMethod(PCWSTR(method.as_ptr()), PCWSTR(params.as_ptr()), &handler);
             }
         }
+    }
+
+    /// M257: `SetWindowTextW` en el hilo 1.
+    pub(super) fn set_title_async(hwnd: usize, alive: Arc<AtomicBool>, title: &str) {
+        let title = title.to_string();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let w = wide(&title);
+            // SAFETY: hilo 1, ventana viva (alive).
+            unsafe {
+                let _ = SetWindowTextW(HWND(hwnd as *mut _), PCWSTR(w.as_ptr()));
+            }
+        });
     }
 
     /// Destruye la ventana en el hilo 1, asíncrono (llamable desde un Drop). WM_DESTROY emite

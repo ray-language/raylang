@@ -266,6 +266,9 @@ contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, 
 standard edit roles: items tagged `role:undo|redo|cut|copy|paste|select_all|close` act natively
 (no event; empty title/shortcut = the standard one) and `ui.edit_menu(items)` rebuilds the Edit
 menu with your items among them (replaces the macOS standard Edit; creates it on Linux/Windows);
+window lifecycle: `ui.set_title(h, t)`, `ui.set_edited(h, bool)` (macOS dirty dot),
+`ui.intercept_close(h, true)` → the user's close emits a `close_requested` event instead of closing
+(you ask/save, then `close(h)`), `ui.intercept_quit(true)` → ⌘Q emits `quit_requested` (window 0);
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray

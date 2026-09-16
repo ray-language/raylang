@@ -2246,6 +2246,16 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_window" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Int(h), Value::Str(op), Value::Str(arg)) => match crate::builtins::ui_window(*h, op, arg) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (int, string, string)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_focus" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::ui_focus(*h) {

@@ -803,6 +803,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::set_titlebar_color(h, color) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M257: operaciones de ventana por nombre (título, punto de modificado, interceptar
+            // cierre/salida); `intercept_quit` no exige ventana.
+            "fn __ray_ui_window(h: i64, op: &str, arg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = op == \"intercept_quit\" || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if known { ray_runtime::ui::window_op(h, op, arg) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M229: foco a una ventana abierta.
             "fn __ray_ui_focus(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",

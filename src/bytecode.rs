@@ -661,6 +661,8 @@ pub enum OpCode {
     UiMountBytes,
     /// M229: `__ui_focus(h)` — trae al frente y da el foco (['ok'] / ['err', msg]).
     UiFocus,
+    /// M257: `__ui_window(h, op, arg)` — título, punto de modificado e interceptar cierre/salida.
+    UiWindow,
     /// M239: `__ui_set_titlebar(h, color)` (['ok'] / ['err', msg]).
     UiSetTitlebar,
     /// M235: `platform()` — el SO ("macos" | "linux" | "windows" | …).

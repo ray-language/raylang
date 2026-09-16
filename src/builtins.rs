@@ -1303,6 +1303,24 @@ pub fn ui_set_titlebar(_h: i64, _color: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M257: `__ui_window(h, op, arg)` — operaciones sobre una ventana abierta por nombre
+/// (`set_title`, `set_edited`, `intercept_close`) y la app (`intercept_quit`, `h` ignorado).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
+    if op == "intercept_quit" {
+        return ray_runtime::ui::window_op(0, op, arg);
+    }
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::window_op(win, op, arg)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_window(_h: i64, _op: &str, _arg: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M229: `ui.focus(h)` — trae al frente y da el foco a una ventana ya abierta.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_focus(h: i64) -> Result<(), String> {
@@ -4304,6 +4322,15 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_set_titlebar", " (handle, color)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_set_titlebar expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__ui_set_titlebar expects a string (the color), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_window(h, op, arg) -> [string] (M257): set_title / set_edited / intercept_close /
+    // intercept_quit sobre una ventana abierta (['ok'] / ['err', msg]).
+    Builtin { name: "__ui_window", opcode: OpCode::UiWindow, check: |a| {
+        arity(a, 3, "__ui_window", " (handle, op, arg)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_window expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_window expects a string (the operation), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__ui_window expects a string (the argument), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_focus(h) -> [string] (M229): trae al frente y da el foco a la ventana `h`.

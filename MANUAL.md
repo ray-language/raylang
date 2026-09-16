@@ -1596,6 +1596,44 @@ Nota: sin `Info.plist` (binario suelto), el webview bloquea `http://` remoto (AT
 `http://127.0.0.1` está exento, que es justo el patrón. El ejemplo completo (webserver + ventana
 + salir al cerrarla) está en [`examples/web/desktop_window/`](examples/web/desktop_window/).
 
+### Frontend con Vite (React, Vue, Svelte, …) y `ray dev`
+
+Para una app de escritorio o móvil cuya interfaz se construye con un framework web, raylang no
+trae bundler propio: se apoya en el que ya usas (Vite, Parcel, Astro…) con el **mismo contrato
+que Tauri**: un comando de desarrollo que expone una URL y un comando de build que deja una
+carpeta. Se declara en `ray.toml` (M263):
+
+```toml
+[frontend]
+dev   = "npm --prefix frontend run dev -- --strictPort --port 5173 --clearScreen false"
+url   = "http://localhost:5173"          # opcional: por defecto la URL de Vite
+build = "npm --prefix frontend run build"
+dist  = "frontend/dist"                  # el build, embebido en el binario y el bundle
+```
+
+Con eso, **`ray dev`** lanza el dev server del frontend una vez por sesión, espera a que
+responda, y hace que **`app://`** apunte a él: `ui.open("App", "app://index.html", 1000, 700)`
+abre la ventana sobre Vite, con su hot module replacement — editas un componente y la página se
+actualiza sin recargar; editas un `.ray` y se reinicia solo el programa (el dev server sigue
+vivo). Al salir de `ray dev` el dev server muere con él, con todo su árbol de procesos. Fuera de
+`ray dev` (`ray run`, `ray build --native`, `ray bundle`) la misma URL `app://index.html` es
+`ray://app/index.html`: el build embebido, que montas con `ui.mount_embed("", "frontend/dist")`.
+`ray build --native` y `ray bundle` corren el `build` antes y embeben `dist` como un
+`[native] embed` más, así que el binario y el `.app` son autocontenidos. `ui.app_url(url)` hace
+la misma resolución a mano (una `http://` de tu webserver también cambia de origen al del dev
+server bajo `ray dev`, conservando la ruta).
+
+El punto de partida es `ray new miapp --frontend react-ts` (cualquier plantilla de
+`npm create vite`): escribe el proyecto con la sección de arriba, un `src/main.ray` que abre
+`app://index.html` y contesta a `window.ray.request(...)` con `ui.reply`, y el `.gitignore` de
+`frontend/node_modules` y `frontend/dist`. No corre npm: al terminar imprime los pasos —
+`npm create vite@latest frontend -- --template react-ts`, `npm --prefix frontend install`,
+`ray dev`. El puente `window.ray` está disponible en la página venga de donde venga (el webview
+lo inyecta al arrancar cada documento), así que un componente React llama al backend con
+`window.ray.request({op: "list"})` igual en desarrollo y en producción; si prefieres HTTP, tu
+webserver embebido sigue ahí y en `vite.config` un `server.proxy` de `/api` lo hace mismo-origen.
+
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):

@@ -28,11 +28,37 @@ pub struct UiEvent {
     tag: string,
 }
 
+/// Resolves an `app://` URL to where the app's pages live RIGHT NOW (M263, `[frontend]` of
+/// `ray.toml`): under `ray dev` with a frontend dev server (Vite, …) `app://index.html` becomes
+/// `<dev server url>/index.html` — hot module replacement included —; everywhere else (`ray run`,
+/// a native binary, a bundle) it becomes `ray://app/index.html`, the embedded build mounted
+/// with `mount_embed`. Any other URL is returned unchanged, except that under `ray dev` an
+/// `http://` URL of your own webserver also swaps its origin for the dev server's (so a
+/// webserver-backed app develops against Vite too). `open`/`open_with` apply it to `app://` URLs.
+pub fn app_url(url: string) -> string {
+    let dev = __ui_frontend_url();
+    if (url.starts_with("app://")) {
+        let rest = url.substring(6, url.len());
+        if (dev == "") { "ray://app/" + rest } else { dev + "/" + rest }
+    } else if (dev != "" && url.starts_with("http://")) {
+        // Sustituye el origen (`http://host:port`) por el del dev server; conserva la ruta.
+        let after = url.substring(7, url.len());
+        match (index_of(after, "/")) {
+            Option.Some(i) => dev + after.substring(i, after.len()),
+            Option.None => dev,
+        }
+    } else {
+        url
+    }
+}
+
 /// Opens a native window with the system webview loading `url` (point it at your embedded
-/// webserver: `http://127.0.0.1:<port>/`). Returns the window handle; `close(h)` closes it.
-/// With `RAY_UI_BACKEND=headless` in the environment, windows are in-memory rows (tests, CI).
+/// webserver: `http://127.0.0.1:<port>/`, or use `app://index.html` — see `app_url` — for a
+/// frontend built with Vite and served from the embedded build). Returns the window handle;
+/// `close(h)` closes it. With `RAY_UI_BACKEND=headless` in the environment, windows are
+/// in-memory rows (tests, CI).
 pub fn open(title: string, url: string, width: int, height: int) -> Result<int, string> {
-    let r = __ui_open(title, url, width, height);
+    let r = __ui_open(title, resolve_app_url(url), width, height);
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
@@ -99,7 +125,7 @@ pub fn options(width: int, height: int) -> WindowOptions {
 pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, string> {
     let r = __ui_open_with(
         title,
-        url,
+        resolve_app_url(url),
         o.width,
         o.height,
         o.min_width,
@@ -121,6 +147,12 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
     } else {
         Result.Err(r[1])
     }
+}
+
+// Solo `app://` se resuelve al abrir: una URL `http://` explícita en `open` se respeta tal cual
+// (quien quiera el intercambio de origen bajo `ray dev` llama a `app_url` a mano).
+fn resolve_app_url(url: string) -> string {
+    if (url.starts_with("app://")) { app_url(url) } else { url }
 }
 
 /// Runs JavaScript in the window's page, fire-and-forget: it does NOT wait for the result (and

@@ -13671,3 +13671,59 @@ valores (pila, locales, arreglos, campos) mueve un 25 % menos.
 
 Verificado: los tres motores dan el mismo resultado (`acc` idéntico en VM y nativo); tests de
 `vm` y de `bytes` en verde; el caso vive en `benchmarks/bytes_index.ray` y en el gate.
+
+## 249. M263 — Frontend con Vite en `ray dev`: `[frontend]`, `app://` y `ui.app_url` (sep 2026)
+
+Origen: IDEAS §91. Una app de escritorio raylang era hasta ahora "un webserver embebido o
+`ray://app/` sirviendo HTML que escribes a mano"; quien quería React o Vue tenía que arrancar
+Vite aparte, apuntar la ventana a su puerto a mano y acordarse de cambiarlo para el bundle. La
+pieza que faltaba no era servir assets (M147/M226 lo resuelven) sino el **ciclo de desarrollo**:
+que el hot reload del bundler y el reinicio de `ray dev` convivan sin que el programa sepa en
+qué modo corre.
+
+Diseño (opción B de §91, el modelo de Tauri): el manifiesto declara el contrato genérico con el
+bundler —`[frontend] dev`, `url`, `build`, `dist`— y la toolchain lo orquesta. `ray dev` lanza
+`dev` por el shell del sistema en la raíz del proyecto, **una vez por sesión**: el dev server
+sobrevive a los reinicios del programa (su HMR es lo que mantiene la página viva; reiniciarlo
+por cada `.ray` tocado tiraría ese estado). Espera a que `url` acepte TCP (≤ 60 s; no HTTP: Vite
+y compañía solo escuchan cuando ya sirven), y exporta **`RAY_FRONTEND_URL`** al hijo `ray run`.
+En el runtime, `cmd_run` la fija en `set_ui_frontend_url` y el builtin `__ui_frontend_url()`
+la expone; el transpilador la emite como literal vacío —el mismo principio que devtools (M231)
+y el live-reload (M234): **lo fija la toolchain, un binario nativo no mira el entorno**, así
+que un `.app` en producción nunca se deja apuntar a un dev server por una variable suelta.
+
+La superficie de usuario es una URL: **`app://<ruta>`**. `ui.app_url` la resuelve a
+`<dev server>/<ruta>` bajo `ray dev` y a `ray://app/<ruta>` en cualquier otro caso (el build
+embebido montado con `mount_embed`), y `open`/`open_with` la aplican al recibir `app://`. Una
+`http://` explícita se respeta tal cual al abrir (quien quiera el intercambio de origen para su
+webserver llama a `app_url` a mano: cambia el origen y conserva la ruta). El programa no tiene
+rama "¿estoy en dev?": la misma línea `ui.open("App", "app://index.html", …)` sirve en `ray
+dev`, `ray run`, el nativo y el bundle. El puente `window.ray` llega a la página venga de Vite
+o de `ray://`: el webview lo inyecta como user script al arrancar cada documento del main
+frame, sin condición de origen.
+
+Supervisión: `npm run dev` es un árbol (`npm`→`sh`→`node`); matar solo al líder deja a `node`
+vivo con el puerto ocupado, el clásico huérfano de los wrappers. `dev_host::prepare_group` lo
+hace líder de su propio grupo de procesos (`setpgid`) y `terminate_group` señala al grupo
+entero (SIGTERM, 3 s, SIGKILL); el handler de muerte del supervisor (`register_group_child`)
+también lo señala, así Ctrl-C limpia. En Windows el Job Object de M172 ya arrastra el árbol y
+`CTRL_BREAK` al grupo de consola pide el cierre. Cada salida de `ray dev` (ventana cerrada,
+`q`, EOF) pasa por `dev_exit`, porque `process::exit` no corre destructores. Si el dev server
+muere solo, `ray dev` avisa y sigue: la próxima vez que arranque el programa, `app://` cae al
+build embebido.
+
+Producción: `collect_embed` añade `[frontend] dist` a los directorios embebidos y `ray build
+--native`/`ray bundle` corren `[frontend] build` antes (fallo = 70, nada se construye), de modo
+que el binario lleva siempre el build actual. `ray run` sin `ray dev` sirve `dist` en vivo y,
+si no existe, lo dice con el comando que lo produce. `ray new --frontend <plantilla>` escribe
+la sección con Vite en `frontend/` (puerto fijo con `--strictPort` para que `url` sea cierta,
+`--clearScreen false` para convivir con la consola de `ray dev`), un `main.ray` que monta el
+build, abre `app://index.html` y contesta a `window.ray.request`, y el `.gitignore`; por
+decisión del usuario **no corre npm** —imprime los tres comandos que siguen— porque la
+elección de gestor y de plantilla es del dev y `npm create vite` ya hace ese trabajo bien.
+
+Verificado: manifiesto (`frontend_section_is_parsed_with_defaults`), `ray new --frontend`
+(compila el main generado, exige plantilla), y el ciclo completo de `ray dev` con un dev server
+falso escrito en raylang en un puerto libre (`dev_runs_the_frontend_dev_server_and_points_app_urls_at_it`:
+espera, resolución de `app://` en el hijo, `open` con la URL del dev server, y el puerto
+liberado al salir). Sin cambios de lenguaje: SPEC intacta.

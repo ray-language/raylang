@@ -3427,6 +3427,9 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(items));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::UiFrontendUrl => {
+                    self.push(HeapValue::Str(crate::builtins::ui_frontend_url().into()));
+                }
                 OpCode::UiDesktop => {
                     let HeapValue::Str(path) = self.pop() else {
                         unreachable!("the checker guarantees a string");

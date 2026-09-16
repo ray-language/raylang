@@ -1479,6 +1479,19 @@ pub fn app_info() -> [String; 3] {
     APP_INFO.get().cloned().unwrap_or_default()
 }
 
+/// M263: la URL del servidor de desarrollo del frontend (`[frontend] url`) bajo `ray dev` — la
+/// fija la CLI desde `RAY_FRONTEND_URL` (que exporta el supervisor); `ui.app_url`/`app://`
+/// resuelven contra ella. Vacía = sin frontend en desarrollo (`ray run`, nativo, bundle).
+static UI_FRONTEND_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn set_ui_frontend_url(url: String) {
+    let _ = UI_FRONTEND_URL.set(url.trim_end_matches('/').to_string());
+}
+
+pub fn ui_frontend_url() -> String {
+    UI_FRONTEND_URL.get().cloned().unwrap_or_default()
+}
+
 pub fn set_embed_config(root: std::path::PathBuf, dirs: Vec<String>) {
     let _ = embed_config().set((root, dirs));
 }
@@ -4021,6 +4034,12 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__app_info", opcode: OpCode::AppInfo, check: |a| {
         nullary(a, "__app_info")?;
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M263: __ui_frontend_url() -> string — la URL del dev server del frontend bajo `ray dev`
+    // (vacía fuera de él); std/ui → app_url()/app://.
+    Builtin { name: "__ui_frontend_url", opcode: OpCode::UiFrontendUrl, check: |a| {
+        nullary(a, "__ui_frontend_url")?;
+        Ok(Type::String)
     } },
     // M88.1: signals() -> Channel<int> — el canal de señales del SO (SIGTERM/SIGINT).
     // Singleton del proceso; compone con recv/select como cualquier canal. Solo VM.

@@ -63,6 +63,9 @@ pub struct Manifest {
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
     pub dev_listen: Option<String>,
+    /// M263 (IDEAS §91): `[frontend]` — el frontend web del proyecto construido con un bundler
+    /// externo (Vite, Parcel, …). `None` = sin sección. Ver `Frontend`.
+    pub frontend: Option<Frontend>,
     /// M156: `[android] application_id` — el identificador de la app Android que `ray bundle
     /// --android` escribe en el build.gradle generado. `None` = `org.raylang.<name>`.
     pub android_application_id: Option<String>,
@@ -139,6 +142,36 @@ impl Manifest {
     }
 }
 
+/// M263: la sección `[frontend]` del manifiesto — el contrato genérico con un bundler externo
+/// (Vite, Parcel, Astro, …; el mismo que Tauri: comando dev + URL, comando build + carpeta):
+///
+/// ```toml
+/// [frontend]
+/// dev   = "npm --prefix frontend run dev -- --strictPort --port 5173 --clearScreen false"
+/// url   = "http://localhost:5173"   # opcional: por defecto la URL de Vite
+/// build = "npm --prefix frontend run build"
+/// dist  = "frontend/dist"           # se embebe como [native] embed en el binario/bundle
+/// ```
+///
+/// `ray dev` lanza `dev`, espera a que `url` responda y exporta `RAY_FRONTEND_URL` al programa
+/// (`ui.app_url` / `app://` resuelven ahí); `ray build --native` y `ray bundle` corren `build`
+/// y embeben `dist`. Cada comando corre por el shell del sistema en la raíz del proyecto.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Frontend {
+    /// `[frontend] dev` — el comando del servidor de desarrollo. `None` = `ray dev` no lanza nada.
+    pub dev: Option<String>,
+    /// `[frontend] url` — la URL que sirve `dev`. Por defecto `http://localhost:5173` (Vite).
+    pub url: String,
+    /// `[frontend] build` — el comando que produce `dist`. `None` = no se corre nada.
+    pub build: Option<String>,
+    /// `[frontend] dist` — la carpeta construida (relativa a la raíz), embebida en el nativo y
+    /// vigilada como asset bajo `ray dev`. `None` = nada que embeber.
+    pub dist: Option<String>,
+}
+
+/// La URL por defecto de `[frontend] url`: la de Vite.
+pub const DEFAULT_FRONTEND_URL: &str = "http://localhost:5173";
+
 /// Parsea el subconjunto de TOML que `ray.toml` usa. `root` es el directorio del manifiesto.
 fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut section = String::new();
@@ -153,6 +186,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut native_without = Vec::new();
     let mut native_embed = Vec::new();
     let mut dev_listen = None;
+    let mut frontend: Option<Frontend> = None;
     let mut ios_development_team = None;
     let mut app_copyright = None;
     let mut app_name = None;
@@ -235,6 +269,18 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "listen" => dev_listen = Some(as_string()?),
                 _ => {} // otras claves de [dev] se ignoran por ahora (extensibilidad)
             },
+            "frontend" => {
+                // M263: el bundler externo del frontend (Vite y compañía). La sección existe en
+                // cuanto aparece; las claves que falten quedan en su default.
+                let f = frontend.get_or_insert_with(|| Frontend { url: DEFAULT_FRONTEND_URL.to_string(), ..Frontend::default() });
+                match key {
+                    "dev" => f.dev = Some(as_string()?),
+                    "url" => f.url = as_string()?.trim_end_matches('/').to_string(),
+                    "build" => f.build = Some(as_string()?),
+                    "dist" => f.dist = Some(as_string()?),
+                    _ => {} // otras claves de [frontend] se ignoran por ahora (extensibilidad)
+                }
+            }
             "app" => match key {
                 // M155: metadatos de la app para el panel About / el bundle.
                 "copyright" => app_copyright = Some(as_string()?),
@@ -292,6 +338,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         native_without,
         native_embed,
         dev_listen,
+        frontend,
         ios_development_team,
         android_application_id,
         app_copyright,
@@ -412,6 +459,28 @@ mod tests {
         assert!(m.dependencies.is_empty());
         assert!(m.native_without.is_empty()); // sin [native] → sin exclusión
         assert_eq!(m.entry_path(), PathBuf::from("/proj/src/main.ray"));
+    }
+
+    #[test]
+    fn frontend_section_is_parsed_with_defaults() {
+        // M263: [frontend] — comandos y carpeta del bundler externo; la URL default es la de Vite.
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[frontend]\ndev = \"npm run dev\"\nbuild = \"npm run build\"\ndist = \"frontend/dist\"\n",
+        )
+        .unwrap();
+        let f = m.frontend.expect("sección [frontend]");
+        assert_eq!(f.dev.as_deref(), Some("npm run dev"));
+        assert_eq!(f.build.as_deref(), Some("npm run build"));
+        assert_eq!(f.dist.as_deref(), Some("frontend/dist"));
+        assert_eq!(f.url, DEFAULT_FRONTEND_URL);
+        // `url` explícita: se normaliza sin la barra final (se concatenan rutas detrás).
+        let m = parse_src("[package]\nname = \"d\"\nversion = \"0.1.0\"\n[frontend]\nurl = \"http://localhost:3000/\"\n").unwrap();
+        let f = m.frontend.unwrap();
+        assert_eq!(f.url, "http://localhost:3000");
+        assert!(f.dev.is_none() && f.build.is_none() && f.dist.is_none());
+        // Sin la sección, `None`.
+        let m = parse_src("[package]\nname = \"d\"\nversion = \"0.1.0\"\n").unwrap();
+        assert!(m.frontend.is_none());
     }
 
     #[test]

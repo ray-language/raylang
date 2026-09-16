@@ -98,7 +98,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
-  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on)
+  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
@@ -168,20 +168,38 @@ usage: ray registry <subcommand>
 /// `ray new <nombre>`: crea el esqueleto de un proyecto — `ray.toml` (el manifiesto que
 /// leerá el gestor de paquetes, M39b) + `src/main.ray` con un hola-mundo + `.gitignore`.
 fn cmd_new(args: &[String]) {
+    // M263: `--frontend <vite-template>` — una app de escritorio con el frontend en Vite (React,
+    // Vue, Svelte, Solid, …: cualquier plantilla de `npm create vite`). `ray new` NO corre npm:
+    // escribe el proyecto raylang con la sección `[frontend]` y dice qué comandos siguen.
+    // Un `--frontend` final se queda sin valor (take_flag_value lo consume igual): pedir la plantilla.
+    let dangling = args.last().is_some_and(|a| a == "--frontend");
+    let (frontend, args) = take_flag_value(args, "--frontend");
+    let frontend = if dangling { Some(String::new()) } else { frontend };
     let Some(name) = args.first() else {
-        eprintln!("usage: ray new <name>");
+        eprintln!("usage: ray new <name> [--frontend <vite-template>]");
         process::exit(64);
     };
+    if let Some(t) = &frontend
+        && (t.is_empty() || t.starts_with('-'))
+    {
+        eprintln!("--frontend needs a Vite template name (react-ts, vue-ts, svelte-ts, solid-ts, vanilla-ts, …)");
+        process::exit(64);
+    }
     let root = Path::new(name);
     if root.exists() {
         eprintln!("'{name}' already exists");
         process::exit(65);
     }
-    let manifest = format!(
+    let mut manifest = format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
     );
-    let main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
-    let gitignore = "# dependencies downloaded by the package manager (M39c)\n.ray-deps/\n";
+    let mut main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
+    let mut gitignore = "# dependencies downloaded by the package manager (M39c)\n.ray-deps/\n".to_string();
+    if frontend.is_some() {
+        manifest.push_str(FRONTEND_MANIFEST_SECTION);
+        main_ray = FRONTEND_MAIN_RAY.replace("{name}", name);
+        gitignore.push_str("# the frontend's packages and build (Vite)\nfrontend/node_modules/\nfrontend/dist/\n");
+    }
     let write_file = |path: std::path::PathBuf, content: &str| {
         if let Some(parent) = path.parent()
             && let Err(e) = fs::create_dir_all(parent)
@@ -196,9 +214,80 @@ fn cmd_new(args: &[String]) {
     };
     write_file(root.join("ray.toml"), &manifest);
     write_file(root.join("src/main.ray"), &main_ray);
-    write_file(root.join(".gitignore"), gitignore);
-    println!("project '{name}' created. To run it:\n  cd {name} && ray run");
+    write_file(root.join(".gitignore"), &gitignore);
+    match frontend {
+        None => println!("project '{name}' created. To run it:\n  cd {name} && ray run"),
+        Some(template) => println!(
+            "project '{name}' created with a Vite frontend ({template}). Next:\n  \
+             cd {name}\n  \
+             npm create vite@latest frontend -- --template {template}\n  \
+             npm --prefix frontend install\n  \
+             ray dev            # backend + Vite dev server (hot reload) in a native window\n\
+             In the page, talk to the backend with window.ray.request(...) (see src/main.ray).\n\
+             ray build --native / ray bundle run the frontend build and embed frontend/dist."
+        ),
+    }
 }
+
+/// M263: la sección `[frontend]` que `ray new --frontend` escribe: el contrato con Vite en la
+/// carpeta `frontend/` (puerto fijo y sin limpiar la consola, para convivir con `ray dev`).
+const FRONTEND_MANIFEST_SECTION: &str = r#"
+# The web frontend (Vite). `ray dev` runs `dev` and points app:// at `url`;
+# `ray build --native` / `ray bundle` run `build` and embed `dist`.
+[frontend]
+dev = "npm --prefix frontend run dev -- --strictPort --port 5173 --clearScreen false"
+url = "http://localhost:5173"
+build = "npm --prefix frontend run build"
+dist = "frontend/dist"
+"#;
+
+/// M263: el `src/main.ray` de una app con frontend Vite: monta el build embebido bajo
+/// `ray://app/`, abre la ventana en `app://index.html` (dev server bajo `ray dev`, build
+/// embebido en producción) y responde a `window.ray.request`.
+const FRONTEND_MAIN_RAY: &str = r#"import std/ui;
+
+// The page (frontend/) is built with Vite. Under `ray dev` the window loads it from the Vite
+// dev server (hot reload); in a native build or a bundle it loads the embedded `frontend/dist`
+// served from ray://app/ — `app://` picks the right one (`ui.app_url`).
+fn main() -> int {
+    // Under `ray dev` the build may not exist yet (the dev server serves the page): only warn.
+    match (ui.mount_embed("", "frontend/dist")) {
+        Result.Err(e) => eprint("frontend build not mounted (fine under `ray dev`): " + e),
+        Result.Ok(_) => {},
+    }
+    let window = match (ui.open("{name}", "app://index.html", 1000, 700)) {
+        Result.Err(e) => {
+            eprint("ui: " + e);
+            return 1;
+        },
+        Result.Ok(w) => w,
+    };
+    // Events: the window closing ends the app; a `window.ray.request(value)` from the page
+    // arrives as a "message" and is answered with `ui.reply` (the Promise resolves in the page).
+    while (true) {
+        let e = match (ui.next_event()) {
+            Result.Err(err) => {
+                eprint("ui: " + err);
+                return 1;
+            },
+            Result.Ok(e) => e,
+        };
+        if (e.kind == "closed" && e.window == window) {
+            return 0;
+        }
+        if (e.kind == "message") {
+            match (ui.as_request(e)) {
+                Option.Some(request) => {
+                    let (id, body) = request;
+                    let _ = ui.reply(e.window, id, "hello from raylang, you sent: " + body);
+                },
+                Option.None => print("message from the page: " + e.tag),
+            }
+        }
+    }
+    0
+}
+"#;
 
 // ── `ray upgrade` (M137): autoactualización del toolchain desde las GitHub Releases ─────────
 
@@ -858,6 +947,13 @@ fn cmd_run(args: &[String]) {
     if let Some(port) = env::var("RAY_DEV_RELOAD").ok().and_then(|p| p.parse::<u16>().ok()) {
         crate::builtins::set_ui_dev_reload(port);
     }
+    // M263: la URL del dev server del frontend (`[frontend]`) también viene del supervisor —
+    // `ui.app_url`/`app://` resuelven contra ella; un binario nativo nunca la mira.
+    if let Ok(url) = env::var("RAY_FRONTEND_URL")
+        && !url.trim().is_empty()
+    {
+        crate::builtins::set_ui_frontend_url(url);
+    }
     let (use_interp, rest) = take_interp(&args);
     let (fuel, rest) = take_flag_num(&rest, "--fuel", "a number of instructions (e.g. --fuel 1000000)");
     let (heap, rest) = take_flag_num(&rest, "--heap", "a number of objects (e.g. --heap 1000000)");
@@ -927,6 +1023,12 @@ fn cmd_dev(args: &[String]) {
     // El socket vive mientras `dev_sock` no se dropee: toda la sesión.
     let listen_pair = dev_sock.as_ref().zip(listen_addr.as_deref());
 
+    // M263: el dev server del frontend (`[frontend] dev`, Vite y compañía) arranca UNA vez por
+    // sesión y sobrevive a los reinicios del programa (su HMR mantiene la página viva; el
+    // programa es lo único que se relanza). Su URL viaja al hijo en `RAY_FRONTEND_URL`.
+    let mut frontend = start_frontend_dev(&root);
+    let frontend_url = frontend.as_ref().map(|f| f.url.clone());
+
     // Live-reload del navegador (M92.4): el hub SSE emite `reload` en cada reinicio; el webserver,
     // viendo `RAY_DEV_RELOAD`, inyecta el snippet en las respuestas HTML. Arranca SIEMPRE: detectar
     // "es una app web" no es asunto del supervisor — la inyección ya vive en el webserver (solo dispara
@@ -944,11 +1046,13 @@ fn cmd_dev(args: &[String]) {
     // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
     let entry = dev_entry(&fwd_args);
     // M147: los dirs de `[native] embed` también se vigilan — un cambio ahí no reinicia (la
-    // lectura de std/embed es en vivo): solo se recarga el navegador vía el hub.
+    // lectura de std/embed es en vivo): solo se recarga el navegador vía el hub. M263: el
+    // `[frontend] dist` es un asset más (bajo `ray dev` la página vive en el dev server, pero
+    // un `ray run` de comprobación lo sirve desde ahí).
     let embed_dirs: Vec<PathBuf> = Manifest::load(&root)
         .ok()
         .flatten()
-        .map(|m| m.native_embed.iter().map(PathBuf::from).collect())
+        .map(|m| embed_dirs_of(&m).into_iter().map(PathBuf::from).collect())
         .unwrap_or_default();
     let watching_embed = !embed_dirs.is_empty();
     let _ = DEV_EMBED_DIRS.set(embed_dirs);
@@ -970,7 +1074,7 @@ fn cmd_dev(args: &[String]) {
     // cerró la app con su propia tecla" (→ `ray dev` sale con ella, cero teclas extra) de "un
     // script terminó" (→ esperar cambios y re-correr, el contrato del modo watch).
     let baseline_tty = crate::builtins::term_attrs_fingerprint();
-    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
+    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port, frontend_url.as_deref());
     let mut running = true;
     // ¿El hijo en curso cambió el terminal alguna vez? (reset en cada relanzamiento)
     let mut interactive_child = false;
@@ -1009,7 +1113,7 @@ fn cmd_dev(args: &[String]) {
                         } else {
                             eprintln!("\r[dev] the program exited; bye");
                         }
-                        std::process::exit(0);
+                        dev_exit(&mut frontend, 0);
                     }
                     // Tecla-única para el resto (un script en bucle de edición): el terminal es
                     // del supervisor y entra a CRUDO — una sola `q` sale, sin Enter. El hint va
@@ -1027,11 +1131,20 @@ fn cmd_dev(args: &[String]) {
             if keys_armed && dev_raw_key_quit() {
                 let _ = crate::builtins::term_raw_off();
                 eprintln!("\r[dev] bye");
-                std::process::exit(0);
+                dev_exit(&mut frontend, 0);
             }
             if !running && !keys_armed && dev_stdin_quit() {
                 eprintln!("[dev] bye");
-                std::process::exit(0);
+                dev_exit(&mut frontend, 0);
+            }
+            // El dev server del frontend murió solo (crash, `q` de Vite, puerto ocupado): sin él
+            // la ventana no tiene página — se avisa y se sigue sin frontend (la próxima vez que
+            // el programa arranque, `app://` caerá al build embebido).
+            if let Some(f) = frontend.as_mut()
+                && let Ok(Some(status)) = f.child.try_wait()
+            {
+                eprintln!("\r[dev] the frontend dev server exited ({status}); restart `ray dev` to relaunch it");
+                frontend = None;
             }
         };
         // Hubo cambio: el terminal vuelve a modo normal ANTES de imprimir nada más o relanzar
@@ -1109,9 +1222,149 @@ fn cmd_dev(args: &[String]) {
         if let Some((hub, _)) = &reload {
             hub.ui_child.store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
+        child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port, frontend_url.as_deref());
         running = true;
         interactive_child = false;
+    }
+}
+
+// ── M263: el frontend con bundler externo (`[frontend]` del ray.toml; IDEAS §91) ─────────────
+
+/// El dev server del frontend lanzado por `ray dev`: el proceso (líder de su grupo) y la URL
+/// que sirve (ya comprobada: responde al TCP).
+struct FrontendDev {
+    child: process::Child,
+    url: String,
+}
+
+/// El pid del dev server del frontend, para la limpieza por señal (`register_group_child`).
+static DEV_FRONTEND: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Un `Command` que corre `cmdline` por el shell del sistema (`sh -c` / `cmd /C`) en `cwd`, con
+/// la consola heredada: el usuario ve la salida de Vite tal cual.
+fn shell_command(cmdline: &str, cwd: &Path) -> process::Command {
+    let mut cmd = if cfg!(windows) {
+        let mut c = process::Command::new("cmd");
+        c.arg("/C").arg(cmdline);
+        c
+    } else {
+        let mut c = process::Command::new("sh");
+        c.arg("-c").arg(cmdline);
+        c
+    };
+    cmd.current_dir(cwd);
+    cmd
+}
+
+/// Lanza `[frontend] dev` (si el manifiesto lo declara) y espera a que su URL acepte
+/// conexiones (≤ 60 s). `None` sin sección o sin `dev`. Un comando que muere antes de servir
+/// es fatal (73): sin página no hay app que desarrollar. La URL no se sondea con HTTP: basta
+/// el `connect` — Vite y compañía escuchan solo cuando ya sirven.
+fn start_frontend_dev(root: &Path) -> Option<FrontendDev> {
+    let manifest = Manifest::load(root).ok().flatten()?;
+    let frontend = manifest.frontend?;
+    let dev = frontend.dev?;
+    let url = frontend.url.clone();
+    let Some(addr) = url_socket_addr(&url) else {
+        eprintln!("[dev] [frontend] url is not an http://host:port URL: '{url}'");
+        process::exit(64);
+    };
+    eprintln!("[dev] frontend: {dev}  (waiting for {url})");
+    let mut cmd = shell_command(&dev, root);
+    crate::dev_host::prepare_group(&mut cmd);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[dev] could not launch the frontend dev server ({dev}): {e}");
+            process::exit(70);
+        }
+    };
+    crate::dev_host::adopt(&child);
+    DEV_FRONTEND.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
+    crate::dev_host::register_group_child(&DEV_FRONTEND);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+            break;
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            eprintln!("[dev] the frontend dev server exited before serving {url} ({status})");
+            process::exit(73);
+        }
+        if std::time::Instant::now() > deadline {
+            eprintln!("[dev] the frontend dev server did not answer at {url} within 60 s; check [frontend] url in ray.toml");
+            let mut fd = FrontendDev { child, url };
+            stop_frontend_dev(&mut Some(&mut fd));
+            process::exit(73);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    eprintln!("[dev] frontend ready at {url} — app:// URLs point there (hot reload by the bundler)");
+    Some(FrontendDev { child, url })
+}
+
+/// `host:port` resuelto de una URL `http://host[:port][/...]` (puerto 80 si falta). `None` si no
+/// es una URL http o el host no resuelve.
+fn url_socket_addr(url: &str) -> Option<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let rest = url.strip_prefix("http://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().ok()?),
+        None => (authority, 80),
+    };
+    let host = host.trim_matches(['[', ']']);
+    (host, port).to_socket_addrs().ok()?.next()
+}
+
+/// Termina el dev server del frontend (todo su árbol) si está en marcha.
+fn stop_frontend_dev(frontend: &mut Option<&mut FrontendDev>) {
+    if let Some(f) = frontend.take() {
+        DEV_FRONTEND.store(0, std::sync::atomic::Ordering::SeqCst);
+        crate::dev_host::terminate_group(&mut f.child);
+    }
+}
+
+/// Sale de `ray dev` con `code` deteniendo antes el dev server del frontend: `process::exit` no
+/// corre destructores, así que la parada es explícita en cada salida.
+fn dev_exit(frontend: &mut Option<FrontendDev>, code: i32) -> ! {
+    stop_frontend_dev(&mut frontend.as_mut());
+    process::exit(code)
+}
+
+/// Los directorios embebidos del proyecto: `[native] embed` más el `[frontend] dist` (M263),
+/// sin duplicados. Lo consultan `ray run`/`ray dev` (std/embed en vivo) y el nativo/bundle.
+pub(crate) fn embed_dirs_of(m: &Manifest) -> Vec<String> {
+    let mut dirs = m.native_embed.clone();
+    if let Some(dist) = m.frontend.as_ref().and_then(|f| f.dist.clone())
+        && !dirs.contains(&dist)
+    {
+        dirs.push(dist);
+    }
+    dirs
+}
+
+/// Corre `[frontend] build` (si el manifiesto de `entry` lo declara) antes de un build nativo o
+/// un bundle: el `dist` que se embebe debe ser el actual. Un build que falla aborta (70).
+fn run_frontend_build(entry: &str) {
+    let entry_dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
+    let Some(m) = Manifest::load(&entry_dir).ok().flatten() else { return };
+    let Some(build) = m.frontend.as_ref().and_then(|f| f.build.clone()) else { return };
+    eprintln!("[frontend] {build}");
+    match shell_command(&build, &m.root).status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("[frontend] the build failed ({s}); nothing was built");
+            process::exit(70);
+        }
+        Err(e) => {
+            eprintln!("[frontend] could not run the build ({build}): {e}");
+            process::exit(70);
+        }
     }
 }
 
@@ -1136,12 +1389,17 @@ fn spawn_dev_child(
     args: &[String],
     listen: Option<(&std::net::TcpListener, &str)>,
     reload_port: Option<u16>,
+    frontend_url: Option<&str>,
 ) -> process::Child {
     let mut cmd = process::Command::new(exe);
     cmd.arg("run").args(args);
     // M92.4: el hijo aprende el puerto del hub de live-reload; el webserver inyecta el snippet SSE.
     if let Some(p) = reload_port {
         cmd.env("RAY_DEV_RELOAD", p.to_string());
+    }
+    // M263: y la URL del dev server del frontend (`ui.app_url`/`app://` resuelven ahí).
+    if let Some(u) = frontend_url {
+        cmd.env("RAY_FRONTEND_URL", u);
     }
     if let Some((listener, addr)) = listen {
         crate::dev_host::pass_listener(&mut cmd, listener, addr);
@@ -1802,6 +2060,7 @@ fn cmd_bundle(args: &[String]) {
     // M183: la misma puerta por plataforma que `ray build` (en Windows ARM64 corosensei no tiene
     // backend: el bundle intentaba compilarlo y fallaba con un error de tipos en corosensei).
     let fibers = fibers_for_target(None, exclude.iter().any(|d| d == "fibers"));
+    run_frontend_build(&path); // M263
     let embed = collect_embed(&path, None);
     if embed.is_empty() {
         eprintln!(
@@ -2534,6 +2793,7 @@ fn cmd_build(args: &[String]) {
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
+        run_frontend_build(&path); // M263
         let embed = collect_embed(&path, embed_arg.as_deref());
         configure_native_app_info(&path); // M247
         build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed, lib_mode);
@@ -2751,6 +3011,12 @@ fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> 
             if !dirs.iter().any(|(x, _)| x == d) {
                 dirs.push((d.clone(), "ray.toml"));
             }
+        }
+        // M263: el build del frontend viaja embebido (`ray build`/`bundle` lo acaban de correr).
+        if let Some(dist) = m.frontend.as_ref().and_then(|f| f.dist.as_deref())
+            && !dirs.iter().any(|(x, _)| x == dist)
+        {
+            dirs.push((dist.to_string(), "ray.toml ([frontend] dist)"));
         }
     }
     if dirs.is_empty() {
@@ -4658,9 +4924,20 @@ pub(crate) fn configure_embed(entry: &str) {
             m.version.clone(),
             m.app_public_key.clone().unwrap_or_default(),
         );
-        if !m.native_embed.is_empty() {
+        let dirs = embed_dirs_of(&m);
+        // M263: bajo `ray run` sin `ray dev`, la página sale del build embebido — si no existe
+        // todavía, mejor decirlo que servir 404s.
+        if let Some(f) = &m.frontend
+            && let Some(dist) = &f.dist
+            && env::var_os("RAY_FRONTEND_URL").is_none()
+            && !m.root.join(dist).is_dir()
+        {
+            let how = f.build.as_deref().unwrap_or("the frontend build");
+            eprintln!("note: frontend build '{dist}' not found — run `{how}` first, or use `ray dev`");
+        }
+        if !dirs.is_empty() {
             let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
-            crate::builtins::set_embed_config(root, m.native_embed);
+            crate::builtins::set_embed_config(root, dirs);
         }
     }
 }

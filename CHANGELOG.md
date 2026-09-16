@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La página sobrevive a un redimensionado con el Web Inspector acoplado** (M262, ray-sublime).
+  En macOS el inspector acoplado se añade como hermano del webview en su superview y reparte la
+  altura de ese superview entre ambos; con el webview como `contentView` de la ventana el superview
+  era el marco de la ventana (título incluido) y, al redimensionar, la página quedaba más alta que
+  el área visible y cortada por arriba hasta cerrar el inspector. El webview vive ahora dentro de un
+  NSView contenedor plano (la disposición de MiniBrowser/Safari) y sigue su tamaño.
+
 - **Cargar un `bytes` grande ya no lo copia** (M261, ray-sublime §85). En la VM, cada lectura de
   una variable `bytes` —también pasarla como argumento, enviarla por canal o usarla de clave—
   copiaba el búfer entero: leer un archivo de 5 MB byte a byte era un memcpy de 5 MB por byte.

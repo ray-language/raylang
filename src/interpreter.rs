@@ -2427,6 +2427,19 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_popup_menu" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Array(items)) => {
+                        let items: Vec<String> = items.borrow().iter().map(|x| match x { Value::Str(s) => s.clone(), _ => unreachable!("the checker guarantees [string]") }).collect();
+                        match crate::builtins::ui_popup_menu(*h, &items) {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (int, [string])"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_message" => {
                 let arr = match (&values[0], &values[1], &values[2], &values[3]) {
                     (Value::Str(title), Value::Str(text), Value::Str(style), Value::Array(buttons)) => {

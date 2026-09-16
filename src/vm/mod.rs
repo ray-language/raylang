@@ -3683,6 +3683,17 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::UiPopupMenu => {
+                    let HeapValue::Obj(ih) = self.pop() else { unreachable!("the checker guarantees a [string]") };
+                    let items: Vec<String> = self.as_array(ih).iter().map(|v| match v { HeapValue::Str(s) => s.to_string(), _ => unreachable!("the checker guarantees [string]") }).collect();
+                    let HeapValue::Int(handle) = self.pop() else { unreachable!("the checker guarantees an int") };
+                    let elems = match crate::builtins::ui_popup_menu(handle, &items) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiMessage => {
                     let HeapValue::Obj(bh) = self.pop() else { unreachable!("the checker guarantees a [string]") };
                     let buttons: Vec<String> = self.as_array(bh).iter().map(|v| match v { HeapValue::Str(s) => s.to_string(), _ => unreachable!("the checker guarantees [string]") }).collect();

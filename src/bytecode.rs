@@ -698,6 +698,8 @@ pub enum OpCode {
     UiDialogWith,
     /// M258: `__ui_message(title, text, style, buttons)` — diálogo de mensaje MODAL (['ok', index] / ['err', msg]).
     UiMessage,
+    /// M259: `__ui_popup_menu(h, items)` — menú contextual en el puntero (['ok'] / ['err', msg]).
+    UiPopupMenu,
     /// M147: `__embed_read(path)` — un asset del espacio `[native] embed` ([b'ok', datos] / [b'err', msg]).
     EmbedRead,
     /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).

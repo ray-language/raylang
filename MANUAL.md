@@ -1519,6 +1519,21 @@ o.suggested = "untitled.ray";
 let target = ui.save_file_with(o)?;            // Option<string>
 ```
 
+El **menú contextual** (M259) reutiliza los mismos `MenuItem`: `ui.popup_menu(h, items)` lo
+muestra en la posición del puntero sobre la ventana `h` y la elección llega como evento `"menu"`,
+igual que la barra. Como el clic derecho ocurre en la página, el cableado es: la página captura
+`contextmenu`, manda un mensaje con el contexto y el programa responde con el menú.
+
+```rust
+// en la página:  document.oncontextmenu = (e) => { e.preventDefault(); window.ray.send("ctx:" + id); };
+if (e.kind == "message" && e.tag.starts_with("ctx:")) {
+    ui.popup_menu(e.window, [
+        ui.item("rename", "Rename...", ""), ui.item("delete", "Delete", ""),
+        ui.separator(), ui.item("role:copy", "", ""),
+    ])?;
+}
+```
+
 El **menú Edit** también es tuyo (M255). Sus items estándar funcionan por acciones nativas del
 sistema (el portapapeles y el undo del webview viven ahí), así que reemplazarlo con items
 corrientes los perdería. Los **roles estándar** lo evitan: un item con tag `"role:undo"`,

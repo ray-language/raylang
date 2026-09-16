@@ -856,6 +856,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Ok(paths) => std::iter::once(Rc::<str>::from(\"ok\")).chain(paths.iter().map(|p| Rc::<str>::from(p.as_str()))).collect(),\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
+            // M259: menú contextual.
+            "fn __ray_ui_popup_menu(h: i64, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let r = if known { ray_runtime::ui::popup_menu(h, &its) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_message(title: &str, text: &str, style: &str, buttons: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let bs: Vec<String> = buttons.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::message(title, text, style, &bs) {\n",

@@ -291,6 +291,23 @@ pub fn edit_menu(items: [MenuItem]) -> Result<int, string> {
     }
 }
 
+/// A CONTEXT menu (M259): shows `items` at the current mouse position, over window `h`. The call
+/// returns as soon as the menu is on screen; the choice arrives as a `"menu"` event (`tag` =
+/// the item's tag, `window` = h), exactly like the menu bar — standard `"role:*"` items act
+/// natively. The items live while the menu is open (`set_menu_item` works on them meanwhile).
+/// Typical wiring: the page captures `contextmenu`, sends a message, the program pops the menu:
+///
+/// ```raylang
+/// // page: document.oncontextmenu = (e) => { e.preventDefault(); window.ray.send("ctx:" + targetId); };
+/// if (e.kind == "message" && e.tag.starts_with("ctx:")) {
+///     ui.popup_menu(e.window, [ui.item("rename", "Rename...", ""), ui.item("delete", "Delete", "")])?;
+/// }
+/// ```
+pub fn popup_menu(h: int, items: [MenuItem]) -> Result<int, string> {
+    let r = __ui_popup_menu(h, encode_items(items));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or
 /// not) and `checked` (the check mark). Works for custom and application-menu items, and for
 /// the windows opened afterwards on Linux and Windows (their bar is per window). `Err` for an

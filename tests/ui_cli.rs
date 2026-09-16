@@ -1058,6 +1058,56 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// M259 (ray-sublime) — `ui.popup_menu(h, items)`: menú contextual. En headless registra los tags
+// (para `set_menu_item`) y deja traza; `Err` sobre ventana cerrada/desconocida o item inválido.
+// VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn popup_menu_registers_its_items_on_all_three_engines() {
+    let base = tmp("popup_m259");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show(r: Result<int, string>, ok: string) { match (r) { Result.Ok(_) => print(ok), Result.Err(e) => print(e) } }
+fn main() {
+    let w = ui.open("Editor", "http://127.0.0.1:1/", 400, 300).unwrap();
+    show(ui.popup_menu(w, [ui.item("rename", "Rename...", ""), ui.separator(), ui.item("role:copy", "", ""), ui.item("delete", "Delete", "del")]), "popup ok");
+    show(ui.set_menu_item("delete", false, false), "delete greyed");
+    show(ui.popup_menu(w, [ui.item("x", "X", "cmd+bogus")]), "bad");
+    show(ui.popup_menu(99, [ui.item("x", "X", "")]), "bad");
+    close(w);
+    show(ui.popup_menu(w, [ui.item("x", "X", "")]), "bad");
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "popup ok\ndelete greyed\nui: unsupported menu shortcut 'cmd+bogus'\nui: not an open window\nui: not an open window\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] popup 1 items 4"), "traza headless: {err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M258 (ray-sublime) — `ui.message`/`alert`/`confirm` y los diálogos de archivo con opciones
 // (`pick_file_with`, `pick_files`, `save_file_with`): en headless `RAY_UI_ANSWER` conduce el
 // botón y `RAY_UI_PICK` (rutas separadas por \n) el diálogo; la traza muestra estilo, botones,

@@ -6785,10 +6785,16 @@ mod win {
         let (title, text, style) = (title.to_string(), text.to_string(), style.to_string());
         let buttons = buttons.to_vec();
         on_main_sync_wait(move || {
+            use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
             use windows::Win32::UI::Controls::{
-                TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TD_ERROR_ICON,
-                TD_INFORMATION_ICON, TD_WARNING_ICON,
+                TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TD_ERROR_ICON, TD_INFORMATION_ICON,
+                TD_WARNING_ICON,
             };
+            // `TaskDialogIndirect` se resuelve EN TIEMPO DE EJECUCIÓN: solo lo exporta comctl32 v6
+            // (activado por manifest). Enlazarlo estáticamente hacía que el cargador matara el
+            // proceso al arrancar (STATUS_ENTRYPOINT_NOT_FOUND) en cualquier binario sin manifest —
+            // el humo del CI de Windows lo cazó. Sin el símbolo, MessageBoxW.
+            type TaskDialogIndirectFn = unsafe extern "system" fn(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut windows::core::BOOL) -> windows::core::HRESULT;
             let n = buttons.len();
             let last = n - 1;
             let title_w = wide(&title);
@@ -6813,10 +6819,16 @@ mod win {
                     nDefaultButton: 100,
                     ..Default::default()
                 };
-                let mut pressed: i32 = 0;
-                if TaskDialogIndirect(&config, Some(&mut pressed), None, None).is_ok() {
-                    let idx = pressed - 100;
-                    return Ok(if (0..n as i32).contains(&idx) { idx as usize } else { last });
+                let task_dialog: Option<TaskDialogIndirectFn> = LoadLibraryW(windows::core::w!("comctl32.dll"))
+                    .ok()
+                    .and_then(|lib| GetProcAddress(lib, windows::core::s!("TaskDialogIndirect")))
+                    .map(|f| std::mem::transmute::<unsafe extern "system" fn() -> isize, TaskDialogIndirectFn>(f));
+                if let Some(task_dialog) = task_dialog {
+                    let mut pressed: i32 = 0;
+                    if task_dialog(&config, &mut pressed, std::ptr::null_mut(), std::ptr::null_mut()).is_ok() {
+                        let idx = pressed - 100;
+                        return Ok(if (0..n as i32).contains(&idx) { idx as usize } else { last });
+                    }
                 }
                 // Respaldo: MessageBoxW por número de botones.
                 let (flags, map): (MESSAGEBOX_STYLE, fn(MESSAGEBOX_RESULT, usize) -> usize) = match n {

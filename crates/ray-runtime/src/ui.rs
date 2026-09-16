@@ -2825,6 +2825,15 @@ mod mac {
             );
             if chord.is_some() {
                 set_i64(item, sel(b"setKeyEquivalentModifierMask:\0"), mask);
+                // M256 (ray-sublime): macOS 12+ "localiza" solo los atajos de puntuación a la
+                // distribución del teclado — `cmd+/` se dibujaba `⌘'` en un teclado latinoamericano
+                // y pasaba a responder a la tecla FÍSICA de la `/` del teclado US, no al carácter.
+                // El spec dice un carácter; el item muestra y espera ese carácter.
+                let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                let off = sel(b"setAllowsAutomaticKeyEquivalentLocalization:\0");
+                if responds(item, sel(b"respondsToSelector:\0"), off) != 0 {
+                    set_bool(item, off, 0);
+                }
             }
             if role.is_none() {
                 set_id(item, sel(b"setTarget:\0"), target);

@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Un atajo de menú se dibuja tal como se declara** (M256, ray-sublime). En macOS 12+ el sistema
+  "localizaba" los atajos de puntuación a la distribución del teclado: `cmd+/` aparecía como `⌘'`
+  en un teclado latinoamericano y pasaba a responder a la tecla física de la `/` del teclado US.
+  Los items de `menu`/`menu_at`/`replace_menu`/`app_menu` desactivan esa localización automática:
+  muestran el carácter del spec y responden a ese carácter.
+
 - **Roles estándar de edición y `ui.edit_menu`** (M255, ray-sublime). Un item de menú con tag
   `"role:undo"`, `"role:redo"`, `"role:cut"`, `"role:copy"`, `"role:paste"`, `"role:select_all"` o
   `"role:close"` se comporta como el del sistema (deshacer, portapapeles y seleccionar todo sobre el

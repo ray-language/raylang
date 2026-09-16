@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.23.1 — 2026-09-16
 
 - **Un atajo de menú se dibuja tal como se declara** (M256, ray-sublime). En macOS 12+ el sistema
   "localizaba" los atajos de puntuación a la distribución del teclado: `cmd+/` aparecía como `⌘'`

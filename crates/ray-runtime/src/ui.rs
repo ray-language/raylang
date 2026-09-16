@@ -5690,7 +5690,7 @@ mod win {
     };
     use windows::core::{HSTRING, PCWSTR, PWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{IBindCtx, CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
         Common::COMDLG_FILTERSPEC, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
@@ -6738,14 +6738,14 @@ mod win {
                     let _ = dialog.SetTitle(PCWSTR(wide(&opts.title).as_ptr()));
                 }
                 if !opts.directory.is_empty()
-                    && let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, Option<&windows::core::IUnknown>, IShellItem>(PCWSTR(wide(&opts.directory).as_ptr()), None)
+                    && let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, Option<&IBindCtx>, IShellItem>(PCWSTR(wide(&opts.directory).as_ptr()), None)
                 {
                     let _ = dialog.SetFolder(&folder);
                 }
                 if !opts.filters.is_empty() && kind != "open_folder" {
                     // Los buffers viven hasta después de Show (COM copia al llamar, pero no se arriesga).
-                    let names: Vec<Vec<u16>> = opts.filters.iter().map(|(n, _)| wide(n)).collect();
-                    let specs: Vec<Vec<u16>> = opts
+                    let names: Vec<HSTRING> = opts.filters.iter().map(|(n, _)| wide(n)).collect();
+                    let specs: Vec<HSTRING> = opts
                         .filters
                         .iter()
                         .map(|(_, exts)| wide(&exts.iter().map(|e| format!("*.{}", e.trim_start_matches('.'))).collect::<Vec<_>>().join(";")))
@@ -6793,11 +6793,11 @@ mod win {
             let last = n - 1;
             let title_w = wide(&title);
             let text_w = wide(&text);
-            let labels: Vec<Vec<u16>> = buttons.iter().map(|b| wide(b)).collect();
+            let labels: Vec<HSTRING> = buttons.iter().map(|b| wide(b)).collect();
             let table: Vec<TASKDIALOG_BUTTON> =
                 labels.iter().enumerate().map(|(i, l)| TASKDIALOG_BUTTON { nButtonID: 100 + i as i32, pszButtonText: PCWSTR(l.as_ptr()) }).collect();
             let icon = match style.as_str() { "warning" => TD_WARNING_ICON, "error" => TD_ERROR_ICON, _ => TD_INFORMATION_ICON };
-            let owner = owner_hwnd().unwrap_or_default();
+            let owner = owner_hwnd().unwrap_or(HWND(std::ptr::null_mut()));
             // SAFETY: hilo 1; todos los buffers viven hasta que la llamada retorna.
             unsafe {
                 let config = TASKDIALOGCONFIG {

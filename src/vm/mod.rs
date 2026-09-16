@@ -921,7 +921,7 @@ impl<'a> Vm<'a> {
                             HeapValue::Float(f) => crate::ffi::FfiVal::Float(*f),
                             HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
                             HeapValue::Str(s) => crate::ffi::FfiVal::Str(s),
-                            HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()),
+                            HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(&b[..]),
                             HeapValue::Ptr(p) => crate::ffi::FfiVal::Int(*p), // M41.4b
                             _ => return Err(runtime_error(pos!().0, pos!().1,
                                 "non-marshalable argument at the FFI boundary")),
@@ -947,7 +947,7 @@ impl<'a> Vm<'a> {
                                                 "the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)")),
                                         }
                                     } else {
-                                        HeapValue::Bytes(bytes)
+                                        HeapValue::bytes(bytes)
                                     };
                                     ("Some", vec![inner])
                                 }
@@ -1923,7 +1923,7 @@ impl<'a> Vm<'a> {
                 }
                 // M16.1b: los octetos UTF-8 del string → bytes (inline, no objeto del heap).
                 OpCode::ToBytes => match self.pop() {
-                    HeapValue::Str(s) => self.push(HeapValue::Bytes(s.as_bytes().to_vec())),
+                    HeapValue::Str(s) => self.push(HeapValue::bytes(s.as_bytes().to_vec())),
                     _ => unreachable!("the checker guarantees a string"),
                 },
                 // M89.2: guardia — la cripto de ring en un binario sin la feature 'net-tls'
@@ -1949,7 +1949,7 @@ impl<'a> Vm<'a> {
                     _ => unreachable!("the checker guarantees an int"),
                 },
                 OpCode::Sha256 => match self.pop() {
-                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha256(&b))),
+                    HeapValue::Bytes(b) => self.push(HeapValue::bytes(crate::builtins::sha256(&b))),
                     _ => unreachable!("the checker guarantees bytes"),
                 },
                 // M126: hasher incremental — el estado vive en ray_runtime::crypto (compartido con
@@ -1963,8 +1963,8 @@ impl<'a> Vm<'a> {
                     let elems = match (&op, &a, &b, &c) {
                         (HeapValue::Str(op), HeapValue::Bytes(a), HeapValue::Bytes(b), HeapValue::Bytes(c)) => {
                             match crate::builtins::bigint_op(op, a, b, c) {
-                                Ok(r) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(r)],
-                                Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                                Ok(r) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(r)],
+                                Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
                             }
                         }
                         _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
@@ -1979,7 +1979,7 @@ impl<'a> Vm<'a> {
                     let op = self.pop();
                     let elems = match (&op, &data, &n) {
                         (HeapValue::Str(op), HeapValue::Bytes(data), HeapValue::Int(n)) => match crate::builtins::deflate_op(op, data, *n) {
-                            Some(r) => vec![HeapValue::Bytes(r)],
+                            Some(r) => vec![HeapValue::bytes(r)],
                             None => vec![],
                         },
                         _ => unreachable!("the checker guarantees (string, bytes, int)"),
@@ -2014,8 +2014,8 @@ impl<'a> Vm<'a> {
                 OpCode::HasherFinal => match self.pop() {
                     HeapValue::Int(handle) => {
                         let elems = match crate::builtins::hasher_final(handle) {
-                            Ok(d) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(d)],
-                            Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                            Ok(d) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(d)],
+                            Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
@@ -2023,11 +2023,11 @@ impl<'a> Vm<'a> {
                     _ => unreachable!("the checker guarantees an int"),
                 },
                 OpCode::Sha512 => match self.pop() {
-                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha512(&b))),
+                    HeapValue::Bytes(b) => self.push(HeapValue::bytes(crate::builtins::sha512(&b))),
                     _ => unreachable!("the checker guarantees bytes"),
                 },
                 OpCode::Sha1 => match self.pop() {
-                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha1(&b))),
+                    HeapValue::Bytes(b) => self.push(HeapValue::bytes(crate::builtins::sha1(&b))),
                     _ => unreachable!("the checker guarantees bytes"),
                 },
                 OpCode::HmacSha256 => {
@@ -2036,7 +2036,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Bytes(k), HeapValue::Bytes(m)) = (k, m) else {
                         unreachable!("the checker guarantees bytes, bytes");
                     };
-                    self.push(HeapValue::Bytes(crate::builtins::hmac_sha256(&k, &m)));
+                    self.push(HeapValue::bytes(crate::builtins::hmac_sha256(&k, &m)));
                 }
                 // M43.3: Ed25519. Los fallibles empujan `[bytes]` etiquetado; `verify` empuja un bool.
                 OpCode::Ed25519PublicKey => {
@@ -2045,7 +2045,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees bytes"),
                     };
                     let elems = match crate::builtins::ed25519_public_key(&seed) {
-                        Some(pk) => vec![HeapValue::Bytes(pk)],
+                        Some(pk) => vec![HeapValue::bytes(pk)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2058,7 +2058,7 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees bytes, bytes");
                     };
                     let elems = match crate::builtins::ed25519_sign(&seed, &msg) {
-                        Some(sig) => vec![HeapValue::Bytes(sig)],
+                        Some(sig) => vec![HeapValue::bytes(sig)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2090,7 +2090,7 @@ impl<'a> Vm<'a> {
                         crate::builtins::chacha20poly1305_open(&key, &nonce, &aad, &data)
                     };
                     let elems = match res {
-                        Some(out) => vec![HeapValue::Bytes(out)],
+                        Some(out) => vec![HeapValue::bytes(out)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2109,7 +2109,7 @@ impl<'a> Vm<'a> {
                         None => crate::builtins::x25519_public_key(&sk),
                     };
                     let elems = match res {
-                        Some(out) => vec![HeapValue::Bytes(out)],
+                        Some(out) => vec![HeapValue::bytes(out)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2126,7 +2126,7 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees bytes, bytes, bytes, int");
                     };
                     let elems = match crate::builtins::hkdf_sha256(&salt, &ikm, &info, len) {
-                        Some(okm) => vec![HeapValue::Bytes(okm)],
+                        Some(okm) => vec![HeapValue::bytes(okm)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2146,7 +2146,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Bytes(b) => b,
                         _ => unreachable!("the checker guarantees bytes"),
                     };
-                    let elems = match String::from_utf8(b) {
+                    let elems = match std::str::from_utf8(&b) {
                         Ok(s) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(s.into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                     };
@@ -2162,8 +2162,8 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees a string"),
                     };
                     let elems = match crate::builtins::read_file_bytes(&path) {
-                        Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
-                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.to_string().into_bytes())],
+                        Ok(data) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)],
+                        Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.to_string().into_bytes())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2174,8 +2174,8 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees a string");
                     };
                     let elems = match crate::builtins::embed_read(&path) {
-                        Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
-                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                        Ok(data) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)],
+                        Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2221,12 +2221,12 @@ impl<'a> Vm<'a> {
                     if crate::builtins::is_tls_handle(handle) {
                         match crate::builtins::tls_read_nb(handle) {
                             Ok(Some(data)) => {
-                                let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
+                                let elems = vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Err(e) => {
-                                let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                                let elems = vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())];
                                 let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
@@ -2248,12 +2248,12 @@ impl<'a> Vm<'a> {
                     }
                     match crate::builtins::socket_read_bytes_nb(handle) {
                         Ok(Some(data)) => {
-                            let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
+                            let elems = vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
-                            let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                            let elems = vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -2386,7 +2386,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Bytes(b), HeapValue::Int(i), HeapValue::Int(j)) = (b, i, j) else {
                         unreachable!("the checker guarantees bytes, int, int");
                     };
-                    self.push(HeapValue::Bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
+                    self.push(HeapValue::bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
                 }
                 // M245: búsqueda de subsecuencia / prefijo en bytes (sin asignar).
                 OpCode::BytesIndexOf => {
@@ -2419,7 +2419,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(n) => (*n & 0xff) as u8,
                         _ => unreachable!("the checker guarantees [int]"),
                     }).collect();
-                    self.push(HeapValue::Bytes(octets));
+                    self.push(HeapValue::bytes(octets));
                 }
                 OpCode::Repeat => {
                     let n = self.pop();
@@ -2816,7 +2816,7 @@ impl<'a> Vm<'a> {
                         timeout_ms, max_output, merge_output,
                     );
                     let elems = crate::builtins::run_encoded(&program, &as_strings(self, ah), &opts)
-                        .into_iter().map(HeapValue::Bytes).collect();
+                        .into_iter().map(HeapValue::bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2857,7 +2857,7 @@ impl<'a> Vm<'a> {
                         scope.procs.push(*h_child);
                     }
                     let elems = crate::builtins::proc_spawn_encode(spawned)
-                        .into_iter().map(HeapValue::Bytes).collect();
+                        .into_iter().map(HeapValue::bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2879,7 +2879,7 @@ impl<'a> Vm<'a> {
                     };
                     let opts = crate::builtins::run_opts_from_flat(&dir, as_strings(self, eh), env_clear, &[], false, false, 0, 0, false);
                     let elems: Vec<HeapValue> = crate::builtins::proc_spawn_detached_encoded(&program, &as_strings(self, ah), &opts)
-                        .into_iter().map(HeapValue::Bytes).collect();
+                        .into_iter().map(HeapValue::bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2913,7 +2913,7 @@ impl<'a> Vm<'a> {
                         scope.procs.push(*h_child);
                     }
                     let elems = crate::builtins::proc_spawn_encode(spawned)
-                        .into_iter().map(HeapValue::Bytes).collect();
+                        .into_iter().map(HeapValue::bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2936,7 +2936,7 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = crate::builtins::proc_try_wait_encoded(handle)
-                        .into_iter().map(HeapValue::Bytes).collect();
+                        .into_iter().map(HeapValue::bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -2979,9 +2979,9 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees two ints"),
                     };
                     let elems = match crate::builtins::read_bytes_handle(handle, max) {
-                        Ok(Some(data)) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
-                        Ok(None) => vec![HeapValue::Bytes(b"eof".to_vec())],
-                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                        Ok(Some(data)) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)],
+                        Ok(None) => vec![HeapValue::bytes(b"eof".to_vec())],
+                        Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -3198,7 +3198,7 @@ impl<'a> Vm<'a> {
                         // Un error de lectura (stdin cerrado/EBADF) se reporta como EOF: el fin
                         // de la entrada, sin tumbar el programa — misma politica en el interprete.
                         let elems = match crate::builtins::stdin_read(max) {
-                            Ok(b) if !b.is_empty() => vec![HeapValue::Bytes(b)],
+                            Ok(b) if !b.is_empty() => vec![HeapValue::bytes(b)],
                             _ => vec![], // EOF (o error de lectura)
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -3226,19 +3226,19 @@ impl<'a> Vm<'a> {
                     // ¿Venció el plazo de un aparcado anterior? (io_wait marcó el pseudo-handle 0
                     // y despertó la fibra; este re-ejecutado lo consume.)
                     if crate::builtins::take_read_timeout(crate::builtins::STDIN_PSEUDO_HANDLE) {
-                        let elems = vec![HeapValue::Bytes(b"timeout".to_vec())];
+                        let elems = vec![HeapValue::bytes(b"timeout".to_vec())];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else if crate::builtins::stdin_ready(0) {
                         let elems = match crate::builtins::stdin_read(max) {
-                            Ok(b) if !b.is_empty() => vec![HeapValue::Bytes(b"data".to_vec()), HeapValue::Bytes(b)],
-                            _ => vec![HeapValue::Bytes(b"eof".to_vec())], // EOF (o error)
+                            Ok(b) if !b.is_empty() => vec![HeapValue::bytes(b"data".to_vec()), HeapValue::bytes(b)],
+                            _ => vec![HeapValue::bytes(b"eof".to_vec())], // EOF (o error)
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else if ms <= 0 {
                         // Plazo agotado de entrada: sondeo puro.
-                        let elems = vec![HeapValue::Bytes(b"timeout".to_vec())];
+                        let elems = vec![HeapValue::bytes(b"timeout".to_vec())];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
@@ -3534,7 +3534,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Bytes(data), HeapValue::Str(path)) = (self.pop(), self.pop()) else {
                         unreachable!("the checker guarantees (string, bytes)");
                     };
-                    let elems = match crate::builtins::ui_mount_bytes(&path, data) {
+                    let elems = match crate::builtins::ui_mount_bytes(&path, data.to_vec()) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3929,16 +3929,16 @@ impl<'a> Vm<'a> {
                     match crate::builtins::udp_recv_from_nb(handle) {
                         Ok(Some((host, port, data))) => {
                             let elems = vec![
-                                HeapValue::Bytes(b"ok".to_vec()),
-                                HeapValue::Bytes(host.into_bytes()),
-                                HeapValue::Bytes(port.to_string().into_bytes()),
-                                HeapValue::Bytes(data),
+                                HeapValue::bytes(b"ok".to_vec()),
+                                HeapValue::bytes(host.into_bytes()),
+                                HeapValue::bytes(port.to_string().into_bytes()),
+                                HeapValue::bytes(data),
                             ];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
-                            let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                            let elems = vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
@@ -5090,9 +5090,10 @@ impl<'a> Vm<'a> {
             (Add, Str(a), Str(b)) => Str(build_str(|o| { o.reserve(a.len() + b.len()); o.push_str(&a); o.push_str(&b); })),
             // M16.1b: `+` concatena dos bytes (inline, no son objetos del heap → van por aquí).
             (Add, Bytes(a), Bytes(b)) => {
-                let mut v = a;
+                let mut v = Vec::with_capacity(a.len() + b.len());
+                v.extend_from_slice(&a);
                 v.extend_from_slice(&b);
-                Bytes(v)
+                Bytes(v.into())
             }
             // Desbordamiento de int = error de ejecución (M34, SPEC §8), como en el intérprete.
             (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),

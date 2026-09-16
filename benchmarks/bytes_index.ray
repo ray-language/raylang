@@ -1,0 +1,48 @@
+import std/time;
+
+// M261 (ray-sublime §85): el coste de cargar un `bytes` grande no debe depender de su tamaño.
+// Recorre el mismo bucle con dos búferes: 4 KiB y ~480 KiB; imprime ms de cada fase.
+fn fill(n: int) -> bytes {
+    var xs: [int] = [];
+    var i = 0;
+    while (i < n) {
+        xs.push(i % 256);
+        i = i + 1;
+    }
+    bytes_of(xs)
+}
+
+fn le32(b: bytes, at: int) -> int {
+    b[at] + b[at + 1] * 256 + b[at + 2] * 65536 + b[at + 3] * 16777216
+}
+
+fn run(label: string, data: bytes, iters: int) {
+    let t0 = time.monotonic_millis();
+    var acc = 0;
+    var i = 0;
+    while (i < iters) {
+        acc = acc + data.len();
+        i = i + 1;
+    }
+    let t1 = time.monotonic_millis();
+    i = 0;
+    while (i < iters) {
+        acc = acc + data[i % 4096];
+        i = i + 1;
+    }
+    let t2 = time.monotonic_millis();
+    i = 0;
+    while (i < iters) {
+        acc = acc + le32(data, i % 4000);
+        i = i + 1;
+    }
+    let t3 = time.monotonic_millis();
+    print("${label}: len ${t1 - t0} ms, index ${t2 - t1} ms, le32 ${t3 - t2} ms (acc ${acc})");
+}
+
+fn main() {
+    let small = fill(4096);
+    let big = fill(483486);
+    run("size 4096  ", small, 100000);
+    run("size 483486", big, 100000);
+}

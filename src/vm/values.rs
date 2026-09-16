@@ -179,7 +179,7 @@ pub(super) fn to_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct],
         HeapValue::Str(s) => Value::Str(s.clone().to_string()),
         HeapValue::Char(c) => Value::Char(*c),
         HeapValue::UInt(n, w) => Value::UInt(*n, *w),
-        HeapValue::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
+        HeapValue::Bytes(b) => Value::Bytes(Rc::new(b.to_vec())),
         HeapValue::Ptr(p) => Value::Ptr(*p), // M41.4b
         HeapValue::Unit => Value::Unit,
         HeapValue::Function(i) => Value::Function(*i),
@@ -242,7 +242,7 @@ pub(super) fn heap_to_key(v: HeapValue) -> MapKey {
         HeapValue::Str(s) => MapKey::Str(s.clone()),
         HeapValue::Char(c) => MapKey::Char(c),
         HeapValue::Bool(b) => MapKey::Bool(b),
-        HeapValue::Bytes(b) => MapKey::Bytes(b),
+        HeapValue::Bytes(b) => MapKey::Bytes(b.to_vec()),
         _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
     }
 }
@@ -254,6 +254,6 @@ pub(super) fn key_to_heap(k: &MapKey) -> HeapValue {
         MapKey::Str(s) => HeapValue::Str(s.clone()),
         MapKey::Char(c) => HeapValue::Char(*c),
         MapKey::Bool(b) => HeapValue::Bool(*b),
-        MapKey::Bytes(b) => HeapValue::Bytes(b.clone()),
+        MapKey::Bytes(b) => HeapValue::bytes(&b[..]),
     }
 }

@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La página sobrevive a un redimensionado con el Web Inspector acoplado** (M257, ray-sublime).
+  En macOS el inspector acoplado se añade como hermano del webview en su superview y reparte la
+  altura de ese superview entre ambos; con el webview como `contentView` de la ventana el superview
+  era el marco de la ventana (título incluido) y, al redimensionar, la página quedaba más alta que
+  el área visible y cortada por arriba hasta cerrar el inspector. El webview vive ahora dentro de un
+  NSView contenedor plano (la disposición de MiniBrowser/Safari) y sigue su tamaño.
+
 - **Un atajo de menú se dibuja tal como se declara** (M256, ray-sublime). En macOS 12+ el sistema
   "localizaba" los atajos de puntuación a la distribución del teclado: `cmd+/` aparecía como `⌘'`
   en un teclado latinoamericano y pasaba a responder a la tecla física de la `/` del teclado US.

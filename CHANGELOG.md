@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Roles estándar de edición y `ui.edit_menu`** (M255, ray-sublime). Un item de menú con tag
+  `"role:undo"`, `"role:redo"`, `"role:cut"`, `"role:copy"`, `"role:paste"`, `"role:select_all"` o
+  `"role:close"` se comporta como el del sistema (deshacer, portapapeles y seleccionar todo sobre el
+  webview con el foco; cerrar la ventana clave) y no emite evento; título y atajo vacíos toman el
+  estándar, propios lo renombran o re-asignan; `set_menu_item` por tag funciona igual.
+  `ui.edit_menu(items)` rehace el menú Edit con tus items entre los roles: en macOS reemplaza el
+  Edit estándar en su sitio (antes, `replace_menu("Edit", …)` perdía el portapapeles y el undo);
+  en Linux y Windows lo crea la primera vez y lo reemplaza después.
+
 ## 1.22.1 — 2026-09-15
 
 - **Los plazos de una fibra ya no dependen de que las demás cedan** (M254, cazado por ray-sublime).

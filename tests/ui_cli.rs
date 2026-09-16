@@ -1058,6 +1058,57 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// M255 (ray-sublime) — roles estándar de edición (`role:undo`, `role:paste`, …) y `edit_menu`:
+// título/atajo estándar si vienen vacíos, `set_menu_item` por tag, y el Edit se crea la primera
+// vez y se reemplaza después (en headless no hay Edit estándar, como en Linux/Windows). VM,
+// intérprete y nativo (el comportamiento nativo del rol — portapapeles real — no se prueba
+// sin display; aquí, la superficie y el borde de decodificación).
+// ---------------------------------------------------------------------------
+#[test]
+fn edit_roles_and_edit_menu_on_all_three_engines() {
+    let base = tmp("edit_roles_m255");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn main() {
+    let std_items = [ui.item("role:undo", "", ""), ui.item("role:redo", "", ""), ui.separator(), ui.item("role:cut", "", ""), ui.item("role:copy", "", ""), ui.item("role:paste", "", ""), ui.separator(), ui.item("find", "Find...", "cmd+f"), ui.item("role:select_all", "", "")];
+    match (ui.edit_menu(std_items)) { Result.Ok(_) => print("edit ok"), Result.Err(e) => print(e) }
+    match (ui.set_menu_item("role:paste", false, false)) { Result.Ok(_) => print("paste greyed"), Result.Err(e) => print(e) }
+    match (ui.edit_menu([ui.item("role:copy", "Copiar", "cmd+shift+c"), ui.item("role:close", "", "")])) { Result.Ok(_) => print("edit replaced"), Result.Err(e) => print(e) }
+    match (ui.edit_menu([ui.item("role:paste", "", "cmd+bogus")])) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    match (ui.menu("Tools", [ui.item("role:undo", "", "")])) { Result.Ok(_) => print("tools ok"), Result.Err(e) => print(e) }
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "edit ok\npaste greyed\nedit replaced\nui: unsupported menu shortcut 'cmd+bogus'\ntools ok\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] menu Edit at -1 items 9"), "el primer edit_menu crea el Edit: {err}");
+        assert!(err.contains("[ui] replace menu Edit items 2"), "el segundo lo reemplaza: {err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M252 (ray-sublime #76) — el evento `focused`: `focus(h)` lo emite con el handle (abrir no
 // produce eventos en headless: la cola queda en silencio, ver las pruebas del aparcado).
 // VM, intérprete y nativo.

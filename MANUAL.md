@@ -1474,6 +1474,26 @@ En Linux no existe ese menú global: los items van como un menú normal titulado
 — `"role:about"` incluido — emiten el evento `"menu"` (muestra tu propio about). Llámalo una
 vez, antes de abrir ventanas.
 
+El **menú Edit** también es tuyo (M255). Sus items estándar funcionan por acciones nativas del
+sistema (el portapapeles y el undo del webview viven ahí), así que reemplazarlo con items
+corrientes los perdería. Los **roles estándar** lo evitan: un item con tag `"role:undo"`,
+`"role:redo"`, `"role:cut"`, `"role:copy"`, `"role:paste"`, `"role:select_all"` o `"role:close"`
+hace lo que haría el del sistema y no emite evento; título y atajo vacíos toman el estándar, y
+propios lo renombran o le cambian el atajo. `ui.edit_menu(items)` rehace el Edit con tus items
+entre los roles (en macOS reemplaza el estándar en su sitio; en Linux/Windows, que no traen Edit,
+lo crea al final de la barra la primera vez — llámalo justo después de declarar File):
+
+```rust
+ui.edit_menu([
+    ui.item("role:undo", "", ""), ui.item("role:redo", "", ""), ui.separator(),
+    ui.item("role:cut", "", ""), ui.item("role:copy", "", ""), ui.item("role:paste", "", ""),
+    ui.separator(),
+    ui.item("find", "Find...", "cmd+f"),              // tuyo: llega como evento "menu"
+    ui.item("role:select_all", "Seleccionar todo", ""), // renombrado, atajo estándar ⌘A
+])?;
+ui.set_menu_item("role:paste", false, false)?;      // los roles también se gobiernan por tag
+```
+
 Y el **contenido** del panel About es tuyo (M155): `ui.set_about(name, version, description,
 copyright)` — el mismo panel nativo, con tu nombre en negrita, la línea "Version …", la
 descripción (como créditos, al estilo del Finder) y el copyright; `""` omite un campo y queda

@@ -204,6 +204,14 @@ pub struct MenuItem {
 }
 
 /// A menu item with the defaults: no icon, enabled, unchecked (M236).
+///
+/// Standard edit roles (M255): a tag of `"role:undo"`, `"role:redo"`, `"role:cut"`,
+/// `"role:copy"`, `"role:paste"`, `"role:select_all"` or `"role:close"` makes the item behave
+/// like the system's own — undo, clipboard and select-all act on the focused webview, close
+/// closes the key window — and it emits NO `"menu"` event. An empty `title` or `shortcut`
+/// takes the standard one (`"Paste"`, `"cmd+v"`); give your own to rename or rebind it. This is
+/// what lets you rebuild the Edit menu (`edit_menu`/`replace_menu("Edit", …)`) with your items
+/// between the standard ones without losing the clipboard. `set_menu_item` works on them by tag.
 pub fn item(tag: string, title: string, shortcut: string) -> MenuItem {
     MenuItem { tag: tag, title: title, shortcut: shortcut, icon: "", enabled: true, checked: false }
 }
@@ -257,6 +265,27 @@ pub fn menu_at(position: int, title: string, items: [MenuItem]) -> Result<int, s
 pub fn replace_menu(title: string, items: [MenuItem]) -> Result<int, string> {
     let r = __ui_replace_menu(title, encode_items(items));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The Edit menu, rebuilt with your items (M255, ray-sublime): on macOS it REPLACES the
+/// contents of the standard Edit menu, in place; on Linux and Windows — where no Edit menu is
+/// installed by default (the webview handles the clipboard keys itself) — it creates one at the
+/// end of the bar the first time and replaces it afterwards, so call it right after declaring
+/// File. Keep the system behaviour with the `"role:*"` items (see `item`) and add your own
+/// around them:
+///
+/// ```raylang
+/// ui.edit_menu([
+///     ui.item("role:undo", "", ""), ui.item("role:redo", "", ""), ui.separator(),
+///     ui.item("role:cut", "", ""), ui.item("role:copy", "", ""), ui.item("role:paste", "", ""),
+///     ui.separator(), ui.item("find", "Find...", "cmd+f"), ui.item("role:select_all", "", ""),
+/// ])?;
+/// ```
+pub fn edit_menu(items: [MenuItem]) -> Result<int, string> {
+    match (replace_menu("Edit", items)) {
+        Result.Ok(v) => Result.Ok(v),
+        Result.Err(_) => menu("Edit", items),
+    }
 }
 
 /// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or

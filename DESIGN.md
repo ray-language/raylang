@@ -13631,3 +13631,43 @@ Verificado: tres motores en headless (`tests/ui_cli.rs`: kinds, dueña, validaci
 operaciones trazadas) y humo real en macOS con panel hijo flotante, ventana sin borde,
 redimensionar, mover, centrar, zoom y pantalla completa ida y vuelta. Linux y Windows compilan en
 el CI; efecto real pendiente de máquina (los símbolos de Windows se cotejaron con el crate 0.62).
+
+## 248. M261 — `bytes` compartido en la VM: cargar un búfer ya no lo copia (sep 2026)
+
+Origen: ray-sublime §85. `ray profile` sobre el arranque del editor puso arriba `zip::le32`, una
+función de cuatro líneas que lee cuatro octetos, a 70 µs por llamada; el escaneo de 98 paquetes
+eran 4,5 s de los 4,6 s hasta ver la ventana, y ninguno era trabajo: eran copias del archivo
+entero, una por campo leído. La app lo rodeó leyendo desde `sub_bytes` de la región en curso, y
+pidió a raylang semántica de referencia para `bytes` "como la de `[T]`". Medido aquí con
+`benchmarks/bytes_index.ray` (100 000 cargas del mismo búfer): `.len()` costaba 8 ms sobre 4 KiB y
+**590 ms sobre 480 KiB**; el coste escalaba con el tamaño del operando, no con el trabajo.
+
+Causa: en la VM `HeapValue::Bytes` era un `Vec<u8>` **inline** en el valor — cada carga de
+variable, paso de argumento, `send` por canal o clave de mapa lo clonaba entero. El mismo
+defecto que M213 arregló para `Str` (`String` → `Arc<str>`), y la misma asimetría entre motores:
+el intérprete ya tenía `Rc<Vec<u8>>` y el nativo `Arc<[u8]>`; solo la VM copiaba.
+
+Cambio: `Bytes(Arc<[u8]>)` (compartido, inmutable; `Arc` y no `Rc` porque el scheduler M:N mueve
+fibras entre hilos, como en M213). Un constructor `HeapValue::bytes(impl Into<Arc<[u8]>>)` absorbe
+los ~70 sitios que construían desde `Vec<u8>`; `+` reserva `a.len() + b.len()` y copia los dos
+lados (antes extendía el clon que la carga ya había pagado: mismo orden, medido igual); los cruces
+al intérprete y a `MapKey` hacen `to_vec()` explícito. Sin `unsafe` nuevo, sin dependencia nueva,
+la semántica del lenguaje no cambia (`bytes` ya era inmutable: SPEC intacta).
+
+Efecto secundario que explica la mejora transversal: el payload más ancho de `HeapValue` era ese
+`Vec` (24 bytes) y el enum medía 32; con `Arc<[u8]>` (16) baja a **24 bytes**, y todo lo que mueve
+valores (pila, locales, arreglos, campos) mueve un 25 % menos.
+
+| VM release (M3 Pro) | antes | M261 |
+|---|---|---|
+| `.len()` ×100 000, búfer 480 KiB | 590 ms | **3 ms** |
+| `le32` (4 índices) ×100 000, búfer 480 KiB | 3 123 ms | **20 ms** |
+| `le32` ×100 000, búfer 4 KiB | 47 ms | 19 ms |
+| `send` de 1,3 MB por canal ×20 000 | 3 284 ms | **27 ms** |
+| `sha256` ×20 + `sub_bytes` ×100 000 sobre 1,3 MB | 1 859 ms | **19 ms** |
+| `acc = acc + chunk` ×20 000 (hasta 1,3 MB) | 384 ms | 384 ms |
+| `Map<bytes, int>` 200 000 insert + 200 000 contains | 39 ms | 38 ms |
+| gate `benchmarks/regress.py` (fib35, loop10M, arrays, gcnested, str_index×2) | — | −5 a −8 % |
+
+Verificado: los tres motores dan el mismo resultado (`acc` idéntico en VM y nativo); tests de
+`vm` y de `bytes` en verde; el caso vive en `benchmarks/bytes_index.ray` y en el gate.

@@ -1822,6 +1822,22 @@ release`, pero la medida queda como referencia de lo que cuesta un bucle de octe
 hoy: es el tipo de micro-bucle que una superinstrucción de indexación/comparación de `bytes` o
 el inlining de funciones pequeñas atacarían.
 
+### `bytes` compartido: cargar un búfer ya no lo copia (M261, sep 2026)
+
+Origen: ray-sublime §85 (`zip::le32` a 70 µs por llamada; 4,5 s de 4,6 s de arranque eran copias
+del archivo). `HeapValue::Bytes` era un `Vec<u8>` inline que cada carga de variable clonaba —el
+defecto que M213 quitó a `Str`—; pasa a `Arc<[u8]>`. De paso `HeapValue` baja de 32 a 24 bytes.
+
+| VM release (M3 Pro), 100 000 iteraciones | antes | M261 |
+|---|---|---|
+| `data.len()`, búfer 4 KiB / 480 KiB | 8 / 590 ms | 2 / **3 ms** |
+| `le32(data, i)` (4 índices), 4 KiB / 480 KiB | 47 / 3 123 ms | 19 / **20 ms** |
+| `send` de 1,3 MB por canal (×20 000) | 3 284 ms | **27 ms** |
+| `acc = acc + chunk` (×20 000) · `Map<bytes,int>` | 384 · 39 ms | 384 · 38 ms |
+| gate (`fib35`, `loop10M`, `arrays`, `gcnested`) | — | **−5 a −8 %** |
+
+Caso en `benchmarks/bytes_index.ray` y en el gate. Nativo e intérprete ya compartían: sin cambio.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

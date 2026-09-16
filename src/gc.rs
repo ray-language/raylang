@@ -62,9 +62,12 @@ pub enum HeapValue {
     /// Entero sin signo con tamaño (M28.3): `(valor_enmascarado, ancho_en_bits)`. Escalar inline
     /// como `Int`/`Char`; no es objeto del heap ni lo traza el GC.
     UInt(u64, u8),
-    /// Bytes (M16.1a): secuencia inmutable de octetos, **inline** en el valor (como `Str`); no es un
-    /// objeto del heap ni lo traza el GC (no contiene handles).
-    Bytes(Vec<u8>),
+    /// Bytes (M16.1a): secuencia inmutable de octetos; no es un objeto del heap ni lo traza el GC
+    /// (no contiene handles). M261: COMPARTIDA (`Arc<[u8]>`, como `Str` desde M213). Antes era un
+    /// `Vec<u8>` propio que se copiaba entero en cada carga de variable, paso de argumento o
+    /// clave de mapa: leer un archivo de 5 MB byte a byte era un memcpy de 5 MB por byte
+    /// (ray-sublime §85). `Arc` y no `Rc`: el scheduler M:N mueve fibras entre hilos.
+    Bytes(std::sync::Arc<[u8]>),
     /// Un **puntero opaco** foráneo (`ptr`, M41.4b): la dirección de un objeto de C, escalar inline. No
     /// es objeto del heap ni lo traza el GC (no contiene handles). Se compara por identidad.
     Ptr(i64),
@@ -85,6 +88,10 @@ pub enum HeapValue {
 }
 
 impl HeapValue {
+    /// M261: construye un `Bytes` compartido desde cualquier búfer propio (`Vec<u8>`, `&[u8]`, `&str`…).
+    pub fn bytes(v: impl Into<std::sync::Arc<[u8]>>) -> HeapValue {
+        HeapValue::Bytes(v.into())
+    }
     /// M233: una constante del chunk como `HeapValue`, convertida UNA vez al compilar (la tabla
     /// `CompiledFn::consts`). Antes cada carga de constante de string clonaba el `String` y lo
     /// volvía a copiar a `Arc<str>` (dos asignaciones por `LoadConst`); ahora es un clon del `Arc`.
@@ -96,7 +103,7 @@ impl HeapValue {
             Value::Str(s) => HeapValue::Str(s.as_str().into()),
             Value::Char(c) => HeapValue::Char(*c),
             Value::UInt(n, w) => HeapValue::UInt(*n, *w),
-            Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
+            Value::Bytes(b) => HeapValue::bytes(&b[..]),
             Value::Unit => HeapValue::Unit,
             _ => unreachable!("chunk constants are primitive"),
         }
@@ -242,7 +249,7 @@ const INITIAL_GC_BYTES: usize = 16 << 20;
 fn value_bytes(v: &HeapValue) -> usize {
     match v {
         HeapValue::Str(s) => s.len(),
-        HeapValue::Bytes(b) => b.capacity(),
+        HeapValue::Bytes(b) => b.len(),
         _ => 0,
     }
 }

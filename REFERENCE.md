@@ -127,7 +127,7 @@ Reservadas (no pueden usarse como identificadores):
 | `bool` | `true`/`false` |
 | `string` | texto UTF-8 inmutable; indexable **por carácter** (`s[i] -> char`) |
 | `char` | un code point Unicode |
-| `bytes` | secuencia inmutable de octetos; `b[i] -> int`. Rendimiento: `+` sobre `bytes` es lineal amortizado (reunir 8 MB en 128 trozos: ~20 ms); construir octeto a octeto con `push` a `[int]` + `bytes_of` es dos órdenes más lento — acumula `bytes` con `+` o `sub_bytes` |
+| `bytes` | secuencia inmutable de octetos; `b[i] -> int`. Rendimiento: el búfer se **comparte** (M261): cargar la variable, pasarla, enviarla por canal o indexarla es O(1) sea cual sea su tamaño; `+` sobre `bytes` es lineal amortizado (reunir 8 MB en 128 trozos: ~20 ms); construir octeto a octeto con `push` a `[int]` + `bytes_of` es dos órdenes más lento — acumula `bytes` con `+` o `sub_bytes` |
 | `unit` | "sin valor útil" (retorno de `print`, etc.) |
 | `[T]` | arreglo dinámico, semántica de **referencia** |
 | `(A, B, …)` | tupla (agregado inmutable, se copia como valor; `t.0 = x` es error) |

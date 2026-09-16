@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Cargar un `bytes` grande ya no lo copia** (M261, ray-sublime §85). En la VM, cada lectura de
+  una variable `bytes` —también pasarla como argumento, enviarla por canal o usarla de clave—
+  copiaba el búfer entero: leer un archivo de 5 MB byte a byte era un memcpy de 5 MB por byte.
+  Ahora el búfer se comparte (`Arc<[u8]>`, como los strings desde M213): 100 000 accesos a un
+  búfer de 480 KiB pasan de 590 ms a 3 ms, un `send` de 1,3 MB de 160 µs a ~1 µs, y el resto de
+  la VM gana un 5–8 % porque el valor encoge de 32 a 24 bytes. Semántica intacta (`bytes` ya era
+  inmutable); el nativo y el intérprete ya compartían.
+
 ## 1.24.0 — 2026-09-16
 
 - **Tipos de ventana y geometría en caliente** (M260). `WindowOptions` gana `kind`

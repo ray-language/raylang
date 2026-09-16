@@ -36,6 +36,8 @@ CASES = [
     # M213: `s[i]` amortizado O(1) (ASCII y UTF-8 descendente). Un retroceso a cuadrático sería ×46.
     ("str_index",      [BIN, "--vm", "benchmarks/str_index.ray"]),
     ("str_index_utf8", [BIN, "--vm", "benchmarks/str_index_utf8.ray"]),
+    # M261: cargar un `bytes` grande es O(1) (Arc). Un retroceso a la copia por carga sería ×40.
+    ("bytes_index",    [BIN, "--vm", "benchmarks/bytes_index.ray"]),
 ]
 
 # M98.4: los casos de MEMORIA — pico de RSS (ru_maxrss del hijo, vía os.wait4; cero deps).

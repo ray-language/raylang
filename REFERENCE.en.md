@@ -126,7 +126,7 @@ Reserved (cannot be used as identifiers):
 | `bool` | `true`/`false` |
 | `string` | immutable UTF-8 text; indexable **by character** (`s[i] -> char`) |
 | `char` | one Unicode code point |
-| `bytes` | immutable sequence of octets; `b[i] -> int`. Performance: `+` on `bytes` is amortized linear (gathering 8 MB in 128 chunks: ~20 ms); building octet by octet with `push` into `[int]` + `bytes_of` is two orders of magnitude slower — accumulate `bytes` with `+` or `sub_bytes` |
+| `bytes` | immutable sequence of octets; `b[i] -> int`. Performance: the buffer is **shared** (M261): loading the variable, passing it, sending it over a channel or indexing it is O(1) whatever its size; `+` on `bytes` is amortized linear (gathering 8 MB in 128 chunks: ~20 ms); building octet by octet with `push` into `[int]` + `bytes_of` is two orders of magnitude slower — accumulate `bytes` with `+` or `sub_bytes` |
 | `unit` | "no useful value" (return of `print`, etc.) |
 | `[T]` | dynamic array, **reference** semantics |
 | `(A, B, …)` | tuple (immutable aggregate, copied as a value; `t.0 = x` is an error) |
@@ -606,4 +606,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:60352ec51f7a -->
+<!-- sync: sha256:35ad058e900b -->

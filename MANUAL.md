@@ -1498,6 +1498,27 @@ while (true) {
 }
 ```
 
+Para preguntar de verdad están los **diálogos de mensaje nativos** (M258): `ui.message(title,
+text, botones)` muestra la alerta del sistema con hasta tres botones con tus etiquetas y devuelve
+el índice del pulsado; cerrar el diálogo con Esc cuenta como el último botón, así que pon
+"Cancelar" al final. `ui.alert` es la versión de un botón, `ui.confirm` la de dos con `bool`, y
+`ui.message_styled` añade el estilo `"warning"` o `"error"`. Los diálogos de archivo aceptan
+opciones: título, carpeta inicial, nombre sugerido, filtros por extensión y selección múltiple.
+
+```rust
+match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
+    Result.Ok(0) => save(),
+    Result.Ok(1) => close(w),
+    _ => {},                                   // Cancel o Esc: la ventana se queda
+}
+var o = ui.file_options();
+o.title = "Open a source file";
+o.filters = [ui.filter("Ray sources", ["ray", "toml"]), ui.filter("Text", ["txt"])];
+let paths = ui.pick_files(o)?;                 // [] si canceló
+o.suggested = "untitled.ray";
+let target = ui.save_file_with(o)?;            // Option<string>
+```
+
 El **menú Edit** también es tuyo (M255). Sus items estándar funcionan por acciones nativas del
 sistema (el portapapeles y el undo del webview viven ahí), así que reemplazarlo con items
 corrientes los perdería. Los **roles estándar** lo evitan: un item con tag `"role:undo"`,

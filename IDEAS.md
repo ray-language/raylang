@@ -3469,3 +3469,25 @@ automático (queda `app.old` en Windows y el bundle anterior renombrado en macOS
 siguiente arranque). Riesgos: notarización exige cuenta Apple Developer y red en el CI de la app;
 el reemplazo del bundle en macOS con la app abierta depende de que el Finder no la tenga
 "traducida" (rename del directorio padre es atómico en APFS).
+
+## 90. Tipos de ventana nativa: paneles flotantes, siempre encima, sin borde, pantalla completa (sep 2026) — 📋 planificado como M260
+
+Pregunta del usuario tras M257: qué tipos de ventana de macOS tiene raylang y su equivalencia en
+Windows/Linux. Hoy `std/ui` abre UN tipo: la ventana de documento (título, cerrar, minimizar y
+redimensionar opcionales). Los tipos con equivalente limpio en los tres sistemas y que un editor
+usa (paleta de comandos, panel de búsqueda flotante, modo presentación):
+
+| tipo | macOS | Windows | Linux (GTK) |
+|---|---|---|---|
+| panel de utilidad flotante sobre la app | `NSPanel` utility, `setLevel: floating` | `WS_EX_TOOLWINDOW` + `WS_EX_TOPMOST` owned | `type_hint UTILITY` + `transient_for` + `keep_above` |
+| siempre encima | `setLevel:` | `HWND_TOPMOST` | `gtk_window_set_keep_above` |
+| sin borde / transparente | `borderless`, `opaque NO` | `WS_POPUP` + layered | `set_decorated(false)` + RGBA |
+| pantalla completa | `toggleFullScreen:` | maximizar sin borde | `gtk_window_fullscreen` |
+
+Plan (M260): `WindowOptions` gana `kind` (`"document"`, `"panel"`, `"borderless"`),
+`always_on_top` y `parent` (el panel queda sobre su ventana dueña; es lo que degrada un sheet);
+`__ui_window` (M257) gana ops en caliente: `fullscreen`, `always_on_top`, `set_size`,
+`set_position`, `center`, `minimize`, `maximize`. Lo que es solo de macOS (sheet, popover, HUD,
+pestañas, `NSToolbar`) degrada a diálogo normal o se hace en HTML dentro del webview — no se
+emula. Impacto: MEDIO (solo `std/ui` y el runtime; ninguna decisión de lenguaje). Precedidos por
+M258 (mensajes + filtros de archivo ✅) y M259 (menú contextual).

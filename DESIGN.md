@@ -13527,3 +13527,39 @@ Verificado: tres motores en headless (`tests/ui_cli.rs`: ops, `Err` sobre ventan
 interceptación armada, bucle de eventos vivo). El cierre del usuario no se pudo simular desde
 fuera (`osascript` exige permiso de Accesibilidad para pulsar teclas): queda para la prueba en
 mano en ray-sublime.
+
+## 245. M258 — Diálogos de mensaje nativos y opciones en los de archivo (sep 2026)
+
+Segundo paso del arco de "lo que una app de documentos usa a diario" (M257 fue el ciclo de vida
+de la ventana). Sin un diálogo de mensaje nativo, el "¿guardar cambios?" que `close_requested`
+hace posible se dibujaba en HTML dentro del webview — funciona, pero no es modal de verdad ni
+tiene el aspecto del sistema. Y `pick_file()` no aceptaba nada: ni filtros por extensión, ni
+carpeta inicial, ni varias rutas.
+
+Decisiones:
+
+- **Botones con etiquetas del programa, índice como resultado.** `message(title, text,
+  buttons)` con 1 a 3 botones devuelve el índice pulsado; **cerrar el diálogo cuenta como el
+  último botón** (Esc en NSAlert va al botón con key equivalent Escape, que el runtime pone al
+  último; GTK devuelve `DELETE_EVENT` y Windows `IDCANCEL`, ambos mapeados al último). La
+  convención "Cancelar al final" es la de los tres sistemas. `alert`/`confirm`/`message_styled`
+  son azúcar en raylang.
+- **Windows sin certeza de manifest.** `TaskDialogIndirect` es lo que permite etiquetas propias,
+  pero exige comctl32 v6 activo; si falla, `MessageBoxW` por número de botones (OK / OK-Cancelar /
+  Sí-No-Cancelar) con las etiquetas del sistema — degradación documentada, no error.
+- **GTK y la variádica.** `gtk_message_dialog_new` es variádica en C; se declara como tal en el
+  puntero (`extern "C" fn(…, *const c_char, ...)`) y se llama con `"%s"` + el texto, que es el
+  uso documentado y evita cualquier interpretación de `%` del propio texto.
+- **Opciones de archivo como struct**, no como aridad creciente: `FileDialogOptions` desde
+  `file_options()`, con un builtin nuevo `__ui_dialog_with` que codifica los filtros
+  `"nombre\text1,ext2"`. `pick_file`/`pick_folder`/`save_file` quedan como estaban (delegan en el
+  camino con opciones). Selección múltiple: `URLs` en macOS, `get_filenames` (GSList) en GTK,
+  `FOS_ALLOWMULTISELECT` + `GetResults` en Windows.
+- **Headless conducido por variables**: `RAY_UI_ANSWER` (índice) y `RAY_UI_PICK` con rutas
+  separadas por `\n`, con traza de estilo, botones, filtros y `multiple` — así el test de tres
+  motores afirma que las opciones llegan al borde.
+
+Verificado: tres motores en headless (`tests/ui_cli.rs`), humo real en macOS (NSAlert con tres
+botones y estilo warning, NSOpenPanel con filtros y selección múltiple: ambos se abren y
+bloquean como deben; se mataron desde fuera porque no hay quien pulse). Linux y Windows compilan
+en el CI; efecto real pendiente de máquina.

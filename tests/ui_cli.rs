@@ -1058,6 +1058,81 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// M258 (ray-sublime) — `ui.message`/`alert`/`confirm` y los diálogos de archivo con opciones
+// (`pick_file_with`, `pick_files`, `save_file_with`): en headless `RAY_UI_ANSWER` conduce el
+// botón y `RAY_UI_PICK` (rutas separadas por \n) el diálogo; la traza muestra estilo, botones,
+// filtros y multiple. Validación: 1..3 botones, estilo conocido. VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn message_dialogs_and_file_dialog_options_on_all_three_engines() {
+    let base = tmp("dialogs_m258");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show_int(r: Result<int, string>) { match (r) { Result.Ok(i) => print("button " + to_string(i)), Result.Err(e) => print(e) } }
+fn show_opt(r: Result<Option<string>, string>) { match (r) { Result.Ok(o) => match (o) { Option.Some(p) => print("path " + p), Option.None => print("none") }, Result.Err(e) => print(e) } }
+fn main() {
+    show_int(ui.message("Save changes?", "Your edits will be lost.", ["Save", "Don't Save", "Cancel"]));
+    show_int(ui.message_styled("Disk full", "", "error", ["OK"]));
+    show_int(ui.alert("Done", "Exported."));
+    match (ui.confirm("Delete?", "This cannot be undone.", "Delete", "Cancel")) { Result.Ok(b) => print("confirm " + to_string(b)), Result.Err(e) => print(e) }
+    show_int(ui.message("x", "y", []));
+    show_int(ui.message_styled("x", "y", "fancy", ["OK"]));
+    var o = ui.file_options();
+    o.title = "Open a source file";
+    o.directory = "/tmp";
+    o.filters = [ui.filter("Ray sources", ["ray", "toml"]), ui.filter("Text", ["txt"])];
+    show_opt(ui.pick_file_with(o));
+    match (ui.pick_files(o)) { Result.Ok(ps) => print("files " + to_string(ps.len()) + " " + ps.join("+")), Result.Err(e) => print(e) }
+    o.suggested = "untitled.ray";
+    show_opt(ui.save_file_with(o));
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "button 1\nbutton 0\nbutton 0\nconfirm false\nui: a message dialog needs 1 to 3 buttons\nui: unknown message style 'fancy' (info, warning, error)\npath /a/x.ray\nfiles 2 /a/x.ray+/a/y.ray\npath /a/x.ray\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .env("RAY_UI_ANSWER", "1")
+            .env("RAY_UI_PICK", "/a/x.ray\n/a/y.ray")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        for line in [
+            "[ui] message info 'Save changes?' [Save|Don't Save|Cancel]",
+            "[ui] message error 'Disk full' [OK]",
+            "[ui] dialog open_file title 'Open a source file' dir '/tmp' filters [Ray sources:ray,toml Text:txt] multiple false",
+            "[ui] dialog open_file title 'Open a source file' dir '/tmp' filters [Ray sources:ray,toml Text:txt] multiple true",
+            "[ui] dialog save_file title 'Open a source file'",
+        ] {
+            assert!(err.contains(line), "traza headless '{line}': {err}");
+        }
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_ANSWER", "1")
+            .env("RAY_UI_PICK", "/a/x.ray\n/a/y.ray")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M257 (ray-sublime) — operaciones de ventana por nombre: `set_title`, `set_edited`,
 // `intercept_close`, `intercept_quit`. En headless: `Ok` con traza, `Err` sobre una ventana
 // cerrada/desconocida, y `close(h)` sigue cerrando aunque el cierre esté interceptado (emite

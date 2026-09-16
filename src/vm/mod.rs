@@ -3667,6 +3667,35 @@ impl<'a> Vm<'a> {
                 }
                 // M148: diálogo de archivo — MODAL: bloquea el hilo del worker lo que el
                 // usuario tarde (clase sqlite/run, documentado).
+                OpCode::UiDialogWith => {
+                    let HeapValue::Bool(multiple) = self.pop() else { unreachable!("the checker guarantees a bool") };
+                    let HeapValue::Obj(fh) = self.pop() else { unreachable!("the checker guarantees a [string]") };
+                    let filters: Vec<String> = self.as_array(fh).iter().map(|v| match v { HeapValue::Str(s) => s.to_string(), _ => unreachable!("the checker guarantees [string]") }).collect();
+                    let HeapValue::Str(suggested) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let HeapValue::Str(dir) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let HeapValue::Str(title) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let HeapValue::Str(kind) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let elems = match crate::builtins::ui_dialog_with(&kind, &title, &dir, &suggested, &filters, multiple) {
+                        Ok(paths) if paths.is_empty() => vec![HeapValue::Str("none".to_string().into())],
+                        Ok(paths) => std::iter::once(HeapValue::Str("ok".to_string().into())).chain(paths.into_iter().map(|p| HeapValue::Str(p.into()))).collect(),
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::UiMessage => {
+                    let HeapValue::Obj(bh) = self.pop() else { unreachable!("the checker guarantees a [string]") };
+                    let buttons: Vec<String> = self.as_array(bh).iter().map(|v| match v { HeapValue::Str(s) => s.to_string(), _ => unreachable!("the checker guarantees [string]") }).collect();
+                    let HeapValue::Str(style) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let HeapValue::Str(text) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let HeapValue::Str(title) = self.pop() else { unreachable!("the checker guarantees a string") };
+                    let elems = match crate::builtins::ui_message(&title, &text, &style, &buttons) {
+                        Ok(i) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(i.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::UiDialog => {
                     let HeapValue::Str(arg) = self.pop() else {
                         unreachable!("the checker guarantees a string");

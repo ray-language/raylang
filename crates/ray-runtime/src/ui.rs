@@ -2158,35 +2158,110 @@ pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
 /// serial: otra op de UI concurrente espera al panel; GTK no lo sufre — su loop recursivo
 /// sigue drenando idles).
 pub fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    let opts = FileDialogOptions { suggested: arg.to_string(), ..FileDialogOptions::default() };
+    dialog_with(kind, &opts).map(|paths| paths.into_iter().next())
+}
+
+/// M258 (ray-sublime): opciones del diálogo de archivo nativo — título, carpeta inicial, nombre
+/// sugerido (guardar), filtros `(nombre, extensiones sin punto)` y selección múltiple.
+#[derive(Clone, Debug, Default)]
+pub struct FileDialogOptions {
+    pub title: String,
+    pub directory: String,
+    pub suggested: String,
+    pub filters: Vec<(String, Vec<String>)>,
+    pub multiple: bool,
+}
+
+/// M258: [`dialog`] con opciones. Devuelve las rutas elegidas (vacío = canceló; una sola salvo
+/// `multiple`). Headless: `RAY_UI_PICK` conduce el resultado (varias rutas separadas por `\n`).
+pub fn dialog_with(kind: &str, opts: &FileDialogOptions) -> Result<Vec<String>, String> {
     if !matches!(kind, "open_file" | "open_folder" | "save_file") {
         return Err(format!("ui: unknown dialog kind '{kind}'"));
     }
     if headless() {
-        return Ok(std::env::var("RAY_UI_PICK").ok().filter(|s| !s.is_empty()));
+        if ui_trace() {
+            let filters: Vec<String> = opts.filters.iter().map(|(n, e)| format!("{n}:{}", e.join(","))).collect();
+            eprintln!("[ui] dialog {kind} title '{}' dir '{}' filters [{}] multiple {}", opts.title, opts.directory, filters.join(" "), opts.multiple);
+        }
+        let picked: Vec<String> = std::env::var("RAY_UI_PICK")
+            .ok()
+            .map(|s| s.split('\n').filter(|p| !p.is_empty()).map(String::from).collect())
+            .unwrap_or_default();
+        return Ok(if opts.multiple { picked } else { picked.into_iter().take(1).collect() });
     }
     #[cfg(target_os = "macos")]
     {
         ensure_app()?;
-        mac::dialog(kind, arg)
+        mac::dialog_with(kind, opts)
     }
     #[cfg(target_os = "linux")]
     {
         ensure_app()?;
-        gtk::dialog(kind, arg)
+        gtk::dialog_with(kind, opts)
     }
     #[cfg(windows)]
     {
         ensure_app()?;
-        win::dialog(kind, arg)
+        win::dialog_with(kind, opts)
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
-        let _ = (kind, arg);
+        let _ = (kind, opts);
         Err("ui: file dialogs are not available on mobile (v1)".to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
-        let _ = arg;
+        let _ = opts;
+        Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
+            .to_string())
+    }
+}
+
+/// M258 (ray-sublime): diálogo de mensaje nativo, MODAL — título, texto, estilo (`info`,
+/// `warning`, `error`) y de 1 a 3 botones con las etiquetas del programa. Devuelve el índice del
+/// botón pulsado; cerrar el diálogo (Esc, la X) cuenta como el ÚLTIMO botón (la convención
+/// "el último es Cancelar"). macOS `NSAlert`; Linux `GtkMessageDialog`; Windows
+/// `TaskDialogIndirect` (con `MessageBoxW` de respaldo si comctl32 v6 no está activo: ahí las
+/// etiquetas son las del sistema — OK/Cancelar, Sí/No/Cancelar — por número de botones).
+/// Headless: `RAY_UI_ANSWER` conduce el índice (por defecto 0) + traza.
+pub fn message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
+    if buttons.is_empty() || buttons.len() > 3 {
+        return Err("ui: a message dialog needs 1 to 3 buttons".to_string());
+    }
+    if !matches!(style, "info" | "warning" | "error") {
+        return Err(format!("ui: unknown message style '{style}' (info, warning, error)"));
+    }
+    if headless() {
+        if ui_trace() {
+            eprintln!("[ui] message {style} '{title}' [{}]", buttons.join("|"));
+        }
+        let answer = std::env::var("RAY_UI_ANSWER").ok().and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0);
+        return Ok(answer.min(buttons.len() - 1));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::message(title, text, style, buttons)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::message(title, text, style, buttons)
+    }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::message(title, text, style, buttons)
+    }
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = (title, text, style, buttons);
+        Err("ui: message dialogs are not available on mobile (v1)".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
+    {
+        let _ = (title, text, style, buttons);
         Err("ui: no backend for this platform (macOS/Linux/Windows; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
@@ -3213,9 +3288,11 @@ mod mac {
     /// M148: diálogo de archivo modal (NSOpenPanel/NSSavePanel), por la espera SIN plazo. La
     /// main queue es SERIAL: mientras el panel está abierto, otras ops de UI esperan (un modal
     /// a la vez — contrato v1; GTK no lo sufre).
-    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    /// M258: [`dialog`] con opciones (título/mensaje, carpeta, nombre sugerido, filtros por
+    /// extensión con `setAllowedFileTypes:`, selección múltiple → `URLs`).
+    pub(super) fn dialog_with(kind: &str, opts: &super::FileDialogOptions) -> Result<Vec<String>, String> {
         let kind = kind.to_string();
-        let arg = arg.to_string();
+        let opts = opts.clone();
         on_main_sync_wait(move || {
             const MODAL_OK: i64 = 1;
             unsafe {
@@ -3223,7 +3300,10 @@ mod mac {
                 let plain_id: MsgId = std::mem::transmute(msg_send());
                 let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
                 let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let id_id: MsgIdId = std::mem::transmute(msg_send());
                 let run_modal: MsgI64 = std::mem::transmute(msg_send());
+                let count: MsgI64 = std::mem::transmute(msg_send());
+                let at: MsgIdI64 = std::mem::transmute(msg_send());
                 let utf8: MsgCStr = std::mem::transmute(msg_send());
 
                 // El panel puede abrir DETRÁS de otras apps si la nuestra no está activa.
@@ -3231,36 +3311,96 @@ mod mac {
                 set_bool(app, sel(b"activateIgnoringOtherApps:\0"), 1);
 
                 let panel = match kind.as_str() {
-                    "save_file" => {
-                        let p = plain_id(cls(b"NSSavePanel\0"), sel(b"savePanel\0"));
-                        if !arg.is_empty() {
-                            set_id(p, sel(b"setNameFieldStringValue:\0"), nsstring(&arg));
-                        }
-                        p
-                    }
+                    "save_file" => plain_id(cls(b"NSSavePanel\0"), sel(b"savePanel\0")),
                     other => {
                         let p = plain_id(cls(b"NSOpenPanel\0"), sel(b"openPanel\0"));
                         if other == "open_folder" {
                             set_bool(p, sel(b"setCanChooseFiles:\0"), 0);
                             set_bool(p, sel(b"setCanChooseDirectories:\0"), 1);
                         }
+                        set_bool(p, sel(b"setAllowsMultipleSelection:\0"), opts.multiple as u8);
                         p
                     }
                 };
+                if !opts.suggested.is_empty() {
+                    set_id(panel, sel(b"setNameFieldStringValue:\0"), nsstring(&opts.suggested));
+                }
+                if !opts.title.is_empty() {
+                    // `title` ya no se muestra en los paneles modernos; `message` es el rótulo visible.
+                    set_id(panel, sel(b"setTitle:\0"), nsstring(&opts.title));
+                    set_id(panel, sel(b"setMessage:\0"), nsstring(&opts.title));
+                }
+                if !opts.directory.is_empty() {
+                    let url = id_id(cls(b"NSURL\0"), sel(b"fileURLWithPath:\0"), nsstring(&opts.directory));
+                    if !url.is_null() {
+                        set_id(panel, sel(b"setDirectoryURL:\0"), url);
+                    }
+                }
+                if !opts.filters.is_empty() && kind != "open_folder" {
+                    let types = plain_id(cls(b"NSMutableArray\0"), sel(b"array\0"));
+                    for (_, exts) in &opts.filters {
+                        for e in exts {
+                            set_id(types, sel(b"addObject:\0"), nsstring(e.trim_start_matches('.')));
+                        }
+                    }
+                    set_id(panel, sel(b"setAllowedFileTypes:\0"), types);
+                }
                 if run_modal(panel, sel(b"runModal\0")) != MODAL_OK {
-                    return Ok(None);
-                }
-                let url = plain_id(panel, sel(b"URL\0"));
-                if url.is_null() {
-                    return Ok(None);
-                }
-                let path = plain_id(url, sel(b"path\0"));
-                let c = utf8(path, sel(b"UTF8String\0"));
-                if c.is_null() {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 }
                 // Copia DENTRO del bloque (la main queue drena con autorelease pool).
-                Ok(Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned()))
+                let path_of = |url: Id| -> Option<String> {
+                    if url.is_null() {
+                        return None;
+                    }
+                    let path = plain_id(url, sel(b"path\0"));
+                    let c = utf8(path, sel(b"UTF8String\0"));
+                    (!c.is_null()).then(|| std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
+                };
+                if kind == "save_file" || !opts.multiple {
+                    return Ok(path_of(plain_id(panel, sel(b"URL\0"))).into_iter().collect());
+                }
+                let urls = plain_id(panel, sel(b"URLs\0"));
+                let n = if urls.is_null() { 0 } else { count(urls, sel(b"count\0")) };
+                Ok((0..n).filter_map(|i| path_of(at(urls, sel(b"objectAtIndex:\0"), i))).collect())
+            }
+        })
+    }
+
+    /// M258: `NSAlert` modal con hasta 3 botones; devuelve el índice pulsado. El último botón
+    /// recibe Esc como key equivalent (cerrar = el último, la convención "Cancelar al final").
+    pub(super) fn message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
+        let (title, text, style) = (title.to_string(), text.to_string(), style.to_string());
+        let buttons = buttons.to_vec();
+        on_main_sync_wait(move || {
+            const FIRST_BUTTON_RETURN: i64 = 1000;
+            unsafe {
+                let shared: MsgId = std::mem::transmute(msg_send());
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                let id_id: MsgIdId = std::mem::transmute(msg_send());
+                let run_modal: MsgI64 = std::mem::transmute(msg_send());
+                let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+                set_bool(app, sel(b"activateIgnoringOtherApps:\0"), 1);
+                let alert = init(alloc(cls(b"NSAlert\0"), sel(b"alloc\0")), sel(b"init\0"));
+                set_id(alert, sel(b"setMessageText:\0"), nsstring(&title));
+                if !text.is_empty() {
+                    set_id(alert, sel(b"setInformativeText:\0"), nsstring(&text));
+                }
+                // NSAlertStyleWarning = 0, Informational = 1, Critical = 2.
+                set_i64(alert, sel(b"setAlertStyle:\0"), match style.as_str() { "warning" => 0, "error" => 2, _ => 1 });
+                let n = buttons.len();
+                for (i, label) in buttons.iter().enumerate() {
+                    let button = id_id(alert, sel(b"addButtonWithTitle:\0"), nsstring(label));
+                    if n > 1 && i == n - 1 && !button.is_null() {
+                        set_id(button, sel(b"setKeyEquivalent:\0"), nsstring("\u{1b}"));
+                    }
+                }
+                let r = run_modal(alert, sel(b"runModal\0")) - FIRST_BUTTON_RETURN;
+                Ok(r.clamp(0, n as i64 - 1) as usize)
             }
         })
     }
@@ -4539,30 +4679,88 @@ mod gtk {
     }
 
     /// M148: diálogo de archivo con el chooser NATIVO (3.20+; en libs más viejas, Err limpio).
-    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    /// M258: símbolos OPCIONALES de los diálogos (filtros, carpeta, selección múltiple, mensaje).
+    /// Resueltos una vez; sin alguno, la opción correspondiente se ignora con degradación limpia.
+    #[repr(C)]
+    struct GSList {
+        data: *mut c_void,
+        next: *mut GSList,
+    }
+    struct DialogApi {
+        filter_new: Option<unsafe extern "C" fn() -> Widget>,
+        filter_set_name: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
+        filter_add_pattern: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
+        chooser_add_filter: Option<FnWidgetPair>,
+        set_current_folder: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> i32>,
+        set_select_multiple: Option<unsafe extern "C" fn(Widget, i32)>,
+        get_filenames: Option<unsafe extern "C" fn(Widget) -> *mut GSList>,
+        slist_free: Option<unsafe extern "C" fn(*mut GSList)>,
+        /// `gtk_message_dialog_new(parent, flags, type, buttons, format, ...)` — variádica.
+        message_new: Option<unsafe extern "C" fn(Widget, i32, i32, i32, *const std::ffi::c_char, ...) -> Widget>,
+        dialog_add_button: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char, i32) -> Widget>,
+        gtk_dialog_run: Option<unsafe extern "C" fn(Widget) -> i32>,
+    }
+    unsafe impl Send for DialogApi {}
+    unsafe impl Sync for DialogApi {}
+
+    fn dialog_api() -> &'static DialogApi {
+        static API: std::sync::OnceLock<DialogApi> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            // SAFETY: literal NUL-terminado; la lib ya está cargada por `api()`; dlsym no retiene nada.
+            let gtk = unsafe { dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+            let opt = |name: &std::ffi::CStr| -> Option<*mut c_void> {
+                if gtk.is_null() { return None; }
+                let p = unsafe { dlsym(gtk, name.as_ptr()) };
+                (!p.is_null()).then_some(p)
+            };
+            // SAFETY: firmas C documentadas de GTK 3 / GLib.
+            unsafe {
+                DialogApi {
+                    filter_new: opt(c"gtk_file_filter_new").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> Widget>(p)),
+                    filter_set_name: opt(c"gtk_file_filter_set_name").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
+                    filter_add_pattern: opt(c"gtk_file_filter_add_pattern").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
+                    chooser_add_filter: opt(c"gtk_file_chooser_add_filter").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
+                    set_current_folder: opt(c"gtk_file_chooser_set_current_folder").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> i32>(p)),
+                    set_select_multiple: opt(c"gtk_file_chooser_set_select_multiple").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    get_filenames: opt(c"gtk_file_chooser_get_filenames").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> *mut GSList>(p)),
+                    slist_free: opt(c"g_slist_free").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut GSList)>(p)),
+                    message_new: opt(c"gtk_message_dialog_new").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32, i32, *const std::ffi::c_char, ...) -> Widget>(p)),
+                    dialog_add_button: opt(c"gtk_dialog_add_button").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char, i32) -> Widget>(p)),
+                    gtk_dialog_run: opt(c"gtk_dialog_run").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> i32>(p)),
+                }
+            }
+        })
+    }
+
+    /// M148: diálogo de archivo con el chooser NATIVO (3.20+; en libs más viejas, Err limpio).
+    /// M258: con opciones — título, carpeta inicial, filtros (`GtkFileFilter` por patrón
+    /// `*.ext`), selección múltiple (`get_filenames`, GSList) y nombre sugerido.
+    pub(super) fn dialog_with(kind: &str, opts: &super::FileDialogOptions) -> Result<Vec<String>, String> {
         let kind = kind.to_string();
-        let arg = arg.to_string();
+        let opts = opts.clone();
         on_main_sync_wait(move || {
             const ACTION_OPEN: i32 = 0;
             const ACTION_SAVE: i32 = 1;
             const ACTION_SELECT_FOLDER: i32 = 2;
             const RESPONSE_ACCEPT: i32 = -3; // NEGATIVO (GTK_RESPONSE_ACCEPT)
             let api = api().as_ref().map_err(|e| e.clone())?;
+            let da = dialog_api();
             let (Some(chooser_new), Some(dialog_run), Some(get_filename)) =
                 (api.chooser_new, api.dialog_run, api.get_filename)
             else {
                 return Err("ui: file dialogs need GTK >= 3.20 (gtk_file_chooser_native_new)"
                     .to_string());
             };
-            let (action, title, accept) = match kind.as_str() {
+            let (action, default_title, accept) = match kind.as_str() {
                 "open_folder" => (ACTION_SELECT_FOLDER, c"Select Folder", c"_Select"),
                 "save_file" => (ACTION_SAVE, c"Save File", c"_Save"),
                 _ => (ACTION_OPEN, c"Open File", c"_Open"),
             };
+            let title_c = std::ffi::CString::new(opts.title.replace('\0', "")).unwrap();
             // SAFETY: punteros válidos del loop; el chooser nativo pasa como GtkFileChooser*.
             unsafe {
                 let chooser = chooser_new(
-                    title.as_ptr(),
+                    if opts.title.is_empty() { default_title.as_ptr() } else { title_c.as_ptr() },
                     std::ptr::null_mut(),
                     action,
                     accept.as_ptr(),
@@ -4572,28 +4770,99 @@ mod gtk {
                     return Err("ui: could not create the file dialog".to_string());
                 }
                 if action == ACTION_SAVE
-                    && !arg.is_empty()
+                    && !opts.suggested.is_empty()
                     && let Some(set_name) = api.set_current_name
                 {
-                    let c = std::ffi::CString::new(arg.replace('\0', "")).unwrap();
+                    let c = std::ffi::CString::new(opts.suggested.replace('\0', "")).unwrap();
                     set_name(chooser, c.as_ptr());
                 }
-                let resp = dialog_run(chooser);
-                let out = if resp == RESPONSE_ACCEPT {
-                    let raw = get_filename(chooser);
-                    if raw.is_null() {
-                        None
-                    } else {
-                        // g_malloc'd: copiar y g_free.
-                        let path = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
-                        (api.g_free)(raw as *mut c_void);
-                        Some(path)
+                if !opts.directory.is_empty() && let Some(set_folder) = da.set_current_folder {
+                    let c = std::ffi::CString::new(opts.directory.replace('\0', "")).unwrap();
+                    set_folder(chooser, c.as_ptr());
+                }
+                if action != ACTION_SELECT_FOLDER
+                    && let (Some(filter_new), Some(set_name), Some(add_pattern), Some(add_filter)) =
+                        (da.filter_new, da.filter_set_name, da.filter_add_pattern, da.chooser_add_filter)
+                {
+                    for (name, exts) in &opts.filters {
+                        let f = filter_new();
+                        let name_c = std::ffi::CString::new(name.replace('\0', "")).unwrap();
+                        set_name(f, name_c.as_ptr());
+                        for e in exts {
+                            let pat = std::ffi::CString::new(format!("*.{}", e.trim_start_matches('.').replace('\0', ""))).unwrap();
+                            add_pattern(f, pat.as_ptr());
+                        }
+                        add_filter(chooser, f); // el chooser toma la referencia (floating ref)
                     }
-                } else {
-                    None
-                };
+                }
+                let multiple = opts.multiple && action != ACTION_SAVE && da.get_filenames.is_some();
+                if multiple && let Some(set_multiple) = da.set_select_multiple {
+                    set_multiple(chooser, 1);
+                }
+                let resp = dialog_run(chooser);
+                let mut out = Vec::new();
+                if resp == RESPONSE_ACCEPT {
+                    if multiple && let Some(get_filenames) = da.get_filenames {
+                        let list = get_filenames(chooser);
+                        let mut node = list;
+                        while !node.is_null() {
+                            let raw = (*node).data as *const std::ffi::c_char;
+                            if !raw.is_null() {
+                                out.push(std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned());
+                                (api.g_free)(raw as *mut c_void);
+                            }
+                            node = (*node).next;
+                        }
+                        if let Some(free) = da.slist_free {
+                            free(list);
+                        }
+                    } else {
+                        let raw = get_filename(chooser);
+                        if !raw.is_null() {
+                            // g_malloc'd: copiar y g_free.
+                            out.push(std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned());
+                            (api.g_free)(raw as *mut c_void);
+                        }
+                    }
+                }
                 (api.g_object_unref)(chooser);
                 Ok(out)
+            }
+        })
+    }
+
+    /// M258: `GtkMessageDialog` modal con botones propios (ids = índice); cerrar = el último.
+    pub(super) fn message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
+        let (title, text, style) = (title.to_string(), text.to_string(), style.to_string());
+        let buttons = buttons.to_vec();
+        on_main_sync_wait(move || {
+            const MESSAGE_INFO: i32 = 0;
+            const MESSAGE_WARNING: i32 = 1;
+            const MESSAGE_ERROR: i32 = 3;
+            const BUTTONS_NONE: i32 = 0;
+            let api = api().as_ref().map_err(|e| e.clone())?;
+            let da = dialog_api();
+            let (Some(message_new), Some(add_button), Some(run)) = (da.message_new, da.dialog_add_button, da.gtk_dialog_run) else {
+                return Err("ui: message dialogs need GTK 3 (gtk_message_dialog_new)".to_string());
+            };
+            let kind = match style.as_str() { "warning" => MESSAGE_WARNING, "error" => MESSAGE_ERROR, _ => MESSAGE_INFO };
+            let text_c = std::ffi::CString::new(text.replace('\0', "")).unwrap();
+            let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+            // SAFETY: firmas C de GTK 3; `%s` + un puntero es el uso documentado de la variádica.
+            unsafe {
+                let dialog = message_new(std::ptr::null_mut(), 0, kind, BUTTONS_NONE, c"%s".as_ptr(), text_c.as_ptr());
+                if dialog.is_null() {
+                    return Err("ui: could not create the message dialog".to_string());
+                }
+                (api.set_title)(dialog, title_c.as_ptr());
+                let n = buttons.len() as i32;
+                for (i, label) in buttons.iter().enumerate() {
+                    let c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
+                    add_button(dialog, c.as_ptr(), i as i32);
+                }
+                let resp = run(dialog);
+                (api.destroy)(dialog);
+                Ok(if (0..n).contains(&resp) { resp as usize } else { (n - 1) as usize })
             }
         })
     }
@@ -5421,10 +5690,11 @@ mod win {
     };
     use windows::core::{HSTRING, PCWSTR, PWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{IBindCtx, CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+        Common::COMDLG_FILTERSPEC, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
+        SHCreateItemFromParsingName, FOS_ALLOWMULTISELECT, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
     };
     use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -6430,35 +6700,145 @@ mod win {
 
     /// Diálogos de archivo del shell (modales, en el hilo 1, sin plazo): `open_file`, `open_folder`,
     /// `save_file` (M183: antes comparaba con `save`/`folder` y TODO caía en el diálogo de Abrir).
-    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    /// M258: diálogo de archivo con opciones — título (`SetTitle`), carpeta (`SetFolder`),
+    /// nombre sugerido, filtros (`SetFileTypes`) y selección múltiple (`FOS_ALLOWMULTISELECT` +
+    /// `GetResults`).
+    pub(super) fn dialog_with(kind: &str, opts: &super::FileDialogOptions) -> Result<Vec<String>, String> {
         let kind = kind.to_string();
-        let arg = arg.to_string();
+        let opts = opts.clone();
         on_main_sync_wait(move || {
+            fn path_of(item: &IShellItem) -> Result<String, String> {
+                // SAFETY: COM del shell en el hilo 1; el item es propio.
+                let name = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }.map_err(|e| format!("ui: dialog: {e}"))?;
+                Ok(CoTaskMemPWSTR::from(name).to_string())
+            }
             // SAFETY: COM del shell en el hilo 1 (STA); los objetos son propios y se sueltan al salir.
             unsafe {
+                let mut open: Option<IFileOpenDialog> = None;
                 let dialog: IFileDialog = if kind == "save_file" {
                     let d: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
-                    if !arg.is_empty() {
-                        let _ = d.SetFileName(PCWSTR(wide(&arg).as_ptr()));
-                    }
                     d.into()
                 } else {
                     let d: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| format!("ui: dialog: {e}"))?;
+                    let mut flags = d.GetOptions().unwrap_or_default();
                     if kind == "open_folder" {
-                        let opts = d.GetOptions().unwrap_or_default();
-                        let _ = d.SetOptions(opts | FOS_PICKFOLDERS);
+                        flags |= FOS_PICKFOLDERS;
                     }
+                    if opts.multiple {
+                        flags |= FOS_ALLOWMULTISELECT;
+                    }
+                    let _ = d.SetOptions(flags);
+                    open = Some(d.clone());
                     d.into()
                 };
+                if !opts.suggested.is_empty() {
+                    let _ = dialog.SetFileName(PCWSTR(wide(&opts.suggested).as_ptr()));
+                }
+                if !opts.title.is_empty() {
+                    let _ = dialog.SetTitle(PCWSTR(wide(&opts.title).as_ptr()));
+                }
+                if !opts.directory.is_empty()
+                    && let Ok(folder) = SHCreateItemFromParsingName::<PCWSTR, Option<&IBindCtx>, IShellItem>(PCWSTR(wide(&opts.directory).as_ptr()), None)
+                {
+                    let _ = dialog.SetFolder(&folder);
+                }
+                if !opts.filters.is_empty() && kind != "open_folder" {
+                    // Los buffers viven hasta después de Show (COM copia al llamar, pero no se arriesga).
+                    let names: Vec<HSTRING> = opts.filters.iter().map(|(n, _)| wide(n)).collect();
+                    let specs: Vec<HSTRING> = opts
+                        .filters
+                        .iter()
+                        .map(|(_, exts)| wide(&exts.iter().map(|e| format!("*.{}", e.trim_start_matches('.'))).collect::<Vec<_>>().join(";")))
+                        .collect();
+                    let table: Vec<COMDLG_FILTERSPEC> = names
+                        .iter()
+                        .zip(specs.iter())
+                        .map(|(n, s)| COMDLG_FILTERSPEC { pszName: PCWSTR(n.as_ptr()), pszSpec: PCWSTR(s.as_ptr()) })
+                        .collect();
+                    let _ = dialog.SetFileTypes(&table);
+                }
                 // M183: modal de la última ventana viva de la app (sin dueño aparecía suelto en la
                 // esquina de la pantalla y la ventana principal seguía activa).
                 if dialog.Show(owner_hwnd()).is_err() {
-                    return Ok(None); // cancelado
+                    return Ok(Vec::new()); // cancelado
+                }
+                if opts.multiple && let Some(d) = open {
+                    let results = d.GetResults().map_err(|e| format!("ui: dialog: {e}"))?;
+                    let n = results.GetCount().map_err(|e| format!("ui: dialog: {e}"))?;
+                    let mut out = Vec::with_capacity(n as usize);
+                    for i in 0..n {
+                        let item = results.GetItemAt(i).map_err(|e| format!("ui: dialog: {e}"))?;
+                        out.push(path_of(&item)?);
+                    }
+                    return Ok(out);
                 }
                 let item = dialog.GetResult().map_err(|e| format!("ui: dialog: {e}"))?;
-                let name = item.GetDisplayName(SIGDN_FILESYSPATH).map_err(|e| format!("ui: dialog: {e}"))?;
-                let path = CoTaskMemPWSTR::from(name).to_string();
-                Ok(Some(path))
+                Ok(vec![path_of(&item)?])
+            }
+        })
+    }
+
+    /// M258: `TaskDialogIndirect` (botones con etiquetas propias, ids = 100 + índice; cancelar =
+    /// el último). Si comctl32 v6 no está activo (sin manifest) cae a `MessageBoxW` por NÚMERO de
+    /// botones (OK / OK-Cancelar / Sí-No-Cancelar): las etiquetas son las del sistema.
+    pub(super) fn message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
+        let (title, text, style) = (title.to_string(), text.to_string(), style.to_string());
+        let buttons = buttons.to_vec();
+        on_main_sync_wait(move || {
+            use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+            use windows::Win32::UI::Controls::{
+                TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TD_ERROR_ICON, TD_INFORMATION_ICON,
+                TD_WARNING_ICON,
+            };
+            // `TaskDialogIndirect` se resuelve EN TIEMPO DE EJECUCIÓN: solo lo exporta comctl32 v6
+            // (activado por manifest). Enlazarlo estáticamente hacía que el cargador matara el
+            // proceso al arrancar (STATUS_ENTRYPOINT_NOT_FOUND) en cualquier binario sin manifest —
+            // el humo del CI de Windows lo cazó. Sin el símbolo, MessageBoxW.
+            type TaskDialogIndirectFn = unsafe extern "system" fn(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut windows::core::BOOL) -> windows::core::HRESULT;
+            let n = buttons.len();
+            let last = n - 1;
+            let title_w = wide(&title);
+            let text_w = wide(&text);
+            let labels: Vec<HSTRING> = buttons.iter().map(|b| wide(b)).collect();
+            let table: Vec<TASKDIALOG_BUTTON> =
+                labels.iter().enumerate().map(|(i, l)| TASKDIALOG_BUTTON { nButtonID: 100 + i as i32, pszButtonText: PCWSTR(l.as_ptr()) }).collect();
+            let icon = match style.as_str() { "warning" => TD_WARNING_ICON, "error" => TD_ERROR_ICON, _ => TD_INFORMATION_ICON };
+            let owner = owner_hwnd().unwrap_or(HWND(std::ptr::null_mut()));
+            // SAFETY: hilo 1; todos los buffers viven hasta que la llamada retorna.
+            unsafe {
+                let config = TASKDIALOGCONFIG {
+                    cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+                    hwndParent: owner,
+                    dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+                    pszWindowTitle: PCWSTR(title_w.as_ptr()),
+                    Anonymous1: TASKDIALOGCONFIG_0 { pszMainIcon: icon },
+                    pszMainInstruction: PCWSTR(title_w.as_ptr()),
+                    pszContent: PCWSTR(text_w.as_ptr()),
+                    cButtons: n as u32,
+                    pButtons: table.as_ptr(),
+                    nDefaultButton: 100,
+                    ..Default::default()
+                };
+                let task_dialog: Option<TaskDialogIndirectFn> = LoadLibraryW(windows::core::w!("comctl32.dll"))
+                    .ok()
+                    .and_then(|lib| GetProcAddress(lib, windows::core::s!("TaskDialogIndirect")))
+                    .map(|f| std::mem::transmute::<unsafe extern "system" fn() -> isize, TaskDialogIndirectFn>(f));
+                if let Some(task_dialog) = task_dialog {
+                    let mut pressed: i32 = 0;
+                    if task_dialog(&config, &mut pressed, std::ptr::null_mut(), std::ptr::null_mut()).is_ok() {
+                        let idx = pressed - 100;
+                        return Ok(if (0..n as i32).contains(&idx) { idx as usize } else { last });
+                    }
+                }
+                // Respaldo: MessageBoxW por número de botones.
+                let (flags, map): (MESSAGEBOX_STYLE, fn(MESSAGEBOX_RESULT, usize) -> usize) = match n {
+                    1 => (MB_OK, |_, l| l),
+                    2 => (MB_OKCANCEL, |r, l| if r == IDOK { 0 } else { l }),
+                    _ => (MB_YESNOCANCEL, |r, l| if r == IDYES { 0 } else if r == IDNO { 1 } else { l }),
+                };
+                let icon_flag = match style.as_str() { "warning" => MB_ICONWARNING, "error" => MB_ICONERROR, _ => MB_ICONINFORMATION };
+                let r = MessageBoxW(Some(owner), PCWSTR(text_w.as_ptr()), PCWSTR(title_w.as_ptr()), flags | icon_flag);
+                Ok(map(r, last))
             }
         })
     }

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.23.0 — 2026-09-16
 
 - **Menú contextual nativo** (M259, ray-sublime). `ui.popup_menu(h, items)` muestra los mismos
   `MenuItem` de la barra (roles estándar incluidos) en la posición del puntero sobre la ventana `h`;

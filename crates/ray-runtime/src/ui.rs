@@ -2527,6 +2527,8 @@ mod mac {
     // M152 (puente IPC): initWithFrame:configuration: / addScriptMessageHandler:name: /
     // isKindOfClass: / initWithSource:injectionTime:forMainFrameOnly:.
     type MsgInitFrameCfg = unsafe extern "C" fn(Id, Sel, CGRect, Id) -> Id;
+    /// M262: `initWithFrame:` del NSView contenedor del webview.
+    type MsgInitFrame = unsafe extern "C" fn(Id, Sel, CGRect) -> Id;
     type MsgVoidIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
     type MsgBoolId = unsafe extern "C" fn(Id, Sel, Id) -> u8;
     /// M236: `imageWithSystemSymbolName:accessibilityDescription:` (devuelve Id).
@@ -3770,7 +3772,23 @@ mod mac {
                         set_bool(webview, sel(b"setInspectable:\0"), 1);
                     }
                 }
-                set_id(window, sel(b"setContentView:\0"), webview);
+                // M262: el webview NO es el contentView: va dentro de un NSView contenedor
+                // plano, con máscara NSViewWidthSizable (2) | NSViewHeightSizable (16). El
+                // Web Inspector acoplado se añade como HERMANO del webview en su superview y
+                // reparte la altura del superview entre ambos; con el webview como contentView
+                // ese superview era el marco de la ventana (título incluido) y, al
+                // redimensionar, la página quedaba más alta que el área visible y cortada por
+                // arriba hasta cerrar el inspector. Es la disposición de MiniBrowser/Safari.
+                let init_frame: MsgInitFrame = std::mem::transmute(msg_send());
+                let container = init_frame(alloc(cls(b"NSView\0"), sel(b"alloc\0")), sel(b"initWithFrame:\0"), rect);
+                if container.is_null() {
+                    return Err("ui: could not create the content view".to_string());
+                }
+                let set_mask: MsgVoidI64 = std::mem::transmute(msg_send());
+                set_mask(webview, sel(b"setAutoresizingMask:\0"), 18);
+                set_id(container, sel(b"addSubview:\0"), webview);
+                set_id(window, sel(b"setContentView:\0"), container);
+                plain(container, sel(b"release\0")); // la ventana lo retiene
 
                 let ns_url = id_id(cls(b"NSURL\0"), sel(b"URLWithString:\0"), nsstring(&url));
                 if ns_url.is_null() {

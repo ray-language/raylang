@@ -1474,6 +1474,118 @@ impl MenuItemSpec {
     pub fn is_separator(&self) -> bool {
         self.tag.is_empty() && self.label == "-"
     }
+
+    /// M255: el rol estándar de edición de este item, si su tag es uno de `"role:*"`.
+    pub fn edit_role(&self) -> Option<EditRole> {
+        EditRole::from_tag(&self.tag)
+    }
+}
+
+/// M255 (ray-sublime): un item de menú con **comportamiento nativo** de edición, declarado por su
+/// tag (`"role:undo"`, `"role:cut"`, …) — como `"role:about"` en el menú de aplicación. Un item
+/// con rol NO emite evento `"menu"`: hace lo que haría el item estándar del sistema sobre el
+/// webview con el foco (deshacer, portapapeles, seleccionar todo) o cierra la ventana clave.
+/// Es lo que permite `replace_menu("Edit", …)` sin perder el portapapeles: el programa
+/// intercala sus items entre los estándar y les cambia título o atajo. Título y atajo vacíos
+/// toman el estándar (`title()`/`shortcut()`); el atajo se declara con `cmd` (⌘ en macOS, Ctrl
+/// en Linux/Windows). Backends: macOS → selector por la responder chain (`undo:`, `cut:`, …,
+/// `performClose:`); Linux → `webkit_web_view_execute_editing_command` sobre el webview de la
+/// ventana dueña del menú; Windows → `Input.dispatchKeyEvent` del DevTools Protocol de WebView2
+/// con el comando de edición (el atajo del item NO se registra como acelerador: la tecla sigue
+/// llegando al webview, que ya la atiende de forma nativa).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditRole {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    Close,
+}
+
+impl EditRole {
+    pub fn from_tag(tag: &str) -> Option<EditRole> {
+        Some(match tag {
+            "role:undo" => EditRole::Undo,
+            "role:redo" => EditRole::Redo,
+            "role:cut" => EditRole::Cut,
+            "role:copy" => EditRole::Copy,
+            "role:paste" => EditRole::Paste,
+            "role:select_all" => EditRole::SelectAll,
+            "role:close" => EditRole::Close,
+            _ => return None,
+        })
+    }
+
+    /// Título estándar (el del menú Edit de macOS).
+    pub fn title(self) -> &'static str {
+        match self {
+            EditRole::Undo => "Undo",
+            EditRole::Redo => "Redo",
+            EditRole::Cut => "Cut",
+            EditRole::Copy => "Copy",
+            EditRole::Paste => "Paste",
+            EditRole::SelectAll => "Select All",
+            EditRole::Close => "Close Window",
+        }
+    }
+
+    /// Atajo estándar, en la sintaxis de chords (`cmd` = ⌘ / Ctrl).
+    pub fn shortcut(self) -> &'static str {
+        match self {
+            EditRole::Undo => "cmd+z",
+            EditRole::Redo => "cmd+shift+z",
+            EditRole::Cut => "cmd+x",
+            EditRole::Copy => "cmd+c",
+            EditRole::Paste => "cmd+v",
+            EditRole::SelectAll => "cmd+a",
+            EditRole::Close => "cmd+w",
+        }
+    }
+
+    /// macOS: el selector de la responder chain (target nil), NUL-terminado.
+    #[cfg(target_os = "macos")]
+    fn mac_selector(self) -> &'static [u8] {
+        match self {
+            EditRole::Undo => b"undo:\0",
+            EditRole::Redo => b"redo:\0",
+            EditRole::Cut => b"cut:\0",
+            EditRole::Copy => b"copy:\0",
+            EditRole::Paste => b"paste:\0",
+            EditRole::SelectAll => b"selectAll:\0",
+            EditRole::Close => b"performClose:\0",
+        }
+    }
+
+    /// Linux: el comando de edición de WebKitGTK (`WEBKIT_EDITING_COMMAND_*`); `Close` no es uno.
+    #[cfg(target_os = "linux")]
+    fn webkit_command(self) -> Option<&'static std::ffi::CStr> {
+        Some(match self {
+            EditRole::Undo => c"Undo",
+            EditRole::Redo => c"Redo",
+            EditRole::Cut => c"Cut",
+            EditRole::Copy => c"Copy",
+            EditRole::Paste => c"Paste",
+            EditRole::SelectAll => c"SelectAll",
+            EditRole::Close => return None,
+        })
+    }
+
+    /// Windows: `(key, code, VK, shift, comando de edición)` para `Input.dispatchKeyEvent`
+    /// (Chromium ejecuta `commands` en vez del manejo por defecto: sin doble efecto).
+    #[cfg(windows)]
+    fn cdp_key(self) -> Option<(&'static str, &'static str, u32, bool, &'static str)> {
+        Some(match self {
+            EditRole::Undo => ("z", "KeyZ", 0x5A, false, "Undo"),
+            EditRole::Redo => ("Z", "KeyZ", 0x5A, true, "Redo"),
+            EditRole::Cut => ("x", "KeyX", 0x58, false, "Cut"),
+            EditRole::Copy => ("c", "KeyC", 0x43, false, "Copy"),
+            EditRole::Paste => ("v", "KeyV", 0x56, false, "Paste"),
+            EditRole::SelectAll => ("a", "KeyA", 0x41, false, "SelectAll"),
+            EditRole::Close => return None,
+        })
+    }
 }
 
 /// M236: la tecla de un atajo de menú.
@@ -1597,6 +1709,25 @@ pub fn chord_label(ch: &Chord, primary: &str) -> String {
 }
 
 #[cfg(test)]
+mod edit_role_tests {
+    use super::*;
+
+    #[test]
+    fn role_tags_resolve_and_fill_the_standard_title_and_shortcut() {
+        assert_eq!(EditRole::from_tag("role:paste"), Some(EditRole::Paste));
+        assert_eq!(EditRole::from_tag("role:select_all"), Some(EditRole::SelectAll));
+        assert_eq!(EditRole::from_tag("role:about"), None);
+        assert_eq!(EditRole::from_tag("paste"), None);
+        let items = decode_items(&["role:undo\t\t".to_string(), "role:copy\tCopiar\tcmd+shift+c".to_string()]).unwrap();
+        assert_eq!((items[0].label.as_str(), items[0].shortcut.as_str()), ("Undo", "cmd+z"));
+        assert_eq!((items[1].label.as_str(), items[1].shortcut.as_str()), ("Copiar", "cmd+shift+c"));
+        for role in [EditRole::Undo, EditRole::Redo, EditRole::Cut, EditRole::Copy, EditRole::Paste, EditRole::SelectAll, EditRole::Close] {
+            assert!(parse_chord(role.shortcut()).is_some(), "atajo estándar parseable: {}", role.shortcut());
+        }
+    }
+}
+
+#[cfg(test)]
 mod chord_tests {
     use super::{parse_chord, chord_label, ChordKey};
 
@@ -1634,7 +1765,7 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
     let mut out = Vec::with_capacity(items.len());
     for it in items {
         let mut p = it.split('\t');
-        let spec = MenuItemSpec {
+        let mut spec = MenuItemSpec {
             tag: p.next().unwrap_or("").to_string(),
             label: p.next().unwrap_or("").to_string(),
             shortcut: p.next().unwrap_or("").to_string(),
@@ -1642,6 +1773,16 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
             enabled: p.next().map(|s| s != "0").unwrap_or(true),
             checked: p.next().map(|s| s == "1").unwrap_or(false),
         };
+        // M255: un item con rol estándar toma título y atajo del sistema si vienen vacíos (aquí,
+        // en el borde, para que los tres backends y la traza headless vean el mismo item).
+        if let Some(role) = spec.edit_role() {
+            if spec.label.is_empty() {
+                spec.label = role.title().to_string();
+            }
+            if spec.shortcut.is_empty() {
+                spec.shortcut = role.shortcut().to_string();
+            }
+        }
         if !spec.is_separator() && spec.tag.is_empty() {
             return Err("ui: a menu item needs a non-empty tag".to_string());
         }
@@ -2667,6 +2808,14 @@ mod mac {
             }
             let chord = if spec.shortcut.is_empty() { None } else { super::parse_chord(&spec.shortcut) };
             let (key, mask) = chord.map(|c| chord_equivalent(&c)).unwrap_or_default();
+            // M255: un rol estándar va por la responder chain (target nil, selector del sistema:
+            // `undo:`, `cut:`, `performClose:`…) — el mismo item que instala el Edit estándar,
+            // con el título/atajo del spec. No emite evento: no entra en `menu_tags`.
+            let role = spec.edit_role();
+            let action = match role {
+                Some(r) => sel(r.mac_selector()),
+                None => action,
+            };
             let item = item_init(
                 alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
                 sel(b"initWithTitle:action:keyEquivalent:\0"),
@@ -2677,14 +2826,16 @@ mod mac {
             if chord.is_some() {
                 set_i64(item, sel(b"setKeyEquivalentModifierMask:\0"), mask);
             }
-            set_id(item, sel(b"setTarget:\0"), target);
-            let n = {
-                let mut tags = menu_tags().lock().unwrap();
-                let n = tags.len() as i64 + 1;
-                tags.insert(n, spec.tag.clone());
-                n
-            };
-            set_i64(item, sel(b"setTag:\0"), n);
+            if role.is_none() {
+                set_id(item, sel(b"setTarget:\0"), target);
+                let n = {
+                    let mut tags = menu_tags().lock().unwrap();
+                    let n = tags.len() as i64 + 1;
+                    tags.insert(n, spec.tag.clone());
+                    n
+                };
+                set_i64(item, sel(b"setTag:\0"), n);
+            }
             if !spec.enabled {
                 set_bool(item, sel(b"setEnabled:\0"), 0);
             }
@@ -4011,6 +4162,8 @@ mod gtk {
         image_item_always_show: Option<unsafe extern "C" fn(Widget, i32)>,
         /// M252: `gtk_window_is_active` (para el evento `focused`).
         window_is_active: Option<unsafe extern "C" fn(Widget) -> i32>,
+        /// M255: `webkit_web_view_execute_editing_command(view, "Cut")` — los roles de edición.
+        execute_editing_command: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
     }
     unsafe impl Send for ItemApi {}
     unsafe impl Sync for ItemApi {}
@@ -4025,6 +4178,16 @@ mod gtk {
                 let p = unsafe { dlsym(gtk, name.as_ptr()) };
                 (!p.is_null()).then_some(p)
             };
+            // M255: la lib de WebKit ya la cargó `api()` (4.1, o 4.0 de respaldo): mismo orden.
+            let webkit = unsafe {
+                let w = dlopen(c"libwebkit2gtk-4.1.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                if w.is_null() { dlopen(c"libwebkit2gtk-4.0.so.37".as_ptr(), RTLD_NOW | RTLD_GLOBAL) } else { w }
+            };
+            let opt_webkit = |name: &std::ffi::CStr| -> Option<*mut c_void> {
+                if webkit.is_null() { return None; }
+                let p = unsafe { dlsym(webkit, name.as_ptr()) };
+                (!p.is_null()).then_some(p)
+            };
             // SAFETY: firmas C documentadas de GTK 3.
             unsafe {
                 ItemApi {
@@ -4037,6 +4200,7 @@ mod gtk {
                     image_item_set_image: opt(c"gtk_image_menu_item_set_image").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
                     image_item_always_show: opt(c"gtk_image_menu_item_set_always_show_image").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                     window_is_active: opt(c"gtk_window_is_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> i32>(p)),
+                    execute_editing_command: opt_webkit(c"webkit_web_view_execute_editing_command").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
                 }
             }
         })
@@ -4092,6 +4256,27 @@ mod gtk {
     extern "C" fn on_menu_activate(_w: Widget, data: *mut c_void) {
         // SAFETY: `data` es el MenuCtx de build_menubar; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const MenuCtx) };
+        // M255: un rol estándar actúa sobre la ventana dueña de esta barra (los menús son por
+        // ventana en GTK) en vez de emitir el evento: comando de edición de WebKit al webview,
+        // o cerrar la ventana. Estamos en el hilo del loop: se toca el widget directamente.
+        if let Some(role) = super::EditRole::from_tag(&ctx.tag) {
+            let Some(cmd) = role.webkit_command() else {
+                super::close_window(ctx.window);
+                return;
+            };
+            let target = match super::windows().lock().unwrap().get(&ctx.window) {
+                Some(super::WinState { win: super::Win::Gtk { webview, alive, .. }, .. }) => Some((*webview, alive.clone())),
+                _ => None,
+            };
+            if let Some((webview, alive)) = target
+                && alive.load(Ordering::SeqCst)
+                && let Some(exec) = item_api().execute_editing_command
+            {
+                // SAFETY: webview vivo (alive) y en el hilo gtk; `cmd` es un literal NUL-terminado.
+                unsafe { exec(webview as Widget, cmd.as_ptr()) };
+            }
+            return;
+        }
         super::push_event("menu", ctx.window, &ctx.tag);
     }
 
@@ -5028,7 +5213,7 @@ mod win {
     use webview2_com::AcceleratorKeyPressedEventHandler;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
     use webview2_com::{
-        AddScriptToExecuteOnDocumentCreatedCompletedHandler, CoTaskMemPWSTR,
+        AddScriptToExecuteOnDocumentCreatedCompletedHandler, CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR,
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
         ExecuteScriptCompletedHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
     };
@@ -5119,6 +5304,19 @@ mod win {
                     // SAFETY: como arriba.
                     let ctx = unsafe { &*ctx_ptr };
                     if let Some(tag) = ctx.menu_tags.get(&id) {
+                        // M255: un rol estándar actúa sobre esta ventana en vez de emitir el evento.
+                        if let Some(role) = super::EditRole::from_tag(tag) {
+                            match role.cdp_key() {
+                                // SAFETY: hilo 1, ventana viva (estamos en su WndProc).
+                                None => unsafe { let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); },
+                                Some(key) => {
+                                    if let Some(wv) = &ctx.webview {
+                                        send_edit_command(wv, key);
+                                    }
+                                }
+                            }
+                            return LRESULT(0);
+                        }
                         super::push_event("menu", ctx.id, tag);
                         return LRESULT(0);
                     }
@@ -5491,10 +5689,16 @@ mod win {
                         let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
                         continue;
                     }
+                    // M255: el atajo de un rol estándar se MUESTRA pero no se registra como
+                    // acelerador — la tecla debe seguir llegando al webview, que ya la atiende
+                    // de forma nativa (interceptarla rompería el Ctrl+C real).
+                    let is_role = spec.edit_role().is_some();
                     let label = match accel_for(&spec.shortcut, next_id) {
                         Some((text, accel)) => {
-                            keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
-                            accels.push(accel);
+                            if !is_role {
+                                keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
+                                accels.push(accel);
+                            }
                             format!("{}\t{text}", spec.label)
                         }
                         None => spec.label.clone(),
@@ -5846,6 +6050,31 @@ mod win {
                 }
             }
         });
+    }
+
+    /// M255: ejecuta un comando de edición sobre el webview vía el DevTools Protocol
+    /// (`Input.dispatchKeyEvent` con `commands`: Chromium ejecuta el comando en lugar del manejo
+    /// por defecto de la tecla, así no hay doble efecto). WebView2 no expone comandos de edición
+    /// directos y `document.execCommand("paste")` está vetado en Chromium; el CDP es la vía que
+    /// usan las herramientas de automatización. Fire-and-forget (hilo 1).
+    fn send_edit_command(wv: &ICoreWebView2, key: (&str, &str, u32, bool, &str)) {
+        let (k, code, vk, shift, command) = key;
+        let modifiers = 2 | if shift { 8 } else { 0 }; // Ctrl (| Shift)
+        let down = format!(
+            "{{\"type\":\"rawKeyDown\",\"modifiers\":{modifiers},\"key\":\"{k}\",\"code\":\"{code}\",\"windowsVirtualKeyCode\":{vk},\"nativeVirtualKeyCode\":{vk},\"commands\":[\"{command}\"]}}"
+        );
+        let up = format!(
+            "{{\"type\":\"keyUp\",\"modifiers\":{modifiers},\"key\":\"{k}\",\"code\":\"{code}\",\"windowsVirtualKeyCode\":{vk},\"nativeVirtualKeyCode\":{vk}}}"
+        );
+        let method = wide("Input.dispatchKeyEvent");
+        // SAFETY: hilo 1, webview vivo (viene del ctx de la ventana en su WndProc).
+        unsafe {
+            for params in [down, up] {
+                let params = wide(&params);
+                let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_e, _r: String| Ok(())));
+                let _ = wv.CallDevToolsProtocolMethod(PCWSTR(method.as_ptr()), PCWSTR(params.as_ptr()), &handler);
+            }
+        }
     }
 
     /// Destruye la ventana en el hilo 1, asíncrono (llamable desde un Drop). WM_DESTROY emite

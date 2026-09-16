@@ -13454,3 +13454,39 @@ fibra que no cede retrasa a las de su worker; el remedio del programa es ceder p
 (`time.sleep(1)`), justo lo que ray-sublime hizo como vuelta. La imprecisión de
 `next_event_timeout` en reposo que la misma traza menciona (100 ms pedidos, 125–575 medidos) no se
 reprodujo con este repro y queda como observación aparte.
+
+## 243. M255 — Roles estándar de edición: rehacer el menú Edit sin perder el portapapeles (sep 2026)
+
+Pregunta de ray-sublime: "¿puedo añadir items al menú Edit o cambiar sus atajos?". Con M250
+(`replace_menu`) el Edit estándar de macOS ya era alcanzable por título, pero reemplazarlo
+destruía sus items — que no son items corrientes: funcionan por **acciones nativas** (`undo:`,
+`cut:`, `paste:`… por la responder chain, que es como el webview recibe el portapapeles). Los
+items del programa solo saben emitir un evento `"menu"` con su tag; resolver Copiar/Pegar desde
+el frontend con `execCommand` es frágil y Pegar está vetado en Chromium.
+
+La forma ya existía en el lenguaje: `"role:about"` es un tag que **el runtime interpreta como
+comportamiento nativo** en vez de como evento. M255 extiende esa idea a siete roles de edición
+(`role:undo|redo|cut|copy|paste|select_all|close`), con una tabla única (`EditRole`, en el
+borde de `decode_items`) que además rellena título y atajo estándar cuando vienen vacíos — así
+los tres backends y la traza headless ven el mismo item, y un programa puede escribir
+`item("role:paste", "", "")` o renombrar/re-asignar dando los suyos. Cada backend hace lo que
+su sistema hace:
+
+- **macOS**: `make_item` emite el NSMenuItem con el selector del rol y target nil (exactamente
+  el item que instala el Edit estándar), y no lo registra en `menu_tags` — sin evento. Queda en
+  `items_by_tag` para `set_menu_item`.
+- **Linux**: el `activate` conoce su ventana (`MenuCtx.window`, M252) → busca el webview y
+  llama `webkit_web_view_execute_editing_command` (símbolo opcional de WebKitGTK, resuelto por
+  `dlsym` como el resto); `role:close` cierra la ventana por `close_window`.
+- **Windows**: WebView2 no expone comandos de edición y `execCommand("paste")` está vetado; la
+  vía es la de las herramientas de automatización: `Input.dispatchKeyEvent` del DevTools
+  Protocol con `commands` (Chromium ejecuta el comando en lugar del manejo por defecto: sin
+  doble efecto). Decisión importante: el atajo de un rol **se muestra pero no se registra como
+  acelerador** — el Ctrl+C real debe seguir llegando al webview, que ya lo atiende; interceptarlo
+  como acelerador de menú lo habría roto. `role:close` → `WM_CLOSE`.
+
+`ui.edit_menu(items)` es raylang puro sobre `replace_menu`/`menu`: en macOS reemplaza el Edit
+estándar en su sitio; en Linux/Windows, que no instalan Edit (el webview atiende las teclas), lo
+crea al final de la barra la primera vez y lo reemplaza después. Verificado: los tres motores en
+headless (`tests/ui_cli.rs`), humo real en macOS (ventana con el Edit rehecho). La vía de
+Windows compila en el CI pero su efecto real queda por comprobar en máquina.

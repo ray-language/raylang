@@ -263,6 +263,9 @@ titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.f
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
+standard edit roles: items tagged `role:undo|redo|cut|copy|paste|select_all|close` act natively
+(no event; empty title/shortcut = the standard one) and `ui.edit_menu(items)` rebuilds the Edit
+menu with your items among them (replaces the macOS standard Edit; creates it on Linux/Windows);
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray

@@ -3427,7 +3427,7 @@ que retiene el string) pasa a la fibra. Impacto: MEDIO (toca `gc`, `sched`, `tra
 `unsafe` nuevo que hay que inventariar en SECURITY). Ganancia esperada: el +10–25 % restante en
 bucles de strings pequeños. Decisión del usuario; medir con `benchmarks/poly` antes y después.
 
-## 89. Auto-actualización de apps: `std/update`, manifiesto firmado y `ray release` (sep 2026) — 🚧 en curso (M246 ✅ M247 ✅ M248 ✅ M249 ✅ — sin publicar, a revisión del usuario)
+## 89. Auto-actualización de apps: `std/update`, manifiesto firmado y `ray release` (sep 2026) — ✅ HECHA (M246–M249, DESIGN §235–§238; publicada en v1.21.0)
 
 Origen: ray-sublime pidió "New Window" y el análisis mostró que un proceso nuevo necesita dos
 cosas que raylang no tiene (saber cómo relanzarse y lanzar un hijo que sobreviva al padre); la

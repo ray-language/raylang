@@ -2314,6 +2314,12 @@ impl Transpiler {
                 }
                 out.push_str(", ");
                 self.emit_expr(out, eff[10])?; // M230: minimizable
+                out.push_str(", &*");
+                self.emit_expr(out, eff[11])?; // M260: kind
+                out.push_str(", ");
+                self.emit_expr(out, eff[12])?; // M260: always_on_top
+                out.push_str(", ");
+                self.emit_expr(out, eff[13])?; // M260: parent (handle = id en el nativo)
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {

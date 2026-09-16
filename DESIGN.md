@@ -13587,3 +13587,47 @@ barra (y así los roles de M255 también funcionan), `DestroyMenu` y purga de ta
 
 Verificado: tres motores en headless (`tests/ui_cli.rs`); Linux y Windows compilan en el CI.
 El humo real en macOS requiere un clic derecho humano: pendiente de ray-sublime.
+
+## 247. M260 — Tipos de ventana y geometría en caliente (sep 2026)
+
+Cierre del arco de escritorio (M257 ciclo de vida, M258 diálogos, M259 menú contextual), a partir
+de la pregunta "¿qué tipos de ventana de macOS tiene raylang y su equivalencia en Windows/Linux?"
+(IDEAS §90). Hasta aquí `std/ui` abría UN tipo: la ventana de documento. Se añaden solo los tipos
+con equivalente limpio en los tres sistemas — panel de utilidad flotante, sin borde, siempre
+encima, ventana dueña — y las operaciones de geometría que un editor usa (pantalla completa,
+tamaño, posición, centrar, minimizar, maximizar). Lo que es solo de macOS (sheet, popover, HUD,
+pestañas, `NSToolbar`) NO se emula: degrada (un `parent` da el "sheet" que se puede dar en los
+tres) o se dibuja en HTML.
+
+Decisiones:
+
+- **`kind` como string en `WindowOptions`** (`"document"|"panel"|"borderless"`) y no un enum del
+  lenguaje: la validación es del runtime y el `Err` es claro; los otros campos de opciones
+  siguen el mismo patrón. `__ui_open_with` pasa de 11 a 14 argumentos (kind, always_on_top,
+  parent) — el coste de tocar seis archivos se paga una vez; las OPERACIONES en caliente, en
+  cambio, entran por la puerta de M257 (`__ui_window(h, op, arg)`, con `arg` "w,h"/"x,y") sin
+  plomería nueva, como se previó.
+- **Borderless que acepta el foco.** Una `NSWindow` sin máscara no puede ser ventana clave y el
+  webview no recibiría teclado; se registra una subclase (`RayBorderlessWindow`, `canBecomeKey/
+  MainWindow` → YES) con el mismo mecanismo objc del delegate. Movible por el fondo
+  (`setMovableByWindowBackground:`) porque no hay barra que arrastrar.
+- **Panel = `NSPanel` utility + floating** (sin botón de minimizar: los paneles no lo tienen);
+  en Windows `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` (barra fina, fuera de la barra de tareas) y en
+  GTK `type_hint UTILITY` + `keep_above`. `parent` es `addChildWindow:ordered:NSWindowAbove` /
+  owner de `CreateWindowExW` / `transient_for`: la hija sigue a la dueña y queda sobre ella.
+- **`set_position` con origen arriba-izquierda** en los tres sistemas (lo que espera un
+  programa): AppKit tiene origen abajo-izquierda, así que se convierte con la altura de la
+  pantalla principal via `CGDisplayBounds` (función C que devuelve el struct por valor: evita el
+  `objc_msgSend_stret` de `[NSScreen frame]`) y `setFrameTopLeftPoint:`.
+- **Pantalla completa en Windows a mano**: no hay API; `WS_POPUP` + rectángulo del monitor de
+  la ventana (`MonitorFromWindow`/`GetMonitorInfoW`), guardando estilo y rectángulo en el ctx
+  para restaurarlos. macOS `toggleFullScreen:` solo si el estado actual difiere (leyendo
+  `styleMask`); GTK `gtk_window_fullscreen`/`unfullscreen`.
+- **GTK `center` sobre una ventana ya mapeada** se hace a mano (pantalla por defecto −
+  tamaño), porque `gtk_window_set_position` solo actúa antes de mapear. Todos los símbolos
+  nuevos de GTK/GDK van por `dlsym` opcional (`WindowApi`), como los demás.
+
+Verificado: tres motores en headless (`tests/ui_cli.rs`: kinds, dueña, validaciones y las siete
+operaciones trazadas) y humo real en macOS con panel hijo flotante, ventana sin borde,
+redimensionar, mover, centrar, zoom y pantalla completa ida y vuelta. Linux y Windows compilan en
+el CI; efecto real pendiente de máquina (los símbolos de Windows se cotejaron con el crate 0.62).

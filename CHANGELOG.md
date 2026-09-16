@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Tipos de ventana y geometría en caliente** (M260). `WindowOptions` gana `kind`
+  (`"document"`, `"panel"` — paleta de utilidad flotante sobre la app —, `"borderless"` — sin marco
+  ni título), `always_on_top` y `parent` (ventana dueña: la nueva queda encima y la sigue). Sobre una
+  ventana abierta: `ui.set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`,
+  `minimize` y `maximize`. macOS `NSPanel`/subclase borderless/`toggleFullScreen:`, GTK type hints y
+  `gtk_window_*`, Windows `WS_EX_TOOLWINDOW`/`WS_POPUP`/topmost y pantalla completa sin marco.
+
 ## 1.23.1 — 2026-09-16
 
 - **Un atajo de menú se dibuja tal como se declara** (M256, ray-sublime). En macOS 12+ el sistema

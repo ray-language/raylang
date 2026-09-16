@@ -13490,3 +13490,40 @@ estándar en su sitio; en Linux/Windows, que no instalan Edit (el webview atiend
 crea al final de la barra la primera vez y lo reemplaza después. Verificado: los tres motores en
 headless (`tests/ui_cli.rs`), humo real en macOS (ventana con el Edit rehecho). La vía de
 Windows compila en el CI pero su efecto real queda por comprobar en máquina.
+
+## 244. M257 — Ciclo de vida de la ventana: título, punto de modificado y cierre interceptable (sep 2026)
+
+Tras M255, la pregunta natural fue qué le faltaba a `std/ui` para una app de documentos de uso
+diario. Tres cosas que Electron/Tauri dan por sentadas y aquí no existían: cambiar el **título**
+después de abrir (el nombre del documento, el asterisco de sucio), el **punto de "modificado"**
+del botón de cerrar de macOS, y sobre todo **preguntar antes de cerrar o salir**: el cierre era
+inmediato (`closed` llegaba con la ventana ya destruida) y ⌘Q terminaba el proceso sin aviso —
+imposible el "¿guardar cambios?".
+
+Decisiones:
+
+- **Una sola primitiva por nombre**, `__ui_window(h, op, arg)`, en vez de un builtin por
+  operación. Añadir un builtin cuesta seis archivos (registro, opcode, VM, intérprete, dos del
+  transpilador); las operaciones de ventana pequeñas y frecuentes que vienen (pantalla completa,
+  tamaño, siempre encima) caben en la misma puerta con un `op` nuevo y cero plomería. El
+  contrato de tipos sigue siendo estricto (`(int, string, string) -> [string]`), y `std/ui.ray`
+  expone funciones con nombre propio (`set_title`, `set_edited`, `intercept_close`,
+  `intercept_quit`).
+- **Interceptar en caliente, no como opción de apertura.** `intercept_close(h, bool)` sobre una
+  ventana abierta evita tocar la aridad de `__ui_open_with` y refleja el uso real: se activa
+  cuando el documento se ensucia y se apaga al guardar.
+- **El cierre del programa siempre cierra.** Solo el cierre del USUARIO pasa por el gancho:
+  macOS `windowShouldClose:` (lo dispara `performClose:` — botón rojo, ⌘W, `role:close`; `[window
+  close]` no), GTK `delete-event` (TRUE = no destruir; `gtk_widget_destroy` no lo emite), Windows
+  `WM_CLOSE` (`DestroyWindow` no lo envía). Así `close(h)` tras el "¿guardar?" no vuelve a
+  preguntar.
+- **La salida de la app** solo existe como concepto en macOS (⌘Q / Quit del menú). NSApp no
+  tenía delegate: ahora lo es la misma instancia singleton que sirve a menús y ventanas, con
+  `applicationShouldTerminate:` → `quit_requested` + `NSTerminateCancel` cuando el programa lo
+  pidió. En Linux y Windows la función es inocua y está documentada como tal.
+
+Verificado: tres motores en headless (`tests/ui_cli.rs`: ops, `Err` sobre ventana cerrada,
+`close(h)` sigue cerrando con la interceptación activa), humo real en macOS (título, punto,
+interceptación armada, bucle de eventos vivo). El cierre del usuario no se pudo simular desde
+fuera (`osascript` exige permiso de Accesibilidad para pulsar teclas): queda para la prueba en
+mano en ray-sublime.

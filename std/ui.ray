@@ -15,8 +15,11 @@
 /// was key/active at that moment — M252 — or 0 when none is, e.g. with every window closed),
 /// "focused" (M252: `window` became the key/active one — on open, on `focus(h)` and whenever
 /// the user brings it to the front; use it to know which window a menu action refers to and to
-/// refresh on regaining focus), or "message" (the page called `window.ray.send(text)`: `tag`
-/// is the text and `window` the sender).
+/// refresh on regaining focus), "message" (the page called `window.ray.send(text)`: `tag`
+/// is the text and `window` the sender), "close_requested" (M257: the user tried to close
+/// `window` while `intercept_close(h, true)` is on — the window stays open until you `close(h)`)
+/// or "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
+/// `window` is 0; the app keeps running until `main` returns).
 /// In headless mode opening a window produces no event; `focus(h)` emits "focused", and the
 /// env var RAY_UI_MSG injects one "message" per opened window (tests).
 pub struct UiEvent {
@@ -366,6 +369,41 @@ pub fn save_file(suggested: string) -> Result<Option<string>, string> {
 /// `eval_js(h, "window.focus()")` only focuses the document, not the native window.
 pub fn focus(h: int) -> Result<int, string> {
     let r = __ui_focus(h);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Changes the title of an OPEN window (M257): `"main.ray — MyApp"`, a dirty marker, the
+/// current document. `Err` for a closed or unknown window.
+pub fn set_title(h: int, title: string) -> Result<int, string> {
+    let r = __ui_window(h, "set_title", title);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Marks an OPEN window's document as modified or not (M257): on macOS the close button shows
+/// the "unsaved changes" dot (`setDocumentEdited:`); Linux and Windows have no such indicator
+/// and ignore it (show it in the title with `set_title`). `Err` for a closed or unknown window.
+pub fn set_edited(h: int, edited: bool) -> Result<int, string> {
+    let r = __ui_window(h, "set_edited", if (edited) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Makes the USER's attempt to close window `h` (the close button, ⌘W/Alt+F4, the window
+/// manager) emit a `"close_requested"` event (`window` = h) instead of closing (M257). The
+/// program decides — ask "Save changes?", save — and closes with `close(h)` when it is ready
+/// (`close` always closes). `false` restores the direct close. `Err` for a closed or unknown
+/// window.
+pub fn intercept_close(h: int, on: bool) -> Result<int, string> {
+    let r = __ui_window(h, "intercept_close", if (on) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Makes the USER's attempt to quit the app — ⌘Q or Quit in the application menu on macOS —
+/// emit a `"quit_requested"` event (`window` = 0) instead of terminating the process (M257).
+/// The program decides: close its windows and return from `main`. Linux and Windows have no
+/// app-level quit besides closing windows, so this only matters on macOS; it is harmless
+/// elsewhere. `false` restores the immediate quit.
+pub fn intercept_quit(on: bool) -> Result<int, string> {
+    let r = __ui_window(0, "intercept_quit", if (on) { "1" } else { "0" });
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

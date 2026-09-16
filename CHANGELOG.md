@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Ciclo de vida de la ventana nativa** (M257, ray-sublime). `ui.set_title(h, title)` cambia el
+  título de una ventana abierta; `ui.set_edited(h, bool)` muestra el punto de "modificado" en el
+  botón de cerrar de macOS; `ui.intercept_close(h, true)` convierte el cierre pedido por el usuario
+  (botón, ⌘W/Alt+F4, gestor de ventanas) en el evento `"close_requested"` — el programa pregunta,
+  guarda y cierra con `close(h)` cuando quiere —; `ui.intercept_quit(true)` hace lo mismo con ⌘Q en
+  macOS (`"quit_requested"`). Antes cerrar y salir eran inmediatos y el título se fijaba al abrir.
+
 - **Roles estándar de edición y `ui.edit_menu`** (M255, ray-sublime). Un item de menú con tag
   `"role:undo"`, `"role:redo"`, `"role:cut"`, `"role:copy"`, `"role:paste"`, `"role:select_all"` o
   `"role:close"` se comporta como el del sistema (deshacer, portapapeles y seleccionar todo sobre el

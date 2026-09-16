@@ -1058,6 +1058,65 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// M257 (ray-sublime) — operaciones de ventana por nombre: `set_title`, `set_edited`,
+// `intercept_close`, `intercept_quit`. En headless: `Ok` con traza, `Err` sobre una ventana
+// cerrada/desconocida, y `close(h)` sigue cerrando aunque el cierre esté interceptado (emite
+// `closed`). El cierre del USUARIO (botón/⌘W/WM/WM_CLOSE) no existe en headless: la
+// interceptación real queda para los backends. VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn window_title_edited_and_close_interception_on_all_three_engines() {
+    let base = tmp("window_ops_m257");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show(r: Result<int, string>, ok: string) { match (r) { Result.Ok(_) => print(ok), Result.Err(e) => print(e) } }
+fn main() {
+    let w = ui.open("Editor", "http://127.0.0.1:1/", 400, 300).unwrap();
+    show(ui.set_title(w, "main.ray — Editor"), "title ok");
+    show(ui.set_edited(w, true), "edited ok");
+    show(ui.intercept_close(w, true), "intercept ok");
+    show(ui.intercept_quit(true), "quit intercept ok");
+    close(w);
+    match (ui.next_event_timeout(500)) {
+        Result.Ok(o) => match (o) { Option.Some(e) => print(e.kind + " " + to_string(e.window)), Option.None => print("no event") },
+        Result.Err(e) => print(e),
+    }
+    show(ui.set_title(w, "after close"), "bad");
+    show(ui.intercept_close(99, true), "bad");
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "title ok\nedited ok\nintercept ok\nquit intercept ok\nclosed 1\nui: not an open window\nui: not an open window\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        for line in ["[ui] title 1 main.ray — Editor", "[ui] edited 1 true", "[ui] intercept close 1 on", "[ui] intercept quit on"] {
+            assert!(err.contains(line), "traza headless '{line}': {err}");
+        }
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M255 (ray-sublime) — roles estándar de edición (`role:undo`, `role:paste`, …) y `edit_menu`:
 // título/atajo estándar si vienen vacíos, `set_menu_item` por tag, y el Edit se crea la primera
 // vez y se reemplaza después (en headless no hay Edit estándar, como en Linux/Windows). VM,

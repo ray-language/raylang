@@ -1058,6 +1058,86 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// M260 — tipos de ventana (`kind`), `always_on_top`, `parent` y las operaciones de geometría en
+// caliente (`set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`, `minimize`,
+// `maximize`): en headless se validan y trazan; `Err` con kind desconocido, dueña no abierta,
+// tamaño fuera de rango o ventana cerrada. VM, intérprete y nativo.
+// ---------------------------------------------------------------------------
+#[test]
+fn window_kinds_and_geometry_ops_on_all_three_engines() {
+    let base = tmp("window_kinds_m260");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn show(r: Result<int, string>, ok: string) { match (r) { Result.Ok(_) => print(ok), Result.Err(e) => print(e) } }
+fn main() {
+    let main_w = ui.open("Editor", "http://127.0.0.1:1/", 800, 600).unwrap();
+    var p = ui.options(320, 200);
+    p.kind = "panel";
+    p.always_on_top = true;
+    p.parent = main_w;
+    match (ui.open_with("Find", "http://127.0.0.1:1/", p)) { Result.Ok(h) => print("panel " + to_string(h)), Result.Err(e) => print(e) }
+    var b = ui.options(300, 300);
+    b.kind = "borderless";
+    match (ui.open_with("Splash", "http://127.0.0.1:1/", b)) { Result.Ok(h) => print("borderless " + to_string(h)), Result.Err(e) => print(e) }
+    var bad = ui.options(300, 300);
+    bad.kind = "hud";
+    match (ui.open_with("X", "http://127.0.0.1:1/", bad)) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    var orphan = ui.options(300, 300);
+    orphan.parent = 99;
+    match (ui.open_with("X", "http://127.0.0.1:1/", orphan)) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
+    show(ui.set_fullscreen(main_w, true), "fullscreen on");
+    show(ui.set_fullscreen(main_w, false), "fullscreen off");
+    show(ui.set_always_on_top(main_w, true), "on top");
+    show(ui.set_size(main_w, 1024, 720), "resized");
+    show(ui.set_size(main_w, 0, 720), "bad");
+    show(ui.set_position(main_w, 40, 60), "moved");
+    show(ui.center(main_w), "centered");
+    show(ui.minimize(main_w), "minimized");
+    show(ui.maximize(main_w), "maximized");
+    close(main_w);
+    show(ui.center(main_w), "bad");
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "panel 2\nborderless 3\nui: unsupported window kind 'hud' (document, panel, borderless)\nui: the parent is not an open window\nfullscreen on\nfullscreen off\non top\nresized\nui: unsupported window size 0x720\nmoved\ncentered\nminimized\nmaximized\nui: not an open window\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        for line in [
+            "[ui] window 2 kind panel always_on_top true parent 1",
+            "[ui] window 3 kind borderless always_on_top false parent 0",
+            "[ui] window 1 Fullscreen(true)",
+            "[ui] window 1 Size(1024, 720)",
+            "[ui] window 1 Position(40, 60)",
+            "[ui] window 1 Center",
+            "[ui] window 1 Maximize",
+        ] {
+            assert!(err.contains(line), "traza headless '{line}': {err}");
+        }
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M259 (ray-sublime) — `ui.popup_menu(h, items)`: menú contextual. En headless registra los tags
 // (para `set_menu_item`) y deja traza; `Err` sobre ventana cerrada/desconocida o item inválido.
 // VM, intérprete y nativo.

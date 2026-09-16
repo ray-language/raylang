@@ -3340,6 +3340,9 @@ impl<'a> Vm<'a> {
                 }
                 // M210/M224/M230: la ventana con opciones (11 argumentos; se sacan en orden inverso).
                 OpCode::UiOpenWith => {
+                    let parent = self.pop();
+                    let always_on_top = self.pop();
+                    let kind = self.pop();
                     let minimizable = self.pop();
                     let titlebar_color = self.pop();
                     let autosave = self.pop();
@@ -3360,7 +3363,11 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Bool(resizable), HeapValue::Bool(center), HeapValue::Bool(minimizable)) = (resizable, center, minimizable) else {
                         unreachable!("the checker guarantees three bools");
                     };
-                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable) {
+                    // M260: tipo, siempre encima y ventana dueña.
+                    let (HeapValue::Str(kind), HeapValue::Bool(always_on_top), HeapValue::Int(parent)) = (kind, always_on_top, parent) else {
+                        unreachable!("the checker guarantees (string, bool, int)");
+                    };
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };

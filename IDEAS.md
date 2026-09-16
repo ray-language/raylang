@@ -3470,7 +3470,7 @@ siguiente arranque). Riesgos: notarización exige cuenta Apple Developer y red e
 el reemplazo del bundle en macOS con la app abierta depende de que el Finder no la tenga
 "traducida" (rename del directorio padre es atómico en APFS).
 
-## 90. Tipos de ventana nativa: paneles flotantes, siempre encima, sin borde, pantalla completa (sep 2026) — 📋 planificado como M260
+## 90. Tipos de ventana nativa: paneles flotantes, siempre encima, sin borde, pantalla completa (sep 2026) — ✅ HECHA (M260, DESIGN §247)
 
 Pregunta del usuario tras M257: qué tipos de ventana de macOS tiene raylang y su equivalencia en
 Windows/Linux. Hoy `std/ui` abre UN tipo: la ventana de documento (título, cerrar, minimizar y

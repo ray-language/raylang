@@ -52,6 +52,12 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// luminance; Windows 11: the caption color; Linux ignores it; "" = system default).
 /// `minimizable` (M230): `false` disables the minimize button (macOS yellow light, Windows
 /// `WS_MINIMIZEBOX`) for secondary panels such as an About window; GTK ignores it.
+/// `kind` (M260): `"document"` (the default window), `"panel"` (a floating utility palette that
+/// stays above the app's windows — macOS `NSPanel`, Windows tool window, GTK utility hint; a
+/// command palette, a find panel) or `"borderless"` (no frame, no title bar — you draw everything;
+/// the window is movable by dragging its background on macOS). `always_on_top` (M260) keeps the
+/// window above every other window. `parent` (M260) is the handle of the OWNING window (0 =
+/// none): the new one stays above it and follows it — the closest thing to a sheet on every OS.
 /// Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
@@ -63,6 +69,9 @@ pub struct WindowOptions {
     autosave: string,
     titlebar_color: string,
     minimizable: bool,
+    kind: string,
+    always_on_top: bool,
+    parent: int,
 }
 
 /// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
@@ -77,7 +86,10 @@ pub fn options(width: int, height: int) -> WindowOptions {
         center: true,
         autosave: "",
         titlebar_color: "",
-        minimizable: true
+        minimizable: true,
+        kind: "document",
+        always_on_top: false,
+        parent: 0
     }
 }
 
@@ -96,7 +108,10 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.center,
         o.autosave,
         o.titlebar_color,
-        o.minimizable
+        o.minimizable,
+        o.kind,
+        o.always_on_top,
+        o.parent
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -572,6 +587,53 @@ pub fn intercept_close(h: int, on: bool) -> Result<int, string> {
 /// elsewhere. `false` restores the immediate quit.
 pub fn intercept_quit(on: bool) -> Result<int, string> {
     let r = __ui_window(0, "intercept_quit", if (on) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Puts an OPEN window in or out of full screen (M260): macOS `toggleFullScreen:` (a Space of
+/// its own), GTK `gtk_window_fullscreen`, Windows a frameless window covering its monitor (the
+/// previous frame is restored on `false`). `Err` for a closed or unknown window.
+pub fn set_fullscreen(h: int, on: bool) -> Result<int, string> {
+    let r = __ui_window(h, "fullscreen", if (on) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Keeps an OPEN window above every other window, or stops doing so (M260):
+/// `WindowOptions.always_on_top` after the fact.
+pub fn set_always_on_top(h: int, on: bool) -> Result<int, string> {
+    let r = __ui_window(h, "always_on_top", if (on) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Resizes an OPEN window's CONTENT area to `width` × `height` (M260; the frame is added by the
+/// system). Same limits as `open`.
+pub fn set_size(h: int, width: int, height: int) -> Result<int, string> {
+    let r = __ui_window(h, "set_size", to_string(width) + "," + to_string(height));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Moves an OPEN window so its top-left corner is at `(x, y)` in screen coordinates, origin at
+/// the top-left of the main screen (M260; converted for AppKit's bottom-left origin).
+pub fn set_position(h: int, x: int, y: int) -> Result<int, string> {
+    let r = __ui_window(h, "set_position", to_string(x) + "," + to_string(y));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Centers an OPEN window on its screen (M260).
+pub fn center(h: int) -> Result<int, string> {
+    let r = __ui_window(h, "center", "");
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Minimizes an OPEN window to the Dock / taskbar (M260).
+pub fn minimize(h: int) -> Result<int, string> {
+    let r = __ui_window(h, "minimize", "");
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Maximizes an OPEN window (M260): macOS zoom (toggles), GTK and Windows maximize.
+pub fn maximize(h: int) -> Result<int, string> {
+    let r = __ui_window(h, "maximize", "");
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

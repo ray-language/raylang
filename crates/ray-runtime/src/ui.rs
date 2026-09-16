@@ -823,13 +823,51 @@ pub struct WindowOptions {
     /// M230: botón de minimizar (macOS: `NSWindowStyleMaskMiniaturizable`; Windows: `WS_MINIMIZEBOX`;
     /// GTK3 no lo controla por ventana y lo ignora). `false` para paneles secundarios (About).
     pub minimizable: bool,
+    /// M260: el TIPO de ventana — `"document"` (la de siempre), `"panel"` (paleta de utilidad
+    /// flotante sobre la app: macOS `NSPanel` utility + floating, Windows `WS_EX_TOOLWINDOW` +
+    /// topmost, GTK type hint UTILITY + keep-above) o `"borderless"` (sin marco ni título: macOS
+    /// máscara borderless con una subclase que acepta el foco, Windows `WS_POPUP`, GTK
+    /// `set_decorated(false)`).
+    pub kind: String,
+    /// M260: siempre encima de las demás ventanas (macOS `setLevel: floating`, Windows
+    /// `HWND_TOPMOST`, GTK `keep_above`).
+    pub always_on_top: bool,
+    /// M260: la ventana DUEÑA (id del runtime; 0 = ninguna): la nueva queda sobre ella y la sigue
+    /// (macOS `addChildWindow:`, Windows owner, GTK `transient_for`) — es lo que da un "sheet"
+    /// degradado o un panel pegado a su documento.
+    pub parent: i64,
 }
 
 impl WindowOptions {
     /// Las opciones de `ui.open`: solo tamaño, redimensionable y centrada, sin mínimo ni memoria.
     pub fn simple(width: i64, height: i64) -> Self {
-        WindowOptions { width, height, min_width: 0, min_height: 0, resizable: true, center: true, autosave: String::new(), titlebar_color: String::new(), minimizable: true }
+        WindowOptions {
+            width,
+            height,
+            min_width: 0,
+            min_height: 0,
+            resizable: true,
+            center: true,
+            autosave: String::new(),
+            titlebar_color: String::new(),
+            minimizable: true,
+            kind: "document".to_string(),
+            always_on_top: false,
+            parent: 0,
+        }
     }
+}
+
+/// M260: una operación de ventana en caliente (ver `window_op`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowCmd {
+    Fullscreen(bool),
+    AlwaysOnTop(bool),
+    Size(i64, i64),
+    Position(i64, i64),
+    Center,
+    Minimize,
+    Maximize,
 }
 
 /// M224: `#rrggbb` → (r, g, b) en 0..=255. `None` si no tiene esa forma exacta (el runtime lo
@@ -1275,11 +1313,21 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     if !opts.titlebar_color.is_empty() && parse_rgb(&opts.titlebar_color).is_none() {
         return Err(format!("ui: unsupported titlebar color '{}' (expected #rrggbb)", opts.titlebar_color));
     }
+    // M260: tipo de ventana y ventana dueña.
+    if !matches!(opts.kind.as_str(), "document" | "panel" | "borderless") {
+        return Err(format!("ui: unsupported window kind '{}' (document, panel, borderless)", opts.kind));
+    }
+    if opts.parent != 0 && !matches!(windows().lock().unwrap().get(&opts.parent), Some(WinState { closed: false, .. })) {
+        return Err("ui: the parent is not an open window".to_string());
+    }
     notify_dev_windowed();
     if headless() {
         start_headless_exit_watchdog();
         if ui_trace() {
             eprintln!("[ui] open {id} {title} {url}");
+            if opts.kind != "document" || opts.always_on_top || opts.parent != 0 {
+                eprintln!("[ui] window {id} kind {} always_on_top {} parent {}", opts.kind, opts.always_on_top, opts.parent);
+            }
             if devtools_enabled() {
                 eprintln!("[ui] devtools {id} on");
             }
@@ -1440,9 +1488,34 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    if !matches!(op, "set_title" | "set_edited" | "intercept_close") {
-        return Err(format!("ui: unknown window operation '{op}'"));
-    }
+    // M260: operaciones de geometría/estado (`WindowCmd`); `arg` = "w,h" / "x,y" / "1"/"0".
+    let pair = || -> Result<(i64, i64), String> {
+        let (a, b) = arg.split_once(',').ok_or_else(|| format!("ui: '{op}' expects two integers 'a,b', not '{arg}'"))?;
+        match (a.trim().parse::<i64>(), b.trim().parse::<i64>()) {
+            (Ok(a), Ok(b)) => Ok((a, b)),
+            _ => Err(format!("ui: '{op}' expects two integers 'a,b', not '{arg}'")),
+        }
+    };
+    let cmd: Option<WindowCmd> = match op {
+        "fullscreen" => Some(WindowCmd::Fullscreen(on)),
+        "always_on_top" => Some(WindowCmd::AlwaysOnTop(on)),
+        "set_size" => {
+            let (w, h) = pair()?;
+            if !(1..=16384).contains(&w) || !(1..=16384).contains(&h) {
+                return Err(format!("ui: unsupported window size {w}x{h}"));
+            }
+            Some(WindowCmd::Size(w, h))
+        }
+        "set_position" => {
+            let (x, y) = pair()?;
+            Some(WindowCmd::Position(x, y))
+        }
+        "center" => Some(WindowCmd::Center),
+        "minimize" => Some(WindowCmd::Minimize),
+        "maximize" => Some(WindowCmd::Maximize),
+        "set_title" | "set_edited" | "intercept_close" => None,
+        _ => return Err(format!("ui: unknown window operation '{op}'")),
+    };
     let mut map = windows().lock().unwrap();
     let Some(state) = map.get_mut(&id).filter(|w| !w.closed) else {
         return Err("ui: not an open window".to_string());
@@ -1457,9 +1530,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     match &state.win {
         Win::Headless => {
             if ui_trace() {
-                match op {
-                    "set_title" => eprintln!("[ui] title {id} {arg}"),
-                    _ => eprintln!("[ui] edited {id} {on}"),
+                match cmd {
+                    Some(c) => eprintln!("[ui] window {id} {c:?}"),
+                    None if op == "set_title" => eprintln!("[ui] title {id} {arg}"),
+                    None => eprintln!("[ui] edited {id} {on}"),
                 }
             }
             Ok(())
@@ -1470,15 +1544,21 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         Win::Mac { window, .. } => {
             let w = *window;
             drop(map);
-            if op == "set_title" { mac::set_title_async(w, arg) } else { mac::set_edited_async(w, on) }
+            match cmd {
+                Some(c) => mac::window_command(w, c),
+                None if op == "set_title" => mac::set_title_async(w, arg),
+                None => mac::set_edited_async(w, on),
+            }
             Ok(())
         }
         #[cfg(target_os = "linux")]
         Win::Gtk { window, alive, .. } => {
             let (w, alive) = (*window, alive.clone());
             drop(map);
-            if op == "set_title" {
-                gtk::set_title_async(w, alive, arg);
+            match cmd {
+                Some(c) => gtk::window_command(w, alive, c),
+                None if op == "set_title" => gtk::set_title_async(w, alive, arg),
+                None => {}
             }
             Ok(())
         }
@@ -1486,11 +1566,31 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         Win::Windows { hwnd, alive } => {
             let (h, alive) = (*hwnd, alive.clone());
             drop(map);
-            if op == "set_title" {
-                win::set_title_async(h, alive, arg);
+            match cmd {
+                Some(c) => win::window_command(h, alive, c),
+                None if op == "set_title" => win::set_title_async(h, alive, arg),
+                None => {}
             }
             Ok(())
         }
+    }
+}
+
+/// M260: el handle nativo de la ventana dueña `parent` (0 = ninguna), por backend.
+#[allow(dead_code)]
+fn parent_native(parent: i64) -> Option<usize> {
+    if parent == 0 {
+        return None;
+    }
+    let map = windows().lock().unwrap();
+    match map.get(&parent) {
+        #[cfg(target_os = "macos")]
+        Some(WinState { win: Win::Mac { window, .. }, closed: false, .. }) => Some(*window),
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { window, .. }, closed: false, .. }) => Some(*window),
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, .. }, closed: false, .. }) => Some(*hwnd),
+        _ => None,
     }
 }
 
@@ -2408,6 +2508,9 @@ mod mac {
     type MsgVoidSize = unsafe extern "C" fn(Id, Sel, CGSize);
     /// M259: `[NSEvent mouseLocation]` (NSPoint por valor) y `popUpMenuPositioningItem:atLocation:inView:`.
     type MsgPoint = unsafe extern "C" fn(Id, Sel) -> CGPoint;
+    /// M260: `setFrameTopLeftPoint:` y `styleMask`.
+    type MsgVoidPoint = unsafe extern "C" fn(Id, Sel, CGPoint);
+    type MsgU64 = unsafe extern "C" fn(Id, Sel) -> u64;
     type MsgPopup = unsafe extern "C" fn(Id, Sel, Id, CGPoint, Id) -> u8;
     /// M224: `colorWithSRGBRed:green:blue:alpha:` (cuatro CGFloat).
     type MsgIdColor = unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id;
@@ -3516,12 +3619,24 @@ mod mac {
             const STYLE_TITLED_CLOSABLE: u64 = 1 | 2;
             const STYLE_MINIATURIZABLE: u64 = 4;
             const STYLE_RESIZABLE: u64 = 8;
+            const STYLE_UTILITY: u64 = 1 << 4;
             const BACKING_BUFFERED: u64 = 2;
             // M210: sin `resizable`, la máscara no lleva el bit de redimensionado (ni el botón verde).
             // M230: sin `minimizable`, tampoco el de miniaturizar (el amarillo nace deshabilitado).
-            let style = STYLE_TITLED_CLOSABLE
-                | if opts.minimizable { STYLE_MINIATURIZABLE } else { 0 }
-                | if opts.resizable { STYLE_RESIZABLE } else { 0 };
+            // M260: `panel` = NSPanel con máscara utility (flotante sobre la app); `borderless` =
+            // máscara 0 sobre una subclase que acepta ser clave (sin ella el webview no recibiría
+            // teclado).
+            let is_panel = opts.kind == "panel";
+            let is_borderless = opts.kind == "borderless";
+            let style = if is_borderless {
+                if opts.resizable { STYLE_RESIZABLE } else { 0 }
+            } else {
+                STYLE_TITLED_CLOSABLE
+                    | if opts.minimizable && !is_panel { STYLE_MINIATURIZABLE } else { 0 }
+                    | if opts.resizable { STYLE_RESIZABLE } else { 0 }
+                    | if is_panel { STYLE_UTILITY } else { 0 }
+            };
+            let parent = super::parent_native(opts.parent);
             let rect = CGRect { x: 0.0, y: 0.0, w: width as f64, h: height as f64 };
             unsafe {
                 let alloc: MsgId = std::mem::transmute(msg_send());
@@ -3532,8 +3647,15 @@ mod mac {
                 let id_id: MsgIdId = std::mem::transmute(msg_send());
                 let shared: MsgId = std::mem::transmute(msg_send());
 
+                let window_class = if is_panel {
+                    cls(b"NSPanel\0")
+                } else if is_borderless {
+                    borderless_window_class()
+                } else {
+                    cls(b"NSWindow\0")
+                };
                 let window = init_window(
-                    alloc(cls(b"NSWindow\0"), sel(b"alloc\0")),
+                    alloc(window_class, sel(b"alloc\0")),
                     sel(b"initWithContentRect:styleMask:backing:defer:\0"),
                     rect,
                     style,
@@ -3542,6 +3664,21 @@ mod mac {
                 );
                 if window.is_null() {
                     return Err("ui: could not create the window".to_string());
+                }
+                // M260: panel flotante; siempre encima; ventana dueña.
+                if is_panel {
+                    set_bool(window, sel(b"setFloatingPanel:\0"), 1);
+                }
+                if opts.always_on_top {
+                    let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                    set_i64(window, sel(b"setLevel:\0"), NS_FLOATING_WINDOW_LEVEL);
+                }
+                if is_borderless {
+                    set_bool(window, sel(b"setMovableByWindowBackground:\0"), 1);
+                }
+                if let Some(parent) = parent {
+                    let add_child: MsgVoidIdI64 = std::mem::transmute(msg_send());
+                    add_child(parent as Id, sel(b"addChildWindow:ordered:\0"), window, NS_WINDOW_ABOVE);
                 }
                 // ¡La trampa nº1!: los NSWindow programáticos se AUTOLIBERAN al cerrarse; el
                 // registro guarda el puntero → use-after-free en el siguiente close(h). El
@@ -3774,6 +3911,72 @@ mod mac {
     /// M239: `set_titlebar_color` sobre una ventana abierta (en el hilo principal).
     pub(super) fn set_titlebar_async(window: usize, rgb: Option<(u8, u8, u8)>) {
         on_main(move || unsafe { apply_titlebar(window as Id, rgb) });
+    }
+
+    const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
+    const NS_WINDOW_ABOVE: i64 = 1;
+    const STYLE_MASK_FULLSCREEN: u64 = 1 << 14;
+
+    /// M260: NSWindow sin marco que ACEPTA ser ventana clave (por defecto una borderless no lo es y
+    /// el webview no recibiría teclado). Una clase por proceso.
+    fn borderless_window_class() -> Id {
+        static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *CLASS.get_or_init(|| {
+            extern "C" fn can_become_key(_this: Id, _sel: Sel) -> bool {
+                true
+            }
+            unsafe {
+                let cls_new = objc_allocateClassPair(cls(b"NSWindow\0"), c"RayBorderlessWindow".as_ptr(), 0);
+                class_addMethod(cls_new, sel(b"canBecomeKeyWindow\0"), can_become_key as extern "C" fn(Id, Sel) -> bool as *const c_void, c"B@:".as_ptr());
+                class_addMethod(cls_new, sel(b"canBecomeMainWindow\0"), can_become_key as extern "C" fn(Id, Sel) -> bool as *const c_void, c"B@:".as_ptr());
+                objc_registerClassPair(cls_new);
+                cls_new as usize
+            }
+        }) as Id
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+    }
+
+    /// M260: operaciones de geometría/estado en el hilo principal. Las coordenadas de
+    /// `set_position` son de PANTALLA con origen arriba-izquierda (como Windows/GTK): se convierten
+    /// al origen abajo-izquierda de AppKit con la altura de la pantalla principal.
+    pub(super) fn window_command(window: usize, cmd: super::WindowCmd) {
+        use super::WindowCmd as C;
+        on_main(move || {
+            // SAFETY: mensajes estándar de NSWindow en el hilo principal.
+            unsafe {
+                let w = window as Id;
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                let plain: MsgVoid = std::mem::transmute(msg_send());
+                match cmd {
+                    C::Fullscreen(on) => {
+                        let mask: MsgU64 = std::mem::transmute(msg_send());
+                        let is_full = mask(w, sel(b"styleMask\0")) & STYLE_MASK_FULLSCREEN != 0;
+                        if is_full != on {
+                            set_id(w, sel(b"toggleFullScreen:\0"), std::ptr::null_mut());
+                        }
+                    }
+                    C::AlwaysOnTop(on) => set_i64(w, sel(b"setLevel:\0"), if on { NS_FLOATING_WINDOW_LEVEL } else { 0 }),
+                    C::Size(cw, ch) => {
+                        let set_size: MsgVoidSize = std::mem::transmute(msg_send());
+                        set_size(w, sel(b"setContentSize:\0"), CGSize { w: cw as f64, h: ch as f64 });
+                    }
+                    C::Position(x, y) => {
+                        let screen = CGDisplayBounds(CGMainDisplayID());
+                        let set_point: MsgVoidPoint = std::mem::transmute(msg_send());
+                        set_point(w, sel(b"setFrameTopLeftPoint:\0"), CGPoint { x: x as f64, y: screen.h - y as f64 });
+                    }
+                    C::Center => plain(w, sel(b"center\0")),
+                    C::Minimize => set_id(w, sel(b"miniaturize:\0"), std::ptr::null_mut()),
+                    C::Maximize => set_id(w, sel(b"zoom:\0"), std::ptr::null_mut()),
+                }
+            }
+        });
     }
 
     /// M257: `setTitle:` en el hilo principal.
@@ -5159,6 +5362,21 @@ mod gtk {
                 if opts.center && let Some(f) = api.set_position {
                     f(window, 1); // GTK_WIN_POS_CENTER
                 }
+                // M260: tipo de ventana, siempre encima, ventana dueña.
+                let wa = window_api();
+                if opts.kind == "panel" {
+                    if let Some(f) = wa.set_type_hint { f(window, GDK_WINDOW_TYPE_HINT_UTILITY); }
+                    if let Some(f) = wa.set_keep_above { f(window, 1); }
+                }
+                if opts.kind == "borderless" && let Some(f) = wa.set_decorated {
+                    f(window, 0);
+                }
+                if opts.always_on_top && let Some(f) = wa.set_keep_above {
+                    f(window, 1);
+                }
+                if let (Some(parent), Some(f)) = (super::parent_native(opts.parent), wa.set_transient_for) {
+                    f(window, parent as Widget);
+                }
                 // M152 — puente IPC: webview con user content manager (handler "ray" + el
                 // shim window.ray.send inyectado en el MAIN frame al arrancar el documento).
                 // Con CUALQUIER símbolo del puente ausente (webkit2gtk < 2.22): webview
@@ -5305,6 +5523,99 @@ mod gtk {
 
     /// Destruye la ventana en el hilo del loop, asíncrono (llamable desde un Drop). El handler
     /// de `destroy` apaga `alive`; si el WM ya la destruyó, la closure no toca nada.
+    const GDK_WINDOW_TYPE_HINT_UTILITY: i32 = 1;
+
+    /// M260: símbolos OPCIONALES de tipo/geometría de ventana (GTK 3 los trae todos; se resuelven
+    /// por dlsym para no romper `ui.open` en una lib recortada).
+    struct WindowApi {
+        set_type_hint: Option<unsafe extern "C" fn(Widget, i32)>,
+        set_decorated: Option<unsafe extern "C" fn(Widget, i32)>,
+        set_keep_above: Option<unsafe extern "C" fn(Widget, i32)>,
+        set_transient_for: Option<FnWidgetPair>,
+        fullscreen: Option<FnWidgetOp>,
+        unfullscreen: Option<FnWidgetOp>,
+        resize: Option<unsafe extern "C" fn(Widget, i32, i32)>,
+        move_to: Option<unsafe extern "C" fn(Widget, i32, i32)>,
+        get_size: Option<unsafe extern "C" fn(Widget, *mut i32, *mut i32)>,
+        iconify: Option<FnWidgetOp>,
+        maximize: Option<FnWidgetOp>,
+        screen_default: Option<unsafe extern "C" fn() -> *mut c_void>,
+        screen_width: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+        screen_height: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    }
+    unsafe impl Send for WindowApi {}
+    unsafe impl Sync for WindowApi {}
+
+    fn window_api() -> &'static WindowApi {
+        static API: std::sync::OnceLock<WindowApi> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            // SAFETY: literal NUL-terminado; la lib ya está cargada por `api()`; dlsym no retiene nada.
+            let gtk = unsafe { dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+            let gdk = unsafe { dlopen(c"libgdk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+            let opt = |lib: *mut c_void, name: &std::ffi::CStr| -> Option<*mut c_void> {
+                if lib.is_null() { return None; }
+                let p = unsafe { dlsym(lib, name.as_ptr()) };
+                (!p.is_null()).then_some(p)
+            };
+            // SAFETY: firmas C documentadas de GTK 3 / GDK 3.
+            unsafe {
+                WindowApi {
+                    set_type_hint: opt(gtk, c"gtk_window_set_type_hint").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_decorated: opt(gtk, c"gtk_window_set_decorated").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_keep_above: opt(gtk, c"gtk_window_set_keep_above").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_transient_for: opt(gtk, c"gtk_window_set_transient_for").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
+                    fullscreen: opt(gtk, c"gtk_window_fullscreen").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
+                    unfullscreen: opt(gtk, c"gtk_window_unfullscreen").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
+                    resize: opt(gtk, c"gtk_window_resize").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
+                    move_to: opt(gtk, c"gtk_window_move").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
+                    get_size: opt(gtk, c"gtk_window_get_size").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut i32, *mut i32)>(p)),
+                    iconify: opt(gtk, c"gtk_window_iconify").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
+                    maximize: opt(gtk, c"gtk_window_maximize").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
+                    screen_default: opt(gdk, c"gdk_screen_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
+                    screen_width: opt(gdk, c"gdk_screen_get_width").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
+                    screen_height: opt(gdk, c"gdk_screen_get_height").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
+                }
+            }
+        })
+    }
+
+    /// M260: operaciones de geometría/estado en el hilo gtk. `Center` sobre una ventana ya
+    /// mapeada se hace a mano (pantalla por defecto − tamaño de la ventana).
+    pub(super) fn window_command(window: usize, alive: Arc<AtomicBool>, cmd: super::WindowCmd) {
+        use super::WindowCmd as C;
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let wa = window_api();
+            let w = window as Widget;
+            // SAFETY: ventana viva (alive) en el hilo del loop; firmas C de GTK 3.
+            unsafe {
+                match cmd {
+                    C::Fullscreen(true) => { if let Some(f) = wa.fullscreen { f(w); } }
+                    C::Fullscreen(false) => { if let Some(f) = wa.unfullscreen { f(w); } }
+                    C::AlwaysOnTop(on) => { if let Some(f) = wa.set_keep_above { f(w, on as i32); } }
+                    C::Size(cw, ch) => { if let Some(f) = wa.resize { f(w, cw as i32, ch as i32); } }
+                    C::Position(x, y) => { if let Some(f) = wa.move_to { f(w, x as i32, y as i32); } }
+                    C::Center => {
+                        if let (Some(screen), Some(sw), Some(sh), Some(get_size), Some(move_to)) =
+                            (wa.screen_default, wa.screen_width, wa.screen_height, wa.get_size, wa.move_to)
+                        {
+                            let s = screen();
+                            if !s.is_null() {
+                                let (mut ww, mut wh) = (0i32, 0i32);
+                                get_size(w, &mut ww, &mut wh);
+                                move_to(w, ((sw(s) - ww) / 2).max(0), ((sh(s) - wh) / 2).max(0));
+                            }
+                        }
+                    }
+                    C::Minimize => { if let Some(f) = wa.iconify { f(w); } }
+                    C::Maximize => { if let Some(f) = wa.maximize { f(w); } }
+                }
+            }
+        });
+    }
+
     /// M257: `gtk_window_set_title` en el hilo gtk.
     pub(super) fn set_title_async(window: usize, alive: Arc<AtomicBool>, title: &str) {
         let title = std::ffi::CString::new(title.replace('\0', "")).unwrap();
@@ -5909,6 +6220,8 @@ mod win {
         /// M210: tamaño mínimo de la VENTANA (área cliente mínima + marco), para WM_GETMINMAXINFO;
         /// (0, 0) = sin mínimo.
         min_track: (i32, i32),
+        /// M260: estilo y rectángulo previos a `fullscreen(true)`, para restaurarlos.
+        fullscreen_saved: Option<(isize, RECT)>,
     }
 
     unsafe extern "system" fn dispatcher_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -6699,13 +7012,23 @@ mod win {
                 // M210: sin `resizable`, ni borde grueso ni botón de maximizar.
                 // M230: sin WS_MINIMIZEBOX el botón de minimizar nace deshabilitado.
                 let minimize_mask = if opts.minimizable { 0 } else { WS_MINIMIZEBOX.0 };
-                let style = if opts.resizable {
+                // M260: `borderless` = WS_POPUP (sin marco ni título); `panel` = tool window
+                // (barra fina, sin botón en la barra de tareas) siempre encima; `always_on_top`
+                // = topmost; `parent` = ventana dueña (queda encima de ella y la sigue).
+                let is_panel = opts.kind == "panel";
+                let style = if opts.kind == "borderless" {
+                    WINDOW_STYLE(WS_POPUP.0 | if opts.resizable { WS_THICKFRAME.0 } else { 0 })
+                } else if opts.resizable {
                     WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !minimize_mask)
                 } else {
                     WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0 | minimize_mask))
                 };
+                let ex_style = WINDOW_EX_STYLE(
+                    (if is_panel { WS_EX_TOOLWINDOW.0 } else { 0 }) | (if is_panel || opts.always_on_top { WS_EX_TOPMOST.0 } else { 0 }),
+                );
+                let owner = super::parent_native(opts.parent).map(|h| HWND(h as *mut _));
                 let has_menu = !menu_specs().lock().unwrap().is_empty();
-                let _ = AdjustWindowRectEx(&mut rc, style, has_menu, WINDOW_EX_STYLE::default());
+                let _ = AdjustWindowRectEx(&mut rc, style, has_menu, ex_style);
                 let (win_w, win_h) = (rc.right - rc.left, rc.bottom - rc.top);
                 // M210: mínimo de la ventana = mínimo del área cliente + el marco que acabamos de medir.
                 let min_track = if opts.min_width > 0 || opts.min_height > 0 {
@@ -6722,7 +7045,7 @@ mod win {
                     (CW_USEDEFAULT, CW_USEDEFAULT)
                 };
                 let hwnd = CreateWindowExW(
-                    WINDOW_EX_STYLE::default(),
+                    ex_style,
                     windows::core::w!("RayUiWindow"),
                     PCWSTR(wide(&title).as_ptr()),
                     style,
@@ -6730,7 +7053,7 @@ mod win {
                     y,
                     win_w,
                     win_h,
-                    None,
+                    owner,
                     None,
                     Some(instance.into()),
                     None,
@@ -6742,7 +7065,7 @@ mod win {
                     apply_titlebar(hwnd, Some(rgb));
                 }
                 let (menu_tags, accels) = build_menubar(hwnd);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -6809,6 +7132,78 @@ mod win {
                 let _ = wv.CallDevToolsProtocolMethod(PCWSTR(method.as_ptr()), PCWSTR(params.as_ptr()), &handler);
             }
         }
+    }
+
+    /// M260: operaciones de geometría/estado en el hilo 1. `Fullscreen(true)` quita el marco
+    /// (WS_POPUP) y cubre el monitor de la ventana, guardando estilo y rectángulo en el ctx;
+    /// `Fullscreen(false)` los restaura. `Size` es del ÁREA CLIENTE (marco añadido con
+    /// AdjustWindowRectEx, como al abrir).
+    pub(super) fn window_command(hwnd: usize, alive: Arc<AtomicBool>, cmd: super::WindowCmd) {
+        use super::WindowCmd as C;
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: hilo 1, ventana viva (alive); el ctx vive mientras `alive`.
+            unsafe {
+                let hwnd = HWND(hwnd as *mut _);
+                let monitor_rect = |work: bool| -> Option<RECT> {
+                    let m = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+                    GetMonitorInfoW(m, &mut info).as_bool().then(|| if work { info.rcWork } else { info.rcMonitor })
+                };
+                match cmd {
+                    C::Fullscreen(on) => {
+                        let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
+                        if ctx_ptr.is_null() {
+                            return;
+                        }
+                        let ctx = &mut *ctx_ptr;
+                        if on && ctx.fullscreen_saved.is_none() {
+                            let mut rc = RECT::default();
+                            let _ = GetWindowRect(hwnd, &mut rc);
+                            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                            ctx.fullscreen_saved = Some((style, rc));
+                            let popup = (style as u32 & !WS_OVERLAPPEDWINDOW.0) | WS_POPUP.0;
+                            SetWindowLongPtrW(hwnd, GWL_STYLE, popup as isize);
+                            if let Some(m) = monitor_rect(false) {
+                                let _ = SetWindowPos(hwnd, Some(HWND_TOP), m.left, m.top, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+                            }
+                        } else if !on && let Some((style, rc)) = ctx.fullscreen_saved.take() {
+                            SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+                            let _ = SetWindowPos(hwnd, None, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW);
+                        }
+                    }
+                    C::AlwaysOnTop(on) => {
+                        let _ = SetWindowPos(hwnd, Some(if on { HWND_TOPMOST } else { HWND_NOTOPMOST }), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    }
+                    C::Size(cw, ch) => {
+                        let mut rc = RECT { left: 0, top: 0, right: cw as i32, bottom: ch as i32 };
+                        let style = WINDOW_STYLE(GetWindowLongPtrW(hwnd, GWL_STYLE) as u32);
+                        let ex = WINDOW_EX_STYLE(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32);
+                        let has_menu = !GetMenu(hwnd).is_invalid();
+                        let _ = AdjustWindowRectEx(&mut rc, style, has_menu, ex);
+                        let _ = SetWindowPos(hwnd, None, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    C::Position(x, y) => {
+                        let _ = SetWindowPos(hwnd, None, x as i32, y as i32, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    C::Center => {
+                        let mut rc = RECT::default();
+                        let _ = GetWindowRect(hwnd, &mut rc);
+                        if let Some(m) = monitor_rect(true) {
+                            let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
+                            let x = m.left + ((m.right - m.left) - w) / 2;
+                            let y = m.top + ((m.bottom - m.top) - h) / 2;
+                            let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                        }
+                    }
+                    C::Minimize => { let _ = ShowWindow(hwnd, SW_MINIMIZE); }
+                    C::Maximize => { let _ = ShowWindow(hwnd, SW_MAXIMIZE); }
+                }
+            }
+        });
     }
 
     /// M257: `SetWindowTextW` en el hilo 1.

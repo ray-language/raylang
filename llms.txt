@@ -275,7 +275,10 @@ native message dialogs: `ui.message(title, text, ["Save", "Don't Save", "Cancel"
 `var o = ui.file_options(); o.filters = [ui.filter("Ray", ["ray"])]; ui.pick_file_with(o)`,
 `ui.pick_files(o) -> Result<[string],_>` (multiple), `ui.save_file_with(o)` (`o.suggested`);
 context menu: `ui.popup_menu(h, items)` at the mouse position (choice arrives as a `menu` event;
-wire it from the page's `contextmenu` via `window.ray.send`);
+wire it from the page's `contextmenu` via `window.ray.send`); window kinds: `o.kind = "panel"`
+(floating utility palette) | `"borderless"`, `o.always_on_top`, `o.parent = h` (owned window);
+live geometry: `ui.set_fullscreen(h, bool)`, `ui.set_always_on_top`, `ui.set_size(h, w, hh)`,
+`ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)`;
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray

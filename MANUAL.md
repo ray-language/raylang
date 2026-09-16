@@ -1518,6 +1518,24 @@ o.suggested = "untitled.ray";
 let target = ui.save_file_with(o)?;            // Option<string>
 ```
 
+Hay **tres tipos de ventana** (M260) y todos aceptan el mismo webview: `kind = "document"` es la
+de siempre; `"panel"` es una paleta de utilidad flotante sobre las ventanas de la app (paleta de
+comandos, panel de búsqueda) y `"borderless"` no tiene marco ni título (un splash, un HUD que
+dibujas tú). `always_on_top` la mantiene sobre todo lo demás y `parent` la hace hija de otra
+ventana: queda encima de su dueña y la sigue, que es lo más parecido a un *sheet* en los tres
+sistemas. Y sobre una ventana abierta: `set_fullscreen`, `set_always_on_top`, `set_size`,
+`set_position`, `center`, `minimize` y `maximize`.
+
+```rust
+var o = ui.options(360, 220);
+o.kind = "panel";
+o.parent = main_w;           // pegado al documento, siempre encima de él
+o.center = false;
+let find = ui.open_with("Find", "ray://app/assets/find.html", o)?;
+ui.set_position(find, 900, 120)?;
+ui.set_fullscreen(main_w, true)?;   // modo presentación; false lo deshace
+```
+
 El **menú contextual** (M259) reutiliza los mismos `MenuItem`: `ui.popup_menu(h, items)` lo
 muestra en la posición del puntero sobre la ventana `h` y la elección llega como evento `"menu"`,
 igual que la barra. Como el clic derecho ocurre en la página, el cableado es: la página captura

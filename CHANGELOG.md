@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.22.1 — 2026-09-15
 
 - **Los plazos de una fibra ya no dependen de que las demás cedan** (M254, cazado por ray-sublime).
   En la VM multicore, una sola fibra ocupada en CPU congelaba `time.sleep`, `select_timeout`,

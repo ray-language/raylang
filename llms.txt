@@ -269,6 +269,11 @@ menu with your items among them (replaces the macOS standard Edit; creates it on
 window lifecycle: `ui.set_title(h, t)`, `ui.set_edited(h, bool)` (macOS dirty dot),
 `ui.intercept_close(h, true)` → the user's close emits a `close_requested` event instead of closing
 (you ask/save, then `close(h)`), `ui.intercept_quit(true)` → ⌘Q emits `quit_requested` (window 0);
+native message dialogs: `ui.message(title, text, ["Save", "Don't Save", "Cancel"]) -> Result<int,_>`
+(index pressed; dismiss = last button), `ui.message_styled(…, "warning"|"error", …)`, `ui.alert`,
+`ui.confirm(title, text, ok, cancel) -> Result<bool,_>`; file dialogs with options:
+`var o = ui.file_options(); o.filters = [ui.filter("Ray", ["ray"])]; ui.pick_file_with(o)`,
+`ui.pick_files(o) -> Result<[string],_>` (multiple), `ui.save_file_with(o)` (`o.suggested`);
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray

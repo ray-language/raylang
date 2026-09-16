@@ -1570,6 +1570,41 @@ pub fn ui_app_menu(_name: &str, _items: &[String]) -> Result<(), String> {
 pub fn ui_dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
     ray_runtime::ui::dialog(kind, arg)
 }
+
+/// M258: `__ui_dialog_with(kind, title, dir, suggested, filters, multiple)` — el diálogo de
+/// archivo con opciones; `filters` codificados "nombre\text1,ext2". Devuelve las rutas (vacío =
+/// canceló).
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_dialog_with(kind: &str, title: &str, dir: &str, suggested: &str, filters: &[String], multiple: bool) -> Result<Vec<String>, String> {
+    let opts = ray_runtime::ui::FileDialogOptions {
+        title: title.to_string(),
+        directory: dir.to_string(),
+        suggested: suggested.to_string(),
+        filters: filters
+            .iter()
+            .map(|f| {
+                let (name, exts) = f.split_once('\t').unwrap_or((f.as_str(), ""));
+                (name.to_string(), exts.split(',').filter(|e| !e.is_empty()).map(|e| e.trim().to_string()).collect())
+            })
+            .collect(),
+        multiple,
+    };
+    ray_runtime::ui::dialog_with(kind, &opts)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_dialog_with(_kind: &str, _title: &str, _dir: &str, _suggested: &str, _filters: &[String], _multiple: bool) -> Result<Vec<String>, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M258: `__ui_message(title, text, style, buttons)` — diálogo de mensaje modal; índice pulsado.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_message(title: &str, text: &str, style: &str, buttons: &[String]) -> Result<usize, String> {
+    ray_runtime::ui::message(title, text, style, buttons)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_message(_title: &str, _text: &str, _style: &str, _buttons: &[String]) -> Result<usize, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_dialog(_kind: &str, _arg: &str) -> Result<Option<String>, String> {
     Err(UI_UNAVAILABLE.to_string())
@@ -4388,6 +4423,26 @@ static BUILTINS: &[Builtin] = &[
         for (i, what) in ["name", "version", "description", "copyright"].iter().enumerate() {
             if a[i] != Type::String { return Err((Some(i), format!("__ui_set_about expects a string (the {what}), not {}", a[i]))); }
         }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_dialog_with(kind, title, dir, suggested, filters, multiple) -> [string] (M258):
+    // ["ok", path...] / ["none"] / ["err", msg]. MODAL como __ui_dialog.
+    Builtin { name: "__ui_dialog_with", opcode: OpCode::UiDialogWith, check: |a| {
+        arity(a, 6, "__ui_dialog_with", " (kind, title, dir, suggested, filters, multiple)")?;
+        for (i, what) in ["kind", "title", "directory", "suggested name"].iter().enumerate() {
+            if a[i] != Type::String { return Err((Some(i), format!("__ui_dialog_with expects a string (the {what}), not {}", a[i]))); }
+        }
+        if a[4] != Type::Array(Box::new(Type::String)) { return Err((Some(4), format!("__ui_dialog_with expects [string] (the filters), not {}", a[4]))); }
+        if a[5] != Type::Bool { return Err((Some(5), format!("__ui_dialog_with expects a bool (multiple), not {}", a[5]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_message(title, text, style, buttons) -> [string] (M258): ["ok", index] / ["err", msg]. MODAL.
+    Builtin { name: "__ui_message", opcode: OpCode::UiMessage, check: |a| {
+        arity(a, 4, "__ui_message", " (title, text, style, buttons)")?;
+        for (i, what) in ["title", "text", "style"].iter().enumerate() {
+            if a[i] != Type::String { return Err((Some(i), format!("__ui_message expects a string (the {what}), not {}", a[i]))); }
+        }
+        if a[3] != Type::Array(Box::new(Type::String)) { return Err((Some(3), format!("__ui_message expects [string] (the buttons), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_dialog(kind, arg) -> [string] (M148): ["ok", path] / ["none"] / ["err", msg]. MODAL:

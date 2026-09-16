@@ -2426,6 +2426,32 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            "ui_dialog_with" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_dialog_with(&*");
+                self.emit_expr(out, eff[0])?;
+                for e in &eff[1..4] {
+                    out.push_str(", &*");
+                    self.emit_expr(out, e)?;
+                }
+                out.push_str(", &");
+                self.emit_expr(out, eff[4])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[5])?;
+                out.push(')');
+            }
+            "ui_message" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_message(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[3])?;
+                out.push(')');
+            }
             "ui_menu" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_menu(&*");

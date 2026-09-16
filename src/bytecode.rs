@@ -694,6 +694,10 @@ pub enum OpCode {
     UiSetAbout,
     /// M148: `__ui_dialog(kind, arg)` — diálogo de archivo MODAL (['ok', path] / ['none'] / ['err', msg]).
     UiDialog,
+    /// M258: `__ui_dialog_with(kind, title, dir, suggested, filters, multiple)` — con opciones (['ok', path…] / ['none'] / ['err', msg]).
+    UiDialogWith,
+    /// M258: `__ui_message(title, text, style, buttons)` — diálogo de mensaje MODAL (['ok', index] / ['err', msg]).
+    UiMessage,
     /// M147: `__embed_read(path)` — un asset del espacio `[native] embed` ([b'ok', datos] / [b'err', msg]).
     EmbedRead,
     /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).

@@ -2408,6 +2408,38 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_dialog_with" => {
+                let strs = |v: &Value| -> Vec<String> {
+                    match v {
+                        Value::Array(items) => items.borrow().iter().map(|x| match x { Value::Str(s) => s.clone(), _ => unreachable!("the checker guarantees [string]") }).collect(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }
+                };
+                let arr = match (&values[0], &values[1], &values[2], &values[3], &values[5]) {
+                    (Value::Str(kind), Value::Str(title), Value::Str(dir), Value::Str(suggested), Value::Bool(multiple)) => {
+                        match crate::builtins::ui_dialog_with(kind, title, dir, suggested, &strs(&values[4]), *multiple) {
+                            Ok(paths) if paths.is_empty() => vec![Value::Str("none".to_string())],
+                            Ok(paths) => std::iter::once(Value::Str("ok".to_string())).chain(paths.into_iter().map(Value::Str)).collect(),
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (string, string, string, string, [string], bool)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_message" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Str(title), Value::Str(text), Value::Str(style), Value::Array(buttons)) => {
+                        let buttons: Vec<String> = buttons.borrow().iter().map(|x| match x { Value::Str(s) => s.clone(), _ => unreachable!("the checker guarantees [string]") }).collect();
+                        match crate::builtins::ui_message(title, text, style, &buttons) {
+                            Ok(i) => vec![Value::Str("ok".to_string()), Value::Str(i.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (string, string, string, [string])"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_dialog" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(kind), Value::Str(arg)) => match crate::builtins::ui_dialog(kind, arg) {

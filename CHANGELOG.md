@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Diálogos de mensaje nativos y opciones en los diálogos de archivo** (M258, ray-sublime).
+  `ui.message(title, text, buttons)` muestra la alerta del sistema con 1 a 3 botones con tus
+  etiquetas y devuelve el índice pulsado (cerrar con Esc = el último botón); `ui.message_styled`
+  añade `"warning"`/`"error"`, `ui.alert` y `ui.confirm` son las formas cortas. Los diálogos de
+  archivo ganan `FileDialogOptions` (título, carpeta inicial, nombre sugerido, filtros por
+  extensión, selección múltiple): `pick_file_with`, `pick_files` (varias rutas), `pick_folder_with`,
+  `save_file_with`. macOS `NSAlert`/`NSOpenPanel`, Linux GTK, Windows `TaskDialogIndirect`/`IFileDialog`.
+
 - **Ciclo de vida de la ventana nativa** (M257, ray-sublime). `ui.set_title(h, title)` cambia el
   título de una ventana abierta; `ui.set_edited(h, bool)` muestra el punto de "modificado" en el
   botón de cerrar de macOS; `ui.intercept_close(h, true)` convierte el cierre pedido por el usuario

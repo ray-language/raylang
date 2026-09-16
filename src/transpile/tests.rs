@@ -90,6 +90,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__onig_compile", "__onig_search",
     // M148: menús + diálogos de archivo.
     "__ui_menu", "__ui_app_menu", "__ui_set_about", "__ui_dialog",
+    // M258: diálogo de archivo con opciones y diálogo de mensaje.
+    "__ui_dialog_with", "__ui_message",
     // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.
     "__embed_read", "__embed_list",
     // M234: raíz en disco de los embebidos (siempre "" en el nativo).

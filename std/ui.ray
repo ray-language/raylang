@@ -357,6 +357,156 @@ pub fn pick_folder() -> Result<Option<string>, string> {
     dialog_result(__ui_dialog("open_folder", ""))
 }
 
+/// A file-type filter for the file dialogs (M258): a display name and the extensions without
+/// the dot (`filter("Ray sources", ["ray", "toml"])`).
+pub struct FileFilter {
+    name: string,
+    extensions: [string],
+}
+
+/// Builds a `FileFilter`.
+pub fn filter(name: string, extensions: [string]) -> FileFilter {
+    FileFilter { name: name, extensions: extensions }
+}
+
+/// Options for the file dialogs (M258). `title` (the dialog's title/prompt; "" = the system
+/// default), `directory` (the folder it opens in; "" = the system's choice), `suggested` (the
+/// pre-filled file name for "save as"), `filters` (selectable file types; empty = any file) and
+/// `multiple` (allow choosing several files — `pick_files`). Start from `file_options()`.
+pub struct FileDialogOptions {
+    title: string,
+    directory: string,
+    suggested: string,
+    filters: [FileFilter],
+    multiple: bool,
+}
+
+/// The defaults of `pick_file`/`pick_folder`/`save_file` as a `FileDialogOptions`.
+pub fn file_options() -> FileDialogOptions {
+    FileDialogOptions { title: "", directory: "", suggested: "", filters: [], multiple: false }
+}
+
+// Codificación del borde de builtins para los filtros: "nombre\text1,ext2".
+fn encode_filters(filters: [FileFilter]) -> [string] {
+    var encoded: [string] = [];
+    var i = 0;
+    while (i < filters.len()) {
+        let f = filters[i];
+        encoded.push(f.name + "\t" + f.extensions.join(","));
+        i = i + 1;
+    }
+    encoded
+}
+
+fn dialog_with(kind: string, o: FileDialogOptions, multiple: bool) -> Result<[string], string> {
+    let r = __ui_dialog_with(
+        kind,
+        o.title,
+        o.directory,
+        o.suggested,
+        encode_filters(o.filters),
+        multiple
+    );
+    if (r[0] == "ok") {
+        var paths: [string] = [];
+        var i = 1;
+        while (i < r.len()) {
+            paths.push(r[i]);
+            i = i + 1;
+        }
+        Result.Ok(paths)
+    } else if (r[0] == "none") {
+        Result.Ok([])
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+fn first_of(r: Result<[string], string>) -> Result<Option<string>, string> {
+    match (r) {
+        Result.Ok(paths) => if (paths.len() == 0) {
+            Result.Ok(Option.None)
+        } else {
+            Result.Ok(Option.Some(paths[0]))
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+/// `pick_file` with options (M258): title, initial folder and type filters. Modal like
+/// `pick_file`; `Ok(None)` = cancelled.
+pub fn pick_file_with(o: FileDialogOptions) -> Result<Option<string>, string> {
+    first_of(dialog_with("open_file", o, false))
+}
+
+/// The "choose files" dialog with MULTIPLE selection (M258): the chosen paths, `Ok([])` if the
+/// user cancelled. Honors `title`, `directory` and `filters`.
+pub fn pick_files(o: FileDialogOptions) -> Result<[string], string> {
+    dialog_with("open_file", o, true)
+}
+
+/// `pick_folder` with options (M258): title and initial folder (filters do not apply).
+pub fn pick_folder_with(o: FileDialogOptions) -> Result<Option<string>, string> {
+    first_of(dialog_with("open_folder", o, false))
+}
+
+/// `save_file` with options (M258): title, initial folder, `suggested` name and type filters.
+pub fn save_file_with(o: FileDialogOptions) -> Result<Option<string>, string> {
+    first_of(dialog_with("save_file", o, false))
+}
+
+/// A native message dialog, MODAL (M258): `title` (the bold line), `text` (the detail) and 1 to
+/// 3 `buttons` with your labels, in order. Returns the INDEX of the button pressed; dismissing
+/// the dialog (Esc, the close box) counts as the LAST button — put "Cancel" last. Informational
+/// style; see `message_styled` for warnings and errors. Headless: `RAY_UI_ANSWER` (default 0).
+///
+/// ```raylang
+/// match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
+///     Result.Ok(0) => save(), Result.Ok(1) => discard(), _ => {},
+/// }
+/// ```
+pub fn message(title: string, text: string, buttons: [string]) -> Result<int, string> {
+    message_styled(title, text, "info", buttons)
+}
+
+/// `message` with a `style`: `"info"`, `"warning"` or `"error"` (the system icon; on macOS the
+/// alert style). Any other style is an `Err`.
+pub fn message_styled(
+    title: string,
+    text: string,
+    style: string,
+    buttons: [string]
+) -> Result<int, string> {
+    let r = __ui_message(title, text, style, buttons);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(i) => Result.Ok(i),
+            Option.None => Result.Err("ui: malformed message result"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// A one-button informational message (M258): `alert("Done", "Exported 12 files.")`.
+pub fn alert(title: string, text: string) -> Result<int, string> {
+    message(title, text, ["OK"])
+}
+
+/// A two-button question (M258): `true` if the user chose the first button (`ok_label`),
+/// `false` for `cancel_label` or dismissing the dialog.
+pub fn confirm(
+    title: string,
+    text: string,
+    ok_label: string,
+    cancel_label: string
+) -> Result<bool, string> {
+    match (message(title, text, [ok_label, cancel_label])) {
+        Result.Ok(i) => Result.Ok(i == 0),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
 /// The native "save as" dialog with `suggested` as the pre-filled file name. `Ok(Some(path))`
 /// is where the user wants the file written (writing it is your job), `Ok(None)` = cancelled.
 pub fn save_file(suggested: string) -> Result<Option<string>, string> {

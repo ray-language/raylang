@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.25.1 — 2026-09-17
 
 - **El pty ya no se filtra a los hijos posteriores; `Proc.pid()` y `Proc.hangup()`** (M264,
   ray-sublime §94). El maestro y el esclavo de `Cmd.pty` nacían sin `FD_CLOEXEC`, así que cada

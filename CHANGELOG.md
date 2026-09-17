@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.25.0 — 2026-09-17
 
 - **Frontend con Vite (o cualquier bundler) integrado en `ray dev`** (M263, IDEAS §91). Nueva
   sección `[frontend]` en `ray.toml` (`dev`, `url`, `build`, `dist`): `ray dev` lanza el dev

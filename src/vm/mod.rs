@@ -2949,6 +2949,19 @@ impl<'a> Vm<'a> {
                     crate::builtins::proc_kill(handle, force);
                     self.push(HeapValue::Unit);
                 }
+                OpCode::ProcPid => {
+                    let HeapValue::Int(handle) = self.pop() else { unreachable!("the checker guarantees int") };
+                    self.push(HeapValue::Int(crate::builtins::proc_pid(handle)));
+                }
+                OpCode::ProcHangup => {
+                    let h_pty = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Int(h_pty)) = (handle, h_pty) else {
+                        unreachable!("the checker guarantees int, int");
+                    };
+                    crate::builtins::proc_hangup(handle, h_pty);
+                    self.push(HeapValue::Unit);
+                }
 
                 // --- I/O con buffering: handles de archivo (M11.8) ---
                 OpCode::Open => {

@@ -40,11 +40,26 @@ fn main() -> int {
     let _ = collect(plain);
     let _ = plain.wait();
     print(process.cmd("sh", ["-c", "true"]).pty(0, 24).stream().is_err());
+    // M264: el segundo hijo NO hereda el maestro/esclavo del primero (CLOEXEC): `ls /dev/fd` en
+    // un hijo bajo pty ve las mismas entradas haya o no otro pty vivo (0, 1, 2 y lo que abra el
+    // propio `ls`: 4 en Linux, 5 en macOS; con la fuga eran 2 más por cada pty anterior).
+    // `pid()` es el del SO mientras vive y -1 tras `wait`; `hangup()` mata a `sleep` con SIGHUP (1).
+    let solo = process.cmd("sh", ["-c", "ls /dev/fd | wc -l"]).pty(80, 24).stream().unwrap();
+    let solo_n = collect(solo);
+    let _ = solo.wait();
+    let a = process.cmd("sh", ["-c", "sleep 5"]).pty(80, 24).stream().unwrap();
+    let b = process.cmd("sh", ["-c", "ls /dev/fd | wc -l"]).pty(80, 24).stream().unwrap();
+    print(collect(b) == solo_n);
+    let _ = b.wait();
+    print(a.pid() > 0);
+    a.hangup();
+    match (a.wait()) { process.Exit.Code(c) => print("code ${c}"), process.Exit.Signal(s) => print("signal ${s}") }
+    print(a.pid());
     0
 }
 "#;
 
-const WANT: &str = "true\ntrue\ntrue\ntrue\ncode 0\ntrue\ntrue\ntrue\ntrue\ntrue\n";
+const WANT: &str = "true\ntrue\ntrue\ntrue\ncode 0\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nsignal 1\n-1\n";
 
 fn dir(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("raylang_test_pty_{name}"));

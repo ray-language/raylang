@@ -2652,6 +2652,20 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            "proc_pid" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_pid(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "proc_hangup" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_hangup(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "proc_write" if name.starts_with("__") && !self.exclude.contains("process") => {
                 self.needs_rt_process = true;
                 out.push_str("__ray_proc_write(");

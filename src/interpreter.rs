@@ -1624,6 +1624,16 @@ impl<'a> Interpreter<'a> {
                 crate::builtins::proc_kill(*h, *force);
                 Value::Unit
             }
+            "__proc_pid" => {
+                let Value::Int(h) = &values[0] else { unreachable!("the checker guarantees an int") };
+                Value::Int(crate::builtins::proc_pid(*h))
+            }
+            "__proc_hangup" => {
+                let (Value::Int(h), Value::Int(h_pty)) = (&values[0], &values[1])
+                else { unreachable!("the checker guarantees int, int") };
+                crate::builtins::proc_hangup(*h, *h_pty);
+                Value::Unit
+            }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),

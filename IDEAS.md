@@ -3407,7 +3407,8 @@ etapa; verificadas contra 1.10.0 y ordenadas en [docs/plan-ray-sublime.md](docs/
 | K decisión | `return` como expresión `never` · `@derive(Clone)` · intérprete embebible (§88 futuro) · trazas sin editar código | la decide el usuario |
 
 Posterior: ray-sublime §85 (cada carga de un `bytes` copiaba el búfer; el 92 % del arranque) → ✅ M261
-(`Arc<[u8]>` en la VM, DESIGN §248). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
+(`Arc<[u8]>` en la VM, DESIGN §248); ray-sublime §94 (el maestro del pty se heredaba sin `CLOEXEC`;
+`Proc.pid`/`Proc.hangup`) → ✅ M264 (DESIGN §249). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
 los 6 226 patrones reales de sintaxis usan look-around. La entrada 31 (`fmt` rompe parches) no se
 reproduce con 1.10.0.
 

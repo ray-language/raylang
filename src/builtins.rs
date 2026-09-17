@@ -4823,6 +4823,20 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bool { return Err((Some(1), format!("__proc_kill expects a bool (force = SIGKILL), not {}", a[1]))); }
         Ok(Type::Unit)
     } },
+    // __proc_pid(h) -> int (M264): el pid del SO del hijo; -1 si el handle no es un hijo vivo.
+    Builtin { name: "__proc_pid", opcode: OpCode::ProcPid, check: |a| {
+        arity(a, 1, "__proc_pid", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_pid expects an int (the child handle), not {}", a[0]))); }
+        Ok(Type::Int)
+    } },
+    // __proc_hangup(h_child, h_pty) -> unit (M264): SIGHUP al GRUPO (Windows: cierra la
+    // pseudoconsola; sin pty, CTRL_BREAK). No-op si ya cosechado.
+    Builtin { name: "__proc_hangup", opcode: OpCode::ProcHangup, check: |a| {
+        arity(a, 2, "__proc_hangup", " (child handle, pty handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_hangup expects an int (the child handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__proc_hangup expects an int (the pty handle, -1 without pty), not {}", a[1]))); }
+        Ok(Type::Unit)
+    } },
 ];
 
 
@@ -6053,6 +6067,38 @@ pub fn proc_kill(h: i64, force: bool) {
         ray_runtime::process::kill_group(child.id() as i32, force);
     }
 }
+
+/// M264: el pid del SO del hijo del handle; `-1` si no es (o ya no es) un hijo registrado.
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+pub fn proc_pid(h: i64) -> i64 {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Child(child)) => child.id() as i64,
+        _ => -1,
+    }
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn proc_pid(_h: i64) -> i64 {
+    -1
+}
+
+/// M264: cuelga la línea del hijo (`SIGHUP` al grupo; Windows: cierra la pseudoconsola o
+/// `CTRL_BREAK`). Idempotente: handle cosechado = no-op.
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
+pub fn proc_hangup(h: i64, h_pty: i64) {
+    let reg = registry().lock().unwrap();
+    let pid = match reg.open.get(&h) {
+        Some(OpenHandle::Child(child)) => Some(child.id()),
+        _ => None,
+    };
+    let pty = match reg.open.get(&h_pty) {
+        Some(OpenHandle::Pty(p)) => Some(p),
+        _ => None,
+    };
+    ray_runtime::process::hangup(pid, pty);
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn proc_hangup(_h: i64, _h_pty: i64) {}
 
 /// Stubs de plataforma (Windows/wasm): el mismo `Err` honesto que `run`.
 #[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]

@@ -207,6 +207,18 @@ pub fn spawn_pty(program: &str, args: &[String], opts: &RunOpts, cols: u16, rows
         return Err(format!("pty: unsupported size {cols}x{rows}"));
     }
     let (master, slave) = open_pty_pair(cols, rows).map_err(|e| format!("{program}: pty: {e}"))?;
+    // M264 (ray-sublime §94): FD_CLOEXEC en el maestro y el esclavo NADA MÁS abrirlos. Sin él,
+    // cada `Command::spawn` posterior (otro shell, `git`, un LSP) heredaba el maestro: el shell
+    // nunca recibía el hang-up al cerrar su terminal (otro hijo lo mantenía abierto), los ptys
+    // no se liberaban hasta morir el último heredero (511 en macOS: se agotaba la tabla) y
+    // cualquier hijo podía leer y escribir el terminal de otro. El esclavo llega al hijo por los
+    // `dup2` de `Command` sobre 0/1/2, que limpian el flag: no se pierde nada. En Linux el par ya
+    // nace con O_CLOEXEC (atómico); aquí se cubre macOS/BSD y se reafirma en todos.
+    // SAFETY: fcntl F_SETFD sobre fds propios recién abiertos.
+    unsafe {
+        let _ = fcntl(master, F_SETFD, FD_CLOEXEC);
+        let _ = fcntl(slave, F_SETFD, FD_CLOEXEC);
+    }
     // SAFETY: fds recién abiertos y propios; `File` toma su propiedad.
     let master = unsafe { std::fs::File::from_raw_fd(master) };
     let slave = unsafe { std::fs::File::from_raw_fd(slave) };
@@ -279,7 +291,7 @@ fn open_pty_pair(cols: u16, rows: u16) -> Result<(i32, i32), String> {
     // SAFETY: llamadas POSIX documentadas sobre el fd maestro recién abierto; el nombre del
     // esclavo se escribe en un buffer local con su tamaño.
     unsafe {
-        let m = posix_openpt(O_RDWR | O_NOCTTY_P);
+        let m = posix_openpt(O_RDWR | O_NOCTTY_P | O_CLOEXEC_P);
         if m < 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -294,7 +306,7 @@ fn open_pty_pair(cols: u16, rows: u16) -> Result<(i32, i32), String> {
             close_fd(m);
             return Err(e.to_string());
         }
-        let s = open(name.as_ptr() as *const std::ffi::c_char, O_RDWR | O_NOCTTY_P);
+        let s = open(name.as_ptr() as *const std::ffi::c_char, O_RDWR | O_NOCTTY_P | O_CLOEXEC_P);
         if s < 0 {
             let e = std::io::Error::last_os_error();
             close_fd(m);
@@ -318,6 +330,8 @@ const TIOCSCTTY: u64 = 0x540E;
 const TIOCSWINSZ: u64 = 0x5414;
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 const O_NOCTTY_P: i32 = 0o400;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const O_CLOEXEC_P: i32 = 0o2000000;
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 unsafe extern "C" {
@@ -397,6 +411,19 @@ pub fn spawn_detached(program: &str, args: &[String], opts: &RunOpts) -> Result<
 pub fn kill_group(pid: i32, force: bool) {
     // SAFETY: `kill` a un grupo propio (hijo lanzado por nosotros con process_group(0)).
     unsafe { kill(-pid, if force { SIGKILL } else { SIGTERM }) };
+}
+
+/// M264 (ray-sublime §94): cuelga la línea del hijo — `SIGHUP` a su GRUPO, lo que el kernel manda
+/// al cerrar el maestro de un terminal. Un `bash` interactivo ignora SIGTERM, y un SIGKILL no
+/// cuelga a sus trabajos en segundo plano; con SIGHUP sale y reenvía el HUP a sus jobs. Sirve
+/// igual para un hijo sin pty. `pid` None (handle ya cosechado) = no-op; `pty` no se usa en unix
+/// (la firma es común con Windows, donde el hang-up es cerrar la pseudoconsola).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn hangup(pid: Option<u32>, _pty: Option<&Pty>) {
+    if let Some(pid) = pid {
+        // SAFETY: `kill` a un grupo propio (el hijo es líder de grupo por `process_group(0)`/`setsid`).
+        unsafe { kill(-(pid as i32), SIGHUP) };
+    }
 }
 
 /// Lanza `program` con `args` y devuelve su salida. `Err` = **no se pudo lanzar** (ENOENT/EACCES/
@@ -604,6 +631,12 @@ const EINTR: i32 = 4;
 const SIGTERM: i32 = 15;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const SIGKILL: i32 = 9;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const SIGHUP: i32 = 1;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const F_SETFD: i32 = 2;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const FD_CLOEXEC: i32 = 1;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const F_GETFL: i32 = 3;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -1262,7 +1295,8 @@ mod win {
         if hr < 0 { Err(format!("pty: resize failed (HRESULT {hr:#x})")) } else { Ok(()) }
     }
 
-    pub fn pty_close(pty: &mut super::Pty) {
+    // `&Pty` (M264): el Option bajo el mutex ya garantiza el cierre único; lo llaman Drop y `hangup`.
+    pub fn pty_close(pty: &super::Pty) {
         if let Some(h) = pty.hpc.lock().unwrap().take() {
             // SAFETY: cerrado una sola vez (el Option lo garantiza frente al vigía).
             unsafe { ClosePseudoConsole(h) };
@@ -1547,6 +1581,20 @@ pub fn spawn_detached(program: &str, args: &[String], opts: &RunOpts) -> Result<
 #[cfg(all(windows, not(target_arch = "wasm32")))]
 pub fn kill_group(pid: i32, force: bool) {
     win::kill_group(pid as u32, force);
+}
+
+/// M264: el hang-up en Windows — con pseudoconsola, cerrarla (ConPTY manda el cierre a los
+/// procesos que cuelgan de ella, como cerrar la ventana de la consola); sin pty, `CTRL_BREAK` al
+/// grupo por la escalera de `kill_group`. `pid` None = no-op.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn hangup(pid: Option<u32>, pty: Option<&Pty>) {
+    if let Some(p) = pty {
+        win::pty_close(p);
+        return;
+    }
+    if let Some(pid) = pid {
+        kill_group(pid as i32, false);
+    }
 }
 
 #[cfg(all(windows, not(target_arch = "wasm32")))]

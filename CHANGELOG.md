@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El pty ya no se filtra a los hijos posteriores; `Proc.pid()` y `Proc.hangup()`** (M264,
+  ray-sublime §94). El maestro y el esclavo de `Cmd.pty` nacían sin `FD_CLOEXEC`, así que cada
+  hijo lanzado después (otro shell, `git`, un LSP) heredaba el maestro: el shell nunca recibía el
+  hang-up al cerrar su terminal, los ptys no se liberaban hasta morir el último heredero (cinco
+  días de `ray dev` dejaron 445 shells huérfanos y `openpty: Device not configured`) y cualquier
+  hijo podía leer el terminal de otro. Ahora nacen `CLOEXEC` (en Linux, atómico con `O_CLOEXEC`).
+  `Proc.pid()` da el pid del SO (`-1` tras `wait`) y `Proc.hangup()` cuelga la línea (`SIGHUP` al
+  grupo; Windows cierra la pseudoconsola): un `bash` interactivo ignora SIGTERM, pero con SIGHUP
+  sale y cuelga a sus trabajos.
+
 ## 1.25.0 — 2026-09-17
 
 - **Frontend con Vite (o cualquier bundler) integrado en `ray dev`** (M263, IDEAS §91). Nueva

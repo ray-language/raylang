@@ -722,6 +722,10 @@ pub enum OpCode {
     SelfCommand,
     /// M237: `__proc_resize(h_pty, cols, rows)` (['ok'] / ['err', msg]).
     ProcResize,
+    /// M264: `__proc_pid(h)` → el pid del SO del hijo (-1 si ya cosechado).
+    ProcPid,
+    /// M264: `__proc_hangup(h_child, h_pty)` → SIGHUP al grupo / cierre de la pseudoconsola.
+    ProcHangup,
     /// M234: `__embed_root()` — raíz en disco de los embebidos bajo la toolchain ("" si horneados).
     EmbedRoot,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.

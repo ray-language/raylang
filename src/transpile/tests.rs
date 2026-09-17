@@ -66,6 +66,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_spawn", "__proc_read", "__proc_write", "__proc_try_wait", "__proc_kill",
     // M237: pseudo-terminal.
     "__proc_spawn_pty", "__proc_resize",
+    // M264: pid y hang-up.
+    "__proc_pid", "__proc_hangup",
     // M246: lanzamiento desacoplado y relanzamiento.
     "__proc_spawn_detached", "__self_command",
     // M247: identidad de la app horneada.

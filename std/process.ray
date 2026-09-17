@@ -314,6 +314,15 @@ pub trait ProcOps {
     /// (the child gets `SIGWINCH`, as when a terminal window is resized). `Err` for a child
     /// without a pty.
     fn resize(self, cols: int, rows: int) -> Result<int, string>;
+    /// The OS pid of the child (`-1` once reaped). Lets a supervisor record the processes it
+    /// started and, on its next start, reap what a `kill -9` of the supervisor left alive.
+    fn pid(self) -> int;
+    /// Hangs up the child's line: `SIGHUP` to its process GROUP — what a terminal emulator sends
+    /// when its window closes. An interactive `bash` ignores `SIGTERM` (and a `SIGKILL` leaves its
+    /// background jobs running), but on `SIGHUP` it exits and forwards the hang-up to its jobs.
+    /// On Windows it closes the pseudoconsole (a child without a pty gets `CTRL_BREAK`). A no-op
+    /// after `wait`.
+    fn hangup(self);
 }
 
 impl ProcOps for Proc {
@@ -344,6 +353,14 @@ impl ProcOps for Proc {
 
     fn kill(self, force: bool) {
         __proc_kill(self.child, force);
+    }
+
+    fn pid(self) -> int {
+        __proc_pid(self.child)
+    }
+
+    fn hangup(self) {
+        __proc_hangup(self.child, self.pty_h);
     }
 
     fn write(self, data: bytes) -> Result<int, string> {

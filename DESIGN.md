@@ -13727,3 +13727,40 @@ Verificado: manifiesto (`frontend_section_is_parsed_with_defaults`), `ray new --
 falso escrito en raylang en un puerto libre (`dev_runs_the_frontend_dev_server_and_points_app_urls_at_it`:
 espera, resolución de `app://` en el hijo, `open` con la URL del dev server, y el puerto
 liberado al salir). Sin cambios de lenguaje: SPEC intacta.
+
+## 249. M264 — El pty no se hereda: `CLOEXEC` en el par, `Proc.pid()` y `Proc.hangup()` (sep 2026)
+
+Origen: ray-sublime §94. Cinco días de `ray dev` y `ray test` sobre el editor dejaron 445 login
+shells huérfanos y ningún pty libre (`openpty: Device not configured`). La causa primera era de la
+app (cerraba el canal del actor de terminales y llamaba a `exit()` en la misma línea), pero al
+mirar los huérfanos cada shell tenía abiertos de 1 a 20 `/dev/ptmx`: los maestros de los ptys de
+los shells anteriores. `spawn_pty` (M237) abría el par con `openpty`/`posix_openpt` y solo le
+ponía `O_NONBLOCK` (flag de estado); los `try_clone` nacen `CLOEXEC`, pero el fd original no, y
+`Command::spawn` lo heredaba a cada hijo posterior. La auditoría CLOEXEC de julio (IDEAS §53.4)
+cubrió pipes y sockets; M237 llegó después y no la heredó.
+
+Consecuencias del fd heredado: un shell nunca recibía el hang-up al cerrar su maestro (otro hijo
+lo mantenía abierto); un pty no se liberaba hasta morir el ÚLTIMO heredero (511 en macOS: se
+agota la tabla); cualquier hijo podía leer y escribir el terminal de otro.
+
+Cambios:
+- `FD_CLOEXEC` en maestro y esclavo nada más abrirlos (`fcntl(F_SETFD)` en todo unix; en Linux
+  además `O_CLOEXEC` en `posix_openpt` y en el `open` del esclavo, atómico). El esclavo llega al
+  hijo por los `dup2` de `Command` sobre 0/1/2, que limpian el flag. Windows no lo tenía:
+  `CreateProcessW` va con `bInheritHandles = FALSE`.
+- `Proc.pid() -> int`: el pid del SO (`-1` tras `wait`), para que un supervisor anote lo que
+  lanza y recoja en el siguiente arranque lo que un `kill -9` suyo dejó vivo.
+- `Proc.hangup()`: `SIGHUP` al GRUPO del hijo — lo que el kernel manda al cerrar el maestro de un
+  terminal. Un `bash` interactivo ignora SIGTERM, y un SIGKILL no cuelga a sus trabajos en segundo
+  plano (`sleep 600 &` sobrevivía al cierre del terminal); con SIGHUP sale y reenvía el HUP. En
+  Windows cierra la pseudoconsola (ConPTY propaga el cierre); sin pty, `CTRL_BREAK` por la
+  escalera de `kill_group`. Se eligió esto frente a "cerrar el maestro desde el programa": el
+  maestro vive triplicado (`pty_h` + los dups `out`/`stdin`) y con CLOEXEC el hang-up del kernel al
+  soltar el último maestro vuelve a funcionar por sí solo.
+
+Tres motores por la tabla BUILTINS (`__proc_pid`, `__proc_hangup`); `std/process.ray` expone los
+métodos en `ProcOps`. Test (`tests/process_pty_cli.rs`, VM y nativo): un hijo bajo pty ve en
+`/dev/fd` las mismas entradas haya o no otro pty vivo (0, 1, 2 y lo que abre el propio `ls`: 4 en
+Linux, 5 en macOS; con la fuga, medido en el binario anterior, eran 4 más: los dos maestros y los
+dos esclavos del otro pty), `pid()` > 0 y `-1` tras `wait`, `hangup()` mata a `sleep` con la
+señal 1.

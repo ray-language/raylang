@@ -1265,10 +1265,23 @@ fn start_frontend_dev(root: &Path) -> Option<FrontendDev> {
     let frontend = manifest.frontend?;
     let dev = frontend.dev?;
     let url = frontend.url.clone();
-    let Some(addr) = url_socket_addr(&url) else {
-        eprintln!("[dev] [frontend] url is not an http://host:port URL: '{url}'");
+    let addrs = url_socket_addrs(&url);
+    if addrs.is_empty() {
+        eprintln!("[dev] [frontend] url is not an http://host:port URL (or the host does not resolve): '{url}'");
         process::exit(64);
-    };
+    }
+    // Si el puerto YA acepta conexiones, otro proceso lo tiene (otro Vite, una sesión anterior):
+    // lanzar el nuestro fallaría con `--strictPort` y el sondeo daría "listo" con la página
+    // ajena. Mejor decirlo antes de lanzar nada.
+    if port_accepts(&addrs) {
+        let port = addrs[0].port();
+        let who = if cfg!(windows) { format!("netstat -ano | findstr :{port}") } else { format!("lsof -nP -iTCP:{port} -sTCP:LISTEN") };
+        eprintln!(
+            "[dev] {url} is already in use by another process before launching the frontend \
+             (`{who}` shows it); stop it, or change the port in [frontend] dev/url of ray.toml"
+        );
+        process::exit(73);
+    }
     eprintln!("[dev] frontend: {dev}  (waiting for {url})");
     let mut cmd = shell_command(&dev, root);
     crate::dev_host::prepare_group(&mut cmd);
@@ -1284,7 +1297,7 @@ fn start_frontend_dev(root: &Path) -> Option<FrontendDev> {
     crate::dev_host::register_group_child(&DEV_FRONTEND);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+        if port_accepts(&addrs) {
             break;
         }
         if let Ok(Some(status)) = child.try_wait() {
@@ -1303,18 +1316,27 @@ fn start_frontend_dev(root: &Path) -> Option<FrontendDev> {
     Some(FrontendDev { child, url })
 }
 
-/// `host:port` resuelto de una URL `http://host[:port][/...]` (puerto 80 si falta). `None` si no
-/// es una URL http o el host no resuelve.
-fn url_socket_addr(url: &str) -> Option<std::net::SocketAddr> {
+/// Las direcciones `host:port` de una URL `http://host[:port][/...]` (puerto 80 si falta) — todas
+/// las que resuelve el host (`localhost` suele ser `127.0.0.1` Y `::1`, y Vite escucha en una u
+/// otra según la máquina). Vacío si no es una URL http o el host no resuelve.
+fn url_socket_addrs(url: &str) -> Vec<std::net::SocketAddr> {
     use std::net::ToSocketAddrs;
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
+    let Some(rest) = url.strip_prefix("http://") else { return Vec::new() };
+    let Some(authority) = rest.split(['/', '?', '#']).next() else { return Vec::new() };
     let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse::<u16>().ok()?),
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(p) => (h, p),
+            Err(_) => return Vec::new(),
+        },
         None => (authority, 80),
     };
     let host = host.trim_matches(['[', ']']);
-    (host, port).to_socket_addrs().ok()?.next()
+    (host, port).to_socket_addrs().map(|it| it.collect()).unwrap_or_default()
+}
+
+/// ¿Alguna de `addrs` acepta una conexión TCP ahora mismo?
+fn port_accepts(addrs: &[std::net::SocketAddr]) -> bool {
+    addrs.iter().any(|a| std::net::TcpStream::connect_timeout(a, std::time::Duration::from_millis(300)).is_ok())
 }
 
 /// Termina el dev server del frontend (todo su árbol) si está en marcha.

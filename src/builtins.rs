@@ -402,6 +402,16 @@ pub fn append_bytes_to_file(path: &str, data: &[u8]) -> std::io::Result<()> {
     f.write_all(data)
 }
 
+/// M265: la ruta canónica como texto. Windows: `canonicalize` devuelve la forma extendida
+/// `\\?\C:\…`; se quita el prefijo para que compare con las rutas que escribe el programa.
+pub fn real_path_display(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if cfg!(windows) => rest.to_string(),
+        _ => s,
+    }
+}
+
 /// M67: las operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file), compartidas
 /// por ambos motores. Devuelve el arreglo etiquetado ya montado (`["ok"(, dato)]`/`["err", msg]`) —
 /// todas las cargas son strings, así cada motor solo lo convierte a su tipo de valor.
@@ -437,6 +447,15 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
         }
         FsOp::Rename => std::fs::rename(&args[0], &args[1]),
         FsOp::CopyFile => std::fs::copy(&args[0], &args[1]).map(|_| ()),
+        // M265: ["ok", ruta_real] — `canonicalize` (symlinks seguidos, `.`/`..` resueltos; la ruta
+        // debe existir). En Windows se quita el prefijo `\\?\` que añade el kernel para que la
+        // ruta sea comparable con lo que el programa escribe.
+        FsOp::RealPath => {
+            return match std::fs::canonicalize(&args[0]) {
+                Ok(p) => vec!["ok".to_string(), real_path_display(&p)],
+                Err(e) => vec!["err".to_string(), e.to_string()],
+            };
+        }
         FsOp::FileSize => {
             // ["ok", tamaño] (como el handle de `__open`); un directorio no tiene tamaño de archivo.
             return match std::fs::metadata(&args[0]) {
@@ -4109,6 +4128,12 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__stat", opcode: OpCode::FsTagged(FsOp::Stat), check: |a| {
         arity(a, 1, "__stat", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__stat expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __real_path(path) -> [string] (M265): ["ok", ruta_real] o ["err", msg]. std/fs → Result<string,string>.
+    Builtin { name: "__real_path", opcode: OpCode::FsTagged(FsOp::RealPath), check: |a| {
+        arity(a, 1, "__real_path", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__real_path expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __chmod(path, mode) -> [string] (M115.3): ["ok"] o ["err", msg]. std/fs → Result<int,string>.

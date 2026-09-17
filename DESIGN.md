@@ -13764,3 +13764,31 @@ métodos en `ProcOps`. Test (`tests/process_pty_cli.rs`, VM y nativo): un hijo b
 Linux, 5 en macOS; con la fuga, medido en el binario anterior, eran 4 más: los dos maestros y los
 dos esclavos del otro pty), `pid()` > 0 y `-1` tras `wait`, `hangup()` mata a `sleep` con la
 señal 1.
+
+## 250. M265 — Descubrimiento por MCP y `fs.real_path` (sep 2026)
+
+Origen: ray-sublime §95 y §97, del panel de agentes del editor. Dos huecos de descubrimiento y
+una primitiva ausente; ninguno un bug de ejecución.
+
+**§95, la vía MCP no cuenta dónde vive HTTP.** Un desarrollador que busque el cliente HTTP solo
+por MCP tropieza tres veces: `llms.txt` fija el nombre `fetch` ("because `get` belongs to Map")
+pero `std/net` no lo exporta —vive en el paquete Tier-2 `net`—; `ray_doc` responde "is not a
+builtin" a `http.stream_with` aunque el paquete esté en `.ray-deps/`; y `ray search http` no
+devuelve `net`. Verificado: `ray_doc` SÍ resuelve los módulos del proyecto y sus dependencias
+cuando recibe `path` (`project_doc_text`), pero las instrucciones del servidor solo nombraban
+`path` para `ray_check`/`ray_run`/`ray_test` y el mensaje de error no lo sugería. Cambios: la
+línea de `fetch` en `llms.txt` dice "Tier-2 `net`, `ray add net`, `import net/http`"; las
+instrucciones nombran `ray_doc` con `path`; el mensaje de "no es un builtin" lo sugiere. El tercer
+punto (`ray search` casa solo el nombre del paquete: el índice `<nombre>.toml` no tiene
+descripción ni palabras clave) queda en IDEAS: exige ampliar el esquema del índice público.
+
+**§97, `std/fs` no tenía `realpath`.** El agente rechaza las rutas que salen de la carpeta
+abierta, pero comparar nombres no basta: un symlink interno puede apuntar a `/etc`. Sin
+`canonicalize`, la app hacía un `fs.stat` por segmento (correcto, O(n) syscalls por lectura, y
+algo que toda app que aísle rutas reescribiría). Cambios: `fs.real_path(path)` (primitivo
+`__real_path` por la vía `FsOp::RealPath`, `std::fs::canonicalize`; en Windows sin el prefijo
+`\\?\` para que compare con lo que el programa escribe) y `fs.is_within_real(inner, outer)`,
+raylang puro sobre `real_path` (igualdad o prefijo con separador). Tres motores: en el nativo los
+wrappers se emiten como raylang sobre el primitivo interceptado, como `stat`/`chmod`. Test en
+`tests/fs_stat_cli.rs`: el symlink al archivo resuelve al archivo; el symlink a `/` no está
+dentro; la ruta inexistente es `Err`.

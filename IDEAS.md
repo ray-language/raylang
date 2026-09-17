@@ -3408,7 +3408,10 @@ etapa; verificadas contra 1.10.0 y ordenadas en [docs/plan-ray-sublime.md](docs/
 
 Posterior: ray-sublime §85 (cada carga de un `bytes` copiaba el búfer; el 92 % del arranque) → ✅ M261
 (`Arc<[u8]>` en la VM, DESIGN §248); ray-sublime §94 (el maestro del pty se heredaba sin `CLOEXEC`;
-`Proc.pid`/`Proc.hangup`) → ✅ M264 (DESIGN §249). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
+`Proc.pid`/`Proc.hangup`) → ✅ M264 (DESIGN §249); §95 (la vía MCP no dice que `fetch` es Tier-2 ni
+que `ray_doc` resuelve dependencias con `path`) + §97 (`fs.real_path`) → ✅ M265 (DESIGN §250);
+§95.3 (`ray search` por palabra clave: pide descripción/keywords en el índice) y §96 (`std/keychain`)
+→ pendientes (keychain = M266 propuesto). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
 los 6 226 patrones reales de sintaxis usan look-around. La entrada 31 (`fmt` rompe parches) no se
 reproduce con 1.10.0.
 

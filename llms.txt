@@ -285,7 +285,8 @@ events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window)
 dev` the window live-reloads on asset changes and the webview devtools are on.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
-for HTTP (because `get` belongs to Map); `bytes_of([int])` vs `to_bytes(string)`;
+for HTTP (because `get` belongs to Map — note `fetch` lives in the Tier-2 package `net`,
+`import net/http;` after `ray add net`, not in `std/net`); `bytes_of([int])` vs `to_bytes(string)`;
 `join(arr, sep)` vs `join(task)` and `close` (file handle/channel) are the only
 arity/type dualities.
 

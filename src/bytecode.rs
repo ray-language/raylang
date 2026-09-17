@@ -31,13 +31,15 @@ pub enum FsOp {
     TempDir,
     /// M216: un directorio temporal NUEVO y único (`fs.make_temp_dir(prefix)`).
     MakeTempDir,
+    /// M265 (ray-sublime #97): la ruta real — symlinks seguidos, `.`/`..` resueltos (`fs.real_path`).
+    RealPath,
 }
 
 impl FsOp {
     /// Nº de argumentos string (rutas) que saca de la pila.
     pub fn argc(self) -> usize {
         match self {
-            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir => 1,
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath => 1,
             FsOp::Rename | FsOp::CopyFile => 2,
             FsOp::TempDir => 0,
         }

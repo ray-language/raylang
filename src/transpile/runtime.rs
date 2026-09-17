@@ -685,6 +685,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        }\n",
             "        Err(e) => vec![\"err\".to_string(), e.to_string()],\n",
             "    })\n}\n",
+            // M265: la ruta real (byte-idéntico a builtins::fs_tagged(FsOp::RealPath)).
+            "fn __ray_real_path_prim(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    __ray_tagged(match std::fs::canonicalize(path) {\n",
+            "        Ok(p) => { let s = p.to_string_lossy().into_owned(); let s = match s.strip_prefix(r\"\\\\?\\\") { Some(rest) if cfg!(windows) => rest.to_string(), _ => s }; vec![\"ok\".to_string(), s] }\n",
+            "        Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
             "fn __ray_chmod_prim(path: &str, mode: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    #[cfg(unix)]\n",
             "    let r = { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode((mode as u32) & 0o7777)).map_err(|e| e.to_string()) };\n",

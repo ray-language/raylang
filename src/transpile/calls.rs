@@ -1011,8 +1011,9 @@ impl Transpiler {
         // Excepción M115.3: stat/chmod NO se interceptan aquí — sus wrappers se emiten (el intercept
         // es a nivel de primitivo `__stat`/`__chmod`, abajo), así el struct `Stat` vive en raylang.
         // M235: copy_all es raylang puro sobre is_dir/mkdir/list_dir/copy_file → su cuerpo se emite.
+        // M265: real_path/is_within_real se emiten sobre el primitivo `__real_path` (como stat).
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all") {
+            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real") {
                 return self.emit_fs(out, ffn, &eff);
             }
         }
@@ -2241,6 +2242,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            "real_path" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_real_path_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "chmod" if name.starts_with("__") => {
                 self.needs_fs_meta = true;
                 out.push_str("__ray_chmod_prim(&*");
@@ -2781,7 +2788,7 @@ impl Transpiler {
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
                 // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
                 if let Some(ffn) = n.strip_prefix("std::fs::")
-                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all")
+                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real")
                 {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),

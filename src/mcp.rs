@@ -133,7 +133,9 @@ fn initialize_result() -> Json {
              more in the public index, github.com/ray-language/ray-index, or with \
              'ray search'), and validate by passing 'path' to ray_check/ray_run/ray_test — \
              they run with the project as context, so multi-file imports and dependencies \
-             resolve exactly like 'ray run'. The 'code' form of those tools is only for \
+             resolve exactly like 'ray run'. Pass 'path' to ray_doc as well to look up the \
+             signatures of the project's own modules and of its Tier-2 dependencies \
+             (e.g. http.stream_with from net). The 'code' form of those tools is only for \
              quick self-contained experiments (isolated temp dir: project files and packages \
              do not resolve there). If you also have shell access, the ray binary itself \
              (ray run / ray test / ray build) is the same loop.".into(),
@@ -359,6 +361,8 @@ fn doc_text_at(symbol: &str, path: Option<&str>) -> String {
                 "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
                  For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
                  a bare module name (e.g. 'std/kv') lists its whole public surface; \
+                 for a project's own modules or its Tier-2 dependencies (net, web, rpc, db…) \
+                 pass 'path' (the project directory) as well; \
                  see the stdlib map in the raylang://llms.txt resource and the full \
                  catalog in raylang://reference.md."
             )),

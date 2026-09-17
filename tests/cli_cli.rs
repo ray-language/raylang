@@ -52,6 +52,34 @@ fn new_fails_if_the_target_exists() {
 }
 
 #[test]
+fn new_with_frontend_writes_the_vite_contract() {
+    // M263: `ray new app --frontend react-ts` — el proyecto nace con la sección [frontend], un
+    // main.ray que abre `app://index.html` y las instrucciones (sin correr npm) en stdout.
+    let base = tmp("new_frontend");
+    let (out, err, code) = ray(&base, &["new", "app", "--frontend", "react-ts"]);
+    assert_eq!(code, 0, "new --frontend must salir 0\n{out}\n{err}");
+    let proj = base.join("app");
+    let manifest = std::fs::read_to_string(proj.join("ray.toml")).unwrap();
+    assert!(manifest.contains("[frontend]"), "{manifest}");
+    assert!(manifest.contains("dist = \"frontend/dist\""), "{manifest}");
+    assert!(manifest.contains("--strictPort --port 5173"), "puerto fijo para que `url` sea cierta\n{manifest}");
+    let main = std::fs::read_to_string(proj.join("src/main.ray")).unwrap();
+    assert!(main.contains("\"app://index.html\""), "{main}");
+    assert!(main.contains("mount_embed(\"\", \"frontend/dist\")"), "{main}");
+    let gitignore = std::fs::read_to_string(proj.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("frontend/node_modules/") && gitignore.contains("frontend/dist/"), "{gitignore}");
+    assert!(out.contains("npm create vite@latest frontend -- --template react-ts"), "{out}");
+    assert!(out.contains("npm --prefix frontend install"), "{out}");
+    // El main generado compila tal cual (sin frontend todavía).
+    let (out, err, code) = ray(&proj, &["build"]);
+    assert_eq!(code, 0, "el main generado compila\n{out}\n{err}");
+    // `--frontend` exige la plantilla.
+    let (_o, err, code) = ray(&base, &["new", "other", "--frontend"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("Vite template"), "{err}");
+}
+
+#[test]
 fn run_passes_the_program_args() {
     let base = tmp("run_args");
     std::fs::write(

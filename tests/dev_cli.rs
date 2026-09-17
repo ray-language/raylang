@@ -659,3 +659,89 @@ fn dev_child_dies_with_the_supervisor() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+/// M263: con `[frontend]` en el ray.toml, `ray dev` lanza el dev server del frontend, espera a
+/// que su URL responda, la exporta al programa (`app://` resuelve ahí) y lo termina —con todo su
+/// árbol de procesos— al salir. El "dev server" es un programa raylang que escucha en un puerto
+/// libre elegido por el test (sin Node en CI); el comando corre por `sh -c`, de ahí unix-only.
+#[cfg(unix)]
+#[test]
+fn dev_runs_the_frontend_dev_server_and_points_app_urls_at_it() {
+    let base = std::env::temp_dir().join("ray_dev_frontend");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    // Un puerto libre: se toma, se lee y se suelta (el servidor falso lo re-vincula).
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    std::fs::write(
+        base.join("server.ray"),
+        "import std/net;\n\nfn main() -> int {\n    let l = match (net.tcp_listen(\"127.0.0.1\", PORT)) {\n        Result.Ok(l) => l,\n        Result.Err(e) => { eprint(e); return 1; },\n    };\n    while (true) {\n        match (net.tcp_accept(l)) {\n            Result.Ok(c) => { let _ = close(c); },\n            Result.Err(e) => { eprint(e); return 1; },\n        }\n    }\n    0\n}\n".replace("PORT", &port.to_string()),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n[frontend]\ndev = \"'{}' run server.ray\"\nurl = \"http://127.0.0.1:{port}\"\ndist = \"dist\"\n",
+            env!("CARGO_BIN_EXE_raylang")
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import std/ui;\nimport std/time;\n\nfn main() {\n    print(\"resolved: \" + ui.app_url(\"app://index.html\"));\n    match (ui.open(\"Dev\", \"app://index.html\", 320, 200)) {\n        Result.Err(e) => print(\"open failed: \" + e),\n        Result.Ok(h) => {\n            time.sleep(500);\n            let _ = close(h);\n        },\n    }\n}\n",
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = ray_dev()
+        .arg("main.ray")
+        .env("RAY_UI_BACKEND", "headless")
+        .env("RAY_UI_TRACE", "1")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("lanza ray dev");
+
+    // La ventana se cierra sola → el supervisor sale solo (y con él, el frontend).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Ok(Some(st)) = dev.try_wait() {
+            break st;
+        }
+        if Instant::now() >= deadline {
+            stop_dev(&mut dev);
+            panic!("ray dev no salió solo:\n{}", std::fs::read_to_string(&out_path).unwrap_or_default());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let log = std::fs::read_to_string(&out_path).unwrap_or_default();
+    assert!(status.success(), "salida limpia del supervisor:\n{log}");
+    assert!(log.contains(&format!("frontend ready at http://127.0.0.1:{port}")), "esperó al dev server:\n{log}");
+    assert!(
+        log.contains(&format!("resolved: http://127.0.0.1:{port}/index.html")),
+        "app:// resuelve al dev server bajo ray dev:\n{log}"
+    );
+    assert!(log.contains(&format!("[ui] open 1 Dev http://127.0.0.1:{port}/index.html")), "open aplica app://:\n{log}");
+    // El dev server murió con el supervisor: el puerto vuelve a rechazar conexiones.
+    let gone = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpStream::connect_timeout(&format!("127.0.0.1:{port}").parse().unwrap(), Duration::from_millis(200)).is_err() {
+            break;
+        }
+        assert!(Instant::now() < gone, "el dev server del frontend sobrevivió a ray dev");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Sin `ray dev` (sin RAY_FRONTEND_URL), app:// es el build embebido.
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["run", "main.ray"])
+        .env("RAY_UI_BACKEND", "headless")
+        .env_remove("RAY_FRONTEND_URL")
+        .current_dir(&base)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("resolved: ray://app/index.html"), "{stdout}");
+}

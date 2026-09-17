@@ -41,6 +41,66 @@ pub fn adopt(child: &process::Child) {
     let _ = child;
 }
 
+/// M263: prepara el `Command` de un hijo que es un ÁRBOL de procesos (`npm run dev` → `sh` →
+/// `node`): en unix lo hace líder de su propio grupo (`setpgid`), para que `terminate_group`
+/// alcance a todos los descendientes con una sola señal (matar solo a `npm` deja a `node` vivo
+/// y el puerto ocupado); en Windows es `prepare` (grupo de consola propio + el Job Object de
+/// `adopt` arrastra a todo el árbol).
+pub fn prepare_group(cmd: &mut process::Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    prepare(cmd);
+}
+
+/// M263: termina un hijo lanzado con `prepare_group` y todo su árbol: SIGTERM al GRUPO (unix)
+/// o CTRL_BREAK al grupo de consola (Windows), espera ≤ 3 s y escala al kill duro del grupo.
+pub fn terminate_group(child: &mut process::Child) {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let pgid = child.id() as i32;
+        // SAFETY: el grupo lo creamos nosotros (`process_group(0)`: pgid == pid del hijo).
+        unsafe {
+            kill(-pgid, 15);
+        }
+        for _ in 0..30 {
+            if let Ok(Some(_)) = child.try_wait() {
+                // El líder murió; los descendientes reciben la misma señal y caen solos.
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        // SAFETY: ídem; SIGKILL al grupo entero.
+        unsafe {
+            kill(-pgid, 9);
+        }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    terminate_gracefully(child);
+}
+
+/// M263: registra el pid de un hijo-GRUPO (`prepare_group`) para que la limpieza de
+/// `install_cleanup_on_death` lo arrastre también: en unix el handler manda SIGTERM al grupo
+/// `-pid`; en Windows el Job Object ya lo cubre (el hijo entra por `adopt`).
+pub fn register_group_child(group_pid: &'static std::sync::atomic::AtomicI32) {
+    #[cfg(unix)]
+    GROUP_PID.store(
+        group_pid as *const _ as *mut std::sync::atomic::AtomicI32,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    let _ = group_pid;
+}
+
+#[cfg(unix)]
+static GROUP_PID: std::sync::atomic::AtomicPtr<std::sync::atomic::AtomicI32> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
 /// Termina el hijo con una petición de cierre ORDENADO (SIGTERM / CTRL_BREAK) — un servidor con
 /// `serve_graceful` drena sus conexiones — y, si a los ~3 s sigue vivo, escala al kill duro.
 pub fn terminate_gracefully(child: &mut process::Child) {
@@ -108,6 +168,16 @@ pub fn install_cleanup_on_death(child_pid: &'static std::sync::atomic::AtomicI32
                 // SAFETY: `kill` a un hijo nuestro. SIGTERM: drena (serve_graceful) o muere por defecto.
                 unsafe {
                     kill(pid, 15);
+                }
+            }
+            // M263: el hijo-grupo (el dev server del frontend), si lo hay: SIGTERM al grupo entero.
+            let g = GROUP_PID.load(std::sync::atomic::Ordering::SeqCst);
+            // SAFETY: ídem, un `AtomicI32` `'static` registrado en `register_group_child`.
+            let gpid = if g.is_null() { 0 } else { unsafe { (*g).load(std::sync::atomic::Ordering::SeqCst) } };
+            if gpid > 0 {
+                // SAFETY: grupo creado por nosotros (`prepare_group`).
+                unsafe {
+                    kill(-gpid, 15);
                 }
             }
             // SAFETY: `_exit` es async-signal-safe.

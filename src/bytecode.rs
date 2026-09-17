@@ -714,6 +714,9 @@ pub enum OpCode {
     /// M247: `__app_info()` → `[id, version, public_key]` de la app (del `ray.toml` bajo `ray run`;
     /// horneado como literal en el nativo/bundle; los tres vacíos = programa suelto).
     AppInfo,
+    /// M263: `__ui_frontend_url()` → la URL del dev server del frontend (`[frontend] url`) que
+    /// `ray dev` exporta; vacía bajo `ray run` y en el nativo (literal `""`).
+    UiFrontendUrl,
     /// M246: `__self_command()` → la línea de comandos que reproduce este programa (la fija la
     /// toolchain: `[ray, "run", entrada]` bajo `ray run`; el nativo emite `[exe]`).
     SelfCommand,

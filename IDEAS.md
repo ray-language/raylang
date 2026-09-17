@@ -3492,3 +3492,29 @@ Plan (M260): `WindowOptions` gana `kind` (`"document"`, `"panel"`, `"borderless"
 pestañas, `NSToolbar`) degrada a diálogo normal o se hace en HTML dentro del webview — no se
 emula. Impacto: MEDIO (solo `std/ui` y el runtime; ninguna decisión de lenguaje). Precedidos por
 M258 (mensajes + filtros de archivo ✅) y M259 (menú contextual).
+
+## 91. Frontend con bundler externo (Vite) integrado en `ray dev` (sep 2026) — ✅ HECHA (M263, DESIGN §249)
+
+Petición del usuario: facilitar apps de escritorio y móvil con **el framework frontend que el
+dev quiera** (React, Vue, Svelte, Solid…). Los assets ya se sirven y embeben sin problema
+(`[native] embed`, `ray://app/`), así que el build nativo y el bundle no eran el reto: lo era la
+**DX en desarrollo** — hot reload del frontend conviviendo con el reinicio de `ray dev`.
+
+Opciones analizadas: **A** proxy inverso HTTP+WebSocket dentro de `net/webserver` hacia Vite (un
+solo origen, cero config en Vite; pero implementar proxy+upgrade WS y pasar cientos de módulos
+ESM por raylang); **B** la ventana apunta a Vite en dev y al build embebido en prod, el modelo
+de Tauri (`beforeDevCommand`+`devUrl`+`frontendDist`); **C** un plugin de Vite que lance
+`ray dev` (invierte la propiedad); **D** bundler propio en Rust (enorme, y no es "el framework
+que quiera"). Decisión: **B**, con el contrato declarado en `ray.toml` **sin nombrar a Vite**
+(`[frontend] dev/url/build/dist`: lo cumplen Vite, Parcel, Astro…). Cero crates nuevos; Node es
+dependencia del proyecto del usuario, nunca de la toolchain. A queda como posible modo
+"transparente" futuro encima de B si el proxy de Vite resulta molesto.
+
+Alcance entregado: `[frontend]` en el manifiesto; `ray dev` lanza/espera/exporta/termina el dev
+server (grupo de procesos propio: `npm`→`sh`→`node` mueren juntos; Job Object en Windows);
+`RAY_FRONTEND_URL` → `__ui_frontend_url()` (vacío en el nativo, patrón de M231/M234: lo fija la
+toolchain, un binario no mira el entorno); `ui.app_url` y `app://` en `open`/`open_with`;
+`ray build --native`/`ray bundle` corren `build` y embeben `dist`; `ray new --frontend
+<plantilla>` sin correr npm (solo instrucciones, decisión del usuario). Impacto: BAJO (ninguna
+decisión de lenguaje; `std/ui` + CLI). Pendiente: iOS en dispositivo real (Vite `--host` + IP
+de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.

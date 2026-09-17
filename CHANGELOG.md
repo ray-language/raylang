@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Frontend con Vite (o cualquier bundler) integrado en `ray dev`** (M263, IDEAS §91). Nueva
+  sección `[frontend]` en `ray.toml` (`dev`, `url`, `build`, `dist`): `ray dev` lanza el dev
+  server del frontend una vez por sesión, espera a que responda y hace que las URLs **`app://`**
+  apunten a él —`ui.open("App", "app://index.html", …)` abre sobre Vite con hot module
+  replacement, y editar un `.ray` reinicia solo el programa—; al salir, el dev server muere con
+  todo su árbol de procesos. Fuera de `ray dev` la misma URL es `ray://app/…` (el build
+  embebido), y `ray build --native`/`ray bundle` corren el `build` y embeben `dist`. Nuevo
+  `ui.app_url(url)` para resolver a mano, y `ray new miapp --frontend react-ts` (cualquier
+  plantilla de `npm create vite`) escribe el proyecto listo e imprime los pasos de npm sin
+  correrlos. Un binario nativo nunca mira `RAY_FRONTEND_URL`.
+
 ## 1.24.1 — 2026-09-16
 
 - **La página sobrevive a un redimensionado con el Web Inspector acoplado** (M262, ray-sublime).

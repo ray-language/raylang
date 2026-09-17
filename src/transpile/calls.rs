@@ -1112,6 +1112,10 @@ impl Transpiler {
                 let [id, version, key] = crate::transpile::native_app_info();
                 write!(out, "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from({id:?}), Rc::<str>::from({version:?}), Rc::<str>::from({key:?})]))").unwrap();
             }
+            // M263: un binario nativo nunca apunta a un dev server: la URL va vacía (literal).
+            "ui_frontend_url" if name.starts_with("__") => {
+                out.push_str("Rc::<str>::from(\"\")");
+            }
             "args" => {
                 out.push_str(
                     "Rc::new(std::cell::RefCell::new(std::env::args().skip(1)\

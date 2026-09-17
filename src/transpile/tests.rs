@@ -70,6 +70,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_spawn_detached", "__self_command",
     // M247: identidad de la app horneada.
     "__app_info",
+    // M263: la URL del dev server del frontend (literal vacío en el nativo).
+    "__ui_frontend_url",
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_open_with", "__ui_eval_js", "__ui_next_event",
     // M225: reply/reply_json con el escape nativo.

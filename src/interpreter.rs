@@ -2218,6 +2218,7 @@ impl<'a> Interpreter<'a> {
                 let arr = crate::builtins::app_info().into_iter().map(Value::Str).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_frontend_url" => Value::Str(crate::builtins::ui_frontend_url()),
             "__ui_desktop" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(k), Value::Str(p)) => match crate::builtins::ui_desktop(k, p) {

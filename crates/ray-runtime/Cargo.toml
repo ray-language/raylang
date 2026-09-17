@@ -35,6 +35,10 @@ x509 = ["dep:x509-parser"]
 # `num-bigint` — ya estaba en el árbol vía x509-parser. NO es de tiempo constante (vale para el DH/RSA
 # de un cliente, no para claves de servidor bajo ataque de temporización; SECURITY.md).
 bigint = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
+# M266 (ray-sublime §96) — secretos en el LLAVERO DEL SISTEMA (`std/keychain`): Keychain Services en macOS
+# (Security.framework), Secret Service por libsecret (dlopen en runtime) en Linux, Credential Manager
+# (advapi32) en Windows. Cero crates, sin headers de build; `RAY_KEYCHAIN_FILE` = archivo plano para tests.
+keychain = []
 # M253 — DEFLATE/INFLATE de producción (`std/deflate`, `std/inflate`) sobre `miniz_oxide` (Rust puro, sin
 # `unsafe`): el LZ77 escrito en raylang queda como respaldo (sin feature, wasm32, `--without deflate`).
 # Motivo: `ray release` comprimía el bundle en la VM a ~2 KB/s. CRC-32/Adler-32 a mano en el mismo módulo.

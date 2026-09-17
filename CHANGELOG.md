@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/keychain`: secretos en el llavero del sistema** (M266, ray-sublime §96). `keychain.get`/
+  `set`/`delete(service, account)` sobre Keychain Services (macOS), Secret Service por libsecret
+  (Linux, dlopen en runtime) y Credential Manager (Windows); cero crates. Antes una app guardaba
+  sus claves de API en un archivo 0600, que en Windows no protege nada. `RAY_KEYCHAIN_FILE` da un
+  archivo plano como llavero para tests y CI. Tres motores; `--without keychain` en el nativo.
 - **`fs.real_path` e `fs.is_within_real`** (M265, ray-sublime §97). La ruta real (symlinks seguidos,
   `.`/`..` resueltos) y la comprobación de que una ruta vive bajo otra una vez resueltas ambas: un
   symlink dentro del proyecto que apunta a `/etc` deja de parecer interno. Antes había que hacer un

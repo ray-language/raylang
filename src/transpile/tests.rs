@@ -56,6 +56,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
     "exit", "panic", "print", "scope", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
     "__bigint_op", "__deflate_op",
+    // M266: llavero del sistema.
+    "__keychain",
     // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
     "__task_failed",
     // M97.2: `__try_call` (el primitivo tras `try_call`) → `catch_unwind` en el MISMO hilo.

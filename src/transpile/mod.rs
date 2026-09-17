@@ -132,6 +132,8 @@ struct Transpiler {
     pub(super) needs_rt_unicode: bool,
     /// M195: el programa usa `std/bigint` (`__bigint_op`) → feature `bigint` de ray-runtime.
     pub(super) needs_rt_bigint: bool,
+    /// M266: el programa usa `std/keychain` (`__keychain`) → feature `keychain` de ray-runtime.
+    pub(super) needs_rt_keychain: bool,
     /// M253: el programa usa `__deflate_op` (std/deflate, std/inflate) → feature `deflate` de ray-runtime.
     pub(super) needs_rt_deflate: bool,
     /// M100: ¿usa `__run` (procesos del SO)? El helper `__ray_run` llama a `ray_runtime::process`
@@ -323,6 +325,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_bigint: false,
+        needs_rt_keychain: false,
         needs_rt_deflate: false,
         needs_rt_tls: false,
         needs_rt_sqlite: false,
@@ -694,6 +697,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // M195: enteros grandes (detectado por USO de `__bigint_op`; `--without bigint` → Err-valor).
     if t.needs_rt_bigint {
         rt_features.push("bigint");
+    }
+    // M266: llavero del sistema (detectado por USO de `__keychain`; `--without keychain` → Err-valor).
+    if t.needs_rt_keychain {
+        rt_features.push("keychain");
     }
     // M253: DEFLATE acelerado (detectado por USO de `__deflate_op`; `--without deflate` → `[]` y los
     // módulos raylang siguen con su propio algoritmo).

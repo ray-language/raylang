@@ -291,6 +291,8 @@ pub enum OpCode {
     BigIntOp,
     /// M253: `__deflate_op(op, data, n)` → `[bytes]` (`[r]` / `[]` = no disponible). Solo VM.
     DeflateOp,
+    /// M266: `__keychain(op, service, account, secret)` → `[string]` (llavero del sistema). Solo VM.
+    Keychain,
     HasherNew,
     HasherUpdate,
     HasherFinal,

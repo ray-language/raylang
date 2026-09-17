@@ -2083,6 +2083,24 @@ impl Transpiler {
                     out.push_str(") { Ok(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(__rt_r)])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__rt_e.into_bytes())])) } }");
                 }
             }
+            // M266: __keychain(op, service, account, secret) -> [string]. Con `--without keychain` no hay
+            // backend detrás: el sitio emite el Err-valor directamente.
+            "keychain" if name.starts_with("__") => {
+                if self.exclude.contains("keychain") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(\"keychain is not available in this build (feature 'keychain')\")]))");
+                } else {
+                    self.needs_rt_keychain = true;
+                    out.push_str("Rc::new(std::cell::RefCell::new(ray_runtime::keychain::op(&*");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &*");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", &*");
+                    self.emit_expr(out, eff[2])?;
+                    out.push_str(", &*");
+                    self.emit_expr(out, eff[3])?;
+                    out.push_str(").into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()))");
+                }
+            }
             "hasher_new" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 out.push_str("{ match ray_runtime::crypto::hasher_new(&");

@@ -13792,3 +13792,45 @@ raylang puro sobre `real_path` (igualdad o prefijo con separador). Tres motores:
 wrappers se emiten como raylang sobre el primitivo interceptado, como `stat`/`chmod`. Test en
 `tests/fs_stat_cli.rs`: el symlink al archivo resuelve al archivo; el symlink a `/` no está
 dentro; la ruta inexistente es `Err`.
+
+## 251. M266 — `std/keychain`: secretos en el llavero del sistema (sep 2026)
+
+Origen: ray-sublime §96. El panel de agentes del editor guarda claves de API (Anthropic, OpenAI y
+compatibles) y no tenía dónde: `std/fs`, `std/kv` y `std/process` era todo, así que la app cayó a
+un `Secrets.json` con `chmod 0600` junto a su configuración — y en Windows `chmod` no significa
+nada: el archivo queda protegido solo por el ACL del perfil. Lo correcto en escritorio es el
+llavero que el sistema ya protege con la sesión del usuario.
+
+Diseño: `keychain.get/set/delete(service, account)` con secretos de TEXTO (UTF-8: tokens, claves,
+contraseñas), `get -> Result<Option<string>, string>` (ausente ≠ error), `set` crea o reemplaza,
+`delete -> Result<bool, string>` dice si había algo. Un primitivo, `__keychain(op, service,
+account, secret) -> [string]`, y la política de los otros subsistemas con-runtime: feature
+`keychain` de ray-runtime (activa por defecto en `ray`; detectada por uso en el nativo;
+`--without keychain` → `Err`-valor), slim/wasm → `Err` claro.
+
+Tres backends A MANO, cero crates (la línea de `std/audio` y `std/ui`: nada que exija headers en
+build):
+- **macOS**: Keychain Services sobre `kSecClassGenericPassword` (`SecItemUpdate` primero, `SecItemAdd`
+  si no existía; `SecItemCopyMatching` con `kSecReturnData`; `SecItemDelete`), diccionarios
+  CoreFoundation con RAII sobre `CFRelease`; los mensajes salen de `SecCopyErrorMessageString`.
+  Security y CoreFoundation se enlazan al build como AppKit en `std/ui`.
+- **Linux**: Secret Service por `libsecret-1.so.0` cargada con `dlopen` en runtime (sin la lib o
+  sin demonio → `Err` con el remedio); esquema propio `dev.raylang.keychain` con dos atributos
+  (`service`, `account`); `secret_password_{store,lookup,clear}_sync` son variádicas: los punteros
+  de función se declaran variádicos y la lista de atributos termina en NULL.
+- **Windows**: Credential Manager (advapi32): credencial genérica con target `service/account`,
+  `UserName` = account y blob = el secreto en UTF-8, `CRED_PERSIST_LOCAL_MACHINE`;
+  `ERROR_NOT_FOUND` es `None`/`false`, no error.
+- **`RAY_KEYCHAIN_FILE=<ruta>`**: archivo plano (`service\taccount\thex(secreto)`, 0600 en unix)
+  para tests y CI, donde no hay llavero ni sesión; documentado como "nunca producción".
+
+Verificado: `tests/keychain_cli.rs` corre el ciclo get/set/replace/delete contra el backend de
+archivo en los tres motores; el llavero REAL se prueba con `RAY_KEYCHAIN_REAL=1` y se hizo en las
+tres plataformas (Keychain en macOS sin diálogos para el propio binario; gnome-keyring en la VM
+Linux; Credential Manager en la VM Windows), dejando el llavero limpio. SECURITY.md lleva la
+sección de política y el inventario de los externs nuevos. Gotcha de plomería: el binario `ray`
+embebe los fuentes de ray-runtime por una lista explícita en `src/cli.rs` (`RT_*_RS`): un módulo
+nuevo del runtime hay que añadirlo ahí o el nativo falla con E0583.
+
+Hallazgo colateral (IDEAS §92): el intérprete falla con dos métodos de trait del mismo nombre
+encadenados (`r.unwrap_or(x).unwrap_or(y)`); la VM y el nativo, no. Hito propio.

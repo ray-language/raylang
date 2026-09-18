@@ -27,6 +27,7 @@ fn stat_detects_kinds_and_chmod_round_trips() {
         std::fs::create_dir_all(&base).expect("mkdir");
         std::fs::write(base.join("f.txt"), b"hello").expect("archivo");
         std::os::unix::fs::symlink("f.txt", base.join("lnk")).expect("symlink");
+        std::os::unix::fs::symlink("/", base.join("esc")).expect("symlink fuera");
         let root = base.to_string_lossy().into_owned();
         let src = format!(
             r#"
@@ -60,6 +61,14 @@ fn main() -> int {{
         Result.Ok(_) => print("MAL"),
         Result.Err(e) => print("chmod missing -> err"),
     }};
+    // M265 (ray-sublime #97): real_path sigue el symlink; is_within_real detecta el que escapa.
+    print(fs.real_path("{root}/lnk").unwrap_or("?") == fs.real_path("{root}/f.txt").unwrap_or("!"));
+    print(fs.real_path("{root}/nope").is_err());
+    print(fs.is_within_real("{root}/lnk", "{root}").unwrap_or(false));
+    print(fs.is_within_real("{root}", "{root}").unwrap_or(false));
+    print(fs.is_within_real("{root}/esc", "{root}").unwrap_or(true));
+    print(fs.is_within_real("{root}/esc/etc", "{root}").unwrap_or(true));
+    print(fs.is_within_real("{root}/nope", "{root}").is_err());
     0
 }}
 "#
@@ -67,7 +76,7 @@ fn main() -> int {{
         let (out, code) = run("ray_stat", &src, vm);
         assert_eq!(
             out,
-            "file\ndir\nsymlink\nerr\nlnk size=5\nchmod ok\nmode=384\nchmod missing -> err\n",
+            "file\ndir\nsymlink\nerr\nlnk size=5\nchmod ok\nmode=384\nchmod missing -> err\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\n",
             "stat/chmod (vm={vm}): {out}"
         );
         assert_eq!(code, 0);

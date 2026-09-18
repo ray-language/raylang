@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`fs.real_path` e `fs.is_within_real`** (M265, ray-sublime §97). La ruta real (symlinks seguidos,
+  `.`/`..` resueltos) y la comprobación de que una ruta vive bajo otra una vez resueltas ambas: un
+  symlink dentro del proyecto que apunta a `/etc` deja de parecer interno. Antes había que hacer un
+  `fs.stat` por segmento. Tres motores.
+- **La vía MCP cuenta dónde vive HTTP** (M265, ray-sublime §95). `llms.txt` dice junto al nombre
+  `fetch` que está en el paquete Tier-2 `net` (`ray add net`, `import net/http`), las instrucciones
+  del servidor y el mensaje de "no es un builtin" de `ray_doc` dicen que con `path` resuelve los
+  módulos del proyecto y sus dependencias Tier-2 (ya lo hacía; nadie lo contaba).
+
 ## 1.25.1 — 2026-09-17
 
 - **El pty ya no se filtra a los hijos posteriores; `Proc.pid()` y `Proc.hangup()`** (M264,

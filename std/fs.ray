@@ -358,6 +358,23 @@ pub fn stat(path: string) -> Result<Stat, string> {
     }
 }
 
+/// The real path of `path`: symlinks followed and `.`/`..` resolved (the path must exist).
+/// Absolute. On Windows the `\\?\` prefix is stripped, so it compares with what you wrote.
+pub fn real_path(path: string) -> Result<string, string> {
+    let r = __real_path(path);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
+/// Whether `inner` lives under `outer` once BOTH are resolved to their real paths — the check a
+/// program needs before touching a path a user or a model asked for: a symlink inside the folder
+/// that points outside it fails here even though its name looks internal. `Err` if either path
+/// does not exist. `outer` itself counts as within.
+pub fn is_within_real(inner: string, outer: string) -> Result<bool, string> {
+    let i = real_path(inner)?;
+    let o = real_path(outer)?;
+    Result.Ok(i == o || i.starts_with(o + "/") || i.starts_with(o + "\\"))
+}
+
 /// Sets the file's permission bits (chmod, the low 12 bits); `Ok(0)` or `Err(message)`.
 /// The mode is a plain int: 384 is 0o600 (owner read/write), 493 is 0o755.
 pub fn chmod(path: string, mode: int) -> Result<int, string> {

@@ -13834,3 +13834,23 @@ nuevo del runtime hay que añadirlo ahí o el nativo falla con E0583.
 
 Hallazgo colateral (IDEAS §92): el intérprete falla con dos métodos de trait del mismo nombre
 encadenados (`r.unwrap_or(x).unwrap_or(y)`); la VM y el nativo, no. Hito propio.
+
+## 252. M267 — Métodos de trait del mismo nombre encadenados (sep 2026)
+
+Origen: IDEAS §92, cazado al escribir el test de M266: `r.unwrap_or(Option.Some("x")).unwrap_or("?")`
+con `r: Result<Option<string>, string>` moría en `--interp` con "no match branch matched" dentro
+de `Option#unwrap_or`, mientras la VM y el nativo imprimían lo correcto.
+
+Causa: `ufcs_sites` se indexa por `(línea, col, nombre)` (CLAUDE.md, gotcha UFCS: el `Call` arranca
+en el receptor, así que `a.f().g()` distingue por el nombre). Con el MISMO nombre en dos eslabones
+—dos traits con `unwrap_or`— la clave colisiona: el checker registra el interno (`Result#unwrap_or`)
+y el externo lo pisa (`Option#unwrap_or`), y `lower_ufcs` baja los dos al mismo destino. La VM
+acertaba por accidente: compara variantes por ÍNDICE y `Result.Ok`/`Option.Some` son ambos el 0,
+así que `Option#unwrap_or` aplicado a un `Result.Ok(v)` devolvía `v`. El intérprete compara por
+nombre y fallaba: el oráculo hizo su trabajo.
+
+Arreglo: la clave lleva un cuarto campo, la PROFUNDIDAD en la cadena (`ufcs_chain_depth`: cuántos
+`.m(…)` con ese nombre y esa posición hay debajo del receptor). Se calcula igual al registrar y al
+bajar porque el lowering reescribe de fuera hacia dentro (el interno sigue siendo `Call(Field)`
+cuando se procesa el externo). Sin cambio en el parser ni en el AST; el selfhost y el LSP no usan
+esa tabla. Test en `tests/ufcs_chain_cli.rs` (tres motores, incluida una cadena de tres eslabones).

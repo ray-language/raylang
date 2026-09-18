@@ -2639,7 +2639,8 @@ impl Checker {
                         let def = self.fn_defs.get(&mangled).copied();
                         self.record_field_hover(object.line, object.col, name, &mty, def);
                     }
-                    self.ufcs_sites.insert((line, col, name.clone()), mangled);
+                    let depth = super::lowering::ufcs_chain_depth(object, name, line, col);
+                    self.ufcs_sites.insert((line, col, name.clone(), depth), mangled);
                     return Ok(ty);
                 }
                 // M9.2: ¿es un método de un trait que **acota** al tipo del receptor?
@@ -2648,7 +2649,8 @@ impl Checker {
                 if let Type::Var(tp) = &recv_ty {
                     let tp = tp.clone();
                     if let Some((dict_name, ret)) = self.resolve_bound_method(&tp, name, args, line, col)? {
-                        self.ufcs_sites.insert((line, col, name.clone()), dict_name);
+                        let depth = super::lowering::ufcs_chain_depth(object, name, line, col);
+                        self.ufcs_sites.insert((line, col, name.clone(), depth), dict_name);
                         return Ok(ret);
                     }
                 }
@@ -2826,7 +2828,8 @@ impl Checker {
             self.record_field_hover(object.line, object.col, name, &mty, def);
         }
         // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
-        self.ufcs_sites.insert((line, col, name.to_string()), target);
+        let depth = super::lowering::ufcs_chain_depth(object, name, line, col);
+        self.ufcs_sites.insert((line, col, name.to_string(), depth), target);
         Ok(ty)
     }
 

@@ -176,10 +176,11 @@ git**. Consúltalos para retomar contexto.
 - **UFCS** `recv.f(args)` también llega como `Call(Field)`. A diferencia de la
   construcción de enums (pre-pasada sin tipos), UFCS **necesita el tipo del receptor**
   (campo-vs-función), así que se resuelve **durante** el checado: se registra el sitio
-  `(línea, col, nombre)` y se baja después con `lower_ufcs`. La clave lleva el
+  `(línea, col, nombre, profundidad)` y se baja después con `lower_ufcs`. La clave lleva el
   **nombre** porque el `Call` y su receptor comparten `(línea, col)` (el parser
   arranca el `Call` en el callee), y la posición sola los confunde en cadenas
-  `a.f().g()`. Sobre el programa **fusionado** multi-módulo, el loader da a cada
+  `a.f().g()`; la **profundidad** (M267, `ufcs_chain_depth`) separa dos eslabones
+  del MISMO nombre, `r.unwrap_or(x).unwrap_or(y)`. Sobre el programa **fusionado** multi-módulo, el loader da a cada
   módulo una **banda de líneas disjunta** (`shift_program`) para que estas tablas por
   posición no colisionen.
 - **Métodos de trait** reusan ese mecanismo: `recv.m(args)` resuelve en `check_call`

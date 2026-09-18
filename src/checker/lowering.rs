@@ -21,8 +21,38 @@ use super::*;
 // el intérprete y la VM solo ven llamadas ordinarias.
 
 type SiteMap = HashMap<(usize, usize, String), String>;
+/// M267: los sitios UFCS llevan además la profundidad en la cadena (ver `ufcs_chain_depth`).
+type UfcsSiteMap = HashMap<(usize, usize, String, usize), String>;
 
-pub(super) fn lower_ufcs(program: &mut Program, sites: &SiteMap) {
+/// M267 (IDEAS §92): la PROFUNDIDAD de un `recv.m(args)` dentro de una cadena de llamadas del
+/// MISMO método y la MISMA posición: `r.unwrap_or(x).unwrap_or(y)` son dos `Call(Field)` que
+/// comparten `(línea, col)` (el `Call` arranca en el receptor) y el nombre, así que la clave
+/// `(línea, col, nombre)` colisionaba y el segundo registro pisaba al primero — el intérprete
+/// aplicaba `Option#unwrap_or` al `Result` (la VM acertaba por accidente: compara variantes por
+/// índice y `Ok`/`Some` son ambos el 0). Cuenta cuántos eslabones `.m(…)` con ese nombre hay
+/// debajo del receptor en la misma posición; es determinista y se calcula igual al registrar
+/// (checker) y al bajar (aquí), porque el lowering reescribe de fuera hacia dentro.
+pub(crate) fn ufcs_chain_depth(object: &Expr, name: &str, line: usize, col: usize) -> usize {
+    let mut depth = 0;
+    let mut e = object;
+    loop {
+        match &e.kind {
+            ExprKind::Call { callee, .. } if e.line == line && e.col == col => match &callee.kind {
+                ExprKind::Field { object, name: n } => {
+                    if n == name {
+                        depth += 1;
+                    }
+                    e = object;
+                }
+                _ => break,
+            },
+            _ => break,
+        }
+    }
+    depth
+}
+
+pub(super) fn lower_ufcs(program: &mut Program, sites: &UfcsSiteMap) {
     if sites.is_empty() {
         return;
     }
@@ -31,7 +61,7 @@ pub(super) fn lower_ufcs(program: &mut Program, sites: &SiteMap) {
     }
 }
 
-pub(super) fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
+pub(super) fn lower_ufcs_block(block: &mut Block, sites: &UfcsSiteMap) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_ufcs_expr(value, sites),
@@ -61,7 +91,7 @@ pub(super) fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
     }
 }
 
-pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
+pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &UfcsSiteMap) {
     // ¿Este `Call(Field)` es un sitio registrado? La clave incluye el nombre del método
     // porque el `Call` y su receptor comparten `(línea, columna)`; el valor es la función
     // **destino** (el mismo nombre para UFCS de función libre, el manglado para un método
@@ -69,7 +99,9 @@ pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
     // también el receptor y los argumentos (p. ej. `a.f().g()`).
     let target = match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Field { name, .. } => sites.get(&(expr.line, expr.col, name.clone())).cloned(),
+            ExprKind::Field { object, name } => {
+                sites.get(&(expr.line, expr.col, name.clone(), ufcs_chain_depth(object, name, expr.line, expr.col))).cloned()
+            }
             _ => None,
         },
         _ => None,

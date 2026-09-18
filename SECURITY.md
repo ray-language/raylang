@@ -86,6 +86,17 @@ abre el sistema es decisión del escritorio del usuario, no del programa.
 tipado, sin shell): solo cambia los pipes por un terminal. Es el programa quien decide lanzar la
 shell del usuario, como hace un editor con terminal integrado.
 
+### El llavero del sistema (`std/keychain`, M266)
+
+`keychain.get`/`set`/`delete(service, account)` guardan secretos en el almacén que el sistema ya
+protege con la sesión del usuario: Keychain Services (macOS), Secret Service por libsecret (Linux;
+gnome-keyring/KWallet) y Credential Manager (Windows). raylang no cifra ni guarda nada por su
+cuenta: hereda la política de acceso de cada llavero (en macOS, el ítem lo crea y lo lee el propio
+binario; otro programa que lo pida pasa por el diálogo del sistema). `RAY_KEYCHAIN_FILE` sustituye
+el llavero por un archivo plano (0600 en unix) SOLO para tests y CI: quien lo ponga en producción
+está guardando secretos en claro. Sin llavero disponible el resultado es `Err`, nunca un
+almacenamiento alternativo silencioso.
+
 ### Política de dependencias
 
 raylang **no** es cero-dependencias: es **dependencias escogidas, acotadas y justificadas**. La
@@ -279,6 +290,13 @@ documentada:
   de `AcceleratorKeyPressed`, que corre ahí); la tabla de aceleradores es propia y se destruye con la
   ventana; `GetKeyState` solo consulta modificadores.
   - M226: el esquema `ray://app/…` (`WKURLSchemeHandler`) sirve la interfaz y los archivos montados **sin socket**: no hay puerto local que otro proceso pueda alcanzar ni permiso de red local en el bundle; los montajes de directorio se canonicalizan y `..` nunca sale de ellos (403 antes de tocar el disco); solo GET/HEAD; sin cabeceras CORS, así que una página de otro origen no puede leer lo servido.
+- **`crates/ray-runtime/src/keychain.rs`** — el llavero del sistema (`std/keychain`, M266), **sin
+  crates**: en macOS, `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete` con
+  diccionarios CoreFoundation propios (RAII sobre `CFRelease`, lectura de los estáticos `kSec*`);
+  en Linux, `dlopen("libsecret-1.so.0")` + `transmute` de `secret_password_{store,lookup,clear}_sync`
+  a sus firmas variádicas (lista de atributos terminada en NULL) y liberación con
+  `secret_password_free`/`g_error_free`; en Windows, `CredWriteW`/`CredReadW`/`CredDeleteW` sobre un
+  `CREDENTIALW` propio y `CredFree` del buffer devuelto. Todos los buffers viven durante la llamada.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

@@ -1983,6 +1983,16 @@ pub fn bigint_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>
     Err("bigint is not available in this build (feature 'bigint')".to_string())
 }
 
+/// M266: la primitiva de `std/keychain` (ver ray_runtime::keychain): `["ok", …]`/`["none"]`/`["err", msg]`.
+#[cfg(all(feature = "keychain", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn keychain_op(op: &str, service: &str, account: &str, secret: &str) -> Vec<String> {
+    ray_runtime::keychain::op(op, service, account, secret)
+}
+#[cfg(not(all(feature = "keychain", any(unix, windows), not(target_arch = "wasm32"))))]
+pub fn keychain_op(_op: &str, _service: &str, _account: &str, _secret: &str) -> Vec<String> {
+    vec!["err".to_string(), "keychain is not available in this build (feature 'keychain')".to_string()]
+}
+
 /// M253: la primitiva acelerada de `std/deflate`/`std/inflate` (ver ray_runtime::deflate). `None` = "no
 /// disponible en este build": los módulos raylang caen a su propio algoritmo.
 #[cfg(all(feature = "deflate", not(target_arch = "wasm32")))]
@@ -3342,6 +3352,15 @@ static BUILTINS: &[Builtin] = &[
             if *t != Type::Bytes { return Err((Some(i), format!("__bigint_op expects bytes, not {}", t))); }
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M266: __keychain(op, service, account, secret) -> [string]: ["ok", …] | ["none"] | ["err", msg].
+    // Primitivo interno de std/keychain (get/set/delete sobre el llavero del sistema).
+    Builtin { name: "__keychain", opcode: OpCode::Keychain, check: |a| {
+        arity(a, 4, "__keychain", " (op, service, account, secret)")?;
+        for (i, t) in a.iter().enumerate() {
+            if *t != Type::String { return Err((Some(i), format!("__keychain expects a string, not {}", t))); }
+        }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     // M253: __deflate_op(op, data, n) -> [bytes]: [resultado] | [] (no disponible → std/deflate y std/inflate
     // usan su algoritmo en raylang). op = "deflate" (n = nivel) | "inflate" (n = tope de salida) | "crc32" |

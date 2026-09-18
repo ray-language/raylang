@@ -34,6 +34,7 @@ const MODULES: &[(&str, &str)] = &[
     // producción.
     // M195: enteros grandes sobre bytes (runtime num-bigint tras la feature `bigint`).
     ("std/bigint", include_str!("../std/bigint.ray")),
+    ("std/keychain", include_str!("../std/keychain.ray")), // M266
     ("std/crypto/md5", include_str!("../std/crypto/md5.ray")),
     ("std/crypto/aes", include_str!("../std/crypto/aes.ray")),
     ("std/crypto/des", include_str!("../std/crypto/des.ray")),

@@ -27,7 +27,7 @@ crate-type = ["cdylib", "rlib"]
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
 # cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
 # quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
-default = ["interp", "sqlite", "net-tls", "ffi", "regex", "watch", "unicode", "audio", "ui", "bigint", "deflate"]
+default = ["interp", "sqlite", "net-tls", "ffi", "regex", "watch", "unicode", "audio", "ui", "bigint", "deflate", "keychain"]
 interp = []
 # M89 (IDEAS §47): SQLite embebido tras una feature (activa por defecto → el binario normal es
 # idéntico). Un build "slim" para contenedores/embedding la excluye (--no-default-features
@@ -73,6 +73,9 @@ regex = ["ray-runtime/regex"]
 unicode = ["ray-runtime/unicode"]
 # M195: enteros grandes (`std/bigint`) vía `ray-runtime` (num-bigint). Slim/wasm la excluyen → Err claro.
 bigint = ["ray-runtime/bigint"]
+# M266: el llavero del sistema (`std/keychain`) vía `ray-runtime` (backends a mano, cero crates). Slim/wasm la
+# excluyen → Err claro; `RAY_KEYCHAIN_FILE` da el backend de archivo para tests.
+keychain = ["ray-runtime/keychain"]
 # M253: DEFLATE/INFLATE de producción (`std/deflate`, `std/inflate`) vía `ray-runtime` (miniz_oxide). Slim/wasm
 # la excluyen → los módulos caen a su algoritmo en raylang (mismo resultado, más lento).
 deflate = ["ray-runtime/deflate"]

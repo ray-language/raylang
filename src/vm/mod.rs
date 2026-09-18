@@ -1972,6 +1972,22 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::Keychain => {
+                    // M266: pop en orden inverso (secret, account, service, op).
+                    let secret = self.pop();
+                    let account = self.pop();
+                    let service = self.pop();
+                    let op = self.pop();
+                    let (HeapValue::Str(op), HeapValue::Str(service), HeapValue::Str(account), HeapValue::Str(secret)) =
+                        (op, service, account, secret)
+                    else {
+                        unreachable!("the checker guarantees four strings");
+                    };
+                    let elems = crate::builtins::keychain_op(&op, &service, &account, &secret)
+                        .into_iter().map(|x| HeapValue::Str(x.into())).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::DeflateOp => {
                     // M253: pop en orden inverso (n, data, op). `[]` = sin runtime → el módulo raylang sigue solo.
                     let n = self.pop();

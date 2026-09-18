@@ -3410,8 +3410,8 @@ Posterior: ray-sublime §85 (cada carga de un `bytes` copiaba el búfer; el 92 %
 (`Arc<[u8]>` en la VM, DESIGN §248); ray-sublime §94 (el maestro del pty se heredaba sin `CLOEXEC`;
 `Proc.pid`/`Proc.hangup`) → ✅ M264 (DESIGN §249); §95 (la vía MCP no dice que `fetch` es Tier-2 ni
 que `ray_doc` resuelve dependencias con `path`) + §97 (`fs.real_path`) → ✅ M265 (DESIGN §250);
-§95.3 (`ray search` por palabra clave: pide descripción/keywords en el índice) y §96 (`std/keychain`)
-→ pendientes (keychain = M266 propuesto). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
+§96 (`std/keychain`) → ✅ M266 (DESIGN §251); §95.3 (`ray search` por palabra clave: pide
+descripción/keywords en el índice) → pendiente (§92 de este archivo). Datos sin trabajo asociado: brecha VM/nativo 26× (bucle) y **121×** (Map + bytes + E/S); 39 % de
 los 6 226 patrones reales de sintaxis usan look-around. La entrada 31 (`fmt` rompe parches) no se
 reproduce con 1.10.0.
 
@@ -3522,3 +3522,19 @@ toolchain, un binario no mira el entorno); `ui.app_url` y `app://` en `open`/`op
 <plantilla>` sin correr npm (solo instrucciones, decisión del usuario). Impacto: BAJO (ninguna
 decisión de lenguaje; `std/ui` + CLI). Pendiente: iOS en dispositivo real (Vite `--host` + IP
 de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.
+
+## 92. Pendientes menores tras el arco de ray-sublime §95–§97 (sep 2026)
+
+- **`ray search` por palabra clave** (ray-sublime §95.3): `cmd_search` casa solo el NOMBRE del
+  paquete contra los archivos del índice, y `<nombre>.toml` (una sección por versión con
+  `git`/`hash`/`yanked`) no tiene descripción ni palabras clave: `ray search http` no devuelve
+  `net`. Hace falta ampliar el esquema del índice público (ray-index) con `description` y
+  `keywords`/`modules` por paquete, que `ray publish` los rellene desde `ray.toml`, y que `search`
+  los mire. Impacto MEDIO: toca dos repos y el formato del índice. Decisión del usuario.
+- **Bug del intérprete: dos métodos de trait con el MISMO nombre encadenados** (cazado al escribir el
+  test de M266): `r.unwrap_or(Option.Some("x")).unwrap_or("?")` con `r: Result<Option<string>,
+  string>` falla en `--interp` con "no match branch matched" dentro de `Option#unwrap_or`; la VM
+  y el nativo lo hacen bien. Pista: `ufcs_sites` se indexa por `(línea, col, nombre)` y un `Call`
+  encadenado comparte posición con su receptor (CLAUDE.md, gotcha UFCS); con el mismo nombre en
+  los dos eslabones la clave colisiona y el lowering del intérprete aplica el destino equivocado.
+  Impacto BAJO en producto (la VM es el motor) pero rompe el oráculo: arreglar como hito propio.

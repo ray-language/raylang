@@ -552,7 +552,8 @@ struct Checker {
     /// libre es el mismo nombre; para un método de trait, el nombre **manglado**
     /// (`Tipo#metodo`). Tras verificar, `lower_ufcs` reescribe `recv.f(args)` a
     /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
-    ufcs_sites: HashMap<(usize, usize, String), String>,
+    /// M267: el cuarto campo es la profundidad en una cadena del mismo método (`lowering::ufcs_chain_depth`).
+    ufcs_sites: HashMap<(usize, usize, String, usize), String>,
     /// M40.2: `for x in it` sobre un iterador → posición del `for` (línea, col) → nombre manglado de
     /// su método `next`. Un pase lo baja reescribiendo `ForIter::In` a `ForIter::Iter`.
     for_iter_sites: HashMap<(usize, usize), String>,

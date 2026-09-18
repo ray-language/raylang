@@ -3531,7 +3531,7 @@ de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.
   `net`. Hace falta ampliar el esquema del índice público (ray-index) con `description` y
   `keywords`/`modules` por paquete, que `ray publish` los rellene desde `ray.toml`, y que `search`
   los mire. Impacto MEDIO: toca dos repos y el formato del índice. Decisión del usuario.
-- **Bug del intérprete: dos métodos de trait con el MISMO nombre encadenados** (cazado al escribir el
+- ✅ M267 (DESIGN §252) — **Bug del intérprete: dos métodos de trait con el MISMO nombre encadenados** (cazado al escribir el
   test de M266): `r.unwrap_or(Option.Some("x")).unwrap_or("?")` con `r: Result<Option<string>,
   string>` falla en `--interp` con "no match branch matched" dentro de `Option#unwrap_or`; la VM
   y el nativo lo hacen bien. Pista: `ufcs_sites` se indexa por `(línea, col, nombre)` y un `Call`

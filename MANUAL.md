@@ -139,11 +139,15 @@ Los **parámetros son inmutables**. Las **firmas de función se anotan siempre**
 La asignación es una **sentencia**, no una expresión (`x = y = 5` no existe). Para descartar un valor:
 `let _ = f();`.
 
-Constantes globales con `const` (su valor debe ser un **literal**):
+Constantes globales con `const` (su valor debe ser un **literal**, o un **arreglo de literales** —
+M274— que se evalúa de nuevo en cada uso: un arreglo fresco por evaluación, sin estado compartido;
+en un bucle caliente ízalo a un local):
 
 ```rust
 const GRAVEDAD: float = 9.81;     // para π/e usa `math.PI`/`math.E` (import std/math), no una const
 const MAX_INTENTOS: int = 3;
+const EXTENSIONES: [string] = ["srt", "vtt"];   // tabla de consulta con nombre (M274)
+const BITRATES: [[int]] = [[32, 64, 96], [128, 192, 256]];
 ```
 
 ### Funciones

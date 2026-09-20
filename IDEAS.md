@@ -3558,11 +3558,11 @@ net 0.2.0, todas con repro y coste medido). Estado:
 | 6 | `ray check` exigía `main` en un módulo de librería | ✅ M270 |
 | 7 | `llms.txt` sin tipos de retorno, sin `b[i]` ni `m.get(k)` | ✅ M273 |
 | 8 | `struct Sub` fallaba con posición sintética `1000000666:1` y mensaje invertido | ✅ M270 |
-| 9 | `std/image` solo decodifica PNG (JPEG para miniaturas) | decisión (crate puro, p. ej. `zune-jpeg`) |
-| 10 | Bucles por píxel 43× más lentos en la VM que en nativo | dato para PERFORMANCE |
+| 9 | `std/image` solo decodifica PNG (JPEG para miniaturas) | ❌ no en std (M274): JPEG es un formato de consumo y en la VM iría por píxel; miniaturas con `ffmpeg`/`sips` vía `std/process` (un servidor de medios ya depende de ffmpeg); si un 2º proyecto lo pide, paquete Tier-2 `image` con feature del runtime |
+| 10 | Bucles por píxel 43× más lentos en la VM que en nativo | 📊 anotado en PERFORMANCE (M274): techo estructural del intérprete (~1 µs por operación sobre `bytes`); regla: píxeles → nativo o caché; primitivas de bloque para `bytes` solo si aparece un 2º caso |
 | 11 | `==`/`assert_eq` sobre enums derivados: error en la VM y E0369 en nativo (structs también) | ✅ M270 |
 | 12 | `to_string` no aceptaba `Show` aunque la referencia lo prometía | ✅ M270 |
 | 13 | Funciones no soportadas en nativo → stubs que panican; pedir opción de error | ✅ M273 |
 | 14 | `ray fmt` recorta `0x0D` a `0xD` | ✅ M273 |
-| 15 | No hay constantes de tipo array | decisión (SPEC) |
-| 16 | `@derive(Show)` no soporta campos array | pendiente (S) |
+| 15 | No hay constantes de tipo array | ✅ M274 (arreglo de literales con semántica de literal inyectado; SPEC §const) |
+| 16 | `@derive(Show)` no soporta campos array | ✅ M274 |

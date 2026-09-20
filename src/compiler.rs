@@ -95,10 +95,12 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     let n_named = program.functions.len();
     let total = n_named + collect_fn_exprs(program).len();
 
-    // M27.5: valores de las constantes de nivel superior (evaluados de sus literales).
+    // M27.5: las constantes de nivel superior. M274: se guarda la EXPRESIÓN (literal o arreglo de
+    // literales) y cada uso la compila de nuevo — semántica de literal inyectado: un `const` arreglo
+    // da un arreglo fresco por evaluación, sin estado compartido que un alias pudiera mutar.
     let mut consts = HashMap::new();
     for cst in &program.consts {
-        consts.insert(cst.name.clone(), crate::runtime::eval_const_literal(&cst.value));
+        consts.insert(cst.name.clone(), cst.value.clone());
     }
 
     // M41: tabla de funciones externas (FFI) + mapa nombre → índice (para bajar `CallExtern`).
@@ -202,7 +204,7 @@ struct Compiler<'a> {
     functions: Vec<Option<CompiledFn>>,
     scopes: Vec<FnScope>,
     /// Constantes de nivel superior (M27.5): nombre → su valor. Una referencia se compila a `Constant`.
-    consts: HashMap<String, Value>,
+    consts: HashMap<String, Expr>,
     /// Funciones externas (M41, FFI): nombre → índice en la tabla `externs` del `CompiledProgram`.
     /// Una llamada a uno de estos nombres se baja a `CallExtern(idx, argc)`.
     extern_indices: &'a HashMap<String, usize>,
@@ -965,10 +967,10 @@ impl<'a> Compiler<'a> {
                     let depth = self.scopes.len() - 1;
                     if let Some(up) = self.resolve_upvalue(depth, name) {
                         self.emit(OpCode::GetUpvalue(up), line, col);
-                    } else if let Some(v) = self.consts.get(name).cloned() {
-                        // M27.5: una constante de nivel superior → su valor como Constant.
-                        let cidx = self.cur().chunk.add_constant(v);
-                        self.emit(OpCode::Constant(cidx), line, col);
+                    } else if let Some(e) = self.consts.get(name).cloned() {
+                        // M27.5: una constante de nivel superior → su literal, compilado en el sitio
+                        // (M274: un arreglo constante se construye de nuevo en cada uso).
+                        self.emit_expr(&e)?;
                     } else {
                         // No es variable ni upvalue ni constante: un nombre de función como valor.
                         let idx = *self.indices.get(name).expect("the checker guarantees the name");

@@ -250,8 +250,14 @@ pub(super) fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<
         // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.show()")),
+        // M274 (raystream [16]): un arreglo se muestra por el `impl<T: Show> Show for [T]` del prelude
+        // (`[a, b]`), con tal de que su elemento sea mostrable (recursivo: `[[int]]`, `[Track]`…).
+        Type::Array(elem) => {
+            render_to_string(a, "_", elem)?;
+            Ok(format!("{expr}.show()"))
+        }
         other => Err(TypeError {
-            msg: format!("cannot derive Show for a field of type {} (for now primitives, struct and enum)", other),
+            msg: format!("cannot derive Show for a field of type {} (for now primitives, arrays, struct and enum)", other),
             line: a.line,
             col: a.col,
             len: 1,

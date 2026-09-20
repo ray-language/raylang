@@ -14019,3 +14019,32 @@ lista de wrappers interceptados de `names.rs` aunque `emit_time` ya lo intercept
 0x80) y el método `m.get(k)`. Ahora los lista, con los tipos de retorno que sorprenden
 (`index_of`/`position`/`pop`/`parse_int` → `Option`, `from_utf8`/`fs.read_file` → `Result`) y
 la indicación de `ray_doc` para el resto.
+
+## 259. M274 — La cola de raystream: constantes arreglo, `Show` de arreglos, y dos decisiones (sep 2026)
+
+Origen: los cuatro hallazgos de raystream que quedaban (IDEAS §93 [9], [10], [15], [16]).
+
+**[15] Constantes de tipo arreglo.** La SPEC exigía literal. El problema de fondo no es
+sintáctico sino de aliasing: los arreglos tienen semántica de referencia y `let` no impide `push`,
+así que una constante COMPARTIDA sería mutable a través de cualquier alias. Decisión: semántica de
+**literal inyectado** — `is_const_literal` acepta un arreglo de literales (anidable), y los tres
+motores evalúan la constante en cada uso: la VM compila la expresión en el sitio (`emit_expr` en
+vez de un `Constant` compartido), el intérprete evalúa la expresión guardada, y el nativo ya
+emitía `fn NAME() -> T { literal }` (un arreglo fresco por llamada). Gana declarar la tabla una vez
+con nombre; el coste por evaluación es el de construir el literal (quien la use en un bucle
+caliente la iza a un local, como cualquier literal). SPEC §gramática `const_valor` y §const.
+
+**[16] `@derive(Show)` con campos arreglo.** El prelude ya tenía `impl<T: Show> Show for [T]`;
+`render_to_string` del derive los rechazaba ("for now primitives, struct and enum"). Ahora emite
+`campo.show()` para `[T]` si el elemento es mostrable (recursivo: `[[string]]`, `[Track]`).
+
+**[9] JPEG en `std/image`: NO.** `std/image` es raylang puro (PNG sobre `std/inflate`). Un
+decodificador JPEG baseline son ~1500 líneas más y en la VM correría por píxel (ver [10]); un crate
+en el runtime metería un formato de consumo, no una primitiva, en la stdlib, y ampliaría la
+superficie de parseo de entrada hostil. Un servidor de medios ya depende de `ffmpeg`: las
+miniaturas se hacen con `std/process` (`ffmpeg -vf scale`, `sips` en macOS) y se cachean. Si un
+segundo proyecto lo pide: paquete Tier-2 `image` con feature del runtime.
+
+**[10] Bucles por píxel 43× más lentos en la VM: dato, no arco.** Techo estructural del intérprete
+(~1 µs por operación sobre `bytes`); anotado en PERFORMANCE con la regla "píxeles → nativo o
+caché". Primitivas de bloque para `bytes` solo si aparece un segundo caso.

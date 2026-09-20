@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Constantes de tipo arreglo y `@derive(Show)` con campos arreglo** (M274, raystream [15], [16]).
+  `const EXTENSIONES: [string] = ["srt", "vtt"];` (anidable) con semántica de literal inyectado:
+  cada uso evalúa el arreglo de nuevo, así que no hay estado compartido que un alias pueda mutar.
+  `@derive(Show)` acepta campos `[T]` (recursivo) por el `Show` de arreglos del prelude. JPEG no
+  entra en `std/image` (miniaturas con `ffmpeg`/`sips` vía `std/process`) y el coste de los bucles
+  por píxel en la VM queda anotado en PERFORMANCE.
+
 - **Herramientas: `ray fmt` conserva el ancho de los literales, `--no-stubs` en el nativo y
   firmas en `llms.txt`** (M273, raystream [7], [13], [14]). `ray fmt` ya no recorta `0x0D` a
   `0xD` ni `0x00010000` a `0x10000`: los ceros a la izquierda escritos se conservan (hex, octal y

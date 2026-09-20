@@ -249,6 +249,32 @@ pub fn stream_response(status: int, ch: Channel<bytes>) -> Response {
     Response { status: status, headers: Map.new(), set_cookie: [], body: b"", stream: [ch] }
 }
 
+// M271 (raystream [3]): un stream de tamaño CONOCIDO. Se anuncia por la cabecera `Content-Length`
+// (sin campo nuevo en Response: una app que la ponga a mano obtiene lo mismo) y el bucle de servicio
+// lo escribe sin chunked y mantiene la conexión viva — una descarga o un medio con barra de progreso.
+/// Like `stream_response`, for a body whose total size is known (`length` bytes): the response
+/// carries `Content-Length` instead of `Transfer-Encoding: chunked`, is written as raw bytes as
+/// the pieces arrive, and the connection stays keep-alive — what a download or a media file
+/// wants (progress bar, resumable). The producer must send exactly `length` bytes; if it closes
+/// the channel early the connection is closed (the client sees a truncated body, never a wrong
+/// next response).
+pub fn stream_response_len(status: int, ch: Channel<bytes>, length: int) -> Response {
+    let r: Response = stream_response(status, ch);
+    r.headers.insert("Content-Length", to_string(length));
+    r
+}
+
+// El tamaño anunciado de un stream (`Content-Length`), o -1 si va chunked.
+fn stream_length_of(r: Response) -> int {
+    match (get(r.headers, "Content-Length")) {
+        Option.Some(v) => match (parse_int(v.trim())) {
+            Option.Some(n) => n,
+            Option.None => 0 - 1,
+        },
+        Option.None => 0 - 1,
+    }
+}
+
 // Entero a hexadecimal en minúsculas (el tamaño de un chunk del framing).
 fn to_hex(n0: int) -> string {
     if (n0 == 0) {
@@ -516,7 +542,10 @@ fn if_none_match_hits(req: Request, etag: string) -> bool {
 
 // M147: la cola común de servir un estático YA LEÍDO (disco o embebido): Range/If-Range/416/
 // 206/200 con Content-Type + ETag + Accept-Ranges. `file` solo aporta la extensión (MIME).
-fn serve_static_bytes(file: string, etag: string, data: bytes, req: Request) -> Response {
+// M271: el rango pedido, ya validado contra `size`: `[]` = respuesta completa (sin Range, HEAD,
+// o If-Range con otro validador), `[x]` = 416, `[a, b]` = 206 inclusivo. Compartido por el camino
+// en memoria (serve_static_bytes) y el de disco por trozos (serve_static_file_stream).
+fn range_of(req: Request, etag: string, size: int) -> [int] {
     // M110: Range/206 (solo GET; en HEAD el Range se ignora, permitido por RFC). `If-Range`
     // con validador distinto al nuestro → respuesta completa (el recurso cambió bajo una
     // descarga reanudada; servir el trozo corrompería).
@@ -537,8 +566,107 @@ fn serve_static_bytes(file: string, etag: string, data: bytes, req: Request) -> 
             Option.None => { },
         }
     }
-    if (range_v != "") {
-        let rng: [int] = parse_range(range_v, data.len());
+    if (range_v == "") {
+        return [];
+    }
+    parse_range(range_v, size)
+}
+
+// M271 (raystream [2]): a partir de este tamaño un estático de DISCO se sirve por trozos desde el
+// archivo (fs.open + seek + read_bytes en un productor), no leído entero: `static_mount` cargaba
+// el archivo completo para servir un `Range` de 11 bytes (1 GB de RSS por un salto de la barra de
+// un reproductor). Por debajo, el camino en memoria (gzip/ETag/Range sobre bytes) sigue igual.
+const STATIC_STREAM_MIN_BYTES: int = 1048576;
+
+// El trozo de lectura del productor (256 KB): memoria acotada sea cual sea el tamaño del archivo.
+const STATIC_CHUNK_BYTES: int = 262144;
+
+// El productor: lee `[from, to]` (inclusivo) de `file` por trozos y los manda por el canal; cierra
+// el canal al terminar (o si el archivo falla a medias: el bucle de servicio detecta el corto).
+fn stream_file_range(file: string, from: int, to: int) -> Channel<bytes> {
+    let ch: Channel<bytes> = Channel.bounded(4);
+    let _ = spawn(fn() {
+        match (fs.open(file, "r")) {
+            Result.Ok(h) => {
+                var go: bool = true;
+                match (fs.seek(h, from)) {
+                    Result.Ok(_) => { },
+                    Result.Err(_) => {
+                        go = false;
+                    },
+                }
+                var left: int = to - from + 1;
+                while (go && left > 0) {
+                    let want: int = if (left < STATIC_CHUNK_BYTES) {
+                        left
+                    } else {
+                        STATIC_CHUNK_BYTES
+                    };
+                    match (fs.read_bytes(h, want)) {
+                        Result.Ok(piece_opt) => match (piece_opt) {
+                            Option.Some(piece) => {
+                                if (piece.len() == 0) {
+                                    go = false;
+                                } else {
+                                    left = left - piece.len();
+                                    send(ch, piece);
+                                }
+                            },
+                            Option.None => {
+                                go = false;
+                            },
+                        },
+                        Result.Err(_) => {
+                            go = false;
+                        },
+                    }
+                }
+                close(h);
+            },
+            Result.Err(_) => { },
+        }
+        close(ch);
+    });
+    ch
+}
+
+// M271: servir un estático de disco GRANDE sin leerlo entero: mismos ETag/Range/If-Range/416/206
+// que serve_static_bytes, con el cuerpo en streaming de tamaño conocido (Content-Length, keep-alive).
+// En un HEAD no se lanza productor: cabeceras solas (el canal nace cerrado).
+fn serve_static_file_stream(file: string, etag: string, size: int, req: Request) -> Response {
+    let rng: [int] = range_of(req, etag, size);
+    if (rng.len() == 1) {
+        let r416: Response = text(416, "range not satisfiable\n");
+        r416.headers.insert("Content-Range", "bytes */" + to_string(size));
+        r416.headers.insert("ETag", etag);
+        return r416;
+    }
+    let from: int = if (rng.len() == 2) { rng[0] } else { 0 };
+    let to: int = if (rng.len() == 2) { rng[1] } else { size - 1 };
+    let length: int = to - from + 1;
+    let ch: Channel<bytes> = if (req.method == "HEAD") {
+        let empty: Channel<bytes> = Channel.bounded(1);
+        close(empty);
+        empty
+    } else {
+        stream_file_range(file, from, to)
+    };
+    let r: Response = stream_response_len(if (rng.len() == 2) { 206 } else { 200 }, ch, length);
+    r.headers.insert("Content-Type", mime_of(file));
+    r.headers.insert("ETag", etag);
+    r.headers.insert("Accept-Ranges", "bytes");
+    if (rng.len() == 2) {
+        r.headers.insert(
+            "Content-Range",
+            "bytes " + to_string(from) + "-" + to_string(to) + "/" + to_string(size)
+        );
+    }
+    r
+}
+
+fn serve_static_bytes(file: string, etag: string, data: bytes, req: Request) -> Response {
+    let rng: [int] = range_of(req, etag, data.len());
+    if (rng.len() > 0) {
         if (rng.len() == 1) {
             let r416: Response = text(416, "range not satisfiable\n");
             r416.headers.insert("Content-Range", "bytes */" + to_string(data.len()));
@@ -597,6 +725,10 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
                 let r304: Response = bytes_response(304, b"");
                 r304.headers.insert("ETag", etag);
                 return r304;
+            }
+            // M271: un archivo grande va por trozos desde el disco (nunca entero en memoria).
+            if (size >= STATIC_STREAM_MIN_BYTES) {
+                return serve_static_file_stream(file, etag, size, req);
             }
             match (fs.read_file_bytes(file)) {
                 Result.Ok(data) => serve_static_bytes(file, etag, data, req),
@@ -1175,7 +1307,7 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
     // M110: una respuesta en streaming va por su propio camino (chunked, sin Content-Length,
     // conexión SIEMPRE close). El live-reload no aplica (no hay cuerpo HTML bufferizado).
     if (r0.stream.len() > 0) {
-        return send_stream_response(conn, r0, omit_body);
+        return send_stream_response(conn, r0, keep, omit_body);
     }
     // M92.4: bajo `ray dev` inyecta el snippet de live-reload en las respuestas HTML (no-op en producción).
     // Se hace ANTES de calcular el Content-Length para que cuadre con el cuerpo ya inyectado.
@@ -1216,11 +1348,23 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
 // chunk por cada trozo del canal, hasta que el productor lo cierre. En un HEAD se envían solo las
 // cabeceras, pero el canal SE DRENA igual: si no, un productor sobre un canal acotado se quedaría
 // bloqueado en `send` para siempre (fuga de fibra).
-fn send_stream_response(conn: int, r: Response, omit_body: bool) -> Result<int, string> {
+fn send_stream_response(
+    conn: int,
+    r: Response,
+    keep: bool,
+    omit_body: bool
+) -> Result<int, string> {
     let ch: Channel<bytes> = r.stream[0];
+    // M271: con `Content-Length` (stream_response_len) el cuerpo va en crudo y la conexión sigue
+    // viva; sin ella, chunked + close (M110).
+    let known: int = stream_length_of(r);
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
-    head = head + "Transfer-Encoding: chunked\r\n";
-    head = head + "Connection: close\r\n";
+    if (known < 0) {
+        head = head + "Transfer-Encoding: chunked\r\n";
+        head = head + "Connection: close\r\n";
+    } else {
+        head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
+    }
     head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
     let ks: [string] = r.headers.keys();
     var i: int = 0;
@@ -1247,6 +1391,7 @@ fn send_stream_response(conn: int, r: Response, omit_body: bool) -> Result<int, 
         Result.Ok(_) => { },
     }
     var err: string = "";
+    var written: int = 0;
     var go: bool = true;
     while (go) {
         match (recv(ch)) {
@@ -1258,7 +1403,12 @@ fn send_stream_response(conn: int, r: Response, omit_body: bool) -> Result<int, 
                     // Un chunk por trozo: "<tamaño-hex>\r\n" + datos + "\r\n". Si el cliente
                     // cortó, se sigue DRENANDO el canal (el productor no debe quedar colgado)
                     // pero ya no se escribe.
-                    let frame: bytes = (to_hex(piece.len()) + "\r\n").to_bytes() + piece + b"\r\n";
+                    let frame: bytes = if (known < 0) {
+                        (to_hex(piece.len()) + "\r\n").to_bytes() + piece + b"\r\n"
+                    } else {
+                        piece
+                    };
+                    written = written + piece.len();
                     match (net.socket_write_bytes(conn, frame)) {
                         Result.Err(e) => {
                             err = e;
@@ -1274,6 +1424,19 @@ fn send_stream_response(conn: int, r: Response, omit_body: bool) -> Result<int, 
     }
     if (omit_body) {
         return Result.Ok(0);
+    }
+    if (known >= 0) {
+        // M271: con tamaño anunciado no hay terminador; un productor corto deja la conexión
+        // inservible (el peer esperaría más octetos) → error, y el bucle de servicio la cierra.
+        if (written != known) {
+            return Result.Err(
+                "stream body: "
+                    + to_string(written)
+                    + " bytes sent, Content-Length was "
+                    + to_string(known)
+            );
+        }
+        return Result.Ok(written);
     }
     net.socket_write_bytes(conn, b"0\r\n\r\n")
 }
@@ -1319,8 +1482,12 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
     match (read_request_limits(conn, limits)) {
         Result.Ok(req) => {
-            let t = spawn(fn() { handler(req, conn) });
-            match (try_join(t)) {
+            // M271 (raystream [5]): `try_call` y no `spawn`+`try_join` (como handle_http desde
+            // M97.2): misma garantía (un handler que revienta responde 500 sin tumbar el servidor)
+            // y, además, un handler que CAPTURA estado (un canal, un actor) compila en el nativo —
+            // con `spawn` el closure tenía que ser Send y `serve_raw(host, port, closure)` fallaba
+            // con E0277 sobre código generado.
+            match (try_call(fn() { handler(req, conn) })) {
                 Result.Ok(_) => { },
                 Result.Err(e) => {
                     eprint("handler: " + e);
@@ -1393,8 +1560,9 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                                 follow = false;
                             },
                         }
-                        // M110: un stream anuncia y hace Connection: close → no reusar.
-                        if (resp.stream.len() > 0) {
+                        // M110: un stream chunked anuncia y hace Connection: close → no reusar.
+                        // M271: con Content-Length (stream_response_len) la conexión sigue viva.
+                        if (resp.stream.len() > 0 && stream_length_of(resp) < 0) {
                             follow = false;
                         }
                     },
@@ -1434,6 +1602,25 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
 /// the VM and in native binaries (the interpreter has no concurrency).
 pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
     serve_raw_limits(host, port, default_limits(), handler)
+}
+
+// M271 (raystream [5]): estado para un handler CRUDO sin capturar un closure en una variable — la
+// fábrica se llama DENTRO de la fibra de cada conexión (el precedente de `serve_with`): en el nativo
+// el valor que cruza al pool es la fábrica escrita inline en la llamada, que compila.
+/// Like `serve_raw`, with a handler FACTORY: `make_handler` runs inside each connection's fiber
+/// and returns the raw handler for it — the way to give a raw handler state (a channel to an
+/// actor, a cache) that also compiles natively: write the factory inline in the call
+/// (`serve_raw_with(h, p, fn() -> fn(Request, int) { … })`); a closure stored in a variable
+/// cannot cross to the connection fibers in a native binary (the compiler says so).
+pub fn serve_raw_with(
+    host: string,
+    port: int,
+    make_handler: fn() -> fn(Request, int)
+) -> Result<int, string> {
+    serve_raw_limits(host, port, default_limits(), fn(req: Request, conn: int) {
+        let h: fn(Request, int) = make_handler();
+        h(req, conn)
+    })
 }
 
 // M56.1: la versión con límites. Dos defensas nuevas en el bucle de accept:

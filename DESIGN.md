@@ -13936,3 +13936,39 @@ comprueban igual) y no se compila a bytecode. `ray run`/`build` siguen exigiendo
 
 Verificado: `tests/raystream_batch_cli.rs` (los cinco, tres motores donde aplica), el test de H5
 del override nativo y la suite selfhost intactos.
+## 256. M271 — Medios en `net/webserver`: estáticos por trozos, streams con tamaño y estado en handlers crudos (sep 2026)
+
+Origen: raystream [2], [3] y [5] (IDEAS §93). Un servidor de medios es el caso de uso que más
+necesita `Range`, y el soporte de `static_mount` —impecable en 206/416/`If-Range`/ETag— era
+inservible para él: leía el archivo entero (`fs.read_file_bytes`) y recortaba después. Medido por
+la app: 1 048 MB de RSS por un `Range: bytes=0-10` sobre un archivo grande, y la memoria no se
+devolvía.
+
+**[2] Estáticos por trozos.** Por encima de `STATIC_STREAM_MIN_BYTES` (1 MB) un estático de disco
+va por `serve_static_file_stream`: los mismos ETag/304 por metadatos, el mismo `range_of`
+(refactor compartido con el camino en memoria: `[]` completo, `[x]` 416, `[a, b]` 206) y un
+productor en `spawn` que abre el archivo, hace `seek` al inicio del rango y manda trozos de 256 KB
+por un canal acotado de 4 — memoria acotada sea cual sea el tamaño. En un HEAD no hay productor:
+el canal nace cerrado y solo van las cabeceras. Por debajo del umbral nada cambia (gzip, ETag y
+Range sobre bytes siguen igual). Test: un archivo de 1,5 MB con patrón conocido por posición, con
+rango en medio, sufijo, completo (cruza trozos), 416 y HEAD.
+
+**[3] Streams de tamaño conocido.** `stream_response_len(status, ch, length)` no añade campo a
+`Response`: pone `Content-Length` y `send_stream_response` lo detecta (`stream_length_of`):
+cuerpo en crudo sin chunked, `Connection: keep-alive`, y `handle_http` no cierra la conexión
+después. Si el productor manda menos octetos de los anunciados, el writer devuelve `Err` y la
+conexión se cierra: el cliente ve un cuerpo truncado, nunca una respuesta siguiente desalineada.
+
+**[5] Estado en handlers crudos.** `handle` (el bucle de `serve_raw`) lanzaba el handler en
+`spawn` + `try_join`; pasa a `try_call` como `handle_http` desde M97.2 (misma garantía de 500 sin
+tumbar el servidor, sin cruzar hilos). Con eso el spike mostró la causa real del E0277: el
+parámetro `handler` sigue cruzando al `spawn` por conexión (bound `Send + Sync`), y un closure
+GUARDADO EN UNA VARIABLE llega como `Rc<closure>`, que ni es `Fn` ni es Send; el mismo closure
+INLINE en la llamada compila (lo emite sin `Rc`). Decisión: `serve_raw_with(host, port,
+make_handler)` (la fábrica corre en la fibra de cada conexión, como `serve_with`) y, en el
+transpilador, un error de raylang con el nombre cuando un closure en variable va a un parámetro
+marcado ("write the closure inline in the call, name a top-level function, or use a handler
+factory"), en vez de tres errores de rustc sobre código generado — lo que pedía la bitácora.
+
+`net` sube a 0.3.0 (superficie nueva); se publica al espejo con `tools/publish-packages.sh net`
+en la siguiente release.

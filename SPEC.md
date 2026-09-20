@@ -182,7 +182,8 @@ variante = IDENT [ '(' tipo { ',' tipo } ')' ] ;
 trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}' ;
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
 impl     = 'impl' [ genericos ] IDENT [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
-const    = 'const' IDENT ':' tipo '=' literal ';' ;
+const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
+const_valor = literal | '[' [ const_valor { ',' const_valor } ] ']' ;
 extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
 firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 ```
@@ -199,7 +200,10 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
   por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
-- `const` de nivel superior: el valor es un **literal** (o literal negado).
+- `const` de nivel superior: el valor es un **literal** (o literal negado) o un **arreglo de
+  literales** (anidable; M274). Un `const` arreglo tiene semántica de **literal inyectado**: cada
+  uso del nombre evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo
+  a través de un alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
 - **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
   cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
   carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se

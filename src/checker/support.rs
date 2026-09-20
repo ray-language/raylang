@@ -27,6 +27,10 @@ pub(super) fn is_const_literal(e: &Expr) -> bool {
         ExprKind::Unary { op: UnaryOp::Neg, expr } => {
             matches!(expr.kind, ExprKind::Int(..) | ExprKind::Float(_))
         }
+        // M274 (raystream [15]): un ARREGLO de literales (anidable) también es constante. Semántica
+        // de literal inyectado: cada uso evalúa el arreglo de nuevo (sin estado compartido que un
+        // alias pudiera mutar); en un bucle caliente se iza a un local.
+        ExprKind::ArrayLit(elems) => elems.iter().all(is_const_literal),
         _ => false,
     }
 }

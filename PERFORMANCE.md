@@ -1838,6 +1838,16 @@ defecto que M213 quitó a `Str`—; pasa a `Arc<[u8]>`. De paso `HeapValue` baja
 
 Caso en `benchmarks/bytes_index.ray` y en el gate. Nativo e intérprete ya compartían: sin cambio.
 
+### Bucles por píxel en la VM (raystream [10], sep 2026): dato, no arco
+
+raystream midió una miniatura de 480×480 (aritmética entera sobre `bytes`, ~1 µs por
+operación-píxel en la VM): **706 ms en la VM, 16 ms en nativo, 0,4 ms cacheada en disco** — 43×.
+Es el techo estructural de un intérprete de bytecode, no un bug: sin JIT no se cierra. Regla
+práctica documentada: procesamiento de píxeles → binario nativo o caché en disco (raystream cachea:
+se paga una vez por archivo). Si un segundo proyecto lo necesita en la VM, la vía son dos o tres
+primitivas de bloque para `bytes` en el runtime (mapa de octetos, copia por rango, reducción), no
+optimizar el intérprete.
+
 ## 4. Más ideas fuera de la caja (backlog abierto)
 
 - **Caché de bytecode `.rayc`**: serializar el chunk compilado → arranque de programas

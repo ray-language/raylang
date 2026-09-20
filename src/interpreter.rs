@@ -30,7 +30,7 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::bytecode::MathFn;
 use crate::runtime::{
-    eval_const_literal, make_uint, program_args, Cell, Closure, EnumInstance, MapKey,
+    make_uint, program_args, Cell, Closure, EnumInstance, MapKey,
     RuntimeError, StructInstance, Value,
 };
 
@@ -108,7 +108,8 @@ struct Interpreter<'a> {
     /// Definiciones de struct, por nombre (para construir literales en orden).
     structs: HashMap<String, &'a StructDef>,
     /// Constantes de nivel superior (M27.5): nombre → su valor (ya evaluado del literal).
-    consts: HashMap<String, Value>,
+    /// M274: la EXPRESIÓN de cada constante; se evalúa en cada uso (literal inyectado).
+    consts: HashMap<String, &'a Expr>,
     /// Pila de ámbitos de la función en ejecución. El último es el más interno.
     /// Cada variable es una **celda** compartible (M4.2): así una closure puede
     /// capturarla por referencia.
@@ -142,7 +143,7 @@ impl<'a> Interpreter<'a> {
         }
         let mut consts = HashMap::new();
         for c in &program.consts {
-            consts.insert(c.name.clone(), eval_const_literal(&c.value));
+            consts.insert(c.name.clone(), &c.value);
         }
         let mut externs = HashMap::new();
         for e in &program.externs {
@@ -652,8 +653,8 @@ impl<'a> Interpreter<'a> {
                 Some(v) => Ok(v),
                 None => {
                     // M27.5: una constante de nivel superior.
-                    if let Some(v) = self.consts.get(name) {
-                        return Ok(v.clone());
+                    if let Some(e) = self.consts.get(name).copied() {
+                        return self.eval_expr(e);
                     }
                     // No es una variable ni constante: un nombre de función usado como valor.
                     let idx = *self.named_index.get(name).expect("the checker guarantees the name");

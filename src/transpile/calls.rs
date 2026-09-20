@@ -908,6 +908,17 @@ impl Transpiler {
             Some(base) => (base, true),
             None => (name, false),
         };
+        // M274 (raystream [16]): el `show` de un ARREGLO (`impl<T: Show> Show for [T]` del prelude, al
+        // que baja un `@derive(Show)` con campos `[T]`) es el `ray_show` nativo del Vec: misma salida
+        // `[a, b]` que la VM (es lo que ya imprime `print`), sin emitir el cuerpo genérico del prelude.
+        if name == "[]#show" {
+            let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+            let Some(first) = eff.first() else { return Err("[]#show without a receiver".to_string()) };
+            out.push_str("Rc::<str>::from(");
+            self.emit_expr(out, first)?;
+            out.push_str(".ray_show())");
+            return Ok(());
+        }
         // Despacho dinámico (M9.3b): el checker baja `obj.m(a)` a `(r.m)(r.data, a)` con `r: dyn`. Aquí el
         // campo `m` es una closure que capturó el concreto → `(r.borrow().m.clone())(a)` (se descarta el
         // arg `r.data` que añadió el checker: es `args[0]`).

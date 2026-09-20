@@ -1887,8 +1887,11 @@ fn derive_eq_and_show_together() {
 
 #[test]
 fn derive_show_unsupported_field_is_error() {
+    // M274: un campo arreglo (incluso anidado) se deriva vía `impl<T: Show> Show for [T]`.
+    check_src("@derive(Show) struct S { xs: [int], m: [[string]] } fn main() -> int { 0 }")
+        .expect("arrays de Show se derivan");
     err_contains(
-        "@derive(Show) struct S { xs: [int] } fn main() -> int { 0 }",
-        "cannot derive Show for a field of type [int]",
+        "@derive(Show) struct S { f: fn(int) -> int } fn main() -> int { 0 }",
+        "cannot derive Show for a field of type fn(int) -> int",
     );
 }

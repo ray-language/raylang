@@ -750,7 +750,7 @@ fn ray_search_list_el_index() {
     let (out, _e, code) = ray_idx(&app, &index, &["search", "sse"]);
     assert_eq!(code, 0);
     assert!(out.contains("net-extra 0.1.0  HTTP client and streaming helpers"), "descripción en la fila:\n{out}");
-    assert!(out.contains("matches keyword 'sse'"), "por qué casó:\n{out}");
+    assert!(out.contains("matches module 'net-extra/sse'"), "por qué casó (módulo antes que keyword):\n{out}");
     assert!(!out.contains("geo"), "geo no casa 'sse':\n{out}");
     let (out, _e, _c) = ray_idx(&app, &index, &["search", "websocket"]);
     assert!(out.contains("matches module 'net-extra/websocket'"), "{out}");

@@ -3930,30 +3930,73 @@ fn cmd_search(args: &[String]) {
             process::exit(66);
         }
     };
-    // Un paquete = un `<nombre>.toml` en el índice (se ignora cualquier otro archivo del repo).
-    let mut names: Vec<String> = entries
+    // Un paquete = un `<nombre>.toml` en el índice (se ignora cualquier otro archivo del repo;
+    // los sidecars `<nombre>.owners.toml`/`<nombre>.meta.toml` caen por el punto del nombre).
+    // M268 (ray-sublime §95.3): el patrón casa el NOMBRE o, por `<nombre>.meta.toml`, la
+    // descripción, las palabras clave y los módulos (`ray search http` → `net`).
+    let mut found: Vec<(String, Option<crate::index::Meta>, Option<String>)> = entries
         .flatten()
         .filter_map(|e| {
             let p = e.path();
             let name = (p.extension().is_some_and(|x| x == "toml"))
                 .then(|| p.file_stem()?.to_str().map(str::to_string))
                 .flatten()?;
-            (crate::deps::valid_package_name(&name) && name.to_lowercase().contains(&pattern))
-                .then_some(name)
+            if !crate::deps::valid_package_name(&name) {
+                return None;
+            }
+            let meta = crate::index::read_meta(&index, &name).ok().flatten();
+            if pattern.is_empty() || name.to_lowercase().contains(&pattern) {
+                return Some((name, meta, None));
+            }
+            let m = meta.as_ref()?;
+            let via = if m.description.to_lowercase().contains(&pattern) {
+                Some("description".to_string())
+            } else if let Some(k) = m.keywords.iter().find(|k| k.to_lowercase().contains(&pattern)) {
+                Some(format!("keyword '{k}'"))
+            } else {
+                m.modules.iter().find(|x| x.to_lowercase().contains(&pattern)).map(|x| format!("module '{x}'"))
+            };
+            via.map(|v| (name, meta.clone(), Some(v)))
         })
         .collect();
-    names.sort();
-    if names.is_empty() {
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    if found.is_empty() {
         println!("no results in the index{}", if pattern.is_empty() { String::new() } else { format!(" for '{pattern}'") });
         return;
     }
-    for name in &names {
-        match crate::index::latest(&index, name) {
-            Ok(v) => println!("{name} {v}"),
-            Err(_) => println!("{name} (no installable version)"),
+    for (name, meta, via) in &found {
+        let version = match crate::index::latest(&index, name) {
+            Ok(v) => v,
+            Err(_) => "(no installable version)".to_string(),
+        };
+        let description = meta.as_ref().filter(|m| !m.description.is_empty()).map_or(String::new(), |m| format!("  {}", m.description));
+        println!("{name} {version}{description}");
+        if let Some(v) = via {
+            println!("  matches {v}");
         }
     }
-    println!("{} package(s)", names.len());
+    println!("{} package(s)", found.len());
+}
+
+/// M268: los módulos importables de un paquete-librería — sus `.ray` de la RAÍZ (la disposición de
+/// `packages/*`: `net/http` es `<raíz>/http.ray`), como `<nombre>/<archivo>`; `mod.ray` es el
+/// propio paquete y no se lista. Ordenados para que el sidecar sea determinista.
+fn package_modules(m: &crate::manifest::Manifest) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(&m.root)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    let stem = (p.extension().is_some_and(|x| x == "ray") && p.is_file())
+                        .then(|| p.file_stem()?.to_str().map(str::to_string))
+                        .flatten()?;
+                    (stem != "mod").then(|| format!("{}/{stem}", m.name))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
 }
 
 /// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
@@ -4243,6 +4286,24 @@ fn cmd_publish(args: &[String]) {
             println!("  hash: {hash}");
             if sig.is_some() {
                 println!("  signature: ed25519 (owner in '{}.owners.toml')", m.name);
+            }
+            // M268: los metadatos de búsqueda (`[package] description`/`keywords` + los módulos
+            // del paquete) van al sidecar `<nombre>.meta.toml`, que `ray search` consulta.
+            let meta = crate::index::Meta {
+                description: m.description.clone().unwrap_or_default(),
+                keywords: m.keywords.clone(),
+                modules: package_modules(&m),
+            };
+            if !meta.description.is_empty() || !meta.keywords.is_empty() || !meta.modules.is_empty() {
+                match crate::index::write_meta(&index, &m.name, &meta) {
+                    Ok(()) => println!(
+                        "  metadata: {}.meta.toml ({} keyword(s), {} module(s))",
+                        m.name,
+                        meta.keywords.len(),
+                        meta.modules.len()
+                    ),
+                    Err(e) => eprintln!("warning: {e}"),
+                }
             }
             println!(
                 "note: the index is a git repo; commit and push '{}.toml' to share it.",

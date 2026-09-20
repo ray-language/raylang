@@ -231,6 +231,35 @@ fn ray_publish_añade_al_index_y_un_consumidor_lo_resolves() {
     let (_o, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 65, "republicar la misma versión fails");
     assert!(err.contains("is already published"), "{err}");
+    // M268: sin description/keywords no hay sidecar de metadatos.
+    assert!(!index.join("mate.meta.toml").exists(), "sin metadatos no hay sidecar");
+
+    // M268: con `[package] description`/`keywords` (y otro módulo en la raíz) la publicación de
+    // la siguiente versión escribe `mate.meta.toml`, y `ray search` lo encuentra por palabra clave.
+    std::fs::write(work.join("http.ray"), "pub fn get() -> int { 1 }\n").unwrap();
+    std::fs::write(
+        work.join("ray.toml"),
+        "[package]\nname = \"mate\"\nversion = \"1.1.0\"\ndescription = \"Triples and a tiny HTTP helper\"\nkeywords = [\"math\", \"http\"]\n",
+    )
+    .unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v1.1.0"]);
+    git(&work, &["tag", "v1.1.0"]);
+    git(&work, &["push", "-q", "origin", "HEAD"]);
+    git(&work, &["push", "-q", "origin", "--tags"]);
+    let (out, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
+    assert_eq!(code, 0, "publish 1.1.0 OK\n{err}");
+    assert!(out.contains("metadata: mate.meta.toml (2 keyword(s), 1 module(s))"), "{out}");
+    let meta = std::fs::read_to_string(index.join("mate.meta.toml")).unwrap();
+    assert!(
+        meta.contains("description = \"Triples and a tiny HTTP helper\"")
+            && meta.contains("keywords = \"math, http\"")
+            && meta.contains("modules = \"mate/http\""),
+        "sidecar:\n{meta}"
+    );
+    let (out, _e, code) = ray_idx(&work, &index, &["search", "math"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("mate 1.1.0  Triples and a tiny HTTP helper") && out.contains("matches keyword 'math'"), "{out}");
 
     // Un consumidor la resuelve por nombre desde el índice y la ejecuta (clona del origin al tag).
     let app = app(&base, "from mate import triple;\nfn main() -> int { print(triple(14)); 0 }\n");
@@ -711,6 +740,25 @@ fn ray_search_list_el_index() {
     let (out, _e, code) = ray_idx(&app, &index, &["search", "zzz"]);
     assert_eq!(code, 0);
     assert!(out.contains("no results"), "{out}");
+
+    // M268: con `<nombre>.meta.toml`, el patrón casa descripción, palabras clave y módulos.
+    std::fs::write(
+        index.join("net-extra.meta.toml"),
+        "description = \"HTTP client and streaming helpers\"\nkeywords = \"http, sse\"\nmodules = \"net-extra/sse, net-extra/websocket\"\n",
+    )
+    .unwrap();
+    let (out, _e, code) = ray_idx(&app, &index, &["search", "sse"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("net-extra 0.1.0  HTTP client and streaming helpers"), "descripción en la fila:\n{out}");
+    assert!(out.contains("matches keyword 'sse'"), "por qué casó:\n{out}");
+    assert!(!out.contains("geo"), "geo no casa 'sse':\n{out}");
+    let (out, _e, _c) = ray_idx(&app, &index, &["search", "websocket"]);
+    assert!(out.contains("matches module 'net-extra/websocket'"), "{out}");
+    let (out, _e, _c) = ray_idx(&app, &index, &["search", "streaming"]);
+    assert!(out.contains("matches description"), "{out}");
+    // Un patrón que casa el NOMBRE no explica nada (la fila basta).
+    let (out, _e, _c) = ray_idx(&app, &index, &["search", "net"]);
+    assert!(out.contains("net-extra 0.1.0") && !out.contains("matches"), "{out}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -545,7 +545,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray mcp` | servidor MCP para agentes LLM: tools `check`/`run`/`test`/`fmt`/`doc`, con el código confinado (fuel + heap + plazo), más el resource `raylang://llms.txt` (el contexto destilado [`llms.txt`](llms.txt) de la raíz del repo, para el prompt del modelo). Guía: [`docs/mcp.md`](docs/mcp.md) |
 | `ray add <nombre>[@req]` | añade una dependencia del registro (`1.2.0`, `^1.2`, `~1.2.3`, `*`) |
 | `ray remove <nombre>` | la elimina (y su caché si nadie más la usa) |
-| `ray search [patrón]` | lista paquetes del registro |
+| `ray search [patrón]` | lista paquetes del registro; el patrón casa el nombre y (M268) la descripción, las palabras clave y los módulos del sidecar `<nombre>.meta.toml` (`ray search http` → `net`, con la descripción en la fila y `matches keyword/module/description` cuando no casó el nombre) |
 | `ray fetch` | descarga las dependencias a `.ray-deps/` |
 | `ray update` | re-resuelve a las versiones más nuevas compatibles |
 | `ray registry publish [--repo <spec>] [--sign]` | publica esta versión en el registro (valida + check semántico + hash; `--sign` la firma Ed25519 y reclama/verifica el dueño del nombre) |

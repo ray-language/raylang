@@ -152,3 +152,19 @@ fn several_files_without_write_is_a_usage_error() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// M273 (raystream [14]): `ray fmt` conserva los ceros a la izquierda de los literales hex/oct/bin
+/// (`0x0D`, `0x00010000`): el ancho fijo es información en código de formatos. Idempotente.
+#[test]
+fn fmt_keeps_the_written_width_of_prefixed_literals() {
+    let src = "fn main() -> int {\n    let b = bytes_of([0x89, 0x50, 0x0D, 0x0A]);\n    let n = 0x00010000 + 0o0017 + 0b00010000 + 0xff;\n    print(b.len() + n);\n    0\n}\n";
+    let p = write_tmp("hexwidth.ray", src);
+    let (out, ok) = fmt(&p);
+    assert!(ok, "fmt ok");
+    assert!(out.contains("0x0D, 0x0A"), "octetos con dos dígitos:\n{out}");
+    assert!(out.contains("0x00010000"), "ancho de 8:\n{out}");
+    assert!(out.contains("0o0017") && out.contains("0xFF"), "octal con ceros; hex en mayúsculas canónicas:\n{out}");
+    let p2 = write_tmp("hexwidth2.ray", &out);
+    let (out2, _) = fmt(&p2);
+    assert_eq!(out, out2, "idempotente");
+}

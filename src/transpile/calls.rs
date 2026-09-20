@@ -2861,7 +2861,7 @@ impl Transpiler {
                 // seed → unit.
                 // Solo las funciones-primitivo; el resto de std/time|random (raylang puro) → ruta genérica.
                 match n {
-                    "std::time::now" | "std::time::monotonic" | "std::time::monotonic_nanos"
+                    "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos"
                     | "std::random::below" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),

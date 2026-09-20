@@ -255,7 +255,8 @@ impl Lexer {
                     let text: String = self.chars[start..self.pos].iter().collect();
                     self.error(format!("integer out of range '{}'", text))
                 })?;
-                return self.int_with_suffix(v, base, start);
+                // M273: el nº de dígitos escritos viaja con el token (solo para `ray fmt`).
+                return self.int_with_suffix(v, base.with_digits(digits.len()), start);
             }
         }
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {

@@ -13995,3 +13995,27 @@ Cambios, todos en `packages/web/framework.ray` sobre lo que M271 dejó en `net/w
 
 `web` sube a 0.4.0. Verificado: `tests/framework_cli.rs` gana una app propia con las tres
 salidas (SSE por chunked, descarga con tamaño por keep-alive, archivo con Range/206 y 304).
+## 258. M273 — Herramientas tras raystream: ancho de los literales en `fmt`, `--no-stubs`, firmas en `llms.txt` (sep 2026)
+
+Origen: raystream [7], [13] y [14] (IDEAS §93). Tres asperezas de herramienta, ninguna del
+lenguaje.
+
+**[14] `ray fmt` recortaba los ceros a la izquierda.** `0x0D` salía `0xD` y `0x00010000` quedaba
+`0x10000`: el formateador reimprimía el VALOR (`format!("0x{:X}")`) y perdía lo escrito. En código
+de formatos el ancho fijo es la información (una tabla de octetos alineada se compara con la
+especificación de un vistazo). `Radix` gana `digits` (cuántos dígitos se escribieron tras el
+prefijo; el lexer lo registra) y `fmt_int` rellena con ceros a ese ancho para hex, octal y
+binario. `digits` es solo presentación: no participa en la igualdad de `Radix` (`PartialEq` a
+mano), así los tests del lexer y cualquier comparación de tokens siguen iguales.
+
+**[13] Los stubs del nativo.** Una función fuera del subconjunto nativo se emite como stub que
+panica al llamarse (H7): el binario compila y avisa. La bitácora pedía poder tratarlo como error:
+`ray build --native --no-stubs` sale 65 tras listar los stubs. De paso, el aviso más común era
+falso: `std::time::monotonic_millis` (alias de M245) aparecía como stub porque faltaba en la
+lista de wrappers interceptados de `names.rs` aunque `emit_time` ya lo interceptaba.
+
+**[7] `llms.txt` sin firmas.** El mapa de la stdlib listaba nombres sin tipos de retorno y omitía
+`b[i]` (LA primitiva de todo parser binario: la app escribió un rodeo incorrecto para octetos ≥
+0x80) y el método `m.get(k)`. Ahora los lista, con los tipos de retorno que sorprenden
+(`index_of`/`position`/`pop`/`parse_int` → `Option`, `from_utf8`/`fs.read_file` → `Result`) y
+la indicación de `ray_doc` para el resto.

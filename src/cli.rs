@@ -106,7 +106,7 @@ Project:
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
@@ -2133,11 +2133,11 @@ fn cmd_bundle(args: &[String]) {
         let x86_so = work.join("x86_64.so");
         if build_arm {
             eprintln!("[bundle] arm64-v8a (aarch64-linux-android)…");
-            build_native(&path, arm_so.to_str(), true, &exclude, Some("aarch64-linux-android"), false, fibers, &embed, true);
+            build_native(&path, arm_so.to_str(), true, &exclude, Some("aarch64-linux-android"), false, false, fibers, &embed, true);
         }
         if build_x86 {
             eprintln!("[bundle] x86_64 (x86_64-linux-android)…");
-            build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, fibers, &embed, true);
+            build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, false, fibers, &embed, true);
         }
         let proj = out_dir.join(format!("{name}-android"));
         // M160: los mipmaps del icono se generan ANTES de escribir el proyecto — el manifest
@@ -2257,11 +2257,11 @@ fn cmd_bundle(args: &[String]) {
         let sim_a = work.join("sim.a");
         if build_dev {
             eprintln!("[bundle] device (aarch64-apple-ios)…");
-            build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, fibers, &embed, true);
+            build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, false, fibers, &embed, true);
         }
         if build_sim {
             eprintln!("[bundle] simulator (aarch64-apple-ios-sim)…");
-            build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, fibers, &embed, true);
+            build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, false, fibers, &embed, true);
         }
         let proj = out_dir.join(format!("{name}-ios"));
         // Con un solo lado construido, el `.a` del OTRO lado del proyecto anterior se
@@ -2319,7 +2319,7 @@ fn cmd_bundle(args: &[String]) {
     // M186: el binario que empaquetamos es el que el build ESCRIBIÓ (en Windows, `bin.exe`), no el
     // nombre que le pedimos.
     configure_native_app_info(&path); // M247
-    let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, fibers, &embed, false));
+    let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, false, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {
         // M209: claves extra del Info.plist ([app.plist]) y el permiso de red local por defecto
@@ -2730,6 +2730,9 @@ fn cmd_build(args: &[String]) {
     // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
     // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
     let fast = args.iter().any(|a| a == "--fast");
+    // M273 (raystream [13]): `--no-stubs` convierte el aviso de funciones fuera del subconjunto nativo
+    // (stubs que panican al llamarse) en un ERROR de build: para quien no quiera minas en runtime.
+    let no_stubs = args.iter().any(|a| a == "--no-stubs");
     // Fibras (arco de concurrencia nativa, jul 2026): la concurrencia del binario nativo corre sobre
     // el scheduler M:N de fibras (corosensei + reactor kqueue/epoll) POR DEFECTO — decisión tomada
     // tras F5 (banco en red real: techo +16 % sobre hilo-por-tarea, 14 hilos / 8 MB donde el modelo
@@ -2832,7 +2835,7 @@ fn cmd_build(args: &[String]) {
         run_frontend_build(&path); // M263
         let embed = collect_embed(&path, embed_arg.as_deref());
         configure_native_app_info(&path); // M247
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed, lib_mode);
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, no_stubs, fibers, &embed, lib_mode);
         return;
     }
     if lib_mode {
@@ -2935,7 +2938,7 @@ fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
 
 /// Devuelve la ruta del artefacto REALMENTE escrito: en Windows no coincide con lo pedido (M186 le
 /// añade la extensión que el SO exige), y `ray bundle` necesita el nombre de verdad para empaquetar.
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     let transpiled = match crate::transpile::transpile_entry(&program, exclude, fast, fibers, embed, lib_mode) {
@@ -2956,6 +2959,10 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         );
         for (name, reason) in &transpiled.stubbed {
             eprintln!("  · {name}: {reason}");
+        }
+        if no_stubs {
+            eprintln!("native build: --no-stubs: refusing to emit stubs (fix or avoid the functions above)");
+            process::exit(65);
         }
     }
     // M169 (docs/windows.md W2): en Windows, los subsistemas cuyo módulo de ray-runtime es

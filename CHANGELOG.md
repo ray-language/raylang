@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Herramientas: `ray fmt` conserva el ancho de los literales, `--no-stubs` en el nativo y
+  firmas en `llms.txt`** (M273, raystream [7], [13], [14]). `ray fmt` ya no recorta `0x0D` a
+  `0xD` ni `0x00010000` a `0x10000`: los ceros a la izquierda escritos se conservan (hex, octal y
+  binario). `ray build --native --no-stubs` convierte el aviso de funciones fuera del subconjunto
+  nativo en un error, y `std::time::monotonic_millis` deja de aparecer como stub (estaba
+  interceptado). `llms.txt` documenta `b[i]`, `m.get(k)` y los tipos de retorno que sorprenden
+  (`Option`/`Result`).
+
 - **`web` 0.4.0: salida a streaming del framework** (M272, raystream [4]). `r.stream(ch,
   content_type)` (SSE, cuerpos generados), `r.stream_len(ch, length, content_type)` (descargas
   con `Content-Length` y keep-alive) y `r.sendfile(c, path)` (un archivo como lo sirve un mount:

@@ -24,6 +24,18 @@ fn handler(req: webserver.Request) -> webserver.Response {
         r.headers.insert("Content-Type", "text/plain");
         return r;
     }
+    // M271: stream de tamaño conocido (Content-Length, keep-alive).
+    if (req.path == "/stream_len") {
+        let ch: Channel<bytes> = Channel.bounded(4);
+        let _ = spawn(fn() {
+            send(ch, b"abc");
+            send(ch, b"defgh");
+            close(ch);
+        });
+        let r = webserver.stream_response_len(200, ch, 8);
+        r.headers.insert("Content-Type", "text/plain");
+        return r;
+    }
     if (req.path.starts_with("/static/")) {
         return webserver.static_mount("/static/", "public", req);
     }
@@ -61,6 +73,9 @@ fn start_server(name: &str) -> Server {
         let _ = std::fs::copy(&src, net.join(lib));
     }
     std::fs::write(dir.join("public/data.bin"), b"0123456789ABCDEF").unwrap();
+    // M271: un archivo por encima del umbral de streaming (1 MB): patrón conocido por posición.
+    let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("public/big.bin"), &big).unwrap();
     // Puerto efímero: bind propio, se libera y se le pasa al servidor (carrera improbable en CI).
     let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = probe.local_addr().unwrap().port();
@@ -217,4 +232,152 @@ fn concat_position_collision_runs_on_both_engines() {
         assert_eq!(out.status.code(), Some(5), "{engine}: exit = 2 + 3");
         assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"), "{engine}");
     }
+}
+
+/// M271 (raystream [2]): un estático GRANDE se sirve desde el disco por trozos — el `Range` no lee
+/// el archivo entero — con Content-Length (sin chunked), 206/Content-Range y el trozo exacto; el
+/// GET completo anuncia el tamaño; el HEAD lleva las cabeceras sin cuerpo.
+#[test]
+fn big_static_files_stream_from_disk_with_ranges() {
+    let srv = start_server("big");
+    let expect = |i: u32| (i % 251) as u8;
+    // Rango pequeño en medio del archivo.
+    let (head, body) = head_and_body(&raw_get(srv.port, "/static/big.bin", "Range: bytes=1000000-1000010\r\n"));
+    assert!(head.starts_with("HTTP/1.1 206"), "{head}");
+    assert!(head.contains("Content-Range: bytes 1000000-1000010/1500000"), "{head}");
+    assert!(head.contains("Content-Length: 11"), "{head}");
+    assert!(!head.contains("Transfer-Encoding"), "sin chunked:\n{head}");
+    assert!(head.contains("Accept-Ranges: bytes"), "{head}");
+    assert_eq!(body, (1000000..=1000010u32).map(expect).collect::<Vec<u8>>());
+    // Rango abierto hasta el final, y sufijo.
+    let (head, body) = head_and_body(&raw_get(srv.port, "/static/big.bin", "Range: bytes=1499990-\r\n"));
+    assert!(head.contains("Content-Range: bytes 1499990-1499999/1500000"), "{head}");
+    assert_eq!(body.len(), 10);
+    // Completo: 200 con el tamaño y el contenido íntegro (cruza varios trozos de 256 KB).
+    let (head, body) = head_and_body(&raw_get(srv.port, "/static/big.bin", ""));
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.contains("Content-Length: 1500000"), "{head}");
+    assert_eq!(body.len(), 1_500_000);
+    assert!(body.iter().enumerate().all(|(i, b)| *b == expect(i as u32)), "contenido íntegro");
+    // 416 fuera de rango.
+    let (head, _b) = head_and_body(&raw_get(srv.port, "/static/big.bin", "Range: bytes=9000000-\r\n"));
+    assert!(head.starts_with("HTTP/1.1 416") && head.contains("Content-Range: bytes */1500000"), "{head}");
+    // HEAD: cabeceras del GET, sin cuerpo.
+    let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    s.write_all(b"HEAD /static/big.bin HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).unwrap();
+    let (head, body) = head_and_body(&out);
+    assert!(head.starts_with("HTTP/1.1 200") && head.contains("Content-Length: 1500000"), "{head}");
+    assert!(body.is_empty(), "HEAD sin cuerpo");
+}
+
+/// M271 (raystream [3]): `stream_response_len` escribe el cuerpo en crudo con Content-Length y la
+/// conexión sigue viva: dos peticiones por la misma conexión.
+#[test]
+fn known_length_streams_keep_the_connection_alive() {
+    let srv = start_server("stream_len");
+    let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(b"GET /stream_len HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s);
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        if line == "\r\n" { break; }
+        head.push_str(&line);
+    }
+    assert!(head.starts_with("HTTP/1.1 200") && head.contains("Content-Length: 8") && head.contains("Connection: keep-alive"), "{head}");
+    assert!(!head.contains("Transfer-Encoding"), "{head}");
+    let mut body = [0u8; 8];
+    r.read_exact(&mut body).unwrap();
+    assert_eq!(&body, b"abcdefgh");
+    // Segunda petición por la MISMA conexión.
+    r.get_mut().write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+    let mut rest = Vec::new();
+    r.read_to_end(&mut rest).unwrap();
+    let (head2, body2) = head_and_body(&rest);
+    assert!(head2.starts_with("HTTP/1.1 200"), "{head2}");
+    assert_eq!(body2, b"hola\n");
+}
+
+/// M271 (raystream [5]): un handler de `serve_raw` con estado en el nativo. Un closure GUARDADO EN UNA
+/// VARIABLE no puede cruzar a las fibras de conexión (antes: tres E0277 de rustc sobre código
+/// generado; ahora un error de raylang con el nombre). El mismo closure INLINE, y la fábrica
+/// `serve_raw_with`, compilan.
+#[test]
+fn serve_raw_handlers_with_state_natively() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_wstream_raw_native");
+    let _ = std::fs::remove_dir_all(&dir);
+    let net = dir.join("net");
+    std::fs::create_dir_all(&net).unwrap();
+    for lib in ["webserver.ray", "trace.ray", "http.ray", "log.ray", "time.ray"] {
+        let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
+        let _ = std::fs::copy(&src, net.join(lib));
+    }
+    // 1) closure en variable → error claro de raylang (no rustc).
+    std::fs::write(
+        dir.join("bad.ray"),
+        r#"import net/webserver;
+
+fn main() -> int {
+    let hits: Channel<int> = Channel.bounded(8);
+    let handler = fn(req: webserver.Request, conn: int) {
+        send(hits, 1);
+        let _ = webserver.send_response(conn, webserver.text(200, "hi"));
+    };
+    if (false) { let _ = webserver.serve_raw("127.0.0.1", 0, handler); }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", "bad.ray", "--native", "-o", dir.join("bad_bin").to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("'handler': a closure stored in a variable cannot be passed here in the native binary"), "{err}");
+    assert!(!err.contains("E0277"), "sin errores de rustc:\n{err}");
+    // 2) inline y con fábrica (serve_raw_with) → compila y corre.
+    std::fs::write(
+        dir.join("main.ray"),
+        r#"import net/webserver;
+
+fn main() -> int {
+    let hits: Channel<int> = Channel.bounded(8);
+    if (false) {
+        let _ = webserver.serve_raw("127.0.0.1", 0, fn(req: webserver.Request, conn: int) {
+            send(hits, 1);
+            let _ = webserver.send_response(conn, webserver.text(200, "hi"));
+        });
+        let _ = webserver.serve_raw_with("127.0.0.1", 0, fn() -> fn(webserver.Request, int) {
+            fn(req: webserver.Request, conn: int) {
+                send(hits, 2);
+                let _ = webserver.send_response(conn, webserver.text(200, "hi"));
+            }
+        });
+    }
+    print("built");
+    0
+}
+"#,
+    )
+    .unwrap();
+    let bin = dir.join("raw_bin");
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", "main.ray", "--native", "-o", bin.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "build --native inline + serve_raw_with\n{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "built\n");
 }

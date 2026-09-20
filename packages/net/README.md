@@ -130,7 +130,16 @@ fn main() -> int {
   **streaming** (`stream_response(status, ch)`: el cuerpo son los trozos de un `Channel<bytes>`,
   en chunked según llegan — el handler `spawn`ea al productor y devuelve ya; canal acotado =
   backpressure) y **HTTP Range** en `static_mount` (`Accept-Ranges`/206/`Content-Range`/416,
-  `If-Range` contra el ETag; multi-rango cae a 200 completo).
+  `If-Range` contra el ETag; multi-rango cae a 200 completo). **M271 (raystream)**: un estático de
+  disco de 1 MB o más se sirve **por trozos desde el archivo** (`fs.open` + `seek` + `read_bytes`
+  de 256 KB en un productor), nunca leído entero: un `Range` de 11 bytes sobre un vídeo de 1 GB
+  cuesta 256 KB de memoria, no 1 GB. **`stream_response_len(status, ch, length)`**: un stream de
+  tamaño conocido va con `Content-Length` (sin chunked) y **keep-alive** — descargas y medios con
+  barra de progreso; el productor debe enviar exactamente `length` octetos (si cierra antes, la
+  conexión se cierra). **`serve_raw_with(host, port, make_handler)`**: estado para un handler
+  crudo por fábrica llamada en la fibra de cada conexión (como `serve_with`); en un binario nativo
+  un closure guardado en una variable no puede cruzar a las fibras de conexión (el compilador lo
+  dice con el nombre): escríbelo inline en la llamada, nombra una función o usa la fábrica.
 
 ### Observabilidad
 

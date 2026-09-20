@@ -93,6 +93,17 @@ impl Transpiler {
                     return Ok(());
                 }
                 ExprKind::Func(fx) => return self.emit_func_literal(out, fx, false),
+                // M271 (raystream [5]): un closure GUARDADO EN UNA VARIABLE llega como `Rc<closure>`,
+                // que ni es `Fn` ni es Send: rustc lo rechazaba con tres E0277 sobre código generado
+                // (`serve_raw(host, port, handler)`). Se dice en raylang, con el nombre: el mismo
+                // closure escrito inline en la llamada, una función nombrada, o una fábrica
+                // (`serve_raw_with`) sí cruzan. Un param fn marcado de la función actual (reenvío
+                // transitivo) sí puede pasar: ya lleva el bound.
+                ExprKind::Ident(n) if matches!(self.lookup(n), Some(Type::Fn(..))) && !self.send_fn_params.contains(n) => {
+                    return Err(format!(
+                        "'{n}': a closure stored in a variable cannot be passed here in the native binary (this parameter crosses to other fibers); write the closure inline in the call, name a top-level function, or use a handler factory (e.g. serve_raw_with)"
+                    ));
+                }
                 _ => {}
             }
         }

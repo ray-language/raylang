@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net/webserver` 0.3.0: medios sin cargar el archivo** (M271, raystream [2], [3], [5]).
+  `static_mount` sirve un estático de disco de 1 MB o más por trozos desde el archivo (un `Range`
+  de 11 bytes sobre un vídeo de 1 GB costaba 1 GB de RSS; ahora 256 KB). `stream_response_len`
+  emite un stream de tamaño conocido con `Content-Length` y keep-alive (antes todo stream era
+  chunked + close). `serve_raw_with` da estado a un handler crudo por fábrica, `handle` deja de
+  lanzar el handler en un `spawn`, y el nativo dice con nombre y línea cuándo un closure guardado
+  en una variable no puede cruzar a las fibras de conexión (antes tres E0277 de rustc).
 - **Cinco arreglos del checker cazados por raystream** (M270, NOTES-raylang [1], [6], [8], [11],
   [12]). Una función de la raíz que redefine una del prelude (`get`, `sort`…) ya no se filtra a la
   stdlib ni a los módulos: el override es léxico a la raíz (antes `std/json` moría con "argument 1

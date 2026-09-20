@@ -124,6 +124,9 @@ pub(super) fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), Str
 /// inyectadas por el checker se SALTAN (el transpilador las mapea a Rust nativo, o no las soporta y su
 /// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
 pub(super) fn is_handled_builtin(name: &str) -> bool {
+    // M270 (raystream [1]): `x#prelude` es la función del prelude `x` inyectada bajo alias porque la
+    // raíz redefinió `x`; se trata exactamente como `x` (interceptada, no emitida).
+    let name = name.strip_suffix("#prelude").unwrap_or(name);
     // `std::math::*`/`std::fs::*` se interceptan en emit_call/type_of (→ Rust nativo); no emitimos sus
     // wrappers del módulo (llaman a primitivos `__sqrt`/`__read_file`… ausentes).
     // M115.3: `std::fs::stat`/`chmod` son la EXCEPCIÓN de fs — sus wrappers se EMITEN (stat

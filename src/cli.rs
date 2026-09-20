@@ -58,7 +58,13 @@ fn run() {
         Some("dev") => cmd_dev(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         // M217 (ray-sublime #10): `ray check` = `ray build` sin flags de nativo — la costumbre de otros lenguajes.
-        Some("check") => cmd_build(&rest[1..]),
+        Some("check") => {
+            // M270 (raystream [6]): `ray check` sobre un MÓDULO sin `main` lo verifica como módulo
+            // (la exigencia de `main` es de run/build). Se pasa como flag interno a cmd_build.
+            let mut a = rest[1..].to_vec();
+            a.push("--check-only".to_string());
+            cmd_build(&a)
+        }
         Some("bundle") => cmd_bundle(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
@@ -2718,6 +2724,8 @@ fn cmd_build(args: &[String]) {
     // `--native [-o <salida>] [--release]` (P2.b): transpila a Rust y lo compila con rustc → binario
     // nativo. El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
     let native = args.iter().any(|a| a == "--native");
+    // M270: `ray check` (flag interno): un módulo sin `main` se verifica como módulo.
+    let check_only = args.iter().any(|a| a == "--check-only");
     let release = args.iter().any(|a| a == "--release");
     // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
     // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
@@ -2813,7 +2821,13 @@ fn cmd_build(args: &[String]) {
         .map(String::as_str);
     let path = resolve_entry(file, true);
     let (mut program, locate, multi) = load_and_locate(&path);
-    check_or_exit(&mut program, &locate, multi);
+    let require_main = !check_only || program.functions.iter().any(|f| f.name == "main");
+    check_or_exit_mode(&mut program, &locate, multi, require_main);
+    if !require_main {
+        // M270: un módulo sin `main` no se compila a bytecode (no hay entrada); verificado = listo.
+        println!("ok: '{path}' compiles (module without main)");
+        return;
+    }
     if native {
         run_frontend_build(&path); // M263
         let embed = collect_embed(&path, embed_arg.as_deref());
@@ -4981,6 +4995,26 @@ fn locate_of(loaded: loader::Loaded) -> (crate::ast::Program, Locate, bool) {
 /// Chequea el programa; si falla, re-corre la variante acumuladora y muestra TODOS los
 /// errores (M33c) contra su módulo, y sale con 65.
 fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool) {
+    check_or_exit_mode(program, locate, multi, true)
+}
+
+/// Como [`check_or_exit`]; con `require_main = false` (M270, `ray check` de un módulo sin `main`)
+/// verifica como módulo: los cuerpos se comprueban igual, solo no se exige la entrada.
+fn check_or_exit_mode(program: &mut crate::ast::Program, locate: &Locate, multi: bool, require_main: bool) {
+    if !require_main {
+        let errors = checker::check_all_modulo(program);
+        if errors.is_empty() {
+            return;
+        }
+        for mut e in errors {
+            let (source, name, local, col, len) = locate(e.line, e.col, e.len);
+            e.line = local;
+            e.col = col;
+            let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
+            eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
+        }
+        process::exit(65);
+    }
     let backup = program.clone();
     if checker::check(program).is_err() {
         let mut copy = backup;

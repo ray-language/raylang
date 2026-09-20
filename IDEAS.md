@@ -3542,3 +3542,27 @@ de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.
   escapaba el USO de un identificador que es palabra reservada de Rust (`r#where`) pero no su
   DECLARACIÓN como variable de `for` (rango, arreglo, `(k, v)` de mapa, chars, `split`); el `for`
   sobre iteradores sí lo hacía. Todas las declaraciones pasan ahora por `mangle`.
+
+## 93. Hallazgos de raystream — servidor de medios en raylang (sep 2026)
+
+Dogfood de `~/Devs/labs/stream` en el Mac mini (`NOTES-raylang.md`, 16 entradas contra 1.26.0 y
+net 0.2.0, todas con repro y coste medido). Estado:
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| 1 | `pub fn get` en la raíz rompe `std/json` (el override del prelude se filtraba a la stdlib) | ✅ M270 |
+| 2 | `static_mount` lee el archivo entero para servir un `Range` (1 GB de RSS por 11 bytes) | M271 |
+| 3 | Sin streaming con `Content-Length` ni keep-alive (`send_stream_response` fuerza chunked) | M271 |
+| 4 | El framework `web` no tiene salida a streaming (`stream: []`): sin SSE ni medios | M272 |
+| 5 | Un handler con estado para `serve_raw` no compila en nativo (closure `Rc` sin `Send`) | M271 |
+| 6 | `ray check` exigía `main` en un módulo de librería | ✅ M270 |
+| 7 | `llms.txt` sin tipos de retorno, sin `b[i]` ni `m.get(k)` | M273 |
+| 8 | `struct Sub` fallaba con posición sintética `1000000666:1` y mensaje invertido | ✅ M270 |
+| 9 | `std/image` solo decodifica PNG (JPEG para miniaturas) | decisión (crate puro, p. ej. `zune-jpeg`) |
+| 10 | Bucles por píxel 43× más lentos en la VM que en nativo | dato para PERFORMANCE |
+| 11 | `==`/`assert_eq` sobre enums derivados: error en la VM y E0369 en nativo (structs también) | ✅ M270 |
+| 12 | `to_string` no aceptaba `Show` aunque la referencia lo prometía | ✅ M270 |
+| 13 | Funciones no soportadas en nativo → stubs que panican; pedir opción de error | M273 |
+| 14 | `ray fmt` recorta `0x0D` a `0xD` | M273 |
+| 15 | No hay constantes de tipo array | decisión (SPEC) |
+| 16 | `@derive(Show)` no soporta campos array | pendiente (S) |

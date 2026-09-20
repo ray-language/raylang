@@ -41,7 +41,10 @@ pub(super) fn is_comparable(t: &Type) -> bool {
         Type::Array(elem) => is_comparable(elem),
         // M27.1: una tupla es comparable con == si todos sus elementos lo son (igualdad posición a posición).
         Type::Tuple(ts) => ts.iter().all(is_comparable),
-        // Un Map (M13.1) no se compara con == por ahora (como los enums); se consulta.
+        // M270 (raystream [11]): un enum se compara con `==` (igualdad estructural: misma variante y
+        // mismo payload), como un struct — ambos motores ya lo hacían en `values_equal`.
+        Type::Enum(_, _) => true,
+        // Un Map (M13.1) no se compara con == por ahora; se consulta.
         Type::Map(_, _) => false,
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
@@ -50,7 +53,7 @@ pub(super) fn is_comparable(t: &Type) -> bool {
         // `Self` (M9) no debería llegar aquí (se sustituye por el tipo concreto), pero
         // como tipo abstracto no es comparable. Un trait object (M9.3b) tampoco.
         // Un canal (M12.1) no se compara con == (se comunica, no se inspecciona). Una Task (M12.3) tampoco.
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) | Type::Channel(_) | Type::Task(_) => false,
+        Type::Unit | Type::Fn(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) | Type::Channel(_) | Type::Task(_) => false,
     }
 }
 

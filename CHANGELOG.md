@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Cinco arreglos del checker cazados por raystream** (M270, NOTES-raylang [1], [6], [8], [11],
+  [12]). Una función de la raíz que redefine una del prelude (`get`, `sort`…) ya no se filtra a la
+  stdlib ni a los módulos: el override es léxico a la raíz (antes `std/json` moría con "argument 1
+  of 'get': expected Box"). Un tipo con el nombre de un trait del prelude (`Sub`, `Ord`…) se
+  rechaza en el propio tipo, con su posición real (antes `1000000666:1` y el mensaje al revés).
+  `==`/`!=` entre enums (igualdad estructural) en los tres motores, y `==` entre structs también
+  compila en el nativo (antes E0369). `to_string(x)` acepta cualquier tipo con `Show`, como
+  prometía la referencia. `ray check` verifica un módulo sin `main` como módulo.
+
 - **`for where in …` compila en el nativo** (M269, ray-sublime §98). Un identificador legal de
   raylang que es palabra reservada de Rust (`where`, `use`, `mod`, `type`, `loop`…) como variable
   de `for` —rango, arreglo, `(k, v)` de mapa, chars de string, `split`— rompía `ray build

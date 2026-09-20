@@ -13894,3 +13894,45 @@ mapa, el bucle de chars de un string y el de `split`. Cinco sitios de `emit.rs` 
 los ámbitos se indexan por él). Test: el de H5 en `tests/cli_cli.rs` gana los cinco bucles con
 `where`/`use`/`type`/`loop`/`mod`/`async`, nativo ≡ VM. (`dyn` NO sirve de ejemplo: es palabra
 clave de raylang.)
+
+## 255. M270 — El lote del checker de raystream: prelude léxico, traits del prelude, `==` de enums, `to_string` con `Show`, `ray check` (sep 2026)
+
+Origen: la bitácora `NOTES-raylang.md` de raystream (IDEAS §93), un servidor de medios escrito en
+el Mac mini contra 1.26.0. Cinco de sus dieciséis hallazgos eran bugs del checker o de los
+diagnósticos; todos reproducidos antes de tocar nada.
+
+**[1] El override del prelude se filtraba a la stdlib.** Una `pub fn get(b: Box, key)` en la raíz
+hacía morir a `std/json` con "argument 1 of 'get': expected Box, got Map<…>": la inyección del
+prelude salta las funciones que el usuario ya definió (el override es una feature, V5/D3, con
+tests) y como el programa fusionado tiene un solo espacio de nombres para los nombres pelados,
+`std::json::stringify_object` llamaba a la del usuario. Decisión: el override es LÉXICO a la raíz.
+La función redefinida se inyecta igualmente bajo el alias `nombre#prelude`; en el cuerpo de
+cualquier función que no sea de la raíz (módulo `::`, prelude, alias) una llamada pelada a un
+nombre redefinido se resuelve al alias y se baja renombrando el callee. En el nativo el alias se
+despacha por el nombre base SALTANDO la función del usuario (`force_prelude` en `emit_call`, en
+`as_builtin_call` y en la inferencia de tipos; `is_handled_builtin` lo trata como el prelude).
+`llms.txt` decía lo contrario de lo real ("a builtin always beats a user function"); ahora dice
+la regla.
+
+**[8] Un tipo con nombre de trait del prelude.** `struct Sub` chocaba al registrar el trait `Sub`
+del prelude (inyectado después) con su posición sintética (`1000000666:1`, `LINE_BASE`) y el
+mensaje al revés. Ahora la inyección detecta la colisión y el error va en el tipo del usuario:
+"'Sub' is the name of a prelude trait; choose another name for this type".
+
+**[11] `==` entre enums.** `is_comparable` excluía `Enum` ("se consulta"), aunque el intérprete ya
+sabía compararlos (`values_equal`); el de la VM NO tenía brazo para `Obj::Enum` y devolvía `false`
+— añadido, con payloads elemento a elemento. En el nativo, `a == b` sobre `Rc<RefCell<T>>` fallaba
+con E0369 para structs Y enums: se deriva `PartialEq` en todo tipo cuyos campos lo admiten (sin
+funciones, sin referencias a tipos que no lo admitan; punto fijo).
+
+**[12] `to_string` con `Show`.** `to_string(x)` con `x` struct/enum que implementa `Show` se
+resuelve como `T#show(x)` y se baja renombrando el callee (misma tabla `ufcs_sites`, profundidad
+`usize::MAX` = "renombrar Ident"). Solo tipos de usuario: `int#show` del prelude se define con
+`to_string(self)` y redirigirlo era recursión infinita (lección de esta sesión).
+
+**[6] `ray check` de un módulo.** `ray check` es `ray build` sin flags; exigía `main`. Con el flag
+interno `--check-only`, un archivo sin `main` se verifica con `check_all_modulo` (los cuerpos se
+comprueban igual) y no se compila a bytecode. `ray run`/`build` siguen exigiendo `main`.
+
+Verificado: `tests/raystream_batch_cli.rs` (los cinco, tres motores donde aplica), el test de H5
+del override nativo y la suite selfhost intactos.

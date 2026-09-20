@@ -299,9 +299,22 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
         parse_int_fn: !defined.contains("parse_int"),
         ..Default::default()
     };
+    // M270 (raystream [1]): las redefinidas por la raíz se inyectan igualmente bajo el alias
+    // `nombre#prelude`, para que los módulos (stdlib, paquetes, submódulos) sigan viendo el prelude
+    // — el override es léxico a la raíz. Idempotente: el alias ya presente no se duplica.
     let mut prelude_fns: Vec<Function> = crate::prelude::functions()
         .into_iter()
-        .filter(|f| !defined.contains(&f.name))
+        .filter_map(|mut f| {
+            if !defined.contains(&f.name) {
+                return Some(f);
+            }
+            let alias = format!("{}#prelude", f.name);
+            if defined.contains(&alias) {
+                return None;
+            }
+            f.name = alias;
+            Some(f)
+        })
         .collect();
     if !prelude_fns.is_empty() {
         prelude_fns.append(&mut program.functions);
@@ -314,6 +327,22 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
         .into_iter()
         .filter(|t| !traits_user.contains(&t.name))
         .collect();
+    // M270 (raystream [8]): un tipo del usuario con el nombre de un trait del prelude (`Sub`, `Ord`,
+    // `Show`…) chocaba al registrar el trait, con la posición SINTÉTICA del prelude (`1000000666:1`)
+    // y el mensaje al revés ("'Sub' is already a type"). El error va en el tipo del usuario.
+    for t in &prelude_traits {
+        let pos = program.structs.iter().filter(|s| s.name == t.name).map(|s| (s.line, s.col))
+            .chain(program.enums.iter().filter(|e| e.name == t.name).map(|e| (e.line, e.col)))
+            .find(|(l, _)| *l < crate::prelude::LINE_BASE);
+        if let Some((line, col)) = pos {
+            return Err(TypeError {
+                msg: format!("'{}' is the name of a prelude trait; choose another name for this type", t.name),
+                line,
+                col,
+                len: t.name.chars().count(),
+            });
+        }
+    }
     if !prelude_traits.is_empty() {
         prelude_traits.append(&mut program.traits);
         program.traits = prelude_traits;
@@ -606,6 +635,13 @@ struct Checker {
     /// trait)`. Sirven para resolver `x.metodo()` con `x: T` acotado y para reenviar
     /// diccionarios al llamar a otro genérico acotado con un `T` rígido.
     current_fn_bounds: Vec<(String, String)>,
+    /// M270 (raystream [1]): ¿la función que se está verificando es del MÓDULO RAÍZ del usuario
+    /// (nombre pelado y posición real)? Solo ahí aplica el override de una función del prelude;
+    /// un módulo (`std::json`, `catalog::store`) o el propio prelude siguen viendo la del prelude.
+    current_fn_is_root: bool,
+    /// M270: nombres de funciones del prelude que el usuario REDEFINIÓ en la raíz; el prelude quedó
+    /// inyectado bajo el alias `nombre#prelude` para los módulos.
+    overridden_prelude: HashSet<String>,
     /// Diccionarios a añadir en cada **sitio de llamada** a una función con bounds (M9.2):
     /// `(línea, col, nombre)` → nombres de los valores función (diccionarios) a pasar como
     /// argumentos extra, en orden. `lower_dict_calls` los añade tras verificar.

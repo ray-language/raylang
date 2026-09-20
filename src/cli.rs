@@ -3949,12 +3949,16 @@ fn cmd_search(args: &[String]) {
                 return Some((name, meta, None));
             }
             let m = meta.as_ref()?;
-            let via = if m.description.to_lowercase().contains(&pattern) {
-                Some("description".to_string())
+            // El motivo más concreto primero: un módulo o una palabra clave dicen más que "está en la
+            // descripción" (`ray search sse` → `matches module 'net/sse'`).
+            let via = if let Some(x) = m.modules.iter().find(|x| x.to_lowercase().contains(&pattern)) {
+                Some(format!("module '{x}'"))
             } else if let Some(k) = m.keywords.iter().find(|k| k.to_lowercase().contains(&pattern)) {
                 Some(format!("keyword '{k}'"))
+            } else if m.description.to_lowercase().contains(&pattern) {
+                Some("description".to_string())
             } else {
-                m.modules.iter().find(|x| x.to_lowercase().contains(&pattern)).map(|x| format!("module '{x}'"))
+                None
             };
             via.map(|v| (name, meta.clone(), Some(v)))
         })

@@ -13874,8 +13874,8 @@ versiones, los metadatos NO son inmutables: cada `publish` los reescribe.
 Cambios: `[package] description` y `keywords` en ray.toml (`["a", "b"]` o `"a, b"`); `ray
 registry publish` escribe el sidecar (los módulos se derivan de los `.ray` de la raíz del
 paquete: `net/http` es `<raíz>/http.ray`; `mod.ray` es el propio paquete y no se lista) y lo
-anuncia; `ray search` casa nombre → descripción → palabras clave → módulos, muestra la descripción
-en la fila y, cuando el nombre no casó, dice por qué (`matches keyword 'sse'`, `matches module
+anuncia; `ray search` casa nombre → módulos → palabras clave → descripción (el motivo más concreto
+primero), muestra la descripción en la fila y, cuando el nombre no casó, dice por qué (`matches keyword 'sse'`, `matches module
 'net/websocket'`, `matches description`). El índice público recibe los sidecars de `net`, `web`,
 `rpc`, `db` y `tz` en un PR aparte (ray-index).
 

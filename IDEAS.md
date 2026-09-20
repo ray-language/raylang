@@ -3538,3 +3538,7 @@ de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.
   encadenado comparte posición con su receptor (CLAUDE.md, gotcha UFCS); con el mismo nombre en
   los dos eslabones la clave colisiona y el lowering del intérprete aplica el destino equivocado.
   Impacto BAJO en producto (la VM es el motor) pero rompe el oráculo: arreglar como hito propio.
+- ✅ M269 (DESIGN §254) — **`for where in …` rompía el nativo** (ray-sublime §98): el transpilador
+  escapaba el USO de un identificador que es palabra reservada de Rust (`r#where`) pero no su
+  DECLARACIÓN como variable de `for` (rango, arreglo, `(k, v)` de mapa, chars, `split`); el `for`
+  sobre iteradores sí lo hacía. Todas las declaraciones pasan ahora por `mangle`.

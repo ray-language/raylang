@@ -2150,6 +2150,17 @@ fn build_native_rust_keyword_identifiers_dont_break_rustc() {
            let e = St.ref(7);\n\
            print(to_string(mut + val_of(e)));  // 18 + 7 = 25\n\
            print(e.show());                // '@derive(Show)': 'St.ref(7)' (nombre ORIGINAL, no r#ref)\n\
+           // M269 (ray-sublime #98): la DECLARACIÓN del `for` también se escapa (rango, arreglo,\n\
+           // mapa (k, v), chars de string y split).\n\
+           var acc = 0;\n\
+           for where in 0..3 { acc = acc + where; }\n\
+           for use in [4, 5] { acc = acc + use; }\n\
+           var m: Map<string, int> = Map.new();\n\
+           m.insert(\"a\", 1);\n\
+           for (type, loop) in m { acc = acc + loop; }\n\
+           for mod in \"xy\" { if (mod == 'x') { acc = acc + 100; } }\n\
+           for async in \"a,b\".split(\",\") { acc = acc + 1000; }\n\
+           print(to_string(acc));           // 3 + 9 + 1 + 100 + 2000 = 2113\n\
            0\n\
          }\n",
     )
@@ -2162,7 +2173,7 @@ fn build_native_rust_keyword_identifiers_dont_break_rustc() {
     let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
     let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
     assert_eq!(native_out, vm_out, "keywords de Rust como identificadores nativo ≡ VM");
-    assert_eq!(native_out, "25\nSt.ref(7)\n", "el valor esperado (incl. show con nombre original)\n{native_out}");
+    assert_eq!(native_out, "25\nSt.ref(7)\n2113\n", "el valor esperado (incl. show con nombre original y los for con keywords)\n{native_out}");
 }
 
 #[test]

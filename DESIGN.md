@@ -13881,3 +13881,16 @@ primero), muestra la descripción en la fila y, cuando el nombre no casó, dice 
 
 Verificado: `tests/registry_cli.rs` (publish escribe el sidecar con la descripción, 2 keywords y
 el módulo nuevo; search por keyword, módulo y descripción; sin metadatos no hay sidecar).
+## 254. M269 — La declaración del `for` también se escapa en el nativo (sep 2026)
+
+Origen: ray-sublime §98. `for where in [a, b] { … }` corre en la VM y `ray build --native` falla
+con "expected identifier, found keyword `where`" y después "cannot find value `r#where`": el
+generador escapaba el USO del identificador como raw identifier de Rust (`mangle` → `r#where`,
+H5) pero emitía la DECLARACIÓN de la variable del `for` tal cual. `let where = …` no fallaba
+(la declaración del `let` ya pasaba por `mangle`), ni el `for` sobre iteradores (`ForIter::Iter`,
+que sí mangleaba sus binders); sí fallaban el rango, el `for` sobre arreglo, el `(k, v)` sobre
+mapa, el bucle de chars de un string y el de `split`. Cinco sitios de `emit.rs` que escribían
+`var` en crudo; ahora todos escriben `mangle(&var)` (los `declare` siguen con el nombre raylang:
+los ámbitos se indexan por él). Test: el de H5 en `tests/cli_cli.rs` gana los cinco bucles con
+`where`/`use`/`type`/`loop`/`mod`/`async`, nativo ≡ VM. (`dyn` NO sirve de ejemplo: es palabra
+clave de raylang.)

@@ -578,13 +578,21 @@ fn range_of(req: Request, etag: string, size: int) -> [int] {
 // un reproductor). Por debajo, el camino en memoria (gzip/ETag/Range sobre bytes) sigue igual.
 const STATIC_STREAM_MIN_BYTES: int = 1048576;
 
-// El trozo de lectura del productor (256 KB): memoria acotada sea cual sea el tamaño del archivo.
+// El trozo de lectura del productor (256 KB) y la profundidad de su cola (M275, raystream [18]: con
+// 4 trozos en cola cada conexión tenía 1 MB en vuelo — 144 MB de RSS a 32 clientes y un 11 % menos
+// de caudal que un bucle directo; con 1 el productor lee el siguiente mientras se escribe el
+// anterior y la memoria por conexión es de dos trozos). Ajustables por `serve_file_with`/
+// `static_mount_with` (chunk ≥ 4 KB, cola ≥ 1).
 const STATIC_CHUNK_BYTES: int = 262144;
+
+const STATIC_QUEUE: int = 1;
+
+const STATIC_CHUNK_MIN: int = 4096;
 
 // El productor: lee `[from, to]` (inclusivo) de `file` por trozos y los manda por el canal; cierra
 // el canal al terminar (o si el archivo falla a medias: el bucle de servicio detecta el corto).
-fn stream_file_range(file: string, from: int, to: int) -> Channel<bytes> {
-    let ch: Channel<bytes> = Channel.bounded(4);
+fn stream_file_range(file: string, from: int, to: int, chunk: int, queue: int) -> Channel<bytes> {
+    let ch: Channel<bytes> = Channel.bounded(if (queue < 1) { 1 } else { queue });
     let _ = spawn(fn() {
         match (fs.open(file, "r")) {
             Result.Ok(h) => {
@@ -597,11 +605,7 @@ fn stream_file_range(file: string, from: int, to: int) -> Channel<bytes> {
                 }
                 var left: int = to - from + 1;
                 while (go && left > 0) {
-                    let want: int = if (left < STATIC_CHUNK_BYTES) {
-                        left
-                    } else {
-                        STATIC_CHUNK_BYTES
-                    };
+                    let want: int = if (left < chunk) { left } else { chunk };
                     match (fs.read_bytes(h, want)) {
                         Result.Ok(piece_opt) => match (piece_opt) {
                             Option.Some(piece) => {
@@ -633,7 +637,14 @@ fn stream_file_range(file: string, from: int, to: int) -> Channel<bytes> {
 // M271: servir un estático de disco GRANDE sin leerlo entero: mismos ETag/Range/If-Range/416/206
 // que serve_static_bytes, con el cuerpo en streaming de tamaño conocido (Content-Length, keep-alive).
 // En un HEAD no se lanza productor: cabeceras solas (el canal nace cerrado).
-fn serve_static_file_stream(file: string, etag: string, size: int, req: Request) -> Response {
+fn serve_static_file_stream(
+    file: string,
+    etag: string,
+    size: int,
+    req: Request,
+    chunk: int,
+    queue: int
+) -> Response {
     let rng: [int] = range_of(req, etag, size);
     if (rng.len() == 1) {
         let r416: Response = text(416, "range not satisfiable\n");
@@ -649,7 +660,7 @@ fn serve_static_file_stream(file: string, etag: string, size: int, req: Request)
         close(empty);
         empty
     } else {
-        stream_file_range(file, from, to)
+        stream_file_range(file, from, to, chunk, queue)
     };
     let r: Response = stream_response_len(if (rng.len() == 2) { 206 } else { 200 }, ch, length);
     r.headers.insert("Content-Type", mime_of(file));
@@ -704,9 +715,28 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
     if (!req.path.starts_with(prefix)) {
         return not_found();
     }
+    static_mount_with(prefix, dir, req, STATIC_CHUNK_BYTES, STATIC_QUEUE)
+}
+
+/// Like `static_mount`, choosing the streaming buffer for big files (see `serve_file_with`).
+pub fn static_mount_with(
+    prefix: string,
+    dir: string,
+    req: Request,
+    chunk_bytes: int,
+    queue: int
+) -> Response {
+    if (req.method != "GET" && req.method != "HEAD") {
+        let r: Response = text(405, "method not allowed\n");
+        r.headers.insert("Allow", "GET, HEAD");
+        return r;
+    }
+    if (!req.path.starts_with(prefix)) {
+        return not_found();
+    }
     let rest: string = req.path.substring(prefix.len(), req.path.len());
     match (static_file_of(dir, rest)) {
-        Option.Some(file) => serve_file(file, req),
+        Option.Some(file) => serve_file_with(file, req, chunk_bytes, queue),
         Option.None => not_found(),
     }
 }
@@ -721,6 +751,17 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
 /// `Content-Length` (never the whole file in memory). Missing or unreadable file → 404. This
 /// does not sanitize `path`: pass a file you resolved yourself, never a client-supplied path.
 pub fn serve_file(file: string, req: Request) -> Response {
+    serve_file_with(file, req, STATIC_CHUNK_BYTES, STATIC_QUEUE)
+}
+
+// M275 (raystream [18]): el trozo y la cola son la decisión que un servidor de medios quiere
+// ajustar (clientes lentos → cola 1 y trozos chicos; enlaces rápidos → trozos grandes).
+/// Like `serve_file`, choosing the streaming buffer for files of 1 MB or more: `chunk_bytes`
+/// per read (min 4 KB; default 256 KB) and `queue` pieces in flight (min 1; default 1). Memory
+/// per connection is about `chunk_bytes × (queue + 1)`.
+pub fn serve_file_with(file: string, req: Request, chunk_bytes: int, queue: int) -> Response {
+    let chunk: int = if (chunk_bytes < STATIC_CHUNK_MIN) { STATIC_CHUNK_MIN } else { chunk_bytes };
+    let q: int = if (queue < 1) { 1 } else { queue };
     // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
     let size: int = match (fs.file_size(file)) {
         Result.Ok(n) => n,
@@ -742,7 +783,7 @@ pub fn serve_file(file: string, req: Request) -> Response {
     }
     // M271: un archivo grande va por trozos desde el disco (nunca entero en memoria).
     if (size >= STATIC_STREAM_MIN_BYTES) {
-        return serve_static_file_stream(file, etag, size, req);
+        return serve_static_file_stream(file, etag, size, req, chunk, q);
     }
     match (fs.read_file_bytes(file)) {
         Result.Ok(data) => serve_static_bytes(file, etag, data, req),

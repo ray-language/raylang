@@ -692,7 +692,7 @@ impl Transpiler {
                         Type::Map(k, v) => ((*k).clone(), (*v).clone()),
                         other => return Err(format!("for (k, v) over {:?} is not supported", other)),
                     };
-                    let binder = |n: &Option<String>| n.clone().unwrap_or_else(|| "_".into());
+                    let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
                     write!(out, "for ({}, {}) in __ray_pairs(&", kn, vn).unwrap();
                     self.emit_expr(out, expr)?;
@@ -709,6 +709,9 @@ impl Transpiler {
                     out.push('\n');
                     return Ok(());
                 }
+                // M269 (ray-sublime §98): el nombre se EMITE siempre por `mangle` — `for where in …` es un
+                // identificador legal de raylang y palabra reservada de Rust (el uso ya salía `r#where`;
+                // la declaración del for no, y el Rust generado no compilaba).
                 let var = match pat {
                     ForPat::Single(n) => n.clone(),
                     ForPat::Tuple(_) => unreachable!("tupla ya manejada arriba"),
@@ -737,13 +740,13 @@ impl Transpiler {
                                 writeln!(out, "    let {} = {}.borrow();", guard, mangle(name)).unwrap();
                                 self.hoisted_borrows.insert(name.clone(), guard);
                             }
-                            write!(out, "    for {} in __rt_lo..__rt_hi ", var).unwrap();
+                            write!(out, "    for {} in __rt_lo..__rt_hi ", mangle(&var)).unwrap();
                         } else {
                             // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
                             // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
                             // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
                             // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
-                            write!(out, "for {} in (", var).unwrap();
+                            write!(out, "for {} in (", mangle(&var)).unwrap();
                             self.emit_expr(out, start)?;
                             out.push_str(")..(");
                             self.emit_expr(out, end)?;
@@ -774,7 +777,7 @@ impl Transpiler {
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
                         if is_string {
-                            write!(out, "for {} in ", var).unwrap();
+                            write!(out, "for {} in ", mangle(&var)).unwrap();
                             self.emit_expr(out, expr)?;
                             out.push_str(".chars() ");
                             self.scopes.push(HashMap::new());
@@ -792,7 +795,7 @@ impl Transpiler {
                             out.push_str("; let __rt_spsep = ");
                             self.emit_expr(out, sep)?;
                             out.push_str("; for __rt_spw in __rt_sps.split(&*__rt_spsep) { let ");
-                            out.push_str(&var);
+                            out.push_str(&mangle(&var));
                             out.push_str(" = Rc::<str>::from(__rt_spw); ");
                             self.scopes.push(HashMap::new());
                             self.declare(&var, Type::String);
@@ -809,7 +812,7 @@ impl Transpiler {
                             out.push_str("{ let __rt_it = ");
                             self.emit_expr(out, expr)?;
                             out.push_str(".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; while __rt_i < __rt_n { let ");
-                            out.push_str(&var);
+                            out.push_str(&mangle(&var));
                             out.push_str(" = __rt_it.borrow()[__rt_i].clone(); __rt_i += 1; ");
                             self.scopes.push(HashMap::new());
                             self.declare(&var, ety);

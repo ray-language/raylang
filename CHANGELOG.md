@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`for where in …` compila en el nativo** (M269, ray-sublime §98). Un identificador legal de
+  raylang que es palabra reservada de Rust (`where`, `use`, `mod`, `type`, `loop`…) como variable
+  de `for` —rango, arreglo, `(k, v)` de mapa, chars de string, `split`— rompía `ray build
+  --native`: el uso salía escapado (`r#where`) pero la declaración del bucle no. Ahora todas las
+  declaraciones pasan por el mismo escape.
 - **`ray search` por palabra clave** (M268, ray-sublime §95.3). El patrón casa, además del
   nombre, la descripción, las palabras clave y los módulos del paquete: `ray search http` devuelve
   `net`, con su descripción en la fila y `matches keyword 'http'` cuando no fue el nombre. Los

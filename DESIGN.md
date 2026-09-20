@@ -13972,3 +13972,26 @@ factory"), en vez de tres errores de rustc sobre código generado — lo que ped
 
 `net` sube a 0.3.0 (superficie nueva); se publica al espejo con `tools/publish-packages.sh net`
 en la siguiente release.
+
+## 257. M272 — La salida a streaming del framework `web` (sep 2026)
+
+Origen: raystream [4] (IDEAS §93). El framework `web` convertía la `Res` del handler a la
+`Response` del webserver con `stream: []` literal: sin acceso al canal ni a la conexión, una app
+que necesitara SSE, una descarga larga o un medio tenía que abandonar el framework entero —
+enrutado, middlewares, sesiones— justo cuando ya estaba escrita.
+
+Cambios, todos en `packages/web/framework.ray` sobre lo que M271 dejó en `net/webserver`:
+- `Res` gana `streaming: [Channel<bytes>]` (mismo contrato que `webserver.Response.stream`; el
+  único literal de `Res` es el del despachador, así que no rompe a nadie) y `build_response` lo
+  pasa. Se llama `streaming` y no `stream` porque el UFCS resuelve campo → método y `r.stream(ch,
+  ct)` debe ser el método (la lección de `Proc.stdin_h`).
+- `r.stream(ch, content_type)`: chunked, como `stream_response`. `r.stream_len(ch, length,
+  content_type)`: `Content-Length` + keep-alive, como `stream_response_len`.
+- `r.sendfile(c, path)`: delega en `webserver.serve_file(path, req)` — la cola de `static_mount`
+  para un archivo ya resuelto, hecha pública en este hito (ETag/304 por metadatos, MIME,
+  Range/206/416 con `If-Range`, y a partir de 1 MB el cuerpo por trozos desde el disco) — y vuelca
+  status, cabeceras (el `Content-Type` va al campo derivado) y cuerpo o stream en la `Res`. No
+  sanea la ruta: la resuelve la app (`static_file_of` sigue siendo cosa de los mounts).
+
+`web` sube a 0.4.0. Verificado: `tests/framework_cli.rs` gana una app propia con las tres
+salidas (SSE por chunked, descarga con tamaño por keep-alive, archivo con Range/206 y 304).

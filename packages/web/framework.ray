@@ -61,6 +61,11 @@ pub struct Res {
     content_type: string,
     headers: Map<string, string>,
     set_cookie: [string],
+    // M272 (raystream [4]): cuerpo en STREAMING — si no está vacío, `body` no cuenta y la respuesta
+    // son los trozos del canal (`r.stream`, `r.stream_len`, `r.sendfile`). Mismo contrato que
+    // `webserver.Response.stream`. Se llama `streaming` (no `stream`) porque el UFCS resuelve
+    // campo → método y `r.stream(ch, ct)` debe ser el método.
+    streaming: [Channel<bytes>],
 }
 
 // Un patrón de ruta (M93.2b): por segmentos (":x" captura uno; "*resto" FINAL captura el resto,
@@ -460,6 +465,56 @@ pub fn header(res: Res, name: string, value: string) -> Res {
     res
 }
 
+// M272 (raystream [4]): la salida a STREAMING del framework — antes solo `net/webserver` la tenía
+// y una app con SSE, descargas largas o medios abandonaba el enrutado, los middlewares y las
+// sesiones en el peor momento.
+/// Streams the body from a `Channel<bytes>` (chunked; the connection closes when the producer
+/// `close`s the channel): `spawn` the producer, then `r.stream(ch, "text/event-stream")` for
+/// SSE, `"application/octet-stream"` for a generated download. A bounded channel gives
+/// backpressure.
+pub fn stream(res: Res, ch: Channel<bytes>, content_type: string) {
+    res.streaming = [ch];
+    res.body = b"";
+    res.content_type = content_type;
+}
+
+/// Streams a body of KNOWN size (`length` bytes) from a channel: `Content-Length` instead of
+/// chunked and keep-alive — a download with a progress bar. The producer must send exactly
+/// `length` bytes.
+pub fn stream_len(res: Res, ch: Channel<bytes>, length: int, content_type: string) {
+    res.streaming = [ch];
+    res.body = b"";
+    res.content_type = content_type;
+    res.headers.insert("Content-Length", to_string(length));
+}
+
+/// Serves a file the way a static mount would (`webserver.serve_file`): strong ETag + 304,
+/// `Content-Type` by extension, `Accept-Ranges`/206/416 with `If-Range`, and from 1 MB up the
+/// body streamed from disk in pieces with `Content-Length` — media, downloads, attachments.
+/// Missing file → 404. Resolve the path yourself (`ctx` only supplies the request for ETag and
+/// Range): never hand a client-supplied path to it.
+pub fn sendfile(res: Res, ctx: Ctx, path: string) {
+    let sr: webserver.Response = webserver.serve_file(path, ctx.req);
+    res.code = sr.status;
+    res.body = sr.body;
+    res.streaming = sr.stream;
+    let ks: [string] = sr.headers.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        match (get(sr.headers, ks[i])) {
+            Option.Some(v) => {
+                if (ks[i] == "Content-Type") {
+                    res.content_type = v;
+                } else {
+                    res.headers.insert(ks[i], v);
+                }
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+}
+
 /// Responds with a `302 Found` redirect to `url` (use `r.status(301)` after it for a permanent one).
 pub fn redirect(res: Res, url: string) {
     res.code = 302;
@@ -736,7 +791,7 @@ fn build_response(res: Res) -> webserver.Response {
         headers: h,
         set_cookie: res.set_cookie,
         body: res.body,
-        stream: []
+        stream: res.streaming
     }
 }
 
@@ -769,7 +824,8 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         body: b"",
         content_type: "text/plain; charset=utf-8",
         headers: Map.new(),
-        set_cookie: []
+        set_cookie: [],
+        streaming: []
     };
     var ctx: Ctx = Ctx {
         method: req.method,

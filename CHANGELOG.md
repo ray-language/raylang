@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.0 — 2026-09-20
 
 - **Constantes de tipo arreglo y `@derive(Show)` con campos arreglo** (M274, raystream [15], [16]).
   `const EXTENSIONES: [string] = ["srt", "vtt"];` (anidable) con semántica de literal inyectado:

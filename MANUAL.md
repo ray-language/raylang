@@ -904,6 +904,8 @@ cara pública de la cápsula. Sin `pub`, el `from`-import es privado al `mod.ray
 [package]
 name = "hola"
 version = "0.1.0"
+description = "Saludos en varios idiomas"        # opcional: lo muestra `ray search` (M268)
+keywords = ["saludo", "i18n"]                    # opcional: por lo que `ray search` lo encuentra
 
 [dependencies]
 textutils = "^1.2"                              # del registro central (rangos semver: 1.2.0, ^1.2, ~1.2.3, *)
@@ -917,7 +919,7 @@ su **hash SHA-256** — un contenido alterado se detecta como error de supply-ch
 
 ```sh
 ray add textutils@^1.2      # añade al manifiesto y descarga
-ray search json             # busca en el registro
+ray search json             # busca en el registro (nombre, descripción, palabras clave y módulos)
 ray update                  # re-resuelve a las más nuevas compatibles
 ray remove textutils
 ray registry publish                 # publica TU paquete en el registro (valida + chequea + hashea)

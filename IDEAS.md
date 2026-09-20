@@ -3525,7 +3525,7 @@ de la LAN, como Tauri) y el modo proxy (A) si hiciera falta.
 
 ## 92. Pendientes menores tras el arco de ray-sublime §95–§97 (sep 2026)
 
-- **`ray search` por palabra clave** (ray-sublime §95.3): `cmd_search` casa solo el NOMBRE del
+- ✅ M268 (DESIGN §253) — **`ray search` por palabra clave** (ray-sublime §95.3): `cmd_search` casaba solo el NOMBRE del
   paquete contra los archivos del índice, y `<nombre>.toml` (una sección por versión con
   `git`/`hash`/`yanked`) no tiene descripción ni palabras clave: `ray search http` no devuelve
   `net`. Hace falta ampliar el esquema del índice público (ray-index) con `description` y

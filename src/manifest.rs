@@ -31,6 +31,12 @@ pub struct Manifest {
     pub version: String,
     /// El archivo de entrada del programa, relativo a la raíz. Por defecto `src/main.ray`.
     pub entry: String,
+    /// M268: `[package] description` — una línea que dice qué es el paquete; va al índice
+    /// (`<nombre>.meta.toml`) al publicar y la muestra `ray search`.
+    pub description: Option<String>,
+    /// M268: `[package] keywords` — palabras por las que `ray search` encuentra el paquete
+    /// (`["http", "sse"]` o `"http, sse"`).
+    pub keywords: Vec<String>,
     /// `(nombre, spec)` de cada dependencia declarada (spec = URL git + tag, resuelto en M39c).
     pub dependencies: Vec<(String, String)>,
     /// El directorio que contiene el `ray.toml` (la raíz del proyecto).
@@ -178,6 +184,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut name = None;
     let mut version = None;
     let mut entry = None;
+    let mut description = None;
+    let mut keywords: Vec<String> = Vec::new();
     let mut dependencies = Vec::new();
     let mut indent_style = None;
     let mut indent_size = None;
@@ -233,6 +241,14 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "name" => name = Some(as_string()?),
                 "version" => version = Some(as_string()?),
                 "entry" => entry = Some(as_string()?),
+                // M268: metadatos de búsqueda del índice.
+                "description" => description = Some(as_string()?),
+                "keywords" => {
+                    keywords = match parse_string_array(value_raw) {
+                        Some(list) => list,
+                        None => as_string()?.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect(),
+                    };
+                }
                 _ => {} // claves desconocidas de [package] se ignoran (extensibilidad)
             },
             "dependencies" => dependencies.push((key.to_string(), as_string()?)),
@@ -329,6 +345,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         name: name.ok_or("ray.toml: missing 'name' in [package]")?,
         version: version.ok_or("ray.toml: missing 'version' in [package]")?,
         entry: entry.unwrap_or_else(|| "src/main.ray".to_string()),
+        description,
+        keywords,
         dependencies,
         root,
         indent_style,

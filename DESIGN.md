@@ -13854,3 +13854,30 @@ Arreglo: la clave lleva un cuarto campo, la PROFUNDIDAD en la cadena (`ufcs_chai
 bajar porque el lowering reescribe de fuera hacia dentro (el interno sigue siendo `Call(Field)`
 cuando se procesa el externo). Sin cambio en el parser ni en el AST; el selfhost y el LSP no usan
 esa tabla. Test en `tests/ufcs_chain_cli.rs` (tres motores, incluida una cadena de tres eslabones).
+
+## 253. M268 — `ray search` por palabra clave: el sidecar de metadatos del índice (sep 2026)
+
+Origen: ray-sublime §95.3 (IDEAS §92). Un desarrollador que busca el cliente HTTP escribe `ray
+search http` y no obtiene `net`: `cmd_search` casaba solo el NOMBRE del paquete contra los
+archivos del índice, y `<nombre>.toml` (una sección por versión: `git`/`hash`/`yanked`/`sig`) no
+tiene descripción ni palabras clave.
+
+Decisión de formato: los metadatos van en un SIDECAR `<nombre>.meta.toml` (`description`,
+`keywords`, `modules`; valores entre comillas, listas separadas por comas), no dentro de
+`<nombre>.toml`. Motivo: compatibilidad hacia atrás. El parser de versiones de las toolchains ya
+instaladas rechaza una clave fuera de una sección `[versión]` ("key outside a [version]
+section"): meter `description` arriba del archivo rompería la resolución de dependencias de todo
+`ray` anterior. Un archivo nuevo no lo lee nadie viejo, y `ray search` lo excluye como paquete por
+el punto del nombre (el precedente de `<nombre>.owners.toml`, M83b). A diferencia de las
+versiones, los metadatos NO son inmutables: cada `publish` los reescribe.
+
+Cambios: `[package] description` y `keywords` en ray.toml (`["a", "b"]` o `"a, b"`); `ray
+registry publish` escribe el sidecar (los módulos se derivan de los `.ray` de la raíz del
+paquete: `net/http` es `<raíz>/http.ray`; `mod.ray` es el propio paquete y no se lista) y lo
+anuncia; `ray search` casa nombre → módulos → palabras clave → descripción (el motivo más concreto
+primero), muestra la descripción en la fila y, cuando el nombre no casó, dice por qué (`matches keyword 'sse'`, `matches module
+'net/websocket'`, `matches description`). El índice público recibe los sidecars de `net`, `web`,
+`rpc`, `db` y `tz` en un PR aparte (ray-index).
+
+Verificado: `tests/registry_cli.rs` (publish escribe el sidecar con la descripción, 2 keywords y
+el módulo nuevo; search por keyword, módulo y descripción; sin metadatos no hay sidecar).

@@ -549,7 +549,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray mcp` | MCP server for LLM agents: `check`/`run`/`test`/`fmt`/`doc` tools, with the code sandboxed (fuel + heap + deadline), plus the `raylang://llms.txt` resource (the distilled context [`llms.txt`](llms.txt) from the repo root, for the model's prompt). Guide: [`docs/mcp.en.md`](docs/mcp.en.md) |
 | `ray add <name>[@req]` | adds a dependency from the registry (`1.2.0`, `^1.2`, `~1.2.3`, `*`) |
 | `ray remove <name>` | removes it (and its cache if nobody else uses it) |
-| `ray search [pattern]` | lists registry packages |
+| `ray search [pattern]` | lists registry packages; the pattern matches the name and (M268) the description, keywords and modules of the `<name>.meta.toml` sidecar (`ray search http` → `net`, with the description on the row and `matches keyword/module/description` when the name did not match) |
 | `ray fetch` | downloads the dependencies into `.ray-deps/` |
 | `ray update` | re-resolves to the newest compatible versions |
 | `ray registry publish [--repo <spec>] [--sign]` | publishes this version to the registry (validates + semantic check + hash; `--sign` signs it with Ed25519 and claims/verifies the name's owner) |
@@ -607,4 +607,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:6f4294ba3493 -->
+<!-- sync: sha256:a11367ea1ffb -->

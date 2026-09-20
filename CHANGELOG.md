@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray search` por palabra clave** (M268, ray-sublime §95.3). El patrón casa, además del
+  nombre, la descripción, las palabras clave y los módulos del paquete: `ray search http` devuelve
+  `net`, con su descripción en la fila y `matches keyword 'http'` cuando no fue el nombre. Los
+  metadatos viven en un sidecar `<nombre>.meta.toml` del índice que `ray registry publish` escribe
+  desde `[package] description`/`keywords` de ray.toml (los módulos se derivan de los `.ray` del
+  paquete); las toolchains anteriores lo ignoran.
+
 - **Métodos de trait del mismo nombre encadenados** (M267, IDEAS §92). `r.unwrap_or(x).unwrap_or(y)`
   con `r: Result<Option<T>, E>` fallaba en el intérprete ("no match branch matched": aplicaba el
   `unwrap_or` de `Option` al `Result`) y la VM acertaba por accidente. Los dos eslabones comparten

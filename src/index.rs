@@ -242,6 +242,66 @@ pub fn write_owners(index_dir: &Path, name: &str, owners: &Owners) -> Result<(),
     std::fs::write(&path, s).map_err(|e| format!("could not write '{}': {e}", path.display()))
 }
 
+/// M268 (ray-sublime §95.3): los METADATOS DE BÚSQUEDA de un paquete, en el sidecar
+/// `<nombre>.meta.toml` — aparte de `<nombre>.toml` a propósito: las toolchains anteriores leen
+/// las versiones con un parser que rechaza claves fuera de una sección `[versión]`, y un sidecar
+/// nuevo no las rompe (el punto del nombre lo excluye de `ray search` como paquete).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Meta {
+    pub description: String,
+    pub keywords: Vec<String>,
+    /// Los módulos importables del paquete (`net/http`, `net/sse`…), derivados de sus `.ray` al publicar.
+    pub modules: Vec<String>,
+}
+
+/// Lee `<nombre>.meta.toml`; `Ok(None)` si el paquete no tiene metadatos.
+pub fn read_meta(index_dir: &Path, name: &str) -> Result<Option<Meta>, String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
+    }
+    let path = index_dir.join(format!("{name}.meta.toml"));
+    let Ok(source) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let mut meta = Meta::default();
+    let list = |v: &str| -> Vec<String> { v.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect() };
+    for line in source.lines() {
+        let line = line.split_once('#').map_or(line, |(a, _)| a).trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some(value) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
+            return Err(format!("{}: the value must be in quotes", path.display()));
+        };
+        match key.trim() {
+            "description" => meta.description = value.to_string(),
+            "keywords" => meta.keywords = list(value),
+            "modules" => meta.modules = list(value),
+            _ => {}
+        }
+    }
+    Ok(Some(meta))
+}
+
+/// Escribe (o REEMPLAZA: los metadatos no son inmutables como las versiones) `<nombre>.meta.toml`.
+pub fn write_meta(index_dir: &Path, name: &str, meta: &Meta) -> Result<(), String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
+    }
+    let path = index_dir.join(format!("{name}.meta.toml"));
+    std::fs::create_dir_all(index_dir)
+        .map_err(|e| format!("could not create the index '{}': {e}", index_dir.display()))?;
+    let clean = |s: &str| s.replace('"', "'").replace('\n', " ");
+    let s = format!(
+        "# search metadata of '{name}' (M268): refreshed on every publish\ndescription = \"{}\"\nkeywords = \"{}\"\nmodules = \"{}\"\n",
+        clean(&meta.description),
+        clean(&meta.keywords.join(", ")),
+        clean(&meta.modules.join(", ")),
+    );
+    std::fs::write(&path, s).map_err(|e| format!("could not write '{}': {e}", path.display()))
+}
+
 /// El MENSAJE que firma una publicación (M83c): liga nombre, versión y hash de contenido.
 pub fn signing_message(name: &str, num: &str, hash: &str) -> String {
     format!("{name}@{num}:{hash}")

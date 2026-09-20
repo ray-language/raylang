@@ -14048,3 +14048,15 @@ segundo proyecto lo pide: paquete Tier-2 `image` con feature del runtime.
 **[10] Bucles por píxel 43× más lentos en la VM: dato, no arco.** Techo estructural del intérprete
 (~1 µs por operación sobre `bytes`); anotado en PERFORMANCE con la regla "píxeles → nativo o
 caché". Primitivas de bloque para `bytes` solo si aparece un segundo caso.
+
+## 260. M275 — La lista de firmas de `llms.txt` se coteja con `ray doc` (sep 2026)
+
+Origen: raystream [17]. La lista "Return types that surprise" de `llms.txt`, añadida en M273 (§258)
+precisamente para que nadie adivinara, decía `char_from_code(n) -> char`; el tipo real es
+`Option<char>`. Un dato erróneo en la lista en la que uno confía es peor que ninguna lista.
+Corregido el dato y, para que no vuelva a pasar, una guarda de CI (`tests/llms_signatures.rs`):
+extrae de los snippets en línea de `llms.txt` (no de los bloques de código) toda firma
+`callee(args) -> T` —varias por snippet, el último método de una cadena— y la coteja con la
+primera línea de `ray doc callee`, tolerando comodines (`T`, `_`), prefijos de módulo
+(`process.Exit`) y la coletilla de trait. Un nombre sin calificar que `ray doc` resuelve en un
+módulo se salta por ambiguo. Verificado: con el dato viejo la guarda falla nombrando la firma.

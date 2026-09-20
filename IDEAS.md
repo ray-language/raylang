@@ -3566,3 +3566,4 @@ net 0.2.0, todas con repro y coste medido). Estado:
 | 14 | `ray fmt` recorta `0x0D` a `0xD` | ✅ M273 |
 | 15 | No hay constantes de tipo array | ✅ M274 (arreglo de literales con semántica de literal inyectado; SPEC §const) |
 | 16 | `@derive(Show)` no soporta campos array | ✅ M274 |
+| 17 | `llms.txt` decía `char_from_code(n) -> char` (es `Option<char>`), en la lista que existe para no adivinar | ✅ M275 (dato corregido + guarda de CI que coteja cada firma citada contra `ray doc`) |

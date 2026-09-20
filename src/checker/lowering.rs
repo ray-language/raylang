@@ -97,6 +97,15 @@ pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &UfcsSiteMap) {
     // **destino** (el mismo nombre para UFCS de función libre, el manglado para un método
     // de trait). Reescribir ANTES de recorrer los hijos, para que la recursión baje
     // también el receptor y los argumentos (p. ej. `a.f().g()`).
+    // M270: un `Call(Ident)` registrado con profundidad `usize::MAX` solo se RENOMBRA (el callee pasa
+    // a ser la función destino, los argumentos quedan): `to_string(x)` → `T#show(x)` y la función del
+    // prelude redefinida en la raíz → `nombre#prelude` dentro de los módulos.
+    if let ExprKind::Call { callee, .. } = &mut expr.kind
+        && let ExprKind::Ident(n) = &callee.kind
+        && let Some(target) = sites.get(&(expr.line, expr.col, n.clone(), usize::MAX)).cloned()
+    {
+        callee.kind = ExprKind::Ident(target);
+    }
     let target = match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
             ExprKind::Field { object, name } => {

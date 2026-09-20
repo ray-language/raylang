@@ -54,6 +54,14 @@ pub(super) fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
             }
             // Closures: identidad (mismo handle).
             (Obj::Closure(_), Obj::Closure(_)) => x == y,
+            // M270 (raystream [11]): dos enums son iguales si son la misma variante del mismo enum y
+            // sus payloads lo son elemento a elemento (el intérprete ya lo hacía así).
+            (Obj::Enum(ea), Obj::Enum(eb)) => {
+                ea.enum_id == eb.enum_id
+                    && ea.tag == eb.tag
+                    && ea.payload.len() == eb.payload.len()
+                    && ea.payload.iter().zip(&eb.payload).all(|(p, q)| values_equal(heap, p, q))
+            }
             _ => false,
         },
         _ => false,

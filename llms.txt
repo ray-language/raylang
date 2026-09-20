@@ -111,9 +111,13 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
 - Bitwise `&`/`|`/`^` bind LOOSER than `==` (C-style): write `(a & b) == c`.
-- A builtin always beats a user function of the same name — do not name your functions
-  `print`, `len`, `get`, `join`, `insert`, `keys`…  (in a library module, prefer trait
-  methods for such names: dispatch by receiver type avoids the clash).
+- Core builtins (`print`, `to_string`, `panic`…) cannot be redefined. A top-level function of
+  the root module MAY redefine a prelude function (`get`, `sort`, `index_of`, `map`…) and the
+  root's code then uses yours; the stdlib, packages and submodules keep the prelude's (the
+  override is lexical to the root, M270). Still, prefer trait methods for such names in a
+  library module: dispatch by receiver type avoids the clash. A user type cannot take the
+  name of a prelude trait (`Eq`, `Show`, `Ord`, `Hash`, `Add`, `Sub`, `Mul`, `Div`, `Neg`,
+  `Clone`, `ToJson`, `Len`, `Contains`…): the checker rejects it at the type.
 - `from` is a keyword (imports) — not usable as a variable/parameter name.
 
 ## Modules

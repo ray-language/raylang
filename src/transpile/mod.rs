@@ -347,6 +347,12 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
+    // M270 (raystream [11]): `==` sobre un struct/enum de usuario es igualdad estructural en la VM
+    // (`values_equal`) y el nativo emitía `a == b` sobre `Rc<RefCell<T>>` sin `PartialEq` → E0369
+    // ("binary operation `==` cannot be applied"). Se deriva `PartialEq` en todo tipo cuyos campos
+    // lo admiten: sin funciones (`Rc<dyn Fn>`) y sin referencias a tipos que tampoco lo admitan
+    // (punto fijo: quitar hasta que nada cambie). Los demás siguen sin `==` nativo.
+    let eq_types = eq_derivable_types(prog);
     for s in &prog.structs {
         // (El struct `Iter` del protocolo de iterador del prelude SÍ se emite desde B2: es
         // `{ step: Rc<dyn Fn() -> Option<T>> }`, y `iter`/`range`/`map`/`filter` lo construyen con
@@ -371,7 +377,8 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             out.push_str("}\n");
             continue;
         }
-        writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
+        let eq = if eq_types.contains(&s.name) { ", PartialEq" } else { "" };
+        writeln!(out, "#[derive(Clone{eq})]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
             // El nombre de campo puede ser palabra reservada de Rust (`type`, `ref`, …): mismo mangle
             // que en literal/acceso/asignación → consistente.
@@ -384,7 +391,8 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             continue; // nativos de Rust
         }
         t.tparams = e.type_params.iter().cloned().collect();
-        writeln!(out, "#[derive(Clone)]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
+        let eq = if eq_types.contains(&e.name) { ", PartialEq" } else { "" };
+        writeln!(out, "#[derive(Clone{eq})]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
                 writeln!(out, "    {},", mangle(&v.name)).unwrap(); // la variante puede ser keyword de Rust
@@ -755,3 +763,41 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
 
 #[cfg(test)]
 mod tests;
+
+/// M270: los structs/enums de usuario para los que se puede derivar `PartialEq` en Rust. Un campo de
+/// tipo función lo impide; un campo (o payload) de un tipo que no lo admite, también — de ahí el
+/// punto fijo. `Option`/`Result` son nativos de Rust y ya lo implementan; un `Map` o un arreglo lo
+/// heredan de sus elementos (`HashMap`/`Vec` bajo `RefCell`/`Rc` implementan `PartialEq` si ellos).
+fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    fn type_ok(t: &Type, ok: &HashSet<String>) -> bool {
+        match t {
+            Type::Fn(_, _) => false,
+            Type::Struct(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
+            Type::Enum(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
+            Type::Array(e) => type_ok(e, ok),
+            Type::Map(k, v) => type_ok(k, ok) && type_ok(v, ok),
+            Type::Tuple(ts) => ts.iter().all(|x| type_ok(x, ok)),
+            _ => true,
+        }
+    }
+    let mut ok: HashSet<String> = prog.structs.iter().filter(|s| !s.name.starts_with("__dyn_")).map(|s| s.name.clone())
+        .chain(prog.enums.iter().map(|e| e.name.clone()))
+        .collect();
+    loop {
+        let before = ok.len();
+        let drop: Vec<String> = prog.structs.iter()
+            .filter(|s| ok.contains(&s.name) && !s.fields.iter().all(|(_, t)| type_ok(t, &ok)))
+            .map(|s| s.name.clone())
+            .chain(prog.enums.iter()
+                .filter(|e| ok.contains(&e.name) && !e.variants.iter().all(|v| v.payload.iter().all(|t| type_ok(t, &ok))))
+                .map(|e| e.name.clone()))
+            .collect();
+        for d in drop {
+            ok.remove(&d);
+        }
+        if ok.len() == before {
+            return ok;
+        }
+    }
+}

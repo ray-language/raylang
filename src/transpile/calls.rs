@@ -851,7 +851,12 @@ impl Transpiler {
     pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
         let ExprKind::Call { callee, args } = &e.kind else { return None };
         let (name, recv) = resolve_callee(callee).ok()?;
-        if self.funcs.contains_key(name) {
+        // M270: el alias `x#prelude` es el builtin `x` aunque exista una `x` del usuario.
+        let (name, force_prelude) = match name.strip_suffix("#prelude") {
+            Some(base) => (base, true),
+            None => (name, false),
+        };
+        if !force_prelude && self.funcs.contains_key(name) {
             return None; // función de usuario homónima: sin fusión
         }
         let method = name.rsplit('#').next().unwrap_or(name).trim_start_matches("__");
@@ -886,6 +891,12 @@ impl Transpiler {
 
     pub(super) fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
         let (name, recv) = resolve_callee(callee)?;
+        // M270 (raystream [1]): `x#prelude` llama a la función del PRELUDE `x` aunque la raíz haya
+        // definido su propia `x`: se despacha por el nombre base saltando la del usuario.
+        let (name, force_prelude) = match name.strip_suffix("#prelude") {
+            Some(base) => (base, true),
+            None => (name, false),
+        };
         // Despacho dinámico (M9.3b): el checker baja `obj.m(a)` a `(r.m)(r.data, a)` con `r: dyn`. Aquí el
         // campo `m` es una closure que capturó el concreto → `(r.borrow().m.clone())(a)` (se descarta el
         // arg `r.data` que añadió el checker: es `args[0]`).
@@ -1084,7 +1095,7 @@ impl Transpiler {
         let shadows_builtin = matches!(self.lookup(name), Some(Type::Fn(_, _)))
             || (!name.contains("::")
                 && !name.contains('#')
-                && self.funcs.contains_key(name)
+                && !force_prelude && self.funcs.contains_key(name)
                 && crate::builtins::lookup(name).is_none())
             // Un método de TRAIT sobre un tipo de usuario/módulo cuyo nombre pelado coincide con un
             // builtin (`Store#get`, `Store#keys`…): el checker ya lo resolvió al manglado y su def SE
@@ -1092,7 +1103,7 @@ impl Transpiler {
             // confundiría con el builtin homónimo de Map/string). Las claves CORE (`Option#unwrap_or`,
             // `string#len`…) SÍ se interceptan: sus brazos nativos son la bajada intencional.
             || (name.contains('#')
-                && self.funcs.contains_key(name)
+                && !force_prelude && self.funcs.contains_key(name)
                 && !is_core_impl_key(name.split('#').next().unwrap_or("")));
         if shadows_builtin {
             self.emit_user_call_hoisted(out, name, &eff)?;
@@ -2772,6 +2783,11 @@ impl Transpiler {
             },
             ExprKind::Call { callee, args } => {
                 let (n, recv) = resolve_callee(callee)?;
+                // M270 (raystream [1]): `x#prelude` = el builtin/prelude `x`, aunque la raíz defina `x`.
+                let (n, force_prelude) = match n.strip_suffix("#prelude") {
+                    Some(base) => (base, true),
+                    None => (n, false),
+                };
                 // Despacho dinámico: el tipo es el retorno del método del trait.
                 if let Some(r) = recv {
                     if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
@@ -2858,9 +2874,10 @@ impl Transpiler {
                 // se emite) y gana sobre los brazos manuales por nombre pelado — `method = ""` lo manda
                 // directo al brazo `_` (función de usuario). Igual un closure local que sombree el
                 // nombre. Las claves CORE (`Option#unwrap_or`…) siguen por sus brazos nativos.
-                let user_call = matches!(self.lookup(n), Some(Type::Fn(_, _)))
-                    || (self.funcs.contains_key(n)
-                        && !(n.contains('#') && is_core_impl_key(n.split('#').next().unwrap_or(""))));
+                let user_call = !force_prelude
+                    && (matches!(self.lookup(n), Some(Type::Fn(_, _)))
+                        || (self.funcs.contains_key(n)
+                            && !(n.contains('#') && is_core_impl_key(n.split('#').next().unwrap_or("")))));
                 let method = if user_call { "" } else { n.rsplit('#').next().unwrap_or(n).trim_start_matches("__") };
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
                 let recv0 = recv.or_else(|| args.first());
@@ -2873,7 +2890,7 @@ impl Transpiler {
                 // regla no casa (colisión de nombre de método), se sigue por el camino manual. Los
                 // WRAPPERS del prelude (get/recv/parse_int/try_join…, que reenvasan `[T]` →
                 // Option/Result) no están en la tabla → brazos manuales de abajo.
-                if !self.funcs.contains_key(n) && self.lookup(n).is_none() {
+                if force_prelude || (!self.funcs.contains_key(n) && self.lookup(n).is_none()) {
                     let table_name = if n.contains('#') { method } else { n };
                     if let Some(b) = crate::builtins::lookup(table_name) {
                         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();

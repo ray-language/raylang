@@ -157,7 +157,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 |---|---|---|
 | `print` | `(value) -> unit` | prints to stdout + newline (int, float, bool, string, char, u\*, bytes→hex, arrays, types with `Show`) |
 | `eprint` | `(value) -> unit` | like `print`, to stderr |
-| `to_string` | `(value) -> string` | textual representation (same as `print`): int/float/bool/string/char/bytes/u\* |
+| `to_string` | `(value) -> string` | textual representation (same as `print`): int/float/bool/string/char/bytes/u\*; M270: also any struct/enum with `Show` (same as `value.show()`) |
 | `panic` | `(msg: string) -> unit` | aborts the program with the message and the position; for broken invariants, not for expected errors |
 | `exit` | `(code: int) -> unit` | M130: terminates the PROCESS with that code, from any fiber (flushes stdout/stderr). Diverges like `panic`; it is not an error (no message, no trace) and `try_call` does not catch it |
 | `args` | `() -> [string]` | command-line arguments (after the program path) |
@@ -607,4 +607,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:a11367ea1ffb -->
+<!-- sync: sha256:3cb390136316 -->

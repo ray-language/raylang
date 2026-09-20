@@ -44,6 +44,8 @@ impl Checker {
             generic_impls: HashMap::new(),
             current_self: None,
             current_fn_bounds: Vec::new(),
+            current_fn_is_root: true,
+            overridden_prelude: HashSet::new(),
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
             dyn_dispatch: HashSet::new(),
@@ -292,8 +294,13 @@ impl Checker {
         self.check_annotations(program)?;
 
         // --- Verificación de cada función ---
+        // M270: qué funciones del prelude tienen alias (`x#prelude`) porque la raíz las redefinió.
+        self.overridden_prelude = program.functions.iter()
+            .filter_map(|f| f.name.strip_suffix("#prelude").map(str::to_string))
+            .collect();
         for f in &program.functions {
             let depth = self.scopes.len();
+            self.current_fn_is_root = !f.name.contains("::") && !f.name.contains('#') && f.line < crate::prelude::LINE_BASE;
             if let Err(e) = self.check_function(f) {
                 if !self.accumulate {
                     return Err(e);
@@ -2595,7 +2602,7 @@ impl Checker {
                 }
                 // `hover_directo = true`: `(line, col)` es la posición del nombre → registra el hover
                 // del builtin ahí (`print`/`pow`/`abs`… muestran su firma con los tipos de la llamada).
-                self.check_named_call_impl(&n, args, line, col, None, true, None)
+                self.check_named_call_renamed(&n, args, line, col, None, true)
             }
 
             // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
@@ -2896,7 +2903,41 @@ impl Checker {
     /// variable local que tape una función global, función de nivel superior (directa o
     /// genérica). Compartida por la llamada directa y por UFCS.
     pub(super) fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>) -> Result<Type, TypeError> {
-        self.check_named_call_impl(name, args, line, col, expected, false, None)
+        self.check_named_call_renamed(name, args, line, col, expected, false)
+    }
+
+    /// M270: la llamada por nombre con las dos REESCRITURAS de sitio que se bajan renombrando el
+    /// callee (`ufcs_sites` con profundidad `usize::MAX`): `to_string(x)` sobre un `Show` → `T#show`
+    /// (raystream [12]) y, dentro de un módulo, una función del prelude que la raíz redefinió →
+    /// `nombre#prelude` (raystream [1]). Lo usan tanto la llamada directa (`hover_direct`) como
+    /// las reescrituras.
+    pub(super) fn check_named_call_renamed(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_direct: bool) -> Result<Type, TypeError> {
+        // [12]: `to_string(x)` con un `x` que implementa `Show` es `x.show()` — la referencia lo
+        // prometía y solo `print` lo cumplía.
+        // Solo para tipos de USUARIO (struct/enum): los primitivos siguen por el builtin — su
+        // `int#show` del prelude se define como `to_string(self)` y redirigirlo sería recursión.
+        if name == "to_string" && args.len() == 1 {
+            let at = self.check_expr(&args[0])?;
+            if matches!(at, Type::Struct(_, _) | Type::Enum(_, _))
+                && let Some(key) = type_key_of(&at)
+                && let Some(show) = self.methods.get(&(key, "show".to_string())).cloned()
+            {
+                let ty = self.check_named_call_recv(&show, args, line, col, expected, &at)?;
+                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), show);
+                return Ok(ty);
+            }
+        }
+        // [1]: el override de una función del prelude es LÉXICO a la raíz: un módulo (la stdlib, un
+        // paquete, un submódulo) y el propio prelude siguen llamando a la del prelude, inyectada
+        // como `nombre#prelude`. Antes la del usuario ganaba en todo el programa y `std/json` moría
+        // con "argument 1 of 'get': expected Box, got Map<…>" por una función del usuario.
+        if !self.current_fn_is_root && !name.contains("::") && self.overridden_prelude.contains(name) {
+            let alias = format!("{name}#prelude");
+            let ty = self.check_named_call_impl(&alias, args, line, col, expected, hover_direct, None)?;
+            self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), alias);
+            return Ok(ty);
+        }
+        self.check_named_call_impl(name, args, line, col, expected, hover_direct, None)
     }
 
     /// Como [`check_named_call`], con el TIPO del primer argumento (el receptor de una reescritura

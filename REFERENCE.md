@@ -158,7 +158,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 |---|---|---|
 | `print` | `(valor) -> unit` | imprime a stdout + salto de línea (int, float, bool, string, char, u\*, bytes→hex, arreglos, tipos con `Show`) |
 | `eprint` | `(valor) -> unit` | como `print`, a stderr |
-| `to_string` | `(valor) -> string` | representación textual (misma que `print`): int/float/bool/string/char/bytes/u\* |
+| `to_string` | `(valor) -> string` | representación textual (misma que `print`): int/float/bool/string/char/bytes/u\*; M270: también cualquier struct/enum con `Show` (equivale a `valor.show()`) |
 | `panic` | `(msg: string) -> unit` | aborta el programa con el mensaje y la posición; para invariantes rotas, no para errores esperables |
 | `exit` | `(code: int) -> unit` | M130: termina el PROCESO con ese código, desde cualquier fibra (flushea stdout/stderr). Diverge como `panic`; no es un error (sin mensaje ni traza) y `try_call` no lo captura |
 | `args` | `() -> [string]` | argumentos de línea de comandos (tras la ruta del programa) |

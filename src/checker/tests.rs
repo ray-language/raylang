@@ -772,9 +772,14 @@ fn enum_payload_type_incorrect() {
 }
 
 #[test]
-fn enum_is_not_comparable() {
+fn enum_is_comparable_structurally() {
+    // M270 (raystream [11]): un enum se compara con `==` como un struct (misma variante y payload).
+    check_src("enum E { A, B } fn main() -> int { let x: E = E.A; if (x == E.B) { 1 } else { 0 } }")
+        .expect("== entre enums");
+    check_src("enum E { A(int), B } fn main() -> int { if (E.A(1) != E.B) { 1 } else { 0 } }")
+        .expect("!= entre enums con payload");
     err_contains(
-        "enum E { A, B } fn main() -> int { let x: E = E.A; if (x == E.B) { 1 } else { 0 } }",
+        "enum E { A } enum F { B } fn main() -> int { if (E.A == F.B) { 1 } else { 0 } }",
         "same comparable type",
     );
 }

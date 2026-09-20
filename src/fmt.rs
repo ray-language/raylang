@@ -1783,9 +1783,12 @@ fn fmt_int(n: i64, radix: crate::token::Radix) -> String {
     // con su sufijo; sin sufijo, el valor es no negativo y `{}` basta.
     let body = match radix.base {
         Base::Dec => if radix.suffix.is_some() || radix.wide { (n as u64).to_string() } else { n.to_string() },
-        Base::Hex => format!("0x{:X}", n as u64),
-        Base::Oct => format!("0o{:o}", n as u64),
-        Base::Bin => format!("0b{:b}", n as u64),
+        // M273 (raystream [14]): se conservan los ceros a la izquierda escritos (`0x0D`, `0x00010000`):
+        // en código de formatos el ancho fijo ES la información. `digits` = 0 (p. ej. un literal
+        // sintetizado) → sin relleno.
+        Base::Hex => format!("0x{:0w$X}", n as u64, w = radix.digits as usize),
+        Base::Oct => format!("0o{:0w$o}", n as u64, w = radix.digits as usize),
+        Base::Bin => format!("0b{:0w$b}", n as u64, w = radix.digits as usize),
     };
     match radix.suffix {
         Some(w) => format!("{}u{}", body, w),

@@ -148,7 +148,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     // el resto (p. ej. `std::time::to_epoch_millis`, helpers de `DateTime`) son raylang puro → se emiten.
     if matches!(
         name,
-        "std::time::now" | "std::time::monotonic" | "std::time::monotonic_nanos" | "std::time::sleep"
+        "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos" | "std::time::sleep"
     )
         || matches!(name, "std::random::next" | "std::random::below" | "std::random::seed")
     {

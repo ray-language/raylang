@@ -22,7 +22,7 @@ pub enum Base {
 /// literal lleva `u8`/`u32`/`u64` — o si es **amplio** (no cabe en `int`, solo en `u64`: se guarda
 /// como sus 64 bits en `i64` y `suffix == Some(64)`). El formateador lo reemite tal cual; el checker
 /// lo tipa directamente como `uN`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Radix {
     pub base: Base,
     /// Sufijo ESCRITO (`u8`/`u32`/`u64`), si lo hay.
@@ -30,18 +30,34 @@ pub struct Radix {
     /// Literal AMPLIO: no cabe en `int`, solo en `u64` (sus 64 bits van en el `i64` del token). Se
     /// tipa como `u64` sin sufijo escrito, y el formateador lo reemite sin sufijo.
     pub wide: bool,
+    /// M273 (raystream [14]): cuántos DÍGITOS se escribieron tras el prefijo (`0x0D` = 2,
+    /// `0x00010000` = 8; 0 = sin registro). Solo PRESENTACIÓN: `ray fmt` conserva los ceros a la
+    /// izquierda (un octeto es `0x0D`, una tabla alineada se lee de un vistazo). No participa en la
+    /// igualdad: dos literales con el mismo valor y base son el mismo token.
+    pub digits: u8,
 }
 
+impl PartialEq for Radix {
+    fn eq(&self, other: &Radix) -> bool {
+        self.base == other.base && self.suffix == other.suffix && self.wide == other.wide
+    }
+}
+impl Eq for Radix {}
+
 impl Radix {
-    pub const DEC: Radix = Radix { base: Base::Dec, suffix: None, wide: false };
-    pub const HEX: Radix = Radix { base: Base::Hex, suffix: None, wide: false };
-    pub const OCT: Radix = Radix { base: Base::Oct, suffix: None, wide: false };
-    pub const BIN: Radix = Radix { base: Base::Bin, suffix: None, wide: false };
+    pub const DEC: Radix = Radix { base: Base::Dec, suffix: None, wide: false, digits: 0 };
+    pub const HEX: Radix = Radix { base: Base::Hex, suffix: None, wide: false, digits: 0 };
+    pub const OCT: Radix = Radix { base: Base::Oct, suffix: None, wide: false, digits: 0 };
+    pub const BIN: Radix = Radix { base: Base::Bin, suffix: None, wide: false, digits: 0 };
     pub fn with_suffix(self, suffix: Option<u8>) -> Radix {
         Radix { suffix, ..self }
     }
     pub fn with_wide(self) -> Radix {
         Radix { wide: true, ..self }
+    }
+    /// M273: registra los dígitos escritos (ver `digits`).
+    pub fn with_digits(self, digits: usize) -> Radix {
+        Radix { digits: digits.min(255) as u8, ..self }
     }
     /// El ancho FIJO del literal, si lo tiene: el sufijo escrito, o 64 si es amplio.
     pub fn fixed_width(&self) -> Option<u8> {

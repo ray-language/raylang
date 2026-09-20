@@ -175,8 +175,17 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    xs.push(v) xs.pop() xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
    `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
-   m.values()` — but reading is the FREE `get(m, k) -> Option<V>` · bytes
-   `b.len() b.sub_bytes(i, j) b.index_of(needle) b.starts_with(prefix)` (octet index, no allocation). (`sort(xs)` is free, so `xs.sort()` also works.)
+   m.values()`; reading is `m.get(k) -> Option<V>` (also the free `get(m, k)`) and
+   `m.get_or(k, default) -> V` · bytes `b[i] -> int` (octet 0–255, O(1) — THE primitive of every
+   binary parser; never `from_utf8(b.sub_bytes(i, i+1))`), `b.len() b.sub_bytes(i, j) -> bytes
+   b.index_of(needle) -> Option<int> b.starts_with(prefix) -> bool` (octet index, no allocation).
+   (`sort(xs)` is free, so `xs.sort()` also works.)
+   Return types that surprise: `s.index_of(x) -> Option<int>`, `xs.position(v) -> Option<int>`,
+   `xs.pop() -> Option<T>`, `parse_int(s) -> Option<int>`, `parse_float(s) -> Option<float>`,
+   `from_utf8(b) -> Result<string, string>`, `s.chars() -> [char]`, `s.split(sep) -> [string]`,
+   `fs.read_file(p) -> Result<string, string>`, `fs.read_file_bytes(p) -> Result<bytes, string>`,
+   `char_code(c) -> int`, `char_from_code(n) -> char`. When in doubt, `ray_doc <name>` gives the
+   exact signature.
 3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
    are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*

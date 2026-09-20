@@ -1982,6 +1982,10 @@ fn build_native_warns_about_stubbed_functions() {
     let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
     assert_eq!(native_out, vm_out, "camino feliz nativo ≡ VM");
     assert_eq!(native_out, "ok\n", "corre main\n{native_out}");
+    // M273 (raystream [13]): con `--no-stubs` el mismo build es un ERROR (65) que nombra la función.
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 65, "--no-stubs rechaza el stub\n{err}");
+    assert!(err.contains("--no-stubs: refusing to emit stubs") && err.contains("g:"), "{err}");
 }
 
 #[test]

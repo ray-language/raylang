@@ -106,6 +106,20 @@ r.cookie("sid=abc; HttpOnly");            // una línea Set-Cookie por llamada
 r.redirect("/nueva");                     // 302 + Location (permanente: r.redirect(...); r.status(301);)
 ```
 
+**Streaming y archivos (M272).** Tres salidas que antes obligaban a bajar a `net/webserver`:
+
+```raylang
+// SSE / cuerpo generado: los trozos de un canal, en chunked; cierra el canal para terminar.
+let ch: Channel<bytes> = Channel.bounded(8);
+let _ = spawn(fn() { send(ch, b"data: hola\n\n"); close(ch); });
+r.stream(ch, "text/event-stream");
+// Descarga de tamaño conocido: Content-Length + keep-alive (barra de progreso en el cliente).
+r.stream_len(ch, total_bytes, "application/octet-stream");
+// Un archivo del disco como lo serviría un mount: ETag/304, Content-Type, Range/206, y a
+// partir de 1 MB por trozos desde el archivo (nunca entero en memoria). Resuelve tú la ruta.
+r.sendfile(c, "media/" + nombre_seguro);
+```
+
 ## Middleware
 
 Un middleware devuelve un **`Step`** (M93.2a): `Step.Next` sigue la cadena, `Step.Done` la corta

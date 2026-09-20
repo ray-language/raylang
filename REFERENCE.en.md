@@ -424,7 +424,7 @@ imported the same way (`import net/http;` → `http.fetch(…)`). They live in t
 | Startup | `listen(build_app, host, port)` (blocks; the builder is a TOP-LEVEL fn — the form that also compiles natively) · **`listen_on(build_app, listener)`** (M150: the bind/serve split — `net.tcp_listen(host, 0)` + `net.local_port` first → the program KNOWS its port without a close/re-bind race, and the backlog accepts from the bind on: the desktop-app pattern) · `listen_tls` · `listen_graceful` · `listen_limits` |
 | Middleware | `use_mw` (global) · `use_on(prefix, mw)` · `with_mw([mw], handler)` (per route) · `after(app, hook)` · `Step.Next/Done` · `cors(app, origin)` · `log_requests(app)` (JSON per request with a trace-id) |
 | Request | `c.param/query/body/json_body/form/form_field/header_of/cookie_of/local/put_local` |
-| Response | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` |
+| Response | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` · **M272**: `r.stream(ch, content_type)` (chunked: SSE, generated bodies) · `r.stream_len(ch, length, content_type)` (Content-Length + keep-alive) · `r.sendfile(c, path)` (ETag/304, MIME, Range/206; from 1 MB streamed from disk) |
 | Static files | `static_files(app, prefix, dir)` · `static_files_cached(+max_age)` (strong ETag + 304 + Range) · **`static_embedded(app, prefix, dir)`** (M147: serves from the `[native] embed` space — live disk in dev, baked into the native binary; content ETag) |
 | Sessions | `ray_session` HttpOnly cookie + `std/kv` |
 
@@ -607,4 +607,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:3cb390136316 -->
+<!-- sync: sha256:27d52b5789b4 -->

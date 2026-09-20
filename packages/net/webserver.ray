@@ -706,36 +706,47 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
     }
     let rest: string = req.path.substring(prefix.len(), req.path.len());
     match (static_file_of(dir, rest)) {
-        Option.Some(file) => {
-            // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
-            let size: int = match (fs.file_size(file)) {
-                Result.Ok(n) => n,
-                Result.Err(_) => {
-                    return not_found();
-                },
-            };
-            let mtime: int = match (fs.mtime(file)) {
-                Result.Ok(ms) => ms,
-                Result.Err(_) => {
-                    return not_found();
-                },
-            };
-            let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
-            if (if_none_match_hits(req, etag)) {
-                let r304: Response = bytes_response(304, b"");
-                r304.headers.insert("ETag", etag);
-                return r304;
-            }
-            // M271: un archivo grande va por trozos desde el disco (nunca entero en memoria).
-            if (size >= STATIC_STREAM_MIN_BYTES) {
-                return serve_static_file_stream(file, etag, size, req);
-            }
-            match (fs.read_file_bytes(file)) {
-                Result.Ok(data) => serve_static_bytes(file, etag, data, req),
-                Result.Err(_) => not_found(),
-            }
-        },
+        Option.Some(file) => serve_file(file, req),
         Option.None => not_found(),
+    }
+}
+
+// M272 (raystream [4]): la cola de `static_mount` para UN archivo ya resuelto, pública para que el
+// framework `web` (`r.sendfile(path)`) y cualquier handler sirvan un archivo con el mismo caching y
+// el mismo Range que un mount. No sanea la ruta (eso es de `static_file_of`): el llamador decide qué
+// archivo sirve.
+/// Serves ONE file (already chosen by the caller) as `static_mount` would: strong ETag from
+/// size+mtime, `If-None-Match` → 304, `Content-Type` by extension, `Accept-Ranges`/206/416 with
+/// `If-Range`, and — from 1 MB up — the body streamed from disk in 256 KB pieces with
+/// `Content-Length` (never the whole file in memory). Missing or unreadable file → 404. This
+/// does not sanitize `path`: pass a file you resolved yourself, never a client-supplied path.
+pub fn serve_file(file: string, req: Request) -> Response {
+    // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
+    let size: int = match (fs.file_size(file)) {
+        Result.Ok(n) => n,
+        Result.Err(_) => {
+            return not_found();
+        },
+    };
+    let mtime: int = match (fs.mtime(file)) {
+        Result.Ok(ms) => ms,
+        Result.Err(_) => {
+            return not_found();
+        },
+    };
+    let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
+    if (if_none_match_hits(req, etag)) {
+        let r304: Response = bytes_response(304, b"");
+        r304.headers.insert("ETag", etag);
+        return r304;
+    }
+    // M271: un archivo grande va por trozos desde el disco (nunca entero en memoria).
+    if (size >= STATIC_STREAM_MIN_BYTES) {
+        return serve_static_file_stream(file, etag, size, req);
+    }
+    match (fs.read_file_bytes(file)) {
+        Result.Ok(data) => serve_static_bytes(file, etag, data, req),
+        Result.Err(_) => not_found(),
     }
 }
 

@@ -3553,7 +3553,7 @@ net 0.2.0, todas con repro y coste medido). Estado:
 | 1 | `pub fn get` en la raíz rompe `std/json` (el override del prelude se filtraba a la stdlib) | ✅ M270 |
 | 2 | `static_mount` lee el archivo entero para servir un `Range` (1 GB de RSS por 11 bytes) | ✅ M271 |
 | 3 | Sin streaming con `Content-Length` ni keep-alive (`send_stream_response` fuerza chunked) | ✅ M271 |
-| 4 | El framework `web` no tiene salida a streaming (`stream: []`): sin SSE ni medios | M272 |
+| 4 | El framework `web` no tiene salida a streaming (`stream: []`): sin SSE ni medios | ✅ M272 |
 | 5 | Un handler con estado para `serve_raw` no compila en nativo (closure `Rc` sin `Send`) | ✅ M271 |
 | 6 | `ray check` exigía `main` en un módulo de librería | ✅ M270 |
 | 7 | `llms.txt` sin tipos de retorno, sin `b[i]` ni `m.get(k)` | M273 |

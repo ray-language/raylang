@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`web` 0.4.0: salida a streaming del framework** (M272, raystream [4]). `r.stream(ch,
+  content_type)` (SSE, cuerpos generados), `r.stream_len(ch, length, content_type)` (descargas
+  con `Content-Length` y keep-alive) y `r.sendfile(c, path)` (un archivo como lo sirve un mount:
+  ETag/304, MIME, Range/206, y por trozos desde disco a partir de 1 MB) — sin abandonar el
+  enrutado, los middlewares ni las sesiones. `webserver.serve_file(path, req)` queda público.
+
 - **`net/webserver` 0.3.0: medios sin cargar el archivo** (M271, raystream [2], [3], [5]).
   `static_mount` sirve un estático de disco de 1 MB o más por trozos desde el archivo (un `Range`
   de 11 bytes sobre un vídeo de 1 GB costaba 1 GB de RSS; ahora 256 KB). `stream_response_len`

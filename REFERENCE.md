@@ -426,7 +426,7 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y s
 | Arranque | `listen(build_app, host, port)` (bloquea; el builder es una fn TOP-LEVEL — la forma que también compila en nativo) · **`listen_on(build_app, listener)`** (M150: el split bind/serve — `net.tcp_listen(host, 0)` + `net.local_port` primero → el programa CONOCE su puerto sin carrera close/re-bind, y el backlog acepta desde el bind: el patrón de apps de escritorio) · `listen_tls` · `listen_graceful` · `listen_limits` |
 | Middleware | `use_mw` (global) · `use_on(prefix, mw)` · `with_mw([mw], handler)` (por ruta) · `after(app, hook)` · `Step.Next/Done` · `cors(app, origen)` · `log_requests(app)` (JSON por petición con trace-id) |
 | Petición | `c.param/query/body/json_body/form/form_field/header_of/cookie_of/local/put_local` |
-| Respuesta | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` |
+| Respuesta | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` · **M272**: `r.stream(ch, content_type)` (chunked: SSE, cuerpos generados) · `r.stream_len(ch, length, content_type)` (Content-Length + keep-alive) · `r.sendfile(c, path)` (ETag/304, MIME, Range/206; ≥ 1 MB por trozos desde disco) |
 | Estáticos | `static_files(app, prefix, dir)` · `static_files_cached(+max_age)` (ETag fuerte + 304 + Range) · **`static_embedded(app, prefix, dir)`** (M147: sirve del espacio `[native] embed` — disco en vivo en dev, horneado en el binario nativo; ETag de contenido) |
 | Sesiones | cookie `ray_session` HttpOnly + `std/kv` |
 

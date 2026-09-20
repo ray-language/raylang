@@ -368,3 +368,104 @@ fn listen_on_serves_a_prebound_listener_without_a_race() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// M272 (raystream [4]): la salida a streaming del framework — `r.stream` (chunked, SSE),
+/// `r.stream_len` (Content-Length + keep-alive) y `r.sendfile` (ETag/304, MIME, Range/206 y por
+/// trozos desde disco a partir de 1 MB) sin salir del enrutado.
+#[test]
+fn framework_stream_stream_len_and_sendfile() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let dir = std::env::temp_dir().join(format!("ray_framework_stream_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    std::fs::write(dir.join("media/small.txt"), b"hello small").unwrap();
+    let big: Vec<u8> = (0..1_200_000u32).map(|i| (i % 199) as u8).collect();
+    std::fs::write(dir.join("media/big.bin"), &big).unwrap();
+    std::fs::write(
+        dir.join("main.ray"),
+        r#"from web/framework import App, Ctx, Res, new_app, listen;
+
+fn build_app() -> App {
+    var app = new_app();
+    app.GET("/events", fn(c: Ctx, r: Res) {
+        let ch: Channel<bytes> = Channel.bounded(4);
+        let _ = spawn(fn() {
+            send(ch, b"data: uno\n\n");
+            send(ch, b"data: dos\n\n");
+            close(ch);
+        });
+        r.stream(ch, "text/event-stream");
+    });
+    app.GET("/dl", fn(c: Ctx, r: Res) {
+        let ch: Channel<bytes> = Channel.bounded(4);
+        let _ = spawn(fn() {
+            send(ch, b"abcd");
+            send(ch, b"efgh");
+            close(ch);
+        });
+        r.stream_len(ch, 8, "application/octet-stream");
+    });
+    app.GET("/media/:name", fn(c: Ctx, r: Res) {
+        r.sendfile(c, "media/" + c.param("name"));
+    });
+    app
+}
+
+fn main() -> int {
+    match (listen(build_app, "127.0.0.1", 0)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ray.toml"),
+        format!(
+            "[package]\nname = \"framework-stream\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n\
+             [dependencies]\nweb = \"path:{root}/packages/web\"\nnet = \"path:{root}/packages/net\"\n"
+        ),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["run", "main.ray"])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("lanza");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee port");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok()).unwrap_or_else(|| panic!("port de {line:?}"));
+    std::thread::spawn(move || { let mut sink = Vec::new(); let _ = reader.read_to_end(&mut sink); });
+
+    // SSE por chunked.
+    let r = ask(port, "GET /events HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200") && r.contains("Content-Type: text/event-stream") && r.contains("Transfer-Encoding: chunked"), "{r}");
+    assert!(r.contains("data: uno\n\n") && r.contains("data: dos\n\n"), "{r}");
+    // Descarga con tamaño conocido: sin chunked, con Content-Length y el cuerpo íntegro.
+    let r = ask(port, "GET /dl HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200") && r.contains("Content-Length: 8") && !r.contains("Transfer-Encoding"), "{r}");
+    assert!(r.ends_with("\r\n\r\nabcdefgh"), "{r}");
+    // sendfile pequeño: MIME por extensión y ETag; el If-None-Match responde 304.
+    let r = ask(port, "GET /media/small.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200") && r.contains("Content-Type: text/plain") && r.contains("ETag: \"") && r.ends_with("hello small"), "{r}");
+    let etag = r.lines().find(|l| l.starts_with("ETag: ")).unwrap()["ETag: ".len()..].to_string();
+    let r304 = ask(port, &format!("GET /media/small.txt HTTP/1.1\r\nHost: x\r\nIf-None-Match: {etag}\r\nConnection: close\r\n\r\n"));
+    assert!(r304.starts_with("HTTP/1.1 304"), "{r304}");
+    // sendfile grande con Range: 206 por trozos desde disco, con el trozo exacto.
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(b"GET /media/big.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=1000000-1000004\r\nConnection: close\r\n\r\n").unwrap();
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).unwrap();
+    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..sep]).into_owned();
+    assert!(head.starts_with("HTTP/1.1 206") && head.contains("Content-Range: bytes 1000000-1000004/1200000") && head.contains("Content-Length: 5"), "{head}");
+    assert_eq!(&raw[sep + 4..], &(1000000..=1000004u32).map(|i| (i % 199) as u8).collect::<Vec<u8>>()[..]);
+    // 404 con un archivo que no existe.
+    let r = ask(port, "GET /media/nope.bin HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 404"), "{r}");
+    let _ = child.kill();
+}

@@ -58,25 +58,16 @@ fn main() -> int {
 
 ## Por qué mirarlo
 
-- **Norte de diseño sin `null`.** Los errores son valores: `Option<T>`/`Result<T,E>` + el operador `?`.
-- **Orientado a expresiones.** `if`, bloques y `match` producen valor; retorno implícito.
-- **Sistema de tipos rico.** Genéricos con inferencia, **traits** (despacho estático, *bounds*, impls
-  genéricos, métodos por defecto, `dyn A + B`), tipos suma y **pattern matching** exhaustivo (con guardas,
-  `if let`, patrones anidados).
-- **Ergonomía moderna.** UFCS (`x.f()`), pipelines (`x |> f()`), closures, e iteradores perezosos
-  (`map`/`filter`/`take`/`zip`/`fold`/`collect`/…).
-- **Concurrencia de verdad.** Modelo de **actores con aislamiento de heap** + canales tipados, sobre un
-  scheduler **M:N multicore** con *data-race freedom* por construcción.
-- **Web de producción.** Un **framework estilo Express** (`web/framework`: rutas con parámetros,
-  middleware, CORS, estáticos con ETag, cookies, JSON tipado vía `ToJson`) sobre un servidor HTTP/1.1
-  concurrente con keep-alive, TLS y apagado ordenado. El nativo corre sobre **fibras M:N** (jul 2026):
-  el framework da **~188k req/s de techo — 93% de axum, con p50/p99.9 empatadas (0,48/1,05 ms vs
-  0,47/1,04) y 1,5× Go+chi** (escalón `json`, generador de carga dedicado), sirviendo con **14 hilos y
-  ~21 KB por conexión**. Guía: [`docs/web-framework.md`](docs/web-framework.md).
-- **Procesos del SO sin sorpresas.** `std/process` lanza comandos con **argv tipado, sin shell**
-  (`run`, un builder con plazo y topes, y *streaming* por canales acotados con contrapresión). El hijo
-  va en su propio grupo de procesos y es **hijo de scope**: nadie se queda huérfano.
-- **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
+- **Nativo para agentes LLM.** [`llms.txt`](llms.txt) (el contexto destilado del lenguaje) y
+  `ray mcp` (un servidor MCP embebido: `ray_check`/`ray_run`/`ray_test`/`ray_fmt`/`ray_doc`, con
+  el código del modelo confinado) dan al agente el bucle escribir → verificar → corregir. Detalle
+  en [raylang y los agentes LLM](#raylang-y-los-agentes-llm).
+- **Desktop y móvil, de fábrica.** El mismo fuente corre como app de escritorio en macOS, Linux
+  y Windows y como app móvil en iOS y Android, sin framework externo ni segundo lenguaje: la
+  interfaz es HTML en el webview del sistema (`std/ui`), el backend es tu servidor web en raylang,
+  y el puente JS ↔ raylang, los menús nativos, los diálogos, el audio y los assets horneados vienen
+  en la toolchain. `ray bundle` deja la `.app`, el `.desktop` o el `.exe`; `--ios` y `--android`
+  generan el proyecto Xcode o Gradle. Guía: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle).
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
   programas (29 jul 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–20×), **a Go
@@ -85,6 +76,25 @@ fn main() -> int {
   programas** contra 9 lenguajes. Frente a la propia VM:
   3–4× en cargas de servicio y 28–57× en cómputo puro. Tablas:
   [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
+- **Web de producción.** Un **framework estilo Express** (`web/framework`: rutas con parámetros,
+  middleware, CORS, estáticos con ETag, cookies, JSON tipado vía `ToJson`) sobre un servidor HTTP/1.1
+  concurrente con keep-alive, TLS y apagado ordenado. El nativo corre sobre **fibras M:N** (jul 2026):
+  el framework da **~188k req/s de techo — 93% de axum, con p50/p99.9 empatadas (0,48/1,05 ms vs
+  0,47/1,04) y 1,5× Go+chi** (escalón `json`, generador de carga dedicado), sirviendo con **14 hilos y
+  ~21 KB por conexión**. Guía: [`docs/web-framework.md`](docs/web-framework.md).
+- **Concurrencia de verdad.** Modelo de **actores con aislamiento de heap** + canales tipados, sobre un
+  scheduler **M:N multicore** con *data-race freedom* por construcción.
+- **Procesos del SO sin sorpresas.** `std/process` lanza comandos con **argv tipado, sin shell**
+  (`run`, un builder con plazo y topes, y *streaming* por canales acotados con contrapresión). El hijo
+  va en su propio grupo de procesos y es **hijo de scope**: nadie se queda huérfano.
+- **Norte de diseño sin `null`.** Los errores son valores: `Option<T>`/`Result<T,E>` + el operador `?`.
+- **Orientado a expresiones.** `if`, bloques y `match` producen valor; retorno implícito.
+- **Sistema de tipos rico.** Genéricos con inferencia, **traits** (despacho estático, *bounds*, impls
+  genéricos, métodos por defecto, `dyn A + B`), tipos suma y **pattern matching** exhaustivo (con guardas,
+  `if let`, patrones anidados).
+- **Ergonomía moderna.** UFCS (`x.f()`), pipelines (`x |> f()`), closures, e iteradores perezosos
+  (`map`/`filter`/`take`/`zip`/`fold`/`collect`/…).
+- **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Corre en el navegador.** La VM compilada a WebAssembly, sin `wasm-bindgen`.
 
 ## Instalación
@@ -137,6 +147,8 @@ ray run                # ejecuta src/main.ray en la VM
 ray dev                # modo desarrollo: recompila y reinicia ante cambios (+ live-reload del navegador)
 ray build              # chequea y compila sin ejecutar
 ray build --native     # transpila a Rust y compila un binario nativo (3–57× la VM, según la carga)
+ray bundle             # empaqueta la app de escritorio: .app (macOS) / .desktop (Linux) / .exe (Windows)
+ray bundle --ios       # genera el proyecto Xcode (--android: el proyecto Gradle)
 ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 

@@ -494,7 +494,13 @@ pub fn stream_len(res: Res, ch: Channel<bytes>, length: int, content_type: strin
 /// Missing file → 404. Resolve the path yourself (`ctx` only supplies the request for ETag and
 /// Range): never hand a client-supplied path to it.
 pub fn sendfile(res: Res, ctx: Ctx, path: string) {
-    let sr: webserver.Response = webserver.serve_file(path, ctx.req);
+    sendfile_with(res, ctx, path, 262144, 1)
+}
+
+/// Like `sendfile`, choosing the streaming buffer for big files: `chunk_bytes` per read (min
+/// 4 KB) and `queue` pieces in flight (min 1) — see `webserver.serve_file_with`.
+pub fn sendfile_with(res: Res, ctx: Ctx, path: string, chunk_bytes: int, queue: int) {
+    let sr: webserver.Response = webserver.serve_file_with(path, ctx.req, chunk_bytes, queue);
     res.code = sr.status;
     res.body = sr.body;
     res.streaming = sr.stream;

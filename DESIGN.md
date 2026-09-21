@@ -14060,3 +14060,30 @@ extrae de los snippets en línea de `llms.txt` (no de los bloques de código) to
 primera línea de `ray doc callee`, tolerando comodines (`T`, `_`), prefijos de módulo
 (`process.Exit`) y la coletilla de trait. Un nombre sin calificar que `ray doc` resuelve en un
 módulo se salta por ambiguo. Verificado: con el dato viejo la guarda falla nombrando la firma.
+
+## 261. M276 — El productor de `serve_file` bufferizaba 1 MB por conexión (sep 2026)
+
+Origen: raystream [18], a las pocas horas de adoptar `webserver.serve_file` (M271): frente a su
+escritor propio de un trozo de 256 KB, la memoria bajo carga se duplicó (RSS pico 144 MB a 32
+clientes, 86 MB a 16) y el caudal bajó un 11 %. Causa: `stream_file_range` abría el canal con
+`Channel.bounded(4)`, así que cada transferencia podía tener 4 × 256 KB en vuelo más el trozo en
+lectura; con el `max_conns` por defecto (1024) el techo teórico eran 1 GB solo en buffers. Y el
+tamaño del buffer es justo la decisión que un servidor de medios quiere ajustar: con clientes de
+unos pocos MB/s la cola de 4 no aporta nada.
+
+Cambios: cola por defecto de 1 (el productor lee el siguiente trozo mientras se escribe el
+anterior: memoria por conexión ≈ 2 trozos) y el trozo y la cola expuestos: `serve_file_with(file,
+req, chunk_bytes, queue)`, `static_mount_with(prefix, dir, req, chunk_bytes, queue)` y
+`r.sendfile_with(c, path, chunk_bytes, queue)` en `web` (trozo ≥ 4 KB, cola ≥ 1). `Limits` no
+cambia: se construye por literal en código de usuario.
+
+Medido en el M3 Pro, binario nativo, archivo de 256 MB (`$CLAUDE_JOB_DIR/tmp/bench18`):
+
+| | 16 descargas en loopback (caudal) | 32 clientes a 20 MB/s (RSS pico) |
+|---|---|---|
+| trozo 256 KB, cola 4 (antes) | 4 638 MB/s | 134 MB |
+| trozo 256 KB, cola 1 (ahora) | 4 819 MB/s | **98 MB** |
+| trozo 1 MB, cola 1 | 5 621 MB/s | 209 MB |
+
+La cola de 1 no cuesta caudal (+4 % en loopback) y quita un 27 % de residente; el trozo grande
+gana caudal en enlaces rápidos a cambio de memoria — de ahí que sea un parámetro y no un default.

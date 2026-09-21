@@ -133,7 +133,9 @@ fn main() -> int {
   `If-Range` contra el ETag; multi-rango cae a 200 completo). **M271 (raystream)**: un estático de
   disco de 1 MB o más se sirve **por trozos desde el archivo** (`fs.open` + `seek` + `read_bytes`
   de 256 KB en un productor), nunca leído entero: un `Range` de 11 bytes sobre un vídeo de 1 GB
-  cuesta 256 KB de memoria, no 1 GB. **`stream_response_len(status, ch, length)`**: un stream de
+  cuesta 256 KB de memoria, no 1 GB. **M275**: la cola del productor es de 1 trozo (memoria por
+  conexión ≈ 2 trozos, 512 KB); `serve_file_with(file, req, chunk_bytes, queue)` y
+  `static_mount_with(prefix, dir, req, chunk_bytes, queue)` ajustan trozo (≥ 4 KB) y cola (≥ 1). **`stream_response_len(status, ch, length)`**: un stream de
   tamaño conocido va con `Content-Length` (sin chunked) y **keep-alive** — descargas y medios con
   barra de progreso; el productor debe enviar exactamente `length` octetos (si cierra antes, la
   conexión se cierra). **`serve_raw_with(host, port, make_handler)`**: estado para un handler

@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net/webserver` 0.3.1: el productor de `serve_file` deja de bufferizar 1 MB por conexión**
+  (M276, raystream [18]). La cola del productor pasa de 4 trozos a 1 (memoria por conexión ≈ 2
+  trozos de 256 KB), y el trozo y la cola son ajustables: `serve_file_with(file, req, chunk_bytes,
+  queue)`, `static_mount_with(...)` y, en `web` 0.4.1, `r.sendfile_with(c, path, chunk_bytes, queue)`.
+
 - **`llms.txt`: `char_from_code(n) -> Option<char>`** (M275, raystream [17]). La lista "Return types
   that surprise" —añadida en M273 justo para no adivinar— decía `-> char`. Corregido, y una guarda de
   CI (`tests/llms_signatures.rs`) coteja desde ahora cada firma con `->` citada en `llms.txt`

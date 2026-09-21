@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.3 — 2026-09-21
 
 - **`ray fmt` ya no escribe bytes de control crudos en cadenas interpoladas** (M282, ray-sublime
   §99). `"${a}\u{1}${b}"` salía con un 0x01 dentro del fuente y el archivo dejaba de ser texto

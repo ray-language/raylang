@@ -359,6 +359,10 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     }
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
+    // M280: `sort` sobre un `[T]` genérico ordena con el diccionario `less` del bound `T: Ord` (estable,
+    // como el merge del prelude): sin exigir `Ord` de Rust a `T`, que f64 no cumple.
+    out.push_str("fn __ray_sort_by<T: Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>, less: &Rc<dyn Fn(T, T) -> bool>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
+    out.push_str("    let mut v = a.borrow().clone(); v.sort_by(|x, y| if less(x.clone(), y.clone()) { std::cmp::Ordering::Less } else if less(y.clone(), x.clone()) { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal }); Rc::new(std::cell::RefCell::new(v))\n}\n");
     // SN1 (bench sortnums): la forma FUSIONADA __sort_prim (solo primitivos: int/string/char, lo
     // garantiza el checker) ordena INESTABLE — para primitivos es observacionalmente idéntico y evita
     // el buffer n/2 del sort estable (4 MB en 1M de ints). Los tipos de usuario siguen en __ray_sort.

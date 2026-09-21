@@ -14171,3 +14171,32 @@ Con un hilo, 1516 → 352. Raystream [18] queda cerrado: sin diferencia frente a
 Guarda: `file_bodies_keep_alive_and_the_read_ahead_queue_matches` (dos rangos por la misma
 conexión; cola 2 → mismo cuerpo y rangos) más el test de M271 sobre el camino por defecto.
 
+## 265. M280 — Raystream [21] y [22]: `import std/sort` tumbaba el nativo; `ray fmt` corrompía interpolaciones anidadas (sep 2026)
+
+Dos hallazgos nuevos de la bitácora de raystream, ambos bloqueantes y ambos con repro de seis líneas.
+
+**[21]** `import std/sort;` sin llamar a nada suyo hacía fallar `ray build --native` con E0277 dentro
+de la stdlib (`sort_desc`/`dedup`: "the trait bound `T: Ord` is not satisfied"). Causa: `sort(a)`
+sobre un `[T]` genérico se emitía como `__ray_sort(&a)`, un genérico de RUST con cota `T: Ord`,
+mientras la firma emitida de la función raylang solo lleva `Clone + RayShow + 'static`: las cotas
+de raylang van por **diccionario** (params ocultos `T#Trait#m`, lowering del checker), no por
+cotas de Rust. Primer intento, descartado en CI: trasladar `+ Ord` a la firma — el harness
+diferencial instancia `<T: Ord>` con `float`, y `f64` no es `Ord` en Rust (IDEAS §63), así que
+rompía programas que hoy compilan. Decisión: `sort` sobre un `[T]` genérico ordena **con el
+diccionario `T#Ord#less` que la función ya recibe** (`__ray_sort_by`, estable como el merge del
+prelude); los tipos concretos siguen en `__ray_sort` (`Ord` de Rust) y `[float]` en
+`__ray_sort_float`. Efecto colateral bienvenido: `sort_desc([1.5, 3.5])` en nativo funciona, que
+con `__ray_sort` no podía. La guarda que pedía la nota,
+`every_std_module_compiles_natively_when_imported` (importa los 44 módulos embebidos y compila a
+nativo, ~30 s), corre con el corpus nativo en cada push a `main`.
+
+**[22]** `ray fmt -w` reescribía `print("latencia: ${tag("http://${origin}/api")} ms");`
+añadiéndole `//${origin}/api")} ms");` como comentario trailing, y se acumulaba en cada pasada:
+la única herramienta que daña el fuente, y en silencio (lo añadido es comentario y compila).
+Causa: `collect_comments` seguía las cadenas con una bandera plana, así que la comilla que abre
+la cadena anidada dentro de `${…}` "cerraba" la exterior y el `//` de `http://` pasaba por
+comentario. Ahora salta la interpolación como lo hace el lexer (`lex_string`): contando llaves
+hasta la que cierra, sin interpretar comillas ni `//` dentro. Vale para cadenas y templates.
+Test de punto fijo en `fmt::tests`; `fmt_policy` ya exige idempotencia sobre todo el corpus, pero
+ningún `.ray` del repo tenía una URL dentro de una interpolación anidada.
+

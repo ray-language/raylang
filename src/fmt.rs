@@ -87,6 +87,11 @@ struct Comment {
 /// Recolecta los comentarios `//` del fuente, respetando cadenas `"…"` y chars `'…'` (un `//` dentro de
 /// un literal no es comentario). raylang no tiene comentarios de bloque, así que cada uno llega al fin de
 /// línea. Como los literales de cadena no cruzan líneas, el estado se reinicia en cada `\n` (defensivo).
+///
+/// M280 (raystream [22]): una interpolación `${…}` dentro de la cadena se salta como hace el LEXER
+/// (`lex_string`): contando llaves hasta la que cierra, sin interpretar comillas ni `//` dentro. Antes
+/// una comilla dentro de la interpolación (`"${tag("http://${origin}/api")}"`) "cerraba" la cadena,
+/// el `//` de `http://` pasaba por comentario y fmt DUPLICABA el resto de la línea en cada pasada.
 fn collect_comments(src: &str) -> Vec<Comment> {
     let chars: Vec<char> = src.chars().collect();
     let mut out = Vec::new();
@@ -111,6 +116,26 @@ fn collect_comments(src: &str) -> Vec<Comment> {
         if in_str || in_char || in_template {
             if c == '\\' {
                 i += 2; // salta el carácter escapado
+                continue;
+            }
+            if (in_str || in_template) && c == '$' && i + 1 < chars.len() && chars[i + 1] == '{' {
+                // `${expr}`: como el lexer, solo cuentan las llaves (una interpolación no cruza líneas).
+                let mut depth = 0usize;
+                let mut j = i + 1;
+                while j < chars.len() && chars[j] != '\n' {
+                    match chars[j] {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                i = if j < chars.len() && chars[j] == '}' { j + 1 } else { j };
                 continue;
             }
             if (in_str && c == '"') || (in_char && c == '\'') || (in_template && c == '`') {
@@ -1907,6 +1932,16 @@ mod tests {
         // Un bloque `extern "c" blocking { … }` conserva su marca al reformatear, y NO se fusiona
         // con un bloque normal de la MISMA librería (la reagrupación es por (lib, blocking)).
         let src = "extern \"c\" blocking {\n    fn sleep(s: int) -> int;\n}\n\nextern \"c\" {\n    fn abs(x: int) -> int;\n}\n\nfn main() -> int {\n    0\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    /// M280 (raystream [22]): una comilla dentro de una interpolación no "cierra" la cadena, así que el
+    /// `//` de una URL anidada no es un comentario: antes fmt duplicaba el resto de la línea como
+    /// comentario trailing en CADA pasada (corrompía el fuente en silencio).
+    #[test]
+    fn nested_interpolation_with_a_url_is_not_a_comment() {
+        let src = "fn tag(s: string) -> string {\n    s\n}\n\nfn main() -> int {\n    let origin: string = \"127.0.0.1:8080\";\n    print(\"latencia: ${tag(\"http://${origin}/api\")} ms\");\n    print(`t: ${tag(\"http://${origin}/x\")}`);  // real\n    0\n}\n";
         assert_eq!(fmt(src), src);
         assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
     }

@@ -329,6 +329,21 @@ fn user_ord_does_not_duplicate_a_derived_partial_eq() {
     assert!(rust.contains("impl PartialEq for Keyed"), "{rust}");
 }
 
+/// M280 (raystream [21]): `sort(a)` sobre un `[T]` GENÉRICO ordena por el diccionario `T#Ord#less`
+/// (`__ray_sort_by`) en vez de exigir `Ord` de Rust a `T` (`__ray_sort<T: Ord>`), que f64 no cumple.
+/// Sin esto, bastaba `import std/sort;` (sort_desc/dedup) para tumbar el build nativo. La firma
+/// emitida NO lleva `+ Ord`: el harness diferencial instancia `<T: Ord>` con float.
+#[test]
+fn sort_on_a_generic_array_goes_through_the_less_dictionary() {
+    let rust = transpile_src(
+        "fn smallest<T: Ord>(a: [T]) -> [T] { sort(a) }\nfn main() {\n    print(smallest([3, 1, 2])[0]);\n    print(smallest([2.5, 1.5])[0]);\n}",
+    );
+    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static>("), "{rust}");
+    assert!(rust.contains("__ray_sort_by(&"), "{rust}");
+    assert!(rust.contains("&T_HH_Ord_HH_less)"), "{rust}");
+    assert!(!rust.contains("+ Ord>"), "{rust}");
+}
+
 #[test]
 fn named_function_values_are_cast_to_their_dyn_type() {
     let rust = transpile_src(

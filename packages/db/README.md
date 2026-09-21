@@ -214,3 +214,7 @@ y reusa las constantes SCRAM **precomputadas** del toy de PostgreSQL. Cubre la c
 mala (la firma del servidor no verifica → lo detecta el cliente), usuario desconocido (`errmsg`),
 el CRUD completo (verificando que el documento insertado y el `$set` viajan dentro del comando) y
 el error del servidor como valor. Ambos motores, mismo stdout.
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

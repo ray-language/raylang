@@ -166,3 +166,7 @@ Los que dependen de **sockets vivos** (http/http2/websocket/dns/udp/redis/postgr
 servidores de juguete, no en el oráculo. El micro-framework web vive en **`packages/web`** (M93,
 promovido de examples): enrutado, estáticos con ETag/304, logging JSON, TLS y graceful sobre
 `net/webserver` — ver `docs/web-framework.md`.
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

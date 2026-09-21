@@ -14199,6 +14199,18 @@ comentario. Ahora salta la interpolación como lo hace el lexer (`lex_string`): 
 hasta la que cierra, sin interpretar comillas ni `//` dentro. Vale para cadenas y templates.
 Test de punto fijo en `fmt::tests`; `fmt_policy` ya exige idempotencia sobre todo el corpus, pero
 ningún `.ray` del repo tenía una URL dentro de una interpolación anidada.
+## 266. M281 — Licencia Apache 2.0 en los paquetes oficiales (sep 2026)
+
+La toolchain va bajo doble licencia MIT o Apache 2.0 (raíz del repo), pero los seis paquetes de
+`packages/` no llevaban licencia propia, y sus espejos en github.com/ray-language (el artefacto que
+consume `ray add`) tampoco: GitHub los mostraba «sin licencia». Decisión del usuario: **Apache
+License 2.0** para todas las librerías (con su cláusula de patentes; es lo que un consumidor
+corporativo espera de una librería). Cada paquete lleva `LICENSE` (el texto completo, copyright
+2026 Roberto Ayala), `license = "Apache-2.0"` en `[package]` (identificador SPDX; el manifiesto
+ignora claves desconocidas, así que es compatible con toolchains anteriores) y una sección
+«Licencia» en el README. El espejo es un tar de `packages/<pkg>/`, así que el `LICENSE` viaja con
+la siguiente publicación; para los ya publicados, `--refresh-readme` copia ahora también el
+`LICENSE` a `main` (sin tocar tags: el hash del índice verifica el tag).
 
 ## 267. M282 — `ray fmt` escupía bytes de control crudos en cadenas interpoladas (sep 2026)
 

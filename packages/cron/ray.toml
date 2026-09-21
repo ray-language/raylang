@@ -3,6 +3,7 @@
 [package]
 name = "cron"
 version = "0.1.0"
+license = "Apache-2.0"
 entry = "cron.ray"
 
 # cron/local (cron en hora LOCAL) importa tz/tz: la dependencia va declarada (M135b — antes

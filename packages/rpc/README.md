@@ -98,3 +98,7 @@ rpc.pool_close(p);
 la batería cubre params de ida y vuelta, `err` del handler, panic sin matar la conexión,
 deadline vencido + reconexión, traceparent/deadline en el sobre, apagado ordenado por RPC y dos
 clientes concurrentes.
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

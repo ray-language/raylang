@@ -19,6 +19,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **`ray fmt` ya no corrompe una interpolación anidada con `//`** (M280, raystream [22]).
   `"${f("http://${h}/x")}"` duplicaba el resto de la línea como comentario en cada pasada; el
   recolector de comentarios salta las interpolaciones como el lexer.
+- **Los seis paquetes oficiales (`net`, `web`, `rpc`, `db`, `tz`, `cron`) llevan licencia Apache
+  2.0** (M281): `LICENSE` en cada paquete, `license = "Apache-2.0"` en su `ray.toml` y sección
+  «Licencia» en su README; los espejos de la organización lo reciben con
+  `tools/publish-packages.sh --refresh-readme`.
 
 - **`fs.read_bytes` reserva una sola vez sobre ficheros** (M278, raystream [18]/[19]). Un trozo de
   256 KB tocaba 768 KB (un `Vec` que crecía doblando más una copia al `bytes` final); ahora se

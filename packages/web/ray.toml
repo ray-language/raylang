@@ -3,6 +3,7 @@
 [package]
 name = "web"
 version = "0.4.2"
+license = "Apache-2.0"
 description = "The Express-style web application framework on top of net/webserver: routing, middleware, templates, sessions, streaming and state"
 keywords = ["web", "framework", "express", "routing", "middleware", "server", "app", "backend", "templates", "sessions", "streaming", "sse", "desktop", "mobile"]
 entry = "framework.ray"

@@ -1650,11 +1650,40 @@ impl Transpiler {
                 // IDEAS §63: [float] no puede ir por __ray_sort (f64 no es Ord en Rust → E0277 en
                 // el build del usuario). Va por __ray_sort_float: el merge del prelude con `<`,
                 // byte-idéntico a la VM incluso con NaN.
-                let is_float =
-                    matches!(self.type_of(eff[0])?, Type::Array(ref e) if matches!(**e, Type::Float));
-                out.push_str(if is_float { "__ray_sort_float(&" } else { "__ray_sort(&" });
-                self.emit_expr(out, eff[0])?;
-                out.push(')');
+                // M280 (raystream [21]): sobre un `[T]` GENÉRICO no hay `Ord` de Rust que exigir (la
+                // firma emitida no lleva la cota — y no puede: el harness instancia `<T: Ord>` con
+                // float). El orden viene del diccionario `T#Ord#less` que la función ya recibe como
+                // param oculto (lowering del checker): `__ray_sort_by` ordena estable con él, como
+                // el merge del prelude. Sin esto, `import std/sort;` (sort_desc/dedup) tumbaba el
+                // build nativo de cualquier programa con E0277 dentro de la stdlib.
+                let elem = match self.type_of(eff[0])? {
+                    Type::Array(e) => Some(*e),
+                    _ => None,
+                };
+                // (El tipo de un param `a: [T]` llega como `Var` o como `Struct("T")` sin normalizar:
+                // un nombre de tipo en ámbito de `tparams` es el mismo caso.)
+                let generic_elem = match &elem {
+                    Some(Type::Var(v)) => Some(v.clone()),
+                    Some(Type::Struct(n, args)) if args.is_empty() && self.tparams.contains(n) => Some(n.clone()),
+                    _ => None,
+                };
+                match generic_elem.map(Type::Var).or(elem) {
+                    Some(Type::Var(v)) => {
+                        out.push_str("__ray_sort_by(&");
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str(&format!(", &{})", mangle(&format!("{v}#Ord#less"))));
+                    }
+                    Some(Type::Float) => {
+                        out.push_str("__ray_sort_float(&");
+                        self.emit_expr(out, eff[0])?;
+                        out.push(')');
+                    }
+                    _ => {
+                        out.push_str("__ray_sort(&");
+                        self.emit_expr(out, eff[0])?;
+                        out.push(')');
+                    }
+                }
             }
             // reverse(a) -> [T]: copia invertida (no muta), como el opcode `Reverse` de la VM.
             "reverse" => {

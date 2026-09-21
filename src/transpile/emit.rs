@@ -49,19 +49,10 @@ impl Transpiler {
     /// `__F{i}`) y deja los nombres marcados en `self.send_fn_params`.
     pub(super) fn fn_generics(&mut self, f: &Function) -> Result<(String, Vec<String>), String> {
         let marked = self.fn_marks.get(&f.name).cloned().unwrap_or_default();
-        // M280 (raystream [21]): la cota `Ord` de raylang (`fn f<T: Ord>`) se traslada a la de Rust,
-        // porque los helpers del runtime que la exigen (`__ray_sort`, `__ray_sort_unstable`) son
-        // genéricos de Rust: sin ella, `sort(a)` sobre un `[T]` acotado no compilaba (E0277) — y
-        // bastaba `import std/sort;` (sort_desc/dedup) para tumbar el build nativo de cualquier
-        // programa. Los demás traits del prelude van por diccionario (params ocultos `T#Trait#m`)
-        // y no necesitan cota en Rust.
         let mut gens: Vec<String> = f
             .type_params
             .iter()
-            .map(|t| {
-                let ord = if f.bounds.iter().any(|(p, tr)| p == t && tr == "Ord") { " + Ord" } else { "" };
-                format!("{}: Clone + RayShow + 'static{ord}", t)
-            })
+            .map(|t| format!("{}: Clone + RayShow + 'static", t))
             .collect();
         let mut ptys = Vec::new();
         self.send_fn_params.clear();

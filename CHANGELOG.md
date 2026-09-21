@@ -6,10 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **`import std/sort;` ya no impide compilar a nativo** (M280, raystream [21]). Las cotas `Ord`
-  de una función genérica (`fn f<T: Ord>`) llegan a la firma de Rust; antes `sort(a)` sobre un
-  `[T]` acotado fallaba con E0277 dentro de la stdlib solo por importar el módulo. Guarda de CI:
-  toda la stdlib importada a la vez compila a nativo.
+- **`import std/sort;` ya no impide compilar a nativo** (M280, raystream [21]). `sort(a)` sobre un
+  `[T]` genérico ordena con el diccionario `less` del bound `T: Ord` en vez de exigir `Ord` de
+  Rust; antes fallaba con E0277 dentro de la stdlib solo por importar el módulo, y de paso
+  `sort_desc([float])` en nativo ahora funciona. Guarda de CI: toda la stdlib importada a la vez
+  compila a nativo.
 - **`ray fmt` ya no corrompe una interpolación anidada con `//`** (M280, raystream [22]).
   `"${f("http://${h}/x")}"` duplicaba el resto de la línea como comentario en cada pasada; el
   recolector de comentarios salta las interpolaciones como el lexer.

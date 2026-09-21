@@ -14176,14 +14176,17 @@ conexión; cola 2 → mismo cuerpo y rangos) más el test de M271 sobre el camin
 Dos hallazgos nuevos de la bitácora de raystream, ambos bloqueantes y ambos con repro de seis líneas.
 
 **[21]** `import std/sort;` sin llamar a nada suyo hacía fallar `ray build --native` con E0277 dentro
-de la stdlib (`sort_desc`/`dedup`: "the trait bound `T: Ord` is not satisfied"). Causa: el
-transpilador emitía toda función genérica con la cota fija `T: Clone + RayShow + 'static`, sin
-trasladar las cotas de raylang. Para los traits del prelude eso basta, porque van por diccionario
-(params ocultos `T#Trait#m`); pero `sort(a)` sobre `[T]` cae en `__ray_sort<T: Ord + Clone>`, un
-genérico de Rust, y rustc exige la cota en la firma. Decisión: `fn f<T: Ord>` emite `+ Ord`
-(`fn_generics`). Solo `Ord`: es la única cota que un helper del runtime exige. Límite conocido: un
-`[float]` sigue sin poder instanciar esas funciones en nativo (f64 no es `Ord` en Rust; IDEAS §63),
-ahora como error en el sitio de uso, no en la definición. La guarda que pedía la nota,
+de la stdlib (`sort_desc`/`dedup`: "the trait bound `T: Ord` is not satisfied"). Causa: `sort(a)`
+sobre un `[T]` genérico se emitía como `__ray_sort(&a)`, un genérico de RUST con cota `T: Ord`,
+mientras la firma emitida de la función raylang solo lleva `Clone + RayShow + 'static`: las cotas
+de raylang van por **diccionario** (params ocultos `T#Trait#m`, lowering del checker), no por
+cotas de Rust. Primer intento, descartado en CI: trasladar `+ Ord` a la firma — el harness
+diferencial instancia `<T: Ord>` con `float`, y `f64` no es `Ord` en Rust (IDEAS §63), así que
+rompía programas que hoy compilan. Decisión: `sort` sobre un `[T]` genérico ordena **con el
+diccionario `T#Ord#less` que la función ya recibe** (`__ray_sort_by`, estable como el merge del
+prelude); los tipos concretos siguen en `__ray_sort` (`Ord` de Rust) y `[float]` en
+`__ray_sort_float`. Efecto colateral bienvenido: `sort_desc([1.5, 3.5])` en nativo funciona, que
+con `__ray_sort` no podía. La guarda que pedía la nota,
 `every_std_module_compiles_natively_when_imported` (importa los 44 módulos embebidos y compila a
 nativo, ~30 s), corre con el corpus nativo en cada push a `main`.
 

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.5 — 2026-09-21
 
 - **La VM ya escribe más de 64 KiB seguidos por TLS** (M285, raycode «el techo de 64 KiB de
   TLS»). `socket_write_bytes` sobre una conexión TLS fallaba con «failed to write whole buffer»

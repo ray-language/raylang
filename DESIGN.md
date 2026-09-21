@@ -14087,3 +14087,25 @@ Medido en el M3 Pro, binario nativo, archivo de 256 MB (`$CLAUDE_JOB_DIR/tmp/ben
 
 La cola de 1 no cuesta caudal (+4 % en loopback) y quita un 27 % de residente; el trozo grande
 gana caudal en enlaces rápidos a cambio de memoria — de ahí que sea un parámetro y no un default.
+
+## 262. M277 — `impl Ord` de usuario chocaba con el `PartialEq` derivado de M270 (sep 2026)
+
+Origen: CI 1181, el push a `main` de la release 1.27.1. El corpus nativo (`native_corpus`, solo
+corre en push, no en PR) falló en `examples/types/impl_ord_sort.ray` con E0119: "conflicting
+implementations of trait `PartialEq`" para `Range` y `Level`. Dos arcos correctos por separado se
+pisaban: M212 emite `impl PartialEq/Eq/PartialOrd/Ord` manuales para todo tipo con `impl Ord` de
+usuario (el `eq` delega en `cmp`), y M270 empezó a **derivar** `PartialEq` en todo tipo cuyos
+campos lo admiten para que `a == b` compile en nativo. Un tipo con `impl Ord` y campos
+comparables recibía los dos.
+
+Decisión: gana el derivado. `==` sobre un struct/enum en la VM es igualdad estructural
+(`values_equal`), no `less(a,b) == less(b,a) == false`; el `eq` manual de M212 era solo un requisito
+de `Ord` en Rust, no una semántica de raylang, y con un `less` que ignora campos divergía de la
+VM. `emit_ord_impls` recibe ahora el conjunto de tipos que derivan `PartialEq` y omite el `impl`
+manual para ellos; los tipos con campos función (no derivables) lo siguen recibiendo, porque sin
+él `Ord` no compila. `Eq`/`PartialOrd`/`Ord` se emiten igual que antes.
+
+Lección para el CI: el PR #375 estuvo verde porque el corpus nativo no corre en `pull_request`
+(decisión de coste, `ci.yml`). La guarda barata queda a nivel transpilación
+(`user_ord_does_not_duplicate_a_derived_partial_eq`), que sí corre en cada PR.
+

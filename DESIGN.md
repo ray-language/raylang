@@ -14255,3 +14255,25 @@ porqué. La vitrina sigue el mismo mensaje: entran raynote (la app de escritorio
 raygame, raykv y raypass a «y más». Pendiente y anotado: nada en la vitrina demuestra móvil; la
 sección desktop/móvil debería llevar una captura o vídeo de iOS/Android.
 
+## 270. M285 — El techo de 64 KiB de TLS en la VM (sep 2026)
+
+Origen: el README de raycode («El techo de 64 KiB de TLS, esquivado»): raylang no podía escribir
+más de 65 536 octetos en una conexión TLS sin una lectura entre medias; fallaba con «failed to
+write whole buffer» y el harness apartaba resultados de herramienta viejos para que cada turno
+cupiera — un parachoques de la app para un bug del runtime. Reproducido con 200 000 octetos en una
+sola escritura contra un sumidero TLS: la VM muere con ese mensaje; el nativo (`StreamOwned`,
+que escribe por trozos y vacía entre medias) y el intérprete (`rustls::Stream`) no.
+
+Causa, en `tls_write_nb` (VM, M19.4b): `tc.conn.writer().write_all(bytes)` metía todo el texto
+plano en el búfer de envío de rustls y solo después lo drenaba al socket. Ese búfer tiene un tope
+(64 KiB por defecto): al llenarse, `write` acepta 0 octetos y `write_all` lo convierte en
+`WriteZero`. Y había un segundo escalón, descubierto al arreglar el primero: justo tras
+`tls_connect` el handshake no ha terminado (solo salió el ClientHello), así que aunque se drene
+no hay nada que escribir — el protocolo espera al peer. Decisión: cifrar por trozos (lo que el
+búfer acepte), drenar entre medias, y si el búfer no acepta nada, **leer** del socket y procesar
+(`read_tls` + `process_new_packets`) para avanzar el handshake, cediendo en `WouldBlock` como ya
+hacía el drenado de escrituras. Sin tocar el tope de rustls (`set_buffer_limit(None)` sería
+memoria sin cota). Test: `tls_writes_over_64_kib_in_one_call_on_the_vm_and_the_interpreter`, que
+con el código anterior falla con el mensaje exacto de raycode. Pendiente de avisar a raycode: el
+parachoques puede retirarse desde 1.27.5.
+

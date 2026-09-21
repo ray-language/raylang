@@ -14240,3 +14240,18 @@ un handler que no acepta HEAD no lo necesita). Test: servidor crudo con las dos 
 nivel de socket hasta el cierre — el HEAD anuncia el tamaño y trae 0 octetos, con cuerpo normal,
 stream y cuerpo-fichero. `net` 0.3.3.
 
+## 269. M284 — La portada cuenta primero lo que distingue (sep 2026)
+
+Decisión del usuario sobre el orden de raylang.dev. Antes: hero, instalación, tarjetas de
+características, desktop/móvil, medido, editor, agentes, playground, vitrina. Las tarjetas en
+segundo lugar eran afirmaciones genéricas («tres motores», «errores como valores») que no
+distinguen a raylang a primera vista, y los dos diferenciadores reales —nativo para agentes LLM y
+desktop/móvil de fábrica— quedaban a mitad de página. Ahora: hero → instálalo → agentes → desktop
+y móvil → editor → playground → medido → tarjetas → vitrina (→ el cierre «fluye sin fricción»).
+Es la estructura clásica: valor, acción, prueba, profundidad, comunidad. El subtítulo del hero
+nombra los dos diferenciadores y el binario medido, para que «instálalo» justo debajo tenga un
+porqué. La vitrina sigue el mismo mensaje: entran raynote (la app de escritorio real), raystream
+(el servidor de medios, dogfood de 23 hallazgos) y msg (malla P2P con Ed25519/X25519); salen
+raygame, raykv y raypass a «y más». Pendiente y anotado: nada en la vitrina demuestra móvil; la
+sección desktop/móvil debería llevar una captura o vídeo de iOS/Android.
+

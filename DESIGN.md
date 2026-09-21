@@ -14200,3 +14200,17 @@ hasta la que cierra, sin interpretar comillas ni `//` dentro. Vale para cadenas 
 Test de punto fijo en `fmt::tests`; `fmt_policy` ya exige idempotencia sobre todo el corpus, pero
 ningún `.ray` del repo tenía una URL dentro de una interpolación anidada.
 
+## 267. M282 — `ray fmt` escupía bytes de control crudos en cadenas interpoladas (sep 2026)
+
+Origen: ray-sublime §99. `ray fmt -w` convertía `"${a}\u{1}${b}"` en la misma cadena con el byte
+0x01 dentro del fuente: el programa hacía lo mismo, pero el archivo dejaba de ser texto (`file` →
+`data`) y **`grep` lo omitía en silencio** — una búsqueda sobre las fuentes no fallaba, simplemente
+no veía ese archivo. Causa: `escape_char` (cadena simple) ya reemitía todo control como
+`\u{H…H}` desde M118, pero `fmt_interp` (cadenas con `${…}` y templates) tenía su propia tabla de
+escapes sin ese brazo. Ahora comparte la regla: `\0` y `\u{H…H}` para cualquier control; en un
+template solo el salto de línea queda literal (es multilínea por diseño). Test de punto fijo que
+además exige que la salida no contenga ningún control salvo `\n`. Tercer fallo del formateador
+en dos días (M273 hex, M280 interpolación anidada, este): las guardas de idempotencia del corpus
+no cazan lo que el corpus no contiene; la regla es que cada bug de fmt deje su caso mínimo en
+`fmt::tests`.
+

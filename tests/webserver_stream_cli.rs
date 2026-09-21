@@ -104,6 +104,98 @@ fn start_server(name: &str) -> Server {
     Server { child, port }
 }
 
+/// M283 (raystream [23]): servidor CRUDO (`serve_raw`) que responde con `send_response_for` — un
+/// cuerpo normal, un stream de tamaño conocido y un cuerpo-fichero (`serve_file` sobre big.bin).
+const RAW_SERVER: &str = r#"import net/webserver;
+
+fn main() -> int {
+    match (webserver.serve_raw("127.0.0.1", __PORT__, fn(req: webserver.Request, conn: int) {
+        let r: webserver.Response = if (req.path == "/text") {
+            webserver.text(200, "hola mundo")
+        } else if (req.path == "/stream_len") {
+            let ch: Channel<bytes> = Channel.bounded(4);
+            let _ = spawn(fn() {
+                send(ch, b"abc");
+                send(ch, b"defgh");
+                close(ch);
+            });
+            webserver.stream_response_len(200, ch, 8)
+        } else {
+            webserver.serve_file("public/big.bin", req)
+        };
+        match (webserver.send_response_for(req, conn, r)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => eprint(e),
+        }
+    })) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+/// Como `start_server`, con `RAW_SERVER` (M283).
+fn start_raw_server(name: &str) -> Server {
+    let dir = std::env::temp_dir().join(format!("ray_wstream_{name}"));
+    let net = dir.join("net");
+    std::fs::create_dir_all(&net).expect("crea net/");
+    std::fs::create_dir_all(dir.join("public")).expect("crea public/");
+    for lib in ["webserver.ray", "trace.ray", "http.ray", "log.ray", "time.ray"] {
+        let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
+        let _ = std::fs::copy(&src, net.join(lib));
+    }
+    let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("public/big.bin"), &big).unwrap();
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    std::fs::write(dir.join("main.ray"), RAW_SERVER.replace("__PORT__", &port.to_string())).unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["--vm", "main.ray"])
+        .current_dir(&dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("lanza el servidor crudo");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "el servidor crudo no llegó a escuchar");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Server { child, port }
+}
+
+/// Petición cruda por TCP con el método dado; devuelve la respuesta completa (hasta el cierre).
+fn raw_req(port: u16, method: &str, path: &str) -> Vec<u8> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    let req = format!("{method} {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).unwrap();
+    out
+}
+
+/// M283 (raystream [23]): en el camino crudo, `send_response` no sabía del método y escribía el
+/// cuerpo entero en un HEAD (Content-Length correcto y 700 KB detrás; `curl -I` no lo delata).
+/// `send_response_for(req, conn, r)` manda las cabeceras completas y CERO octetos de cuerpo — con
+/// cuerpo normal, stream de tamaño conocido y cuerpo-fichero; el GET sigue trayendo el cuerpo.
+#[test]
+fn send_response_for_omits_the_body_of_a_head_in_raw_handlers() {
+    let srv = start_raw_server("raw_head");
+    for (path, len) in [("/text", 10usize), ("/stream_len", 8), ("/big", 1_500_000)] {
+        let (head, body) = head_and_body(&raw_req(srv.port, "HEAD", path));
+        assert!(head.starts_with("HTTP/1.1 200"), "{path}: {head}");
+        assert!(head.contains(&format!("Content-Length: {len}")), "{path}: {head}");
+        assert!(body.is_empty(), "{path}: un HEAD no lleva cuerpo ({} octetos)", body.len());
+        let (head, body) = head_and_body(&raw_req(srv.port, "GET", path));
+        assert!(head.starts_with("HTTP/1.1 200"), "{path}: {head}");
+        assert_eq!(body.len(), len, "{path}: el GET trae el cuerpo");
+    }
+}
+
 /// GET crudo por TCP; devuelve la respuesta completa como bytes.
 fn raw_get(port: u16, path: &str, extra: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("conecta");

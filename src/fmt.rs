@@ -1343,6 +1343,11 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
                         '"' if !template => out.push_str("\\\""),
                         '`' if template => out.push_str("\\`"),
                         '$' if chars.get(i + 1) == Some(&'{') => out.push_str("\\$"),
+                        // M282 (ray-sublime §99): como en `escape_char`, un carácter de control se
+                        // reemite escapado (`\0`, `\u{H…H}`) — nunca un byte crudo en la fuente: el
+                        // archivo dejaba de ser texto (`file` → data, `grep` lo omitía en silencio).
+                        '\0' => out.push_str("\\0"),
+                        other if other.is_control() => out.push_str(&format!("\\u{{{:X}}}", other as u32)),
                         other => out.push(other),
                     }
                 }
@@ -1944,6 +1949,20 @@ mod tests {
         let src = "fn tag(s: string) -> string {\n    s\n}\n\nfn main() -> int {\n    let origin: string = \"127.0.0.1:8080\";\n    print(\"latencia: ${tag(\"http://${origin}/api\")} ms\");\n    print(`t: ${tag(\"http://${origin}/x\")}`);  // real\n    0\n}\n";
         assert_eq!(fmt(src), src);
         assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    /// M282 (ray-sublime §99): un escape de control dentro de una cadena INTERPOLADA (o un template)
+    /// se reemite como escape, no como el byte crudo — antes `"${a}\u{1}${b}"` salía con un 0x01 en
+    /// la fuente y el archivo dejaba de ser texto (`grep` lo omitía en silencio). La cadena simple ya
+    /// lo hacía bien (`escape_char`); el camino de `fmt_interp` no.
+    #[test]
+    fn control_escapes_survive_inside_interpolations() {
+        let src = "fn main() -> int {\n    let a: string = \"x\";\n    let k: string = \"${a}\\u{1}${a}\\0\\u{7F}\";\n    let t: string = `${a}\\u{1B}[0m\nq`;\n    print(k.len() + t.len());\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("\"${a}\\u{1}${a}\\0\\u{7F}\""), "{out}");
+        assert!(out.contains("${a}\\u{1B}[0m"), "{out}");
+        assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "sin bytes de control crudos:\n{out:?}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     #[test]

@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray fmt` ya no escribe bytes de control crudos en cadenas interpoladas** (M282, ray-sublime
+  §99). `"${a}\u{1}${b}"` salía con un 0x01 dentro del fuente y el archivo dejaba de ser texto
+  (`grep` lo omitía en silencio); ahora los controles se reemiten como `\0`/`\u{H…H}`, como ya
+  hacía la cadena simple.
+
 - **`import std/sort;` ya no impide compilar a nativo** (M280, raystream [21]). `sort(a)` sobre un
   `[T]` genérico ordena con el diccionario `less` del bound `T: Ord` en vez de exigir `Ord` de
   Rust; antes fallaba con E0277 dentro de la stdlib solo por importar el módulo, y de paso

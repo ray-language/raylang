@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Nativo: un tipo con `impl Ord` cuyos campos admiten `==` volvía a compilar** (M277). Desde
+  1.27.0, `ray build --native` fallaba con E0119 (dos `impl PartialEq`) en cualquier struct/enum
+  con `impl Ord` de usuario y campos comparables (p. ej. `examples/types/impl_ord_sort.ray`): el
+  `PartialEq` derivado de M270 chocaba con el manual de M212. Ahora gana el derivado (igualdad
+  estructural, la misma que la VM).
+
 ## 1.27.1 — 2026-09-20
 
 - **`net/webserver` 0.3.1: el productor de `serve_file` deja de bufferizar 1 MB por conexión**

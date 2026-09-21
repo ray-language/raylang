@@ -309,6 +309,26 @@ fn iterates_inline_split_without_materializing() {
 /// M222 (ray-sublime, 1.11.0): dos funciones con nombre como valor en las ramas de un `if` — cada
 /// ítem de función tiene su propio tipo en Rust, así que el valor se emite con la coerción explícita
 /// `Rc::new(f) as Rc<dyn Fn(…) -> …>`; antes rustc fallaba con E0308.
+/// M212 + M270 (CI 1181 tras 1.27.1): un tipo con `impl Ord` de usuario cuyos campos admiten
+/// `PartialEq` lo DERIVA (igualdad estructural, la de la VM) y el bloque de `Ord` no emite un segundo
+/// `impl PartialEq` manual (E0119 en rustc). Un tipo con campo función no lo deriva y sí lo recibe
+/// del bloque de `Ord`.
+#[test]
+fn user_ord_does_not_duplicate_a_derived_partial_eq() {
+    let rust = transpile_src(
+        "struct Range { lo: int, hi: int }\n\
+         impl Ord for Range { fn less(self, other: Range) -> bool { self.lo < other.lo } }\n\
+         struct Keyed { key: int, f: fn(int) -> int }\n\
+         impl Ord for Keyed { fn less(self, other: Keyed) -> bool { self.key < other.key } }\n\
+         fn main() {\n    let r = sort([Range { lo: 2, hi: 3 }, Range { lo: 1, hi: 9 }]);\n    print(r[0].lo);\n}",
+    );
+    assert!(rust.contains("#[derive(Clone, PartialEq)]\nstruct Range"), "{rust}");
+    assert!(!rust.contains("impl PartialEq for Range"), "{rust}");
+    assert!(rust.contains("impl Ord for Range"), "{rust}");
+    assert!(rust.contains("#[derive(Clone)]\nstruct Keyed"), "{rust}");
+    assert!(rust.contains("impl PartialEq for Keyed"), "{rust}");
+}
+
 #[test]
 fn named_function_values_are_cast_to_their_dyn_type() {
     let rust = transpile_src(

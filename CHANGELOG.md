@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`import std/sort;` ya no impide compilar a nativo** (M280, raystream [21]). Las cotas `Ord`
+  de una función genérica (`fn f<T: Ord>`) llegan a la firma de Rust; antes `sort(a)` sobre un
+  `[T]` acotado fallaba con E0277 dentro de la stdlib solo por importar el módulo. Guarda de CI:
+  toda la stdlib importada a la vez compila a nativo.
+- **`ray fmt` ya no corrompe una interpolación anidada con `//`** (M280, raystream [22]).
+  `"${f("http://${h}/x")}"` duplicaba el resto de la línea como comentario en cada pasada; el
+  recolector de comentarios salta las interpolaciones como el lexer.
+
 - **`fs.read_bytes` reserva una sola vez sobre ficheros** (M278, raystream [18]/[19]). Un trozo de
   256 KB tocaba 768 KB (un `Vec` que crecía doblando más una copia al `bytes` final); ahora se
   reserva exacto (`min(max, lo que queda)`) y se lee sobre él, en la VM y en nativo. Servir un

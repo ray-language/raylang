@@ -68,6 +68,41 @@ fn the_deterministic_examples_transpile_identically_to_the_vm() {
     run_corpus(&[]); // el DEFAULT: fibras (decisión post-F5/F4)
 }
 
+/// M280 (raystream [21]): `import std/sort;` —sin llamar a nada suyo— tumbaba el build nativo de
+/// cualquier programa: las funciones genéricas acotadas de un módulo se emiten aunque no se usen, y
+/// un error de rustc dentro de la stdlib no cita el fichero del usuario. Esta guarda importa TODOS
+/// los módulos embebidos de `std/` en un programa y exige que compile a nativo y salga 0.
+#[test]
+#[ignore = "compila un binario nativo con toda la stdlib importada (~30 s); correr con -- --ignored"]
+fn every_std_module_compiles_natively_when_imported() {
+    if !has_rustc() {
+        eprintln!("saltando: rustc no disponible");
+        return;
+    }
+    let tmp = std::env::temp_dir().join(format!("ray_allstd_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("crea el dir temporal");
+    let mut src = String::new();
+    for m in raylang::stdlib::names() {
+        src.push_str(&format!("import {m};\n"));
+    }
+    src.push_str("\nfn main() -> int {\n    0\n}\n");
+    let main = tmp.join("main.ray");
+    std::fs::write(&main, src).unwrap();
+    let bin = tmp.join(format!("allstd{}", std::env::consts::EXE_SUFFIX));
+    let build = Command::new(BIN)
+        .args(["build", main.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza el build --native");
+    assert!(
+        build.status.success(),
+        "toda la stdlib importada debe compilar a nativo:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&bin).output().expect("corre el binario");
+    assert_eq!(run.status.code(), Some(0));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// El RESPALDO hilo-por-tarea (`--without fibers`): sigue siendo un modelo soportado (escape del
 /// default y única vía en targets sin poller) → sigue teniendo su corpus byte-idéntico a la VM.
 #[test]

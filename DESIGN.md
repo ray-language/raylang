@@ -14171,3 +14171,29 @@ Con un hilo, 1516 → 352. Raystream [18] queda cerrado: sin diferencia frente a
 Guarda: `file_bodies_keep_alive_and_the_read_ahead_queue_matches` (dos rangos por la misma
 conexión; cola 2 → mismo cuerpo y rangos) más el test de M271 sobre el camino por defecto.
 
+## 265. M280 — Raystream [21] y [22]: `import std/sort` tumbaba el nativo; `ray fmt` corrompía interpolaciones anidadas (sep 2026)
+
+Dos hallazgos nuevos de la bitácora de raystream, ambos bloqueantes y ambos con repro de seis líneas.
+
+**[21]** `import std/sort;` sin llamar a nada suyo hacía fallar `ray build --native` con E0277 dentro
+de la stdlib (`sort_desc`/`dedup`: "the trait bound `T: Ord` is not satisfied"). Causa: el
+transpilador emitía toda función genérica con la cota fija `T: Clone + RayShow + 'static`, sin
+trasladar las cotas de raylang. Para los traits del prelude eso basta, porque van por diccionario
+(params ocultos `T#Trait#m`); pero `sort(a)` sobre `[T]` cae en `__ray_sort<T: Ord + Clone>`, un
+genérico de Rust, y rustc exige la cota en la firma. Decisión: `fn f<T: Ord>` emite `+ Ord`
+(`fn_generics`). Solo `Ord`: es la única cota que un helper del runtime exige. Límite conocido: un
+`[float]` sigue sin poder instanciar esas funciones en nativo (f64 no es `Ord` en Rust; IDEAS §63),
+ahora como error en el sitio de uso, no en la definición. La guarda que pedía la nota,
+`every_std_module_compiles_natively_when_imported` (importa los 44 módulos embebidos y compila a
+nativo, ~30 s), corre con el corpus nativo en cada push a `main`.
+
+**[22]** `ray fmt -w` reescribía `print("latencia: ${tag("http://${origin}/api")} ms");`
+añadiéndole `//${origin}/api")} ms");` como comentario trailing, y se acumulaba en cada pasada:
+la única herramienta que daña el fuente, y en silencio (lo añadido es comentario y compila).
+Causa: `collect_comments` seguía las cadenas con una bandera plana, así que la comilla que abre
+la cadena anidada dentro de `${…}` "cerraba" la exterior y el `//` de `http://` pasaba por
+comentario. Ahora salta la interpolación como lo hace el lexer (`lex_string`): contando llaves
+hasta la que cierra, sin interpretar comillas ni `//` dentro. Vale para cadenas y templates.
+Test de punto fijo en `fmt::tests`; `fmt_policy` ya exige idempotencia sobre todo el corpus, pero
+ningún `.ray` del repo tenía una URL dentro de una interpolación anidada.
+

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.4 — 2026-09-21
 
 - **`net/webserver` 0.3.3: `send_response_for(req, conn, r)`** (M283, raystream [23]). En el camino
   crudo (`serve_raw*`), `send_response` no conocía el método y escribía el cuerpo entero en un

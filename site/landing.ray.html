@@ -287,9 +287,9 @@ section.engines { padding: 2.5rem 0 4rem; }
                 <span class="badge">Self-hosted</span>
             </div>
             <h1>A language for <span class="grad">real-world production</span>.</h1>
-            <p class="sub">Generics, traits, pattern matching and multicore concurrency through
-            actors — with errors as values, no null and no exceptions. Written in Rust, with a
-            minimal, deliberate dependency surface.</p>
+            <p class="sub">Native for LLM agents, desktop and mobile apps out of the box, and a
+            native binary measured against Go — on a language with generics, traits, pattern
+            matching and multicore actors: errors as values, no null, no exceptions.</p>
             <div class="cta">
                 <a class="btn primary" href="#empezar">Get started</a>
                 <a class="btn ghost" href="#playground">Playground</a>
@@ -299,9 +299,9 @@ section.engines { padding: 2.5rem 0 4rem; }
                 <span class="badge">Auto-alojado</span>
             </div>
             <h1>Un lenguaje para <span class="grad">producción real</span>.</h1>
-            <p class="sub">Genéricos, traits, pattern matching y concurrencia multicore por
-            actores — con errores como valores, sin null y sin excepciones. Escrito en Rust,
-            con una superficie de dependencias mínima y deliberada.</p>
+            <p class="sub">Nativo para agentes LLM, apps de escritorio y móvil de fábrica, y un
+            binario nativo medido contra Go — sobre un lenguaje con genéricos, traits, pattern
+            matching y actores multicore: errores como valores, sin null y sin excepciones.</p>
             <div class="cta">
                 <a class="btn primary" href="#empezar">Empezar</a>
                 <a class="btn ghost" href="#playground">Playground</a>
@@ -370,6 +370,174 @@ section.engines { padding: 2.5rem 0 4rem; }
             </div>
         </div>
         </div>
+    </div>
+</section>
+
+<section class="agents" id="agentes">
+    <div class="wrap">
+        <div class="duo">
+            <div>
+{% if en %}                <h2 class="sec">Native for <span class="grad">LLM agents</span></h2>
+                <p class="lead">raylang ships the two pieces a model needs to write correct
+                raylang — and verify it on its own.</p>
+                <ul>
+                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
+                    the distilled context: the delta against Rust, the canonical forms and the
+                    exact error messages, ready for your prompt or <code>CLAUDE.md</code>.</li>
+                    <li><b><code>ray mcp</code></b> — an MCP server embedded in the binary:
+                    the <em>write → check → fix</em> loop with the compiler's exact diagnostics
+                    and the model's code sandboxed (fuel + heap + deadline, in a subprocess).</li>
+                    <li><code>llms.txt</code> itself is served as a <em>resource</em>
+                    (<code>raylang://llms.txt</code>) — the client injects it before the first
+                    line. Full guide in
+                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.en.md">docs/mcp.en.md</a>.</li>
+                </ul>{% else %}                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
+                <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
+                raylang correcto — y lo verifique solo.</p>
+                <ul>
+                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
+                    el contexto destilado: el delta contra Rust, las formas canónicas y los
+                    mensajes de error exactos, listo para tu prompt o <code>CLAUDE.md</code>.</li>
+                    <li><b><code>ray mcp</code></b> — un servidor MCP embebido en el binario:
+                    el bucle <em>escribir → verificar → corregir</em> con los diagnósticos
+                    exactos del compilador y el código del modelo confinado (fuel + heap +
+                    plazo, en subproceso).</li>
+                    <li>El propio <code>llms.txt</code> se sirve como <em>resource</em>
+                    (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
+                    primera línea. Guía completa en
+                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
+                </ul>{% endif %}
+            </div>
+            <div class="window">
+                <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>mcp</span></div>
+                <pre><code><span class="pr">$ </span><span class="st">claude mcp add raylang -- ray mcp</span>
+
+<span class="cm"># tools</span>
+{% if en %}<span class="fn">ray_check</span>   <span class="cm">exact, positioned diagnostics</span>
+<span class="fn">ray_run</span>     <span class="cm">stdout + exit, sandboxed</span>
+<span class="fn">ray_test</span>    <span class="cm">the @test runner</span>
+<span class="fn">ray_fmt</span>     <span class="cm">canonical source</span>
+<span class="fn">ray_doc</span>     <span class="cm">stdlib signature + doc</span>{% else %}<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
+<span class="fn">ray_run</span>     <span class="cm">stdout + exit, confinado</span>
+<span class="fn">ray_test</span>    <span class="cm">el runner @test</span>
+<span class="fn">ray_fmt</span>     <span class="cm">fuente canónico</span>
+<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>{% endif %}
+
+<span class="cm"># resource</span>
+<span class="ty">raylang://llms.txt</span></code></pre>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="eco platforms" id="plataformas">
+    <div class="wrap">
+{% if en %}        <h2 class="sec">Desktop and mobile, <span class="grad">out of the box</span></h2>
+        <p class="lead">The same raylang source runs as a desktop app on macOS, Linux and
+        Windows and as a mobile app on iPhone and Android — no external framework, no second
+        language. The interface is HTML in the system webview (<code>std/ui</code>), the backend
+        is your raylang web server, and the JS ↔ raylang bridge, native menus, file dialogs,
+        audio and the assets baked into the binary ship with the toolchain.</p>
+        <div class="apps">
+            <div class="app"><b>macOS</b><span><code>ray bundle</code> produces the <code>.app</code> with icon, application menu, About panel and ad-hoc signature (the distribution one is yours to add).</span></div>
+            <div class="app"><b>Linux</b><span>the same command leaves the binary with its <code>.desktop</code> launcher; window and webview on GTK/WebKitGTK.</span></div>
+            <div class="app"><b>Windows</b><span>the same command leaves the desktop <code>.exe</code> (no console on double-click, embedded icon and version) with its shortcut; window and webview on Win32/WebView2, audio through WASAPI.</span></div>
+            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> generates the Xcode project with the program compiled to a static library; persistent signing for device and simulator.</span></div>
+            <div class="app"><b>Android</b><span><code>ray bundle --android</code> generates the Gradle project with the native <code>.so</code>, launcher icon and release signing; audio through AAudio.</span></div>
+        </div>
+        <div class="chips">
+            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
+            <span class="chip"><b>ray bundle --ios</b> · Xcode project</span>
+            <span class="chip"><b>ray bundle --android</b> · Gradle project</span>
+        </div>
+        <p class="note">Step-by-step guide in the
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a> (Spanish).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
+        <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
+        Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
+        interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
+        servidor web en raylang, y el puente JS ↔ raylang, los menús nativos, los diálogos de
+        archivo, el audio y los assets horneados en el binario vienen en la toolchain.</p>
+        <div class="apps">
+            <div class="app"><b>macOS</b><span><code>ray bundle</code> produce la <code>.app</code> con icono, menú de aplicación, panel About y firma ad-hoc (la de distribución la pones tú).</span></div>
+            <div class="app"><b>Linux</b><span>el mismo comando deja el binario con su lanzador <code>.desktop</code>; ventana y webview sobre GTK/WebKitGTK.</span></div>
+            <div class="app"><b>Windows</b><span>el mismo comando deja el <code>.exe</code> de escritorio (sin consola al doble clic, icono y versión embebidos) con su acceso directo; ventana y webview sobre Win32/WebView2, audio por WASAPI.</span></div>
+            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> genera el proyecto Xcode con el programa compilado a librería estática; firma persistente para dispositivo y simulador.</span></div>
+            <div class="app"><b>Android</b><span><code>ray bundle --android</code> genera el proyecto Gradle con el <code>.so</code> nativo, icono launcher y firma de release; audio por AAudio.</span></div>
+        </div>
+        <div class="chips">
+            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
+            <span class="chip"><b>ray bundle --ios</b> · proyecto Xcode</span>
+            <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
+        </div>
+        <p class="note">Guía paso a paso en el
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>{% endif %}
+    </div>
+</section>
+
+<section class="eco" id="editores">
+    <div class="wrap">
+{% if en %}        <h2 class="sec">In your <span class="grad">editor</span></h2>
+        <p class="lead">Official extensions on top of the raylang LSP: live diagnostics,
+        completion, hover, go to definition, rename and formatting.</p>
+        <div class="apps">
+            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extension on the marketplace, with the LSP client built in</span></a>
+            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>syntax + LSP; <code>Package Control: Install Package → raylang</code></span></a>
+            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">under review in the Zed gallery</em><span>tree-sitter grammar + LSP; until approved, install it as a dev extension</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>point at <code>ray lsp</code> directly; config in editors/</span></a>
+        </div>
+        <p class="note">The Zed extension is submitted to the official gallery and awaiting
+        approval:{% else %}        <h2 class="sec">En tu <span class="grad">editor</span></h2>
+        <p class="lead">Extensiones oficiales sobre el LSP de raylang: diagnósticos en vivo,
+        autocompletado, hover, ir a definición, renombrar y formateo.</p>
+        <div class="apps">
+            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extensión en el marketplace, con cliente LSP integrado</span></a>
+            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>sintaxis + LSP; <code>Package Control: Install Package → raylang</code></span></a>
+            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">en revisión en la galería de Zed</em><span>gramática tree-sitter + LSP; mientras se aprueba, se instala como extensión de desarrollo</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
+        </div>
+        <p class="note">La extensión de Zed está enviada a la galería oficial y en proceso de
+        aprobación:{% endif %}
+        <a href="https://github.com/zed-industries/extensions/pull/7361">zed-industries/extensions #7361</a>.</p>
+    </div>
+</section>
+
+<section class="play" id="playground">
+    <div class="wrap">
+{% if en %}        <h2 class="sec">Try it <span class="grad">in the browser</span></h2>
+        <p class="lead">The full VM compiled to WebAssembly — the playground runs raylang in
+        your browser, with no server and nothing to install.</p>
+        <p class="scope-note"><b>Scope</b>: it runs the <b>whole language</b> and the pure stdlib
+        through <code>import std/*</code> (math, json, markdown, iterators, actors/channels…).
+        The stdlib with I/O (<code>fs</code>, <code>process</code>, networking) compiles but
+        returns <code>Err</code> at run time — the browser has no disk and no sockets. Registry
+        packages (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) and
+        multi-file modules do not resolve here: for those, install <code>ray</code> and use
+        <code>ray add</code>.</p>{% else %}        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
+        <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
+        en tu navegador, sin servidor y sin instalar nada.</p>
+        <p class="scope-note"><b>Alcance</b>: corre el <b>lenguaje completo</b> y la stdlib pura
+        con <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…). La
+        stdlib con E/S (<code>fs</code>, <code>process</code>, red) compila pero devuelve
+        <code>Err</code> al ejecutar — el navegador no tiene disco ni sockets. Los paquetes del
+        registro (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) y los
+        módulos multi-archivo no resuelven aquí: para eso, instala <code>ray</code> y usa
+        <code>ray add</code>.</p>{% endif %}
+        <iframe src="{{ root }}playground/index.html{% if en %}?lang=en{% endif %}" title="{% if en %}raylang playground{% else %}playground de raylang{% endif %}" loading="lazy"></iframe>
+        {% if en %}<p class="after"><a href="{{ root }}playground/index.html?lang=en">Open the playground full screen →</a></p>{% else %}<p class="after"><a href="{{ root }}playground/index.html">Abrir el playground a pantalla completa →</a></p>{% endif %}
+    </div>
+</section>
+
+<section class="eco" id="benchmarks">
+    <div class="wrap">
+{% if en %}        <h2 class="sec">Measured, <span class="grad">not promised</span></h2>
+        <p class="lead">The native binary goes head to head with Go and <code>rustc -O</code>, and
+        beats node in 9 of the 10 compute programs of the polyglot bench. The bars come from the
+        repository's real table — re-measuring the bench regenerates this chart.</p>{% else %}        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
+        <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
+        le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
+        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>{% endif %}
+        {{& bench }}
+        <p style="margin-top:1.2rem">{% if en %}<a class="btn ghost" href="bench.html">See the full benchmarks</a>{% else %}<a class="btn ghost" href="bench.html">Ver los benchmarks completos</a>{% endif %}</p>
     </div>
 </section>
 
@@ -452,189 +620,21 @@ section.engines { padding: 2.5rem 0 4rem; }
     </div>
 </section>
 
-<section class="eco platforms" id="plataformas">
-    <div class="wrap">
-{% if en %}        <h2 class="sec">Desktop and mobile, <span class="grad">out of the box</span></h2>
-        <p class="lead">The same raylang source runs as a desktop app on macOS, Linux and
-        Windows and as a mobile app on iPhone and Android — no external framework, no second
-        language. The interface is HTML in the system webview (<code>std/ui</code>), the backend
-        is your raylang web server, and the JS ↔ raylang bridge, native menus, file dialogs,
-        audio and the assets baked into the binary ship with the toolchain.</p>
-        <div class="apps">
-            <div class="app"><b>macOS</b><span><code>ray bundle</code> produces the <code>.app</code> with icon, application menu, About panel and ad-hoc signature (the distribution one is yours to add).</span></div>
-            <div class="app"><b>Linux</b><span>the same command leaves the binary with its <code>.desktop</code> launcher; window and webview on GTK/WebKitGTK.</span></div>
-            <div class="app"><b>Windows</b><span>the same command leaves the desktop <code>.exe</code> (no console on double-click, embedded icon and version) with its shortcut; window and webview on Win32/WebView2, audio through WASAPI.</span></div>
-            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> generates the Xcode project with the program compiled to a static library; persistent signing for device and simulator.</span></div>
-            <div class="app"><b>Android</b><span><code>ray bundle --android</code> generates the Gradle project with the native <code>.so</code>, launcher icon and release signing; audio through AAudio.</span></div>
-        </div>
-        <div class="chips">
-            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
-            <span class="chip"><b>ray bundle --ios</b> · Xcode project</span>
-            <span class="chip"><b>ray bundle --android</b> · Gradle project</span>
-        </div>
-        <p class="note">Step-by-step guide in the
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a> (Spanish).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
-        <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
-        Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
-        interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
-        servidor web en raylang, y el puente JS ↔ raylang, los menús nativos, los diálogos de
-        archivo, el audio y los assets horneados en el binario vienen en la toolchain.</p>
-        <div class="apps">
-            <div class="app"><b>macOS</b><span><code>ray bundle</code> produce la <code>.app</code> con icono, menú de aplicación, panel About y firma ad-hoc (la de distribución la pones tú).</span></div>
-            <div class="app"><b>Linux</b><span>el mismo comando deja el binario con su lanzador <code>.desktop</code>; ventana y webview sobre GTK/WebKitGTK.</span></div>
-            <div class="app"><b>Windows</b><span>el mismo comando deja el <code>.exe</code> de escritorio (sin consola al doble clic, icono y versión embebidos) con su acceso directo; ventana y webview sobre Win32/WebView2, audio por WASAPI.</span></div>
-            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> genera el proyecto Xcode con el programa compilado a librería estática; firma persistente para dispositivo y simulador.</span></div>
-            <div class="app"><b>Android</b><span><code>ray bundle --android</code> genera el proyecto Gradle con el <code>.so</code> nativo, icono launcher y firma de release; audio por AAudio.</span></div>
-        </div>
-        <div class="chips">
-            <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
-            <span class="chip"><b>ray bundle --ios</b> · proyecto Xcode</span>
-            <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
-        </div>
-        <p class="note">Guía paso a paso en el
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>{% endif %}
-    </div>
-</section>
-
-<section class="eco" id="benchmarks">
-    <div class="wrap">
-{% if en %}        <h2 class="sec">Measured, <span class="grad">not promised</span></h2>
-        <p class="lead">The native binary goes head to head with Go and <code>rustc -O</code>, and
-        beats node in 9 of the 10 compute programs of the polyglot bench. The bars come from the
-        repository's real table — re-measuring the bench regenerates this chart.</p>{% else %}        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
-        <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
-        le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
-        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>{% endif %}
-        {{& bench }}
-        <p style="margin-top:1.2rem">{% if en %}<a class="btn ghost" href="bench.html">See the full benchmarks</a>{% else %}<a class="btn ghost" href="bench.html">Ver los benchmarks completos</a>{% endif %}</p>
-    </div>
-</section>
-
-<section class="eco" id="editores">
-    <div class="wrap">
-{% if en %}        <h2 class="sec">In your <span class="grad">editor</span></h2>
-        <p class="lead">Official extensions on top of the raylang LSP: live diagnostics,
-        completion, hover, go to definition, rename and formatting.</p>
-        <div class="apps">
-            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extension on the marketplace, with the LSP client built in</span></a>
-            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>syntax + LSP; <code>Package Control: Install Package → raylang</code></span></a>
-            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">under review in the Zed gallery</em><span>tree-sitter grammar + LSP; until approved, install it as a dev extension</span></a>
-            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>point at <code>ray lsp</code> directly; config in editors/</span></a>
-        </div>
-        <p class="note">The Zed extension is submitted to the official gallery and awaiting
-        approval:{% else %}        <h2 class="sec">En tu <span class="grad">editor</span></h2>
-        <p class="lead">Extensiones oficiales sobre el LSP de raylang: diagnósticos en vivo,
-        autocompletado, hover, ir a definición, renombrar y formateo.</p>
-        <div class="apps">
-            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extensión en el marketplace, con cliente LSP integrado</span></a>
-            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>sintaxis + LSP; <code>Package Control: Install Package → raylang</code></span></a>
-            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">en revisión en la galería de Zed</em><span>gramática tree-sitter + LSP; mientras se aprueba, se instala como extensión de desarrollo</span></a>
-            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
-        </div>
-        <p class="note">La extensión de Zed está enviada a la galería oficial y en proceso de
-        aprobación:{% endif %}
-        <a href="https://github.com/zed-industries/extensions/pull/7361">zed-industries/extensions #7361</a>.</p>
-    </div>
-</section>
-
-<section class="agents" id="agentes">
-    <div class="wrap">
-        <div class="duo">
-            <div>
-{% if en %}                <h2 class="sec">Native for <span class="grad">LLM agents</span></h2>
-                <p class="lead">raylang ships the two pieces a model needs to write correct
-                raylang — and verify it on its own.</p>
-                <ul>
-                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
-                    the distilled context: the delta against Rust, the canonical forms and the
-                    exact error messages, ready for your prompt or <code>CLAUDE.md</code>.</li>
-                    <li><b><code>ray mcp</code></b> — an MCP server embedded in the binary:
-                    the <em>write → check → fix</em> loop with the compiler's exact diagnostics
-                    and the model's code sandboxed (fuel + heap + deadline, in a subprocess).</li>
-                    <li><code>llms.txt</code> itself is served as a <em>resource</em>
-                    (<code>raylang://llms.txt</code>) — the client injects it before the first
-                    line. Full guide in
-                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.en.md">docs/mcp.en.md</a>.</li>
-                </ul>{% else %}                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
-                <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
-                raylang correcto — y lo verifique solo.</p>
-                <ul>
-                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
-                    el contexto destilado: el delta contra Rust, las formas canónicas y los
-                    mensajes de error exactos, listo para tu prompt o <code>CLAUDE.md</code>.</li>
-                    <li><b><code>ray mcp</code></b> — un servidor MCP embebido en el binario:
-                    el bucle <em>escribir → verificar → corregir</em> con los diagnósticos
-                    exactos del compilador y el código del modelo confinado (fuel + heap +
-                    plazo, en subproceso).</li>
-                    <li>El propio <code>llms.txt</code> se sirve como <em>resource</em>
-                    (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
-                    primera línea. Guía completa en
-                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
-                </ul>{% endif %}
-            </div>
-            <div class="window">
-                <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>mcp</span></div>
-                <pre><code><span class="pr">$ </span><span class="st">claude mcp add raylang -- ray mcp</span>
-
-<span class="cm"># tools</span>
-{% if en %}<span class="fn">ray_check</span>   <span class="cm">exact, positioned diagnostics</span>
-<span class="fn">ray_run</span>     <span class="cm">stdout + exit, sandboxed</span>
-<span class="fn">ray_test</span>    <span class="cm">the @test runner</span>
-<span class="fn">ray_fmt</span>     <span class="cm">canonical source</span>
-<span class="fn">ray_doc</span>     <span class="cm">stdlib signature + doc</span>{% else %}<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
-<span class="fn">ray_run</span>     <span class="cm">stdout + exit, confinado</span>
-<span class="fn">ray_test</span>    <span class="cm">el runner @test</span>
-<span class="fn">ray_fmt</span>     <span class="cm">fuente canónico</span>
-<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>{% endif %}
-
-<span class="cm"># resource</span>
-<span class="ty">raylang://llms.txt</span></code></pre>
-            </div>
-        </div>
-    </div>
-</section>
-
-<section class="play" id="playground">
-    <div class="wrap">
-{% if en %}        <h2 class="sec">Try it <span class="grad">in the browser</span></h2>
-        <p class="lead">The full VM compiled to WebAssembly — the playground runs raylang in
-        your browser, with no server and nothing to install.</p>
-        <p class="scope-note"><b>Scope</b>: it runs the <b>whole language</b> and the pure stdlib
-        through <code>import std/*</code> (math, json, markdown, iterators, actors/channels…).
-        The stdlib with I/O (<code>fs</code>, <code>process</code>, networking) compiles but
-        returns <code>Err</code> at run time — the browser has no disk and no sockets. Registry
-        packages (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) and
-        multi-file modules do not resolve here: for those, install <code>ray</code> and use
-        <code>ray add</code>.</p>{% else %}        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
-        <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
-        en tu navegador, sin servidor y sin instalar nada.</p>
-        <p class="scope-note"><b>Alcance</b>: corre el <b>lenguaje completo</b> y la stdlib pura
-        con <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…). La
-        stdlib con E/S (<code>fs</code>, <code>process</code>, red) compila pero devuelve
-        <code>Err</code> al ejecutar — el navegador no tiene disco ni sockets. Los paquetes del
-        registro (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) y los
-        módulos multi-archivo no resuelven aquí: para eso, instala <code>ray</code> y usa
-        <code>ray add</code>.</p>{% endif %}
-        <iframe src="{{ root }}playground/index.html{% if en %}?lang=en{% endif %}" title="{% if en %}raylang playground{% else %}playground de raylang{% endif %}" loading="lazy"></iframe>
-        {% if en %}<p class="after"><a href="{{ root }}playground/index.html?lang=en">Open the playground full screen →</a></p>{% else %}<p class="after"><a href="{{ root }}playground/index.html">Abrir el playground a pantalla completa →</a></p>{% endif %}
-    </div>
-</section>
-
 <section class="eco" id="ecosistema">
     <div class="wrap">
 {% if en %}        <h2 class="sec">Built <span class="grad">with raylang</span></h2>
-        <p class="lead">Servers, tools and even terminal games — real dogfood, published in the
+        <p class="lead">An LLM coding agent, a desktop app, servers and tools — real dogfood, published in the
         organization.</p>
         <div class="apps">
             <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>coding agent and REPL for the terminal</span></a>
             <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>service monitor with an SSE dashboard</span></a>
-            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>Redis-compatible key-value store (RESP2)</span></a>
+            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>personal media server: Range streaming, live library, synced rooms</span></a>
             <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
             <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>at-least-once queue broker with a write-ahead log</span></a>
-            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>encrypted secrets vault, sealed-box sharing</span></a>
+            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>serverless P2P chat: signed gossip, Ed25519 and X25519</span></a>
             <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>end-to-end encrypted P2P file transfer</span></a>
-            <a class="app" href="https://github.com/ray-language/raygame"><b>raygame</b><span>Tetris in the terminal at 30 fps</span></a>
-            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>and more →</b><span>raysite, raytop, raymail, raysync, raylogs, raycall…</span></a>
+            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>desktop notepad: native menus, dialogs and close interception</span></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>and more →</b><span>raykv, raypass, raygame, raysite, raytop, raymail, raysync…</span></a>
         </div>
         <p class="libs">The libraries too: the networking and formats stack
         (<code>net</code> — HTTP/1.1 and 2, DNS, WebSocket, TLS —, <code>web</code>,
@@ -642,18 +642,18 @@ section.engines { padding: 2.5rem 0 4rem; }
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
         written in pure raylang, and community packages are published in the
         <a href="https://github.com/ray-language/ray-index">registry</a> with hashes and signatures.</p>{% else %}        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
-        <p class="lead">Servidores, herramientas y hasta juegos de terminal — dogfood real,
+        <p class="lead">Un agente de código LLM, una app de escritorio, servidores y herramientas — dogfood real,
         publicado en la organización.</p>
         <div class="apps">
             <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>agente de código y REPL para la terminal</span></a>
             <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>monitor de servicios con dashboard SSE</span></a>
-            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>clave-valor compatible con Redis (RESP2)</span></a>
+            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>servidor de medios personal: streaming con Range, biblioteca viva, salas sincronizadas</span></a>
             <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
             <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>broker de colas at-least-once con write-ahead log</span></a>
-            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>bóveda de secretos cifrada, compartición sealed-box</span></a>
+            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>chat P2P sin servidor: gossip firmado, Ed25519 y X25519</span></a>
             <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>transferencia de archivos P2P cifrada extremo a extremo</span></a>
-            <a class="app" href="https://github.com/ray-language/raygame"><b>raygame</b><span>Tetris en la terminal a 30 fps</span></a>
-            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>raysite, raytop, raymail, raysync, raylogs, raycall…</span></a>
+            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>bloc de notas de escritorio: menús nativos, diálogos e intercepción del cierre</span></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>raykv, raypass, raygame, raysite, raytop, raymail, raysync…</span></a>
         </div>
         <p class="libs">Las librerías también: la pila de red y formatos
         (<code>net</code> — HTTP/1.1 y 2, DNS, WebSocket, TLS —, <code>web</code>,

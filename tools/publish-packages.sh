@@ -81,7 +81,7 @@ EOF
     fi
 }
 
-# --refresh-readme: SOLO re-genera el README público de espejos ya publicados (rama main, sin
+# --refresh-readme: SOLO re-genera el README público (y el LICENSE, M281) de espejos ya publicados (rama main, sin
 # tocar tags — el hash del índice verifica el contenido del TAG, así que es seguro). Para el
 # accidente inverso (contenido nuevo) el camino es subir la versión y publicar normal.
 if [ "$1" = "--refresh-readme" ]; then
@@ -93,12 +93,15 @@ if [ "$1" = "--refresh-readme" ]; then
         git clone -q "$ORG_SSH/$PKG.git" "$W2/$PKG" || { echo "no mirror for $PKG"; exit 65; }
         cp "$REPO_ROOT/packages/$PKG/README.md" "$W2/$PKG/README.md" 2>/dev/null || { echo "$PKG: no README"; continue; }
         transform_readme "$W2/$PKG/README.md" "$PKG" "$VERSION"
-        if git -C "$W2/$PKG" diff --quiet; then
-            echo "$PKG: README already up to date"
+        # M281: el LICENSE del paquete viaja con el README (GitHub lo detecta en la raíz del espejo).
+        cp "$REPO_ROOT/packages/$PKG/LICENSE" "$W2/$PKG/LICENSE" 2>/dev/null || true
+        git -C "$W2/$PKG" add -A
+        if git -C "$W2/$PKG" diff --cached --quiet; then
+            echo "$PKG: README/LICENSE already up to date"
         else
-            git -C "$W2/$PKG" commit -qam "docs: public-mirror usage (index + ray add; no local paths)"
+            git -C "$W2/$PKG" commit -qm "docs: public-mirror README and LICENSE (index + ray add; no local paths)"
             git -C "$W2/$PKG" push -q
-            echo "$PKG: README refreshed on main"
+            echo "$PKG: README/LICENSE refreshed on main"
         fi
     done
     exit 0

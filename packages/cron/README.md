@@ -23,3 +23,7 @@ spawn(fn() { cron.run(s, fn() { print("tick"); }); });   // runner cooperativo
   la hora CIVIL de la zona. Política DST: una hora del **hueco** de primavera dispara al
   acabar el hueco; una del **solape** de otoño dispara solo la PRIMERA vez. Módulo aparte
   para que el cron UTC no arrastre la dependencia tz.
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

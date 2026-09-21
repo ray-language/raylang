@@ -14226,3 +14226,17 @@ en dos días (M273 hex, M280 interpolación anidada, este): las guardas de idemp
 no cazan lo que el corpus no contiene; la regla es que cada bug de fmt deje su caso mínimo en
 `fmt::tests`.
 
+## 268. M283 — `send_response_for`: el camino crudo cumple el HEAD (sep 2026)
+
+Origen: raystream [23], al dejar que el paquete resolviera los HEAD tras 1.27.3. `serve_file`
+construye bien la respuesta de un HEAD (`Content-Length` real, sin abrir el fichero), pero
+`send_response(conn, r)` —el emisor del camino crudo, `serve_raw*`— no recibe la petición, no sabe
+el método y escribe el cuerpo entero detrás de las cabeceras. `curl -I` no lo delata (deja de leer
+al acabar las cabeceras); solo se ve leyendo el socket hasta el cierre. El bucle de `serve()` sí lo
+hace bien porque conoce la petición y pasa `omit_body` a `send_response_keep`: la capacidad
+existía, no estaba expuesta. Decisión: `send_response_for(req, conn, r)`, una línea que delega en
+ese `omit_body` con `req.method == "HEAD"`; `send_response` se queda como está (compatibilidad, y
+un handler que no acepta HEAD no lo necesita). Test: servidor crudo con las dos llamadas, leído a
+nivel de socket hasta el cierre — el HEAD anuncia el tamaño y trae 0 octetos, con cuerpo normal,
+stream y cuerpo-fichero. `net` 0.3.3.
+

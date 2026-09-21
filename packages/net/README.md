@@ -142,7 +142,10 @@ fn main() -> int {
   que solo compensa cuando el disco es más lento que el cliente. **`stream_response_len(status, ch, length)`**: un stream de
   tamaño conocido va con `Content-Length` (sin chunked) y **keep-alive** — descargas y medios con
   barra de progreso; el productor debe enviar exactamente `length` octetos (si cierra antes, la
-  conexión se cierra). **`serve_raw_with(host, port, make_handler)`**: estado para un handler
+  conexión se cierra). **`send_response_for(req, conn, r)`** (M283, raystream [23]): como `send_response` pero sabiendo la
+  petición — un HEAD lleva las cabeceras completas y ningún cuerpo (también con streams y
+  cuerpos-fichero); es lo que un handler crudo debe usar cuando la petición pueda ser un HEAD.
+  **`serve_raw_with(host, port, make_handler)`**: estado para un handler
   crudo por fábrica llamada en la fibra de cada conexión (como `serve_with`); en un binario nativo
   un closure guardado en una variable no puede cruzar a las fibras de conexión (el compilador lo
   dice con el nombre): escríbelo inline en la llamada, nombra una función o usa la fábrica.

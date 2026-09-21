@@ -1331,6 +1331,17 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
     send_response_keep(conn, r, false, false)
 }
 
+// M283 (raystream [23]): el camino crudo (`serve_raw*` + `send_response`) no sabía del método y
+// escribía el cuerpo entero en un HEAD (`Content-Length` correcto y 700 KB detrás). `serve()` sí
+// lo hacía bien porque su bucle conoce la petición y pasa `omit_body`; esto lo expone.
+/// Like `send_response`, but aware of the request: a `HEAD` gets the full headers (including the
+/// `Content-Length` the body would have) and no body, as RFC 9110 requires — also for streaming
+/// and file bodies (their producer is drained / never opened). Use it in raw handlers
+/// (`serve_raw`, `serve_raw_with`) whenever the request may be a HEAD.
+pub fn send_response_for(req: Request, conn: int, r: Response) -> Result<int, string> {
+    send_response_keep(conn, r, false, req.method == "HEAD")
+}
+
 // M92.4 (live-reload): ¿la respuesta es text/html? (Content-Type, case-insensitive).
 fn is_html_response(r: Response) -> bool {
     let ks: [string] = r.headers.keys();

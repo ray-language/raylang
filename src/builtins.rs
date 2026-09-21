@@ -2590,8 +2590,31 @@ pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     };
     // Antes de cifrar datos de aplicación, asegúrate de que el handshake terminó (drena sus registros).
     tls_flush_writes(tc)?;
-    tc.conn.writer().write_all(bytes).map_err(|e| e.to_string())?;
-    tls_flush_writes(tc)?;
+    // M285 (raycode): el búfer de texto plano de rustls tiene un tope (64 KiB por defecto). Con
+    // `write_all` de golpe, al llenarse devolvía `Ok(0)` → "failed to write whole buffer" para todo
+    // envío mayor que el tope sin una lectura entre medias (una petición HTTPS con un cuerpo de
+    // 100 KB, p. ej.). Se cifra por trozos: lo que el búfer acepte, se drena al socket, y se sigue.
+    // El nativo (StreamOwned) y el intérprete (rustls::Stream) ya lo hacían así.
+    let mut off = 0;
+    while off < bytes.len() {
+        let n = tc.conn.writer().write(&bytes[off..]).map_err(|e| e.to_string())?;
+        off += n;
+        tls_flush_writes(tc)?;
+        if n == 0 && off < bytes.len() {
+            // El búfer está lleno y no hay nada que escribir: el protocolo espera al peer (el
+            // handshake sigue en curso — tras `tls_connect` solo se ha enviado el ClientHello, y el
+            // texto plano se cifra cuando llega el ServerHello…). Hay que LEER para avanzarlo. Una
+            // lectura pequeña y acotada (el peer responde en cuanto recibe); en WouldBlock se cede.
+            match tc.conn.read_tls(&mut tc.sock) {
+                Ok(0) => return Err("the connection closed during the write".to_string()),
+                Ok(_) => {
+                    tc.conn.process_new_packets().map_err(|e| e.to_string())?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
     Ok(bytes.len())
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]

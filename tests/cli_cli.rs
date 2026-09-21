@@ -1257,6 +1257,107 @@ fn build_native_tls_client_against_vm_server_echoes() {
     );
 }
 
+/// M285 (raycode): sumidero TLS — acumula lo recibido hasta 200 000 octetos y responde con la cuenta.
+const TLS_SINK_SERVER_RAY: &str = "import std/net;\n\
+import std/fs;\n\
+fn handle(conn: int) {\n\
+    var total = 0;\n\
+    var go = true;\n\
+    while (go && total < 200000) {\n\
+        match (net.socket_read_bytes(conn)) {\n\
+            Result.Ok(data) => { if (data.len() == 0) { go = false; } else { total = total + data.len(); } },\n\
+            Result.Err(e) => { eprint(e); go = false; },\n\
+        }\n\
+    }\n\
+    let _ = net.socket_write_bytes(conn, (\"got \" + to_string(total)).to_bytes());\n\
+    close(conn);\n\
+}\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    var cert = \"\";\n\
+    var key = \"\";\n\
+    match (fs.read_file(a[0])) { Result.Ok(c) => { cert = c; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (fs.read_file(a[1])) { Result.Ok(k) => { key = k; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (net.tcp_listen(\"127.0.0.1\", 0)) {\n\
+        Result.Err(e) => { eprint(e); return 1; },\n\
+        Result.Ok(srv) => {\n\
+            print(to_string(net.local_port(srv)));\n\
+            var go = true;\n\
+            while (go) {\n\
+                match (net.tcp_accept(srv)) {\n\
+                    Result.Ok(tcp) => match (net.tls_accept(tcp, cert, key)) {\n\
+                        Result.Ok(conn) => handle(conn),\n\
+                        Result.Err(e) => eprint(\"tls_accept: \" + e),\n\
+                    },\n\
+                    Result.Err(e) => eprint(e),\n\
+                }\n\
+            }\n\
+        },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// M285: cliente que manda 200 000 octetos EN UNA SOLA escritura TLS y lee la respuesta.
+const TLS_BIG_CLIENT_RAY: &str = "import std/net;\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    let port = parse_int(a[0]).unwrap_or(0);\n\
+    var seed: [int] = [];\n\
+    var i = 0;\n\
+    while (i < 200000) { seed.push(i % 251); i = i + 1; }\n\
+    let payload: bytes = bytes_of(seed);\n\
+    match (net.tls_connect(\"localhost\", port)) {\n\
+        Result.Ok(conn) => {\n\
+            match (net.socket_write_bytes(conn, payload)) {\n\
+                Result.Ok(n) => print(\"sent \" + to_string(n)),\n\
+                Result.Err(e) => { eprint(\"write: \" + e); return 1; },\n\
+            }\n\
+            match (net.socket_read_bytes(conn)) {\n\
+                Result.Ok(data) => match (from_utf8(data)) {\n\
+                    Result.Ok(s) => print(s),\n\
+                    Result.Err(e) => eprint(e),\n\
+                },\n\
+                Result.Err(e) => eprint(e),\n\
+            }\n\
+            close(conn);\n\
+        },\n\
+        Result.Err(e) => { eprint(\"connect: \" + e); return 1; },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// M285 (raycode «el techo de 64 KiB de TLS»): en la VM, `socket_write_bytes` sobre TLS metía todo
+/// el texto plano en el búfer de rustls con `write_all` y lo drenaba después; el búfer tiene un tope
+/// de 64 KiB, así que todo envío mayor sin una lectura entre medias moría con "failed to write whole
+/// buffer". Ahora cifra por trozos y drena entre medias. 200 000 octetos en UNA escritura, en la VM
+/// y en el intérprete, contra un sumidero TLS de la VM que responde con la cuenta.
+#[test]
+fn tls_writes_over_64_kib_in_one_call_on_the_vm_and_the_interpreter() {
+    let base = tmp("tls_big_write");
+    std::fs::write(base.join("server.ray"), TLS_SINK_SERVER_RAY).unwrap();
+    std::fs::write(base.join("client.ray"), TLS_BIG_CLIENT_RAY).unwrap();
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    for engine in ["--vm", "--interp"] {
+        let mut server_cmd = Command::new(BIN);
+        server_cmd.arg("run").arg(base.join("server.ray"));
+        let (mut server, port) = launch_tls_echo_server(&mut server_cmd);
+        let client = Command::new(BIN)
+            .arg(engine)
+            .arg(base.join("client.ray"))
+            .arg(port.to_string())
+            .env("SSL_CERT_FILE", &ca)
+            .output()
+            .expect("corre el cliente TLS");
+        let _ = server.kill();
+        assert_eq!(
+            String::from_utf8_lossy(&client.stdout),
+            "sent 200000\ngot 200000\n",
+            "200 KB en una escritura TLS ({engine})\nstderr: {}",
+            String::from_utf8_lossy(&client.stderr)
+        );
+    }
+}
+
 #[test]
 fn build_native_tls_server_against_vm_client_echoes() {
     // El otro lado: un servidor TLS (tls_accept) transpila a nativo; un cliente del VM conecta por TLS y

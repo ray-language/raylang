@@ -118,6 +118,21 @@ pub struct Response {
     // escribe con Transfer-Encoding: chunked según llegan y termina cuando el productor lo cierra.
     // Construir con `stream_response`.
     stream: [Channel<bytes>],
+    // M279 (raystream [18]/[19]): cuerpo = un RANGO DE FICHERO que el propio emisor lee y escribe
+    // trozo a trozo en la fibra de la conexión ([descriptor] = fichero; [] = no). Sin fibra
+    // productora ni canal: un `bytes` que cruza un canal se copia dos veces en nativo y mimalloc
+    // no reutiliza entre hilos lo que una fibra libera en otro — medido, 3× de memoria por
+    // conexión frente a este bucle. Lo construye `serve_file` (cola por defecto).
+    file: [FileBody],
+}
+
+// M279: el descriptor de un cuerpo-fichero: `[from, to]` inclusivo, leído en trozos de `chunk`.
+/// A file range served as a response body by the connection's own fiber (built by `serve_file`).
+pub struct FileBody {
+    path: string,
+    from: int,
+    to: int,
+    chunk: int,
 }
 
 // M129: negociación de Accept-Encoding (hallazgo del dogfood: las apps la hacían a mano).
@@ -166,7 +181,10 @@ pub fn accepts_gzip(req: Request) -> bool {
 /// cache per encoding). If compression would not shrink the body, returns it untouched.
 /// Explicit per handler: `webserver.gzip(req, webserver.json_response(body))`.
 pub fn gzip(req: Request, r: Response) -> Response {
-    if (r.stream.len() > 0 || r.body.len() < GZIP_MIN_BYTES || !accepts_gzip(req)) {
+    if (r.stream.len() > 0
+        || r.file.len() > 0
+        || r.body.len() < GZIP_MIN_BYTES
+        || !accepts_gzip(req)) {
         return r;
     }
     for k in r.headers.keys() {
@@ -210,14 +228,22 @@ pub fn text(status: int, body: string) -> Response {
         headers: Map.new(),
         set_cookie: [],
         body: body.to_bytes(),
-        stream: []
+        stream: [],
+        file: []
     }
 }
 
 // Respuesta binaria: el cuerpo va tal cual (octetos crudos).
 /// Builds a binary response with the given status: the body bytes are sent verbatim (images, downloads, etc.).
 pub fn bytes_response(status: int, body: bytes) -> Response {
-    Response { status: status, headers: Map.new(), set_cookie: [], body: body, stream: [] }
+    Response {
+        status: status,
+        headers: Map.new(),
+        set_cookie: [],
+        body: body,
+        stream: [],
+        file: []
+    }
 }
 
 /// Appends one `Set-Cookie` line to the response and returns it (chainable with UFCS:
@@ -246,7 +272,14 @@ pub fn with_cookie(r: Response, line: string) -> Response {
 /// only (the channel is still drained so the producer never blocks forever). Set `Content-Type`
 /// on the returned response as usual.
 pub fn stream_response(status: int, ch: Channel<bytes>) -> Response {
-    Response { status: status, headers: Map.new(), set_cookie: [], body: b"", stream: [ch] }
+    Response {
+        status: status,
+        headers: Map.new(),
+        set_cookie: [],
+        body: b"",
+        stream: [ch],
+        file: []
+    }
 }
 
 // M271 (raystream [3]): un stream de tamaño CONOCIDO. Se anuncia por la cabecera `Content-Length`
@@ -260,6 +293,20 @@ pub fn stream_response(status: int, ch: Channel<bytes>) -> Response {
 /// next response).
 pub fn stream_response_len(status: int, ch: Channel<bytes>, length: int) -> Response {
     let r: Response = stream_response(status, ch);
+    r.headers.insert("Content-Length", to_string(length));
+    r
+}
+
+// M279: respuesta cuyo cuerpo es un rango de fichero de `length` octetos, leído por el emisor.
+fn file_response_len(status: int, body: FileBody, length: int) -> Response {
+    let r: Response = Response {
+        status: status,
+        headers: Map.new(),
+        set_cookie: [],
+        body: b"",
+        stream: [],
+        file: [body]
+    };
     r.headers.insert("Content-Length", to_string(length));
     r
 }
@@ -304,7 +351,14 @@ pub fn not_found() -> Response {
 pub fn json_response(body: string) -> Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "application/json; charset=utf-8");
-    Response { status: 200, headers: h, set_cookie: [], body: body.to_bytes(), stream: [] }
+    Response {
+        status: 200,
+        headers: h,
+        set_cookie: [],
+        body: body.to_bytes(),
+        stream: [],
+        file: []
+    }
 }
 
 // Respuesta HTML con el charset declarado. `text`/`ok` NO ponen Content-Type → el navegador adivina
@@ -315,7 +369,14 @@ pub fn json_response(body: string) -> Response {
 pub fn html_response(status: int, body: string) -> Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "text/html; charset=utf-8");
-    Response { status: status, headers: h, set_cookie: [], body: body.to_bytes(), stream: [] }
+    Response {
+        status: status,
+        headers: h,
+        set_cookie: [],
+        body: body.to_bytes(),
+        stream: [],
+        file: []
+    }
 }
 
 // El cuerpo de una petición decodificado como texto UTF-8 (para formularios/JSON entrantes). Para datos
@@ -655,14 +716,15 @@ fn serve_static_file_stream(
     let from: int = if (rng.len() == 2) { rng[0] } else { 0 };
     let to: int = if (rng.len() == 2) { rng[1] } else { size - 1 };
     let length: int = to - from + 1;
-    let ch: Channel<bytes> = if (req.method == "HEAD") {
-        let empty: Channel<bytes> = Channel.bounded(1);
-        close(empty);
-        empty
+    let status: int = if (rng.len() == 2) { 206 } else { 200 };
+    // M279: con la cola por defecto (1) el cuerpo es un FileBody: el emisor lee y escribe en la
+    // fibra de la conexión (un trozo vivo, sin copias). `queue >= 2` pide lectura adelantada y
+    // conserva el productor en su fibra con esa cola (M271/M276). Un HEAD nunca lee el cuerpo.
+    let r: Response = if (queue <= 1 || req.method == "HEAD") {
+        file_response_len(status, FileBody { path: file, from: from, to: to, chunk: chunk }, length)
     } else {
-        stream_file_range(file, from, to, chunk, queue)
+        stream_response_len(status, stream_file_range(file, from, to, chunk, queue), length)
     };
-    let r: Response = stream_response_len(if (rng.len() == 2) { 206 } else { 200 }, ch, length);
     r.headers.insert("Content-Type", mime_of(file));
     r.headers.insert("ETag", etag);
     r.headers.insert("Accept-Ranges", "bytes");
@@ -757,8 +819,10 @@ pub fn serve_file(file: string, req: Request) -> Response {
 // M275 (raystream [18]): el trozo y la cola son la decisión que un servidor de medios quiere
 // ajustar (clientes lentos → cola 1 y trozos chicos; enlaces rápidos → trozos grandes).
 /// Like `serve_file`, choosing the streaming buffer for files of 1 MB or more: `chunk_bytes`
-/// per read (min 4 KB; default 256 KB) and `queue` pieces in flight (min 1; default 1). Memory
-/// per connection is about `chunk_bytes × (queue + 1)`.
+/// per read (min 4 KB; default 256 KB) and `queue` pieces in flight (min 1; default 1). With the
+/// default queue the connection's own fiber reads and writes the file, one chunk live at a time
+/// (memory per connection ≈ `chunk_bytes`); `queue >= 2` adds a producer fiber that reads ahead
+/// (≈ `chunk_bytes × (queue + 1)`), which only pays off when the disk is slower than the client.
 pub fn serve_file_with(file: string, req: Request, chunk_bytes: int, queue: int) -> Response {
     let chunk: int = if (chunk_bytes < STATIC_CHUNK_MIN) { STATIC_CHUNK_MIN } else { chunk_bytes };
     let q: int = if (queue < 1) { 1 } else { queue };
@@ -1339,7 +1403,8 @@ fn inject_live_reload(r: Response) -> Response {
                             headers: r.headers,
                             set_cookie: r.set_cookie,
                             body: inject_before_body_end(html, snippet).to_bytes(),
-                            stream: []
+                            stream: [],
+                            file: []
                         }
                     },
                     Result.Err(e) => r,  // cuerpo no-UTF8 → intacto
@@ -1360,6 +1425,10 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
     // conexión SIEMPRE close). El live-reload no aplica (no hay cuerpo HTML bufferizado).
     if (r0.stream.len() > 0) {
         return send_stream_response(conn, r0, keep, omit_body);
+    }
+    // M279: un cuerpo-fichero lo lee y escribe esta misma fibra, trozo a trozo.
+    if (r0.file.len() > 0) {
+        return send_file_response(conn, r0, keep, omit_body);
     }
     // M92.4: bajo `ray dev` inyecta el snippet de live-reload en las respuestas HTML (no-op en producción).
     // Se hace ANTES de calcular el Content-Length para que cuadre con el cuerpo ya inyectado.
@@ -1400,6 +1469,103 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
 // chunk por cada trozo del canal, hasta que el productor lo cierre. En un HEAD se envían solo las
 // cabeceras, pero el canal SE DRENA igual: si no, un productor sobre un canal acotado se quedaría
 // bloqueado en `send` para siempre (fuga de fibra).
+// M279: escribe una respuesta cuyo cuerpo es un rango de fichero: cabeceras con Content-Length
+// (keep-alive posible) y el cuerpo leído del disco en trozos de `chunk` y escrito al socket en la
+// fibra de la conexión — un solo trozo vivo por conexión. El fichero se abre ANTES de escribir la
+// cabecera: si falla, el error vuelve al bucle de servicio con la conexión intacta. Un fichero
+// que se acorta entre medias deja la conexión inservible (el peer esperaría más) → error.
+fn send_file_response(conn: int, r: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+    let fb: FileBody = r.file[0];
+    let length: int = fb.to - fb.from + 1;
+    var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
+    head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
+    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
+    let ks: [string] = r.headers.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        match (get(r.headers, ks[i])) {
+            Option.Some(v) => {
+                head = head + ks[i] + ": " + v + "\r\n";
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    var c: int = 0;
+    while (c < r.set_cookie.len()) {
+        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
+        c = c + 1;
+    }
+    head = head + "\r\n";
+    if (omit_body) {
+        return net.socket_write_bytes(conn, head.to_bytes());
+    }
+    let h: int = match (fs.open(fb.path, "r")) {
+        Result.Ok(h) => h,
+        Result.Err(e) => {
+            return Result.Err("file body: " + e);
+        },
+    };
+    match (fs.seek(h, fb.from)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            close(h);
+            return Result.Err("file body: " + e);
+        },
+    }
+    match (net.socket_write_bytes(conn, head.to_bytes())) {
+        Result.Err(e) => {
+            close(h);
+            return Result.Err(e);
+        },
+        Result.Ok(_) => { },
+    }
+    var err: string = "";
+    var written: int = 0;
+    var left: int = length;
+    while (err == "" && left > 0) {
+        let want: int = if (left < fb.chunk) { left } else { fb.chunk };
+        match (fs.read_bytes(h, want)) {
+            Result.Err(e) => {
+                err = "file body: " + e;
+            },
+            Result.Ok(piece_opt) => match (piece_opt) {
+                Option.None => {
+                    left = 0;
+                },
+                Option.Some(piece) => {
+                    if (piece.len() == 0) {
+                        left = 0;
+                    } else {
+                        match (net.socket_write_bytes(conn, piece)) {
+                            Result.Err(e) => {
+                                err = e;
+                            },
+                            Result.Ok(_) => {
+                                written = written + piece.len();
+                                left = left - piece.len();
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    }
+    close(h);
+    if (err != "") {
+        return Result.Err(err);
+    }
+    if (written != length) {
+        return Result.Err(
+            "file body: "
+                + to_string(written)
+                + " bytes sent, Content-Length was "
+                + to_string(length)
+        );
+    }
+    Result.Ok(written)
+}
+
 fn send_stream_response(
     conn: int,
     r: Response,

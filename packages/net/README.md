@@ -133,9 +133,13 @@ fn main() -> int {
   `If-Range` contra el ETag; multi-rango cae a 200 completo). **M271 (raystream)**: un estático de
   disco de 1 MB o más se sirve **por trozos desde el archivo** (`fs.open` + `seek` + `read_bytes`
   de 256 KB en un productor), nunca leído entero: un `Range` de 11 bytes sobre un vídeo de 1 GB
-  cuesta 256 KB de memoria, no 1 GB. **M275**: la cola del productor es de 1 trozo (memoria por
-  conexión ≈ 2 trozos, 512 KB); `serve_file_with(file, req, chunk_bytes, queue)` y
-  `static_mount_with(prefix, dir, req, chunk_bytes, queue)` ajustan trozo (≥ 4 KB) y cola (≥ 1). **`stream_response_len(status, ch, length)`**: un stream de
+  cuesta 256 KB de memoria, no 1 GB. **M279**: con la cola por defecto (1) NO hay productor ni
+  canal: la respuesta lleva un `FileBody` (ruta, rango, trozo) y la fibra de la conexión lee y
+  escribe el fichero trozo a trozo — un trozo vivo por conexión (medido: 2,1 MB → 0,66 MB por
+  conexión a 32 clientes, el mismo coste que un bucle a mano, con más caudal). `serve_file_with(file,
+  req, chunk_bytes, queue)` y `static_mount_with(prefix, dir, req, chunk_bytes, queue)` ajustan el
+  trozo (≥ 4 KB); `queue >= 2` recupera el productor en su fibra con lectura adelantada (M271/M276),
+  que solo compensa cuando el disco es más lento que el cliente. **`stream_response_len(status, ch, length)`**: un stream de
   tamaño conocido va con `Content-Length` (sin chunked) y **keep-alive** — descargas y medios con
   barra de progreso; el productor debe enviar exactamente `length` octetos (si cierra antes, la
   conexión se cierra). **`serve_raw_with(host, port, make_handler)`**: estado para un handler

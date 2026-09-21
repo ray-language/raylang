@@ -11,6 +11,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   reserva exacto (`min(max, lo que queda)`) y se lee sobre él, en la VM y en nativo. Servir un
   fichero por trozos con un bucle directo baja de 738 a 352 KB por conexión en el banco de
   raystream, con más caudal.
+- **`net/webserver` 0.3.2 y `web` 0.4.2: `serve_file` sin fibra intermedia** (M279, raystream
+  [18]/[19]). Con la cola por defecto, la fibra de la conexión lee y escribe el fichero trozo a
+  trozo (la respuesta lleva un `FileBody`; `Response.file`, `Res.file`): 2,1 MB → 0,66 MB por
+  conexión a 32 clientes en el banco de raystream, el mismo coste que un bucle a mano, con más
+  caudal. `queue >= 2` en `serve_file_with`/`static_mount_with`/`sendfile_with` conserva el
+  productor con lectura adelantada.
 
 ## 1.27.2 — 2026-09-21
 

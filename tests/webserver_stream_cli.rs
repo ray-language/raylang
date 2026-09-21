@@ -39,6 +39,10 @@ fn handler(req: webserver.Request) -> webserver.Response {
     if (req.path.starts_with("/static/")) {
         return webserver.static_mount("/static/", "public", req);
     }
+    // M279: cola >= 2 → el productor en su fibra con lectura adelantada (el camino de M271/M276).
+    if (req.path == "/big2") {
+        return webserver.serve_file_with("public/big.bin", req, 65536, 2);
+    }
     webserver.ok("hola\n")
 }
 
@@ -270,6 +274,45 @@ fn big_static_files_stream_from_disk_with_ranges() {
     let (head, body) = head_and_body(&out);
     assert!(head.starts_with("HTTP/1.1 200") && head.contains("Content-Length: 1500000"), "{head}");
     assert!(body.is_empty(), "HEAD sin cuerpo");
+}
+
+/// M279 (raystream [18]/[19]): con la cola por defecto el cuerpo-fichero lo lee la fibra de la
+/// conexión (sin productor ni canal) y la conexión sigue viva: dos rangos por la misma conexión.
+/// Con `queue >= 2` se conserva el productor con lectura adelantada: mismo cuerpo, mismos rangos.
+#[test]
+fn file_bodies_keep_alive_and_the_read_ahead_queue_matches() {
+    let srv = start_server("file_body");
+    let expect = |i: u32| (i % 251) as u8;
+    // Dos rangos por la MISMA conexión (keep-alive con Content-Length).
+    let mut s = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(b"GET /static/big.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=0-9\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s);
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        if line == "\r\n" { break; }
+        head.push_str(&line);
+    }
+    assert!(head.starts_with("HTTP/1.1 206") && head.contains("Content-Length: 10") && head.contains("Connection: keep-alive"), "{head}");
+    let mut body = [0u8; 10];
+    r.read_exact(&mut body).unwrap();
+    assert_eq!(body.to_vec(), (0..10u32).map(expect).collect::<Vec<u8>>());
+    r.get_mut().write_all(b"GET /static/big.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=1499990-\r\nConnection: close\r\n\r\n").unwrap();
+    let mut rest = Vec::new();
+    r.read_to_end(&mut rest).unwrap();
+    let (head2, body2) = head_and_body(&rest);
+    assert!(head2.starts_with("HTTP/1.1 206") && head2.contains("Content-Range: bytes 1499990-1499999/1500000"), "{head2}");
+    assert_eq!(body2, (1499990..1500000u32).map(expect).collect::<Vec<u8>>());
+    // Cola de 2: el productor con lectura adelantada sigue dando el cuerpo íntegro y los rangos.
+    let (head, body) = head_and_body(&raw_get(srv.port, "/big2", ""));
+    assert!(head.starts_with("HTTP/1.1 200") && head.contains("Content-Length: 1500000"), "{head}");
+    assert_eq!(body.len(), 1_500_000);
+    assert!(body.iter().enumerate().all(|(i, b)| *b == expect(i as u32)), "contenido íntegro (cola 2)");
+    let (head, body) = head_and_body(&raw_get(srv.port, "/big2", "Range: bytes=70000-70010\r\n"));
+    assert!(head.starts_with("HTTP/1.1 206") && head.contains("Content-Length: 11"), "{head}");
+    assert_eq!(body, (70000..=70010u32).map(expect).collect::<Vec<u8>>());
 }
 
 /// M271 (raystream [3]): `stream_response_len` escribe el cuerpo en crudo con Content-Length y la

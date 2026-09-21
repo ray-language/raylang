@@ -73,10 +73,10 @@ try {
             try {
                 Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
             } catch {
-                Fail "no se pudo descargar $url`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
+                Fail "no se pudo descargar $url`n       ($($_.Exception.Message))`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
             }
         } else {
-            Fail "no se pudo descargar $url`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
+            Fail "no se pudo descargar $url`n       ($($_.Exception.Message))`n       existe una Release con ese asset? Mira https://github.com/$Repo/releases"
         }
     }
     # Quitar la marca de origen web del zip: si no, los .exe extraidos heredan el aviso de SmartScreen.

@@ -14109,3 +14109,36 @@ Lección para el CI: el PR #375 estuvo verde porque el corpus nativo no corre en
 (decisión de coste, `ci.yml`). La guarda barata queda a nivel transpilación
 (`user_ord_does_not_duplicate_a_derived_partial_eq`), que sí corre en cada PR.
 
+## 263. M278 — Memoria por conexión al servir ficheros (I): `read_bytes` reserva una vez (sep 2026)
+
+Origen: raystream [18] y [19] quedaron con un "3,3× de memoria por conexión frente al bucle
+directo, y no sabemos por qué". Reproducidos en el M3 Pro los bancos `writer_ab.ray` y
+`fiber_cost.ray` de raystream (fichero de 256 MB, 32 clientes, mediana de 3, `net` por `path:`),
+KB por conexión, bucle directo / `serve_file`: 738 / 2106 con mimalloc y todos los hilos; 380 /
+1516 con un hilo; 422 / 1126 sin mimalloc; 352 / 1015 sin mimalloc y un hilo. Tres causas, todas
+en el runtime nativo:
+
+1. **`read_bytes` tocaba tres bloques por lectura.** `Vec::new()` + `take(max).read_to_end`
+   crece doblando: 512 KB de capacidad para 256 KB (verificado con un programa Rust aislado), y
+   después `Rc::<[u8]>::from(buf)` copia. Afecta a los dos caminos.
+2. **Un `bytes` que cruza un canal se copia dos veces** (`emit_to_send` a `Arc<[u8]>`, y de vuelta
+   a `Rc<[u8]>` al recibir). Bajo carga conviven por conexión el trozo en cola, el que se lee y el
+   que se escribe: la brecha que persiste con un hilo y sin mimalloc (~650 KB).
+3. **mimalloc no reutiliza entre hilos** lo que una fibra libera en otro: un trozo cruzando un canal
+   cuesta 508 KB con mimalloc y varios hilos, 294 con un hilo, 296 sin mimalloc (`fiber_cost`); los
+   mandos de purga no cambian nada. Sin mimalloc el servidor fue además más rápido en caudal.
+
+Este arco resuelve la causa 1. Sobre un fichero regular se sabe cuánto queda (tamaño − posición,
+contando el búfer del `BufReader`): se reserva **una vez, exacta**, `min(max, restante)` — en
+nativo directamente como `Rc<[u8]>` (`new_uninit_slice`, sin `Vec` intermedio); en el helper
+compartido de la VM, `Vec::with_capacity` y lectura sobre él. Solo una lectura corta (fichero
+truncado entre medias) copia al tamaño real. Tuberías y dispositivos siguen por `take` +
+`read_to_end`. El contrato de M113 ("memoria acotada por lo leído; un `max` desorbitado no
+pre-reserva") se mantiene: se reserva lo que queda del fichero, nunca `max`.
+
+Medido (mismo banco, mimalloc, todos los hilos): bucle directo **738 → 352 KB por conexión** y
+4041 → 4317 MB/s; `serve_file` sin cambio (2106 → 2290, ruido), como predice la descomposición:
+su coste es la causa 2 y 3, que ataca el arco siguiente (§264). Guarda:
+`build_native_read_bytes_chunks_match_the_vm` (trozos exactos, cola corta, `max` mayor que el
+resto, EOF, seek + relectura; nativo ≡ VM).
+

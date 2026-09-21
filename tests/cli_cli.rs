@@ -199,6 +199,75 @@ fn build_native_covers_the_array_math_and_fs_surface() {
     assert!(vm_out.trim_end().ends_with("abc"), "el append concatena\n{vm_out}");
 }
 
+/// M278 (raystream [18]/[19]): `fs.read_bytes(h, max)` sobre un fichero regular reserva UNA vez y
+/// exacta (`min(max, restante)`) en vez de `Vec` doblado + copia. Este test fija el contrato que esa
+/// vía debe conservar, en nativo ≡ VM: trozos exactos de `max`, cola corta, `max` mayor que lo que
+/// queda, EOF → `None`, y seek + relectura (la posición cuenta el búfer del `BufReader`).
+#[test]
+fn build_native_read_bytes_chunks_match_the_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native read_bytes: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_read_bytes");
+    let data = base.join("data.bin");
+    let data_lit = data.to_str().unwrap().replace('\\', "\\\\");
+    let src = format!(
+        "import std/fs;\n\
+         fn main() -> int {{\n\
+         \x20   var seed: [int] = [];\n\
+         \x20   var k: int = 0;\n\
+         \x20   while (k < 700000) {{ seed.push((k * 7 + 3) % 256); k = k + 1; }}\n\
+         \x20   let _ = fs.write_file_bytes(\"{data}\", bytes_of(seed));\n\
+         \x20   match (fs.open(\"{data}\", \"r\")) {{\n\
+         \x20       Result.Err(e) => {{ eprint(e); 1 }},\n\
+         \x20       Result.Ok(h) => {{\n\
+         \x20           var sizes: string = \"\";\n\
+         \x20           var sum: int = 0;\n\
+         \x20           var go: bool = true;\n\
+         \x20           while (go) {{\n\
+         \x20               match (fs.read_bytes(h, 262144)) {{\n\
+         \x20                   Result.Err(e) => {{ eprint(e); go = false; }},\n\
+         \x20                   Result.Ok(o) => match (o) {{\n\
+         \x20                       Option.None => {{ sizes = sizes + \"EOF\"; go = false; }},\n\
+         \x20                       Option.Some(b) => {{\n\
+         \x20                           sizes = sizes + to_string(b.len()) + \",\";\n\
+         \x20                           var i: int = 0;\n\
+         \x20                           while (i < b.len()) {{ sum = (sum * 31 + b[i]) % 1000000007; i = i + 1; }}\n\
+         \x20                       }},\n\
+         \x20                   }},\n\
+         \x20               }}\n\
+         \x20           }}\n\
+         \x20           print(sizes);\n\
+         \x20           print(sum);\n\
+         \x20           let _ = fs.seek(h, 699990);\n\
+         \x20           match (fs.read_bytes(h, 1000000)) {{\n\
+         \x20               Result.Ok(o) => match (o) {{ Option.Some(b) => print(\"tail=\" + to_string(b.len())), Option.None => print(\"tail=none\") }},\n\
+         \x20               Result.Err(e) => eprint(e),\n\
+         \x20           }}\n\
+         \x20           match (fs.read_bytes(h, 5)) {{\n\
+         \x20               Result.Ok(o) => match (o) {{ Option.Some(b) => print(\"after=\" + to_string(b.len())), Option.None => print(\"after=none\") }},\n\
+         \x20               Result.Err(e) => eprint(e),\n\
+         \x20           }}\n\
+         \x20           close(h);\n\
+         \x20           0\n\
+         \x20       }},\n\
+         \x20   }}\n\
+         }}\n",
+        data = data_lit
+    );
+    std::fs::write(base.join("chunks.ray"), src).unwrap();
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "chunks.ray"]);
+    assert_eq!(vm_code, 0, "la VM corre el programa\n{vm_err}");
+    assert_eq!(vm_out, "262144,262144,175712,EOF\n875226913\ntail=10\nafter=none\n", "contrato de read_bytes en la VM");
+    let bin = base.join(format!("chunks_bin{}", std::env::consts::EXE_SUFFIX));
+    let (out, err, code) = ray(&base, &["build", "chunks.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM en read_bytes por trozos");
+}
+
 #[test]
 fn build_native_of_a_multi_module_project_is_a_single_binary() {
     // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana

@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`fs.read_bytes` reserva una sola vez sobre ficheros** (M278, raystream [18]/[19]). Un trozo de
+  256 KB tocaba 768 KB (un `Vec` que crecía doblando más una copia al `bytes` final); ahora se
+  reserva exacto (`min(max, lo que queda)`) y se lee sobre él, en la VM y en nativo. Servir un
+  fichero por trozos con un bucle directo baja de 738 a 352 KB por conexión en el banco de
+  raystream, con más caudal.
+
 ## 1.27.2 — 2026-09-21
 
 - **Nativo: un tipo con `impl Ord` cuyos campos admiten `==` volvía a compilar** (M277). Desde

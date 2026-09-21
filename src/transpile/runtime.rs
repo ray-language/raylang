@@ -610,8 +610,21 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    use std::io::Read; if max <= 0 { return Err(Rc::<str>::from(\"read_bytes expects max > 0\")); }\n",
             "    let mut reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get_mut(&h) {\n",
-            "        Some(__RayHandle::Reader(r)) => { let mut buf = Vec::new(); match (&mut *r).take(max as u64).read_to_end(&mut buf) {\n",
-            "            Ok(0) => Ok(None), Ok(_) => Ok(Some(Rc::<[u8]>::from(buf))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            // M278 (raystream [18]/[19]): antes `Vec::new()` + `read_to_end` (capacidad DOBLADA: 512 KB
+            // para 256 KB) y luego `Rc::from(buf)` (otra copia): tres bloques tocados por lectura. Sobre
+            // un fichero regular se reserva UNA vez, exacta (`min(max, restante)`), directamente como
+            // `Rc<[u8]>`, y se lee sobre ella; solo una lectura corta (fichero truncado entre medias)
+            // copia al tamaño real. Tuberías/dispositivos siguen por `take` + `read_to_end`.
+            "        Some(__RayHandle::Reader(r)) => {\n",
+            "            use std::io::Seek; let exact = r.get_ref().metadata().ok().filter(|m| m.is_file()).and_then(|m| r.stream_position().ok().map(|p| m.len().saturating_sub(p))).map(|rem| rem.min(max as u64) as usize);\n",
+            "            match exact { Some(n) if n > 0 => {\n",
+            "                let mut buf = Rc::<[u8]>::new_uninit_slice(n);\n",
+            "                let dst: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(Rc::get_mut(&mut buf).unwrap().as_mut_ptr() as *mut u8, n) };\n",
+            "                let mut off = 0usize;\n",
+            "                while off < n { match r.read(&mut dst[off..]) { Ok(0) => break, Ok(k) => off += k, Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}, Err(e) => return Err(Rc::<str>::from(e.to_string())) } }\n",
+            "                if off == 0 { Ok(None) } else if off == n { Ok(Some(unsafe { buf.assume_init() })) } else { Ok(Some(Rc::<[u8]>::from(&dst[..off]))) } }\n",
+            "            _ => { let mut buf = Vec::new(); match (&mut *r).take(max as u64).read_to_end(&mut buf) {\n",
+            "                Ok(0) => Ok(None), Ok(_) => Ok(Some(Rc::<[u8]>::from(buf))), Err(e) => Err(Rc::<str>::from(e.to_string())) } } } }\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for reading\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
             "fn __ray_seek(h: i64, pos: i64) -> Result<i64, Rc<str>> {\n",

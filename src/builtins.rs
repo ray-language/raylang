@@ -876,6 +876,39 @@ pub fn read_line_handle(h: i64) -> Option<String> {
     }
 }
 
+/// M278: octetos que quedan por leer si el handle es un FICHERO REGULAR (tamaño − posición,
+/// contando el búfer del `BufReader`); `None` para tuberías, dispositivos o si el SO no responde.
+fn regular_file_remaining(r: &mut std::io::BufReader<std::fs::File>) -> Option<u64> {
+    use std::io::Seek;
+    let meta = r.get_ref().metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let pos = r.stream_position().ok()?;
+    Some(meta.len().saturating_sub(pos))
+}
+
+/// M278: lee hasta llenar `n` octetos en `buf` (ya reservado) o hasta EOF; devuelve los leídos.
+/// Como `take(n).read_to_end` pero sin realojos: la capacidad no se toca.
+fn read_exact_or_eof(r: &mut impl std::io::Read, buf: &mut Vec<u8>, n: usize) -> std::io::Result<usize> {
+    let start = buf.len();
+    buf.resize(start + n, 0);
+    let mut off = 0;
+    while off < n {
+        match r.read(&mut buf[start + off..start + n]) {
+            Ok(0) => break,
+            Ok(k) => off += k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                buf.truncate(start);
+                return Err(e);
+            }
+        }
+    }
+    buf.truncate(start + off);
+    Ok(off)
+}
+
 /// M113: lee hasta `max` octetos del handle (lector) desde su posición actual. `Ok(Some(datos))`
 /// —exactamente `max` salvo cerca del final—, `Ok(None)` en EOF, `Err` en error o handle
 /// no-lector. Compartido por ambos motores (`__read_bytes_handle`). Se lee con `take` +
@@ -889,8 +922,21 @@ pub fn read_bytes_handle(h: i64, max: i64) -> Result<Option<Vec<u8>>, String> {
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Reader(r)) => {
-            let mut buf = Vec::new();
-            match (&mut *r).take(max as u64).read_to_end(&mut buf) {
+            // M278 (raystream [18]/[19]): `Vec::new()` + `read_to_end` crecía DOBLANDO (512 KB de
+            // capacidad para un trozo de 256 KB). Sobre un fichero regular se sabe cuánto queda:
+            // se reserva EXACTAMENTE `min(max, restante)` y se lee hasta llenar o EOF. El contrato
+            // ("memoria acotada por lo leído") se mantiene: un `max` desorbitado reserva lo que
+            // queda del fichero, no `max`. Tuberías/dispositivos siguen por el camino de `take`.
+            let exact = regular_file_remaining(r).map(|rem| rem.min(max as u64) as usize);
+            let mut buf = match exact {
+                Some(n) if n > 0 => Vec::with_capacity(n),
+                _ => Vec::new(),
+            };
+            let result = match exact {
+                Some(n) if n > 0 => read_exact_or_eof(r, &mut buf, n),
+                _ => (&mut *r).take(max as u64).read_to_end(&mut buf),
+            };
+            match result {
                 Ok(0) => Ok(None),
                 Ok(_) => Ok(Some(buf)),
                 Err(e) => Err(e.to_string()),

@@ -66,6 +66,9 @@ pub struct Res {
     // `webserver.Response.stream`. Se llama `streaming` (no `stream`) porque el UFCS resuelve
     // campo → método y `r.stream(ch, ct)` debe ser el método.
     streaming: [Channel<bytes>],
+    // M279: cuerpo-fichero leído por la fibra de la conexión (`r.sendfile`); mismo contrato que
+    // `webserver.Response.file`.
+    file: [webserver.FileBody],
 }
 
 // Un patrón de ruta (M93.2b): por segmentos (":x" captura uno; "*resto" FINAL captura el resto,
@@ -504,6 +507,7 @@ pub fn sendfile_with(res: Res, ctx: Ctx, path: string, chunk_bytes: int, queue: 
     res.code = sr.status;
     res.body = sr.body;
     res.streaming = sr.stream;
+    res.file = sr.file;
     let ks: [string] = sr.headers.keys();
     var i: int = 0;
     while (i < ks.len()) {
@@ -797,7 +801,8 @@ fn build_response(res: Res) -> webserver.Response {
         headers: h,
         set_cookie: res.set_cookie,
         body: res.body,
-        stream: res.streaming
+        stream: res.streaming,
+        file: res.file
     }
 }
 
@@ -831,7 +836,8 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         content_type: "text/plain; charset=utf-8",
         headers: Map.new(),
         set_cookie: [],
-        streaming: []
+        streaming: [],
+        file: []
     };
     var ctx: Ctx = Ctx {
         method: req.method,

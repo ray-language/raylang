@@ -14141,4 +14141,33 @@ Medido (mismo banco, mimalloc, todos los hilos): bucle directo **738 → 352 KB 
 su coste es la causa 2 y 3, que ataca el arco siguiente (§264). Guarda:
 `build_native_read_bytes_chunks_match_the_vm` (trozos exactos, cola corta, `max` mayor que el
 resto, EOF, seek + relectura; nativo ≡ VM).
+## 264. M279 — Memoria por conexión al servir ficheros (II): `serve_file` sin fibra intermedia (sep 2026)
+
+Continuación de §263 (causas 2 y 3): un `bytes` que cruza un canal se copia dos veces en nativo
+(`Rc<[u8]>` → `Arc<[u8]>` al enviar, y de vuelta al recibir) y mimalloc no reutiliza entre hilos
+lo que la fibra productora libera en otro. El diseño productor→canal→emisor de `serve_file`
+(M271) pagaba las dos en cada trozo, y la superposición lectura-escritura que compraba no se
+notaba en caudal: el bucle directo de raystream fue más rápido en todas las configuraciones.
+
+Decisión: `Response` gana `file: [FileBody]` (ruta, `[from, to]`, trozo), con la misma convención
+de arreglo vacío que `stream`. Con la cola por defecto (1), `serve_file`/`static_mount` devuelven
+un cuerpo-fichero y **la fibra de la conexión lo lee y escribe** trozo a trozo
+(`send_file_response`): un trozo vivo por conexión, sin canal, sin copias, y con `Content-Length`
+(keep-alive). El fichero se abre antes de escribir la cabecera (si falla, error al bucle con la
+conexión intacta); un fichero que se acorta entre medias es error, como en el stream de tamaño
+conocido. `queue >= 2` conserva el productor con lectura adelantada (M271/M276): sigue siendo la
+herramienta cuando el disco es más lento que el cliente. `gzip` ignora los cuerpos-fichero como
+ignora los streams; un HEAD nunca abre el fichero. El framework `web` plumbea el campo
+(`Res.file`, `sendfile`). `net` 0.3.2, `web` 0.4.2.
+
+Alternativas descartadas: (a) mover el `bytes` único por el canal sin copiar (causa 2) — vale
+para toda tubería binaria y queda como palanca futura, pero no quita la fibra ni la retención
+de mimalloc, y `serve_file` no necesita el canal; (b) `sendfile(2)` — ata el emisor al socket
+crudo (TLS lo excluye) y no aplica al modo VM; el bucle en raylang ya iguala al bucle a mano.
+
+Medido (`writer_ab.ray`, 256 MB, 32 clientes, mimalloc, todos los hilos, KB por conexión):
+`serve_file` **2106 → 659** (bucle directo en la misma corrida: 690), caudal 3996 → 4401 MB/s.
+Con un hilo, 1516 → 352. Raystream [18] queda cerrado: sin diferencia frente al escritor propio.
+Guarda: `file_bodies_keep_alive_and_the_read_ahead_queue_matches` (dos rangos por la misma
+conexión; cola 2 → mismo cuerpo y rangos) más el test de M271 sobre el camino por defecto.
 

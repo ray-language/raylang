@@ -57,25 +57,16 @@ fn main() -> int {
 
 ## Why look at it
 
-- **No `null` by design.** Errors are values: `Option<T>`/`Result<T,E>` plus the `?` operator.
-- **Expression-oriented.** `if`, blocks and `match` produce values; implicit return.
-- **A rich type system.** Generics with inference, **traits** (static dispatch, *bounds*, generic
-  impls, default methods, `dyn A + B`), sum types and exhaustive **pattern matching** (with guards,
-  `if let`, nested patterns).
-- **Modern ergonomics.** UFCS (`x.f()`), pipelines (`x |> f()`), closures, `break`/`continue`, and lazy
-  iterators (`map`/`filter`/`take`/`zip`/`fold`/`collect`/…).
-- **Real concurrency.** An **actor model with heap isolation** plus typed channels, on an **M:N
-  multicore** scheduler with *data-race freedom* by construction.
-- **Production web.** An **Express-style framework** (`web/framework`: routes with parameters,
-  middleware, CORS, static files with ETag, cookies, typed JSON via `ToJson`) on a concurrent HTTP/1.1
-  server with keep-alive, TLS and graceful shutdown. The native binary runs on **M:N fibers** (Jul 2026):
-  the framework peaks at **~188k req/s — 93% of axum, with p50/p99.9 tied (0.48/1.05 ms vs
-  0.47/1.04) and 1.5× Go+chi** (`json` tier, dedicated load generator), serving with **14 threads and
-  ~21 KB per connection**. Guide: [`docs/web-framework.md`](docs/web-framework.md).
-- **OS processes without surprises.** `std/process` launches commands with a **typed argv, no shell**
-  (`run`, a builder with deadline and caps, and *streaming* through bounded channels with backpressure).
-  The child gets its own process group and is a **scope child**: nothing is left orphaned.
-- **Self-hosted.** raylang's lexer, parser, checker, interpreter and VM are written **in raylang**.
+- **Native for LLM agents.** [`llms.txt`](llms.txt) (the distilled language context) and `ray mcp`
+  (an embedded MCP server: `ray_check`/`ray_run`/`ray_test`/`ray_fmt`/`ray_doc`, with the model's
+  code sandboxed) give an agent the write → verify → fix loop. Details in
+  [raylang and LLM agents](#raylang-and-llm-agents).
+- **Desktop and mobile, out of the box.** The same source runs as a desktop app on macOS, Linux
+  and Windows and as a mobile app on iOS and Android, with no external framework and no second
+  language: the UI is HTML in the system webview (`std/ui`), the backend is your raylang web
+  server, and the JS ↔ raylang bridge, native menus, dialogs, audio and baked-in assets ship with
+  the toolchain. `ray bundle` produces the `.app`, `.desktop` or `.exe`; `--ios` and `--android`
+  generate the Xcode or Gradle project. Guide: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle) (Spanish).
 - **Compiles to a native binary.** `ray build --native` transpiles the program to Rust and compiles it to
   an executable with byte-identical parity (*dev = VM / deploy = native*). On the 14-program polyglot
   bench (29 Jul 2026, M3 Pro) it **beats node in 9 of the 10 compute programs** (1.1×–20×), **Go in
@@ -83,6 +74,25 @@ fn main() -> int {
   the table**. In time×memory it ranks **#1 or #2 in 11 of the 12 programs** against 9 languages.
   Against its own VM: 3–4× on service workloads and 28–57× on pure compute. Tables:
   [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
+- **Production web.** An **Express-style framework** (`web/framework`: routes with parameters,
+  middleware, CORS, static files with ETag, cookies, typed JSON via `ToJson`) on a concurrent HTTP/1.1
+  server with keep-alive, TLS and graceful shutdown. The native binary runs on **M:N fibers** (Jul 2026):
+  the framework peaks at **~188k req/s — 93% of axum, with p50/p99.9 tied (0.48/1.05 ms vs
+  0.47/1.04) and 1.5× Go+chi** (`json` tier, dedicated load generator), serving with **14 threads and
+  ~21 KB per connection**. Guide: [`docs/web-framework.md`](docs/web-framework.md).
+- **Real concurrency.** An **actor model with heap isolation** plus typed channels, on an **M:N
+  multicore** scheduler with *data-race freedom* by construction.
+- **OS processes without surprises.** `std/process` launches commands with a **typed argv, no shell**
+  (`run`, a builder with deadline and caps, and *streaming* through bounded channels with backpressure).
+  The child gets its own process group and is a **scope child**: nothing is left orphaned.
+- **No `null` by design.** Errors are values: `Option<T>`/`Result<T,E>` plus the `?` operator.
+- **Expression-oriented.** `if`, blocks and `match` produce values; implicit return.
+- **A rich type system.** Generics with inference, **traits** (static dispatch, *bounds*, generic
+  impls, default methods, `dyn A + B`), sum types and exhaustive **pattern matching** (with guards,
+  `if let`, nested patterns).
+- **Modern ergonomics.** UFCS (`x.f()`), pipelines (`x |> f()`), closures, `break`/`continue`, and lazy
+  iterators (`map`/`filter`/`take`/`zip`/`fold`/`collect`/…).
+- **Self-hosted.** raylang's lexer, parser, checker, interpreter and VM are written **in raylang**.
 - **Runs in the browser.** The VM compiled to WebAssembly, without `wasm-bindgen`.
 
 ## Installation
@@ -135,6 +145,8 @@ ray run                # runs src/main.ray on the VM
 ray dev                # development mode: rebuilds and restarts on changes (+ browser live-reload)
 ray build              # checks and compiles without running
 ray build --native     # transpiles to Rust and builds a native binary (3–57× the VM, depending on the load)
+ray bundle             # packages the desktop app: .app (macOS) / .desktop (Linux) / .exe (Windows)
+ray bundle --ios       # generates the Xcode project (--android: the Gradle project)
 ray test               # runs the @test functions
 ray fmt src/main.ray   # formats
 ray doc src/main.ray   # generates documentation from ///
@@ -345,4 +357,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:33d47ee7d8aa -->
+<!-- sync: sha256:8b63f2eaea37 -->

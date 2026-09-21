@@ -48,3 +48,7 @@ net = "path:../raylang/packages/net"   # web se apoya en net/webserver y net/log
 ```
 
 Demo completo: [`examples/web/framework/`](../../examples/web/framework/).
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

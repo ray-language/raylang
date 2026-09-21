@@ -22,3 +22,7 @@ match (tz.to_utc(mad, civil)) {               // la inversa NO es total (DST):
   del footer** TZ-string (`CET-1CEST,M3.5.0,M10.5.0/3`; solo la forma `Mm.w.d[/hora]`,
   la que emite zic — un footer no soportado degrada a extrapolar el último tipo).
 - `fixtures/` trae TZif commiteados (tzdata es dominio público) para tests deterministas.
+
+## Licencia
+
+[Apache License 2.0](LICENSE) (M281). Copyright 2026 Roberto Ayala.

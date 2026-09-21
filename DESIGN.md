@@ -14171,3 +14171,16 @@ Con un hilo, 1516 → 352. Raystream [18] queda cerrado: sin diferencia frente a
 Guarda: `file_bodies_keep_alive_and_the_read_ahead_queue_matches` (dos rangos por la misma
 conexión; cola 2 → mismo cuerpo y rangos) más el test de M271 sobre el camino por defecto.
 
+## 266. M281 — Licencia Apache 2.0 en los paquetes oficiales (sep 2026)
+
+La toolchain va bajo doble licencia MIT o Apache 2.0 (raíz del repo), pero los seis paquetes de
+`packages/` no llevaban licencia propia, y sus espejos en github.com/ray-language (el artefacto que
+consume `ray add`) tampoco: GitHub los mostraba «sin licencia». Decisión del usuario: **Apache
+License 2.0** para todas las librerías (con su cláusula de patentes; es lo que un consumidor
+corporativo espera de una librería). Cada paquete lleva `LICENSE` (el texto completo, copyright
+2026 Roberto Ayala), `license = "Apache-2.0"` en `[package]` (identificador SPDX; el manifiesto
+ignora claves desconocidas, así que es compatible con toolchains anteriores) y una sección
+«Licencia» en el README. El espejo es un tar de `packages/<pkg>/`, así que el `LICENSE` viaja con
+la siguiente publicación; para los ya publicados, `--refresh-readme` copia ahora también el
+`LICENSE` a `main` (sin tocar tags: el hash del índice verifica el tag).
+

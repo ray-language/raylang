@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Los seis paquetes oficiales (`net`, `web`, `rpc`, `db`, `tz`, `cron`) llevan licencia Apache
+  2.0** (M281): `LICENSE` en cada paquete, `license = "Apache-2.0"` en su `ray.toml` y sección
+  «Licencia» en su README; los espejos de la organización lo reciben con
+  `tools/publish-packages.sh --refresh-readme`.
+
 - **`fs.read_bytes` reserva una sola vez sobre ficheros** (M278, raystream [18]/[19]). Un trozo de
   256 KB tocaba 768 KB (un `Vec` que crecía doblando más una copia al `bytes` final); ahora se
   reserva exacto (`min(max, lo que queda)`) y se lee sobre él, en la VM y en nativo. Servir un

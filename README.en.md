@@ -69,10 +69,11 @@ fn main() -> int {
   generate the Xcode or Gradle project. Guide: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle) (Spanish).
 - **Compiles to a native binary.** `ray build --native` transpiles the program to Rust and compiles it to
   an executable with byte-identical parity (*dev = VM / deploy = native*). On the 14-program polyglot
-  bench (29 Jul 2026, M3 Pro) it **beats node in 9 of the 10 compute programs** (1.1×–20×), **Go in
-  six** and **`rustc -O` in four** (tying both in two more), and starts in **1.80 ms — the fastest on
+  bench (22 Sep 2026, M3 Pro) it **beats node in 9 of the 10 compute programs** (1.1×–23×), **Go in
+  five** and **`rustc -O` in four** (tying both in two more), and starts in **1.96 ms — the fastest on
   the table**. In time×memory it ranks **#1 or #2 in 11 of the 12 programs** against 9 languages.
-  Against its own VM: 3–4× on service workloads and 28–57× on pure compute. Tables:
+  Against its own VM: 2.6–4× on service workloads and 14–28× on pure compute (the VM is measured
+  with a PGO build, `make pgo`; the plain release runs 10–26% slower on compute). Tables:
   [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
 - **Production web.** An **Express-style framework** (`web/framework`: routes with parameters,
   middleware, CORS, static files with ETag, cookies, typed JSON via `ToJson`) on a concurrent HTTP/1.1
@@ -357,4 +358,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:8b63f2eaea37 -->
+<!-- sync: sha256:96ad8ad17138 -->

@@ -70,11 +70,12 @@ fn main() -> int {
   generan el proyecto Xcode o Gradle. Guía: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle).
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
-  programas (29 jul 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–20×), **a Go
-  en seis** y **a `rustc -O` en cuatro** (empatando con ambos en otros dos), y arranca en
-  **1,80 ms — el más rápido de la mesa**. En tiempo×memoria queda **#1 o #2 en 11 de los 12
+  programas (22 sep 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–23×), **a Go
+  en cinco** y **a `rustc -O` en cuatro** (empatando con ambos en otros dos), y arranca en
+  **1,96 ms — el más rápido de la mesa**. En tiempo×memoria queda **#1 o #2 en 11 de los 12
   programas** contra 9 lenguajes. Frente a la propia VM:
-  3–4× en cargas de servicio y 28–57× en cómputo puro. Tablas:
+  2,6–4× en cargas de servicio y 14–28× en cómputo puro (la VM se mide con build PGO, `make pgo`;
+  la release plana rinde un 10–26 % menos en cómputo). Tablas:
   [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
 - **Web de producción.** Un **framework estilo Express** (`web/framework`: rutas con parámetros,
   middleware, CORS, estáticos con ETag, cookies, JSON tipado vía `ToJson`) sobre un servidor HTTP/1.1

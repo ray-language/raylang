@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Nativo: patrones de enum anidados y guardas `if` en `match`** (M287, ray-sublime §102).
+  `Option.Some(Json.JBool(on)) => …` compilaba en la VM y el intérprete y fallaba en `ray build
+  --native` (E0308); y una guarda `patrón if cond =>` era «not supported». Ahora ambos compilan,
+  con cualquier profundidad de anidamiento, y salen byte-idénticos a la VM.
+
 ## 1.27.5 — 2026-09-21
 
 - **La VM ya escribe más de 64 KiB seguidos por TLS** (M285, raycode «el techo de 64 KiB de

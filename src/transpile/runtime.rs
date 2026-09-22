@@ -174,7 +174,7 @@ mod __ray_term {
 
 pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fibers: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
-    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns, unreachable_code)]\n");
+    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns, unreachable_code, irrefutable_let_patterns)]\n");
     out.push_str("use std::rc::Rc;\n");
     // H6 + H21-N1: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el
     // nativo no lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). El error viaja como PANIC con

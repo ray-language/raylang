@@ -3568,3 +3568,17 @@ net 0.2.0, todas con repro y coste medido). Estado:
 | 16 | `@derive(Show)` no soporta campos array | ✅ M274 |
 | 17 | `llms.txt` decía `char_from_code(n) -> char` (es `Option<char>`), en la lista que existe para no adivinar | ✅ M275 (dato corregido + guarda de CI que coteja cada firma citada contra `ray doc`) |
 | 18 | El productor de `serve_file` bufferizaba 1 MB por conexión (cola de 4 × 256 KB: 144 MB de RSS a 32 clientes y −11 % de caudal) | ✅ M276 (cola 1 por defecto; trozo y cola ajustables con `serve_file_with`/`static_mount_with`/`sendfile_with`) |
+
+## 94. `ray check --native`: la paridad con el nativo antes del empaquetado (sep 2026)
+
+Origen: ray-sublime §102 (y antes §27 y §98): un programa pasa `ray build` y `ray test` —los dos
+motores lo ejecutan— y falla al compilar nativo. Se descubre al empaquetar, y en un proyecto sin
+`check-native` en su CI eso es el día del release. ray-sublime lo mitiga compilando nativo en cada
+PR, que tarda minutos.
+
+Propuesta: `ray check --native` (o `ray build --check-native`): transpilar y pasar `rustc` en modo
+comprobación (`--emit=metadata`, sin enlazar ni cargo) sobre el proyecto Cargo generado con la
+caché compartida. Segundos, no minutos; y en `llms.txt` como paso recomendado tras `ray test`
+para quien despliega nativo. Impacto: solo CLI; no toca el lenguaje. Lo que NO resuelve: las
+divergencias en tiempo de ejecución, que siguen siendo cosa del corpus y del harness diferencial.
+

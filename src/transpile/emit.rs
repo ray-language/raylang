@@ -1717,11 +1717,17 @@ impl Transpiler {
         out.push_str(&temp);
         out.push_str(" {\n");
         for arm in arms {
-            if arm.guard.is_some() {
-                return Err("match guards (`if`) are not supported".into());
-            }
             self.scopes.push(HashMap::new());
             let mut binds: Vec<(String, Type)> = Vec::new();
+            // M287 (ray-sublime §102): un subpatrón de enum de USUARIO no puede destructurarse en un
+            // patrón de Rust (el payload viaja como `Rc<E>`). `emit_pattern` lo sustituye por un
+            // temporal (`__rt_pN`) y lo DIFIERE: aquí se comprueba con `matches!(&**__rt_pN, …)` en
+            // la guarda de Rust del brazo, y al entrar al brazo se recuperan sus bindings con
+            // `let PAT = &**__rt_pN else { unreachable!() }` (recursivo: un patrón diferido puede
+            // diferir a su vez). Las guardas `if` de raylang (M40.1a) van por el mismo mecanismo:
+            // un bloque en la guarda de Rust con los bindings ya clonados y la condición emitida.
+            let mut deferred: Vec<(String, Type, Pattern)> = Vec::new();
+            let mut pn = 0usize;
             // El binding de TODO el escrutinio (`x => …`) es un caso especial: liga el `Rc<E>` (temp),
             // no un `&campo`. Se emite `_` y se clona desde el temporal.
             let whole_binding = match &arm.pattern.kind {
@@ -1732,18 +1738,48 @@ impl Transpiler {
                 out.push('_');
                 self.declare(x, scrut_ty.clone());
             } else {
-                self.emit_pattern(out, &arm.pattern, &scrut_ty, &mut binds)?;
+                self.emit_pattern(out, &arm.pattern, &scrut_ty, &mut binds, &mut deferred, &mut pn, true)?;
             }
-            out.push_str(" => {\n");
-            // Los bindings se emiten manglados (pueden ser temps `$…` del checker); `declare` usa el nombre
-            // crudo (el que llevan los `Ident` del AST) → los usos, que también manglan, casan.
+            // Condiciones de la guarda de Rust: una prueba `matches!` por patrón diferido de PRIMER
+            // nivel (las anidadas más adentro van dentro de esa misma prueba).
+            let mut conds: Vec<String> = Vec::new();
+            for (temp, ty, pat) in &deferred {
+                conds.push(self.nested_test(&format!("&**{temp}"), pat, ty, &mut pn)?);
+            }
+            // Prólogo del brazo: recuperar los bindings diferidos (worklist) y clonar TODOS los
+            // bindings a valores propios. Los bindings se emiten manglados (pueden ser temps `$…` del
+            // checker); `declare` usa el nombre crudo (el que llevan los `Ident` del AST).
+            let mut prologue = String::new();
             if let Some(x) = &whole_binding {
-                writeln!(out, "let {} = {}.clone();", mangle(x), temp).unwrap();
+                writeln!(prologue, "let {} = {}.clone();", mangle(x), temp).unwrap();
             }
-            for (b, bt) in &binds {
-                writeln!(out, "let {} = {}.clone();", mangle(b), mangle(b)).unwrap();
+            let mut all_binds = binds.clone();
+            let mut work = deferred.clone();
+            while !work.is_empty() {
+                let (dtemp, dty, dpat) = work.remove(0);
+                let mut patstr = String::new();
+                let mut inner_binds: Vec<(String, Type)> = Vec::new();
+                let mut inner_def: Vec<(String, Type, Pattern)> = Vec::new();
+                self.emit_pattern(&mut patstr, &dpat, &dty, &mut inner_binds, &mut inner_def, &mut pn, true)?;
+                writeln!(prologue, "let {patstr} = &**{dtemp} else {{ unreachable!() }};").unwrap();
+                all_binds.extend(inner_binds);
+                work.extend(inner_def);
+            }
+            for (b, bt) in &all_binds {
+                writeln!(prologue, "let {} = {}.clone();", mangle(b), mangle(b)).unwrap();
                 self.declare(b, bt.clone());
             }
+            if let Some(g) = &arm.guard {
+                let mut gs = String::new();
+                self.emit_expr(&mut gs, g)?;
+                conds.push(format!("{{ {prologue} {gs} }}"));
+            }
+            if !conds.is_empty() {
+                out.push_str(" if ");
+                out.push_str(&conds.join(" && "));
+            }
+            out.push_str(" => {\n");
+            out.push_str(&prologue);
             self.emit_expr(out, &arm.body)?;
             out.push_str("\n}\n");
             self.scopes.pop();
@@ -1761,6 +1797,9 @@ impl Transpiler {
         pat: &Pattern,
         expected: &Type,
         binds: &mut Vec<(String, Type)>,
+        deferred: &mut Vec<(String, Type, Pattern)>,
+        pn: &mut usize,
+        top: bool,
     ) -> Result<(), String> {
         match &pat.kind {
             PatternKind::Wildcard => out.push('_'),
@@ -1770,6 +1809,16 @@ impl Transpiler {
             }
             PatternKind::Variant { enum_name, variant, subpatterns } => {
                 let native = enum_name == "Option" || enum_name == "Result";
+                // M287: variante de enum de usuario ANIDADA (no en el nivel del escrutinio, que ya
+                // llega desreferenciado): el valor es `Rc<E>` y Rust no destructura a través de él
+                // → temporal + diferido (ver `emit_match`).
+                if !native && !top {
+                    let temp = format!("__rt_p{}", *pn);
+                    *pn += 1;
+                    out.push_str(&temp);
+                    deferred.push((temp, expected.clone(), pat.clone()));
+                    return Ok(());
+                }
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err (nativos, sin `EnumName::`)
                 } else {
@@ -1804,7 +1853,7 @@ impl Transpiler {
                         if i > 0 {
                             out.push_str(", ");
                         }
-                        self.emit_pattern(out, sp, &payload[i], binds)?;
+                        self.emit_pattern(out, sp, &payload[i], binds, deferred, pn, false)?;
                     }
                     out.push(')');
                 }
@@ -1814,6 +1863,86 @@ impl Transpiler {
             }
         }
         Ok(())
+    }
+
+    /// M287: los payloads de una variante (Option/Result → args del tipo esperado; enum de usuario →
+    /// tabla de variantes con los params de tipo sustituidos). Compartido por `emit_pattern` y las
+    /// pruebas `matches!` de los patrones diferidos.
+    fn variant_payload(&self, enum_name: &str, variant: &str, expected: &Type) -> Result<Vec<Type>, String> {
+        if enum_name == "Option" || enum_name == "Result" {
+            return match normalize_type(expected) {
+                Type::Enum(_, args) => Ok(match variant {
+                    "Some" | "Ok" => vec![args[0].clone()],
+                    "Err" => vec![args[1].clone()],
+                    _ => vec![],
+                }),
+                _ => Err("Option/Result pattern without an expected type".into()),
+            };
+        }
+        let raw = self
+            .enum_variants
+            .get(enum_name)
+            .and_then(|m| m.get(variant))
+            .ok_or_else(|| format!("unknown variant {}.{}", enum_name, variant))?
+            .clone();
+        let subst = enum_subst(&self.enum_tparams, enum_name, expected);
+        Ok(raw.iter().map(|p| subst_type(p, &subst)).collect())
+    }
+
+    /// M287: la PRUEBA de un patrón diferido como expresión bool de Rust: `matches!(expr, PAT)` con
+    /// los bindings como `_`, y las variantes de usuario anidadas más adentro como temporales con
+    /// su propia prueba en la guarda del `matches!` (`PAT if matches!(&**__rt_qN, …)`), recursivo.
+    fn nested_test(&self, expr: &str, pat: &Pattern, expected: &Type, pn: &mut usize) -> Result<String, String> {
+        let mut conds: Vec<String> = Vec::new();
+        let p = self.test_pattern(pat, expected, pn, &mut conds, true)?;
+        if p == "_" {
+            return Ok("true".to_string());
+        }
+        Ok(if conds.is_empty() {
+            format!("matches!({expr}, {p})")
+        } else {
+            format!("matches!({expr}, {p} if {})", conds.join(" && "))
+        })
+    }
+
+    fn test_pattern(
+        &self,
+        pat: &Pattern,
+        expected: &Type,
+        pn: &mut usize,
+        conds: &mut Vec<String>,
+        top: bool,
+    ) -> Result<String, String> {
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Binding(_) => Ok("_".to_string()),
+            PatternKind::Variant { enum_name, variant, subpatterns } => {
+                let native = enum_name == "Option" || enum_name == "Result";
+                if !native && !top {
+                    let temp = format!("__rt_q{}", *pn);
+                    *pn += 1;
+                    conds.push(self.nested_test(&format!("&**{temp}"), pat, expected, pn)?);
+                    return Ok(temp);
+                }
+                let mut out = if native {
+                    variant.clone()
+                } else {
+                    format!("{}::{}", mangle(enum_name), mangle(variant))
+                };
+                if !subpatterns.is_empty() {
+                    let payload = self.variant_payload(enum_name, variant, expected)?;
+                    out.push('(');
+                    for (i, sp) in subpatterns.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        out.push_str(&self.test_pattern(sp, &payload[i], pn, conds, false)?);
+                    }
+                    out.push(')');
+                }
+                Ok(out)
+            }
+            PatternKind::Struct { .. } => Err("struct destructuring pattern is not supported".into()),
+        }
     }
 
     /// Aplana una cadena de concatenación de strings `a + b + c + …` en sus operandos (izq→der),
@@ -1959,8 +2088,13 @@ impl Transpiler {
                 };
                 if let Some(payload) = payload {
                     for (sp, ty) in subpatterns.iter().zip(payload) {
-                        if let PatternKind::Binding(x) = &sp.kind {
-                            out.insert(x.clone(), ty);
+                        match &sp.kind {
+                            PatternKind::Binding(x) => {
+                                out.insert(x.clone(), ty);
+                            }
+                            // M287: un subpatrón de variante también liga (recursivo).
+                            PatternKind::Variant { .. } => out.extend(self.pattern_binding_types(Some(&ty), sp)),
+                            _ => {}
                         }
                     }
                 }

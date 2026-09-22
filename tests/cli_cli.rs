@@ -268,6 +268,95 @@ fn build_native_read_bytes_chunks_match_the_vm() {
     assert_eq!(native_out, vm_out, "nativo ≡ VM en read_bytes por trozos");
 }
 
+/// M287 (ray-sublime §102): patrones de enum de usuario ANIDADOS (dentro de `Option`, `Result`, de
+/// otro enum y de un enum genérico) y guardas `if` con bindings: compilaban en la VM y el
+/// intérprete y no en nativo (E0308: `Rc<E>` no se destructura en un patrón de Rust; las guardas
+/// eran «not supported»). Nativo ≡ VM sobre 17 casos.
+#[test]
+fn build_native_nested_patterns_and_guards_match_the_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native patrones anidados: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_nested_patterns");
+    std::fs::write(base.join("deep.ray"), DEEP_PATTERNS_RAY).unwrap();
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "deep.ray"]);
+    assert_eq!(vm_code, 0, "la VM corre el programa\n{vm_err}");
+    assert_eq!(vm_out, DEEP_PATTERNS_EXPECTED, "salida esperada en la VM");
+    let bin = base.join(format!("deep_bin{}", std::env::consts::EXE_SUFFIX));
+    let (out, err, code) = ray(&base, &["build", "deep.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), vm_out, "nativo ≡ VM en patrones anidados y guardas");
+}
+
+const DEEP_PATTERNS_RAY: &str = r#"enum Inner {
+    Leaf(int),
+    Pair(int, string),
+    Nil,
+}
+
+enum Outer {
+    Wrap(Inner),
+    Both(Inner, Inner),
+    Tag(string),
+}
+
+enum Box<T> {
+    Full(T),
+    Empty,
+}
+
+fn describe(o: Option<Outer>) -> string {
+    match (o) {
+        Option.Some(Outer.Wrap(Inner.Leaf(v))) if v > 5 => "big leaf ${v}",
+        Option.Some(Outer.Wrap(Inner.Leaf(v))) => "leaf ${v}",
+        Option.Some(Outer.Wrap(Inner.Pair(n, s))) => "pair ${n} ${s}",
+        Option.Some(Outer.Both(Inner.Leaf(a), Inner.Leaf(b))) if a == b => "twins ${a}",
+        Option.Some(Outer.Both(Inner.Leaf(a), _)) => "left ${a}",
+        Option.Some(Outer.Both(_, Inner.Nil)) => "right nil",
+        Option.Some(Outer.Tag(t)) if t.len() > 3 => "long tag ${t}",
+        Option.Some(_) => "other",
+        Option.None => "none",
+    }
+}
+
+fn res(r: Result<Box<Outer>, string>) -> string {
+    match (r) {
+        Result.Ok(Box.Full(Outer.Wrap(Inner.Leaf(v)))) => "ok leaf ${v}",
+        Result.Ok(Box.Full(Outer.Tag(t))) => "ok tag ${t}",
+        Result.Ok(Box.Full(_)) => "ok other",
+        Result.Ok(Box.Empty) => "ok empty",
+        Result.Err(e) if e == "boom" => "kaboom",
+        Result.Err(e) => "err ${e}",
+        Result.Ok(_) => "ok ?",
+    }
+}
+
+fn main() -> int {
+    print(describe(Option.Some(Outer.Wrap(Inner.Leaf(9)))));
+    print(describe(Option.Some(Outer.Wrap(Inner.Leaf(2)))));
+    print(describe(Option.Some(Outer.Wrap(Inner.Pair(3, "x")))));
+    print(describe(Option.Some(Outer.Both(Inner.Leaf(4), Inner.Leaf(4)))));
+    print(describe(Option.Some(Outer.Both(Inner.Leaf(4), Inner.Leaf(5)))));
+    print(describe(Option.Some(Outer.Both(Inner.Nil, Inner.Nil))));
+    print(describe(Option.Some(Outer.Both(Inner.Pair(1, "a"), Inner.Leaf(1)))));
+    print(describe(Option.Some(Outer.Tag("longer"))));
+    print(describe(Option.Some(Outer.Tag("ab"))));
+    print(describe(Option.Some(Outer.Wrap(Inner.Nil))));
+    print(describe(Option.None));
+    print(res(Result.Ok(Box.Full(Outer.Wrap(Inner.Leaf(7))))));
+    print(res(Result.Ok(Box.Full(Outer.Tag("t")))));
+    print(res(Result.Ok(Box.Full(Outer.Wrap(Inner.Nil)))));
+    print(res(Result.Ok(Box.Empty)));
+    print(res(Result.Err("boom")));
+    print(res(Result.Err("other")));
+    0
+}
+"#;
+
+const DEEP_PATTERNS_EXPECTED: &str = "big leaf 9\nleaf 2\npair 3 x\ntwins 4\nleft 4\nright nil\nother\nlong tag longer\nother\nother\nnone\nok leaf 7\nok tag t\nok other\nok empty\nkaboom\nerr other\n";
+
 #[test]
 fn build_native_of_a_multi_module_project_is_a_single_binary() {
     // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana
@@ -2117,7 +2206,8 @@ fn build_native_iterators_match_the_vm() {
 
 #[test]
 fn build_native_warns_about_stubbed_functions() {
-    // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un `match` con guarda `if`) se emite
+    // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un patrón de struct anidado en un
+    // payload; la guarda `if` que usaba este test se soporta desde M287) se emite
     // como stub que panica. Antes el build decía "ok" en silencio y el binario moría en runtime si la
     // llamaba. Ahora AVISA (nombre + motivo) al compilar; el binario sigue compilando y corre si no llama
     // a la función stubbeada. Oráculo del camino feliz: main no la llama → nativo ≡ VM.
@@ -2128,11 +2218,11 @@ fn build_native_warns_about_stubbed_functions() {
     let base = tmp("build_native_stub_warn");
     std::fs::write(
         base.join("prog.ray"),
-        "enum E { A, B }\n\
+        "struct Pt { x: int }\n\
+         enum E { A(Pt), B }\n\
          fn g(e: E) -> int {\n\
            match (e) {\n\
-             E.A if false => 1,   // guarda de match: fuera del subconjunto nativo → g se stubbea\n\
-             E.A => 3,\n\
+             E.A(Pt { x }) => x,   // patrón de struct anidado: fuera del subconjunto nativo → g se stubbea\n\
              E.B => 2,\n\
            }\n\
          }\n\
@@ -2145,7 +2235,7 @@ fn build_native_warns_about_stubbed_functions() {
     assert_eq!(code, 0, "build --native con stub sale 0\nstdout={out}\nstderr={err}");
     // El aviso nombra la función stubbeada y su motivo.
     assert!(err.contains("not supported in the native subset"), "avisa del stub: {err}");
-    assert!(err.contains("g:") && err.contains("match guards"), "nombra la función y el motivo: {err}");
+    assert!(err.contains("g:") && err.contains("struct destructuring pattern"), "nombra la función y el motivo: {err}");
     // El binario compila y corre (no toca el stub) idéntico a la VM.
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     let native_out = String::from_utf8_lossy(&native.stdout).into_owned();

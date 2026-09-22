@@ -257,12 +257,16 @@ fn gen_trait_dyn(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
 }
 
 fn gen_enums_nested(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    // M287 (ray-sublime §102): PATRONES ANIDADOS de verdad (`Wrap(Leaf(v))`, y dentro de `Option`)
+    // y una guarda `if` con binding — antes la sonda generaba el rodeo (`Wrap(inner) => match
+    // (inner)`), que es justo lo único que compilaba en nativo, y el bug pasó de largo.
     let k = r.int_in(1, 9);
     let top = format!(
         "enum InnerP{i} {{ Leaf(int), Nil, }}\n\
          enum OuterP{i} {{ Wrap(InnerP{i}), Tag(string), }}\n\
-         fn describe_{i}(o: OuterP{i}) -> string {{\n    match (o) {{\n        OuterP{i}.Wrap(inner) => match (inner) {{\n            InnerP{i}.Leaf(v) => \"leaf:${{v}}\",\n            InnerP{i}.Nil => \"nil\",\n        }},\n        OuterP{i}.Tag(s) => \"tag:${{s}}\",\n    }}\n}}\n\
-         fn probe_{i}() {{\n    print(describe_{i}(OuterP{i}.Wrap(InnerP{i}.Leaf({k}))));\n    print(describe_{i}(OuterP{i}.Wrap(InnerP{i}.Nil)));\n    print(describe_{i}(OuterP{i}.Tag(\"t{k}\")));\n    let all = [OuterP{i}.Tag(\"a\"), OuterP{i}.Wrap(InnerP{i}.Leaf(2))];\n    print(all.len());\n}}\n"
+         fn describe_{i}(o: OuterP{i}) -> string {{\n    match (o) {{\n        OuterP{i}.Wrap(InnerP{i}.Leaf(v)) if v > 4 => \"big:${{v}}\",\n        OuterP{i}.Wrap(InnerP{i}.Leaf(v)) => \"leaf:${{v}}\",\n        OuterP{i}.Wrap(_) => \"nil\",\n        OuterP{i}.Tag(s) => \"tag:${{s}}\",\n    }}\n}}\n\
+         fn opt_{i}(o: Option<OuterP{i}>) -> string {{\n    match (o) {{\n        Option.Some(OuterP{i}.Wrap(InnerP{i}.Leaf(v))) => \"some:${{v}}\",\n        Option.Some(OuterP{i}.Tag(t)) if t == \"z\" => \"zeta\",\n        Option.Some(_) => \"some\",\n        Option.None => \"none\",\n    }}\n}}\n\
+         fn probe_{i}() {{\n    print(describe_{i}(OuterP{i}.Wrap(InnerP{i}.Leaf({k}))));\n    print(describe_{i}(OuterP{i}.Wrap(InnerP{i}.Leaf(3))));\n    print(describe_{i}(OuterP{i}.Wrap(InnerP{i}.Nil)));\n    print(describe_{i}(OuterP{i}.Tag(\"t{k}\")));\n    print(opt_{i}(Option.Some(OuterP{i}.Wrap(InnerP{i}.Leaf({k})))));\n    print(opt_{i}(Option.Some(OuterP{i}.Tag(\"z\"))));\n    print(opt_{i}(Option.Some(OuterP{i}.Wrap(InnerP{i}.Nil))));\n    print(opt_{i}(Option.None));\n    let all = [OuterP{i}.Tag(\"a\"), OuterP{i}.Wrap(InnerP{i}.Leaf(2))];\n    print(all.len());\n}}\n"
     );
     (vec![], top)
 }

@@ -344,6 +344,21 @@ fn sort_on_a_generic_array_goes_through_the_less_dictionary() {
     assert!(!rust.contains("+ Ord>"), "{rust}");
 }
 
+/// M287 (ray-sublime §102): un subpatrón de enum de USUARIO anidado (`Some(Json.JBool(on))`) no se
+/// puede destructurar en un patrón de Rust (el payload es `Rc<E>`): se sustituye por un temporal, se
+/// comprueba con `matches!` en la guarda del brazo y se recupera con `let … else` al entrar. Las
+/// guardas `if` de raylang van por la misma guarda de Rust, con los bindings ya clonados.
+#[test]
+fn nested_user_enum_patterns_and_guards_lower_to_rust_guards() {
+    let rust = transpile_src(
+        "enum J { B(bool), S(string), N }\nfn f(v: Option<J>) -> bool {\n    match (v) {\n        Option.Some(J.B(on)) if on => true,\n        Option.Some(J.S(w)) => w == \"auto\",\n        _ => false,\n    }\n}\nfn main() {\n    print(f(Option.Some(J.B(true))));\n}",
+    );
+    assert!(rust.contains("Some(__rt_p0) if matches!(&**__rt_p0, J::B(_)) && {"), "{rust}");
+    assert!(rust.contains("let J::B(on) = &**__rt_p0 else { unreachable!() };"), "{rust}");
+    assert!(rust.contains("Some(__rt_p0) if matches!(&**__rt_p0, J::S(_)) => {"), "{rust}");
+    assert!(rust.contains("let J::S(w) = &**__rt_p0 else { unreachable!() };"), "{rust}");
+}
+
 #[test]
 fn named_function_values_are_cast_to_their_dyn_type() {
     let rust = transpile_src(
@@ -694,12 +709,12 @@ fn function_field_call_unwraps_it() {
 
 #[test]
 fn an_untranspilable_function_becomes_a_panicking_stub() {
-    // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí una GUARDA de match; el
-    // canal de struct que usaba este test se soporta desde H21-N5a) se emite como STUB que
-    // panica, con su firma → el programa COMPILA; si el flujo real no la llama, corre igual que
-    // la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
+    // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un patrón de STRUCT anidado en
+    // un payload; la guarda que usaba este test se soporta desde M287, y el canal de struct desde
+    // H21-N5a) se emite como STUB que panica, con su firma → el programa COMPILA; si el flujo real
+    // no la llama, corre igual que la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
     let rust = transpile_src(
-        "fn start() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }\n\
+        "struct Pt { x: int }\nenum E { P(Pt) }\nfn start() -> int { let e = E.P(Pt { x: 3 }); match (e) { E.P(Pt { x }) => x } }\n\
          fn main() -> int { print(42); 0 }",
     );
     assert!(
@@ -1370,10 +1385,11 @@ fn transpiles_for_over_map() {
 
 #[test]
 fn rejects_outside_the_subset() {
-    // Una GUARDA de match (`Option.Some(n) if n > 0 =>`) sigue fuera del subconjunto → no
-    // transpilable. (try_join, que era el caso de este test, se portó en H21-N2 — ver abajo.)
+    // Un patrón de STRUCT anidado en un payload (`E.P(Pt { x }) =>`) sigue fuera del subconjunto → no
+    // transpilable. (La guarda de match que usaba este test se soporta desde M287; try_join, el
+    // caso original, se portó en H21-N2 — ver abajo.)
     let tokens = crate::lexer::lex(
-        "fn main() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }",
+        "struct Pt { x: int }\nenum E { P(Pt) }\nfn main() -> int { let e = E.P(Pt { x: 3 }); match (e) { E.P(Pt { x }) => x } }",
     )
     .unwrap();
     let mut prog = crate::parser::parse(tokens).unwrap();

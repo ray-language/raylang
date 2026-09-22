@@ -14277,3 +14277,36 @@ memoria sin cota). Test: `tls_writes_over_64_kib_in_one_call_on_the_vm_and_the_i
 con el código anterior falla con el mensaje exacto de raycode. Pendiente de avisar a raycode: el
 parachoques puede retirarse desde 1.27.5.
 
+
+
+## 271. M287 — Patrones de enum anidados y guardas en el `match` nativo (sep 2026)
+
+Origen: ray-sublime §102. `match (value) { Option.Some(Json.JBool(on)) => on, … }` pasa `ray
+build` y `ray test` y falla al compilar nativo con E0308: el payload de un enum de usuario viaja
+como `Rc<E>` y Rust no destructura a través de un `Rc` dentro de un patrón; el `Some(x)` externo
+casa, el `Json::JBool(on)` interno no. El rodeo (partir el match en dos) era lo único que
+funcionaba, y la sonda `enums_nested_match` del harness diferencial generaba justo ese rodeo. De
+paso, las guardas `patrón if cond =>` (M40.1a, soportadas en checker, VM e intérprete) devolvían
+«match guards are not supported» en nativo, sin documentar.
+
+Decisión: **temporal + guarda de Rust + `let … else`**. En `emit_pattern`, una variante de enum
+de usuario que no esté en el nivel del escrutinio (que ya llega desreferenciado) se emite como un
+temporal `__rt_pN` y se difiere; `emit_match` añade a la guarda de Rust del brazo una prueba
+`matches!(&**__rt_pN, PAT)` (con los bindings como `_`, y las variantes anidadas más adentro como
+temporales con su propia prueba dentro del `matches!`, recursivo) y, al entrar al brazo, recupera
+los bindings con `let PAT = &**__rt_pN else { unreachable!() }` (worklist: un patrón diferido
+puede diferir a su vez). Las guardas `if` de raylang van por la misma guarda de Rust: un bloque
+con los bindings ya clonados y la condición emitida, conjuntado con las pruebas anteriores. No se
+toca la representación de los valores ni el checker; el fallo previo era de compilación, así que
+ningún programa que funcionara puede empeorar. `pattern_binding_types` recurre a los
+subpatrones, para que el tipado de un brazo con bindings anidados no caiga a «could not infer».
+
+Alternativa descartada: desugar el `match` a matches anidados (compilación de matriz de
+patrones) — más superficie, cuerpos por defecto duplicados y nada que la guarda no cubra con la
+gramática actual (comodín, binding, variante). Guardas: test de transpilación (la forma exacta),
+`build_native_nested_patterns_and_guards_match_the_vm` (17 casos: dos niveles, `Result` dentro
+de un enum genérico, guardas con bindings, binding entero con guarda; nativo ≡ VM) y la sonda del
+harness reescrita con patrones anidados y una guarda, para que el diferencial de cada push lo
+cubra. Anotado en IDEAS: un `ray check --native` (transpilar + `rustc` sin enlazar) para que
+este perfil de fallo no espere al empaquetado.
+\n

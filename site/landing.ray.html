@@ -532,10 +532,16 @@ section.engines { padding: 2.5rem 0 4rem; }
 {% if en %}        <h2 class="sec">Measured, <span class="grad">not promised</span></h2>
         <p class="lead">The native binary goes head to head with Go and <code>rustc -O</code>, and
         beats node in 9 of the 10 compute programs of the polyglot bench. The bars come from the
-        repository's real table — re-measuring the bench regenerates this chart.</p>{% else %}        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
+        repository's real table — re-measuring the bench regenerates this chart. The VM column is
+        measured with a PGO build of the toolchain (<code>make pgo</code>); the published release is
+        a plain build and runs 10–26% slower on pure compute in the VM — the native binary is
+        unaffected. <a href="https://github.com/ray-language/raylang/blob/main/docs/build.md#3-pgo-toolspgosh">How to build it</a>.</p>{% else %}        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
         <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
         le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
-        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>{% endif %}
+        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica. La columna
+        de la VM se mide con un build PGO de la toolchain (<code>make pgo</code>); la release
+        publicada es un build plano y en la VM rinde un 10–26 % menos en cómputo puro — el binario
+        nativo no se ve afectado. <a href="https://github.com/ray-language/raylang/blob/main/docs/build.md#3-pgo-toolspgosh">Cómo compilarlo</a>.</p>{% endif %}
         {{& bench }}
         <p style="margin-top:1.2rem">{% if en %}<a class="btn ghost" href="bench.html">See the full benchmarks</a>{% else %}<a class="btn ghost" href="bench.html">Ver los benchmarks completos</a>{% endif %}</p>
     </div>

@@ -87,11 +87,17 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 > variante compite motor contra motor. La Pike VM escrita en raylang (la implementación de
 > referencia) sigue siendo el motor del intérprete (`--interp`) y de los builds slim.
 
-## Resultados (29 jul 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
+## Resultados (22 sep 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
 
-> Corrida archivada completa (export de `bench.py --export-md`, todas las tablas y el entorno):
-> [`results/2026-07-30-arco-vm.md`](results/2026-07-30-arco-vm.md) — la referencia post-arco de
-> la VM (Fases 69-75) con el arnés corregido, todas las filas `10/10`.
+> Corridas archivadas completas (export de `bench.py --export-md`, todas las tablas y el entorno):
+> [`results/2026-09-22-v1.27.5.md`](results/2026-09-22-v1.27.5.md) — las 10 variantes en las
+> mismas corridas, `ray` = **release 1.27.5 tal como se publica (build plano)** — y
+> [`results/2026-09-22-v1.27.5-pgo.md`](results/2026-09-22-v1.27.5-pgo.md) — solo `ray` y
+> `native`, con `ray` = **build PGO** del mismo commit (`make pgo`,
+> [docs/build.md §3](../../docs/build.md#3-pgo-toolspgosh)). Las columnas `native`/`vs node`/`vs go`/
+> `vs rustc -O` salen de la primera; la columna **VM ÷ native**, de la segunda. Referencias
+> anteriores: [`results/2026-09-10-v1.14.0.md`](results/2026-09-10-v1.14.0.md) y
+> [`results/2026-07-30-arco-vm.md`](results/2026-07-30-arco-vm.md).
 
 Suite completa con el arnés actual (auto-medición: los 12 programas de cómputo cronometran su
 propio workload, así que **no** cuentan el arranque del runtime; `empty`/`print` sí lo miden, que
@@ -103,36 +109,40 @@ arco F enlaza **fibras M:N** por defecto.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 13× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 26× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.6× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.4× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.4× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.0× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 25× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.0× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.7× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.0× |
+| `loopsum` | **29.9 ms** 🥇 | 9.01× | 1.00× (empate) | 1.00× (empate) | 13.9× |
+| `fibrec` | 19.5 ms | 2.10× | 0.89× | 0.81× | 28× |
+| `wordcount` | **40.3 ms** 🥇 | 3.22× | **1.18×** | **1.55×** | 4.0× |
+| `jsonserialize` | 32.1 ms | 2.35× | 0.90× | 0.88× | 2.6× |
+| `jsondeserialize` | 79.2 ms | 1.22× | 0.59× | 0.63× | 3.1× |
+| `logparse` | **23.9 ms** 🥇 | 2.17× | 1.00× (empate) | **1.36×** | 2.8× |
+| `treealloc` | **19.6 ms** 🥇 | 1.12× | **1.56×** | **1.47×** | 26× |
+| `sortnums` | **20.6 ms** 🥇 | 22.68× | **3.85×** | **1.18×** | 6.5× |
+| `matrixmul` | **6.5 ms** 🥇 | **4.05×** | **1.33×** | 0.99× (empate) | 2.8× |
+| `regex` | 68.4 ms | 0.97× | **1.19×** | 0.40× | 4.0× |
 
-> Las filas de `matrixmul` (Fase 67: hoist de borrows → vectorización) y de `wordcount`/
-> `jsondeserialize`/`logparse`/`regex` (Fase 68: fusiones de substring/split + el borde de
-> capturas) son las **re-mediciones del mismo día** con el arnés, tras esos arcos del
-> transpilador; la corrida original está en el historial de PERFORMANCE.md. La columna
-> **VM ÷ native** es del 29–30 jul, tras los arcos de la VM (Fases 69–72: regex sobre el crate,
-> kernel DotRange, ronda 5 de superinstrucciones y el despacho inlineado) y con la corrección
-> del sesgo de presupuesto del arnés (Fase 73).
+> **Con qué build se mide la VM.** La columna **VM ÷ native** (y todo lo que dice «VM» en este
+> documento) se mide con un build **PGO** de `ray` (`make pgo`; guía en
+> [docs/build.md §3](../../docs/build.md#3-pgo-toolspgosh)). La release publicada en GitHub es un
+> build **plano**: en la VM rinde entre un **10 % y un 26 % menos** en cómputo puro (medido el
+> 22 sep 2026, mismo commit y misma máquina: `loopsum` 473 → 395 ms, `fibrec` 721 → 532 ms,
+> `sortnums` 157 → 118 ms con PGO). El binario **nativo** (`ray build --native`) no depende del
+> build de la toolchain: lo compila `rustc` con su propio LTO, y entre ambas corridas varía solo el
+> ruido de máquina (2–11 %). Las razones frente a node, Go y `rustc -O` son, por tanto, las que
+> obtiene cualquiera con la release.
 
-- **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El décimo, `regex`,
-  queda a un **5%** (0.95×) — y ahí node corre su motor C++; la variante `.ray` usa `std/regex`
+- **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 23×). El décimo, `regex`,
+  queda a un **3%** (0.97×) — y ahí node corre su motor C++; la variante `.ray` usa `std/regex`
   con el crate `regex` (R5). Ojo con el 0.40× de la columna rust: `regex.rs` parsea **a mano**
-  (ver la nota de arriba) — con el crate `regex`, Rust puro cuesta ~49 ms, no 26.
-- **Le gana a Go en seis** (`sortnums` 3.51×, `treealloc` 1.59×, `matrixmul` 1.35×, `regex`
-  1.17×, `wordcount` 1.16×, `logparse` 1.05×) **y empata en dos** (`loopsum`, `jsonserialize`);
-  **a `rustc -O` en cuatro** (`wordcount` 1.60×, `treealloc` 1.52×, `logparse` 1.49×, `sortnums`
-  1.12×) **y empata en dos** (`loopsum`, `matrixmul`). Donde pierde contra ambos es en
-  `jsondeserialize` y `fibrec`.
-- **Arranque** (proceso completo, sin auto-medición): `empty` **1.80 ms 🥇 #1 de 10** — por
-  delante de rustc (1.92 ms) y Go (1.98 ms), con 1.8 MB de RSS. Las fibras no lo penalizan.
+  (ver la nota de arriba) — con el crate `regex`, Rust puro cuesta ~49 ms, no 27.
+- **Le gana a Go en cinco** (`sortnums` 3.85×, `treealloc` 1.56×, `matrixmul` 1.33×, `regex`
+  1.19×, `wordcount` 1.18×) **y empata en dos** (`loopsum`, `logparse`); **a `rustc -O` en
+  cuatro** (`wordcount` 1.55×, `treealloc` 1.47×, `logparse` 1.36×, `sortnums` 1.18×) **y empata
+  en dos** (`loopsum`, `matrixmul`). Donde pierde contra ambos es en `jsondeserialize`,
+  `jsonserialize` y `fibrec`. Frente a la corrida de julio, `logparse` pasa de ganar a Go por un
+  5% a empatar, y `jsondeserialize` frente a node baja de 2.11× a 1.22× (la corrida de node de
+  julio fue anómala; la de septiembre ya daba 1.2×).
+- **Arranque** (proceso completo, sin auto-medición): `empty` **1.96 ms 🥇 #1 de 10** — por
+  delante de rustc (2.10 ms) y Go (2.17 ms), con 1.8 MB de RSS. Las fibras no lo penalizan.
 
 **Ranking combinado (tiempo × memoria, media geométrica)**: el binario nativo queda **#1 o #2 en
 11 de los 12 programas** (#1 absoluto en `wordcount` y `logparse`) y #3 en el restante

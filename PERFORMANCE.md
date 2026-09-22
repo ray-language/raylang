@@ -30,16 +30,16 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 13× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 26× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.6× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.4× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.4× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.0× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 25× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.0× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.7× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.0× |
+| `loopsum` | **29.9 ms** 🥇 | 9.01× | 1.00× (empate) | 1.00× (empate) | 13.9× |
+| `fibrec` | 19.5 ms | 2.10× | 0.89× | 0.81× | 28× |
+| `wordcount` | **40.3 ms** 🥇 | 3.22× | **1.18×** | **1.55×** | 4.0× |
+| `jsonserialize` | 32.1 ms | 2.35× | 0.90× | 0.88× | 2.6× |
+| `jsondeserialize` | 79.2 ms | 1.22× | 0.59× | 0.63× | 3.1× |
+| `logparse` | **23.9 ms** 🥇 | 2.17× | 1.00× (empate) | **1.36×** | 2.8× |
+| `treealloc` | **19.6 ms** 🥇 | 1.12× | **1.56×** | **1.47×** | 26× |
+| `sortnums` | **20.6 ms** 🥇 | 22.68× | **3.85×** | **1.18×** | 6.5× |
+| `matrixmul` | **6.5 ms** 🥇 | **4.05×** | **1.33×** | 0.99× (empate) | 2.8× |
+| `regex` | 68.4 ms | 0.97× | **1.19×** | 0.40× | 4.0× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
@@ -52,16 +52,23 @@ estadístico con node); la columna entera se re-midió tras V9
 despacho inlineado (la closure por instrucción que LLVM no fundía)— que juntas la bajaron un
 25–45% en toda la tabla.)*
 
-- **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
+- **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 3% (0.97×) contra el motor C++ de V8,
   y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
   el 0.40× de la tabla no es motor contra motor).
-- **Gana a Go en seis** (`sortnums` 3.51×, `treealloc` 1.59×, `matrixmul` 1.35×, `regex` 1.17×,
-  `wordcount` 1.16×, `logparse` 1.05×) **y empata en dos** (`loopsum`, `jsonserialize`); **a
-  `rustc -O` en cuatro** (`wordcount` 1.60×, `treealloc` 1.52×, `logparse` 1.49×, `sortnums`
-  1.12×) **y empata en dos** (`loopsum`, `matrixmul`). El hueco que queda es `jsondeserialize`
-  (0.60× de Go — la construcción de la línea y el slicing sin vistas).
-- **Arranque**: `empty` **1.80 ms, #1 de 10** (rustc 1.92, Go 1.98), 1.8 MB de RSS.
+- **Gana a Go en cinco** (`sortnums` 3.85×, `treealloc` 1.56×, `matrixmul` 1.33×, `regex` 1.19×,
+  `wordcount` 1.18×) **y empata en dos** (`loopsum`, `logparse`); **a `rustc -O` en cuatro**
+  (`wordcount` 1.55×, `treealloc` 1.47×, `logparse` 1.36×, `sortnums` 1.18×) **y empata en dos**
+  (`loopsum`, `matrixmul`). El hueco que queda es `jsondeserialize` (0.59× de Go — la construcción
+  de la línea y el slicing sin vistas).
+- **Arranque**: `empty` **1.96 ms, #1 de 10** (rustc 2.10, Go 2.17), 1.8 MB de RSS.
 - **Ranking combinado tiempo×memoria: #1 o #2 en 11 de los 12 programas** (#1 en `wordcount` y `logparse`), #3 en el restante (`jsonserialize`).
+- **Re-medición del 22 sep 2026 (1.27.5)**: las razones frente a node/Go/rustc son las de julio
+  dentro del ruido (la máquina dio ese día un 8–15 % más lento en TODO, Go y rustc incluidos). La
+  VM se mide con build **PGO** (`make pgo`, docs/build.md §3): la release plana rinde un 10–26 %
+  menos en cómputo puro (`loopsum` 473 → 395 ms, `fibrec` 721 → 532 ms con PGO), y con PGO iguala
+  la corrida de sep 10 en cómputo y mejora un 14–27 % en cargas de servicio (`wordcount`,
+  `jsonserialize`, `logparse`). La única regresión real que queda es el **arranque de la VM**:
+  4.1 ms (1.0.0) → 6.4 ms (desde 1.14), pendiente de arco.
 
 **Las fibras salen gratis en cómputo** (A/B del mismo programa con y sin `--without fibers`,
 mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — ruido — y el

@@ -516,6 +516,31 @@ print("uno dos".chars().len());          // 7
 
 Un string **no se muta** (`s[i] = c` es error): construye uno nuevo, o usa `StringBuilder` para acumular.
 
+#### Cadenas plantilla: multilínea y comillas sin escapar
+
+Un literal `"…"` **no puede cruzar líneas** (`lex error: newline inside an unterminated string`).
+Para texto de varias líneas, o con muchas comillas dobles dentro (JSON, SQL, HTML), se usan los
+**acentos graves** `` `…` `` (M95): mismo valor y mismo tipo `string`, pero la comilla doble es
+literal y los saltos de línea se conservan tal cual. La interpolación `${expr}` funciona igual:
+
+```rust
+let id = 7;
+let name = "Ada";
+let json = `{"id": ${id}, "name": "${name}"}`;   // sin \" por cada comilla
+let sql = `SELECT id, name
+FROM users
+WHERE name = "${name}"
+ORDER BY id`;                                      // multilínea: los saltos son literales
+print(json);
+print(sql);
+```
+
+Los escapes siguen activos dentro de los acentos graves (`\n`, `\t`, `\u{…}`), más dos propios:
+`` \` `` para un acento grave literal y `\$` para un `${` que no debe interpolar. No hay sangría
+automática: el texto empieza justo tras el acento grave y las líneas siguientes se toman desde la
+columna cero, así que un bloque sangrado dentro de una función arrastra su sangría al valor. No hay
+comillas triples, *heredocs* ni cadenas *raw*. Demo: `examples/basics/plantillas.ray`.
+
 ### Chars
 
 ```rust

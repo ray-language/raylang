@@ -4,6 +4,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.7 — 2026-09-22
+
+- **`llms.txt` (recurso `raylang://llms.txt` del MCP): las cadenas multilínea, visibles donde un agente las busca** (acentos graves; sin triple comilla, heredoc ni raw). El MANUAL §6 gana la subsección de cadenas plantilla.
+
 ## 1.27.6 — 2026-09-22
 
 - **Nativo: patrones de enum anidados y guardas `if` en `match`** (M287, ray-sublime §102).

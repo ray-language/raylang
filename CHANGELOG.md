@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.9 — 2026-09-24
 
 - **`std/crypto`: contraseñas con PBKDF2-HMAC-SHA256** (M290, arco de endurecimiento IDEAS §96 #2).
   La stdlib solo ofrecía hashes rápidos (SHA, HMAC, HKDF), que inducen `sha256(password)`. Nuevos

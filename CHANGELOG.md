@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.8 — 2026-09-24
 
 - **LSP: hover e ir-a-definición de los tipos escritos en anotaciones, incluidos los calificados**
   (M288). Sobre `sqlite.Conn` (`import db/sqlite;`), o sobre un `Category` local en `-> Result<Category,

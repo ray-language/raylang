@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`web` 0.4.3: sesiones endurecidas** (M289, arco de endurecimiento IDEAS §96). El id de
+  sesión eran `uuid_v4()` sobre el PRNG del runtime (SplitMix64 sembrado del reloj: predecible);
+  ahora son 128 bits del CSPRNG del SO en hex. Una cookie `ray_session` con un valor que no
+  emitió el framework se ignora (fin de la fijación de sesión; `is_session_id` es público) y la
+  cookie lleva `SameSite=Lax` y, detrás de un proxy que anuncie `X-Forwarded-Proto: https`,
+  `Secure`.
+
 ## 1.27.8 — 2026-09-24
 
 - **LSP: hover e ir-a-definición de los tipos escritos en anotaciones, incluidos los calificados**

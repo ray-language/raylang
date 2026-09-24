@@ -426,7 +426,7 @@ imported the same way (`import net/http;` → `http.fetch(…)`). They live in t
 | Request | `c.param/query/body/json_body/form/form_field/header_of/cookie_of/local/put_local` |
 | Response | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` · **M272**: `r.stream(ch, content_type)` (chunked: SSE, generated bodies) · `r.stream_len(ch, length, content_type)` (Content-Length + keep-alive) · `r.sendfile(c, path)` (ETag/304, MIME, Range/206; from 1 MB streamed from disk) |
 | Static files | `static_files(app, prefix, dir)` · `static_files_cached(+max_age)` (strong ETag + 304 + Range) · **`static_embedded(app, prefix, dir)`** (M147: serves from the `[native] embed` space — live disk in dev, baked into the native binary; content ETag) |
-| Sessions | `ray_session` HttpOnly cookie + `std/kv` |
+| Sessions | `ray_session` cookie (128 CSPRNG bits; `HttpOnly; SameSite=Lax`, `Secure` behind an HTTPS proxy; `is_session_id` rejects foreign ids) + `std/kv` |
 
 Full details in [`docs/web-framework.md`](docs/web-framework.md) (in Spanish); demo in
 `examples/web/framework/`. Shared state between handlers: each connection runs in its own fiber with
@@ -607,4 +607,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:27d52b5789b4 -->
+<!-- sync: sha256:56c0477e7ebf -->

@@ -3701,3 +3701,28 @@ propuestas: **P1** requisitos previos 1–2 (valen por sí solos: endurecen la V
 **P3** feature `plugins` en nativo · **P4** medir en ray-sublime (latencia canal vs RPC, que
 sigue pendiente en su IDEAS) y decidir si algo de N2 sube a N1. Antes de P1: **medir la
 latencia RPC** de N2 en VM y nativo — si basta para el editor, P2 pierde urgencia.
+
+## 96. Arco de endurecimiento: vulnerabilidades latentes en los bordes (sep 2026)
+
+Origen: revisión con el usuario (24 sep 2026) de qué vulnerabilidades tiene el lenguaje en sí.
+El núcleo que SECURITY.md promete se sostiene (aritmética checked, índices con rango, GC, actores
+sin estado compartido, front-end sin pánicos con fuzz, combustible/heap, lockfile con hash y
+firmas). Lo latente está en los **bordes**: donde el código «funciona» y ningún test funcional
+ve el problema. Sondeado sobre el código, no sobre generalidades. Pasos, en orden de gravedad:
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| 1 | **Sesiones de `web` predecibles y fijables**: `session_of` usaba `uuid_v4()` → `random_int` (SplitMix64 sembrado del reloj); aceptaba cualquier valor de cookie; sin `SameSite`/`Secure` | ✅ **M289** (web 0.4.3): 128 bits de `crypto.random_bytes` en hex; `is_session_id` rechaza lo que no emitió el framework; `SameSite=Lax` + `Secure` tras `X-Forwarded-Proto: https`. Pendiente menor: `Request` no dice si la conexión propia era TLS → `Secure` solo detrás de proxy; añadir `tls: bool` a `Request` (net) cuando toque romper el literal |
+| 2 | **Sin derivación de claves para contraseñas** en `std/crypto` (solo SHA/HMAC/HKDF): la stdlib induce `sha256(password)` | ⏳ PBKDF2-HMAC-SHA256 vía `ring` (+ guía en MANUAL: sal de `random_bytes`, iteraciones, `constant_time_eq`) |
+| 3 | **`ray_run` del MCP confina CPU/memoria/tiempo, no el I/O**: el snippet (escrito por un modelo) tiene disco, red y procesos del usuario | ⏳ documentar el modelo de amenazas en SECURITY.md; evaluar `--deny fs,net,process` por capacidades del registro de builtins (misma pieza que IDEAS §95 P1) |
+| 4 | **`std/json` sin límite de profundidad**: en la VM lo corta el límite de marcos; en NATIVO no hay límite → `[[[[…` contra cualquier API nativa = stack overflow = aborto del proceso | ⏳ `max_depth` (200, como `bson`) + error honesto |
+| 5 | **Máscara WebSocket con `std/random`** (RFC 6455 §5.3 pide impredecible: envenenamiento de cachés de proxies) | ⏳ `crypto.random_bytes(4)` en `net/websocket` y `websocket_client` |
+| 6 | **`inflate` con `n <= 0` = sin tope** (bomba de descompresión si el llamador no pasa límite) | ⏳ default finito |
+| 7 | **`ray dev` ejecuta `[frontend] dev` con `sh -c`** (clonar y correr = ejecutar código; misma clase que scripts de npm) y **deps `path:` sin confinamiento** | ⏳ documentar en SECURITY.md (aceptable; el LSP nunca lo hace) |
+| 8 | **Handles como enteros globales** (footgun en programa propio; vulnerabilidad con plugins) | → IDEAS §95 P1 |
+| 9 | **Recursión profunda en nativo** (pilas de fibra de tamaño fijo; sin `RAYLANG_MAX_DEPTH`) | ⏳ medir qué pasa y, si aborta, límite de profundidad también en nativo |
+
+Lo que se revisó y está bien: framing HTTP (TE sobre CL, RFC 7230), límites de cabeceras/cuerpo/
+conexiones/tiempo, `static_response` sin `..`, templates con autoescape (`{{& }}` explícito),
+MySQL/PostgreSQL con sentencias preparadas reales, `ahash` con semilla aleatoria, saltos de
+redirección acotados. Impacto: paquetes `web`/`net` y stdlib; ningún cambio en el lenguaje.

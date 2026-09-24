@@ -151,6 +151,47 @@ fn session_in_memory_in_production() {
     assert!(g.contains("name=x"), "get con cookie: {g}");
     assert!(!dir.join("dev-sessions.rkv").exists(), "producción no escribe a disco");
 
+    // M289: el id son 32 hex (128 bits del CSPRNG), la cookie lleva SameSite=Lax y, sin proxy
+    // HTTPS, NO lleva Secure.
+    let sid = &cookie["ray_session=".len()..];
+    assert_eq!(sid.len(), 32, "id de 32 hex: {sid}");
+    assert!(sid.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "hex minúsculas: {sid}");
+    let set_cookie = r.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie: ray_session=")).unwrap();
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"), "flags: {set_cookie}");
+    assert!(!set_cookie.contains("Secure"), "sin proxy https no hay Secure: {set_cookie}");
+
+    child.kill().ok();
+    child.wait().ok();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M289: una cookie con un id que NO emitió el framework (session fixation) se ignora — el
+/// servidor estrena otra sesión y el valor que el atacante eligió no ve nada. Y detrás de un
+/// proxy que anuncia HTTPS (`X-Forwarded-Proto`), la cookie sale con `Secure`.
+#[test]
+fn forged_session_cookie_is_ignored_and_secure_behind_https_proxy() {
+    let dir = test_dir("forged");
+    let (mut child, port) = launch(&dir, &[]);
+
+    // Fijación: el cliente trae `ray_session=evil` y guarda algo.
+    let r = ask(port, "GET /put?v=fixed HTTP/1.1\r\nHost: x\r\nCookie: ray_session=evil\r\nConnection: close\r\n\r\n");
+    let issued = session_cookie(&r);
+    assert_ne!(issued, "ray_session=evil", "el id forjado no se adopta: {r}");
+    // Con el id forjado no hay nada; con el emitido, sí.
+    let g = ask(port, "GET /get HTTP/1.1\r\nHost: x\r\nCookie: ray_session=evil\r\nConnection: close\r\n\r\n");
+    assert!(g.contains("name=\r\n") || g.ends_with("name="), "el id forjado no ve la sesión: {g}");
+    let g = ask(port, &format!("GET /get HTTP/1.1\r\nHost: x\r\nCookie: {issued}\r\nConnection: close\r\n\r\n"));
+    assert!(g.contains("name=fixed"), "el id emitido sí: {g}");
+    // Un id con la forma correcta pero mayúsculas tampoco se adopta (forma canónica estricta).
+    let upper = issued.to_ascii_uppercase();
+    let r = ask(port, &format!("GET /put?v=z HTTP/1.1\r\nHost: x\r\nCookie: {upper}\r\nConnection: close\r\n\r\n"));
+    assert_ne!(session_cookie(&r), upper, "mayúsculas no es un id nuestro");
+
+    // Secure detrás de un proxy HTTPS.
+    let r = ask(port, "GET /put?v=s HTTP/1.1\r\nHost: x\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n");
+    let set_cookie = r.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie: ray_session=")).unwrap();
+    assert!(set_cookie.contains("; Secure"), "Secure tras proxy https: {set_cookie}");
+
     child.kill().ok();
     child.wait().ok();
     let _ = std::fs::remove_dir_all(&dir);

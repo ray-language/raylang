@@ -269,8 +269,11 @@ fn main() -> int {
 }
 ```
 
-`session_of(ctx, res)` da el id (cookie `ray_session`, uuid v4, `Path=/; HttpOnly`; se crea y
-se añade el `Set-Cookie` la primera vez que cualquier helper lo necesita). Los valores son
+`session_of(ctx, res)` da el id (cookie `ray_session`: 128 bits del CSPRNG en hex, `Path=/;
+HttpOnly; SameSite=Lax`, y `Secure` detrás de un proxy que anuncie `X-Forwarded-Proto: https`;
+se crea y se añade el `Set-Cookie` la primera vez que cualquier helper lo necesita). Una cookie
+con un valor que no tenga esa forma se ignora y se estrena otra sesión (`is_session_id`), así
+nadie puede fijarle a un usuario un id elegido. Los valores son
 strings; para estado no ligado a un usuario (config, contadores), usa `std/kv` directamente
 (`kv.open_shared(path)` — misma API `StoreOps` que el store local).
 

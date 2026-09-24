@@ -17,9 +17,10 @@ import std/url;
 // Alias (M11.5): los leaf `json`/`cookie` chocarían con las funciones homónimas del framework.
 import std/json as jsonlib;
 import net/cookie as cookielib;
-// Sesiones (G.2): store compartido por actor (std/kv) + ids de sesión (uuid v4).
+// Sesiones (G.2): store compartido por actor (std/kv) + ids de sesión del CSPRNG (M289).
 import std/kv;
-import std/uuid;
+import std/crypto;
+import std/hex;
 // Reexport (M11.6a): el trait vive en std/json (M93.4); los consumidores pueden seguir haciendo
 // `from web/framework import ToJson`.
 pub from std/json import ToJson;
@@ -542,7 +543,7 @@ pub fn cookie(res: Res, line: string) -> Res {
 // --- Sesiones (G.2, IDEAS §48 G-rev) ---
 // El diferenciador de DX del hot reload: editar un handler SIN perder la sesión. La capa
 // son tres piezas ya existentes compuestas: el actor `kv.SharedStore` (estado compartido
-// entre las fibras-conexión, coherente por FIFO), la cookie `ray_session` (uuid v4) y la
+// entre las fibras-conexión, coherente por FIFO), la cookie `ray_session` (128 bits del CSPRNG) y la
 // persistencia RKV1 de std/kv. Bajo `ray dev` (RAY_DEV_RELOAD presente) el store se carga
 // del archivo al boot y se guarda tras cada escritura → el estado sobrevive al restart del
 // supervisor. En producción arranca vacío y NUNCA toca disco.
@@ -568,22 +569,52 @@ pub fn sessions(path: string) -> Result<Sessions, string> {
     }
 }
 
-/// The request's session id: the `ray_session` cookie if present; otherwise a fresh
-/// uuid v4, added to `res` as a `Set-Cookie` (`Path=/; HttpOnly`) and cached in the
-/// request locals — stable within the request, whichever helper asks first.
+// M289 (endurecimiento): el id de sesión son 128 bits del CSPRNG del SO en hex (32 chars).
+// Antes era `uuid.uuid_v4()`, que apila sobre `random_int` — un SplitMix64 sembrado del reloj,
+// PREDECIBLE: quien observa unos ids puede adivinar los siguientes. Y una cookie con un valor
+// que no tenga esta forma se IGNORA (se estrena otra): así un atacante no puede fijar la sesión
+// de la víctima con un id elegido por él (session fixation).
+/// Whether `s` has the shape of a session id issued by this framework: exactly 32 lowercase
+/// hex characters. Cookies with any other value are ignored (a fresh id is issued).
+pub fn is_session_id(s: string) -> bool {
+    if (s.len() != 32) {
+        return false;
+    }
+    match (hex.hex_decode(s)) {
+        Result.Ok(b) => b.len() == 16 && s == hex.hex_encode(b),
+        Result.Err(e) => false,
+    }
+}
+
+// La cookie lleva `Secure` cuando la petición llegó por HTTPS a través de un proxy que lo
+// anuncia (`X-Forwarded-Proto: https`); el servidor no marca hoy en `Request` si la conexión
+// propia era TLS (IDEAS §96).
+fn session_cookie_line(ctx: Ctx, sid: string) -> string {
+    var line = "ray_session=" + sid + "; Path=/; HttpOnly; SameSite=Lax";
+    if (header_of(ctx, "x-forwarded-proto").to_lower() == "https") {
+        line = line + "; Secure";
+    }
+    line
+}
+
+/// The request's session id: the `ray_session` cookie if present and well-formed (see
+/// `is_session_id`); otherwise a fresh id — 128 bits from the OS CSPRNG (`crypto.random_bytes`)
+/// in hex — added to `res` as a `Set-Cookie` (`Path=/; HttpOnly; SameSite=Lax`, plus `Secure`
+/// behind an `X-Forwarded-Proto: https` proxy) and cached in the request locals — stable
+/// within the request, whichever helper asks first.
 pub fn session_of(ctx: Ctx, res: Res) -> string {
     let cached = local(ctx, "ray_session");
     if (cached != "") {
         return cached;
     }
     let from_cookie = cookie_of(ctx, "ray_session");
-    if (from_cookie != "") {
+    if (is_session_id(from_cookie)) {
         put_local(ctx, "ray_session", from_cookie);
         return from_cookie;
     }
-    let sid = uuid.uuid_v4();
+    let sid = hex.hex_encode(crypto.random_bytes(16));
     put_local(ctx, "ray_session", sid);
-    cookie(res, "ray_session=" + sid + "; Path=/; HttpOnly");
+    cookie(res, session_cookie_line(ctx, sid));
     sid
 }
 

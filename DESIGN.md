@@ -14341,3 +14341,24 @@ para el rango: sobre `geo` o sobre `twice`, la misma entrada y el rango `geo.twi
 Fuera de alcance: los nombres de tipo en cabeceras que no pasan por `parse_type` (`impl T for X`,
 bounds `<T: Show>`), y los parámetros de tipo (`T`), que no tienen declaración que mostrar.
 
+## 273. M289 — Sesiones de `web` con CSPRNG, sin fijación y con flags (sep 2026)
+
+Origen: revisión de vulnerabilidades latentes (IDEAS §96, paso 1). `session_of` estrenaba la
+cookie `ray_session` con `uuid.uuid_v4()`, y `std/uuid` apila sobre `random_int`: el SplitMix64
+del runtime, sembrado del reloj y pensado para ser reproducible (`random_seed`), no para ser
+secreto. Su propio `///` avisaba «not cryptographically secure». Además el framework adoptaba
+cualquier valor que trajera la cookie —un atacante podía fijarle a la víctima un id conocido y
+leer su sesión después— y la cookie salía solo con `Path=/; HttpOnly`.
+
+Decisión: **128 bits de `crypto.random_bytes` en hex** (32 chars) como id; `is_session_id`
+(público) exige exactamente esa forma canónica —longitud, hex y minúsculas, verificada por
+decode+encode— y `session_of` ignora cualquier cookie que no la cumpla y estrena otra: la
+fijación muere porque el id lo elige siempre el servidor. La cookie lleva `SameSite=Lax` (el
+default sensato: navegación de primer nivel sí, POST cross-site no) y `Secure` cuando la petición
+llegó por HTTPS a través de un proxy que lo anuncia (`X-Forwarded-Proto: https`). No se marca
+`Secure` para una conexión TLS propia porque `Request` no lleva hoy si el socket era TLS: añadir
+el campo rompe el literal de `Request` en clientes y tests, y va con el siguiente cambio que toque
+`net` (IDEAS §96). `net` ya importaba `std/crypto` (handshake de WebSocket), así que `web` no
+añade gating nuevo en builds sin cripto. Test `tests/session_cli.rs`: forma del id, flags, id
+forjado ignorado (y en mayúsculas), `Secure` tras proxy. `web` 0.4.2 → 0.4.3.
+

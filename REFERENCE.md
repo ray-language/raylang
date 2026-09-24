@@ -428,7 +428,7 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y s
 | Petición | `c.param/query/body/json_body/form/form_field/header_of/cookie_of/local/put_local` |
 | Respuesta | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` · **M272**: `r.stream(ch, content_type)` (chunked: SSE, cuerpos generados) · `r.stream_len(ch, length, content_type)` (Content-Length + keep-alive) · `r.sendfile(c, path)` (ETag/304, MIME, Range/206; ≥ 1 MB por trozos desde disco) |
 | Estáticos | `static_files(app, prefix, dir)` · `static_files_cached(+max_age)` (ETag fuerte + 304 + Range) · **`static_embedded(app, prefix, dir)`** (M147: sirve del espacio `[native] embed` — disco en vivo en dev, horneado en el binario nativo; ETag de contenido) |
-| Sesiones | cookie `ray_session` HttpOnly + `std/kv` |
+| Sesiones | cookie `ray_session` (128 bits del CSPRNG; `HttpOnly; SameSite=Lax`, `Secure` tras proxy HTTPS; `is_session_id` rechaza ids ajenos) + `std/kv` |
 
 Detalle completo en [`docs/web-framework.md`](docs/web-framework.md); demo en `examples/web/framework/`. Estado compartido entre handlers: cada conexión corre en su fibra con heap aislado — la forma de serie es **`web.state`** (M154): `state(path) -> Result<AppState, _>` (mismo interruptor que `sessions`: persiste bajo `ray dev`, memoria pura en producción) o `state_memory()`, con `state_get(st, k)` · `state_put(st, k, v)` · `state_delete(st, k)` · **`state_incr(st, k, delta) -> Result<int, _>`** (contador atómico — el RMW corre en la fibra dueña del actor kv). Para estado tipado a medida, el patrón ACTOR (una fibra dueña + canales); receta en el MANUAL §15.
 

@@ -241,6 +241,7 @@ pub fn semantic_index(program: &mut Program) -> SemanticIndex {
     // reuniría nada del cuerpo → hover/def no funcionarían. Es introspección, no ejecución.
     checker.require_main = false;
     checker.field_name_pos = program.field_name_pos.clone(); // posiciones de nombres de campo/método
+    checker.type_name_sites = program.type_name_sites.clone(); // M288: nombres de tipo en anotaciones
     let _ = checker.check_program(program); // best-effort: el índice parcial igual sirve
     checker.index
 }
@@ -667,6 +668,10 @@ struct Checker {
     /// `gather`: `(línea, col, nombre)` del acceso → `(línea, col)` del `name`. Para registrar el
     /// hover del campo/método en su posición (el AST `Field` no la lleva). Vacío sin `gather`.
     field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
+    /// Sitios de nombres de tipo en posición de tipo (M288), copiados del `Program` en modo
+    /// `gather`: `(línea, col, nombre global)`. Se vuelcan al índice tras las pre-pasadas (cuando
+    /// ya se sabe qué nombre es struct/enum/trait). Vacío sin `gather`.
+    type_name_sites: Vec<(usize, usize, String)>,
     /// El índice semántico recolectado (M10.2b). Vacío si `gather` es `false`.
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).

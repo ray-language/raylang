@@ -1191,6 +1191,68 @@ fn hover_of_const_and_builtin_type() {
 }
 
 #[test]
+fn hover_and_definition_of_type_names_in_annotations() {
+    // M288: un nombre de tipo escrito en una ANOTACIÓN (param, retorno, `let x: T`, campo, `dyn`)
+    // tiene hover e ir-a-definición. Antes solo lo tenían el literal `P { … }` y los patrones: el
+    // AST `Type` no lleva posición, así que el checker no registraba nada para `p: P`.
+    let src = "trait Show2 { fn show2(self) -> string; }\nstruct P { x: int }\nenum E { A, B }\nfn f(p: P, e: E, s: dyn Show2) -> P {\n    let q: P = p;\n    q\n}\nfn main() -> int { 0 }\n";
+    let hover = |line: usize, ch: usize| hover_at(None, src, line, ch).map(|(t, s, e)| (t, s, e));
+    // Param `p: P` (línea 3, col 8) y retorno `-> P` (col 34).
+    assert_eq!(hover(3, 8), Some(("struct P".into(), 8, 9)), "param annotation");
+    assert_eq!(hover(3, 34), Some(("struct P".into(), 34, 35)), "return annotation");
+    // Enum y trait (`dyn Show2`).
+    assert_eq!(hover(3, 14), Some(("enum E".into(), 14, 15)), "enum annotation");
+    assert_eq!(hover(3, 24), Some(("trait Show2".into(), 24, 29)), "dyn trait annotation");
+    // `let q: P` (línea 4, col 11).
+    assert_eq!(hover(4, 11), Some(("struct P".into(), 11, 12)), "let annotation");
+    // Ir-a-definición: `P` de la anotación → su declaración (línea 1).
+    let (_, line, _, _) = definition_at("file:///t.ray", src, 3, 8).expect("def de P");
+    assert_eq!(line, 1, "struct P se declara en la línea 2 (0-based 1)");
+    // El uso de la variable sigue con su propio hover (no lo tapa el del tipo): `= p;` (línea 4, col 15).
+    assert_eq!(hover(4, 15), Some(("p: P".into(), 15, 16)));
+}
+
+#[test]
+fn hover_and_definition_of_qualified_type_across_modules() {
+    // M288: `geo.Circle` en una anotación → hover `struct geo.Circle` (forma de fachada, con sus
+    // `///` del módulo origen) e ir-a-definición al archivo del módulo. Era el caso reportado con
+    // `sqlite.Conn` (`import db/sqlite;`): la función `sqlite.connect` tenía hover y el tipo no.
+    let dir = std::env::temp_dir().join("ray_lsp_hover_qualified_type");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("geo.ray"), "/// A circle.\npub struct Circle { r: int }\npub fn twice(x: int) -> int { x * 2 }\n").unwrap();
+    let uri = file_uri(&dir.join("main.ray"));
+    let src = "import geo;\nfn area(c: geo.Circle) -> int { geo.twice(c.r) }\nfn main() -> int { 0 }\n";
+    // La FUNCIÓN calificada `geo.twice(` (cols 32–41): la misma entrada y el mismo rango completo
+    // tanto sobre `geo` como sobre `twice` (antes el rango era solo `geo` y el editor descartaba el
+    // popover al llegar por `twice`).
+    for ch in [32, 36] {
+        let (t, start, end) = hover_at(Some(&uri), src, 1, ch).expect("hover de la función calificada");
+        assert_eq!(t, "geo.twice: fn(int) -> int");
+        assert_eq!((start, end), (32, 41), "rango de `geo.twice` entero");
+    }
+    // Hover sobre `geo` y sobre `Circle` (línea 1, cols 11 y 15): la misma entrada.
+    for ch in [11, 15] {
+        let (t, start, end) = hover_at(Some(&uri), src, 1, ch).expect("hover del tipo calificado");
+        assert_eq!(t, "struct geo.Circle", "forma de fachada, sin '::'");
+        assert_eq!((start, end), (11, 21), "el rango cubre `geo.Circle` entero, no solo `geo`");
+    }
+    // Con documentación (`///` de geo.ray) vía `hover_result`.
+    let mut docs = HashMap::new();
+    docs.insert(uri.clone(), src.to_string());
+    let msg = json::parse(&format!(
+        r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":15}}}}}}"#
+    )).unwrap();
+    let value = hover_result(&msg, &docs).get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("").to_string();
+    assert!(value.contains("struct geo.Circle") && value.contains("A circle."), "hover con doc: {value}");
+    // Ir-a-definición → geo.ray, línea 1 (tras la línea de doc).
+    let (turi, line, _, _) = definition_at(&uri, src, 1, 15).expect("def de geo.Circle");
+    assert!(turi.ends_with("geo.ray"), "{turi}");
+    assert_eq!(line, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn completion_offers_builtin_consts_and_types() {
     let comp = |src: &str, line: usize, ch: usize| -> Vec<String> {
         let mut docs = HashMap::new();

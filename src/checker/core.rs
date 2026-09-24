@@ -54,6 +54,7 @@ impl Checker {
             const_defs: HashMap::new(),
             gather: false,
             field_name_pos: std::collections::HashMap::new(),
+            type_name_sites: Vec::new(),
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
@@ -203,6 +204,15 @@ impl Checker {
         }
         for e in &program.enums {
             self.check_type_def_bounds(&e.name, &e.type_params, &e.bounds, "enum", e.line, e.col)?;
+        }
+
+        // M288: hover/ir-a-definición de los nombres de tipo escritos en ANOTACIONES (params,
+        // retornos, `let x: T`, campos, payloads, `dyn A`). El AST `Type` no lleva posición; los
+        // sitios los deja el parser en `type_name_sites` y se vuelcan aquí, cuando ya se sabe si el
+        // nombre es struct/enum/trait (y dónde se declara). Un nombre que no es ninguno (parámetro
+        // de tipo, `Map`/`Channel`, un typo) no registra nada: el hover cae a su fallback.
+        if self.gather {
+            self.record_type_name_sites();
         }
 
         // --- Pre-pasada: registrar firmas (con tipos normalizados) ---
@@ -3418,6 +3428,25 @@ impl Checker {
         self.index.hovers.push(HoverEntry { line, col, len, text });
         if let Some((def_line, def_col)) = def {
             self.index.defs.push(DefEntry { line, col, len, def_line, def_col });
+        }
+    }
+
+    /// M288: vuelca los sitios de nombres de tipo en posición de tipo al índice: `struct X` /
+    /// `enum X` / `trait X` con su posición de declaración. Solo en modo `gather`.
+    pub(super) fn record_type_name_sites(&mut self) {
+        let sites = std::mem::take(&mut self.type_name_sites);
+        for (line, col, name) in &sites {
+            let kind = if self.structs.contains_key(name) {
+                "struct"
+            } else if self.enum_names.contains(name) {
+                "enum"
+            } else if self.traits.contains_key(name) {
+                "trait"
+            } else {
+                continue;
+            };
+            let def = self.type_defs.get(name).copied();
+            self.record_named(*line, *col, name.chars().count(), format!("{kind} {name}"), def);
         }
     }
 

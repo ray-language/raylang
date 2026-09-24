@@ -14310,3 +14310,34 @@ harness reescrita con patrones anidados y una guarda, para que el diferencial de
 cubra. Anotado en IDEAS: un `ray check --native` (transpilar + `rustc` sin enlazar) para que
 este perfil de fallo no espere al empaquetado.
 \n
+
+## 272. M288 — Hover e ir-a-definición de los tipos en anotaciones (sep 2026)
+
+Origen: reporte del usuario con `import db/sqlite;`. `sqlite.connect(` tenía hover (firma + doc)
+pero `sqlite.Conn` en un parámetro no mostraba nada; tampoco un `Category` local en `-> Result<
+Category, string>`, ni la propia declaración. Y el hover de `sqlite.exec(` «funcionaba solo en una
+dirección»: al llegar por `exec` o por el `.`, el popover no aparecía.
+
+Dos causas distintas. (1) El AST `Type` **no lleva posición**: es un valor que se compara
+estructuralmente (`Struct("P", [])` en la firma tiene que ser igual al del argumento), así que meterle
+`(línea, col)` rompería la igualdad en todo el checker. El índice semántico solo registraba nombres
+de tipo donde hay una expresión con posición (literal `P { … }`, patrón `E.V(x)`), nunca en una
+anotación. (2) `hover_at` recortaba el rango devuelto al **token** de la fuente en la columna de
+inicio: para `db::sqlite::exec` (la entrada namespacada, más larga que la fuente) el rango era
+solo `sqlite`, y VS Code descarta un hover cuya posición no cae en el rango que el servidor declara
+—de ahí la dependencia de la dirección del ratón.
+
+Decisión: **tabla lateral, como `field_name_pos`**. El parser registra en `Program::type_name_sites`
+`(línea, col, nombre)` de cada identificador leído en `parse_type` (con su `M.` si lo lleva) y de
+los traits de un `dyn A + B`. El loader la desplaza con la banda del módulo y la **reescribe al
+nombre global** con la misma regla que las referencias del AST (`TypeRewriter::rewrite_name`,
+plana: sin ámbito de parámetros de tipo, que solo afectaría al texto del hover). El checker la copia
+en modo `gather` y, tras las pre-pasadas (cuando ya sabe qué nombre es struct/enum/trait y dónde se
+declara), vuelca `struct X`/`enum X`/`trait X` con su `def` vía `record_named`. Coste cero fuera
+del LSP: la tabla viaja vacía de consumidores en la verificación normal. Para (2), `hover_at` mide
+el **camino** `ident(.ident)*` de la fuente (`path_len`) y usa esa longitud tanto para filtrar como
+para el rango: sobre `geo` o sobre `twice`, la misma entrada y el rango `geo.twice` entero.
+
+Fuera de alcance: los nombres de tipo en cabeceras que no pasan por `parse_type` (`impl T for X`,
+bounds `<T: Show>`), y los parámetros de tipo (`T`), que no tienen declaración que mostrar.
+

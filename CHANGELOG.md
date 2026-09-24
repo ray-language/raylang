@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net` 0.3.4: máscara WebSocket y nonce del handshake desde el CSPRNG** (M292, arco de
+  endurecimiento IDEAS §96 #5). La clave de enmascarado de cada trama cliente→servidor y el
+  nonce `Sec-WebSocket-Key` salían de `std/random` (predecible desde unas pocas tramas); RFC 6455
+  §5.3 exige una máscara impredecible (envenenamiento de cachés de proxies). Ahora
+  `crypto.random_bytes`, también en las copias demo de `examples/web`.
+
 - **`std/json`: la profundidad como valor, no como desbordamiento** (M291, arco de endurecimiento
   IDEAS §96 #4). `parse`/`parse_relaxed` devuelven `Err("nesting too deep …")` pasados
   `json.max_depth()` (200) niveles de arreglo/objeto. Antes, un `[[[[…` de miles de niveles era un

@@ -10,7 +10,6 @@
 from std/base64 import base64;
 import std/crypto;
 import std/net;
-import std/random;
 
 // --- Handshake ---
 // El GUID mágico del protocolo (RFC 6455 §1.3): se concatena a la clave del cliente antes del SHA-1.
@@ -192,12 +191,11 @@ pub fn encode_frame_masked(opcode: int, payload: bytes) -> bytes {
             }
         }
     }
-    var mask: [int] = [];
+    // M292 (IDEAS §96 #5): la clave de enmascarado sale del CSPRNG. RFC 6455 §5.3 exige que sea
+    // impredecible para el atacante (es lo que impide el envenenamiento de cachés de proxies);
+    // `std/random` es un SplitMix64 sembrado del reloj y se predice desde unas pocas tramas.
+    let mask = crypto.random_bytes(4);
     var i = 0;
-    while (i < 4) {
-        mask.push(random.below(256));
-        i = i + 1;
-    }
     var m = 0;
     while (m < 4) {
         out.push(mask[m]);

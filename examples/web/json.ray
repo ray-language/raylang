@@ -38,13 +38,16 @@ struct P {
     // M291 (IDEAS §96 #4): niveles de arreglo/objeto abiertos. El parser es recursivo: sin tope, un
     // `[[[[…` de miles de niveles agota la pila — en la VM es un error de ejecución que mata el
     // programa; en el binario nativo, un desbordamiento de la pila de la fibra. Se rechaza como
-    // VALOR (`Err`) al cruzar `MAX_DEPTH`, como hace `db/bson`.
+    // VALOR (`Err`) al cruzar `max_depth()`, como hace `db/bson`.
     depth: int,
 }
 
 /// The maximum nesting of arrays/objects `parse` accepts (200, as `db/bson`); deeper input is an
-/// `Err("nesting too deep …")`, never a stack overflow.
-pub const MAX_DEPTH: int = 200;
+/// `Err("nesting too deep …")`, never a stack overflow. (A function, not a `const`: the
+/// self-hosted parser that mirrors this file does not support top-level constants yet.)
+pub fn max_depth() -> int {
+    200
+}
 
 fn at_end(p: P) -> bool { p.i >= p.n }
 
@@ -106,9 +109,9 @@ fn parse_value(p: P) -> Result<Json, string> {
     let c: char = cur(p);
     if (c == '{' || c == '[') {
         p.depth = p.depth + 1;
-        if (p.depth > MAX_DEPTH) {
+        if (p.depth > max_depth()) {
             return Result.Err(
-                "nesting too deep (possible DoS): more than " + to_string(MAX_DEPTH) + " levels"
+                "nesting too deep (possible DoS): more than " + to_string(max_depth()) + " levels"
             );
         }
         let r = if (c == '{') { parse_object(p) } else { parse_array(p) };

@@ -161,7 +161,7 @@ fn main() -> int {
 #[test]
 fn nesting_too_deep_is_an_error_value() {
     let driver = r#"
-from json import parse, MAX_DEPTH;
+from json import parse, max_depth;
 fn nested(n: int) -> string {
     var s = "";
     var i = 0;
@@ -177,8 +177,8 @@ fn reports(n: int) {
     }
 }
 fn main() -> int {
-    reports(MAX_DEPTH);
-    reports(MAX_DEPTH + 1);
+    reports(max_depth());
+    reports(max_depth() + 1);
     reports(100000);
     match (parse("{\"a\": [{\"b\": [[1]]}]}")) {
         Result.Ok(j) => print("mixed ok"),

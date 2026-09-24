@@ -14400,10 +14400,11 @@ ya reconoce para `--fuel`/`--heap`, aflorando en la librería más usada.
 
 Decisión: **tope de profundidad como valor**, el mismo patrón que `db/bson` (M-, `max_depth`
 200): `P` lleva `depth`, `parse_value` lo sube al entrar en `{`/`[` y lo baja al salir, y al
-cruzar `MAX_DEPTH` devuelve `Err("nesting too deep (possible DoS): more than 200 levels")`. Un
+cruzar `max_depth()` devuelve `Err("nesting too deep (possible DoS): more than 200 levels")`. Un
 solo punto de control (en `parse_value`, no en cada retorno de `parse_array`/`parse_object`) y
-sirve a `parse` y `parse_relaxed`. `MAX_DEPTH` es `pub const` para que un consumidor pueda
-razonar sobre el límite (y para el test). 200 porque coincide con `bson`, supera de sobra
+sirve a `parse` y `parse_relaxed`. `max_depth()` es `pub` para que un consumidor pueda razonar sobre el límite (y para el test);
+es función y no `const` porque `examples/web/json.ray` está en el corpus del parser autoalojado,
+que aún no soporta constantes de nivel superior (M27.5) — lo cazó el CI de la PR #401. 200 porque coincide con `bson`, supera de sobra
 cualquier JSON legítimo (serde_json corta en 128; Jackson en 1000) y cabe en los 1024 marcos de
 la VM con dos marcos por nivel. Verificado en los tres motores: 200 pasa, 201 y 100 000 son
 `Err` — el nativo ya no aborta. No toca el lenguaje: es un cambio de la stdlib embebida, sin

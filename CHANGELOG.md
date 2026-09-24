@@ -8,7 +8,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 - **`std/json`: la profundidad como valor, no como desbordamiento** (M291, arco de endurecimiento
   IDEAS §96 #4). `parse`/`parse_relaxed` devuelven `Err("nesting too deep …")` pasados
-  `json.MAX_DEPTH` (200) niveles de arreglo/objeto. Antes, un `[[[[…` de miles de niveles era un
+  `json.max_depth()` (200) niveles de arreglo/objeto. Antes, un `[[[[…` de miles de niveles era un
   error de ejecución fatal en la VM y, en el binario nativo, un desbordamiento de la pila del
   proceso (100 000 niveles → «has overflowed its stack»).
 

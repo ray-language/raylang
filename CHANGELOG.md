@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/json`: la profundidad como valor, no como desbordamiento** (M291, arco de endurecimiento
+  IDEAS §96 #4). `parse`/`parse_relaxed` devuelven `Err("nesting too deep …")` pasados
+  `json.MAX_DEPTH` (200) niveles de arreglo/objeto. Antes, un `[[[[…` de miles de niveles era un
+  error de ejecución fatal en la VM y, en el binario nativo, un desbordamiento de la pila del
+  proceso (100 000 niveles → «has overflowed its stack»).
+
 ## 1.27.9 — 2026-09-24
 
 - **`std/crypto`: contraseñas con PBKDF2-HMAC-SHA256** (M290, arco de endurecimiento IDEAS §96 #2).

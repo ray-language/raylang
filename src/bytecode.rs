@@ -320,6 +320,9 @@ pub enum OpCode {
     /// M114: HKDF-SHA256 (RFC 5869). Saca `len` (int) y salt/ikm/info (bytes); empuja `[bytes]`
     /// etiquetado. M114: comparación en tiempo constante — saca dos `bytes`, empuja `bool` (total).
     HkdfSha256,
+    /// M290: PBKDF2-HMAC-SHA256 (RFC 8018, contraseñas). Saca `len` e `iterations` (int) y salt/
+    /// password (bytes); empuja `[bytes]` etiquetado.
+    Pbkdf2HmacSha256,
     ConstantTimeEq,
 
     /// Diferido TLS (STARTTLS): envuelve un socket TCP plano YA CONECTADO en una sesión TLS de

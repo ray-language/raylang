@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/crypto`: contraseñas con PBKDF2-HMAC-SHA256** (M290, arco de endurecimiento IDEAS §96 #2).
+  La stdlib solo ofrecía hashes rápidos (SHA, HMAC, HKDF), que inducen `sha256(password)`. Nuevos
+  `password_hash(p)` (formato autodescriptivo `$pbkdf2-sha256$<iter>$<sal>$<clave>`, sal del
+  CSPRNG, 600 000 iteraciones), `password_verify(p, stored)` (tiempo constante, `false` ante un
+  hash malformado), `password_hash_with` y la primitiva `pbkdf2_hmac_sha256`. Byte-idéntico en
+  los tres motores (vectores RFC 7914 §11). MANUAL: «Contraseñas: `password_hash`, nunca `sha256`».
+
 - **`web` 0.4.3: sesiones endurecidas** (M289, arco de endurecimiento IDEAS §96). El id de
   sesión eran `uuid_v4()` sobre el PRNG del runtime (SplitMix64 sembrado del reloj: predecible);
   ahora son 128 bits del CSPRNG del SO en hex. Una cookie `ray_session` con un valor que no

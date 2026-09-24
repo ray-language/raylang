@@ -745,6 +745,15 @@ pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], len: i64) -> Option<Vec
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn hkdf_sha256(_salt: &[u8], _ikm: &[u8], _info: &[u8], _len: i64) -> Option<Vec<u8>> { None }
 
+/// PBKDF2-HMAC-SHA256 (RFC 8018, M290): derivación LENTA para contraseñas. `None` con `iterations`
+/// fuera de `1..=u32::MAX` o `len` fuera de `1..=1024`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: i64, len: i64) -> Option<Vec<u8>> {
+    ray_runtime::crypto::pbkdf2_hmac_sha256(password, salt, iterations, len)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn pbkdf2_hmac_sha256(_password: &[u8], _salt: &[u8], _iterations: i64, _len: i64) -> Option<Vec<u8>> { None }
+
 /// Compara dos `bytes` en tiempo constante. Total: `false` ante longitudes distintas.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool { ray_runtime::crypto::constant_time_eq(a, b) }
@@ -3534,6 +3543,16 @@ static BUILTINS: &[Builtin] = &[
             if a[i] != Type::Bytes { return Err((Some(i), format!("hkdf_sha256 expects bytes ({etiqueta}), not {}", a[i]))); }
         }
         if a[3] != Type::Int { return Err((Some(3), format!("hkdf_sha256 expects an int (output length), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M290: PBKDF2-HMAC-SHA256 (contraseñas). `[bytes]` etiquetado (el prelude → Option<bytes>).
+    Builtin { name: "__pbkdf2_hmac_sha256", opcode: OpCode::Pbkdf2HmacSha256, check: |a| {
+        arity(a, 4, "__pbkdf2_hmac_sha256", "")?;
+        for (i, etiqueta) in ["password", "salt"].iter().enumerate() {
+            if a[i] != Type::Bytes { return Err((Some(i), format!("pbkdf2_hmac_sha256 expects bytes ({etiqueta}), not {}", a[i]))); }
+        }
+        if a[2] != Type::Int { return Err((Some(2), format!("pbkdf2_hmac_sha256 expects an int (iterations), not {}", a[2]))); }
+        if a[3] != Type::Int { return Err((Some(3), format!("pbkdf2_hmac_sha256 expects an int (output length), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__constant_time_eq", opcode: OpCode::ConstantTimeEq, check: |a| {

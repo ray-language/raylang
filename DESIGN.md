@@ -14386,3 +14386,24 @@ a sí misma: `std/kv` → `std/fs`). Golden de tres motores con los vectores ofi
 ejemplo queda fuera del corpus del parser autoalojado (`bytes` + interpolación anidada), como
 `key_agreement.ray`.
 
+## 276. M292 — WebSocket: la máscara y el nonce salen del CSPRNG (sep 2026)
+
+Origen: IDEAS §96 #5. `net/websocket` construía la clave de enmascarado de cada trama cliente→
+servidor con `random.below(256)` cuatro veces, y `websocket_client` el nonce `Sec-WebSocket-Key`
+con dieciséis. `std/random` es SplitMix64 sembrado del reloj: quien ve unas pocas tramas
+reconstruye el estado y predice las máscaras siguientes. RFC 6455 §5.3 exige que la clave sea
+impredecible para el atacante —no cifra nada; es lo que impide que un script en el navegador
+componga octetos elegidos en el cable y envenene la caché de un proxy intermedio— y §4.1 pide un
+nonce «randomly selected». Es el mismo patrón que las sesiones (M289): el PRNG de simulación
+usado donde hacía falta secreto.
+
+Decisión: `crypto.random_bytes(4)` para la máscara y `base64(crypto.random_bytes(16))` para el
+nonce; `std/random` desaparece de los dos módulos. Sin coste apreciable (el CSPRNG del SO por
+trama es despreciable frente al `write` del socket) y sin gating nuevo: `net/websocket` ya
+importaba `std/crypto` para el `sha1` del handshake. Las copias demo de `examples/web`
+(`websocket.ray`/`websocket_client.ray`, que es lo que ejercen `tests/websocket_cli.rs` y
+`websocket_client_cli.rs`) reciben el mismo cambio para no enseñar el patrón malo. Test propio
+(`tests/websocket_mask_cli.rs`, proyecto temporal con `net` por ruta): dos tramas del mismo
+mensaje llevan máscaras distintas, ambas desenmascaran al payload y el bit MASK va puesto, en
+los dos motores. `net` 0.3.3 → 0.3.4.
+

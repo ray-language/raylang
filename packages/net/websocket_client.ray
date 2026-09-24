@@ -10,7 +10,7 @@
 // fragmentación). Reusa la cripto del handshake (`accept_key`) y el framing de `websocket.ray`.
 // Funciona en ambos motores (cliente bloqueante); `wss://` vía el handle TLS (M19.4).
 from std/base64 import base64;
-import std/random;
+import std/crypto;
 from net/websocket import
     accept_key,
     encode_frame_masked,
@@ -26,13 +26,9 @@ import std/net;
 // --- Handshake del cliente ---
 // Genera una `Sec-WebSocket-Key`: 16 octetos aleatorios en base64 (RFC 6455 §4.1).
 fn make_key() -> string {
-    var b: [int] = [];
-    var i = 0;
-    while (i < 16) {
-        b.push(random.below(256));
-        i = i + 1;
-    }
-    base64(bytes_of(b))
+    // M292: del CSPRNG (RFC 6455 §4.1 pide un nonce «randomly selected»; con `std/random`, sembrado
+    // del reloj, no lo era).
+    base64(crypto.random_bytes(16))
 }
 
 // La petición de upgrade del cliente.

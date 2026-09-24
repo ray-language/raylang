@@ -1029,7 +1029,7 @@ impl<'a> Interpreter<'a> {
                             | "__ed25519_verify" | "__chacha20poly1305_seal"
                             | "__chacha20poly1305_open" | "__x25519_public_key"
                             | "__x25519_shared_secret" | "__hkdf_sha256"
-                            | "__constant_time_eq")
+                            | "__pbkdf2_hmac_sha256" | "__constant_time_eq")
                     {
                         return Err(runtime_error(callee.line, callee.col,
                             crate::builtins::NET_TLS_UNAVAILABLE));
@@ -1400,6 +1400,17 @@ impl<'a> Interpreter<'a> {
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
                 _ => unreachable!("the checker guarantees bytes, bytes, bytes, int"),
+            },
+            // M290: PBKDF2-HMAC-SHA256 (contraseñas). `[bytes]` etiquetado; el prelude → Option.
+            "__pbkdf2_hmac_sha256" => match (&values[0], &values[1], &values[2], &values[3]) {
+                (Value::Bytes(password), Value::Bytes(salt), Value::Int(iterations), Value::Int(len)) => {
+                    let elems = match crate::builtins::pbkdf2_hmac_sha256(password, salt, *iterations, *len) {
+                        Some(dk) => vec![Value::Bytes(Rc::new(dk))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees bytes, bytes, int, int"),
             },
             "__constant_time_eq" => match (&values[0], &values[1]) {
                 (Value::Bytes(a), Value::Bytes(b)) => Value::Bool(crate::builtins::constant_time_eq(a, b)),

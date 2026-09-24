@@ -14362,3 +14362,27 @@ el campo rompe el literal de `Request` en clientes y tests, y va con el siguient
 añade gating nuevo en builds sin cripto. Test `tests/session_cli.rs`: forma del id, flags, id
 forjado ignorado (y en mayúsculas), `Secure` tras proxy. `web` 0.4.2 → 0.4.3.
 
+## 274. M290 — Contraseñas: PBKDF2 en `std/crypto` (sep 2026)
+
+Origen: IDEAS §96 #2. `std/crypto` tenía SHA-256/512, HMAC y HKDF —todos rápidos a propósito— y
+nada lento: la stdlib inducía `sha256(password)`, que un atacante con la tabla rompe a miles de
+millones por segundo. Es una vulnerabilidad de *misuse*: el código funciona y ningún test la ve.
+
+Decisión: **PBKDF2-HMAC-SHA256** (RFC 8018) porque `ring` ya lo trae (`ring::pbkdf2::derive`),
+tiempo constante, cero dependencias nuevas; Argon2/scrypt pedirían un crate más y quedan como
+mejora futura si algún consumidor lo exige. Cableado como HKDF (M114): un builtin
+`__pbkdf2_hmac_sha256(password, salt, iterations, len) -> [bytes]` etiquetado en los tres motores
+(`ray_runtime::crypto` compartido por VM/intérprete/nativo → byte-idéntico), y la capa de uso en
+raylang puro: `password_hash(p)` con sal fresca de 16 octetos del CSPRNG y 600 000 iteraciones
+(OWASP 2023 para PBKDF2-SHA256), formato **autodescriptivo** `$pbkdf2-sha256$<iter>$<sal hex>$<clave
+hex>` —las iteraciones viajan en la cadena, así que subirlas después no invalida lo guardado—,
+`password_hash_with(p, n)` para tests, y `password_verify(p, encoded)` que parsea con tolerancia
+total (`false` ante cualquier malformación, nunca un panic) y compara con `constant_time_eq`.
+Topes de la primitiva: `iterations` en `1..=u32::MAX` (lo que acepta `ring`), `len` en `1..=1024`
+(cada bloque de 32 octetos cuesta otras `iterations` rondas: sin tope, un `len` grande es un DoS
+del propio llamador). `std/crypto` importa `std/hex` para la codificación (la stdlib ya se importa
+a sí misma: `std/kv` → `std/fs`). Golden de tres motores con los vectores oficiales de RFC 7914
+§11 (`tests/password_hash_cli.rs`); oráculo VM≡intérprete del builtin en `vm/tests.rs`. El
+ejemplo queda fuera del corpus del parser autoalojado (`bytes` + interpolación anidada), como
+`key_agreement.ray`.
+

@@ -2236,6 +2236,19 @@ impl Transpiler {
                 self.emit_expr(out, eff[3])?;
                 out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
             }
+            // M290: PBKDF2-HMAC-SHA256 — dos `bytes` por referencia y dos `int` por valor.
+            "pbkdf2_hmac_sha256" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("{ let __rt_r = ray_runtime::crypto::pbkdf2_hmac_sha256(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[3])?;
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
+            }
             "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal" | "chacha20poly1305_open"
             | "x25519_public_key" | "x25519_shared_secret"
                 if name.starts_with("__") && !self.exclude.contains("crypto") =>

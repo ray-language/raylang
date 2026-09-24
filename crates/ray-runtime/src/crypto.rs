@@ -209,6 +209,26 @@ pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], len: i64) -> Option<Vec
 #[cfg(not(feature = "crypto"))]
 pub fn hkdf_sha256(_salt: &[u8], _ikm: &[u8], _info: &[u8], _len: i64) -> Option<Vec<u8>> { None }
 
+// --- PBKDF2-HMAC-SHA256 (derivación de claves a partir de CONTRASEÑAS, M290) ---
+
+/// PBKDF2-HMAC-SHA256 (RFC 8018): `len` octetos derivados de `password` con `salt` e `iterations`
+/// rondas. Es la derivación **lenta a propósito** para contraseñas (HKDF es rápida: sirve para
+/// secretos ya uniformes, no para lo que teclea una persona). `None` si `iterations` no está en
+/// `1..=u32::MAX` o `len` no está en `1..=1024` (un tope práctico: cada bloque de 32 octetos cuesta
+/// otras `iterations` rondas). Tiempo constante respecto a `password` por `ring`.
+#[cfg(feature = "crypto")]
+pub fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: i64, len: i64) -> Option<Vec<u8>> {
+    if iterations <= 0 || iterations > u32::MAX as i64 || len <= 0 || len > 1024 {
+        return None;
+    }
+    let iterations = std::num::NonZeroU32::new(iterations as u32)?;
+    let mut out = vec![0u8; len as usize];
+    ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, iterations, salt, password, &mut out);
+    Some(out)
+}
+#[cfg(not(feature = "crypto"))]
+pub fn pbkdf2_hmac_sha256(_password: &[u8], _salt: &[u8], _iterations: i64, _len: i64) -> Option<Vec<u8>> { None }
+
 /// Compara dos secuencias de octetos en **tiempo constante** (respecto al contenido; la longitud sí se
 /// distingue). El `==` de raylang sobre `bytes` corta en el primer octeto distinto: comparar así una
 /// etiqueta MAC o un token filtra el valor correcto por temporización, octeto a octeto.

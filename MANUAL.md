@@ -2174,6 +2174,28 @@ Por último, para comparar cualquier secreto —una etiqueta MAC, un token de se
 `constant_time_eq(a, b)` y no `==`: el `==` corta en el primer octeto distinto, y esa diferencia de
 tiempo revela el valor correcto octeto a octeto.
 
+#### Contraseñas: `password_hash`, nunca `sha256`
+
+Un hash rápido (`sha256`, `hkdf_sha256`) es exactamente lo que NO quieres para una contraseña: quien
+robe la tabla prueba miles de millones por segundo. `std/crypto` trae la derivación **lenta a
+propósito** (PBKDF2-HMAC-SHA256, RFC 8018) ya empaquetada:
+
+```rust
+import std/crypto;
+
+// Al registrar: guarda la cadena entera (sal del CSPRNG + iteraciones + clave, autodescriptiva).
+let stored = crypto.password_hash(password);      // "$pbkdf2-sha256$600000$<sal hex>$<clave hex>"
+
+// Al entrar: compara en tiempo constante; `false` también ante un hash malformado.
+if (crypto.password_verify(password, stored)) { /* dentro */ }
+```
+
+`password_hash` usa `PASSWORD_ITERATIONS` (600 000, la recomendación OWASP para PBKDF2-SHA256,
+unas décimas de segundo por intento) y una sal fresca de 16 octetos; como las iteraciones viajan en
+la cadena, subirlas más adelante no invalida lo guardado. `password_hash_with(p, n)` fija el factor
+(bájalo solo en tests). La primitiva cruda es `pbkdf2_hmac_sha256(password, salt, iterations, len)
+-> Option<bytes>` (`None` con `iterations` fuera de `1..=4294967295` o `len` fuera de `1..=1024`).
+
 ### Tiempo y duraciones (`std/time`)
 
 Relojes (`now()` epoch-ms, `monotonic()` para medir intervalos), `sleep(ms)` cooperativo, y las

@@ -2636,6 +2636,32 @@ fn ed25519_oracle() {
 /// `info` — la propiedad de la que depende tener una clave por sentido. Los vectores oficiales de RFC
 /// 7748/5869 viven en el golden de tres motores (`tests/key_agreement_cli.rs`); aquí se prueba el
 /// cableado de los primitivos en ambos motores. Devuelve 1 solo si TODO cuadra.
+/// M290: cableado de `__pbkdf2_hmac_sha256` en ambos motores — vector RFC 7914 §11 (c = 1) y los
+/// rechazos (iteraciones 0, len fuera de 1..=1024). Los tres motores con la capa raylang van en
+/// `tests/password_hash_cli.rs`.
+#[test]
+fn pbkdf2_oracle() {
+    let src = r#"
+        fn main() -> int {
+            let dk = __pbkdf2_hmac_sha256("passwd".to_bytes(), "salt".to_bytes(), 1, 64);
+            let want = bytes_of([0x55, 0xac, 0x04, 0x6e, 0x56, 0xe3, 0x08, 0x9f, 0xec, 0x16, 0x91, 0xc2, 0x25, 0x44, 0xb6, 0x05, 0xf9, 0x41, 0x85, 0x21, 0x6d, 0xde, 0x04, 0x65, 0xe6, 0x8b, 0x9d, 0x57, 0xc2, 0x0d, 0xac, 0xbc, 0x49, 0xca, 0x9c, 0xcc, 0xf1, 0x79, 0xb6, 0x45, 0x99, 0x16, 0x64, 0xb3, 0x9d, 0x77, 0xef, 0x31, 0x7c, 0x71, 0xb8, 0x45, 0xb1, 0xe3, 0x0b, 0xd5, 0x09, 0x11, 0x20, 0x41, 0xd3, 0xa1, 0x97, 0x83]);
+            let ok = dk.len() == 1 && __constant_time_eq(dk[0], want);
+            let zero_iter = __pbkdf2_hmac_sha256("x".to_bytes(), "s".to_bytes(), 0, 32).len() == 0;
+            let bad_len = __pbkdf2_hmac_sha256("x".to_bytes(), "s".to_bytes(), 1, 0).len() == 0
+                && __pbkdf2_hmac_sha256("x".to_bytes(), "s".to_bytes(), 1, 1025).len() == 0;
+            if (ok && zero_iter && bad_len) { 1 } else { 0 }
+        }
+    "#;
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let interp = crate::interpreter::run(&prog).expect("interp ok");
+    let compiled = compile_program(&prog).expect("compila");
+    let vm = run_program(&compiled).expect("vm ok");
+    assert_eq!(interp, vm, "VM≠intérprete en pbkdf2");
+    assert_eq!(vm, crate::runtime::Value::Int(1), "vector RFC 7914 y rechazos");
+}
+
 #[test]
 fn x25519_hkdf_oracle() {
     let src = r#"

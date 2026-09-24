@@ -1936,7 +1936,7 @@ impl<'a> Vm<'a> {
                 | OpCode::HmacSha256 | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
                 | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
                 | OpCode::X25519PublicKey | OpCode::X25519SharedSecret | OpCode::HkdfSha256
-                | OpCode::ConstantTimeEq
+                | OpCode::Pbkdf2HmacSha256 | OpCode::ConstantTimeEq
                     if !crate::builtins::net_tls_available() =>
                 {
                     let (l, c) = pos!();
@@ -2143,6 +2143,24 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::hkdf_sha256(&salt, &ikm, &info, len) {
                         Some(okm) => vec![HeapValue::bytes(okm)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M290: PBKDF2-HMAC-SHA256. Pop en orden inverso: len, iterations, salt, password.
+                OpCode::Pbkdf2HmacSha256 => {
+                    let len = self.pop();
+                    let iterations = self.pop();
+                    let salt = self.pop();
+                    let password = self.pop();
+                    let (HeapValue::Bytes(password), HeapValue::Bytes(salt), HeapValue::Int(iterations), HeapValue::Int(len)) =
+                        (password, salt, iterations, len)
+                    else {
+                        unreachable!("the checker guarantees bytes, bytes, int, int");
+                    };
+                    let elems = match crate::builtins::pbkdf2_hmac_sha256(&password, &salt, iterations, len) {
+                        Some(dk) => vec![HeapValue::bytes(dk)],
                         None => vec![],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

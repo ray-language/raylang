@@ -695,6 +695,8 @@ fn parses_files_reales_equal_what_el_oracle() {
                             // `for` (M27.2), ambos diferidos en el toolchain auto-alojado.
         "key_agreement.ray", // M114: acuerdo de claves X25519/HKDF; `bytes` en posición de tipo (M16)
                              // + interpolación (M27.3), ambos diferidos en el toolchain auto-alojado.
+        "password_hash.ray", // M290: contraseñas PBKDF2; `bytes` en posición de tipo (M16) +
+                             // interpolación con comillas anidadas (M27.3), ambos diferidos (idem).
         "process_session.ray", // M100 v3: sesión persistente (stdin escribible); `bytes` en posición
                                // de tipo (M16) + interpolación (M27.3), ambos diferidos.
         "process_stream.ray", // M100 v2: streaming de procesos; anota `bytes` en posición de tipo

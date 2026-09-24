@@ -3,6 +3,9 @@
 // Hashes/MACs take and return `bytes`; the fallible ones (Ed25519 sign/key from a 32-byte seed,
 // ChaCha20-Poly1305 whose sizes must match, `open` which also authenticates) return `Option<bytes>`.
 // The functions wrap engine-side primitives (`__sha256`, `__ed25519_sign`, …).
+// M290: `password_hash`/`password_verify` codifican en hex → std/hex (la stdlib se importa a sí misma).
+import std/hex;
+
 // M68.2: aleatoriedad criptográfica. El PRNG de `std/random` (SplitMix64 sembrado del reloj)
 // es para simulación/jitter; los SECRETOS salen de aquí.
 /// `n` cryptographically secure random bytes from the OS CSPRNG. Use this — not `std/random` —
@@ -153,6 +156,82 @@ pub fn x25519_shared_secret(secret: bytes, peer_public: bytes) -> Option<bytes> 
 pub fn hkdf_sha256(salt: bytes, ikm: bytes, info: bytes, len: int) -> Option<bytes> {
     let r = __hkdf_sha256(salt, ikm, info, len);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// --- Contraseñas (M290, arco de endurecimiento IDEAS §96) ---
+// SHA-256/HKDF son RÁPIDOS a propósito: un atacante con el hash prueba miles de millones de
+// contraseñas por segundo. PBKDF2 es lento a propósito (iteraciones) — es lo que se guarda en una
+// base de datos. Formato de `password_hash`: `$pbkdf2-sha256$<iteraciones>$<sal hex>$<clave hex>`
+// (sal de 16 octetos del CSPRNG, clave de 32), autodescriptivo: `password_verify` lee las
+// iteraciones del propio hash, así que subirlas en el futuro no invalida los guardados.
+/// PBKDF2-HMAC-SHA256 (RFC 8018): `len` bytes derived from `password` with `salt` and `iterations`
+/// rounds — the deliberately SLOW derivation for passwords (HKDF is fast: it is for secrets that are
+/// already uniform, not for what a person types). `None` if `iterations` is outside `1..=4294967295`
+/// or `len` outside `1..=1024`. Prefer `password_hash`/`password_verify`, which pick the salt and
+/// encode everything for storage.
+pub fn pbkdf2_hmac_sha256(
+    password: bytes,
+    salt: bytes,
+    iterations: int,
+    len: int
+) -> Option<bytes> {
+    let r = __pbkdf2_hmac_sha256(password, salt, iterations, len);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// The default PBKDF2 work factor of `password_hash` (OWASP 2023 for PBKDF2-HMAC-SHA256).
+pub const PASSWORD_ITERATIONS: int = 600000;
+
+/// Hashes a password for storage: PBKDF2-HMAC-SHA256 with a fresh 16-byte CSPRNG salt and
+/// `PASSWORD_ITERATIONS` rounds, encoded as `$pbkdf2-sha256$<iterations>$<salt hex>$<key hex>`.
+/// Store the whole string; check it later with `password_verify`. Never store `sha256(password)`.
+pub fn password_hash(password: string) -> string {
+    password_hash_with(password, PASSWORD_ITERATIONS)
+}
+
+/// `password_hash` with an explicit work factor (`iterations >= 1`; lower it only in tests).
+pub fn password_hash_with(password: string, iterations: int) -> string {
+    let salt = random_bytes(16);
+    match (pbkdf2_hmac_sha256(password.to_bytes(), salt, iterations, 32)) {
+        Option.Some(key) => "$pbkdf2-sha256$"
+            + to_string(iterations)
+            + "$"
+            + hex.hex_encode(salt)
+            + "$"
+            + hex.hex_encode(key),
+        Option.None => "",
+    }
+}
+
+/// Checks `password` against a string produced by `password_hash` — in constant time on the derived
+/// key. `false` for a wrong password AND for a malformed or foreign `encoded` (never a panic).
+pub fn password_verify(password: string, encoded: string) -> bool {
+    let parts = encoded.split("$");
+    if (parts.len() != 5 || parts[0] != "" || parts[1] != "pbkdf2-sha256") {
+        return false;
+    }
+    let iterations = match (parts[2].parse_int()) {
+        Option.Some(n) => n,
+        Option.None => {
+            return false;
+        },
+    };
+    let salt = match (hex.hex_decode(parts[3])) {
+        Result.Ok(b) => b,
+        Result.Err(e) => {
+            return false;
+        },
+    };
+    let expected = match (hex.hex_decode(parts[4])) {
+        Result.Ok(b) => b,
+        Result.Err(e) => {
+            return false;
+        },
+    };
+    match (pbkdf2_hmac_sha256(password.to_bytes(), salt, iterations, expected.len())) {
+        Option.Some(key) => constant_time_eq(key, expected),
+        Option.None => false,
+    }
 }
 
 /// Compares two byte strings in constant time: `false` for different lengths, and otherwise a comparison

@@ -3582,3 +3582,122 @@ caché compartida. Segundos, no minutos; y en `llms.txt` como paso recomendado t
 para quien despliega nativo. Impacto: solo CLI; no toca el lenguaje. Lo que NO resuelve: las
 divergencias en tiempo de ejecución, que siguen siendo cosa del corpus y del harness diferencial.
 
+
+## 95. Plugins: apoyo desde el lenguaje a apps extensibles, en dos niveles (sep 2026)
+
+Origen: conversación con el usuario a raíz de ray-sublime IDEAS §6 («no hay intérprete
+embebible»): un programa raylang ya arrancado —y sobre todo uno compilado nativo— no puede
+cargar código que no venía en el binario. ray-sublime lo rodeó con su modelo de tres capas
+(PLAN §2: JS en el webview, servicios por JSON-RPC en proceso aparte, contribuciones
+declarativas); ninguna capa ejecuta raylang dentro del editor. Es el deseo más transversal de
+cualquier app con plugins (editor, servidor con hooks, bot). No confundir con hot reload ni hot
+swap (§48): aquí el host no cambia; se le añade código ajeno.
+
+**Lo que ya existe y lo que falta.** Actores con heap aislado y canales que cruzan heaps
+copiando (M38); `run_program_with_limit` con combustible por instrucciones y tope de heap; un
+loader que compila proyectos multi-módulo y un checker que valida el programa fusionado; el
+registro único de builtins (`src/builtins.rs`); FFI por `dlopen` (M41) como plugin nativo con
+ABI C, sin tipos ni aislamiento. Falta la costura: `run_program` toma UN `CompiledProgram`
+inmutable —no hay forma de compilar y ejecutar un segundo programa en una VM viva— y un binario
+`ray build --native` no lleva ni checker ni VM.
+
+**Cómo lo hace la industria** (cuatro familias; la elección depende de qué toca el plugin):
+proceso aparte por RPC (LSP, VS Code, go-plugin: kernel aísla, se mata, cualquier lenguaje,
+decenas de µs por llamada); VM de scripting embebida (Lua en juegos/Redis/Neovim, Emacs Lisp,
+Python en Sublime: ns por llamada, acceso directo al estado); WASM en sandbox (Zed, Lapce,
+Figma, proxy-wasm, Extism: cualquier lenguaje, capacidades explícitas, cargar/descargar y matar
+por combustible; coste = `wasmtime`); librerías nativas (VST, módulos de Apache: máximo
+rendimiento, mínimo aislamiento = nuestro FFI). Neovim combina dos: Lua en proceso para lo de
+confianza y plugins remotos por msgpack-RPC para el resto. Ese es el modelo que se adopta.
+
+### Modelo de dos niveles
+
+| Nivel | Qué corre | Aislamiento | Para quién |
+|---|---|---|---|
+| **N1 — en proceso, `std/plugin`** | un programa raylang compilado al cargar y ejecutado como **actor** con heap propio, conectado al host por canales | permisos estáticos + límites de la VM; **sin** aislamiento de memoria | extensiones de fábrica, plugins **firmados** o de fuentes que el usuario haya decidido confiar |
+| **N2 — proceso aparte** | un binario cualquiera (raylang nativo, Python, Node…) por JSON-RPC (stdio o TCP local), como ya hace ray-sublime | kernel: memoria, muerte fiable, sandbox del SO opcional | todo lo demás: plugins de terceros, código no auditado |
+
+Los dos niveles hablan **el mismo contrato**: un módulo raylang del host con sus tipos de
+mensaje. N1 lo importa como dependencia y lo usa por canal; N2 lo recibe como esquema JSON-RPC
+generado de esos mismos tipos (`@derive(ToJson)` ya existe). Escribir un plugin en N1 y bajarlo
+a N2 —o al revés— no cambia su lógica, solo su transporte. WASM como host (`wasmtime` detrás
+de una feature) sería un N1.5 futuro con el mismo contrato; no lo necesita ray-sublime para
+arrancar y es una dependencia grande → arco aparte, si llega.
+
+### N1 — `std/plugin` (contrato)
+
+- **Contrato tipado por un módulo del host.** El host publica un módulo raylang normal
+  (`api.ray`) con `pub enum Event` / `pub enum Request` (lo que quiera). El plugin lo importa
+  como dependencia por ruta. Host y plugin comparten los tipos **por construcción** (el checker
+  compila el plugin contra ese módulo): sin esquemas ni bindings.
+- **Entrada fija.** `pub fn plugin(inbox: Channel<Event>, outbox: Channel<Request>)`. API del
+  host: `plugin.load(dir, api_source, caps) -> Result<Plugin, string>` (compila; verifica la
+  firma de entrada contra los nombres del módulo API; error honesto si no casa) y
+  `plugin.spawn(p) -> (Channel<Event>, Channel<Request>)`. Nada más cruza la frontera: ni
+  closures ni referencias, solo valores por mensaje (copia entre heaps, como entre actores).
+  Consecuencia de diseño: el API se piensa **por eventos**, no por lecturas finas del buffer.
+- **Permisos estáticos y dinámicos.** `caps` (`fs`, `net`, `process`, `ui`, `env`, …) se aplica
+  DOS veces: en compilación, por el registro de builtins (un plugin sin `fs` no compila si usa
+  `fs.read_file`) y rechazando `extern "lib"` siempre; y en ejecución, en el despacho del
+  builtin, contra las capacidades del actor. Solo-compilación no basta: un bug del checker o de
+  memoria lo saltaría.
+- **Parar y recargar.** `plugin.stop(p)`: combustible/safepoint (cooperativo, como toda la
+  cancelación de la VM). Recargar = parar el actor, recompilar, `spawn` de nuevo; el estado
+  del host no se toca. Es el hot reload de §48 acotado a donde compensa.
+- **DX gratis.** Un plugin es un proyecto raylang corriente (`ray.toml` + dependencia por ruta
+  al módulo API): `ray check`, `ray test`, LSP, hover y raydoc funcionan sin tocar nada.
+- **Nativo.** Un binario `ray build --native` que use `std/plugin` enlaza checker + VM como un
+  subsistema más del proyecto Cargo generado (feature `plugins`, excluible con `--without
+  plugins`), igual que TLS/SQLite. Es el binario **de la app** el que crece (unos pocos MB), no
+  `ray`. Es una decisión de producto por app, no una imposición.
+
+### Requisitos previos (bloqueantes: se resuelven ANTES de que exista `std/plugin`)
+
+1. **Handles por actor.** Hoy el registro de archivos/sockets/procesos es **global del proceso**
+   con claves `i64` correlativas (`FileRegistry` en `builtins.rs`): un plugin puede inventarse
+   `7` y leer, escribir o cerrar el archivo, el socket o el pty del host sin ningún permiso. Los
+   handles deben ser propiedad de un actor y la VM debe rechazar un handle ajeno. Es la
+   vulnerabilidad concreta y el cambio de diseño de más calado.
+2. **Bloqueo doble de las válvulas de escape** (arriba): builtins por capacidad en compilación
+   Y en despacho; `extern` prohibido en plugins; `std/keychain`, `std/update`, `std/process`,
+   `ui.eval_js`, `env()` detrás de capacidades explícitas.
+
+### Amenazas de N1 que hay que asumir o mitigar (modelo de amenazas nuevo para SECURITY.md)
+
+Hoy la VM asume programa **de confianza**; N1 ejecuta código de terceros en el proceso de la app.
+- **DoS interno**: bucle infinito y memoria ya los cubren combustible y tope de heap. Faltan:
+  bombas de `spawn`, inundación de canales hacia el host y **recursión profunda** (stack
+  overflow de Rust = aborto del proceso entero → límite de profundidad de llamada en la VM).
+- **Panic = caída de la app**: las fibras ya llevan `catch_unwind` y no se compila con
+  `panic = abort`, pero `ice!` y los `unwrap` de builtins pasan a ser alcanzables por entrada
+  hostil (60 `unsafe` en builtins + 11 en FFI). Sin aislamiento de memoria, un bug del runtime
+  es un compromiso del host: **por eso N1 es solo para código de confianza**.
+- **Compilador como superficie**: lexer/parser/checker sobre fuente hostil (hay fuzz nocturno y
+  límite de profundidad del parser; la fusión de módulos y las tablas por posición nunca se
+  pensaron adversarias). Cargar un plugin NO resuelve dependencias por red ni sigue `path:`
+  fuera de su directorio.
+- **Confused deputy por el API**: aunque el plugin no tenga `fs`, `Request.OpenFile(path)` lo
+  abre el host con sus privilegios → toda petición con rutas/URLs/comandos se valida en el host
+  como si viniera de la red; nada de un plugin llega a `eval_js` sin escapar.
+- **Fugas**: rutas absolutas en errores, `args()`, cwd, variables `RAY_*` del supervisor.
+- **Cadena de suministro** (el vector real de todos los ecosistemas): lockfile con hash (ya
+  existe para paquetes, reutilizar), permisos declarados y visibles al instalar, firma para N1.
+
+### Lo que esto aporta al modelo de tres capas de ray-sublime
+
+N1 es una **capa 0**: la lógica de editor que hoy iría a `ui.js` por no poder correr raylang
+pasa a un actor raylang con permisos estáticos, y el webview queda para presentación. Reduce la
+capa 1, que es la más peligrosa de las tres (mismo origen = ninguna separación entre
+extensiones ni con el core; la identidad del emisor debe fijarla el host por iframe, no un
+campo del JS; phantoms/popups HTML son inyección directa). Las capas 2 y 3 siguen: la 2 es N2
+tal cual; la 3 exige tratar los build systems como capa 2 (son comandos de shell), timeout por
+regex en `.sublime-syntax` (ReDoS) y rutas confinadas al directorio de la extensión.
+
+**Clasificación de impacto**: ALTO en runtime (handles por actor, capacidades en despacho,
+límite de recursión, segundo programa en VM viva) · MEDIO en nativo (feature `plugins`) ·
+BAJO en lenguaje (nada nuevo en sintaxis ni tipos: el contrato es un módulo ordinario). Fases
+propuestas: **P1** requisitos previos 1–2 (valen por sí solos: endurecen la VM aunque
+`std/plugin` no llegue) · **P2** `std/plugin` en VM con contrato, permisos, `stop` y recarga ·
+**P3** feature `plugins` en nativo · **P4** medir en ray-sublime (latencia canal vs RPC, que
+sigue pendiente en su IDEAS) y decidir si algo de N2 sube a N1. Antes de P1: **medir la
+latencia RPC** de N2 en VM y nativo — si basta para el editor, P2 pierde urgencia.

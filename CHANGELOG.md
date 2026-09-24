@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`net` 0.3.4: máscara WebSocket y nonce del handshake desde el CSPRNG** (M292, arco de
+  endurecimiento IDEAS §96 #5). La clave de enmascarado de cada trama cliente→servidor y el
+  nonce `Sec-WebSocket-Key` salían de `std/random` (predecible desde unas pocas tramas); RFC 6455
+  §5.3 exige una máscara impredecible (envenenamiento de cachés de proxies). Ahora
+  `crypto.random_bytes`, también en las copias demo de `examples/web`.
+
+- **`std/json`: la profundidad como valor, no como desbordamiento** (M291, arco de endurecimiento
+  IDEAS §96 #4). `parse`/`parse_relaxed` devuelven `Err("nesting too deep …")` pasados
+  `json.max_depth()` (200) niveles de arreglo/objeto. Antes, un `[[[[…` de miles de niveles era un
+  error de ejecución fatal en la VM y, en el binario nativo, un desbordamiento de la pila del
+  proceso (100 000 niveles → «has overflowed its stack»).
+
 ## 1.27.9 — 2026-09-24
 
 - **`std/crypto`: contraseñas con PBKDF2-HMAC-SHA256** (M290, arco de endurecimiento IDEAS §96 #2).

@@ -14386,6 +14386,30 @@ a sí misma: `std/kv` → `std/fs`). Golden de tres motores con los vectores ofi
 ejemplo queda fuera del corpus del parser autoalojado (`bytes` + interpolación anidada), como
 `key_agreement.ray`.
 
+## 275. M291 — `std/json`: la profundidad como valor, no como desbordamiento (sep 2026)
+
+Origen: IDEAS §96 #4 (ya apuntado como «menor» en §35: «sin límite de profundidad, lo corta
+`MAX_CALL_DEPTH`»). El parser de `std/json` es recursivo (`parse_value` → `parse_array`/
+`parse_object` → `parse_value`) y no contaba niveles. Medido con `[[[[…` sintético: en la VM,
+5 000 niveles dan `stack overflow (recursion too deep: 1024 frames)` —un error de ejecución que
+mata el programa, no un `Err` que el handler pueda devolver como 400—; en el binario **nativo**,
+1 000 y 5 000 niveles pasan y 100 000 terminan en `thread 'main' has overflowed its stack`: el
+proceso entero abortado por un cuerpo de 200 KB contra cualquier API que parsee JSON. Es la
+diferencia entre la VM (límite de marcos) y el nativo (pila real de la fibra) que SECURITY.md
+ya reconoce para `--fuel`/`--heap`, aflorando en la librería más usada.
+
+Decisión: **tope de profundidad como valor**, el mismo patrón que `db/bson` (M-, `max_depth`
+200): `P` lleva `depth`, `parse_value` lo sube al entrar en `{`/`[` y lo baja al salir, y al
+cruzar `max_depth()` devuelve `Err("nesting too deep (possible DoS): more than 200 levels")`. Un
+solo punto de control (en `parse_value`, no en cada retorno de `parse_array`/`parse_object`) y
+sirve a `parse` y `parse_relaxed`. `max_depth()` es `pub` para que un consumidor pueda razonar sobre el límite (y para el test);
+es función y no `const` porque `examples/web/json.ray` está en el corpus del parser autoalojado,
+que aún no soporta constantes de nivel superior (M27.5) — lo cazó el CI de la PR #401. 200 porque coincide con `bson`, supera de sobra
+cualquier JSON legítimo (serde_json corta en 128; Jackson en 1000) y cabe en los 1024 marcos de
+la VM con dos marcos por nivel. Verificado en los tres motores: 200 pasa, 201 y 100 000 son
+`Err` — el nativo ya no aborta. No toca el lenguaje: es un cambio de la stdlib embebida, sin
+bump de paquete.
+
 ## 276. M292 — WebSocket: la máscara y el nonce salen del CSPRNG (sep 2026)
 
 Origen: IDEAS §96 #5. `net/websocket` construía la clave de enmascarado de cada trama cliente→

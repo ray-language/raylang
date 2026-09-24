@@ -17,7 +17,12 @@ pub fn op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
             Some(miniz_oxide::deflate::compress_to_vec(data, level))
         }
         "inflate" => {
-            let limit = if n <= 0 { usize::MAX } else { n as usize };
+            // M293 (IDEAS §96 #6): `n <= 0` acota a CERO octetos, no a "sin tope". Antes era
+            // `usize::MAX`, y `std/zip` pasaba como tope el `size` declarado en la cabecera: un ZIP
+            // con `size = 0` y datos deflate reales descomprimía sin límite (bomba) antes de que la
+            // comprobación de tamaño lo rechazara. Así el camino rápido coincide con el inflater en
+            // raylang (que con `limit` 0 rechaza el primer octeto emitido).
+            let limit = n.max(0) as usize;
             miniz_oxide::inflate::decompress_to_vec_with_limit(data, limit).ok()
         }
         "crc32" => Some(crc32(data).to_be_bytes().to_vec()),
@@ -83,8 +88,12 @@ mod tests {
         let text = b"raylang raylang raylang comprime y descomprime".repeat(50);
         let z = op("deflate", &text, 6).expect("deflate");
         assert!(z.len() < text.len());
-        assert_eq!(op("inflate", &z, 0).expect("inflate").as_slice(), text.as_slice());
         assert_eq!(op("inflate", &z, text.len() as i64).expect("inflate at the limit").len(), text.len());
+        // M293: 0 (o negativo) NO es "sin tope": es tope cero → cualquier salida lo rebasa.
+        assert!(op("inflate", &z, 0).is_none(), "limit 0 rejects any output");
+        assert!(op("inflate", &z, -1).is_none(), "negative limit rejects any output");
+        let empty = op("deflate", b"", 6).expect("deflate empty");
+        assert_eq!(op("inflate", &empty, 0).expect("empty stream fits in a zero cap").len(), 0);
         assert!(op("inflate", &z, 10).is_none(), "over the cap → None (the raylang path reports the error)");
         assert!(op("inflate", b"\xff\xff\xff", 0).is_none());
         assert!(op("nope", b"", 0).is_none());

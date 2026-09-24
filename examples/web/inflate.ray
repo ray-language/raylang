@@ -12,7 +12,8 @@
 // (bit-reader con bounds, NLEN verificado, cabecera gzip acotada, FDICT rechazado, hlit/hdist
 // acotados, repeticiones 16/17/18 sin rebasar). M64.2: tope de salida anti-bomba — las formas
 // `inflate_raw_limit`/`gunzip_limit`/`zlib_inflate_limit(data, max_out)` acotan la salida; las
-// formas sin límite delegan con 64 MiB por defecto.
+// formas sin límite delegan con 64 MiB por defecto. M293: `max_out <= 0` es tope CERO (cualquier
+// octeto emitido es `Err`), nunca "sin tope" — el camino rápido del runtime lo hacía ilimitado.
 //
 // DEFLATE empaqueta los bits LSB-first dentro de cada octeto, pero los códigos Huffman se leen como
 // si fueran MSB-first → `read_bit` saca el bit menos significativo y `decode` los va acumulando por la

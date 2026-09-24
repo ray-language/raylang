@@ -35,7 +35,16 @@ struct P {
     n: int,
     // M218 (ray-sublime #5): modo relajado — comentarios `//` `/* */` y comas finales.
     relaxed: bool,
+    // M291 (IDEAS §96 #4): niveles de arreglo/objeto abiertos. El parser es recursivo: sin tope, un
+    // `[[[[…` de miles de niveles agota la pila — en la VM es un error de ejecución que mata el
+    // programa; en el binario nativo, un desbordamiento de la pila de la fibra. Se rechaza como
+    // VALOR (`Err`) al cruzar `MAX_DEPTH`, como hace `db/bson`.
+    depth: int,
 }
+
+/// The maximum nesting of arrays/objects `parse` accepts (200, as `db/bson`); deeper input is an
+/// `Err("nesting too deep …")`, never a stack overflow.
+pub const MAX_DEPTH: int = 200;
 
 fn at_end(p: P) -> bool { p.i >= p.n }
 
@@ -95,10 +104,16 @@ fn parse_value(p: P) -> Result<Json, string> {
         return Result.Err("unexpected end of input");
     }
     let c: char = cur(p);
-    if (c == '{') {
-        parse_object(p)
-    } else if (c == '[') {
-        parse_array(p)
+    if (c == '{' || c == '[') {
+        p.depth = p.depth + 1;
+        if (p.depth > MAX_DEPTH) {
+            return Result.Err(
+                "nesting too deep (possible DoS): more than " + to_string(MAX_DEPTH) + " levels"
+            );
+        }
+        let r = if (c == '{') { parse_object(p) } else { parse_array(p) };
+        p.depth = p.depth - 1;
+        r
     } else if (c == '"') {
         parse_string_value(p)
     } else if (c == 't' || c == 'f') {
@@ -447,7 +462,7 @@ pub fn parse_relaxed(s: string) -> Result<Json, string> {
 
 fn parse_with(s: string, relaxed: bool) -> Result<Json, string> {
     let cs = s.chars();
-    var p: P = P { cs: cs, i: 0, n: cs.len(), relaxed: relaxed };
+    var p: P = P { cs: cs, i: 0, n: cs.len(), relaxed: relaxed, depth: 0 };
     match (parse_value(p)) {
         Result.Ok(j) => {
             skip_ws(p);

@@ -155,6 +155,42 @@ fn main() -> int {
     check("errors", driver, expected);
 }
 
+/// M291 (IDEAS §96 #4): la profundidad se acota como VALOR. 200 niveles pasan; 201 es `Err`, en
+/// los dos motores, sin desbordar la pila (antes: error de ejecución fatal en la VM, stack
+/// overflow del proceso en nativo).
+#[test]
+fn nesting_too_deep_is_an_error_value() {
+    let driver = r#"
+from json import parse, MAX_DEPTH;
+fn nested(n: int) -> string {
+    var s = "";
+    var i = 0;
+    while (i < n) { s = s + "["; i = i + 1; }
+    i = 0;
+    while (i < n) { s = s + "]"; i = i + 1; }
+    s
+}
+fn reports(n: int) {
+    match (parse(nested(n))) {
+        Result.Ok(j) => print("ok " + to_string(n)),
+        Result.Err(e) => print("err " + to_string(n) + ": " + e),
+    }
+}
+fn main() -> int {
+    reports(MAX_DEPTH);
+    reports(MAX_DEPTH + 1);
+    reports(100000);
+    match (parse("{\"a\": [{\"b\": [[1]]}]}")) {
+        Result.Ok(j) => print("mixed ok"),
+        Result.Err(e) => print("mixed err: " + e),
+    }
+    0
+}
+"#;
+    let expected = "ok 200\nerr 201: nesting too deep (possible DoS): more than 200 levels\nerr 100000: nesting too deep (possible DoS): more than 200 levels\nmixed ok";
+    check("depth", driver, expected);
+}
+
 // ── Helpers de acceso + pretty-print (M90.3) ─────────────────────────────────────────
 
 #[test]

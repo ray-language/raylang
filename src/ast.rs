@@ -186,6 +186,15 @@ pub struct Program {
     /// porque en una cadena (`v.doble().inc().doble()`) todos los eslabones comparten la posición del
     /// receptor: dos `.doble()` colapsarían a la misma clave; se guardan ambas posiciones.
     pub field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
+    /// Sitios de **nombres de tipo en posición de tipo** (M288): `(línea, col, nombre)` de cada
+    /// identificador que el parser leyó como tipo nominal (`Conn`, `sqlite.Conn`, `Caja<int>` →
+    /// `Caja`, los traits de un `dyn A + B`). El AST `Type` no lleva posición (es un valor que se
+    /// compara estructuralmente), así que sin esta tabla el checker no podía registrar el hover ni
+    /// el ir-a-definición de un tipo escrito en una anotación —solo funcionaba en literales de
+    /// struct y patrones—. El loader la desplaza y **reescribe** los nombres al global
+    /// (`db::sqlite::Conn`), como hace con las referencias de tipo del AST; el checker la consume
+    /// solo en modo `gather` (LSP). Vacía sin coste para la verificación normal.
+    pub type_name_sites: Vec<(usize, usize, String)>,
     /// Funciones externas (M41, FFI): `extern "lib" { fn name(params) -> ret; … }`. Cada una es
     /// una firma **sin cuerpo** cuya implementación vive en una librería C nativa, cargada por
     /// `dlopen`/`dlsym` en tiempo de ejecución (`src/ffi.rs`). El checker valida que los tipos sean

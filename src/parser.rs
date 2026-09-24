@@ -71,6 +71,8 @@ pub struct Parser {
     /// Posición del nombre en un acceso `recv.name` (M10.2g): `(línea, col, nombre)` del acceso →
     /// `(línea, col)` del `name` tras el `.`. Al terminar pasa al `Program` (para el hover del LSP).
     field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
+    /// Ver [`crate::ast::Program::type_name_sites`] (M288): nombres de tipo en posición de tipo.
+    type_name_sites: Vec<(usize, usize, String)>,
     /// Azúcar preservado para el formateador (M29.3): forma de superficie de interpolación y pipelines,
     /// indexada por la posición del nodo desazucarado raíz. Al terminar pasan al `Program`. Ver
     /// [`crate::ast::Program::interp_sites`].
@@ -99,7 +101,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), if_let_sites: std::collections::HashSet::new(), return_expr_sites: std::collections::HashSet::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), type_name_sites: Vec::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), paren_sites: std::collections::HashSet::new(), if_let_sites: std::collections::HashSet::new(), return_expr_sites: std::collections::HashSet::new(), depth: 0 }
     }
 
     // =================================================================
@@ -114,6 +116,7 @@ impl Parser {
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
+        acc.type_name_sites = std::mem::take(&mut self.type_name_sites);
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
@@ -142,6 +145,7 @@ impl Parser {
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
+        acc.type_name_sites = std::mem::take(&mut self.type_name_sites);
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         acc.paren_sites = std::mem::take(&mut self.paren_sites);
@@ -725,7 +729,8 @@ impl Parser {
         if self.eat(&TokenKind::Dyn) {
             let mut traits = Vec::new();
             loop {
-                let (name, _, _) = self.expect_ident("the trait name after 'dyn'")?;
+                let (name, line, col) = self.expect_ident("the trait name after 'dyn'")?;
+                self.type_name_sites.push((line, col, name.clone())); // M288: hover/def del trait
                 traits.push(name);
                 if !self.eat(&TokenKind::Plus) {
                     break;
@@ -788,6 +793,7 @@ impl Parser {
         // (Un identificador suelto es `Struct(name, [])`; el checker lo reclasifica.)
         if let TokenKind::Ident(name) = self.peek_kind() {
             let mut name = name.clone();
+            let (line, col) = (self.peek().line, self.peek().col);
             self.advance();
             // Tipo calificado por módulo: `M.Tipo` (M11.3c-3). El `.` se guarda **en el nombre**;
             // el loader lo resuelve a `M::Tipo` (validando `import M;` + `pub`). Sin loader (REPL,
@@ -796,6 +802,9 @@ impl Parser {
                 let (ty, _, _) = self.expect_ident("the type name after 'M.'")?;
                 name = format!("{}.{}", name, ty);
             }
+            // M288: el sitio del nombre (con su `M.` si lo lleva), para el hover/def de tipos en
+            // anotaciones. Se registra ANTES de los argumentos, que se registran a su vez.
+            self.type_name_sites.push((line, col, name.clone()));
             let args = self.type_args()?;
             return Ok(Type::Struct(name, args));
         }

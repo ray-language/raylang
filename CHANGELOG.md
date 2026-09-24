@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **LSP: hover e ir-a-definición de los tipos escritos en anotaciones, incluidos los calificados**
+  (M288). Sobre `sqlite.Conn` (`import db/sqlite;`), o sobre un `Category` local en `-> Result<Category,
+  string>`, el editor no mostraba nada: el AST `Type` no lleva posición y el checker solo registraba
+  los tipos en literales de struct y patrones. Ahora el parser deja los sitios de los nombres de tipo,
+  el loader los califica y el checker los vuelca al índice: hover (`struct sqlite.Conn` + sus `///`),
+  ir-a-definición (salta al módulo, también a `.ray-deps/`) y `dyn Trait`.
+- **LSP: el hover de un nombre calificado ya no depende de por dónde llega el ratón** (M288). Sobre
+  `sqlite.exec(` el servidor devolvía el rango de `sqlite` aunque el cursor estuviera sobre `exec`,
+  y el editor descartaba el popover al llegar por la derecha o al pasar sobre el `.`. El rango cubre
+  ahora el camino entero `sqlite.exec`.
+
 ## 1.27.7 — 2026-09-22
 
 - **`llms.txt` (recurso `raylang://llms.txt` del MCP): las cadenas multilínea, visibles donde un agente las busca** (acentos graves; sin triple comilla, heredoc ni raw). El MANUAL §6 gana la subsección de cadenas plantilla.

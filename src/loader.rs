@@ -291,7 +291,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), module_bands: Vec::new(),
-        expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
+        expr_spans: HashMap::new(), field_name_pos: HashMap::new(), type_name_sites: Vec::new(),
         externs: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
         interp_sites: HashMap::new(), pipe_sites: HashMap::new(), paren_sites: HashSet::new(), if_let_sites: HashSet::new(), return_expr_sites: HashSet::new(),
@@ -351,7 +351,9 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);
-        TypeRewriter::new(&type_refs, &import_map, &surfaces).rewrite_program(&mut m.program);
+        let mut type_rewriter = TypeRewriter::new(&type_refs, &import_map, &surfaces);
+        type_rewriter.rewrite_program(&mut m.program);
+        type_rewriter.rewrite_type_name_sites(&mut m.program.type_name_sites);
 
         // 5. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
@@ -382,6 +384,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         merged.externs.append(&mut m.program.externs);
         merged.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
         merged.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
+        merged.type_name_sites.append(&mut m.program.type_name_sites);
 
         loaded_modules.push(LoadedModule {
             name: m.name, source: m.source, start_line: start, path: m.path, template: m.template,
@@ -414,6 +417,10 @@ pub fn shift_program(program: &mut Program, delta: usize) {
         .into_iter()
         .map(|((l, c, n), ps)| ((l + delta, c, n), ps.into_iter().map(|(nl, nc)| (nl + delta, nc)).collect()))
         .collect();
+    // M288: los sitios de nombres de tipo también viajan con su módulo.
+    for (l, _, _) in &mut program.type_name_sites {
+        *l += delta;
+    }
     for f in &mut program.functions {
         shift_function(f, delta);
     }
@@ -1401,6 +1408,17 @@ impl<'a> TypeRewriter<'a> {
                 }
             }
             _ => {} // Int/Float/Bool/String/Unit/Var/SelfType
+        }
+    }
+
+    /// M288: reescribe los nombres de la tabla lateral `type_name_sites` (nombres de tipo en
+    /// posición de tipo, para el hover/def del LSP) con la MISMA regla que las referencias del AST
+    /// (`rewrite_name`), pero sin ámbito de parámetros de tipo: la tabla es plana (no sabe en qué
+    /// `fn<T>` cae cada sitio). Un parámetro de tipo que coincida con un tipo nominal del módulo
+    /// se reescribiría al nominal; solo afecta al texto del hover, nunca al chequeo.
+    fn rewrite_type_name_sites(&self, sites: &mut [(usize, usize, String)]) {
+        for (_, _, name) in sites.iter_mut() {
+            self.rewrite_name(name);
         }
     }
 

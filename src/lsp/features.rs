@@ -213,13 +213,37 @@ pub(super) fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize)
     let (qline, qcol) = (line0 + 1, char0 + 1);
     // Entre los que solapan la posición, el **más específico** (menor rango): un nombre namespacado
     // (`geo::duplicar`) registra un `len` mayor que el token de la fuente y solaparía el siguiente.
+    // El rango de cada entrada se recorta al **camino** real de la fuente (`sqlite.exec`, no el
+    // `db::sqlite::exec` namespacado, más largo): así el filtro no captura tokens vecinos y el
+    // rango devuelto cubre TODO el nombre calificado. Devolver solo `sqlite` cuando el cursor
+    // está sobre `exec` hacía que el editor descartara el popover (la posición no caía en el
+    // rango) y que el hover dependiera de por dónde llegaba el ratón.
+    let span = |h: &checker::HoverEntry| h.len.min(path_len(src, line0, h.col - 1));
     let e = idx.hovers.iter()
-        .filter(|h| h.line == qline && qcol >= h.col && qcol < h.col + h.len)
-        .min_by_key(|h| h.len)?;
+        .filter(|h| h.line == qline && qcol >= h.col && qcol < h.col + span(h))
+        .min_by_key(|h| span(h))?;
     let start = e.col - 1;
-    // Recorta el fin al identificador real de la fuente (el `len` namespacado puede excederlo).
-    let end = start + e.len.min(token_len(src, line0, start));
+    let end = start + span(e);
     Some((facade_name(&e.text, &imports_of(src)), start, end))
+}
+
+/// Largo en la fuente de un **camino calificado** que empieza en `col0`: `ident(.ident)*` (M288).
+/// Para un identificador simple coincide con `token_len`; para `sqlite.exec`/`geo.Circle` cubre
+/// el nombre completo tal como lo escribió el usuario.
+pub(super) fn path_len(src: &str, line0: usize, col0: usize) -> usize {
+    let Some(line) = src.lines().nth(line0) else { return 0 };
+    let chars: Vec<char> = line.chars().skip(col0).collect();
+    let mut i = 0;
+    loop {
+        let start = i;
+        while i < chars.len() && is_ident_char(chars[i]) { i += 1; }
+        if i == start { return start.saturating_sub(1); } // `.` sin identificador detrás: no cuenta
+        if i + 1 < chars.len() && chars[i] == '.' && is_ident_char(chars[i + 1]) {
+            i += 1;
+        } else {
+            return i;
+        }
+    }
 }
 
 /// Presenta los nombres globales para el usuario: convierte cada ruta namespacada del loader

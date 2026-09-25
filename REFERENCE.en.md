@@ -169,6 +169,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | Function | Signature | Description |
 |---|---|---|
 | `spawn` | `(f: fn() -> T) -> Task<T>` | launches a concurrent task; `join` waits for its value |
+| `spawn_isolated` | `(f: fn() -> T) -> Task<T>` | like `spawn`, but in a fresh **handle domain** (M296): the task cannot use the files/sockets/processes/windows of other domains (they behave as closed) nor they its own; its children inherit the domain |
 | `join` | `(t: Task<T>) -> T` | blocks until the task finishes (re-raises its failure). *Ad-hoc*: `join(arr, sep)` is the string one |
 | `scope` | `(body: fn() -> R) -> R` | structured concurrency: on return it joins every task launched inside; if one fails, it cancels its siblings and propagates |
 | `send` | `(ch: Channel<T>, v: T) -> unit` | sends; blocks if the bounded channel is full (backpressure) |
@@ -607,4 +608,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:f8aa1dc9517f -->
+<!-- sync: sha256:79af32685172 -->

@@ -3653,7 +3653,7 @@ arrancar y es una dependencia grande → arco aparte, si llega.
 
 ### Requisitos previos (bloqueantes: se resuelven ANTES de que exista `std/plugin`)
 
-1. **Handles por actor.** Hoy el registro de archivos/sockets/procesos es **global del proceso**
+1. ✅ **M296** **Handles por actor.** (Resuelto como *dominios*: `spawn_isolated`; ver §96 #8.) Hoy el registro de archivos/sockets/procesos es **global del proceso**
    con claves `i64` correlativas (`FileRegistry` en `builtins.rs`): un plugin puede inventarse
    `7` y leer, escribir o cerrar el archivo, el socket o el pty del host sin ningún permiso. Los
    handles deben ser propiedad de un actor y la VM debe rechazar un handle ajeno. Es la
@@ -3719,7 +3719,7 @@ ve el problema. Sondeado sobre el código, no sobre generalidades. Pasos, en ord
 | 5 | **Máscara WebSocket con `std/random`** (RFC 6455 §5.3 pide impredecible: envenenamiento de cachés de proxies) | ✅ **M292** (net 0.3.4): máscara `crypto.random_bytes(4)` y nonce `Sec-WebSocket-Key` de 16 octetos del CSPRNG, en `net/websocket`+`websocket_client` y en las copias demo de `examples/web`; `std/random` fuera de ambos; test `tests/websocket_mask_cli.rs` |
 | 6 | **`inflate` con `n <= 0` = sin tope** (bomba de descompresión si el llamador no pasa límite) | ✅ **M293**: `n <= 0` es tope CERO en `ray_runtime::deflate::op` (antes `usize::MAX`); vector real: `std/zip` pasa el `size` declarado como tope → un ZIP con `size = 0` sobre datos deflate descomprimía la bomba entera antes del check de tamaño (`tests/fixtures/bomb.zip`, test en `zip_cli`) |
 | 7 | **`ray dev` ejecuta `[frontend] dev` con `sh -c`** (clonar y correr = ejecutar código; misma clase que scripts de npm) y **deps `path:` sin confinamiento** | ✅ **M294**: SECURITY.md «Herramientas de desarrollo» + «No son vulnerabilidades» |
-| 8 | **Handles como enteros globales** (footgun en programa propio; vulnerabilidad con plugins) | → IDEAS §95 P1 |
+| 8 | **Handles como enteros globales** (footgun en programa propio; vulnerabilidad con plugins) | ✅ **M296**: dominios de handles — cada handle nace en el dominio de su tarea; `spawn` hereda, `spawn_isolated` estrena; un handle ajeno se comporta como cerrado en los 98 sitios de acceso (VM+intérprete: `OpenHandles`; nativo: `__RayOpen`) sin tocarlos. Mitad 1 de §95 P1; queda la mitad 2 (capacidades en el despacho) |
 | 9 | **Recursión profunda en nativo** (pilas de fibra de tamaño fijo; sin `RAYLANG_MAX_DEPTH`) | ✅ **M295**: medido — fibra de 128 KiB: SIGBUS mudo (exit 138) entre 500 y 1000 marcos; hilo principal: aborto de Rust pasados ~20 000. Ahora contador por fibra con el mismo límite/mensaje que la VM (`RAYLANG_MAX_DEPTH`, exit 70), solo en funciones que pueden recurrir (SCC del grafo de llamadas + closures + valores `fn`), soltado antes de las llamadas en cola (paridad con `TailCall`), pila de fibra 1 MiB; `--fast` lo quita. Coste: +1,3 ns/llamada recursiva (fib35 0,03→0,07 s), +0,3 ns en cola, 0 en el resto |
 
 Lo que se revisó y está bien: framing HTTP (TE sobre CL, RFC 7230), límites de cabeceras/cuerpo/

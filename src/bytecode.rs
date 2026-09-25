@@ -454,6 +454,8 @@ pub enum OpCode {
     /// almacén de tareas (la fibra corre con `task: None` → nada que retener ni liberar); dentro de un
     /// scope se comporta como `Spawn` (el scope necesita rastrear a la hija y la consume al cerrar).
     /// Empuja `unit` (el `Pop` que sigue lo tira). Solo la VM.
+    /// M296: `spawn_isolated(f)` — como `Spawn`, pero la fibra hija estrena un dominio de handles.
+    SpawnIsolated,
     SpawnDiscard,
     /// Saca un `Task<T>`; **une** la tarea: si terminó, empuja su valor; si falló (panic), re-lanza ese
     /// fallo; si sigue pendiente, **bloquea** la fibra hasta que termine (M12.3). Builtin `join` de 1

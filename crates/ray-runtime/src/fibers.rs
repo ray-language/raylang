@@ -88,6 +88,9 @@ struct Task {
     /// repuesta en `DEPTH` al reanudar. El binario transpilado la incrementa en cada prólogo de
     /// función y corta en `max_call_depth()` con el mismo error que la VM.
     depth: u32,
+    /// M296: dominio de handles de la fibra (0 = principal; `spawn` hereda, `spawn_isolated`
+    /// estrena). Como `depth`, se intercambia con `DOMAIN` alrededor de cada `resume`.
+    domain: u64,
 }
 
 thread_local! {
@@ -95,6 +98,14 @@ thread_local! {
     /// thread-local y no un campo del contexto por fibra porque se toca en CADA llamada: el
     /// scheduler la intercambia con `Task::depth` alrededor de cada `resume`.
     pub static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// M296: dominio de handles del actor que corre en ESTE worker (ver `Task::domain`).
+    pub static DOMAIN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// M296: un dominio de handles nuevo, nunca visto (para `spawn_isolated`).
+pub fn fresh_domain() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// M295: el límite de marcos raylang por fibra/hilo — `RAYLANG_MAX_DEPTH=N` (mínimo 16; por
@@ -397,7 +408,8 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     });
     let s = sched();
     let home = s.pick_home();
-    let task = Task { co, done: done.clone(), local: None, timed_out: false, home, depth: 0 };
+    // M296: la fibra nace en el dominio del que la lanza (el `spawn_isolated` lo cambia dentro).
+    let task = Task { co, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
     s.enqueue(task);
     JoinHandle { done }
 }
@@ -699,10 +711,12 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
         // M295: la profundidad de llamadas viaja con la fibra: se repone antes de reanudar y se
         // guarda al aparcar (el worker, fuera de una fibra, está a 0).
         DEPTH.with(|d| d.set(task.depth));
+        DOMAIN.with(|d| d.set(task.domain));
         // El catch_unwind delimita el panic de LA FIBRA (corosensei lo propaga a través de resume):
         // se publica como Err en su celda y el worker sigue con la siguiente.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.co.resume(timed_out)));
         task.depth = DEPTH.with(|d| d.replace(0));
+        task.domain = DOMAIN.with(|d| d.replace(0));
         CURRENT.with(|c| c.set(std::ptr::null()));
         CURRENT_LOCAL.with(|c| c.set(std::ptr::null_mut()));
         match r {

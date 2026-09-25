@@ -1903,8 +1903,9 @@ impl Transpiler {
             // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
             // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
             // una función de nivel superior de aridad 0 (`spawn(worker)` → `move || worker()`; sin captura).
-            "spawn" | "scope" => {
+            "spawn" | "spawn_isolated" | "scope" => {
                 self.needs_concurrency = true;
+                let is_spawn = method != "scope"; // M296: spawn_isolated se emite como spawn
                 let named: Option<String> = match &eff[0].kind {
                     ExprKind::Func(_) => None,
                     ExprKind::Ident(n) if self.funcs.contains_key(n) => {
@@ -1936,7 +1937,7 @@ impl Transpiler {
                     // H21-N5b (solo spawn: cruza de hilo): las demás capturas de HEAP se convierten a
                     // la repr Send FUERA (deep copy) y se reconstruyen DENTRO — la semántica de heap
                     // aislado de la VM (M38): la mutación no se comparte; los canales son el conducto.
-                    if method == "spawn" {
+                    if is_spawn {
                         let mut fn_clones: Vec<String> = Vec::new();
                         if let ExprKind::Func(fnexpr) = &eff[0].kind {
                             let (caps, cls) = self.spawn_captures(&fnexpr.body)?;
@@ -1957,7 +1958,7 @@ impl Transpiler {
                         }
                     }
                 }
-                let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
+                let runtime = match method { "spawn" => "__ray_spawn", "spawn_isolated" => "__ray_spawn_isolated", _ => "__ray_scope" };
                 write!(out, "{}(move || ", runtime).unwrap();
                 if !captures.is_empty() {
                     out.push_str("{ ");
@@ -1975,7 +1976,7 @@ impl Transpiler {
                 // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc;
                 // compuestos → __RaySend); el cuerpo produce la repr del programa, se envuelve. scope
                 // corre en el hilo actual → sin conversión.
-                let wrap = if method == "spawn" { ret } else { Type::Unit };
+                let wrap = if is_spawn { ret } else { Type::Unit };
                 // El cuerpo del literal se emite AQUÍ (no por `emit_fn_expr`), así que hay que
                 // registrar sus celdas a mano: una `var` declarada DENTRO del cuerpo y capturada por
                 // una closure aún más interna necesita `Rc<RefCell<_>>`, o el `Rc<closure>` que la
@@ -1990,7 +1991,7 @@ impl Transpiler {
                 // raylang, y la conversión Send se aplica al resultado. Sin la frontera, `return;`
                 // fija `()` como retorno del closure de hilo y choca con la cola `__RaySend::U`
                 // (E0308); lo mismo pasaba con `return s;` (Rc<str>) frente a la cola Arc<str>.
-                if send_is_tree(&wrap) && method == "spawn" {
+                if send_is_tree(&wrap) && is_spawn {
                     let mut tmp = String::new();
                     match &eff[0].kind {
                         ExprKind::Func(fnexpr) => {

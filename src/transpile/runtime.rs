@@ -195,10 +195,17 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     if fibers {
         out.push_str("#[inline(always)] fn __ray_depth_cell() -> *const std::cell::Cell<u32> { ray_runtime::fibers::DEPTH.with(|d| d as *const _) }\n");
         out.push_str("fn __ray_max_depth() -> u32 { ray_runtime::fibers::max_call_depth() }\n");
+        out.push_str("#[inline] fn __ray_domain() -> u64 { ray_runtime::fibers::DOMAIN.with(|d| d.get()) }\n");
+        out.push_str("fn __ray_set_domain(d: u64) { ray_runtime::fibers::DOMAIN.with(|c| c.set(d)) }\n");
+        out.push_str("fn __ray_fresh_domain() -> u64 { ray_runtime::fibers::fresh_domain() }\n");
     } else {
         out.push_str("thread_local! { static __RAY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
         out.push_str("#[inline(always)] fn __ray_depth_cell() -> *const std::cell::Cell<u32> { __RAY_DEPTH.with(|d| d as *const _) }\n");
         out.push_str("fn __ray_max_depth() -> u32 { static L: std::sync::OnceLock<u32> = std::sync::OnceLock::new(); *L.get_or_init(|| std::env::var(\"RAYLANG_MAX_DEPTH\").ok().and_then(|v| v.parse::<u32>().ok()).map(|n| n.max(16)).unwrap_or(1024)) }\n");
+        out.push_str("thread_local! { static __RAY_DOMAIN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }\n");
+        out.push_str("#[inline] fn __ray_domain() -> u64 { __RAY_DOMAIN.with(|d| d.get()) }\n");
+        out.push_str("fn __ray_set_domain(d: u64) { __RAY_DOMAIN.with(|c| c.set(d)) }\n");
+        out.push_str("fn __ray_fresh_domain() -> u64 { static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1); N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }\n");
     }
     // El guard lleva el PUNTERO a la celda: un solo acceso TLS por llamada (el `Drop` no vuelve a
     // buscarla). SAFETY: la celda es thread-local y vive lo que el hilo; el guard se destruye en el
@@ -569,10 +576,20 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         )
         .unwrap();
         out.push_str(concat!(
-            "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
+            // M296: dominios de handles — el mapa consulta el dominio del actor en curso; un handle de
+            // otro dominio se comporta como cerrado (mismo contrato que la VM, `builtins::OpenHandles`).
+            "#[derive(Default)] struct __RayOpen(__RayMap<i64, (u64, __RayHandle)>);\n",
+            "impl __RayOpen {\n",
+            "    fn get(&self, h: &i64) -> Option<&__RayHandle> { let d = __ray_domain(); self.0.get(h).filter(|(o, _)| *o == d).map(|(_, v)| v) }\n",
+            "    fn get_mut(&mut self, h: &i64) -> Option<&mut __RayHandle> { let d = __ray_domain(); self.0.get_mut(h).filter(|(o, _)| *o == d).map(|(_, v)| v) }\n",
+            "    fn insert(&mut self, h: i64, v: __RayHandle) -> Option<__RayHandle> { self.0.insert(h, (__ray_domain(), v)).map(|(_, o)| o) }\n",
+            "    fn remove(&mut self, h: &i64) -> Option<__RayHandle> { if self.get(h).is_none() { return None; } self.0.remove(h).map(|(_, v)| v) }\n",
+            "    fn contains_key(&self, h: &i64) -> bool { self.get(h).is_some() }\n",
+            "}\n",
+            "struct __RayReg { next: i64, open: __RayOpen }\n",
             "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
-            "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::default() }))\n}\n",
+            "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayOpen::default() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
             // M182: el "fd" por el que aparca el reactor de fibras — el descriptor en unix y el
             // SOCKET (truncado a i32, valores pequeños) en Windows, donde el reactor es WSAPoll.
@@ -1911,10 +1928,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // __ray_cv_wait (10 ms) — interino hasta F3 (esperas de fibra nativas).
         if t.fibers {
             out.push_str(concat!(
-                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
+                // M296: `spawn` hereda el dominio de handles; `spawn_isolated` estrena uno.
+                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain()) }\n",
+                "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain()) }\n",
+                "fn __ray_spawn_in<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F, domain: u64) -> __RayTask<T> {\n",
                 "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
                 "    let t = task.clone();\n",
                 "    let _ = ray_runtime::fibers::spawn(move || {\n",
+                "        __ray_set_domain(domain);\n",
                 "        __ray_ctx(|c| c.cancel = Some(t.cancel.clone()));\n",
                 "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
                 "        if r.is_err() { let frames = __ray_ctx(|c| std::mem::take(&mut c.scopes)); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
@@ -1994,10 +2015,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        }\n",
                 "    });\n",
                 "}\n",
-                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
+                // M296: `spawn` hereda el dominio de handles; `spawn_isolated` estrena uno.
+                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain()) }\n",
+                "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain()) }\n",
+                "fn __ray_spawn_in<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F, domain: u64) -> __RayTask<T> {\n",
                 "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
                 "    let t = task.clone();\n",
                 "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
+                "        __ray_set_domain(domain);\n",
                 "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
                 "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
                 // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el

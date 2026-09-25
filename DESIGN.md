@@ -14431,3 +14431,24 @@ importaba `std/crypto` para el `sha1` del handshake. Las copias demo de `example
 mensaje llevan máscaras distintas, ambas desenmascaran al payload y el bit MASK va puesto, en
 los dos motores. `net` 0.3.3 → 0.3.4.
 
+## 277. M293 — `inflate` con tope cero, no sin tope (sep 2026)
+
+Origen: IDEAS §96 #6. `ray_runtime::deflate::op("inflate", data, n)` tomaba `n <= 0` como «sin
+tope» (`usize::MAX`), mientras que el inflater en raylang (el camino sin la feature `deflate`)
+con `limit` 0 rechaza el primer octeto emitido: los dos motores discrepaban y el rápido era el
+inseguro. No era teórico: `std/zip::read` pasa como tope el `size` que declara la cabecera del
+ZIP, y un archivo con `size = 0` sobre datos deflate reales (8 KB que expanden a 8 MiB, o a lo
+que quepa en la memoria) se descomprimía ENTERO antes de que la comprobación `out.len() !=
+e.size` lo rechazara. La defensa anti-bomba de M64.2 existía, pero la puerta de atrás era el
+cero.
+
+Decisión: `n <= 0` es **tope cero** (`n.max(0)`): cualquier salida lo rebasa y `op` devuelve
+`None` → la capa raylang lo reporta como `Err("decompressed output exceeds the limit (possible
+decompression bomb)")`. Un stream vacío sigue cabiendo en un tope cero (salida de 0 octetos), así
+que la entrada vacía legítima de un ZIP (`empty.txt`, `size = 0`, deflate de nada) sigue leyéndose.
+No se toca la API: las formas sin `_limit` conservan los 64 MiB por defecto y las `_limit` ahora
+significan lo que dicen. `std/zip` no necesita cambio: con el tope honesto, la bomba es un `Err`
+inmediato. Fixture `tests/fixtures/bomb.zip` (generado con `zipfile` y el `size` parcheado a 0 en
+cabecera local y directorio central) y test en `tests/zip_cli.rs` para los dos motores; el test
+unitario del runtime fija la semántica de `0`, `-1` y stream vacío.
+

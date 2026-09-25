@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/inflate`: `max_out <= 0` es tope cero, no «sin tope»** (M293, arco de endurecimiento
+  IDEAS §96 #6). El camino rápido del runtime tomaba `0` como ilimitado, y `std/zip` pasa como
+  tope el `size` declarado en la cabecera: un ZIP con `size = 0` sobre datos deflate reales
+  descomprimía la bomba entera antes de la comprobación de tamaño. Ahora es un `Err` inmediato;
+  un stream vacío legítimo sigue leyéndose.
+
 - **`net` 0.3.4: máscara WebSocket y nonce del handshake desde el CSPRNG** (M292, arco de
   endurecimiento IDEAS §96 #5). La clave de enmascarado de cada trama cliente→servidor y el
   nonce `Sec-WebSocket-Key` salían de `std/random` (predecible desde unas pocas tramas); RFC 6455

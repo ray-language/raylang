@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.10 — 2026-09-24
 
 - **SECURITY.md: la premisa de confianza y el modelo de amenazas de las herramientas** (M294,
   arco de endurecimiento IDEAS §96 #3 y #7). El confinamiento `--fuel`/`--heap` acota CPU, memoria

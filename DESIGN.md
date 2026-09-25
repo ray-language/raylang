@@ -14452,3 +14452,27 @@ inmediato. Fixture `tests/fixtures/bomb.zip` (generado con `zipfile` y el `size`
 cabecera local y directorio central) y test en `tests/zip_cli.rs` para los dos motores; el test
 unitario del runtime fija la semántica de `0`, `-1` y stream vacío.
 
+## 278. M294 — SECURITY.md: la premisa de confianza y el modelo de amenazas de las herramientas (sep 2026)
+
+Origen: IDEAS §96 #3 y #7. SECURITY.md presentaba el confinamiento `--fuel`/`--heap` como la
+respuesta a «entrada que escribe un modelo» (`ray mcp`), y no lo es del todo: acota CPU, memoria y
+tiempo, pero el subproceso tiene el disco, la red y los procesos del usuario. Y tres decisiones de
+confianza de las herramientas —`ray dev` ejecuta el `[frontend] dev` por `sh -c`, las dependencias
+`path:` compilan lo que apunten, el MCP no acota I/O— no estaban escritas en ningún sitio: quien
+clonara un repo ajeno no tenía forma de saberlas.
+
+Decisión: **decir lo que hay, no construir todavía**. Tres piezas nuevas en SECURITY.md: (1) la
+**premisa** explícita de que todas las garantías protegen al programa de su entrada y ninguna
+protege al anfitrión del programa —no hay modelo de capacidades, y los handles son enteros
+globales del proceso—, que es exactamente lo que IDEAS §95 exige resolver antes de plugins;
+(2) la sección «Herramientas de desarrollo» con las tres decisiones, cada una con su
+justificación y su frontera (el LSP nunca ejecuta nada; el aislamiento de origen aplica a deps por
+nombre; el MCP se usa donde se usaría cualquier ejecutor de código generado); (3) «Lo que la
+stdlib y los paquetes hacen por ti», el resumen del arco de endurecimiento (M289–M293) escrito
+como invariantes para que nadie los reabra por accidente. Y dos entradas nuevas en las listas de
+«qué cuenta como vulnerabilidad»: SÍ lo es un secreto derivado de `std/random` o una entrada
+externa sin tope en la stdlib/paquetes oficiales; NO lo son las tres decisiones de confianza. La
+mitigación real del MCP —capacidades negables verificadas en el despacho de builtins— queda
+propuesta y enlazada con §95 P1: es la misma pieza que necesitan los plugins, y se construirá una
+vez.
+

@@ -48,7 +48,9 @@ Lo que raylang **garantiza por construcción**:
   recursos** (`ray run --fuel N` acota las instrucciones; `--heap N` acota los objetos vivos): un bucle
   infinito o una entrada maliciosa **no cuelgan ni agotan la memoria** del anfitrión. El servidor
   MCP (`ray mcp`) ejecuta el código de sus tools con esos límites y un plazo, precisamente porque
-  su entrada la escribe un modelo.
+  su entrada la escribe un modelo. **Lo que el confinamiento NO acota es el I/O**: un programa bajo
+  `--fuel`/`--heap` sigue teniendo el disco, la red y los procesos del usuario que lo ejecuta (ver
+  «Herramientas de desarrollo» más abajo). Es un límite de recursos, no una sandbox.
 - **Compilador sin pánicos.** El front-end (lexer/parser/checker) convierte toda entrada del usuario en un
   **error con posición**, nunca en un *panic* de Rust. Los fallos de invariante interna se centralizan en un
   `ice!()` (Internal Compiler Error) que pide un reporte de bug. Esto se verifica con **fuzzing continuo**
@@ -73,6 +75,63 @@ Lo que raylang **garantiza por construcción**:
     `[registry] index`. Solo se contacta al resolver deps **por nombre** (nunca en
     `run`/`build` con deps git/`path:`), y el opt-out es explícito: `index = ""` en
     `ray.toml` o `RAY_INDEX` vacía (builds herméticos/CI sin red).
+
+### La premisa: el programa es de confianza
+
+Todas las garantías de arriba protegen a un programa raylang **de su entrada** (un cuerpo HTTP, un
+archivo, una respuesta de red). Ninguna protege al anfitrión **del programa**: raylang no tiene un
+modelo de capacidades — un programa que compila puede abrir cualquier archivo, socket o proceso que
+pueda el usuario, y los handles del runtime (archivos, sockets, procesos) son enteros globales del
+proceso. Esto es lo esperado para código propio, y es la razón por la que ejecutar código de
+terceros dentro de un proceso raylang (plugins, IDEAS §95) exige antes handles por actor y
+capacidades verificadas en el despacho de cada builtin, no solo en compilación.
+
+### Herramientas de desarrollo: `ray dev`, dependencias `path:` y `ray mcp`
+
+Tres comportamientos por diseño que conviene saber antes de abrir un proyecto ajeno:
+
+- **`ray dev` ejecuta comandos del proyecto.** El `[frontend] dev` de `ray.toml` corre por el
+  shell del sistema (`sh -c` / `cmd /C`) para que el usuario vea Vite tal cual. Clonar un repo y
+  correr `ray dev` es ejecutar lo que ese repo diga — la misma clase de confianza que los scripts de
+  `npm`, y por eso solo lo hace `ray dev`: el **LSP nunca** ejecuta nada del proyecto al abrirlo
+  (diagnostica con el loader, sin red y sin procesos), y `ray run`/`build` no lanzan el frontend.
+- **Las dependencias `path:` no están confinadas.** Un `ray.toml` puede apuntar a `../../lo-que-sea`
+  y el loader compila esos archivos como módulos. Son parte del proyecto que decides compilar, igual
+  que un submódulo git; el aislamiento de origen (índice único, hash, firma) aplica a las
+  dependencias **por nombre**, no a las rutas locales.
+- **`ray mcp` confina CPU, memoria y tiempo, no el I/O.** `ray_run`/`ray_test`/`ray_check` ejecutan
+  el código que escribe el modelo en un subproceso con combustible, tope de heap, plazo con kill y
+  un directorio temporal propio — pero con el disco, la red y los procesos **del usuario**. Un
+  prompt inyectado puede pedirle al modelo un programa que lea `~/.ssh` o lance procesos, y raylang
+  lo ejecutará. Úsalo como usarías cualquier herramienta que ejecute código generado: en una cuenta
+  o contenedor con lo que estés dispuesto a exponer. Una lista de capacidades negables (`fs`, `net`,
+  `process`) verificada en el despacho de builtins es la mitigación prevista (IDEAS §95 P1, §96 #3).
+
+### Lo que la stdlib y los paquetes hacen por ti (endurecimiento, sep 2026)
+
+Revisión de los bordes donde el código «funciona» y ningún test funcional ve el problema (IDEAS
+§96). Lo cerrado, para que nadie lo reabra por accidente:
+
+- **Secretos solo del CSPRNG.** `std/random` (SplitMix64 sembrado del reloj, reproducible con
+  `random_seed`) es para simulación y *jitter*, nunca para un valor que un atacante no deba
+  adivinar. Los ids de sesión del framework `web` (M289), la máscara de las tramas WebSocket y el
+  nonce del handshake (M292) salen de `crypto.random_bytes`. Un módulo de la stdlib o de un paquete
+  oficial que derive un secreto de `std/random` **es una vulnerabilidad a reportar**.
+- **Sesiones que no se pueden fijar.** `web` acepta una cookie `ray_session` solo con la forma que
+  él mismo emite (`is_session_id`); cualquier otro valor se ignora y se estrena una sesión. La
+  cookie lleva `HttpOnly; SameSite=Lax` y `Secure` detrás de un proxy que anuncie
+  `X-Forwarded-Proto: https`.
+- **Contraseñas con derivación lenta.** `crypto.password_hash`/`password_verify` (PBKDF2-HMAC-SHA256,
+  sal del CSPRNG, 600 000 iteraciones, formato autodescriptivo, comparación en tiempo constante,
+  M290). `sha256(password)` es el error que la stdlib dejaba a mano; ahora hay una forma correcta
+  con nombre obvio.
+- **Entrada hostil acotada como valor, nunca como caída.** `std/json` rechaza más de
+  `max_depth()` (200) niveles con un `Err` (M291: antes, un binario nativo abortaba por
+  desbordamiento de pila con un cuerpo de 200 KB); `std/inflate` con `max_out <= 0` es tope cero
+  y no «sin tope» (M293: un ZIP con `size = 0` sobre datos deflate descomprimía la bomba entera);
+  `db/bson` corta a 200 niveles; el servidor HTTP limita cabeceras, cuerpo, conexiones y tiempo de
+  lectura; `static_response` rechaza `..`; los templates escapan HTML por defecto; MySQL y
+  PostgreSQL usan sentencias preparadas reales.
 
 ### Procesos que lanza `std/ui` (M235)
 
@@ -314,12 +373,20 @@ documentada:
 - Un fallo en la verificación de certificados TLS del cliente HTTP/red.
 - Una **divergencia entre motores** con impacto de seguridad: que el binario nativo o el
   intérprete permitan algo que la VM impide (o al revés) en cualquiera de las garantías de arriba.
+- Un módulo de la stdlib o de un paquete oficial (`net`, `web`, `db`, `rpc`) que derive un
+  **secreto** (token, id de sesión, nonce, sal, clave) de `std/random` en vez del CSPRNG, o que
+  acepte **entrada externa sin tope** (profundidad, tamaño descomprimido, cabeceras) de forma que
+  un cuerpo pequeño agote la pila o la memoria.
 
 **No** son vulnerabilidades (comportamiento por diseño, documentado):
 
 - Que un programa que **declara y usa FFI** haga algo inseguro — es la frontera insegura por definición.
 - Que un programa pase entrada no confiable a `sh -c` vía `std/process`: el argv es tipado
   precisamente para que eso sea una decisión visible de quien la escribe.
+- Que `ray dev` ejecute el comando `[frontend] dev` del `ray.toml` del proyecto, que una
+  dependencia `path:` compile archivos fuera del directorio del proyecto, o que un programa bajo
+  `ray mcp` tenga acceso al disco y la red del usuario: las tres son decisiones de confianza
+  documentadas arriba («Herramientas de desarrollo»).
 - Que un **binario nativo** no respete `--fuel`/`--heap`, o que `--fast` no detecte desbordamientos.
 - Que la criptografía **pura en raylang** (`examples/`, material de demostración, y los módulos
   LEGADOS `std/crypto/{md5,aes,des}` de M194) no sea de tiempo constante — por eso `std/crypto` se

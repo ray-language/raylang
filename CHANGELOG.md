@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **SECURITY.md: la premisa de confianza y el modelo de amenazas de las herramientas** (M294,
+  arco de endurecimiento IDEAS §96 #3 y #7). El confinamiento `--fuel`/`--heap` acota CPU, memoria
+  y tiempo, **no el I/O** (también bajo `ray mcp`); `ray dev` ejecuta el `[frontend] dev` del
+  proyecto por el shell; las dependencias `path:` no están confinadas. Nueva sección con lo que la
+  stdlib y los paquetes garantizan tras M289–M293, y dos entradas nuevas en «qué cuenta como
+  vulnerabilidad».
 - **`std/inflate`: `max_out <= 0` es tope cero, no «sin tope»** (M293, arco de endurecimiento
   IDEAS §96 #6). El camino rápido del runtime tomaba `0` como ilimitado, y `std/zip` pasa como
   tope el `size` declarado en la cabecera: un ZIP con `size = 0` sobre datos deflate reales

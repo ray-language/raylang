@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net` 0.3.5 / `web` 0.4.4: servidores locales de apps cerrados a su ventana** (M297, arco de
+  endurecimiento IDEAS §96 #10). Un servidor en `127.0.0.1` era un API abierto para cualquier
+  página web del navegador (POSTs y WebSockets sin CORS) y para cualquier otro proceso o app del
+  móvil. Nuevos `webserver.local_token()`, `local_limits(token)` (token obligatorio por
+  `X-Ray-Token`, cookie `ray_local` o `?ray_token=`, más guarda de origen por loopback → 403),
+  `serve_with_on_limits`, `cross_site_blocked` y `web.listen_local(build, listener, token)`.
+  `ray://app` queda documentado como el camino por defecto sin puerto. SECURITY.md: «Servidores
+  locales en apps de escritorio y móvil».
+
 - **`spawn_isolated` y dominios de handles** (M296, arco de endurecimiento IDEAS §96 #8 y la
   mitad 1 de §95 P1). Todo handle del runtime (archivo, socket, proceso, ventana…) nace en el
   dominio de la tarea que lo crea; `spawn` lo hereda —nada cambia para el código existente— y

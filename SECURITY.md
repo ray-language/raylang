@@ -110,6 +110,39 @@ Tres comportamientos por diseño que conviene saber antes de abrir un proyecto a
   o contenedor con lo que estés dispuesto a exponer. Una lista de capacidades negables (`fs`, `net`,
   `process`) verificada en el despacho de builtins es la mitigación prevista (IDEAS §95 P1, §96 #3).
 
+### Servidores locales en apps de escritorio y móvil (M297)
+
+Una app que sirve su interfaz desde un webserver en `127.0.0.1:<puerto>` tiene **dos atacantes
+locales** que no existen en un servidor normal, y el puerto no es un secreto (fijo se conoce;
+aleatorio se escanea desde JavaScript en segundos):
+
+- **Cualquier página web abierta en el navegador del usuario** puede enviar peticiones a ese
+  puerto. CORS le impide leer la respuesta, pero el efecto secundario ocurre (un POST de formulario
+  que borre o ejecute algo); los WebSockets no están sujetos a CORS, así que abre uno y habla con
+  el servidor en las dos direcciones; con DNS rebinding además lee las respuestas.
+- **Cualquier otro proceso de la máquina**, o cualquier otra app instalada en el móvil (ni Android
+  ni iOS aíslan `localhost` entre apps), conecta al puerto como si fuera la ventana legítima.
+
+Lo que raylang ofrece, en orden de preferencia:
+
+1. **Sin puerto: `ray://app/…`** (M226). La ventana carga la interfaz por un esquema servido dentro
+   del proceso; no hay socket que atacar. Es el camino por defecto para escritorio y móvil, y el
+   que usan las apps de referencia (ray-sublime).
+2. **Con backend HTTP local: `web.listen_local(build, listener, token)`** o, en crudo,
+   `webserver.local_limits(token)`. Activa las dos defensas: el **token local** de 128 bits del
+   CSPRNG (`webserver.local_token()`), que la ventana recibe en la URL (`?ray_token=`) y conserva
+   en una cookie `HttpOnly; SameSite=Strict` —otro proceso no lo conoce; otra página web tampoco—,
+   y la **guarda de origen**: una petición que llega por loopback, sin cabeceras de proxy, con un
+   `Origin` http(s) cuyo host no es el `Host`, es un navegador ajeno → 403, también para el
+   handshake WebSocket. Las dos son **opt-in** a propósito: una guarda de origen «siempre activa»
+   rompería un servidor real detrás de un proxy que no ponga `X-Forwarded-For`, y toda app con
+   CORS configurado.
+3. `0.0.0.0` es una decisión de servidor, no de app: expone el puerto a toda la red local.
+
+Un servidor local sin `local_limits` es, para cualquier proceso de la máquina y para cualquier
+página web hostil, un API abierto. No es una vulnerabilidad de raylang; es la razón de que exista
+`ray://app`.
+
 ### Lo que la stdlib y los paquetes hacen por ti (endurecimiento, sep 2026)
 
 Revisión de los bordes donde el código «funciona» y ningún test funcional ve el problema (IDEAS

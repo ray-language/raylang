@@ -84,6 +84,26 @@ struct Task {
     timed_out: bool,
     /// Worker al que esta fibra está FIJADA (ver el doc del módulo: no migra jamás).
     home: usize,
+    /// M295: profundidad de llamadas raylang de ESTA fibra (marcos vivos), guardada al aparcar y
+    /// repuesta en `DEPTH` al reanudar. El binario transpilado la incrementa en cada prólogo de
+    /// función y corta en `max_call_depth()` con el mismo error que la VM.
+    depth: u32,
+}
+
+thread_local! {
+    /// M295: marcos raylang vivos en la fibra (o hilo) que corre en ESTE worker. Es un `Cell`
+    /// thread-local y no un campo del contexto por fibra porque se toca en CADA llamada: el
+    /// scheduler la intercambia con `Task::depth` alrededor de cada `resume`.
+    pub static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// M295: el límite de marcos raylang por fibra/hilo — `RAYLANG_MAX_DEPTH=N` (mínimo 16; por
+/// defecto 1024), el MISMO mando y default que la VM (`runtime::max_call_depth`). Se lee una vez.
+pub fn max_call_depth() -> u32 {
+    static LIMIT: OnceLock<u32> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("RAYLANG_MAX_DEPTH").ok().and_then(|v| v.parse::<u32>().ok()).map(|n| n.max(16)).unwrap_or(1024)
+    })
 }
 
 // SAFETY: corosensei NO marca `Coroutine` como Send a propósito — una pila suspendida puede contener
@@ -310,8 +330,13 @@ fn fiber_stack_size() -> usize {
             .and_then(|v| v.parse::<usize>().ok())
             .map(|k| k.max(32) * 1024)
             .unwrap_or_else(|| {
+                // M295: el default sube de 128 KiB a 1 MiB, escalando con `RAYLANG_MAX_DEPTH` (1 KiB
+                // por marco): el contador de profundidad debe saltar ANTES que la página de guarda
+                // —medido: con 128 KiB una recursión de ~750 marcos moría por SIGBUS mudo, por
+                // debajo de los 1024 que la VM permite—. Reserva virtual: solo cuestan las páginas
+                // tocadas, así que una fibra corta sigue costando lo mismo.
                 match DEFAULT_STACK_KIB.load(std::sync::atomic::Ordering::Relaxed) {
-                    0 => 128 * 1024,
+                    0 => (max_call_depth() as usize).max(1024) * 1024,
                     kib => kib.max(32) * 1024,
                 }
             })
@@ -372,7 +397,7 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     });
     let s = sched();
     let home = s.pick_home();
-    let task = Task { co, done: done.clone(), local: None, timed_out: false, home };
+    let task = Task { co, done: done.clone(), local: None, timed_out: false, home, depth: 0 };
     s.enqueue(task);
     JoinHandle { done }
 }
@@ -671,9 +696,13 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
         // este marco durante todo el resume; se retira ANTES de ceder la Task a nadie).
         CURRENT_LOCAL.with(|c| c.set(&mut task.local as *mut _));
         let timed_out = std::mem::replace(&mut task.timed_out, false);
+        // M295: la profundidad de llamadas viaja con la fibra: se repone antes de reanudar y se
+        // guarda al aparcar (el worker, fuera de una fibra, está a 0).
+        DEPTH.with(|d| d.set(task.depth));
         // El catch_unwind delimita el panic de LA FIBRA (corosensei lo propaga a través de resume):
         // se publica como Err en su celda y el worker sigue con la siguiente.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.co.resume(timed_out)));
+        task.depth = DEPTH.with(|d| d.replace(0));
         CURRENT.with(|c| c.set(std::ptr::null()));
         CURRENT_LOCAL.with(|c| c.set(std::ptr::null_mut()));
         match r {

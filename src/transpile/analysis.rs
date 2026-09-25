@@ -387,3 +387,239 @@ pub(super) fn cell_vars(body: &Block) -> std::collections::HashSet<String> {
     decls.retain(|n| captured.contains(n));
     decls
 }
+
+/// M295: qué funciones y qué closures necesitan el prólogo de profundidad (`__ray_enter`). Solo
+/// las que pueden RECURRIR: las que están en un ciclo del grafo de llamadas (incluido el bucle a
+/// sí mismas). El grafo es conservador: una llamada cuyo callee no es el nombre de una función del
+/// programa (un valor `fn`, un método `dyn`) apunta al nodo VALUE, que a su vez apunta a toda
+/// función usada como valor (su nombre en posición no-callee, o un método de trait `Tipo#m`,
+/// alcanzable por `dyn`) y a TODAS las closures (cada una es un nodo propio, `<closure:id>`, con
+/// sus callees; cualquiera podría ser el valor llamado). Una función que crea una closure NO
+/// apunta a ella (crearla no la ejecuta); la closure entra en un ciclo solo si sus llamadas
+/// alcanzan VALUE — `fn(x) x + 1` no paga nada; `fn(x) xs.map(g)` sí. Devuelve `(funciones en
+/// ciclo, ids de closures en ciclo)`. Así el código no recursivo —la mayoría— no paga el contador
+/// (~1,3 ns por llamada, medido en fib35).
+pub(super) fn depth_checked_fns(prog: &Program) -> (std::collections::HashSet<String>, std::collections::HashSet<usize>) {
+    use std::collections::{HashMap, HashSet};
+    const VALUE: &str = "<value>";
+    let fn_names: HashSet<&str> = prog.functions.iter().map(|f| f.name.as_str()).collect();
+    let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut as_value: HashSet<String> = HashSet::new();
+    let mut closure_ids: Vec<usize> = Vec::new();
+    // Callees directos de un bloque SIN descender a las closures que contiene (cada closure es
+    // su propio nodo); `calls_value` si alguna llamada no es a una función por nombre.
+    fn callees_of(b: &Block, fn_names: &HashSet<&str>, out: &mut HashSet<String>) -> bool {
+        let mut calls_value = false;
+        // `visit_exprs_block` desciende a las closures; se filtran por posición: todo lo que cae
+        // dentro del rango de una closure del bloque se atribuye a esa closure, no a este cuerpo.
+        let mut inner: Vec<(usize, usize)> = Vec::new(); // (línea, col) de inicio de cada closure
+        visit_exprs_block(b, &mut |e: &Expr| {
+            if let ExprKind::Func(_) = &e.kind {
+                inner.push((e.line, e.col));
+            }
+        });
+        let _ = &inner;
+        visit_exprs_block(b, &mut |e: &Expr| {
+            if let ExprKind::Call { callee, .. } = &e.kind {
+                match &callee.kind {
+                    ExprKind::Ident(n) if fn_names.contains(n.as_str()) => {
+                        out.insert(n.clone());
+                    }
+                    _ => calls_value = true,
+                }
+            }
+        });
+        calls_value
+    }
+    // Recorre las closures de un bloque (anidadas incluidas) dándole a cada una su nodo.
+    fn closures_of(b: &Block, fn_names: &HashSet<&str>, edges: &mut HashMap<String, HashSet<String>>, ids: &mut Vec<usize>) {
+        visit_exprs_block(b, &mut |e: &Expr| {
+            if let ExprKind::Func(fx) = &e.kind {
+                let mut out = HashSet::new();
+                if callees_of(&fx.body, fn_names, &mut out) {
+                    out.insert(VALUE.to_string());
+                }
+                edges.insert(format!("<closure:{}>", fx.id), out);
+                ids.push(fx.id);
+            }
+        });
+    }
+    for f in &prog.functions {
+        let mut out = HashSet::new();
+        if callees_of(&f.body, &fn_names, &mut out) {
+            out.insert(VALUE.to_string());
+        }
+        // Usos por valor: un Ident de función que NO es el callee de una llamada.
+        let mut callee_positions: HashSet<(usize, usize)> = HashSet::new();
+        visit_exprs_block(&f.body, &mut |e: &Expr| {
+            if let ExprKind::Call { callee, .. } = &e.kind
+                && let ExprKind::Ident(n) = &callee.kind
+                && fn_names.contains(n.as_str())
+            {
+                callee_positions.insert((callee.line, callee.col));
+            }
+        });
+        visit_exprs_block(&f.body, &mut |e: &Expr| {
+            if let ExprKind::Ident(n) = &e.kind
+                && fn_names.contains(n.as_str())
+                && !callee_positions.contains(&(e.line, e.col))
+            {
+                as_value.insert(n.clone());
+            }
+        });
+        closures_of(&f.body, &fn_names, &mut edges, &mut closure_ids);
+        edges.insert(f.name.clone(), out);
+    }
+    // VALUE: toda función usada por valor, los métodos de trait (`dyn`) y todas las closures.
+    let mut val: HashSet<String> = as_value;
+    for f in &prog.functions {
+        if f.name.contains('#') {
+            val.insert(f.name.clone());
+        }
+    }
+    for id in &closure_ids {
+        val.insert(format!("<closure:{id}>"));
+    }
+    edges.insert(VALUE.to_string(), val);
+    // Tarjan: nodos en una SCC de tamaño > 1, o con bucle propio.
+    let nodes: Vec<String> = edges.keys().cloned().collect();
+    let idx: HashMap<&str, usize> = nodes.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let adj: Vec<Vec<usize>> = nodes.iter().map(|n| edges[n].iter().filter_map(|m| idx.get(m.as_str()).copied()).collect()).collect();
+    let comp = scc_components(&adj);
+    let mut size = vec![0usize; comp.iter().max().map_or(0, |m| m + 1)];
+    for &c in &comp {
+        size[c] += 1;
+    }
+    let mut fns = HashSet::new();
+    let mut closures = HashSet::new();
+    for (v, name) in nodes.iter().enumerate() {
+        if size[comp[v]] > 1 || adj[v].contains(&v) {
+            if let Some(id) = name.strip_prefix("<closure:").and_then(|r| r.strip_suffix('>')) {
+                closures.insert(id.parse::<usize>().unwrap_or(usize::MAX));
+            } else if name != VALUE {
+                fns.insert(name.clone());
+            }
+        }
+    }
+    (fns, closures)
+}
+
+/// Componentes fuertemente conexas (Tarjan): devuelve, por nodo, el índice de su componente.
+fn scc_components(adj: &[Vec<usize>]) -> Vec<usize> {
+    struct T<'a> {
+        adj: &'a [Vec<usize>],
+        index: Vec<usize>,
+        low: Vec<usize>,
+        on: Vec<bool>,
+        comp: Vec<usize>,
+        stack: Vec<usize>,
+        next: usize,
+        ncomp: usize,
+    }
+    impl T<'_> {
+        fn strong(&mut self, v: usize) {
+            self.index[v] = self.next;
+            self.low[v] = self.next;
+            self.next += 1;
+            self.stack.push(v);
+            self.on[v] = true;
+            for i in 0..self.adj[v].len() {
+                let w = self.adj[v][i];
+                if self.index[w] == usize::MAX {
+                    self.strong(w);
+                    self.low[v] = self.low[v].min(self.low[w]);
+                } else if self.on[w] {
+                    self.low[v] = self.low[v].min(self.index[w]);
+                }
+            }
+            if self.low[v] == self.index[v] {
+                loop {
+                    let w = self.stack.pop().unwrap_or(v);
+                    self.on[w] = false;
+                    self.comp[w] = self.ncomp;
+                    if w == v {
+                        break;
+                    }
+                }
+                self.ncomp += 1;
+            }
+        }
+    }
+    let n = adj.len();
+    let mut t = T { adj, index: vec![usize::MAX; n], low: vec![0; n], on: vec![false; n], comp: vec![usize::MAX; n], stack: Vec::new(), next: 0, ncomp: 0 };
+    for v in 0..n {
+        if t.index[v] == usize::MAX {
+            t.strong(v);
+        }
+    }
+    t.comp
+}
+
+/// M295: posiciones `(línea, col)` de las llamadas en POSICIÓN DE COLA de un cuerpo — la cola del
+/// bloque, las colas de las ramas de `if`/`match`/bloques anidados, y `return <llamada>`. Espeja la
+/// regla del `TailCall` de la VM (compiler.rs: una llamada cuya continuación es el `Return`): en
+/// esos sitios el nativo suelta el guard de profundidad ANTES de llamar (`drop(_f)`), así una
+/// función que itera por recursión en cola no cuenta marcos —como en la VM, que reutiliza el
+/// marco— y Rust sigue pudiendo hacer la llamada como salto (sibling call).
+pub(super) fn tail_call_sites(body: &Block) -> std::collections::HashSet<(usize, usize)> {
+    let mut out = std::collections::HashSet::new();
+    fn expr(e: &Expr, out: &mut std::collections::HashSet<(usize, usize)>) {
+        match &e.kind {
+            ExprKind::Call { .. } => {
+                out.insert((e.line, e.col));
+            }
+            ExprKind::If { then_branch, else_branch, .. } => {
+                block(then_branch, out);
+                if let Some(eb) = else_branch {
+                    expr(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| expr(&a.body, out)),
+            ExprKind::Block(b) => block(b, out),
+            _ => {}
+        }
+    }
+    fn block(b: &Block, out: &mut std::collections::HashSet<(usize, usize)>) {
+        // `return <llamada>;` en cualquier sentencia del cuerpo (también dentro de bucles: el
+        // `return` sale de la función, así que la llamada es de cola igualmente).
+        for st in &b.statements {
+            returns(st, out);
+        }
+        if let Some(t) = &b.tail {
+            expr(t, out);
+        }
+    }
+    fn returns(st: &Stmt, out: &mut std::collections::HashSet<(usize, usize)>) {
+        match &st.kind {
+            StmtKind::Return { value: Some(v) } => expr(v, out),
+            StmtKind::Expr(e) => returns_in_expr(e, out),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => returns_in_expr(value, out),
+            StmtKind::Assign { value, .. } => returns_in_expr(value, out),
+            StmtKind::For { body, .. } => body.statements.iter().for_each(|s| returns(s, out)),
+            _ => {}
+        }
+    }
+    // Un `return` puede vivir dentro de un if/match/while/bloque usado como sentencia.
+    fn returns_in_expr(e: &Expr, out: &mut std::collections::HashSet<(usize, usize)>) {
+        match &e.kind {
+            ExprKind::If { then_branch, else_branch, .. } => {
+                then_branch.statements.iter().for_each(|s| returns(s, out));
+                if let Some(t) = &then_branch.tail { returns_in_expr(t, out); }
+                if let Some(eb) = else_branch { returns_in_expr(eb, out); }
+            }
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| returns_in_expr(&a.body, out)),
+            ExprKind::While { body, .. } => {
+                body.statements.iter().for_each(|s| returns(s, out));
+                if let Some(t) = &body.tail { returns_in_expr(t, out); }
+            }
+            ExprKind::Block(b) => {
+                b.statements.iter().for_each(|s| returns(s, out));
+                if let Some(t) = &b.tail { returns_in_expr(t, out); }
+            }
+            _ => {}
+        }
+    }
+    block(body, &mut out);
+    out
+}
+

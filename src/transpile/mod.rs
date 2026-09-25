@@ -43,6 +43,15 @@ struct FnSig {
 
 struct Transpiler {
     funcs: HashMap<String, FnSig>,
+    /// M295: funciones que emiten el prólogo de profundidad (las que pueden recurrir, por
+    /// `analysis::depth_checked_fns`); vacío con `--fast`.
+    depth_fns: std::collections::HashSet<String>,
+    /// M295: ids de las closures (`FnExpr::id`) que emiten el prólogo (están en un ciclo de llamadas).
+    depth_closures: std::collections::HashSet<usize>,
+    /// M295: ¿el cuerpo que se está emitiendo lleva guard `_f`? (para soltarlo en las llamadas de
+    /// cola) y las posiciones de esas llamadas en ese cuerpo.
+    depth_active: bool,
+    tail_sites: std::collections::HashSet<(usize, usize)>,
     /// Pila de ámbitos: nombre de variable → su tipo (para decidir clonado y para la inferencia de `let`).
     scopes: Vec<HashMap<String, Type>>,
     /// Overlay de bindings de patrón para `type_of` (ago 2026): `arm_type` lo empuja mientras tipa el
@@ -293,8 +302,20 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         }
     }
     let marks = spawn_fn_param_marks(prog);
+    // M295: solo las funciones que pueden recurrir pagan el contador de profundidad; `--fast`
+    // (código propio y confiado, como la aritmética envolvente) lo quita del todo.
+    let (mut depth_fns, depth_closures) = if fast { Default::default() } else { analysis::depth_checked_fns(prog) };
+    if !fast {
+        // `main` siempre cuenta (un marco, coste nulo): la recursión directa desde main corta en el
+        // mismo marco que la VM.
+        depth_fns.insert("main".to_string());
+    }
     let mut t = Transpiler {
         funcs,
+        depth_fns,
+        depth_closures,
+        depth_active: false,
+        tail_sites: std::collections::HashSet::new(),
         scopes: Vec::new(),
         probe_binds: std::cell::RefCell::new(Vec::new()),
         enums,

@@ -1469,3 +1469,49 @@ fn hoists_composite_literal_args_to_temporaries() {
     let single = transpile_src("fn main() { print([7]); }");
     assert!(single.contains("vec![7i64]"), "1 elem se emite directo, sin izar: {}", single);
 }
+
+/// M295: el prólogo de profundidad solo lo emiten las funciones que pueden recurrir (ciclo del
+/// grafo de llamadas, incluidos los ciclos a través de valores `fn` y closures) y `main`.
+#[test]
+fn depth_prologue_only_on_functions_that_can_recurse() {
+    let src = "fn leaf(x: int) -> int { x + 1 }\nfn helper(x: int) -> int { leaf(x) * 2 }\nfn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\nfn even(n: int) -> bool { if (n == 0) { true } else { odd(n - 1) } }\nfn odd(n: int) -> bool { if (n == 0) { false } else { even(n - 1) } }\nfn apply(g: fn(int) -> int, n: int) -> int { if (n == 0) { 0 } else { g(n - 1) + 1 } }\nfn via_value(n: int) -> int { apply(via_value, n) }\nfn main() -> int { helper(1) + fib(3) + via_value(2) + (if (even(2)) { 1 } else { 0 }) }\n";
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    let (fns, closures) = super::analysis::depth_checked_fns(&prog);
+    for f in ["fib", "even", "odd", "apply", "via_value"] {
+        assert!(fns.contains(f), "{f} puede recurrir: {fns:?}");
+    }
+    for f in ["leaf", "helper", "main"] {
+        assert!(!fns.contains(f), "{f} no recurre: {fns:?}");
+    }
+    // (Las closures del PRELUDE sí pueden estar en ciclo —llaman a valores `fn`—; el conjunto no
+    // distingue origen, así que aquí no se afirma nada sobre él.)
+    let _ = closures;
+    // En el Rust emitido: fib y los recursivos llevan `__ray_enter`; leaf/helper no; main siempre.
+    let out = transpile_src(src);
+    for f in ["fn fib(", "fn even(", "fn apply(", "fn ray_main("] {
+        let i = out.find(f).unwrap_or_else(|| panic!("{f} emitida"));
+        assert!(out[i..i + 200].contains("__ray_enter()"), "{f} lleva el prólogo");
+    }
+    for f in ["fn leaf(", "fn helper("] {
+        let i = out.find(f).unwrap_or_else(|| panic!("{f} emitida"));
+        assert!(!out[i..i + 120].contains("__ray_enter()"), "{f} NO lleva el prólogo");
+    }
+    // Las llamadas en cola de un cuerpo con guard lo sueltan antes (`drop(_f)`): odd → even es de cola.
+    let i = out.find("fn odd(").unwrap();
+    let odd = &out[i..i + 400];
+    assert!(odd.contains("drop(_f);") && odd.find("drop(_f);") < odd.find("even("), "tail call suelta el guard antes de llamar: {odd}");
+}
+
+/// M295: `--fast` quita el contador de profundidad del todo (código propio y confiado).
+#[test]
+fn fast_mode_emits_no_depth_prologue() {
+    let src = "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\nfn main() -> int { fib(5) }\n";
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    let out = super::transpile_with_opts(&prog, &[], true).expect("transpile").source;
+    assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
+}
+

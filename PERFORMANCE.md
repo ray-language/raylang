@@ -1903,3 +1903,14 @@ superinstrucción de guarda (P0.5 no llegó a existir). El método medir-primero
 | post-P2.b (nativo) | **<1× (bate a node)** | **<1×** | **~1×** | **~1×** | **~1×** |
 
 *(post-P2.b se compara el binario `--native`; el modo VM conserva su perfil para dev.)*
+
+## 7. Nota M295 (sep 2026): el contador de profundidad del nativo
+
+El endurecimiento (IDEAS §96 #9) añade al binario nativo un contador de marcos por fibra para
+cortar la recursión profunda como la VM. Medido en release, nativo, Apple Silicon: fib35 (30 M
+llamadas recursivas) 0,03 → 0,07 s (+1,3 ns/llamada; ~1 ns es el thread-local de macOS), bucle
+por recursión en cola de 100 M iteraciones 0,05 → 0,08 s (+0,3 ns), bucles `while` y código no
+recursivo: sin cambio (no llevan prólogo). `--fast` lo quita. Si algún día el TLS de macOS
+importa en un benchmark de cabecera, la vía es un contador estático por worker con la fibra
+guardando el suyo (0,04 s en el experimento), no quitar la cota.
+

@@ -240,8 +240,13 @@ dos excepciones explícitas:
 
 - El **confinamiento** `--fuel`/`--heap` es una facilidad de la VM y **no existe** en el binario
   nativo: para ejecutar código no confiable, usa la VM.
-- `--fast` cambia a propósito la aritmética *checked* por **envolvente**: es un modo de
-  rendimiento para código propio y confiado, no para entrada hostil.
+- `--fast` cambia a propósito la aritmética *checked* por **envolvente** y quita el **contador de
+  profundidad de llamadas** (M295): es un modo de rendimiento para código propio y confiado, no
+  para entrada hostil. Sin `--fast`, una recursión demasiado profunda es el mismo error de
+  ejecución que en la VM (`stack overflow (recursion too deep: …)`, exit 70) — antes era un aborto
+  del proceso en el hilo principal y un SIGBUS mudo dentro de una fibra, por debajo de los 1024
+  marcos que la VM permite. La página de guarda de cada pila sigue siendo la última red para
+  marcos gigantes.
 
 El binario solo enlaza los subsistemas que el programa usa, y `--without …` permite excluirlos
 explícitamente (builds herméticos, contenedores endurecidos).

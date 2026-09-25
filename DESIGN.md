@@ -14476,3 +14476,47 @@ mitigación real del MCP —capacidades negables verificadas en el despacho de b
 propuesta y enlazada con §95 P1: es la misma pieza que necesitan los plugins, y se construirá una
 vez.
 
+## 279. M295 — Nativo: la recursión profunda como error de ejecución, no como caída (sep 2026)
+
+Origen: IDEAS §96 #9, el último paso medible del arco de endurecimiento. La VM corta en 1024
+marcos con un error limpio (M217); el binario nativo no contaba nada. Medido con una recursión no
+optimizable a bucle: en el hilo principal (8 MiB) aborta con `thread 'main' has overflowed its
+stack` pasados unos 20 000 marcos; **dentro de una fibra** (128 KiB de pila) muere por **SIGBUS
+mudo, exit 138, entre 500 y 1000 marcos** — por debajo de lo que la VM permite. Un programa que
+recurre 800 niveles dentro de un `spawn` funciona en la VM y mata el proceso nativo sin mensaje:
+la divergencia entre motores con impacto de seguridad que SECURITY.md declara vulnerabilidad.
+
+Alternativas: comparar el puntero de pila con un límite por fibra (barato, pero sin paridad de
+mensaje ni de `RAYLANG_MAX_DEPTH`, y el límite sigue viniendo de un thread-local); convertir el
+SIGSEGV de la página de guarda en panic (UB desde un manejador de señal: descartado); o un
+**contador de marcos por fibra**, el modelo de Go (`morestack` en cada prólogo), que da paridad
+exacta con la VM. Se eligió el contador, y el coste se midió antes de aceptarlo: en fib35 nativo
+(30 M llamadas) el prólogo sube de 0,03 a 0,07 s — ~1,3 ns por llamada, de los que ~1 ns es el
+acceso thread-local (en macOS es una llamada; un contador estático sin TLS daba 0,04 s). Con el
+objetivo nº 1 del proyecto siendo el rendimiento, eso no podía pagarse en todas las llamadas.
+
+Decisión, en cuatro piezas. (1) **Solo las funciones que pueden recurrir** llevan el prólogo:
+`analysis::depth_checked_fns` construye el grafo de llamadas con dos nodos conservadores —VALUE
+(toda llamada cuyo callee no es el nombre de una función: valores `fn`, despacho `dyn`) apunta a
+toda función usada por valor, a los métodos de trait y a CLOSURE (la unión de las closures)— y
+marca las funciones en una SCC de tamaño > 1 o con bucle propio; `main` siempre cuenta (un marco)
+para que la recursión directa desde `main` corte en el mismo marco que la VM. Sin ciclos no hay
+recursión ilimitada, así que la cota se conserva; una cadena no recursiva entre dos recursivas no
+se cuenta y el corte puede llegar unos marcos más tarde que en la VM, nunca antes. (2) **El guard
+se suelta antes de las llamadas en cola** (`{ drop(_f); f(x) }` en las posiciones que
+`analysis::tail_call_sites` calcula: cola del cuerpo, ramas de `if`/`match`, `return <llamada>`):
+espeja el `TailCall` de la VM —un bucle por recursión en cola no cuenta marcos en ninguno de los
+dos— y deja que Rust siga haciendo la llamada como salto (100 M iteraciones en cola: 0,05 → 0,08 s,
+sin tocar la pila). En una cadena UFCS las llamadas anidadas comparten posición: dentro de una
+llamada de cola el estado se apaga. (3) El contador vive en `ray_runtime::fibers::DEPTH` (un
+`Cell` thread-local que el scheduler intercambia con `Task::depth` alrededor de cada `resume`,
+así viaja con la fibra) o, sin fibras, en un thread-local del binario; el guard guarda el puntero
+a la celda para hacer un solo acceso TLS por llamada; `RAYLANG_MAX_DEPTH` y el mensaje son
+idénticos a los de la VM. (4) La **pila de fibra por defecto sube de 128 KiB a 1 MiB** (y escala
+con `RAYLANG_MAX_DEPTH`, 1 KiB por marco): el contador debe saltar antes que la página de guarda,
+que sigue como última red para marcos gigantes. Reserva virtual: una fibra corta cuesta lo mismo.
+`--fast` quita el contador, como quita la aritmética checked: mismo contrato («código propio y
+confiado»). Golden de tres motores en `tests/native_depth_cli.rs` (directa, en fibra, mutua en
+cola, a través de un valor `fn`, con `RAYLANG_MAX_DEPTH`; stdout y exit code idénticos a la VM);
+unit tests del análisis en `transpile/tests.rs`; corpus nativo y diferencial sin cambios.
+

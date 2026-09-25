@@ -185,6 +185,29 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // con el hook de Rust.
     out.push_str("struct __RayErr(String);\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // M295: profundidad de llamadas raylang — el binario nativo corta la recursión en el MISMO
+    // límite y con el MISMO mensaje que la VM (`RAYLANG_MAX_DEPTH`, 1024 por defecto), en vez de
+    // reventar la pila (hilo principal: aborto con el mensaje de Rust; fibra: SIGBUS mudo). Cada
+    // función/closure raylang emite `let _f = __ray_enter();` como primera sentencia; el guard
+    // decrementa al salir por cualquier vía (retorno, `?`, panic). Con fibras, el contador vive en
+    // `ray_runtime::fibers::DEPTH` (el scheduler lo intercambia por fibra); sin ellas, en un
+    // thread-local propio (una tarea = un hilo).
+    if fibers {
+        out.push_str("#[inline(always)] fn __ray_depth_cell() -> *const std::cell::Cell<u32> { ray_runtime::fibers::DEPTH.with(|d| d as *const _) }\n");
+        out.push_str("fn __ray_max_depth() -> u32 { ray_runtime::fibers::max_call_depth() }\n");
+    } else {
+        out.push_str("thread_local! { static __RAY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
+        out.push_str("#[inline(always)] fn __ray_depth_cell() -> *const std::cell::Cell<u32> { __RAY_DEPTH.with(|d| d as *const _) }\n");
+        out.push_str("fn __ray_max_depth() -> u32 { static L: std::sync::OnceLock<u32> = std::sync::OnceLock::new(); *L.get_or_init(|| std::env::var(\"RAYLANG_MAX_DEPTH\").ok().and_then(|v| v.parse::<u32>().ok()).map(|n| n.max(16)).unwrap_or(1024)) }\n");
+    }
+    // El guard lleva el PUNTERO a la celda: un solo acceso TLS por llamada (el `Drop` no vuelve a
+    // buscarla). SAFETY: la celda es thread-local y vive lo que el hilo; el guard se destruye en el
+    // MISMO hilo que lo creó — una fibra reanuda siempre en su worker de origen (fibers.rs), y sin
+    // fibras cada tarea es un hilo.
+    out.push_str("struct __RayFrame(*const std::cell::Cell<u32>);\n");
+    out.push_str("impl Drop for __RayFrame { #[inline(always)] fn drop(&mut self) { let d = unsafe { &*self.0 }; d.set(d.get() - 1); } }\n");
+    out.push_str("#[inline(always)] fn __ray_enter() -> __RayFrame { let p = __ray_depth_cell(); let d = unsafe { &*p }; let n = d.get() + 1; d.set(n); if n > __ray_max_depth() { __ray_depth_overflow(d) } __RayFrame(p) }\n");
+    out.push_str("#[cold] fn __ray_depth_overflow(d: &std::cell::Cell<u32>) -> ! { d.set(d.get() - 1); __ray_rt_err(&format!(\"stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)\", __ray_max_depth())) }\n");
     // M130: exit(code) — termina el PROCESO, byte-idéntico a la VM. OJO (M132): el print nativo
     // va por el HILO ESCRITOR de M96f — flushear std::io::stdout() aquí era el buffer equivocado
     // (la salida pendiente se perdía; process::exit no corre destructores): hay que drenar el

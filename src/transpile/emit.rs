@@ -94,19 +94,28 @@ impl Transpiler {
             params.push(format!("mut {}: {}", mangle(&p.name), pty));
             self.declare(&p.name, p.ty.clone());
         }
+        // M295: `{ let _f = __ray_enter(); <cuerpo> }` — el prólogo de profundidad envuelve el
+        // bloque del cuerpo (que es una expresión: su valor es el de la función).
+        // Una cadena NO recursiva intermedia (main → helper → f recursiva) no se cuenta: el corte
+        // puede llegar unos marcos más tarde que en la VM, nunca antes, y la profundidad sigue
+        // acotada (sin ciclos no hay recursión ilimitada).
+        let prologue = if self.depth_fns.contains(&f.name) { "let _f = __ray_enter(); " } else { "" };
+        self.depth_active = !prologue.is_empty();
+        self.tail_sites = if self.depth_active { super::analysis::tail_call_sites(&f.body) } else { Default::default() };
         write!(
             out,
-            "fn {}{}({}) -> {} ",
+            "fn {}{}({}) -> {} {{ {}",
             rust_name,
             generics,
             params.join(", "),
-            rust_ty(&f.return_type, &self.enums, &self.tparams)?
+            rust_ty(&f.return_type, &self.enums, &self.tparams)?,
+            prologue
         )
         .unwrap();
         let added = self.enter_cells(&f.body);
         self.emit_block(out, &f.body)?;
         self.exit_cells(added);
-        out.push('\n');
+        out.push_str(" }\n");
         self.scopes.pop();
         self.tparams.clear();
         Ok(())
@@ -996,7 +1005,16 @@ impl Transpiler {
             // ser palabra reservada de Rust.
             write!(out, "{}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
         }
-        write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
+        // M295: mismo prólogo de profundidad que una función con nombre (la VM cuenta la closure
+        // como un marco más).
+        let closure_counts = self.depth_closures.contains(&fnexpr.id);
+        write!(out, "| -> {} {{ {}", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?, if closure_counts { "let _f = __ray_enter(); " } else { "" }).unwrap();
+        // El guard `_f` de la closure es el suyo: el estado de cola del cuerpo exterior se repone al salir.
+        let saved_depth = (self.depth_active, std::mem::take(&mut self.tail_sites));
+        self.depth_active = closure_counts;
+        if self.depth_active {
+            self.tail_sites = super::analysis::tail_call_sites(&fnexpr.body);
+        }
         self.scopes.push(HashMap::new());
         for p in &fnexpr.params {
             self.declare(&p.name, p.ty.clone());
@@ -1017,9 +1035,12 @@ impl Transpiler {
         self.emit_block(out, &fnexpr.body)?;
         self.exit_cells(added);
         self.scopes.pop();
+        self.depth_active = saved_depth.0;
+        self.tail_sites = saved_depth.1;
         if !send_caps.is_empty() {
             out.push_str(" }");
         }
+        out.push_str(" }"); // M295: cierra el bloque del prólogo de profundidad
         if boxed {
             out.push(')');
         }
@@ -1216,7 +1237,22 @@ impl Transpiler {
                     out.push(')');
                 }
             }
-            ExprKind::Call { callee, args } => self.emit_call(out, callee, args)?,
+            ExprKind::Call { callee, args } => {
+                // M295: llamada en cola de un cuerpo con guard → se suelta el guard ANTES (el marco
+                // no cuenta, como el TailCall de la VM, y Rust puede hacer la llamada como salto).
+                // Las llamadas anidadas en ella (callee/args, que en una cadena UFCS comparten
+                // posición) se emiten con el estado de cola apagado.
+                if self.depth_active && self.tail_sites.contains(&(e.line, e.col)) {
+                    self.depth_active = false;
+                    out.push_str("{ drop(_f); ");
+                    let r = self.emit_call(out, callee, args);
+                    self.depth_active = true;
+                    r?;
+                    out.push_str(" }");
+                } else {
+                    self.emit_call(out, callee, args)?
+                }
+            }
             ExprKind::If { cond, then_branch, else_branch } => {
                 out.push_str("if ");
                 self.emit_expr(out, cond)?;

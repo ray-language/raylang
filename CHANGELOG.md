@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Nativo: la recursión demasiado profunda es un error de ejecución, no una caída** (M295, arco
+  de endurecimiento IDEAS §96 #9). Medido: dentro de una fibra el binario moría por SIGBUS mudo
+  entre 500 y 1000 marcos —por debajo de los 1024 que la VM permite— y en el hilo principal
+  abortaba con el mensaje de Rust. Ahora corta con el mismo error y límite que la VM (`stack
+  overflow (recursion too deep: 1024 frames; RAYLANG_MAX_DEPTH raises the limit)`, exit 70),
+  también en fibras y con `--without fibers`; la recursión en cola sigue sin contar marcos. Solo
+  las funciones que pueden recurrir llevan el contador (~1,3 ns por llamada); `--fast` lo quita.
+  La pila de fibra por defecto sube de 128 KiB a 1 MiB (reserva virtual; solo cuestan las páginas
+  tocadas).
+
 ## 1.27.10 — 2026-09-24
 
 - **SECURITY.md: la premisa de confianza y el modelo de amenazas de las herramientas** (M294,

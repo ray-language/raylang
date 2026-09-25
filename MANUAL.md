@@ -1864,12 +1864,17 @@ let argv = args();                 // [string]
 
 ### Profundidad de recursión
 
-La VM y el intérprete cortan una recursión demasiado profunda con un error limpio en vez de
+Los tres motores cortan una recursión demasiado profunda con un error limpio en vez de
 reventar la pila de Rust: `stack overflow (recursion too deep: 1024 frames; RAYLANG_MAX_DEPTH
 raises the limit)`. El límite por defecto es 1024 marcos; `RAYLANG_MAX_DEPTH=N` en el entorno lo
 cambia (mínimo 16). Un compilador que recorre árboles de profundidad arbitraria conviene que lo
 suba a sabiendas —o que convierta la recursión en bucle—; el mensaje dice siempre el límite
-vigente (M217).
+vigente (M217). La recursión **en cola** no cuenta marcos en ninguno de los tres (la VM reutiliza
+el marco; el nativo suelta el contador antes de la llamada): un bucle escrito por recursión en
+cola corre sin límite. En el binario nativo el contador lo llevan solo las funciones que pueden
+recurrir (M295; `--fast` lo quita del todo, como quita la aritmética checked): una cadena no
+recursiva entre dos de ellas no se cuenta, así que el corte puede llegar unos marcos más tarde
+que en la VM, nunca antes.
 
 ### Procesos del SO (`std/process`)
 

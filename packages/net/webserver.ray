@@ -17,6 +17,9 @@ import std/embed;
 import std/inflate;
 import std/deflate;
 import net/trace;
+// M297 (IDEAS §96 #10): token local del CSPRNG para servidores de apps de escritorio/móvil.
+import std/crypto;
+import std/hex;
 
 // M56.2: `path` llega DECODIFICADO (%XX; un `+` es literal en rutas) y SIN la query string, que
 // va aparte en `query` (cruda, sin el `?`) — así el enrutado por ruta funciona con `?x=1` y el
@@ -87,6 +90,10 @@ pub struct Limits {
     max_body_bytes: int,
     max_conns: int,
     read_timeout_millis: int,
+    // M297: si no está vacío, toda petición debe traerlo (cabecera `X-Ray-Token`, cookie
+    // `ray_local` o `?ray_token=`; ver `local_limits`). Es la defensa contra OTROS PROCESOS de la
+    // misma máquina (o apps del mismo móvil) que conecten al puerto de una app de escritorio.
+    local_token: string,
 }
 
 /// The default safety limits: 64 KiB of headers, 10 MiB of body, 1024 simultaneous connections,
@@ -96,8 +103,163 @@ pub fn default_limits() -> Limits {
         max_header_bytes: 65536,
         max_body_bytes: 10485760,
         max_conns: 1024,
-        read_timeout_millis: 10000
+        read_timeout_millis: 10000,
+        local_token: ""
     }
+}
+
+// --- M297: servidores locales de apps de escritorio/móvil (IDEAS §96 #10) ---
+// Un servidor en 127.0.0.1 es un API abierto para (a) cualquier página web en el navegador del
+// usuario — puede enviarle peticiones y abrir WebSockets sin que CORS lo impida — y (b) cualquier
+// otro proceso de la máquina (o app del móvil). `local_limits` activa las DOS defensas: la guarda
+// de origen contra (a) y el token local contra (b), que solo conoce la ventana legítima. Son
+// opt-in a propósito: una guarda de origen «siempre activa» rompería un servidor real detrás de
+// un proxy que no ponga `X-Forwarded-For`, y las apps con CORS configurado.
+
+/// A fresh 128-bit local token (hex) for `local_limits`: pass it to the window you open
+/// (`?ray_token=<token>` in the URL, or the `X-Ray-Token` header) so only that window can talk to
+/// the server; other processes on the machine cannot guess it.
+pub fn local_token() -> string {
+    hex.hex_encode(crypto.random_bytes(16))
+}
+
+/// `default_limits()` for a LOCAL server (a desktop/mobile app's window): every request must carry
+/// the token (see `local_token`) as `X-Ray-Token: <token>`, the `ray_local` cookie, or
+/// `?ray_token=<token>`; otherwise 403. A request that brings it in the query gets the cookie set
+/// (`HttpOnly; SameSite=Strict`), so a page loaded once with the token keeps working (its
+/// WebSockets too) without repeating it. It also enables the cross-site guard: a request arriving
+/// over loopback with an http(s) `Origin` whose host is not the `Host` — a web page in the user's
+/// browser talking to your port — is refused (see `cross_site_blocked`).
+pub fn local_limits(token: string) -> Limits {
+    var l = default_limits();
+    l.local_token = token;
+    l
+}
+
+// El host (`host[:port]`) de un origen `http(s)://host[:port]/...`; "" si no es http(s).
+fn origin_host(origin: string) -> string {
+    let o = origin.to_lower();
+    var rest = "";
+    if (o.starts_with("http://")) {
+        rest = o.substring(7, o.len());
+    } else if (o.starts_with("https://")) {
+        rest = o.substring(8, o.len());
+    } else {
+        return "";
+    }
+    match (rest.index_of("/")) {
+        Option.Some(k) => rest.substring(0, k),
+        Option.None => rest,
+    }
+}
+
+fn is_loopback(remote: string) -> bool {
+    remote.starts_with("127.") || remote == "::1" || remote.starts_with("[::1]")
+}
+
+// M297: guarda de origen. Bloquea una petición que llega POR LOOPBACK, sin proxy delante (sin
+// `X-Forwarded-*`/`Forwarded`: una página web no puede añadirlos sin preflight), con un `Origin`
+// http(s) cuyo host NO es el `Host` de la petición: es un navegador en otra pestaña atacando un
+// servidor local. Un `Origin` no http(s) (`ray://app`, `null`, ausente) pasa: la ventana propia.
+// Un despliegue real (peer remoto, o detrás de nginx con X-Forwarded-For) no se toca.
+/// Whether `req` looks like a cross-site request from a browser page to a LOCAL server: it arrived
+/// over loopback, without proxy headers (`X-Forwarded-*`/`Forwarded`), with an http(s) `Origin`
+/// whose host differs from the request `Host`. `local_limits` refuses these; a raw handler can
+/// call it directly.
+pub fn cross_site_blocked(req: Request) -> bool {
+    if (!is_loopback(remote_ip(req))) {
+        return false;
+    }
+    if (get(req.headers, "x-forwarded-for").is_some()
+        || get(req.headers, "x-forwarded-host").is_some()
+        || get(req.headers, "forwarded").is_some()) {
+        return false;
+    }
+    let origin = match (get(req.headers, "origin")) {
+        Option.Some(o) => o,
+        Option.None => {
+            return false;
+        },
+    };
+    let oh = origin_host(origin);
+    if (oh == "") {
+        return false;
+    }
+    let host = match (get(req.headers, "host")) {
+        Option.Some(h) => h.to_lower(),
+        Option.None => "",
+    };
+    oh != host
+}
+
+// M297: ¿trae el token local? Devuelve (aceptada, llegó-por-query). Comparación en tiempo constante.
+fn local_token_check(req: Request, token: string) -> (bool, bool) {
+    let want = token.to_bytes();
+    match (get(req.headers, "x-ray-token")) {
+        Option.Some(t) => {
+            if (crypto.constant_time_eq(t.to_bytes(), want)) {
+                return (true, false);
+            }
+        },
+        Option.None => { },
+    }
+    match (get(req.headers, "cookie")) {
+        Option.Some(c) => {
+            if (crypto.constant_time_eq(cookie_value(c, "ray_local").to_bytes(), want)) {
+                return (true, false);
+            }
+        },
+        Option.None => { },
+    }
+    match (get(url.parse_query(req.query), "ray_token")) {
+        Option.Some(t) => {
+            if (crypto.constant_time_eq(t.to_bytes(), want)) {
+                return (true, true);
+            }
+        },
+        Option.None => { },
+    }
+    (false, false)
+}
+
+// El valor de la cookie `name` en una cabecera `Cookie:` (`a=1; b=2`), o "". Inline y no
+// `net/cookie`: este módulo se copia suelto en tests (dev_cli) con solo `net/trace` al lado.
+fn cookie_value(header: string, name: string) -> string {
+    let parts = header.split(";");
+    var i = 0;
+    while (i < parts.len()) {
+        let kv = parts[i].trim();
+        match (kv.index_of("=")) {
+            Option.Some(k) => {
+                if (kv.substring(0, k) == name) {
+                    return kv.substring(k + 1, kv.len());
+                }
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+// La decisión de la guarda para una petición: `Ok(set_cookie)` si pasa (y si hay que sembrar la
+// cookie del token), `Err(respuesta 403)` si no.
+fn local_guard(req: Request, limits: Limits) -> Result<bool, Response> {
+    if (limits.local_token == "") {
+        return Result.Ok(false);
+    }
+    if (cross_site_blocked(req)) {
+        return Result.Err(text(403, "Forbidden: cross-site request to a local server"));
+    }
+    let (ok, via_query) = local_token_check(req, limits.local_token);
+    if (!ok) {
+        return Result.Err(text(403, "Forbidden: missing local token"));
+    }
+    Result.Ok(via_query)
+}
+
+fn token_cookie(token: string) -> string {
+    "ray_local=" + token + "; Path=/; HttpOnly; SameSite=Strict"
 }
 
 // M56.7: `headers` es un Map (una cabecera por nombre, ergonómico) y la ÚNICA cabecera que en la
@@ -1711,6 +1873,18 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
     match (read_request_limits(conn, limits)) {
         Result.Ok(req) => {
+            // M297: guarda de origen + token local también en el camino crudo.
+            match (local_guard(req, limits)) {
+                Result.Ok(_) => { },
+                Result.Err(denied) => {
+                    match (send_response(conn, denied)) {
+                        Result.Ok(_) => { },
+                        Result.Err(e) => eprint("response: " + e),
+                    }
+                    let _ = close(conn);
+                    return;
+                },
+            }
             // M271 (raystream [5]): `try_call` y no `spawn`+`try_join` (como handle_http desde
             // M97.2): misma garantía (un handler que revienta responde 500 sin tumbar el servidor)
             // y, además, un handler que CAPTURA estado (un canal, un actor) compila en el nativo —
@@ -1769,6 +1943,18 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                 let close: bool = wants_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
                 let is_head: bool = req.method == "HEAD";
+                // M297: guarda de origen + token local ANTES del handler.
+                let seed_cookie: bool = match (local_guard(req, limits)) {
+                    Result.Ok(v) => v,
+                    Result.Err(denied) => {
+                        match (send_response(conn, denied)) {
+                            Result.Ok(_) => { },
+                            Result.Err(e) => eprint("response: " + e),
+                        }
+                        follow = false;
+                        continue;
+                    },
+                };
                 // M97.2: `try_call` en vez de `spawn`+`try_join`. Misma garantía (un handler que
                 // revienta responde 500 y cierra, sin tumbar el servidor) sin cambio de hilo: en el
                 // binario nativo el `spawn` iba al pool de hilos del SO, así que CADA petición
@@ -1782,6 +1968,9 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                 // lo que este código ya hacía.
                 match (try_call(fn() -> Response { handler(req) })) {
                     Result.Ok(resp) => {
+                        if (seed_cookie) {
+                            resp.set_cookie.push(token_cookie(limits.local_token));
+                        }
                         match (send_response_keep(conn, resp, !close, is_head)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
@@ -2258,6 +2447,19 @@ pub fn serve_with_on(
     make_handler: fn() -> fn(Request) -> Response
 ) -> Result<int, string> {
     serve_on_limits(listener, default_limits(), fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// M297 — `serve_with_on` with explicit limits (the desktop-app pattern with a local token:
+/// `serve_with_on_limits(listener, local_limits(token), make_handler)`).
+pub fn serve_with_on_limits(
+    listener: int,
+    limits: Limits,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
+    serve_on_limits(listener, limits, fn(req: Request) -> Response {
         let h: fn(Request) -> Response = make_handler();
         h(req)
     })

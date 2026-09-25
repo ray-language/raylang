@@ -288,6 +288,12 @@ listen_graceful(build_app, "0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT →
 listen_limits(build_app, "0.0.0.0", 8080, mis_limits);     // webserver.Limits explícitos
 ```
 
+**Apps de escritorio y móvil (M297).** Si la ventana carga desde un servidor local, usa
+`listen_local(build_app, listener, token)` con `token = webserver.local_token()` y abre la ventana
+con `?ray_token=<token>` en la URL: cualquier otro proceso de la máquina o página web del navegador
+recibe 403 (token obligatorio + guarda de origen). Sin backend HTTP, mejor `ray://app/…`, que no
+abre puerto alguno. Detalle en SECURITY.md «Servidores locales en apps de escritorio y móvil».
+
 Por qué el builder y no una `App` construida: una `App` contiene **closures** (los handlers) y
 el modelo de actores de heap aislado no deja que un closure cruce hilos en el backend nativo. El
 builder cruza como función plana y la `App` se construye **dentro de la tarea de cada petición**

@@ -1349,7 +1349,12 @@ sin mensajería nueva que aprender:
 ```rust
 import std/ui;
 
-let h = ui.open("Mi app", "http://127.0.0.1:" + to_string(port) + "/", 900, 640)?;
+// Con backend HTTP local: `listen_local` (M297) — el token en la URL cierra el puerto a cualquier
+// otro proceso de la máquina y a cualquier página web del navegador (ver «Servidores locales»
+// en SECURITY.md). Sin backend, mejor `ray://app/...` (más abajo): sin puerto alguno.
+let token = webserver.local_token();
+let h = ui.open("Mi app", "http://127.0.0.1:" + to_string(port) + "/?ray_token=" + token, 900, 640)?;
+// … y en otra fibra: web.listen_local(build_app, listener, token)
 ui.eval_js(h, "console.log('hola desde raylang')")?;   // fire-and-forget
 
 // Los eventos son una cola por proceso; la fibra APARCA (sin sondeo).
@@ -1451,7 +1456,8 @@ carga por `ray://app/…` directamente del proceso: `ui.mount_embed("", "assets"
 embebidos en `ray://app/assets/…`, `ui.mount_dir("files", project_dir)` sirve el directorio del
 proyecto en `ray://app/files/<ruta>` (ruta canónica, `..` nunca sale de él, Range para leer por
 tramos, ETag/304), y `ui.open("App", "ray://app/assets/index.html", 1200, 800)` abre sin puerto
-alguno. Ninguna otra aplicación de la máquina puede hablar con ese "servidor", el bundle no
+alguno. Ninguna otra aplicación de la máquina —ni ninguna página web abierta en el navegador del
+usuario— puede hablar con ese "servidor", el bundle no
 necesita el permiso de red local y los bytes van en streaming por trozos de 256 KiB — un archivo
 de 8 MiB con `fetch` y `Range` tarda unos 50 ms en macOS. Lo sirven los tres backends: WKWebView,
 WebKitGTK (con una lib anterior a 2.36 solo cuerpo y MIME, sin Range ni 304) y WebView2 (el tramo

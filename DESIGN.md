@@ -14558,3 +14558,40 @@ sin fibras) en `tests/handle_domains_cli.rs`: herencia por `spawn`, aislamiento 
 direcciones, `close` ajeno inerte, y una nieta del aislado que hereda el dominio aislado y no el
 de la raíz.
 
+## 281. M297 — El puerto local de una app de escritorio no es un secreto (sep 2026)
+
+Origen: pregunta del usuario mientras se esperaba un CI: «las apps de escritorio y móvil que usan
+un webserver, ¿quedan vulnerables desde fuera solo adivinando el puerto?». No estaba considerado
+como vector propio. Con el código delante: las apps de referencia cargan por `ray://app` (sin
+puerto), pero el MANUAL enseñaba `ui.open("http://127.0.0.1:" + port)` y una app real (`store`)
+lo usa; `net/webserver` no comprobaba `Origin` ni `Host` ni tenía secreto alguno. Dos atacantes
+locales que un servidor normal no tiene: (1) una página web en el navegador del usuario, que envía
+peticiones al puerto (CORS bloquea leer, no ejecutar; los WebSockets ni eso; DNS rebinding lee) y
+descubre el puerto escaneando desde JavaScript; (2) cualquier otro proceso de la máquina o app del
+móvil, porque ni Android ni iOS aíslan `localhost` entre apps. Es lo que resuelven Electron y
+Tauri con esquema propio (= nuestro `ray://app`) y VS Code, Jupyter o Docker Desktop con un token
+por lanzamiento cuando el servidor es inevitable.
+
+Primer intento y por qué se descartó: una **guarda de origen siempre activa** en `webserver`
+(loopback + `Origin` http(s) con host ≠ `Host` → 403). Rompió el test de CORS del framework al
+instante, y el análisis mostró dos víctimas reales: cualquier app con `web.cors(...)` (cuyo
+propósito es exactamente aceptar orígenes ajenos) y todo servidor detrás de un proxy que no ponga
+`X-Forwarded-For` —nginx con `proxy_pass` a pelo reescribe `Host` a `127.0.0.1:8080` y el
+navegador manda `Origin: https://site` en cada POST → 403 en producción—. Una defensa por defecto
+que rompe despliegues correctos no es una defensa.
+
+Decisión: **opt-in con dos defensas juntas**, `webserver.local_limits(token)` (y `web.listen_local`
+encima): el **token local** de 128 bits del CSPRNG que la ventana recibe en la URL y conserva en
+una cookie `HttpOnly; SameSite=Strict` (la cookie no viaja en peticiones cross-site; otro proceso
+no la conoce; la comparación es en tiempo constante), y la **guarda de origen** contra la página
+web que hubiera robado el token —solo por loopback, solo sin cabeceras de proxy, solo con `Origin`
+http(s) (la ventana propia manda `ray://app` o nada)—, que cubre también el handshake WebSocket
+porque se evalúa antes del handler en los dos caminos (`handle_http` y el crudo). `Limits` gana el
+campo `local_token` (la copia demo de `examples/web/webserver.ray`, que es lo que ejercen
+`webserver_cli` y `dev_cli`, es un módulo distinto y no lo lleva). Y la documentación pone
+`ray://app` primero: sin puerto no hay vector. Golden sobre el paquete real en
+`tests/local_guard_cli.rs` (modo plain: nada cambia; modo token: cada cabecera, cookie y query, la
+siembra de la cookie, los orígenes propio/no-http/ajeno y el proxy). Hallazgo lateral del arnés:
+soltar el lector de stdout del servidor hijo mata al servidor por EPIPE en su segundo `print` —
+la conexión aparecía «reseteada por el peer»—; el lector se drena en un hilo.
+

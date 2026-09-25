@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`spawn_isolated` y dominios de handles** (M296, arco de endurecimiento IDEAS §96 #8 y la
+  mitad 1 de §95 P1). Todo handle del runtime (archivo, socket, proceso, ventana…) nace en el
+  dominio de la tarea que lo crea; `spawn` lo hereda —nada cambia para el código existente— y
+  `spawn_isolated(f)` estrena uno: la tarea aislada no puede usar los handles de otros dominios (se
+  comportan como cerrados) ni exponer los suyos, y sus hijas heredan el confinamiento. Idéntico en
+  VM y nativo (con y sin fibras); el intérprete vive en un único dominio.
+
 - **Nativo: la recursión demasiado profunda es un error de ejecución, no una caída** (M295, arco
   de endurecimiento IDEAS §96 #9). Medido: dentro de una fibra el binario moría por SIGBUS mudo
   entre 500 y 1000 marcos —por debajo de los 1024 que la VM permite— y en el hilo principal

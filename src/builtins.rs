@@ -366,6 +366,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "random_int" => "A pseudo-random int in `[0, n)`.",
         // --- Concurrencia (VM) ---
         "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
+        "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns inherit its domain. The building block for running plugins or less-trusted code in-process.",
         "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure). Runtime error on a closed channel (use `try_send` when the receiver may be gone).",
         // M190: las funciones ASOCIADAS (tabla ASSOC) también responden en `ray_doc`/hover — antes
@@ -841,15 +842,67 @@ struct TlsConn {
     sock: std::net::TcpStream,
 }
 
+// --- M296: dominios de handles (IDEAS §96 #8, §95 P1) ---
+// Cada handle se etiqueta con el DOMINIO del actor que lo creó. `spawn` hereda el dominio del padre
+// (así el webserver sigue repartiendo conexiones a fibras hijas); `spawn_isolated` estrena uno. Un
+// handle de otro dominio se comporta EXACTAMENTE como uno cerrado ("invalid handle") en todos los
+// sitios de acceso, sin tocarlos: el mapa del registro es este tipo, que consulta el dominio actual
+// (thread-local que el scheduler de la VM fija al conmutar fibras; el intérprete, sin fibras, vive
+// en el dominio 0). `drain` ignora dominios: es el cierre total al salir.
+thread_local! {
+    static CURRENT_DOMAIN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+static NEXT_DOMAIN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// El dominio de handles del actor que corre en este hilo (0 = el principal / sin fibras).
+pub fn current_domain() -> u64 {
+    CURRENT_DOMAIN.with(|d| d.get())
+}
+
+/// Fija el dominio del actor en curso (lo llama el scheduler de la VM al conmutar fibras).
+pub fn set_current_domain(d: u64) {
+    CURRENT_DOMAIN.with(|c| c.set(d));
+}
+
+/// Un dominio nuevo, nunca visto (para `spawn_isolated`).
+pub fn fresh_domain() -> u64 {
+    NEXT_DOMAIN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// El mapa de handles abiertos, filtrado por dominio: misma API que el `HashMap` que sustituye.
+#[derive(Default)]
+struct OpenHandles(std::collections::HashMap<i64, (u64, OpenHandle)>);
+
+impl OpenHandles {
+    fn get(&self, h: &i64) -> Option<&OpenHandle> {
+        let d = current_domain();
+        self.0.get(h).filter(|(owner, _)| *owner == d).map(|(_, v)| v)
+    }
+    fn get_mut(&mut self, h: &i64) -> Option<&mut OpenHandle> {
+        let d = current_domain();
+        self.0.get_mut(h).filter(|(owner, _)| *owner == d).map(|(_, v)| v)
+    }
+    fn insert(&mut self, h: i64, v: OpenHandle) -> Option<OpenHandle> {
+        self.0.insert(h, (current_domain(), v)).map(|(_, old)| old)
+    }
+    fn remove(&mut self, h: &i64) -> Option<OpenHandle> {
+        self.get(h)?; // solo si es del dominio actual
+        self.0.remove(h).map(|(_, v)| v)
+    }
+    fn drain(&mut self) -> impl Iterator<Item = (i64, OpenHandle)> + '_ {
+        self.0.drain().map(|(k, (_, v))| (k, v))
+    }
+}
+
 /// El registro de archivos abiertos: un contador para los handles y el mapa handle → archivo.
 struct FileRegistry {
     next: i64,
-    open: std::collections::HashMap<i64, OpenHandle>,
+    open: OpenHandles,
 }
 
 fn registry() -> &'static std::sync::Mutex<FileRegistry> {
     static R: std::sync::OnceLock<std::sync::Mutex<FileRegistry>> = std::sync::OnceLock::new();
-    R.get_or_init(|| std::sync::Mutex::new(FileRegistry { next: 1, open: std::collections::HashMap::new() }))
+    R.get_or_init(|| std::sync::Mutex::new(FileRegistry { next: 1, open: OpenHandles::default() }))
 }
 
 /// Abre `path` en el modo dado (`"r"` lectura, `"w"` escritura/trunca, `"a"` añade) y devuelve un
@@ -3794,6 +3847,16 @@ static BUILTINS: &[Builtin] = &[
     // --- Concurrencia: CSP sobre la VM (M12.1). Solo la VM las ejecuta; el intérprete da error limpio. ---
     // spawn(f: fn() -> T) -> Task<T>: lanza f (sin parámetros) como green thread y devuelve su handle
     // (M12.3; en M12.1/M12.2 devolvía unit y el handle no existía).
+    // M296: como `spawn`, pero la fibra hija estrena un DOMINIO de handles: no ve los archivos,
+    // sockets, procesos ni ventanas del padre (ni el padre los suyos). La base de los plugins (§95).
+    Builtin { name: "spawn_isolated", opcode: OpCode::SpawnIsolated, check: |a| {
+        arity(a, 1, "spawn_isolated", " (a function with no parameters)")?;
+        match &a[0] {
+            Type::Fn(params, ret) if params.is_empty() => Ok(Type::Task(ret.clone())),
+            Type::Fn(_, _) => Err((Some(0), "spawn_isolated requires a function WITHOUT parameters (fn() -> T)".into())),
+            other => Err((Some(0), format!("spawn_isolated expects a function, not {}", other))),
+        }
+    } },
     Builtin { name: "spawn", opcode: OpCode::Spawn, check: |a| {
         arity(a, 1, "spawn", " (a function with no parameters)")?;
         match &a[0] {

@@ -471,6 +471,13 @@ las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de
 - `spawn(f: fn() -> T) -> Task<T>` lanza una fibra (no cede). `join(t: Task<T>) -> T` bloquea
   hasta que termina y **re-lanza** su fallo; `try_join(t) -> Result<T, string>` lo devuelve como
   valor en vez de re-lanzarlo.
+- **Dominios de handles** (M296). Todo handle del runtime (archivo, socket, proceso, ventana…) nace
+  en el **dominio** de la tarea que lo crea. `spawn` hereda el dominio del padre; `spawn_isolated(f:
+  fn() -> T) -> Task<T>` es `spawn` con un dominio **nuevo**: la tarea aislada, y las que ella
+  lance, no pueden usar los handles de otros dominios —se comportan exactamente como un handle
+  cerrado (`invalid handle`)— y sus handles son invisibles fuera. Los valores (canales, mensajes)
+  cruzan dominios con normalidad; solo los handles están confinados. El intérprete, sin fibras,
+  vive en un único dominio.
 - `scope(body: fn() -> R) -> R` **posee** las tareas lanzadas dentro: al salir las une; si una
   falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original.
 - `Channel.new() -> Channel<T>` (no acotado), `Channel.bounded(n)` (acotado; `n = 0` rendezvous).

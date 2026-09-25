@@ -81,10 +81,13 @@ Lo que raylang **garantiza por construcción**:
 Todas las garantías de arriba protegen a un programa raylang **de su entrada** (un cuerpo HTTP, un
 archivo, una respuesta de red). Ninguna protege al anfitrión **del programa**: raylang no tiene un
 modelo de capacidades — un programa que compila puede abrir cualquier archivo, socket o proceso que
-pueda el usuario, y los handles del runtime (archivos, sockets, procesos) son enteros globales del
-proceso. Esto es lo esperado para código propio, y es la razón por la que ejecutar código de
-terceros dentro de un proceso raylang (plugins, IDEAS §95) exige antes handles por actor y
-capacidades verificadas en el despacho de cada builtin, no solo en compilación.
+pueda el usuario. Los handles del runtime (archivos, sockets, procesos, ventanas) son enteros, pero
+desde M296 llevan **dominio**: una tarea lanzada con `spawn_isolated` no puede usar los handles de
+otros dominios (se comportan como cerrados) ni exponer los suyos, y sus hijas heredan el
+confinamiento. Es la primera de las dos piezas que exige ejecutar código de terceros dentro de un
+proceso raylang (plugins, IDEAS §95 P1); la segunda —capacidades verificadas en el despacho de cada
+builtin, no solo en compilación— sigue pendiente: hoy un plugin aislado no ve los archivos del
+host, pero puede abrir los suyos.
 
 ### Herramientas de desarrollo: `ray dev`, dependencias `path:` y `ray mcp`
 

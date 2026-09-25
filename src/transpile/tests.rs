@@ -55,7 +55,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
-    "exit", "panic", "print", "scope", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
+    "exit", "panic", "print", "scope", "spawn_isolated", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
     "__bigint_op", "__deflate_op",
     // M266: llavero del sistema.
     "__keychain",

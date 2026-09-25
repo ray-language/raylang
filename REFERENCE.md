@@ -170,6 +170,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | Función | Firma | Descripción |
 |---|---|---|
 | `spawn` | `(f: fn() -> T) -> Task<T>` | lanza una tarea concurrente; `join` espera su valor |
+| `spawn_isolated` | `(f: fn() -> T) -> Task<T>` | como `spawn`, pero en un **dominio de handles** nuevo (M296): la tarea no ve los archivos/sockets/procesos/ventanas de otros dominios (se comportan como cerrados) ni ellos los suyos; sus hijas heredan el dominio |
 | `join` | `(t: Task<T>) -> T` | bloquea hasta que la tarea termina (re-lanza su fallo). *Ad-hoc*: `join(arr, sep)` es el de strings |
 | `scope` | `(body: fn() -> R) -> R` | concurrencia estructurada: al volver une todas las tareas lanzadas dentro; si una falla, cancela a sus hermanas y propaga |
 | `send` | `(ch: Channel<T>, v: T) -> unit` | envía; bloquea si el canal acotado está lleno (backpressure) |

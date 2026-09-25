@@ -57,7 +57,7 @@ pub(super) fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::colle
             visit_exprs_block(&f.body, &mut |e: &Expr| {
                 if let ExprKind::Call { callee, args } = &e.kind {
                     if let ExprKind::Ident(cn) = &callee.kind {
-                        if cn == "spawn" {
+                        if cn == "spawn" || cn == "spawn_isolated" {
                             if let Some(arg0) = args.first() {
                                 if let ExprKind::Func(fx) = &arg0.kind {
                                     let mut ids = std::collections::HashSet::new();
@@ -120,6 +120,7 @@ pub(super) fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::colle
                     if let ExprKind::Call { callee, args } = &e.kind
                         && let ExprKind::Ident(cn) = &callee.kind
                         && cn != "spawn"
+                        && cn != "spawn_isolated"
                     {
                         for (j, a) in args.iter().enumerate() {
                             if let ExprKind::Ident(an) = &a.kind

@@ -2596,7 +2596,13 @@ fn main() -> int {
 
 ### Tareas y concurrencia estructurada
 
-`spawn` devuelve un `Task<T>`; `join` espera su resultado. `scope` ata el ciclo de vida:
+`spawn` devuelve un `Task<T>`; `join` espera su resultado. `scope` ata el ciclo de vida.
+`spawn_isolated` es `spawn` en un **dominio de handles** propio (M296): la tarea aislada no puede
+usar los archivos, sockets, procesos ni ventanas que abrieron otras tareas —para ella se comportan
+como cerrados— y las suyas quedan invisibles fuera; las tareas que ella lance heredan su dominio.
+Es la pieza para correr un plugin o código de menos confianza dentro del proceso: los valores y
+los canales cruzan con normalidad, los handles no. En el día a día no hace falta: `spawn` hereda
+el dominio del padre, así que un servidor sigue repartiendo conexiones a sus fibras.
 
 ```rust
 fn main() -> int {

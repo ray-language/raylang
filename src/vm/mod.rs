@@ -98,7 +98,7 @@ fn num_workers(program: &CompiledProgram) -> usize {
 /// M44a: solo lo usa la rama no-wasm de `num_workers` (en wasm siempre es 1).
 #[cfg(not(target_arch = "wasm32"))]
 fn program_uses_spawn(program: &CompiledProgram) -> bool {
-    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn | OpCode::SpawnDiscard)))
+    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated)))
 }
 
 /// M38.3b paso 3: una referencia al programa compilado **compartible entre hilos worker**. `CompiledProgram`
@@ -244,6 +244,7 @@ impl<'a> Vm<'a> {
                 scopes: Vec::new(),
                 unit_enums: Default::default(),
                 try_markers: Vec::new(),
+                domain: 0,
                 pending_error: None,
                 prof: Default::default(),
             },
@@ -1208,12 +1209,14 @@ impl<'a> Vm<'a> {
                 }
 
                 // --- Concurrencia: CSP sobre la VM (M12.1) ---
-                OpCode::Spawn | OpCode::SpawnDiscard => {
+                OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated => {
                     // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args), le asigna una
                     // Task<T> (M12.3) y la encola. Si hay un scope activo, adscribe la tarea a él.
                     // M98.1: `SpawnDiscard` (fire-and-forget fuera de scope) NO aloja Task — no hay
                     // quién la consuma y la entrada quedaría retenida para siempre (la fuga de M98).
                     let discard = matches!(instr, OpCode::SpawnDiscard);
+                    // M296: la hija hereda el dominio de handles del padre, o estrena uno.
+                    let domain = if matches!(instr, OpCode::SpawnIsolated) { crate::builtins::fresh_domain() } else { self.cur.domain };
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
@@ -1253,7 +1256,7 @@ impl<'a> Vm<'a> {
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
-                            try_markers: Vec::new(), pending_error: None, prof: Default::default(),
+                            try_markers: Vec::new(), pending_error: None, prof: Default::default(), domain,
                         });
                         if profile::enabled() {
                             profile::note_fiber();

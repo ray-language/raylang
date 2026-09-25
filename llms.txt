@@ -149,6 +149,7 @@ module-locally. Path dependencies from `ray.toml` import by dir/leaf: `import rp
 ```raylang
 let ch: Channel<int> = Channel.new();            // annotate; Channel.bounded(n) = bounded
 spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
+// spawn_isolated(f): same, but in a fresh handle domain (cannot use other tasks' files/sockets)
 if let Option.Some(v) = recv(ch) { print(v); }   // recv -> Option<T> (None = closed)
 
 let r = scope(fn() -> int {                      // structured: scope joins its tasks

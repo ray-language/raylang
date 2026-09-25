@@ -46,6 +46,9 @@ pub(super) struct Fiber {
     /// incompatibles); ahora el emisor despierta y su `send` falla con "send on a closed channel",
     /// simétrico de los receptores, que reciben `None`.
     pub(super) pending_error: Option<String>,
+    /// M296: dominio de handles de la fibra (0 = el principal; `spawn` hereda, `spawn_isolated`
+    /// estrena). El worker lo publica en el thread-local de `builtins` al conmutar a esta fibra.
+    pub(super) domain: u64,
 }
 
 /// Un `try_call` en vuelo (M97.2): a dónde volver si su cuerpo falla.
@@ -370,6 +373,7 @@ impl<'a> Vm<'a> {
             if let Some(next) = sh.ready.pop_front() {
                 sh.running += 1;
                 drop(sh);
+                crate::builtins::set_current_domain(next.domain); // M296
                 self.cur = next;
                 return Ok(true);
             }

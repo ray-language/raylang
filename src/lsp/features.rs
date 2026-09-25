@@ -1734,7 +1734,7 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
     }
     // Ítem-extra de closure para los builtins que toman una función anónima (`spawn(fn() { … })`,
     // `scope(fn() { … })`): inserta la forma con cuerpo, aparte del builtin pelado.
-    for name in ["spawn", "scope"] {
+    for name in ["spawn", "spawn_isolated", "scope"] {
         if crate::builtins::names().any(|n| n == name) {
             list.push(item_closure_snippet(name));
         }

@@ -14520,3 +14520,41 @@ confiado»). Golden de tres motores en `tests/native_depth_cli.rs` (directa, en 
 cola, a través de un valor `fn`, con `RAYLANG_MAX_DEPTH`; stdout y exit code idénticos a la VM);
 unit tests del análisis en `transpile/tests.rs`; corpus nativo y diferencial sin cambios.
 
+## 280. M296 — Dominios de handles y `spawn_isolated` (sep 2026)
+
+Origen: IDEAS §96 #8 y §95 P1, el requisito previo número uno de los plugins en proceso. El
+registro de handles (archivos, sockets TCP/UDP/TLS, SQLite, pipes, procesos, ptys, watchers,
+ventanas) era **global del proceso** con claves `i64` correlativas: cualquier tarea podía
+inventarse `7` y leer, escribir o cerrar el socket, el pty o la ventana de otra. En un programa
+propio es un footgun; con código de terceros en el mismo proceso es la vulnerabilidad completa.
+
+La restricción que ordena el diseño: **la propiedad estricta por tarea rompe producción**. El
+webserver acepta en una fibra y reparte la conexión (un `int`) a la fibra hija de cada petición;
+`std/process` y `std/ui` hacen lo mismo. Y un handle es un `int` corriente en el modelo de valores:
+un canal no puede saber que lo que transporta es un handle para «transferir propiedad». Así que ni
+propiedad por tarea ni transferencia explícita.
+
+Decisión: **dominios heredables**. Cada handle se etiqueta al nacer con el dominio de la tarea que
+lo crea; `spawn` (y `scope`) heredan el dominio del padre —todo el código existente sigue en el
+dominio 0, sin cambio observable—; el builtin nuevo `spawn_isolated(f)` es `spawn` con un dominio
+fresco, y las tareas que la aislada lance heredan el suyo. Un handle de otro dominio se comporta
+**exactamente como uno cerrado** (`invalid handle`), lo que da uniformidad gratis en los 98 sitios
+de acceso: en la VM y el intérprete el mapa del registro pasa a ser `OpenHandles`, un tipo con la
+misma API que el `HashMap` que sustituye (`get`/`get_mut`/`insert`/`remove`/`drain`) y que filtra
+por el dominio actual; en el nativo, `__RayOpen` hace lo mismo en el Rust emitido. Ningún sitio de
+acceso se toca. El dominio actual es un thread-local: el scheduler de la VM lo publica al conmutar
+fibras (`Fiber::domain`), el de ray-runtime lo intercambia con `Task::domain` alrededor de cada
+`resume` (el mismo mecanismo que `DEPTH`, M295), en el modelo de hilos cada tarea lo fija al
+arrancar, y el intérprete —sin fibras— vive en el dominio 0. `close_all_handles` (el cierre total
+al salir) drena sin mirar dominios. Los valores y los canales cruzan dominios con normalidad: solo
+los handles están confinados, que es exactamente el borde que §95 necesita (los mensajes tipados
+del contrato host↔plugin sí pasan; un `int` que resulte ser un handle del host no sirve para nada).
+
+Lo que NO cubre, dicho en SECURITY.md: la tarea aislada no ve los handles del host, pero puede
+abrir los suyos (archivos, sockets, procesos); la segunda mitad de §95 P1 —capacidades verificadas
+en el despacho de cada builtin— sigue pendiente. Las tablas fuera del registro (hashers de
+`std/crypto`, ctls de audio) siguen globales: bajo impacto, anotado. Golden VM ↔ nativo (con y
+sin fibras) en `tests/handle_domains_cli.rs`: herencia por `spawn`, aislamiento en ambas
+direcciones, `close` ajeno inerte, y una nieta del aislado que hereda el dominio aislado y no el
+de la raíz.
+

@@ -1,0 +1,10 @@
+# Parche para zed-industries/zed (crates/theme/src/icon_theme.rs): el tema de iconos por defecto
+# de Zed es código Rust, no un archivo de extensión. Añadir, en orden alfabético:
+#
+#   en FILE_SUFFIXES_BY_ICON_KEY, tras ("r", ...):
+#       ("raylang", &["ray"]),
+#   en FILE_ICONS (icono ← ruta), tras ("python", ...):
+#       ("raylang", "icons/file_icons/raylang.svg"),
+#
+# y copiar upstream-icon/raylang.svg a assets/icons/file_icons/raylang.svg (monocromo en negro:
+# Zed lo tiñe con el color del tema, como toml.svg o rust.svg).

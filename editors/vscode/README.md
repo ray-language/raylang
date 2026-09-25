@@ -103,6 +103,13 @@ extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 > inevitable del coloreado por-editor. La validación real (LSP) sí reutilizará el
 > checker de Rust, una sola vez para todos los editores.
 
+## Icono de archivo
+
+Los `.ray` llevan icono propio en el explorador y las pestañas (`contributes.languages[].icon`,
+`icons/ray-file-light.svg` y `ray-file-dark.svg`: la manta del logo recortada para 16 px, en dos
+tonos según el fondo). Lo usan los temas de iconos que no tienen un mapeo propio para la
+extensión; los catálogos de terceros (Material Icon Theme, vscode-icons) reciben el mismo SVG por PR.
+
 ## Instalación
 
 **Desde el Marketplace** (la vía normal): busca **raylang** en la vista de extensiones, o

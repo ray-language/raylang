@@ -2,7 +2,7 @@
   "name": "raylang",
   "displayName": "raylang",
   "description": "Soporte para el lenguaje raylang (.ray) y sus templates compilados (.ray.html): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "publisher": "ray-language",
   "license": "MIT OR Apache-2.0",
   "icon": "icon.png",
@@ -44,7 +44,11 @@
         "extensions": [
           ".ray"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/ray-file-light.svg",
+          "dark": "./icons/ray-file-dark.svg"
+        }
       },
       {
         "id": "html",

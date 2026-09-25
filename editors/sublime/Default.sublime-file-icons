@@ -1,0 +1,7 @@
+{
+    // Icono de los archivos .ray en la barra lateral y las pestañas (Sublime Text ≥ 4206:
+    // los iconos van por .sublime-file-icons, no por la sintaxis). Tema claro.
+    "icons": {
+        "ray": "file_type_raylang"
+    }
+}

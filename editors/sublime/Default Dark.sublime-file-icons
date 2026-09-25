@@ -1,0 +1,6 @@
+{
+    // Variante para fondos oscuros (tema Default Dark).
+    "icons": {
+        "ray": "file_type_raylang_dark"
+    }
+}

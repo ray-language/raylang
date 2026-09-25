@@ -69,3 +69,14 @@ Es un push a repos ajenos a este: al hacerlo desde una sesión automatizada, avi
 - 0.1.0 (ago 2026): primera versión; PR #7361 al registro.
 - 0.1.1 (12 sep 2026): sufijos `u8`/`u32`/`u64` en los literales enteros.
 - 0.1.2 (12 sep 2026): `break`/`continue` como sentencias; `///` como comentario de documentación.
+
+## Icono de archivo `.ray` (sep 2026)
+
+Un lenguaje de Zed no fija el icono de sus archivos: los iconos viven en el **tema de iconos** por
+defecto de Zed, que es código Rust (`crates/theme/src/icon_theme.rs`), o en un tema de iconos
+completo aportado por una extensión (que sustituiría el del usuario entero — no es el caso). El
+camino correcto es una PR a `zed-industries/zed` con dos líneas y un SVG; está preparado en
+`upstream-icon/` (`raylang.svg` en el formato de Zed —monocromo, teñido por el tema— y
+`icon_theme.patch` con las líneas exactas). Hasta que la fusionen, `.ray` sale con el icono
+genérico.
+

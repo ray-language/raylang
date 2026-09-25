@@ -1,0 +1,6 @@
+{
+    // Variante para fondos oscuros (tema Adaptive).
+    "icons": {
+        "ray": "file_type_raylang_dark"
+    }
+}

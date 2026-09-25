@@ -48,6 +48,14 @@ nombre `raylang`:
 No hay que compilar nada: el `.sublime-syntax` es declarativo (a diferencia del cliente de
 VSCode, que sí es TypeScript a compilar).
 
+## Icono de archivo
+
+Desde Sublime Text 4206 los iconos de archivo van por `.sublime-file-icons` (no por la sintaxis):
+el paquete trae `Default`, `Default Dark` y `Adaptive.sublime-file-icons`, que mapean la extensión
+`ray` a las texturas de `icons/` (`file_type_raylang` para fondo claro, `file_type_raylang_dark`
+para oscuro; 1×, `@2x` y `@3x`). Si usas otro tema, copia una de esas tres a
+`Packages/User/<Tema>.sublime-file-icons`.
+
 ## Tests de la gramática (`tests/syntax_test_raylang.ray`)
 
 La gramática tiene sus aserciones en el formato estándar de Sublime: cada línea de código va

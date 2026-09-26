@@ -383,3 +383,68 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "2\n1\n-2\n3\ntrue\n6\n3\n");
 }
+
+/// M309 (findings #44): `Option`/`Result` satisfacen `Eq`/`Show` (con `assert_eq`) en los tres
+/// motores, con la forma canónica `Option.Some(x)` en el mensaje.
+#[test]
+fn option_and_result_satisfy_eq_and_show_on_all_engines() {
+    let d = tmp("option_eq");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() -> int {
+    assert_eq(Option.Some(133), Option.Some(133));
+    let r: Result<int, string> = Result.Ok(2);
+    assert_eq(r, Result.Ok(2));
+    let e: Result<int, string> = Result.Err("x");
+    assert_eq(e, Result.Err("x"));
+    match (try_call(fn() { assert_eq(Option.Some((1, "a")), Option.None); })) {
+        Result.Ok(_) => print("bad"),
+        Result.Err(m) => print(m),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "assert_eq failed: Option.Some((1, a)) != Option.None\n");
+}
+
+/// M309 (findings #55, #61, #65): `-o dir/app` crea `dir`; un paquete se importa a sí mismo por su
+/// nombre desde sus propios tests aunque declare `entry`; `[package] raylang = "X"` exige un
+/// toolchain ≥ X.
+#[test]
+fn output_dir_self_import_and_required_raylang() {
+    // #55: el directorio de salida se crea antes de compilar.
+    let d = tmp("outdir");
+    std::fs::write(d.join("prog.ray"), "fn main() { print(7); }\n").unwrap();
+    if has_rustc() {
+        let out = d.join("deep/er/app");
+        let (_o, err, code) = ray(&d, &["build", "--native", "prog.ray", "-o", out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.is_file(), "el binario está en el directorio creado");
+    }
+
+    // #61: un paquete-librería con entry que se importa por su nombre en sus tests.
+    let p = tmp("selfimport").join("libs").join("grpc");
+    std::fs::create_dir_all(p.join("tests")).unwrap();
+    std::fs::write(p.join("ray.toml"), "[package]\nname = \"grpc\"\nversion = \"0.1.0\"\nentry = \"grpc.ray\"\n").unwrap();
+    std::fs::write(p.join("grpc.ray"), "import grpc/h2;\npub fn hello() -> string { h2.frame(\"x\") }\n").unwrap();
+    std::fs::write(p.join("h2.ray"), "pub fn frame(s: string) -> string { \"<\" + s + \">\" }\n").unwrap();
+    std::fs::write(p.join("tests/h2_test.ray"), "import grpc/h2;\n@test\nfn frames() -> bool { h2.frame(\"a\") == \"<a>\" }\n").unwrap();
+    let (out, err, code) = ray(&p, &["test"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ok    "), "{out}");
+
+    // #65: la versión mínima del lenguaje.
+    let q = tmp("reqver");
+    std::fs::create_dir_all(q.join("src")).unwrap();
+    std::fs::write(q.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nraylang = \"99.0.0\"\n").unwrap();
+    std::fs::write(q.join("src/main.ray"), "fn main() { print(1); }\n").unwrap();
+    let (_o, err, code) = ray(&q, &["run"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("requires raylang 99.0.0 or newer"), "{err}");
+    std::fs::write(q.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nraylang = \"1.0.0\"\n").unwrap();
+    let (out, _e, code) = ray(&q, &["run"]);
+    assert_eq!(code, 0);
+    assert_eq!(out, "1\n");
+}

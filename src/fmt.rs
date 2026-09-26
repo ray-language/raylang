@@ -517,7 +517,9 @@ fn fmt_from_import(it: &FromImport) -> String {
 
 fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
     let pref = if it.is_pub { "pub " } else { "" };
-    format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_expr(cur, &it.value, 0))
+    // M309 (findings #43): como una sentencia — si no cabe en el ancho, el arreglo se reparte
+    // (un `const VOICES: [string] = [… 16 strings …]` quedaba en 122 columnas).
+    retry_wrapped(cur, 0, None, |c| format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_value(c, &it.value, 0)))
 }
 
 /// Los pares (librería, blocking) de los bloques `extern` en orden de primera aparición, con la
@@ -1574,8 +1576,11 @@ fn could_wrap_list(e: &Expr) -> bool {
         ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => xs,
         ExprKind::MapLit(ps) => return !ps.is_empty()
             && !ps.iter().any(|(k, v)| is_multiline_form(k) || is_multiline_form(v)),
+        // M309 (findings #43): un campo con un CLOSURE no impide repartir el literal — un campo por
+        // línea, y el cuerpo del closure indentado bajo su campo (antes salía todo en una línea con
+        // los cuerpos abiertos en medio). Las formas con bloque (if/match/while) siguen fuera.
         ExprKind::StructLit { fields, .. } => {
-            return !fields.is_empty() && !fields.iter().any(|(_, v)| is_multiline_form(v))
+            return !fields.is_empty() && !fields.iter().any(|(_, v)| is_multiline_form(v) && !matches!(v.kind, ExprKind::Func(_)))
         }
         _ => return false,
     };
@@ -1671,7 +1676,16 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             if fields.is_empty() {
                 format!("{} {{ }}", name)
             } else {
+                // M309 (findings #43): un campo cuyo valor sale MULTILÍNEA (un closure con cuerpo) no
+                // puede compartir línea con los demás campos — el literal va un campo por línea,
+                // siempre (no solo cuando no cabe): es la forma canónica, y así es idempotente.
+                let save = cur.i;
                 let fs: Vec<String> = fields.iter().map(|(n, v)| format!("{}: {}", n, fmt_expr(cur, v, 0))).collect();
+                if fields.len() > 1 && fs.iter().any(|f| f.contains('\n')) {
+                    cur.i = save;
+                    let items: Vec<ListItem> = fields.iter().map(|(n, v)| ListItem::Named(n.as_str(), v)).collect();
+                    return fmt_wrapped_list(cur, &format!("{} ", name), "{", &items, "}");
+                }
                 format!("{} {{ {} }}", name, fs.join(", "))
             }
         }
@@ -2143,6 +2157,23 @@ mod tests {
         let out = fmt(src);
         assert_eq!(out, src, "etiquetas intactas: {out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M309 (findings #43): un `const` arreglo que no cabe se reparte como una sentencia, y un
+    /// literal de struct con campos-closure se reparte un campo por línea (los cuerpos bajo su campo).
+    #[test]
+    fn long_const_arrays_and_struct_literals_with_closures_wrap() {
+        let src = "const VOICES: [string] = [\"alpha\", \"bravo\", \"charlie\", \"delta\", \"echo\", \"foxtrot\", \"golf\", \"hotel\", \"india\", \"juliett\", \"kilo\", \"lima\"];\n";
+        let out = fmt(src);
+        assert!(out.starts_with("const VOICES: [string] = [\n    \"alpha\",\n"), "{out}");
+        for l in out.lines() {
+            assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
+        }
+        assert_eq!(fmt(&out), out, "idempotente");
+        let src2 = "struct Dialogs {\n    available: bool,\n    save: fn(string) -> bool,\n    open: fn(string) -> bool,\n}\n\nfn main() {\n    let d = Dialogs { available: true, save: fn(p: string) -> bool { print(p); print(p.len()); true }, open: fn(p: string) -> bool { print(p); print(p.len()); false } };\n    print(d.available);\n}\n";
+        let out2 = fmt(src2);
+        assert!(out2.contains("    let d = Dialogs {\n        available: true,\n        save: fn(p: string) -> bool {\n            print(p);\n"), "{out2}");
+        assert_eq!(fmt(&out2), out2, "idempotente");
     }
 
     /// M298 (findings 1.27.11 #9): un `if` de valor como OPERANDO de una concatenación larga o como

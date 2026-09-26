@@ -1157,6 +1157,18 @@ impl Transpiler {
                     // clone() vale para todo tipo (para int es copia); mantiene la semántica de "leer clona".
                     write!(out, "{}.borrow().clone()", mangle(name)).unwrap();
                 } else if let Some(ty) = self.lookup(name) {
+                    // M309 (findings #60): un param fn MARCADO (genérico `__F: Fn + Send…`, H21-N5c)
+                    // usado como VALOR (guardado en un mapa, devuelto, pasado a un param no marcado)
+                    // necesita la coerción al `Rc<dyn Fn>` que espera el tipo raylang — sin ella
+                    // rustc daba E0308 «expected Rc<dyn Fn(...)>, found type parameter __F1».
+                    let marked_fn = self.send_fn_params.contains(name)
+                        && matches!(normalize_type(ty), Type::Fn(..))
+                        && rust_ty(ty, &self.enums, &self.tparams).is_ok();
+                    if marked_fn {
+                        let dyn_ty = rust_ty(ty, &self.enums, &self.tparams)?;
+                        write!(out, "(Rc::new({}.clone()) as {})", mangle(name), dyn_ty).unwrap();
+                        return Ok(());
+                    }
                     // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
                     let heap = is_heap(ty);
                     out.push_str(&mangle(name));

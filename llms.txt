@@ -37,6 +37,17 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   patterns (`json.Json.JObject(m)`) and qualified types in signatures (`regex.Regex`) work.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
+- Primitive type names cannot name a function: `pub fn int(key: string)` / `fn u32(…)` are
+  errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`). There are no type
+  aliases yet (`type Handler = fn(...)` is a syntax error): repeat the signature.
+- Server handlers (web/rpc/gRPC) receive a COPY of what they capture: fiber heaps are isolated,
+  so a captured `Map` mutated inside a handler does not persist — per connection on the VM
+  (one connection "works"), per call on native. Shared state lives in a database or an actor
+  fiber reached through channels; never in a captured value.
+- `signals()` also delivers SIGWINCH (28, terminal resize): a graceful-shutdown loop must
+  check the value (15/2), not stop on "any signal" (`webserver.shutdown_signals()` is that filter).
+- `ray version` prints `X.Y.Z+dev.<sha>` for a toolchain built from the repo HEAD: it accepts
+  code a release may not. `[package] raylang = "X.Y.Z"` in ray.toml pins the minimum release.
 - Integer literals: decimal or `0xFF` / `0o755` / `0b1010`. String/char escapes include
   `\0`, `\xNN` and `\u{1F600}`.
 

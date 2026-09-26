@@ -1654,7 +1654,65 @@ pub fn set_ui_frontend_url(url: String) {
 }
 
 pub fn ui_frontend_url() -> String {
-    UI_FRONTEND_URL.get().cloned().unwrap_or_default()
+    if let Some(u) = UI_FRONTEND_URL.get() {
+        return u.clone();
+    }
+    dev_frontend_url_override()
+}
+
+/// M309 (findings #49): un build de DESARROLLO (`ray run --devtools`, `ray build --native
+/// --devtools`, `ray bundle --devtools`) honra `RAY_DEV_FRONTEND_URL` — la URL del dev server del
+/// frontend en OTRA máquina (el Mac, desde el teléfono) — si responde; si no, cae a la build
+/// embebida. Un build sin devtools (release) la ignora siempre. Se decide una vez por proceso.
+pub fn dev_frontend_url_override() -> String {
+    static DEV_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DEV_URL
+        .get_or_init(|| {
+            #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+            let dev = ray_runtime::ui::devtools_enabled();
+            #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+            let dev = false;
+            if !dev {
+                return String::new();
+            }
+            let Ok(url) = std::env::var("RAY_DEV_FRONTEND_URL") else { return String::new() };
+            let url = url.trim().trim_end_matches('/').to_string();
+            if url.is_empty() {
+                return String::new();
+            }
+            if dev_url_reachable(&url) {
+                eprintln!("[ui] development frontend: {url} (RAY_DEV_FRONTEND_URL)");
+                url
+            } else {
+                eprintln!("[ui] RAY_DEV_FRONTEND_URL={url} does not answer; using the embedded frontend");
+                String::new()
+            }
+        })
+        .clone()
+}
+
+/// ¿Responde `host:port` de una URL http(s)? Un `connect` con plazo corto (700 ms); la primera
+/// conexión a la red local en iOS puede fallar mientras el sistema pide permiso (se reintenta
+/// una vez tras un instante).
+pub fn dev_url_reachable(url: &str) -> bool {
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")).unwrap_or(url);
+    let hostport = rest.split('/').next().unwrap_or("");
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().unwrap_or(80)),
+        None => (hostport, if url.starts_with("https://") { 443 } else { 80 }),
+    };
+    use std::net::ToSocketAddrs;
+    let Ok(mut addrs) = (host, port).to_socket_addrs() else { return false };
+    let Some(addr) = addrs.next() else { return false };
+    for attempt in 0..2 {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(700)).is_ok() {
+            return true;
+        }
+        if attempt == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+    }
+    false
 }
 
 pub fn set_embed_config(root: std::path::PathBuf, dirs: Vec<String>) {

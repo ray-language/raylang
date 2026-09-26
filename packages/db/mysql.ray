@@ -19,6 +19,7 @@
 // que cierra el socket).
 import std/net;
 import std/crypto;
+import std/bigint;
 import std/math;
 
 /// Una conexión abierta: el socket, la secuencia de paquete en curso y el búfer de lectura
@@ -197,6 +198,169 @@ fn sha2_auth(scramble: [int], password: string) -> [int] {
     let h2 = crypto.sha256(crypto.sha256(h1));
     let h3 = crypto.sha256(bytes_of(bytes_to_ints(h2) + scramble));
     xor_digest(h1, h3)
+}
+
+// ── caching_sha2_password: full-path en claro (RSA-OAEP, M309) ─────────────────────────
+// Sin TLS el servidor no acepta la contraseña en claro: hay que cifrarla con SU clave pública
+// (PEM SubjectPublicKeyInfo) con RSA-OAEP y SHA-1 (RFC 8017 §7.1.1, el padding que usa MySQL).
+// El mensaje es `password + NUL` XOR el scramble (repetido). Todo en raylang: base64 y DER a mano,
+// `std/bigint` para la exponenciación modular (es un cliente: el tiempo constante no aplica).
+fn slice_ints(p: [int], from: int, to: int) -> [int] {
+    var out: [int] = [];
+    var i = from;
+    while (i < to) {
+        out.push(p[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn base64_decode_ints(text: string) -> [int] {
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var out: [int] = [];
+    var acc = 0;
+    var bits = 0;
+    for ch in text {
+        match (alphabet.index_of(to_string(ch))) {
+            Option.Some(v) => {
+                acc = (acc << 6) | v;
+                bits = bits + 6;
+                if (bits >= 8) {
+                    bits = bits - 8;
+                    out.push((acc >> bits) & 255);
+                    acc = acc & ((1 << bits) - 1);
+                }
+            },
+            Option.None => { },
+        }
+    }
+    out
+}
+
+// El cuerpo base64 de un PEM (sin cabeceras `-----…-----` ni saltos de línea).
+fn pem_body(pem: bytes) -> string {
+    let text = match (from_utf8(pem)) {
+        Result.Ok(t) => t,
+        Result.Err(_) => "",
+    };
+    var body = "";
+    for line in text.split("\n") {
+        let l = line.trim();
+        if (l.len() > 0 && !l.starts_with("-----")) {
+            body = body + l;
+        }
+    }
+    body
+}
+
+// Longitud DER en `p[i]` (corta o larga): devuelve (longitud, índice tras ella).
+fn der_len(p: [int], i: int) -> Result<(int, int), string> {
+    let b = at(p, i)?;
+    if (b < 128) {
+        return Result.Ok((b, i + 1));
+    }
+    let n = b & 127;
+    var v = 0;
+    var k = 0;
+    while (k < n) {
+        v = (v << 8) | at(p, i + 1 + k)?;
+        k = k + 1;
+    }
+    Result.Ok((v, i + 1 + n))
+}
+
+// Espera la etiqueta `tag` en `p[i]` y devuelve (inicio del contenido, longitud).
+fn der_expect(p: [int], i: int, tag: int) -> Result<(int, int), string> {
+    if (at(p, i)? != tag) {
+        return Result.Err("mysql: unexpected DER element in the server public key");
+    }
+    let (len, start) = der_len(p, i + 1)?;
+    Result.Ok((start, len))
+}
+
+// (n, e) de un SubjectPublicKeyInfo RSA, como magnitudes big-endian (sin el 0x00 de signo).
+fn rsa_public_key(pem: bytes) -> Result<(bytes, bytes), string> {
+    let d = base64_decode_ints(pem_body(pem));
+    let (s0, _) = der_expect(d, 0, 48)?;  // SEQUENCE (SPKI)
+    let (a0, alen) = der_expect(d, s0, 48)?;  // SEQUENCE (AlgorithmIdentifier)
+    let (b0, blen) = der_expect(d, a0 + alen, 3)?;  // BIT STRING
+    if (at(d, b0)? != 0) {
+        return Result.Err("mysql: unsupported public key encoding");
+    }
+    let (k0, _) = der_expect(d, b0 + 1, 48)?;  // SEQUENCE (RSAPublicKey)
+    let (n0, nlen) = der_expect(d, k0, 2)?;  // INTEGER n
+    let (e0, elen) = der_expect(d, n0 + nlen, 2)?;  // INTEGER e
+    let n = bigint.from_bytes(bytes_of(slice_ints(d, n0, n0 + nlen)));
+    let e = bigint.from_bytes(bytes_of(slice_ints(d, e0, e0 + elen)));
+    Result.Ok((n, e))
+}
+
+// MGF1 con SHA-1: `len` octetos de máscara a partir de `seed`.
+fn mgf1_sha1(seed: [int], len: int) -> [int] {
+    var out: [int] = [];
+    var counter = 0;
+    while (out.len() < len) {
+        let block = seed + [
+            counter >> 24 & 255,
+            counter >> 16 & 255,
+            counter >> 8 & 255,
+            counter & 255
+        ];
+        out = out + bytes_to_ints(crypto.sha1(bytes_of(block)));
+        counter = counter + 1;
+    }
+    slice_ints(out, 0, len)
+}
+
+fn xor_ints(a: [int], b: [int]) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < a.len()) {
+        out.push(a[i] ^ b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// RSA-OAEP(SHA-1, etiqueta vacía) de `msg` con (n, e); el resultado ocupa k = |n| octetos.
+fn rsa_oaep_sha1(n: bytes, e: bytes, msg: [int]) -> Result<[int], string> {
+    let k = n.len();
+    let h = 20;
+    if (msg.len() > k - 2 * h - 2) {
+        return Result.Err("mysql: the password is too long for the server key");
+    }
+    var db: [int] = bytes_to_ints(crypto.sha1(b""));
+    var ps = k - msg.len() - 2 * h - 2;
+    while (ps > 0) {
+        db.push(0);
+        ps = ps - 1;
+    }
+    db = db + [1] + msg;
+    let seed = bytes_to_ints(crypto.random_bytes(h));
+    let masked_db = xor_ints(db, mgf1_sha1(seed, k - h - 1));
+    let masked_seed = xor_ints(seed, mgf1_sha1(masked_db, h));
+    let em = [0] + masked_seed + masked_db;
+    let cipher = bigint.modpow(bytes_of(em), e, n)?;
+    var out: [int] = [];
+    var pad = k - cipher.len();
+    while (pad > 0) {
+        out.push(0);
+        pad = pad - 1;
+    }
+    Result.Ok(out + bytes_to_ints(cipher))
+}
+
+// `password + NUL` XOR el scramble (repetido), cifrado con la clave pública del servidor.
+fn rsa_password(pem: bytes, scramble: [int], password: string) -> Result<[int], string> {
+    let (n, e) = rsa_public_key(pem)?;
+    let plain = bytes_to_ints(password.to_bytes()) + [0];
+    var msg: [int] = [];
+    var i = 0;
+    while (i < plain.len()) {
+        msg.push(plain[i] ^ scramble[i % scramble.len()]);
+        i = i + 1;
+    }
+    rsa_oaep_sha1(n, e, msg)
 }
 
 fn auth_for(plugin: string, scramble: [int], password: string) -> Result<[int], string> {
@@ -384,11 +548,22 @@ fn connect_opts(
                         let _ = write_packet(c, bytes_to_ints(password.to_bytes()) + [0])?;
                         // sigue el OK/ERR en el bucle
                     } else {
-                        return Result.Err(
-                            "mysql: caching_sha2_password requires the full path; use connect_tls (the "
-                                + "password travels encrypted), a user with mysql_native_password, or "
-                                + "warm the server cache with another client"
-                        );
+                        // M309 (findings #56): full-path EN CLARO — el intercambio RSA del protocolo:
+                        // se pide la clave pública del servidor (0x02), llega como AuthMoreData
+                        // [0x01][PEM], y la contraseña (con NUL, XOR el scramble) viaja cifrada con
+                        // RSA-OAEP(SHA-1). Es lo que hace un `mysql:8.4` recién creado (sin caché
+                        // y con `caching_sha2_password` por defecto) sin exigir TLS.
+                        let _ = write_packet(c, [2])?;
+                        let kp = read_packet(c)?;
+                        if (kp[0] != 1 || kp.len() < 2) {
+                            return Result.Err(
+                                "mysql: expected the server public key for caching_sha2_password"
+                            );
+                        }
+                        let pem = bytes_of(slice_ints(kp, 1, kp.len()));
+                        let enc = rsa_password(pem, scramble, password)?;
+                        let _ = write_packet(c, enc)?;
+                        // sigue el OK/ERR en el bucle
                     }
                 }
             } else {

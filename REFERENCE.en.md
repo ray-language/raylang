@@ -334,7 +334,7 @@ defining the same name).
 
 | Trait | Method(s) | Notes |
 |---|---|---|
-| `Eq` | `eq(self, other: Self) -> bool` | enables `==`/`!=` on user types; derivable |
+| `Eq` | `eq(self, other: Self) -> bool` | enables `==`/`!=` on user types; `Option<T>`/`Result<T, E>` implement it when their parameters do (M309: `assert_eq(o, Option.Some(1))`), as does `Show` (`Option.Some(1)`); derivable |
 | `Show` | `show(self) -> string` | enables `print`/`to_string`; derivable |
 | `Ord` | `less(self, other: Self) -> bool` | enables `sort`/`min`/`max`; impls for int/float/string/char |
 | `Hash` | `hash(self) -> int` | keys of `Set`; derivable |
@@ -480,7 +480,7 @@ fiber). For custom typed state, the ACTOR pattern (one owning fiber + channels);
 | Piece | Surface |
 |---|---|
 | Protocol | frame = 4 BE octets of length + JSON payload: request `{"id","method","params"[,"deadline_ms","traceparent"]}` → response `{"id","ok"}` \| `{"id","err"}` (protobuf: deferred) |
-| Server | `serve(host, port, handler)` · `serve_graceful(host, port, drain_ms, handler)` (signals + draining, M88.1b) · `serve_shutdown[_limits](…, stop, drain_ms, …)` · handler `fn(Req) -> Result<Json, string>`; `Req { method, params, deadline_ms, traceparent }`; one fiber per connection; a handler panic → `err` without killing the connection; `Limits { max_frame_bytes }` (10 MiB) |
+| Server | `serve(host, port, handler)` · `serve_graceful(host, port, drain_ms, handler)` (M309: only SIGTERM/SIGINT shut down — `signals()` also carries SIGWINCH; `shutdown_signals()` is that filter as a channel, to wire `serve_shutdown` by hand) (signals + draining, M88.1b) · `serve_shutdown[_limits](…, stop, drain_ms, …)` · handler `fn(Req) -> Result<Json, string>`; `Req { method, params, deadline_ms, traceparent }`; one fiber per connection; a handler panic → `err` without killing the connection; `Limits { max_frame_bytes }` (10 MiB) |
 | Client | `connect(host, port) -> Result<Client, _>` · `call(c, method, params)` · `call_deadline(…, ms)` (bounds the wait; after a timeout: reconnect) · `call_full(…, deadline_ms, traceparent)` · `disconnect` — persistent connection, correlated and validated id |
 | Pool (M127) | `pool(host, port, size) -> Pool` · `pool_call`/`pool_call_deadline`/`pool_call_full` · `pool_close` — up to `size` calls IN FLIGHT at once (one connection per slot: the server serves one fiber per connection → real parallelism); lazy dialing, a checkout that PARKS when exhausted (backpressure via a bounded channel) and **automatic reconnection** after a failure (the timeout discards the desynchronized connection; the next call re-dials) |
 
@@ -585,7 +585,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray upgrade [tag] [--check]` | updates `ray`/`raylang` to the latest release (or the tag); `--check` only reports (0 = up to date, 1 = a newer one exists) |
 | `ray toolchain install [--rust <channel>] [--force] [--no-vendor]` | installs a PRIVATE Rust toolchain for `build --native` under `~/.ray/toolchain` (rustup `minimal` profile, without touching the user's Rust or PATH) and the release's `ray-runtime` vendor (first build offline). With `cargo` already on the PATH it installs nothing (unless `--force`) |
 | `ray toolchain status` | which `cargo`/`rustc` `build --native` would use and from where (`RAY_CARGO`/`RAY_RUSTC` → PATH → private), their version, the system linker and the installed vendor; exit 1 if any is missing |
-| `ray version` | version |
+| `ray version` | version — `1.27.12` on a release; `1.27.12+dev.<sha>` when built from the repo HEAD (M309: HEAD and release accept different code; `[package] raylang = "1.27.12"` in `ray.toml` requires a toolchain ≥ that version and warns when the toolchain is a development build) |
 | `ray help` | the help: every subcommand with its flags (also without arguments) |
 
 `run` flags:
@@ -633,4 +633,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:de5d87843b51 -->
+<!-- sync: sha256:c4c1f6dbeffb -->

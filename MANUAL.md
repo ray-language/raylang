@@ -1356,8 +1356,12 @@ la URL al webview del shell: el fuente de escritorio corre sin tocar. El ciclo d
 como eventos (`kind="lifecycle"`, `tag="background"/"foreground"`). Simulador: compilar sin
 firma y `simctl install/launch`; dispositivo: declara tu team una vez en el ray.toml —
 `[ios] development_team = "ABCDE12345"` — y cada regeneración lo escribe en el `App.xcconfig`
-(sin declararlo, el bundle **preserva** la firma que Xcode dejó en el xcconfig anterior; solo
-la primera vez toca elegir team en Xcode). `--ios` excluye `process` (fork/exec denegado en
+(o escríbelo tú en el xcconfig: `DEVELOPMENT_TEAM = ABCDE12345`). Elegir el equipo en Xcode
+(Signing & Capabilities) NO basta: Xcode lo guarda en `project.pbxproj`, que el bundle
+reescribe; desde M309 el bundle rescata ese `DEVELOPMENT_TEAM` del pbxproj anterior al
+xcconfig, pero la fuente de verdad es el xcconfig o el `ray.toml`. Y tras cambiar solo el
+programa o el frontend no hace falta regenerar: `ray build --native --lib --release --target
+aarch64-apple-ios -o <App>-ios/libs/libray_app.a` deja el proyecto Xcode intacto. `--ios` excluye `process` (fork/exec denegado en
 iOS) y `audio` (backend sin validar ahí).
 
 Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — shell Java con
@@ -1726,6 +1730,19 @@ El punto de partida es `ray new miapp --frontend react-ts` (cualquier plantilla 
 lo inyecta al arrancar cada documento), así que un componente React llama al backend con
 `window.ray.request({op: "list"})` igual en desarrollo y en producción; si prefieres HTTP, tu
 webserver embebido sigue ahí y en `vite.config` un `server.proxy` de `/api` lo hace mismo-origen.
+
+**Iterar la UI en el teléfono** (M309, findings #49). Como el shell inyecta `window.ray` en
+cualquier página que cargue el webview, la app del iPhone o del emulador puede cargar el dev
+server del Mac y conservar el puente: (1) arranca Vite escuchando en la red — `npm --prefix
+frontend run dev -- --host 0.0.0.0` (añádelo como script `dev:device` en el `package.json`);
+(2) construye la app con devtools (`ray bundle --ios --devtools` o `ray build --native --devtools
+--lib …`); (3) lánzala con `RAY_DEV_FRONTEND_URL=http://<ip-del-mac>:5173` en el entorno (una
+variable del esquema de Xcode; en Android, un extra del intent o `adb reverse tcp:5173
+tcp:5173` y `http://127.0.0.1:5173`). Un build de desarrollo comprueba que la URL responde y
+entonces `app://` resuelve contra ella (HMR incluido); si no responde, usa la build embebida.
+Un build `--release` (sin devtools) ignora la variable siempre. En iOS la primera conexión a la
+red local falla mientras el sistema pide el permiso (`NSLocalNetworkUsageDescription`, que el
+bundle ya declara): la comprobación reintenta una vez.
 
 
 ### Markdown (`std/markdown`)
@@ -2611,7 +2628,9 @@ fn main() -> int {
   que en un programa con fibras es normal, no excepcional (el `send` a secas es error).
 - `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2, y
   SIGWINCH=28 para el re-maquetado de TUIs), para el **apagado ordenado** de un servicio: compone
-  con `recv`/`select` (drena tu canal de trabajo O apaga). Singleton del proceso; unix (VM y
+  con `recv`/`select` (drena tu canal de trabajo O apaga). ⚠️ Comprueba el VALOR: un servidor que
+  se apaga «con cualquier señal» se para al redimensionar la terminal (SIGWINCH llega por el
+  mismo canal; `serve_graceful` ya lo filtra). Singleton del proceso; unix (VM y
   binario nativo). Ejemplo completo en
   [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray). Para un servidor web no
   hace falta cablearlo a mano: `webserver.serve_graceful(host, port, drain_ms, handler)` ya lo
@@ -2790,6 +2809,14 @@ mismo emisor), y una operación servida entera por el actor es **atómica** — 
 read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás funciones**
 (una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
 y el actor muere cuando su canal se cierra (`close(ch)`).
+
+**Lo que captura un handler es una COPIA** (M309, findings #58). Un servidor `web`, `rpc` o gRPC
+corre cada conexión en su fibra, y lo que el handler captura del ámbito exterior (un `Map` de
+estado, un contador) se copia al arrancar la fibra: mutarlo dentro del handler no persiste fuera.
+En la VM la copia es **por conexión** (un test con una sola conexión «funciona»); en el binario
+nativo, los closures que cruzan a `spawn` se reconstruyen **en cada invocación**, así que ni eso.
+El estado compartido de un servicio vive en una base de datos o en un actor (esta sección):
+nunca en un valor capturado.
 
 **Fan-out desde un actor** (un suscriptor por canal: SSE, WebSockets, notificaciones): el actor
 NO debe usar `send` a secas hacia sus suscriptores — `send` sobre un canal **cerrado** es un

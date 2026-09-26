@@ -14856,3 +14856,50 @@ etiquetas de Rust, `'ray_outer:` delante del `loop`/`for`/`while` que implementa
 `for` (ocho formas, una por optimización). (6) Los cuatro espejos selfhost (parser, checker,
 intérprete, compilador) y `parse_dump` con la etiqueta en el volcado de paridad.
 
+## 291. M309 — El segundo barrido: móvil, distribuido y bases de datos (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 — ray808 (app móvil con frontend React llevada a
+iOS y Android), su hot reload en el teléfono, y raymart (cuatro APIs hexagonales con rpc, gRPC,
+rayq, outbox y saga, compiladas a nativo en Docker contra la release). Lo hecho, por decisión:
+
+**Bases de datos, verificadas contra servidores reales.** `db/mongo` contra mongod 8.3 con y sin
+`--auth`: MongoDB 6+ exige `conversationId` int32 (nuevo `Bson.Int32`, solo para CODIFICAR: lo
+decodificado sigue llegando como `Int`, que es lo que todo el código existente casa) y cierra el
+SASL con un `saslContinue` vacío hasta `done: true`; sin usuario no hay SCRAM; `writeErrors` es
+`Err` (un duplicado era `Ok(0)`). `db/mysql` contra `mysql:8.4` recién creado en los tres motores:
+el full-path de `caching_sha2_password` en claro es el intercambio RSA del protocolo (petición
+0x02 de la clave pública, RSA-OAEP con SHA-1 sobre `password+NUL XOR scramble`), escrito en
+raylang sobre `std/bigint` (base64 y DER a mano; es un cliente, sin exigencia de tiempo
+constante). Antes solo TLS o `mysql_native_password`.
+
+**Nativo: fallar en compilación, no en ejecución.** Un valor cuyo tipo guarda funciones (un
+`Router` con `Map<string, fn>`) capturado por un closure de `spawn` compilaba y panicaba al
+arrancar la fibra — solo en nativo. Como la conversión `__to_send` corre AL crear la fibra, el
+programa fallaría siempre: el error de transpilación es estrictamente mejor (`type_holds_fn`
+recorre campos, payloads, elementos y valores). Y un parámetro función MARCADO (genérico
+`__F: Fn + Send`, H21-N5c) usado como valor se coerciona al `Rc<dyn Fn>` del tipo raylang.
+
+**Móvil.** `0` es «la ventana del shell» en `eval_js`/`reply` (los shells entregan `window = 0`).
+El shell Android fija `HOME`/`TMPDIR` (`android.system.Os.setenv`) y trae `onShowFileChooser`.
+`ray bundle --ios`: `IPHONEOS_DEPLOYMENT_TARGET` en el entorno de cargo (los objetos C de `ring`
+tomaban el `minos` del SDK), `[app.plist]` + `NSLocalNetworkUsageDescription` en el Info.plist
+del shell (iOS 14+), rescate del `DEVELOPMENT_TEAM` del pbxproj anterior (Xcode lo escribe ahí,
+no en el xcconfig: la doc decía lo contrario) y aviso cuando `--ios-target` deja un lado vacío.
+Hot reload nivel 1–3: `RAY_DEV_FRONTEND_URL` honrada solo por builds con `--devtools` y solo si
+responde (sonda TCP con reintento: iOS falla la primera conexión local mientras pide permiso).
+Los niveles 4 (`ray dev --device`) y el nivel 2 del programa (ventana remota / VM en la app)
+quedan en IDEAS §98 como arcos.
+
+**Herramientas.** `1.27.12+dev.<sha>` (build.rs: `git describe --exact-match` contra `v<versión>`;
+`RAYLANG_RELEASE_BUILD` lo fuerza limpio — el CI de release lo exporta, porque su checkout no
+trae tags) y `[package] raylang = "X"` (mínimo; aviso en dev). `-o dir/app` crea `dir` antes de
+compilar. Un paquete cuyo directorio se llama como él se resuelve por su nombre desde dentro
+aunque tenga `entry`. `ray add` respeta el comentario que encabeza la tabla siguiente. «module
+not found» sugiere `ray add pkg`. `ray fmt`: los `const` pasan por `retry_wrapped`, y un literal
+de struct con un campo multilínea va un campo por línea SIEMPRE (canónico e idempotente; la
+variante «solo si no cabe» no lo era, porque cada línea cabía).
+
+**Lenguaje y paquetes.** `impl<T: Eq> Eq for Option<T>` y compañía en el prelude (composición,
+como `[T]`); `show` da la forma canónica del nativo. `serve_graceful` en `net`/`rpc` filtra
+SIGWINCH (`shutdown_signals()`).
+

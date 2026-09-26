@@ -2374,7 +2374,38 @@ pub fn serve_graceful(
     drain_ms: int,
     handler: fn(Request) -> Response
 ) -> Result<int, string> {
-    serve_shutdown(host, port, signals(), drain_ms, handler)
+    serve_shutdown(host, port, shutdown_signals(), drain_ms, handler)
+}
+
+// M309 (findings #64): `signals()` también entrega SIGWINCH (28) — un servidor cableado «a
+// cualquier señal» se paraba al redimensionar la terminal. Solo SIGTERM (15) y SIGINT (2) son
+// órdenes de apagado; el resto se ignora.
+/// A channel that carries only the SHUTDOWN signals (SIGTERM=15, SIGINT=2) forwarded from
+/// `signals()` — `signals()` itself also delivers SIGWINCH (terminal resize), which must not
+/// stop a server. `serve_graceful` uses it; wire `serve_shutdown`'s `stop` to it yourself when
+/// you compose the loop by hand.
+pub fn shutdown_signals() -> Channel<int> {
+    let stop: Channel<int> = Channel.new();
+    let sig = signals();
+    spawn(fn() {
+        var forwarding = true;
+        while (forwarding) {
+            match (recv(sig)) {
+                Option.Some(n) => {
+                    if (n == 15 || n == 2) {
+                        send(stop, n);
+                        close(stop);
+                        forwarding = false;
+                    }
+                },
+                Option.None => {
+                    close(stop);
+                    forwarding = false;
+                },
+            }
+        }
+    });
+    stop
 }
 
 // Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde

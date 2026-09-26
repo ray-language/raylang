@@ -335,7 +335,7 @@ definiendo el mismo nombre).
 
 | Trait | Método(s) | Notas |
 |---|---|---|
-| `Eq` | `eq(self, other: Self) -> bool` | habilita `==`/`!=` en tipos de usuario; derivable |
+| `Eq` | `eq(self, other: Self) -> bool` | habilita `==`/`!=` en tipos de usuario; `Option<T>`/`Result<T, E>` lo implementan si sus parámetros lo hacen (M309: `assert_eq(o, Option.Some(1))`), igual que `Show` (`Option.Some(1)`); derivable |
 | `Show` | `show(self) -> string` | habilita `print`/`to_string`; derivable |
 | `Ord` | `less(self, other: Self) -> bool` | habilita `sort`/`min`/`max`; impls para int/float/string/char |
 | `Hash` | `hash(self) -> int` | claves de `Set`; derivable |
@@ -476,7 +476,7 @@ Detalle completo en [`docs/web-framework.md`](docs/web-framework.md); demo en `e
 | Pieza | Superficie |
 |---|---|
 | Protocolo | frame = 4 octetos BE de longitud + payload JSON: petición `{"id","method","params"[,"deadline_ms","traceparent"]}` → respuesta `{"id","ok"}` \| `{"id","err"}` (protobuf: diferido) |
-| Servidor | `serve(host, port, handler)` · `serve_graceful(host, port, drain_ms, handler)` (señales + drenado, M88.1b) · `serve_shutdown[_limits](…, stop, drain_ms, …)` · handler `fn(Req) -> Result<Json, string>`; `Req { method, params, deadline_ms, traceparent }`; una fibra por conexión; panic del handler → `err` sin matar la conexión; `Limits { max_frame_bytes }` (10 MiB) |
+| Servidor | `serve(host, port, handler)` · `serve_graceful(host, port, drain_ms, handler)` (M309: solo SIGTERM/SIGINT apagan — `signals()` también trae SIGWINCH; `shutdown_signals()` es ese filtro como canal, para cablear `serve_shutdown` a mano) (señales + drenado, M88.1b) · `serve_shutdown[_limits](…, stop, drain_ms, …)` · handler `fn(Req) -> Result<Json, string>`; `Req { method, params, deadline_ms, traceparent }`; una fibra por conexión; panic del handler → `err` sin matar la conexión; `Limits { max_frame_bytes }` (10 MiB) |
 | Cliente | `connect(host, port) -> Result<Client, _>` · `call(c, method, params)` · `call_deadline(…, ms)` (acota la espera; tras timeout: reconectar) · `call_full(…, deadline_ms, traceparent)` · `disconnect` — conexión persistente, id correlado y validado |
 | Pool (M127) | `pool(host, port, size) -> Pool` · `pool_call`/`pool_call_deadline`/`pool_call_full` · `pool_close` — hasta `size` llamadas EN VUELO a la vez (una conexión por hueco: el servidor atiende una fibra por conexión → paralelismo real); marcado perezoso, checkout que APARCA al agotarse (backpressure por canal acotado) y **reconexión automática** tras un fallo (el timeout descarta la conexión desincronizada; la siguiente llamada re-marca) |
 
@@ -581,7 +581,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray upgrade [tag] [--check]` | actualiza `ray`/`raylang` a la última release (o al tag); `--check` solo informa (0 = al día, 1 = hay nueva) |
 | `ray toolchain install [--rust <canal>] [--force] [--no-vendor]` | instala una toolchain de Rust PRIVADA para `build --native` bajo `~/.ray/toolchain` (rustup perfil `minimal`, sin tocar el Rust del usuario ni su PATH) y el vendor de `ray-runtime` de la release (primer build sin red). Con `cargo` ya en el PATH no instala nada (salvo `--force`) |
 | `ray toolchain status` | qué `cargo`/`rustc` usaría `build --native` y de dónde (`RAY_CARGO`/`RAY_RUSTC` → PATH → privada), su versión, el linker del sistema y el vendor instalado; exit 1 si falta alguno |
-| `ray version` | versión |
+| `ray version` | versión — `1.27.12` en una release; `1.27.12+dev.<sha>` compilado de la HEAD del repo (M309: la HEAD y la release aceptan código distinto; `[package] raylang = "1.27.12"` en `ray.toml` exige un toolchain ≥ esa versión y avisa cuando el toolchain es de desarrollo) |
 | `ray help` | la ayuda: todos los subcomandos con sus flags (también sin argumentos) |
 
 Flags de `run`:

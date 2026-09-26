@@ -7,6 +7,11 @@
 # `releases/latest/download/raylang-<target>.tar.gz` sin consultar la API de GitHub.
 name: release
 
+# M309: los binarios de release se identifican como la versión limpia (`1.27.12`), nunca
+# `+dev.<sha>` (build.rs; el checkout de Actions no trae tags para `git describe`).
+env:
+  RAYLANG_RELEASE_BUILD: "1"
+
 on:
   push:
     tags: ["v[0-9]*"]

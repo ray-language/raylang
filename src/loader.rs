@@ -267,11 +267,22 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                 };
                 match resolved {
                     Some(mp) => pending.push((dep.clone(), mp, false)),
-                    None => return Err(rend(line, col, 1, &format!(
-                        "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {})",
-                        dep, dep, dep,
-                        roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
-                    ))),
+                    None => {
+                        // M309 (findings #62): las dependencias no son transitivas — un módulo
+                        // `pkg/…` de un paquete que solo trae otra dependencia hay que declararlo.
+                        let hint = match dep.split_once('/') {
+                            Some((pkg, _)) if pkg != "std" && crate::deps::valid_package_name(pkg) => format!(
+                                "; if '{pkg}' is a package (also when another dependency imports it: dependencies are not transitive), declare it in [dependencies] — `ray add {pkg}`"
+                            ),
+                            _ => String::new(),
+                        };
+                        return Err(rend(line, col, 1, &format!(
+                            "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {}){}",
+                            dep, dep, dep,
+                            roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", "),
+                            hint
+                        )));
+                    }
                 }
             }
         }

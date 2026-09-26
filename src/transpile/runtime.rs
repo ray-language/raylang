@@ -846,6 +846,22 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // hilo del programa no es fibra y bloquea en poll); sin fibras, la espera condvar del runtime.
     if t.needs_rt_ui {
         out.push_str(concat!(
+            // M309 (findings #49): un build con `--devtools` honra RAY_DEV_FRONTEND_URL si responde
+            // (espejo de builtins::dev_frontend_url_override); sin devtools, cadena vacía.
+            "fn __ray_dev_frontend_url() -> String {\n",
+            "    static DEV_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();\n",
+            "    DEV_URL.get_or_init(|| {\n",
+            "        if !ray_runtime::ui::devtools_enabled() { return String::new(); }\n",
+            "        let Ok(url) = std::env::var(\"RAY_DEV_FRONTEND_URL\") else { return String::new() };\n",
+            "        let url = url.trim().trim_end_matches('/').to_string();\n",
+            "        if url.is_empty() { return String::new(); }\n",
+            "        let rest = url.strip_prefix(\"http://\").or_else(|| url.strip_prefix(\"https://\")).unwrap_or(&url);\n",
+            "        let hostport = rest.split('/').next().unwrap_or(\"\");\n",
+            "        let (host, port) = match hostport.rsplit_once(':') { Some((h, p)) => (h.trim_matches(|c| c == '[' || c == ']').to_string(), p.parse::<u16>().unwrap_or(80)), None => (hostport.to_string(), if url.starts_with(\"https://\") { 443 } else { 80 }) };\n",
+            "        use std::net::ToSocketAddrs;\n",
+            "        let ok = (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()).map(|addr| { for attempt in 0..2 { if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(700)).is_ok() { return true; } if attempt == 0 { std::thread::sleep(std::time::Duration::from_millis(400)); } } false }).unwrap_or(false);\n",
+            "        if ok { eprintln!(\"[ui] development frontend: {url} (RAY_DEV_FRONTEND_URL)\"); url } else { eprintln!(\"[ui] RAY_DEV_FRONTEND_URL={url} does not answer; using the embedded frontend\"); String::new() }\n",
+            "    }).clone()\n}\n",
             "fn __ray_ui_open(title: &str, url: &str, w: i64, h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window(id, title, url, w, h) {\n",

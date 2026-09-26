@@ -1436,3 +1436,29 @@ fn missing_field_of_a_module_struct_suggests_its_constructor() {
         "{err}"
     );
 }
+
+/// M309 (findings #49): un build de DESARROLLO (`--devtools`) honra `RAY_DEV_FRONTEND_URL` si
+/// responde; si no responde cae a la build embebida; sin `--devtools` se ignora siempre.
+#[test]
+fn dev_frontend_url_is_honoured_only_with_devtools_and_when_reachable() {
+    let base = tmp("dev_frontend");
+    std::fs::write(base.join("prog.ray"), "import std/ui;\nfn main() { print(ui.app_url(\"app://index.html\")); }\n").unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let live = format!("http://127.0.0.1:{port}");
+    let run = |devtools: bool, url: &str| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ray"));
+        cmd.arg("run");
+        if devtools {
+            cmd.arg("--devtools");
+        }
+        cmd.arg("prog.ray").current_dir(&base).env("RAY_DEV_FRONTEND_URL", url);
+        let (out, code) = run_headless(&mut cmd);
+        assert_eq!(code, 0, "{out}");
+        out
+    };
+    assert_eq!(run(true, &live), format!("{live}/index.html\n"), "devtools + alcanzable → la URL de desarrollo");
+    assert_eq!(run(true, "http://127.0.0.1:1"), "ray://app/index.html\n", "devtools + no responde → embebida");
+    assert_eq!(run(false, &live), "ray://app/index.html\n", "sin devtools se ignora");
+    drop(listener);
+}

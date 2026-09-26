@@ -594,6 +594,31 @@ fn a_pattern_binding_named_like_a_cell_var_of_another_arm_is_not_a_cell() {
     assert!(!f_head.contains("addr.borrow()"), "el binding de patron no es celda: {}", f_head);
 }
 
+/// M309 (findings #59): capturar en un `spawn` un valor cuyo tipo guarda funciones es error de
+/// TRANSPILACIÓN (antes compilaba y panicaba solo en nativo, en ejecución).
+#[test]
+fn a_spawn_capture_holding_functions_is_a_transpile_error() {
+    let src = "struct Router { routes: Map<string, fn(int) -> int> }\n\
+               fn main() { let r = Router { routes: Map.new() }; spawn(fn() { let n = r.routes.len(); print(n); }); }";
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    let err = transpile(&prog).err().expect("debe fallar al transpilar");
+    assert!(err.contains("'r' (type Router) holds function values and cannot be captured by a 'spawn' closure"), "{err}");
+}
+
+/// M309 (findings #60): un param fn MARCADO (cruza un spawn) usado como VALOR se coerciona al
+/// `Rc<dyn Fn>` del tipo raylang — antes E0308 «found type parameter __F1».
+#[test]
+fn a_marked_fn_param_used_as_a_value_is_coerced_to_dyn() {
+    let rust = transpile_src(
+        "fn keep(m: Map<string, fn(int) -> int>, f: fn(int) -> int) { m.insert(\"k\", f); }\n\
+         fn serve(h: fn(int) -> int) { spawn(fn() { let m: Map<string, fn(int) -> int> = Map.new(); keep(m, h); }); }\n\
+         fn main() { serve(fn(x: int) -> int { x + 1 }); }",
+    );
+    assert!(rust.contains("(Rc::new(h.clone()) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+}
+
 #[test]
 fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
     // FFI (M41): `extern "m" { fn sqrt(x: float) -> float; }` → una decl `extern "C"` del símbolo C

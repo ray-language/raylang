@@ -3765,3 +3765,39 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | ✅ **M305**: `std/collections/deque` por ruta; con `path`, listado de un módulo del proyecto o de `.ray-deps` (`rpc/rpc`, `web/framework`) |
 | 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | ✅ **M307**: `fs.sync_data(h)` (fdatasync; VM/intérprete/nativo) + aviso del coste en REFERENCE |
 
+## 98. El segundo barrido de `ray-apps` (ray808, hot reload, raymart) (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras M309:
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| 38 | `ui.reply` nunca resuelve en iOS/Android (`window = 0`) | ✅ M309: `0` = la ventana del shell |
+| 39 | Los shells móviles no atienden `ray://app` | documentado (M307/M309); implementar el esquema (WKURLSchemeHandler / `shouldInterceptRequest`) sigue PROPUESTO |
+| 40 | Android sin directorio de datos | ✅ M309: el shell fija `HOME`/`TMPDIR` |
+| 41 | Android: `<input type="file">` | ✅ M309: `onShowFileChooser` |
+| 42 | `ray add` en el sitio equivocado | ✅ M309 |
+| 43 | `ray fmt`: struct con closures / `const` largo | ✅ M309 |
+| 44 | `Option`/`Result` sin `Eq`; patrones literales de string en `match` | ✅ `Eq`/`Show` (M309); los patrones de string literal siguen PROPUESTOS (junto a #53) |
+| 45 | iOS: objetos C con `minos` del SDK | ✅ M309: `IPHONEOS_DEPLOYMENT_TARGET` |
+| 46 | Firma iOS: Xcode escribe en el pbxproj | ✅ M309: rescate + docs |
+| 47 | `--ios-target sim` deja `libs/` vacío sin aviso | ✅ M309: aviso |
+| 48 | Recompilar la librería basta | ✅ M309: README generado y MANUAL |
+| 49 | Hot reload del frontend en el teléfono | ✅ niveles 1–3 (M309: docs, `dev:device`, `RAY_DEV_FRONTEND_URL` con `--devtools`); nivel 4 (`ray dev --device`) PROPUESTO |
+| 50 | Hot reload del programa en el teléfono | PROPUESTO — arco: A (ventana remota, backend `RAY_UI_BACKEND=remote` sobre WebSocket a `ray dev`) primero; B (VM en la app) después |
+| 51 | iOS sin `NSLocalNetworkUsageDescription`; `[app.plist]` no llega a `--ios` | ✅ M309 |
+| 52 | `dyn Trait` en campos; `dyn mod.Trait` / `impl mod.Trait for` no parsean | PROPUESTO — rutas calificadas en `dyn`/`impl … for` (parser + resolución); `dyn` en campos requiere decidir la representación (hoy los puertos se inyectan por genéricos, documentado) |
+| 53 | Patrones de tupla en `match`; exhaustividad anidada de `Result<Option<T>>` | PROPUESTO — patrones de tupla + exhaustividad recursiva (hoy conservadora) |
+| 54 | Primitivos como nombres de función (doc); alias de tipo | ✅ documentado en llms; `type Alias = …` PROPUESTO (sintaxis nueva: parser + checker + selfhost) |
+| 55 | `-o dir/app` sin `dir` | ✅ M309 |
+| 56 | mysql `caching_sha2_password` en claro | ✅ M309 (db 0.1.1) |
+| 57 | mongo contra MongoDB 6+ | ✅ M309 (db 0.1.1) |
+| 58 | Los handlers reciben una copia | ✅ documentado (MANUAL §15, llms) |
+| 59 | Nativo: struct con funciones cruza a `spawn` → panic | ✅ M309: error de transpilación con el rodeo |
+| 60 | Nativo: E0308 con un param función en un mapa | ✅ M309 |
+| 61 | Un paquete no se importa a sí mismo en sus tests | ✅ M309 |
+| 62 | Dependencias no transitivas sin pista | ✅ M309: el error sugiere `ray add pkg` |
+| 63 | Servidor gRPC en `net` | PROPUESTO — `net/grpc_server` (+ generador de codecs desde `.proto`); raymart tiene la referencia (h2c, deadlines, metadata, interop grpcurl) |
+| 64 | `signals()` entrega SIGWINCH | ✅ M309: `serve_graceful` filtra; `shutdown_signals()`; docs |
+| 65 | HEAD y release con el mismo número | ✅ M309: `+dev.<sha>` y `[package] raylang` |
+| 66 | `ray test --native` | PROPUESTO — compilar cada suite a nativo (un binario por suite con su `main` sintético) |
+

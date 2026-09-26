@@ -40,13 +40,51 @@ impl Transpiler {
                         name
                     ))
                 }
-                _ => {
+                other => {
+                    // M309 (findings #59): un valor cuyo tipo GUARDA funciones (un `Router` con un
+                    // `Map<string, fn(...)>`, un adaptador con un campo `fn`) no puede cruzar a
+                    // `spawn` en el nativo — antes compilaba y panicaba en ejecución (solo en
+                    // nativo; la VM copia el heap sin más). Error de compilación, con el rodeo.
+                    if self.type_holds_fn(&other, &mut Vec::new()) {
+                        return Err(format!(
+                            "'{}' (type {}) holds function values and cannot be captured by a 'spawn' closure in the native backend: build it inside the fiber, or pass plain data and construct it there",
+                            name, other
+                        ));
+                    }
                     let is_cell = self.is_cell(&name);
                     out.push((name, ty, is_cell));
                 }
             }
         }
         Ok((out, clones))
+    }
+
+    /// M309 (findings #59): ¿el tipo contiene un valor-función en alguna posición (campos de struct,
+    /// payloads de enum, elementos, valores de Map…)? `seen` corta la recursión de tipos recursivos.
+    pub(super) fn type_holds_fn(&self, t: &Type, seen: &mut Vec<String>) -> bool {
+        match normalize_type(t) {
+            Type::Fn(..) => true,
+            Type::Array(e) => self.type_holds_fn(&e, seen),
+            Type::Map(k, v) => self.type_holds_fn(&k, seen) || self.type_holds_fn(&v, seen),
+            Type::Tuple(ts) => ts.iter().any(|x| self.type_holds_fn(x, seen)),
+            Type::Struct(n, args) | Type::Enum(n, args) => {
+                if args.iter().any(|a| self.type_holds_fn(a, seen)) {
+                    return true;
+                }
+                if seen.contains(&n) {
+                    return false;
+                }
+                seen.push(n.clone());
+                if let Some(fields) = self.struct_fields.get(&n) {
+                    return fields.iter().any(|(_, ft)| self.type_holds_fn(ft, seen));
+                }
+                if let Some(variants) = self.enum_variants.get(&n) {
+                    return variants.values().any(|payload| payload.iter().any(|pt| self.type_holds_fn(pt, seen)));
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Emite `e` convertido a la repr SEND de un `Channel<T>`/`Task<T>` (para cruzar el hilo): string→
@@ -1153,9 +1191,11 @@ impl Transpiler {
                 let [id, version, key] = crate::transpile::native_app_info();
                 write!(out, "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from({id:?}), Rc::<str>::from({version:?}), Rc::<str>::from({key:?})]))").unwrap();
             }
-            // M263: un binario nativo nunca apunta a un dev server: la URL va vacía (literal).
+            // M263: un binario nativo nunca apunta a un dev server… salvo un build con `--devtools`
+            // (M309, findings #49): entonces honra `RAY_DEV_FRONTEND_URL` si responde (el runtime
+            // decide en ejecución; un release sin devtools sigue devolviendo la cadena vacía).
             "ui_frontend_url" if name.starts_with("__") => {
-                out.push_str("Rc::<str>::from(\"\")");
+                out.push_str("Rc::<str>::from(__ray_dev_frontend_url())");
             }
             "args" => {
                 out.push_str(

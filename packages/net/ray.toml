@@ -2,7 +2,7 @@
 # contra el directorio padre — ver deps::dependency_roots_for).
 [package]
 name = "net"
-version = "0.3.6"
+version = "0.3.7"
 license = "Apache-2.0"
 description = "Networking for raylang: HTTP client (fetch) and production web server, HTTP/2, WebSocket, SSE, DNS, JWT, OAuth2, mail, Redis and Postgres clients"
 keywords = ["http", "https", "fetch", "client", "webserver", "server", "http2", "websocket", "sse", "streaming", "dns", "jwt", "oauth2", "mail", "smtp", "redis", "postgres", "grpc", "metrics", "ntp", "udp", "tls", "cookie", "trace", "log"]

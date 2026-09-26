@@ -783,6 +783,16 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         {
             roots.push(parent);
         }
+        // M309 (findings #61): un paquete cuyo directorio se llama como él (`libs/grpc` con
+        // `name = "grpc"`) se resuelve por su propio nombre desde dentro — sus módulos se importan
+        // entre sí como `grpc/h2`, igual que los ve un consumidor — aunque declare `entry` (la
+        // heurística "entry = aplicación" lo dejaba fuera y el rodeo era depender de sí mismo).
+        if m.root.file_name().is_some_and(|n| n == m.name.as_str())
+            && let Some(parent) = m.root.parent().map(Path::to_path_buf)
+            && !roots.contains(&parent)
+        {
+            roots.push(parent);
+        }
         // M138: un paquete DESCARGADO —su `ray.toml` vive directamente bajo una caché
         // `.ray-deps/`— resuelve a sus dependencias hermanas por la CACHÉ PLANA: el padre entra
         // como raíz aunque el paquete declare `entry` (la cara publicable, M135). Sin esto, la

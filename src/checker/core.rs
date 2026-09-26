@@ -2319,7 +2319,7 @@ impl Checker {
                         Ok(Type::Unit)
                     }
                     Some(else_ty) => {
-                        let else_e = else_branch.as_ref().expect("else present");
+                        let Some(else_e) = else_branch.as_ref() else { crate::ice!("an if with an else type has an else branch") };
                         // M13.2a: si una rama diverge (p.ej. termina en `panic`), el if toma el
                         // tipo de la otra; solo la rama que sí produce valor manda.
                         if block_diverges(then_branch) {
@@ -3461,7 +3461,7 @@ impl Checker {
                     Param { name: "__d1".into(), ty: tuple_ty.clone(), line, col },
                 ],
                 Type::Bool,
-                acc.expect("a tuple has elements"),
+                acc.unwrap_or_else(|| crate::ice!("a tuple type has at least two elements")),
             )
         } else {
             let mut acc = lit("(");

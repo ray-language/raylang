@@ -201,15 +201,20 @@ fn is_integer_type(t: Type) -> bool {
 // M299 (findings 1.27.11 #12): espejo de `constructor_hint` — el constructor público del módulo
 // que devuelve el struct al que le falta un campo (`ui.item(string, string, string)`).
 fn constructor_hint(c: Checker, struct_name: string) -> string {
-    let sep = struct_name.last_index_of_str("::");
+    let sep = last_index_of_str(struct_name, "::");
     if (sep < 0) {
         return "";
     }
     let prefix = struct_name.substring(0, sep);
-    let msep = prefix.last_index_of_str("::");
+    let msep = last_index_of_str(prefix, "::");
     let module = if (msep < 0) { prefix } else { prefix.substring(msep + 2, prefix.len()) };
+    // Sin `for` ni `.unwrap()`: el toolchain autoalojado (metacircular) no los tiene.
     var best = "";
-    for (fname, sig) in c.funcs {
+    let names = c.funcs.keys();
+    var ni = 0;
+    while (ni < names.len()) {
+        let fname = names[ni];
+        ni = ni + 1;
         if (!fname.starts_with(prefix + "::") || fname.contains("#")) {
             continue;
         }
@@ -217,9 +222,12 @@ fn constructor_hint(c: Checker, struct_name: string) -> string {
         if (bare.contains("::") || !c.pub_funcs.contains_key(fname)) {
             continue;
         }
-        let is_ctor = match (sig.ret) {
-            Type.TNamed(n, _) => n == struct_name,
-            _ => false,
+        let is_ctor = match (c.funcs.get(fname)) {
+            Option.Some(sig) => match (sig.ret) {
+                Type.TNamed(n, _) => n == struct_name,
+                _ => false,
+            },
+            Option.None => false,
         };
         if (is_ctor && (best == "" || fname < best)) {
             best = fname;
@@ -228,7 +236,12 @@ fn constructor_hint(c: Checker, struct_name: string) -> string {
     if (best == "") {
         return "";
     }
-    let sig = c.funcs.get(best).unwrap();
+    let sig = match (c.funcs.get(best)) {
+        Option.Some(x) => x,
+        Option.None => {
+            return "";
+        },
+    };
     var params = "";
     var i = 0;
     while (i < sig.params.len()) {
@@ -1741,7 +1754,8 @@ fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
     let saved_labels = c.loop_labels;
     c.loop_depth = 0;  // M191: un bucle exterior no es alcanzable desde una función anónima
     c.break_ok = false;
-    c.loop_labels = [];
+    var no_labels: [string] = [];
+    c.loop_labels = no_labels;
     let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "the anonymous function");
     c.current_return = saved;
     c.loop_depth = saved_depth;
@@ -3742,7 +3756,10 @@ fn check_if(
             Result.Ok(Type.TUnit)
         },
         Option.Some(else_e) => {
-            let else_ty = else_done.unwrap();
+            let else_ty = match (else_done) {
+                Option.Some(t) => t,
+                Option.None => Type.TUnit,
+            };
             if (block_diverges(then_b)) {
                 return Result.Ok(else_ty);
             }

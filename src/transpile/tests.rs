@@ -1566,6 +1566,14 @@ fn fast_mode_emits_no_depth_prologue() {
     assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
 }
 
+/// M311: tras el chequeo el AST no nombra alias (erasure): el transpilador ve los tipos expandidos.
+#[test]
+fn type_aliases_are_erased_before_transpiling() {
+    let rust = transpile_src("type Id = int;\ntype Pair<T> = (T, T);\nstruct U { id: Id }\nfn swap(p: Pair<Id>) -> Pair<Id> { (p.1, p.0) }\nfn main() { let u = U { id: 1 }; let q: Pair<Id> = (u.id, 2); print(swap(q).0.to_string()); }");
+    assert!(rust.contains("fn swap(mut p: (i64, i64,)) -> (i64, i64,)"), "{rust}");
+    assert!(!rust.contains("Pair") && !rust.contains(" Id"), "{rust}");
+}
+
 /// M310: patrones de tupla y literales en nativo — el int/char van como patrón de Rust, el string
 /// anidado como prueba diferida `== "lit"`, y un match con guardas de Rust lleva el comodín
 /// inalcanzable (la exhaustividad la probó el checker).

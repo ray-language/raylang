@@ -79,7 +79,7 @@ longitud en caracteres. **Ningún token cruza líneas.**
 ```ebnf
 programa    = { item } ;
 item        = import | from_import | [ anotaciones ] [ 'pub' ] declaracion ;
-declaracion = funcion | struct | enum | trait | impl | const ;
+declaracion = funcion | struct | enum | trait | impl | const | alias_tipo ;
 import      = 'import' ruta_modulo [ 'as' IDENT ] ';' ;
 from_import = [ 'pub' ] 'from' ruta_modulo 'import' nombre [ 'as' IDENT ]
               { ',' nombre [ 'as' IDENT ] } [ ',' ] ';' ;
@@ -187,6 +187,7 @@ trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
 impl     = 'impl' [ genericos ] nombre_trait [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
+alias_tipo = 'type' IDENT [ '<' IDENT { ',' IDENT } '>' ] '=' tipo ';' ;   (* 'type' es contextual: solo abre ítem (M311) *)
 const_valor = literal | '[' [ const_valor { ',' const_valor } ] ']' ;
 extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
 firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
@@ -204,6 +205,18 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
   por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
+- **Alias de tipo** (M311): `[pub] type Nombre[<T, …>] = tipo;` da un nombre a un tipo en
+  posición de tipo. **No es un tipo nuevo**: `type Id = int` es `int` en todas partes (`Id` e
+  `int` son intercambiables; un `Pair<T> = (T, T)` casa con la tupla). Los parámetros se
+  sustituyen por los argumentos de cada uso (aridad exacta; sin bounds — van en la función o el
+  struct que lo usa). Se expande en el checker (`resolve_type`) y se borra del AST tras el
+  chequeo: ningún motor lo ve; los diagnósticos muestran el tipo expandido. Un alias puede nombrar
+  otro alias; un ciclo (`type A = [B]; type B = A;`) es error, como un nombre que ya es
+  struct/enum/trait. `pub type` se exporta y califica como un tipo (`geo.Pt`, `from geo import
+  Pt`); un alias privado no se ve desde fuera. `type` es palabra clave **contextual**: solo abre
+  un ítem seguido de un nombre; en cualquier otra posición es un identificador (campo `type`,
+  variable `type`). La construcción va por el nombre real (`Enum.Variante`, `Struct { … }`), no
+  por el alias.
 - `const` de nivel superior: el valor es un **literal** (o literal negado), un **arreglo o una
   tupla de valores constantes** (anidable; M274/M307) o el **nombre de otra constante declarada
   antes** (M307: `const IDS: [int] = [ID_A, ID_B];`, `const TABLE: [(int, string)] = [(ID_A,

@@ -33,7 +33,7 @@ Reserved (cannot be used as identifiers):
 
 | Group | Words |
 |---|---|
-| Declarations | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` |
+| Declarations | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` (`type` is **contextual**: `type Alias<T> = …;` only at the start of an item, M311) |
 | Control | `if` `else` `while` `for` `in` `match` `return` `break` `continue` |
 | Modules | `import` `pub` (`from` is **contextual**: only at the start of an item, `from M import x;`) |
 | Values/types | `true` `false` `dyn` `as` `self` `Self` |
@@ -140,6 +140,7 @@ Reserved (cannot be used as identifiers):
 | `Option<T>` / `Result<T, E>` | from the prelude; absence and error as values (there is no `null` and no exceptions) |
 | `Channel<T>` / `Task<T>` | concurrency (SPEC §9) |
 | your own `struct` / `enum` | reference semantics (struct/enum); generics with bounds (`struct Box<T: Show>`) |
+| `type Alias<T> = type;` | type alias (M311): a name for a type, not a new type (`type Id = int` is `int`; `type Pair<T> = (T, T)`; `type Handler = fn(Req) -> Res`); `pub type` is exported like a type; expanded in the checker (erasure) and diagnostics show the expanded type |
 | `dyn Trait`, `dyn A + B` | trait objects (dynamic dispatch); *upcasting* to a subset of traits; allowed as a struct field and with qualified paths (`dyn m.Trait`, `impl m.Trait for T`, M310); shown as `<dyn Trait>` |
 | `Iter<T>` | lazy iterator (closure-backed) |
 | `ptr` | opaque FFI pointer (not dereferenceable from raylang) |
@@ -634,4 +635,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:b898f626ce42 -->
+<!-- sync: sha256:3e316a2e9da3 -->

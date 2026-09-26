@@ -18,6 +18,7 @@ impl Checker {
             enum_names: HashSet::new(),
             enum_tparams: HashMap::new(),
             struct_tparams: HashMap::new(),
+            aliases: HashMap::new(),
             struct_bounds: HashMap::new(),
             enum_bounds: HashMap::new(),
             scopes: Vec::new(),
@@ -83,6 +84,33 @@ impl Checker {
         // al ancho del subrayado, nunca al veredicto.)
         if self.expr_spans.is_empty() && !program.expr_spans.is_empty() {
             self.expr_spans = program.expr_spans.clone();
+        }
+        // M311 (findings #54): registrar los alias de tipo ANTES de resolver cualquier tipo (las
+        // constantes, los campos y las firmas pueden nombrarlos). Nombre único (ni struct/enum/trait),
+        // parámetros únicos, y sin ciclos (`type A = [B]; type B = A`): la expansión no terminaría.
+        for a in &program.type_aliases {
+            let is_type = program.structs.iter().any(|s| s.name == a.name)
+                || program.enums.iter().any(|e| e.name == a.name)
+                || program.traits.iter().any(|t| t.name == a.name);
+            if is_type {
+                return Err(self.err(a.line, a.col, format!("'{}' is already a type; it cannot also be a type alias", a.name)));
+            }
+            self.check_unique_tparams(&a.type_params, &a.name, a.line, a.col)?;
+            if self.aliases.insert(a.name.clone(), (a.type_params.clone(), a.target.clone())).is_some() {
+                return Err(self.err(a.line, a.col, format!("type alias '{}' declared twice", a.name)));
+            }
+            if self.gather {
+                self.type_defs.entry(a.name.clone()).or_insert((a.line, a.col));
+            }
+        }
+        for a in &program.type_aliases {
+            let mut path: Vec<String> = vec![a.name.clone()];
+            if self.alias_cycle(&a.target, &mut path) {
+                return Err(self.err(a.line, a.col, format!(
+                    "type alias '{}' refers to itself (through {}); an alias cannot be recursive",
+                    a.name, path.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(" -> ")
+                )));
+            }
         }
         // M27.5: registrar y validar las constantes de nivel superior. El valor debe ser un literal (o
         // un literal negado) del tipo declarado. Un duplicado o un valor no-literal es error.
@@ -195,6 +223,12 @@ impl Checker {
             for (_, ty) in &fields {
                 self.ensure_type(ty, s.line, s.col)?;
             }
+        }
+        // M311: el destino de cada alias se valida con sus parámetros en ámbito (los usos solo
+        // comprueban la aridad: `ensure_type`).
+        for a in &program.type_aliases {
+            self.type_params = a.type_params.iter().cloned().collect();
+            self.ensure_type(&a.target, a.line, a.col)?;
         }
         self.type_params.clear();
 
@@ -1178,6 +1212,10 @@ impl Checker {
                     }
                     return Ok(());
                 }
+                // M311: un alias solo comprueba la aridad aquí (su destino se validó al declararlo).
+                if let Some((params, _)) = self.aliases.get(name) {
+                    return self.ensure_type_args(name, params.len(), args, line, col);
+                }
                 let arity = self.struct_tparams.get(name)
                     .or_else(|| self.enum_tparams.get(name));
                 match arity {
@@ -1244,6 +1282,32 @@ impl Checker {
     /// nombre (y se resuelven los argumentos), recursivamente:
     ///   - un **parámetro de tipo** en ámbito → `Var` (M6; tapa a los nombres de tipo);
     ///   - un **enum** → `Enum` (M5); en otro caso, se queda como `Struct`.
+    /// M311: ¿el tipo `ty` menciona (directa o transitivamente por otros alias) alguno de los alias
+    /// de `path`? Deja en `path` la cadena hasta el alias repetido, para el mensaje.
+    fn alias_cycle(&self, ty: &Type, path: &mut Vec<String>) -> bool {
+        match ty {
+            Type::Struct(n, args) | Type::Enum(n, args) => {
+                if let Some((_, target)) = self.aliases.get(n) {
+                    if path.contains(n) {
+                        path.push(n.clone());
+                        return true;
+                    }
+                    path.push(n.clone());
+                    if self.alias_cycle(target, path) {
+                        return true;
+                    }
+                    path.pop();
+                }
+                args.iter().any(|a| self.alias_cycle(a, path))
+            }
+            Type::Array(e) | Type::Channel(e) | Type::Task(e) => self.alias_cycle(e, path),
+            Type::Map(k, v) => self.alias_cycle(k, path) || self.alias_cycle(v, path),
+            Type::Tuple(ts) => ts.iter().any(|t| self.alias_cycle(t, path)),
+            Type::Fn(ps, r) => ps.iter().any(|p| self.alias_cycle(p, path)) || self.alias_cycle(r, path),
+            _ => false,
+        }
+    }
+
     pub(super) fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
             // `Self` (M9): dentro de un `impl`, denota el tipo implementador
@@ -1281,6 +1345,15 @@ impl Checker {
                     Type::Var(name.clone())
                 } else {
                     let rargs: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+                    // M311: un alias se EXPANDE aquí (sustituyendo sus parámetros por los argumentos
+                    // ya resueltos) y se resuelve el resultado — así puede encadenar otro alias. Con
+                    // aridad equivocada se deja tal cual: `ensure_type` da el error con posición.
+                    if let Some((params, target)) = self.aliases.get(name)
+                        && params.len() == rargs.len()
+                    {
+                        let sigma: HashMap<String, Type> = params.iter().cloned().zip(rargs).collect();
+                        return self.resolve_type(&super::traits::subst_named(target, &sigma));
+                    }
                     if self.enum_names.contains(name) {
                         Type::Enum(name.clone(), rargs)
                     } else {
@@ -3756,6 +3829,12 @@ impl Checker {
                 "enum"
             } else if self.traits.contains_key(name) {
                 "trait"
+            } else if let Some((params, target)) = self.aliases.get(name) {
+                // M311: el hover de un alias enseña a qué expande.
+                let gens = if params.is_empty() { String::new() } else { format!("<{}>", params.join(", ")) };
+                let def = self.type_defs.get(name).copied();
+                self.record_named(*line, *col, name.chars().count(), format!("type {name}{gens} = {target}"), def);
+                continue;
             } else {
                 continue;
             };

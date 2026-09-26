@@ -516,6 +516,28 @@ fn main() -> int {
 }
 ```
 
+### Alias de tipo `type`
+
+Un alias da nombre a un tipo que se repite (M311). No crea un tipo nuevo: `Id` **es** `int`, y
+un valor `Pair<int>` es una tupla `(int, int)` — nada que envolver ni desenvolver. Los alias
+genéricos toman sus argumentos en cada uso, y `pub type` se exporta del módulo como un struct.
+
+```rust
+type Id = int;
+type Pair<T> = (T, T);
+type Handler = fn(Req) -> Result<Json, string>;
+pub type Lookup<V> = Map<string, V>;
+
+fn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }
+fn route(h: Handler) { … }
+let users: Lookup<Id> = Map.new();
+```
+
+Los diagnósticos muestran el tipo expandido (`expected int, got string`, no `Id`). Un alias no
+lleva bounds (van en la función o el struct que lo usa) ni puede ser recursivo; la construcción
+sigue usando el nombre real (`Shape.Circle(1)`, `Point { … }`), y `type` sigue siendo un nombre
+válido para campos y variables (`r.type`): solo abre un ítem cuando va seguido de un nombre.
+
 ## 6. Strings, chars y bytes
 
 ### Strings

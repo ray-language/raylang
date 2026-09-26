@@ -43,6 +43,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     nativo) — el estado va a una base de datos o un actor; los primitivos no pueden nombrar
     funciones; `signals()` y SIGWINCH.
 
+- **Alias de tipo** (M311, `RAYLANG-FINDINGS.md` #54): `[pub] type Nombre<T, …> = tipo;` —
+  `type Id = int`, `type Pair<T> = (T, T)`, `type Handler = fn(Req) -> Result<Json, string>`.
+  Un nombre para un tipo, no un tipo nuevo: se expande en el checker y ningún motor lo ve; los
+  diagnósticos muestran el tipo expandido. `pub type` se exporta y califica como un tipo
+  (`geo.Pt`, `from geo import Pt`). `type` es contextual (sigue valiendo como campo o variable).
+  `ray fmt`, `ray doc` (sección «Type aliases») y el hover del LSP (`type Pair<T> = (T, T)`) lo
+  conocen.
 - **Patrones de tupla y literales, exhaustividad real y `dyn` en campos** (M310,
   `RAYLANG-FINDINGS.md` #44/#52/#53).
   - **`match` sobre tuplas, structs y primitivos**: `match ((method, path)) { ("GET", "/") => …,

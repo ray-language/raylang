@@ -2007,6 +2007,20 @@ fn tuple_and_literal_patterns_exhaustiveness() {
     assert!(check_src("fn f(t: (int, string)) -> string { match (t) { (n, s) => s + n.to_string() } }\nfn main() {}").is_ok());
 }
 
+/// M311 (findings #54): alias de tipo — expansión en firmas, campos, genéricos y cadenas; errores.
+#[test]
+fn type_aliases_expand_and_are_validated() {
+    assert!(check_src("type Id = int;\ntype Ids = [Id];\ntype Pair<T> = (T, T);\ntype Res<T> = Result<T, string>;\ntype Lookup<K, V> = Map<K, V>;\nstruct U { id: Id, tags: Ids }\nfn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }\nfn f(m: Lookup<string, Id>) -> Res<Ids> { Result.Ok([m.len()]) }\nfn main() { let u = U { id: 1, tags: [2] }; let p: Pair<Id> = (u.id, u.tags[0]); print(swap(p).0); let h: fn(Id) -> Id = fn(x: Id) -> Id { x + 1 }; print(h(1)); }").is_ok());
+    // Un alias es el tipo: `Id` e `int` son intercambiables; un alias de tupla casa con la tupla.
+    assert!(check_src("type Id = int;\nfn g(x: int) -> Id { x }\nfn main() { let a: Id = g(1); let b: int = a; print(b); }").is_ok());
+    err_contains("type A = [B];\ntype B = A;\nfn main() {}", "type alias 'A' refers to itself (through 'A' -> 'B' -> 'A')");
+    err_contains("type A = int;\nstruct A { x: int }\nfn main() {}", "'A' is already a type; it cannot also be a type alias");
+    err_contains("type P<T> = (T, T);\nfn f(p: P<int, int>) {}\nfn main() {}", "'P' expects 1 type argument(s), got 2");
+    err_contains("type P<T> = (T, T);\ntype P<U> = U;\nfn main() {}", "type alias 'P' declared twice");
+    err_contains("type Q = Nope;\nfn main() {}", "unknown type: 'Nope' not declared");
+    err_contains("type Id = int;\nfn main() { let s: Id = \"x\"; }", "'s' is declared as int but initialized with string");
+}
+
 /// M310 (findings #52): `dyn Trait` como tipo de campo de struct (el trait se declara después).
 #[test]
 fn dyn_trait_field_in_struct() {

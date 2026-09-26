@@ -62,6 +62,7 @@ fn main() -> int { 0 }
 let a = 3;                                       // immutable
 var b = 0;                                       // mutable; b = b + 1; later
 const LIMIT: int = 100;                          // top-level constant (literals, arrays/tuples of them, earlier consts)
+type Pair<T> = (T, T);                           // type alias (1.27.13): a name, not a new type; `pub type` exports it
 
 if (cond) { 1 } else { 2 }                       // if is an EXPRESSION (both branches typed)
 while (i < n) { i = i + 1; }

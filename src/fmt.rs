@@ -374,6 +374,7 @@ enum Top<'a> {
     FromImport(&'a FromImport),
     Const(&'a ConstDef),
     Struct(&'a StructDef),
+    TypeAlias(&'a TypeAliasDef),
     Enum(&'a EnumDef),
     Trait(&'a TraitDef),
     Impl(&'a ImplBlock),
@@ -395,6 +396,9 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
     }
     for it in &p.structs {
         tops.push((it.line, Top::Struct(it)));
+    }
+    for it in &p.type_aliases {
+        tops.push((it.line, Top::TypeAlias(it)));
     }
     for it in &p.enums {
         tops.push((it.line, Top::Enum(it)));
@@ -441,6 +445,13 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             Top::FromImport(it) => fmt_from_import(it),
             Top::Const(it) => fmt_const(cur, it),
             Top::Struct(it) => fmt_struct(cur, it),
+            Top::TypeAlias(it) => format!(
+                "{}type {}{} = {};",
+                if it.is_pub { "pub " } else { "" },
+                it.name,
+                fmt_generics(&it.type_params, &[]),
+                fmt_type(&it.target)
+            ),
             Top::Enum(it) => fmt_enum(cur, it),
             Top::Trait(it) => fmt_trait(cur, it),
             Top::Impl(it) => fmt_impl(cur, it),
@@ -2026,6 +2037,14 @@ mod tests {
 
     fn fmt(src: &str) -> String {
         format_source(src).expect("formatea")
+    }
+
+    /// M311: los alias de tipo son estables (con `pub`, genéricos y doc-comment).
+    #[test]
+    fn type_alias_roundtrip() {
+        let src = "/// A pair.\npub type Pair<T> = (T, T);\n\ntype Handler = fn(int) -> string;\n\nfn main() { }\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt("type   Id=int ;\nfn main() {}\n"), "type Id = int;\n\nfn main() { }\n");
     }
 
     /// M310: los patrones de tupla y literales (incluido el negativo y el string) son estables.

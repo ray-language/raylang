@@ -3787,7 +3787,7 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 51 | iOS sin `NSLocalNetworkUsageDescription`; `[app.plist]` no llega a `--ios` | ✅ M309 |
 | 52 | `dyn Trait` en campos; `dyn mod.Trait` / `impl mod.Trait for` no parsean | ✅ M310: campos `dyn` (pre-pasada de nombres de trait; `<dyn T>` opaco al mostrar) y rutas calificadas en `dyn`/`impl … for` |
 | 53 | Patrones de tupla en `match`; exhaustividad anidada de `Result<Option<T>>` | ✅ M310: patrones de tupla y exhaustividad por matriz (recursiva) |
-| 54 | Primitivos como nombres de función (doc); alias de tipo | ✅ documentado en llms; `type Alias = …` PROPUESTO (sintaxis nueva: parser + checker + selfhost) |
+| 54 | Primitivos como nombres de función (doc); alias de tipo | ✅ documentado en llms; ✅ M311: `[pub] type Alias<T> = …;` (contextual; expansión en el checker, erasure) |
 | 55 | `-o dir/app` sin `dir` | ✅ M309 |
 | 56 | mysql `caching_sha2_password` en claro | ✅ M309 (db 0.1.1) |
 | 57 | mongo contra MongoDB 6+ | ✅ M309 (db 0.1.1) |

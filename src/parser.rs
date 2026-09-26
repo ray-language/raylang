@@ -229,6 +229,21 @@ impl Parser {
             let value = self.expression()?;
             self.expect(&TokenKind::Semicolon, "';' at the end of the constant")?;
             acc.consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
+        } else if self.check_ident("type") && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+            // M311 (findings #54): `type Nombre[<T, …>] = tipo;`. `type` es palabra clave CONTEXTUAL:
+            // solo al inicio de un ítem seguido de un nombre; en cualquier otra posición sigue siendo
+            // un identificador (campos `type`, variables `type`).
+            self.no_annotations(&anns, "a type alias")?;
+            let kw = self.advance();
+            let (name, _, _) = self.expect_ident("the alias name")?;
+            let (type_params, bounds) = self.type_params_with_bounds()?;
+            if let Some((tp, tr)) = bounds.first() {
+                return Err(self.error_here(format!("a type alias takes no bounds ('{tp}: {tr}'); put the bound on the function or struct that uses it")));
+            }
+            self.expect(&TokenKind::Eq, "'=' after the alias name")?;
+            let target = self.parse_type()?;
+            self.expect(&TokenKind::Semicolon, "';' at the end of the type alias")?;
+            acc.type_aliases.push(TypeAliasDef { is_pub: pub_tok.is_some(), name, type_params, target, line: kw.line, col: kw.col });
         } else if self.check(&TokenKind::Struct) {
             let mut s = self.struct_def()?;
             s.annotations = anns;
@@ -2186,6 +2201,22 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    /// M311: `type` es palabra clave contextual — ítem `type X<T> = …;` al inicio, identificador en
+    /// cualquier otra posición (campo `type`, variable `type`).
+    #[test]
+    fn type_alias_items_and_type_as_identifier() {
+        let p = parse_prog("pub type Pair<T> = (T, T);\ntype Id = int;\nstruct R { type: string }\nfn main() { let type = 1; let r = R { type: \"a\" }; print(r.type + type.to_string()); }");
+        assert_eq!(p.type_aliases.len(), 2);
+        assert!(p.type_aliases[0].is_pub && p.type_aliases[0].name == "Pair" && p.type_aliases[0].type_params == vec!["T".to_string()]);
+        assert!(matches!(&p.type_aliases[0].target, Type::Tuple(ts) if ts.len() == 2));
+        assert!(!p.type_aliases[1].is_pub && p.type_aliases[1].target == Type::Int);
+        assert_eq!(p.structs[0].fields[0].0, "type");
+        let e = parse(crate::lexer::lex("type P<T: Show> = T; fn main() {}").unwrap()).unwrap_err();
+        assert!(e.msg.contains("a type alias takes no bounds"), "{}", e.msg);
+        let e = parse(crate::lexer::lex("@derive(Eq) type P = int; fn main() {}").unwrap()).unwrap_err();
+        assert!(e.msg.contains("type alias"), "{}", e.msg);
     }
 
     #[test]

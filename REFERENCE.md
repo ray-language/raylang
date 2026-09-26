@@ -33,7 +33,7 @@ Reservadas (no pueden usarse como identificadores):
 
 | Grupo | Palabras |
 |---|---|
-| Declaraciones | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` |
+| Declaraciones | `fn` `let` `var` `const` `struct` `enum` `trait` `impl` `extern` (`type` es **contextual**: `type Alias<T> = …;` solo al inicio de un ítem, M311) |
 | Control | `if` `else` `while` `for` `in` `match` `return` `break` `continue` |
 | Módulos | `import` `pub` (`from` es **contextual**: solo al inicio de un ítem, `from M import x;`) |
 | Valores/tipos | `true` `false` `dyn` `as` `self` `Self` |
@@ -141,6 +141,7 @@ Reservadas (no pueden usarse como identificadores):
 | `Option<T>` / `Result<T, E>` | del prelude; la ausencia y el error como valores (no hay `null` ni excepciones) |
 | `Channel<T>` / `Task<T>` | concurrencia (§9 de la SPEC) |
 | `struct` / `enum` propios | semántica de referencia (struct/enum); genéricos con bounds (`struct Caja<T: Show>`) |
+| `type Alias<T> = tipo;` | alias de tipo (M311): un nombre para un tipo, no un tipo nuevo (`type Id = int` es `int`; `type Pair<T> = (T, T)`; `type Handler = fn(Req) -> Res`); `pub type` se exporta como un tipo; se expande en el checker (erasure) y los diagnósticos muestran el tipo expandido |
 | `dyn Trait`, `dyn A + B` | trait objects (despacho dinámico); *upcasting* a un subconjunto de traits; vale como campo de struct y admite rutas calificadas (`dyn m.Trait`, `impl m.Trait for T`, M310); se muestra `<dyn Trait>` |
 | `Iter<T>` | iterador perezoso (respaldado por closure) |
 | `ptr` | puntero opaco del FFI (no desreferenciable desde raylang) |

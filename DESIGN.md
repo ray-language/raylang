@@ -14949,3 +14949,38 @@ nativo, igual que un struct con campos función: fuera de alcance. Y `dyn M.Trai
 de M40.1c): espeja la regla del escrutinio (struct/primitivo válidos con `_`/binding) y los
 mensajes nuevos byte a byte; el corpus de paridad tiene los cuatro casos.
 
+## 293. M311 — Alias de tipo (sep 2026)
+
+El hallazgo #54 (raymart quería `type Handler = fn(Req) -> Result<Json, string>` y raylang no
+tenía cómo nombrar un tipo). La decisión de diseño es que un alias **no es un tipo nuevo**: es
+un nombre que se expande, como en Rust/TypeScript y a diferencia de un *newtype*. Eso lo hace
+barato y sin sorpresas (`Id` e `int` son el mismo tipo; nada que envolver) y deja la puerta
+abierta a un newtype de verdad si algún día hace falta (`IDEAS`).
+
+**Erasure en dos tiempos.** El checker registra `nombre → (params, destino crudo)` antes de
+resolver ningún tipo y `resolve_type` expande cada uso (sustituye los parámetros por los
+argumentos ya resueltos y vuelve a resolver: un alias puede nombrar otro alias); `ensure_type`
+solo comprueba la aridad del uso, porque el destino se validó al declararlo con sus parámetros
+en ámbito. Como el transpilador nativo tiene su propio `type_of` sobre el AST, tras el chequeo
+`lower_type_aliases` reescribe TODAS las posiciones de tipo del programa (campos, payloads,
+firmas, impls, constantes y los cuerpos: `let`, closures, casts) y vacía `program.type_aliases`.
+Para eso `subst_named_block/expr` (M40.2c) se generalizó en `map_types_block/expr` con un
+`Fn(&Type) -> Type`. Ningún motor sabe de alias; los diagnósticos enseñan el tipo expandido.
+
+**Ciclos y choques.** `type A = [B]; type B = A;` haría que la expansión no terminara: se
+detecta al registrar (recorrido por los alias del destino) con la cadena en el mensaje. Un alias
+con el nombre de un struct/enum/trait es error, igual que repetirlo. Sin bounds: irían en la
+función o el struct que usa el alias, y aceptarlos aquí prometería una verificación que no
+existe (un alias no se instancia).
+
+**`type` contextual.** La palabra ya vive en campos y variables de programas reales (`r.type`,
+`let type = …`, el JSON de medio mundo), así que no puede ser reservada. Como `from` (M192):
+solo abre un ítem cuando va al inicio y le sigue un nombre.
+
+**Módulos.** Un alias se namespacia como un tipo (`geo::Pt`), entra en la superficie pública si
+es `pub` (`geo.Pt`, `from geo import Pt`) y su destino es una posición de tipo más para el
+`TypeRewriter` del loader (con sus parámetros en ámbito). Un alias privado de otro módulo no se
+ve («unknown type: 'geo.Hidden' not declared»). El checker auto-alojado no lo conoce: el corpus
+de paridad no usa alias y la stdlib tampoco (regla: la stdlib no usa sintaxis fuera del
+subconjunto metacircular).
+

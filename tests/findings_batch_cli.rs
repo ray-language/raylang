@@ -449,6 +449,78 @@ fn output_dir_self_import_and_required_raylang() {
     assert_eq!(out, "1\n");
 }
 
+/// #54 (M311): alias de tipo — en firmas, campos, genéricos, closures, `Map`, `Option`/`Result`,
+/// y a través de módulos (`pub type`, `geo.Pt`, `from geo import Named`; un alias privado no se ve).
+#[test]
+fn type_aliases_run_on_all_engines_and_across_modules() {
+    let d = tmp("m311_aliases");
+    std::fs::write(
+        d.join("geo.ray"),
+        "pub type Pt = (int, int);\npub type Named<T> = (string, T);\ntype Hidden = int;\npub fn origin() -> Pt { (0, 0) }\npub fn tag(n: string, p: Pt) -> Named<Pt> { (n, p) }\npub fn hidden() -> Hidden { 7 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import geo;
+from geo import Named;
+
+type Id = int;
+type Ids = [Id];
+type Pair<T> = (T, T);
+type Lookup<K, V> = Map<K, V>;
+type Handler = fn(Id) -> string;
+type MaybeId = Option<Id>;
+type Res<T> = Result<T, string>;
+type Point = geo.Pt;
+
+struct User { id: Id, tags: Ids, pos: Point }
+enum Ev { Moved(Point), Named(Named<Id>) }
+
+fn describe(u: User, h: Handler) -> string { h(u.id) + " at " + u.pos.0.to_string() }
+fn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }
+fn find(m: Lookup<string, Id>, k: string) -> MaybeId { m.get(k) }
+fn parse(s: string) -> Res<Id> {
+    match (parse_int(s)) { Option.Some(v) => Result.Ok(v), Option.None => Result.Err("bad " + s) }
+}
+
+fn main() -> int {
+    let u = User { id: 3, tags: [1, 2], pos: geo.origin() };
+    let h: Handler = fn(i: Id) -> string { "user#" + i.to_string() };
+    print(describe(u, h));
+    let p: Pair<string> = ("a", "b");
+    print(swap(p).0 + swap(p).1);
+    var m: Lookup<string, Id> = Map.new();
+    m.insert("x", 9);
+    print(find(m, "x"));
+    print(find(m, "y"));
+    print(parse("12"));
+    print(parse("zz"));
+    let e = Ev.Named(("n", 5));
+    let tg = geo.tag("n", geo.origin());
+    let inner = tg.1;
+    print(inner.1);
+    match (e) { Ev.Moved(q) => print(q.0), Ev.Named((n, _)) => print(n) }
+    let t: Named<Point> = ("t", (1, 2));
+    print(t.0);
+    print(geo.hidden());
+    let ids: Ids = u.tags;
+    let type = 4;
+    ids.len() + type - 6
+}
+"#,
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "user#3 at 0\nba\nOption.Some(9)\nOption.None\nResult.Ok(12)\nResult.Err(bad zz)\n0\nn\nt\n7\n",
+    );
+    // Un alias privado de otro módulo no se ve; el mensaje es el de un tipo desconocido calificado.
+    std::fs::write(d.join("bad.ray"), "import geo;\ntype H = geo.Hidden;\nfn main() {}\n").unwrap();
+    let (_o, e, code) = ray(&d, &["run", "bad.ray"]);
+    assert_eq!(code, 65, "{e}");
+    assert!(e.contains("unknown type: 'geo.Hidden' not declared"), "{e}");
+}
+
 /// #44/#52/#53 (M310): patrones de tupla y literales (anidados en variantes), exhaustividad por
 /// matriz y `dyn Trait` como campo de struct, con la misma salida en los tres motores.
 #[test]

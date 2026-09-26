@@ -139,6 +139,21 @@ pub struct Annotation {
     pub col: usize,
 }
 
+/// Alias de tipo (M311): `[pub] type Nombre[<T, …>] = tipo;`. Un nombre para un tipo en posición
+/// de tipo (anotaciones, campos, firmas); no es un tipo nuevo — `type Id = int` es `int`. Los
+/// parámetros de tipo se sustituyen por los argumentos de cada uso (`type Pair<T> = (T, T)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAliasDef {
+    /// `pub`: el alias se exporta de su módulo (como un struct).
+    pub is_pub: bool,
+    pub name: String,
+    pub type_params: Vec<String>,
+    /// El tipo al que expande, CRUDO (como lo trae el parser; el checker lo resuelve al expandir).
+    pub target: Type,
+    pub line: usize,
+    pub col: usize,
+}
+
 /// Un programa completo: definiciones de tipos (struct/enum) y funciones de nivel
 /// superior.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -201,6 +216,9 @@ pub struct Program {
     /// marshalables (primitivos en M41.1) y las registra como llamables; los motores despachan la
     /// llamada a `ffi::call` en vez de ejecutar un cuerpo. Es **la** frontera insegura del lenguaje.
     pub externs: Vec<ExternFn>,
+    /// Alias de tipo (M311, findings #54): `type Nombre[<T, …>] = tipo;`. Solo el checker los ve —
+    /// `resolve_type` los **expande** en cada posición de tipo (erasure): ningún motor conoce alias.
+    pub type_aliases: Vec<TypeAliasDef>,
     /// **Azúcar preservado para el formateador** (M29.3). El parser desazucara la interpolación
     /// `"…${e}…"` a una concatenación `+ to_string(e)` y los pipelines `x |> f(a)` a `f(x, a)` —así el
     /// checker y los motores nunca los ven—, PERO guarda aquí la forma de superficie, indexada por la

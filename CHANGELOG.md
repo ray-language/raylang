@@ -31,6 +31,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **`ray doc` / `ray_doc` más completos** (M305, IDEAS §97 #11, #34). Las constantes públicas
+  de un módulo (`ray doc crypto.PASSWORD_ITERATIONS` → `const PASSWORD_ITERATIONS: int = 600000`
+  + su `///`), los módulos de colecciones por su ruta (`ray doc std/collections/deque`) y, en el
+  MCP con `path`, la superficie entera de un módulo del proyecto o de un paquete de `.ray-deps`
+  (`ray_doc "rpc/rpc"`, `"web/framework"`).
+
 - **La stdlib que las apps rodeaban** (M304, IDEAS §97 #24, #25, #26, #30, #31, #32).
   `s.last_index_of(sub)` y `b.last_index_of(needle)`; `b.index_of_from(needle, start)` sin
   copiar; los combinadores `Option.and_then/unwrap_or_else` y

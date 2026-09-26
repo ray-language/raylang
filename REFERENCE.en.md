@@ -566,7 +566,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray fmt <file>... [--write]` | prints the canonical version (keeps `if let` — M201 — and the user's parentheses and comments; 4-space indentation; whatever exceeds 100 columns is split: a `from … import` one name per line, a method chain one link per line, `&&`/`\|\|`/`+` chains one operand per line, and delimited lists — arguments, `fn` parameters, literals — one element per line with the closer on its own line; trailing comments stay with their operand/element and your parentheses are kept). `--write`/`-w` rewrites in place and accepts several files. Canonical forms that surprise (M217): an empty block is `{ }` (with a space) and two consecutive top-level `const`s get a blank line between them |
 | `ray build --templates-only [path…]` | **materializes** on disk the generated module of each `.ray.html` template (`{% params %}` signature), for inspection (without paths: the project root). The normal path does not need it: the loader compiles templates **in memory** when resolving their imports (M102) and ignores a sibling `.ray` |
 | `ray check [file]` | alias of `ray build` (M217): type-check without running; 0 ok / 65 error |
-| `ray doc <file \| std/<module> \| <module>.<symbol> \| <builtin>>` | Markdown documentation of a file's public surface (`///`); with a symbol (M217) the same answer as the MCP's `ray_doc`: `ray doc std/ui` lists the module, `ray doc ui.MenuItem` gives signature and doc |
+| `ray doc <file \| std/<module> \| <module>.<symbol> \| <builtin>>` | Markdown documentation of a file's public surface (`///`); with a symbol (M217) the same answer as the MCP's `ray_doc`: `ray doc std/ui` lists the module, `ray doc ui.MenuItem` gives signature and doc · M305: also public constants (`ray doc crypto.PASSWORD_ITERATIONS`), collection modules by path (`ray doc std/collections/deque`) and, in `ray_doc` with `path`, the surface of a project module or a package module (`"rpc/rpc"`, `"web/framework"`) |
 | `ray serve [dir] [--host H] [--port N]` | serves a directory of static files over HTTP for previews (`_site/`, `playground/`, the output of `ray doc`): `index.html` per directory, MIME by extension, `Cache-Control: no-store`, no `..`; defaults to `.` on `127.0.0.1:8000`, `--port 0` picks a free one. It is the server written in raylang embedded in the binary (M199), not a production server (use `net/webserver` for that) |
 | `ray repl` | interactive REPL |
 | `ray lsp` | Language Server (diagnostics, hover, go-to-definition, references, rename, completion, signature help) |
@@ -631,4 +631,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:d94dac56d14d -->
+<!-- sync: sha256:6144da667f26 -->

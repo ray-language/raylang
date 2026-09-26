@@ -3742,9 +3742,9 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | ✅ **M302**: `==` ya existía; los bounds `Eq`/`Show` de una tupla se satisfacen por composición (closure sintetizado en `dict_for`, tres motores) |
 | 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | ✅ **M303**: la regla M204 de los brazos de `match` aplicada al `if` (también `[]`), Rust + selfhost |
 | 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | PROPUESTO |
-| 11 | `ray doc` de constantes de módulo | tooling | PROPUESTO |
+| 11 | `ray doc` de constantes de módulo | tooling | ✅ **M305**: `pub const` con firma, valor literal y `///`; también en los listados |
 | 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | ✅ **M299**: todo campo ausente en un struct de módulo sugiere el constructor público del módulo que lo devuelve (Rust + selfhost) |
-| 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor |
+| 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor — sin cambio: para permisos, `assert_eq(to_string(mode), "384")` o un `assert` con mensaje propio; un `assert_eq` con formato rompería la simetría `Show` |
 | 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | PROPUESTO — `tcp_accept` con timeout, o corregir la doc |
 | 15 | `tcp_connect_timeout` que aparque la fibra | runtime | PROPUESTO — conexión no bloqueante + interés de escritura con plazo |
 | 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | PROPUESTO (net 0.3.6) |
@@ -3762,6 +3762,6 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 31 | `bytes.index_of_from(needle, start)` | stdlib | ✅ **M304** (sin copiar; O(n·m) simple sobre `b[i]`) |
 | 32 | Deque con iteración e índice | stdlib | ✅ **M304**: `get`, `peek_back`, `to_array`, `iter` (instantánea) |
 | 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | PROPUESTO |
-| 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | PROPUESTO |
+| 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | ✅ **M305**: `std/collections/deque` por ruta; con `path`, listado de un módulo del proyecto o de `.ray-deps` (`rpc/rpc`, `web/framework`) |
 | 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | PROPUESTO |
 

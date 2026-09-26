@@ -357,6 +357,7 @@ fn doc_text_at(symbol: &str, path: Option<&str>) -> String {
             .or_else(|| std_doc_text(symbol))
             .or_else(|| std_module_listing(symbol))
             .or_else(|| path.and_then(|p| project_doc_text(symbol, p)))
+            .or_else(|| path.and_then(|p| project_module_listing(symbol, p)))
             .unwrap_or_else(|| format!(
                 "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
                  For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
@@ -422,6 +423,10 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             struct_signature(s)
         } else if let Some(e) = prog.enums.iter().find(|e| e.is_pub && e.name == func) {
             enum_signature(e)
+        } else if let Some(c) = prog.consts.iter().find(|c| c.is_pub && c.name == func) {
+            // M305 (IDEAS §97 #11): las CONSTANTES públicas también son superficie
+            // (`crypto.PASSWORD_ITERATIONS` existía y ray_doc lo negaba).
+            const_signature(c)
         } else {
             return None;
         };
@@ -432,6 +437,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             format!("pub fn {func}("), format!("fn {func}("), format!("pub fn {func}<"),
             format!("pub struct {func} "), format!("pub struct {func}<"),
             format!("pub enum {func} "), format!("pub enum {func}<"),
+            format!("pub const {func}:"), format!("pub const {func} "),
         ];
         if let Some(i) = lines.iter().position(|l| {
             let t = l.trim_start();
@@ -451,6 +457,23 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
     }
 }
 
+
+/// `const NOMBRE: tipo = valor` (M305): el valor solo si es un literal (lo habitual en una
+/// constante pública); si no, la firma sin valor.
+fn const_signature(c: &crate::ast::ConstDef) -> String {
+    use crate::ast::ExprKind;
+    let value = match &c.value.kind {
+        ExprKind::Int(v, _) => Some(v.to_string()),
+        ExprKind::Float(f) => Some(f.to_string()),
+        ExprKind::Bool(b) => Some(b.to_string()),
+        ExprKind::Str(t) => Some(format!("{t:?}")),
+        _ => None,
+    };
+    match value {
+        Some(v) => format!("const {}: {} = {v}", c.name, c.ty),
+        None => format!("const {}: {}", c.name, c.ty),
+    }
+}
 
 /// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).
 fn struct_signature(s: &crate::ast::StructDef) -> String {
@@ -500,7 +523,10 @@ fn trait_method_signature(trait_name: &str, m: &crate::ast::MethodSig) -> String
 /// `ray_doc "std/kv"` (o `"kv"` a secas) lista tipos, funciones y métodos de trait con firma,
 /// en vez de responder "usa module.function".
 fn std_module_listing(symbol: &str) -> Option<String> {
+    // M305 (IDEAS §97 #34): también `std/collections/deque` y `collections/deque` (antes el `/`
+    // interior lo descartaba y solo valía `deque` a secas).
     let bare = symbol.strip_prefix("std/").unwrap_or(symbol);
+    let bare = bare.strip_prefix("collections/").unwrap_or(bare);
     if bare.contains('.') || bare.contains('/') {
         return None;
     }
@@ -508,6 +534,27 @@ fn std_module_listing(symbol: &str) -> Option<String> {
         let n = format!("{p}{bare}");
         crate::stdlib::embedded(&n).map(|s| (n, s))
     })?;
+    let import_path = name.clone();
+    let lines = module_surface(src)?;
+    // M202/M206: la nota de cada listado dice cómo se llama lo que lista. Desde M206 UFCS resuelve
+    // contra el módulo que declara el tipo del receptor: `x.f(…)` encadena con `import std/<m>;`
+    // si `x` es un struct/enum de este módulo; sobre primitivos y tipos del prelude hace falta el
+    // import sin calificar.
+    Some(format!(
+        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
+         With `import {import_path};` call them qualified: `{bare}.f(x, …)`. Method-style chaining `x.f(…)` \
+         (UFCS) works when `x` is a struct/enum declared by this module (pub functions taking it first); \
+         on primitives or prelude types (`Option`/`Result`/`Map`) it needs `from {import_path} import f;`.",
+        lines.len(),
+        lines.join("\n"),
+        bare
+    ))
+}
+
+/// Las firmas de la superficie PÚBLICA de un fuente raylang: structs, enums, constantes,
+/// funciones y métodos de trait. `None` si no hay nada público (o no parsea). La comparten el
+/// listado de un módulo `std/*` y el de un módulo de proyecto/paquete (M305).
+fn module_surface(src: &str) -> Option<Vec<String>> {
     let tokens = crate::lexer::lex(src).ok()?;
     let prog = crate::parser::parse(tokens).ok()?;
     let mut lines: Vec<String> = Vec::new();
@@ -517,6 +564,9 @@ fn std_module_listing(symbol: &str) -> Option<String> {
     for e in prog.enums.iter().filter(|e| e.is_pub) {
         lines.push(enum_signature(e));
     }
+    for c in prog.consts.iter().filter(|c| c.is_pub) {
+        lines.push(const_signature(c));
+    }
     for f in prog.functions.iter().filter(|f| f.is_pub) {
         lines.push(fn_signature(f));
     }
@@ -525,22 +575,75 @@ fn std_module_listing(symbol: &str) -> Option<String> {
             lines.push(trait_method_signature(&t.name, m));
         }
     }
-    if lines.is_empty() {
+    if lines.is_empty() { None } else { Some(lines) }
+}
+
+/// M305 (IDEAS §97 #34): la superficie pública de un módulo del PROYECTO o de un paquete de
+/// `.ray-deps` — `ray_doc "rpc/rpc"` / `"web/framework"` / `"framework"` con `path`. Antes solo
+/// `modulo.simbolo` resolvía en modo proyecto y un nombre pelado era «not a builtin…».
+fn project_module_listing(symbol: &str, path: &str) -> Option<String> {
+    if symbol.contains('.') || symbol.is_empty() {
         return None;
     }
-    // M202/M206: la nota de cada listado dice cómo se llama lo que lista. Desde M206 UFCS resuelve
-    // contra el módulo que declara el tipo del receptor: `x.f(…)` encadena con `import std/<m>;`
-    // si `x` es un struct/enum de este módulo; sobre primitivos y tipos del prelude hace falta el
-    // import sin calificar.
-    Some(format!(
-        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
-         With `import std/{bare};` call them qualified: `{bare}.f(x, …)`. Method-style chaining `x.f(…)` \
-         (UFCS) works when `x` is a struct/enum declared by this module (pub functions taking it first); \
-         on primitives or prelude types (`Option`/`Result`/`Map`) it needs `from std/{bare} import f;`.",
-        lines.len(),
-        lines.join("\n"),
-        bare
-    ))
+    let (root, files) = project_files(path)?;
+    let (dir_hint, stem_wanted) = match symbol.rsplit_once('/') {
+        Some((d, s)) => (Some(d.rsplit('/').next().unwrap_or(d).to_string()), s.to_string()),
+        None => (None, symbol.to_string()),
+    };
+    for f in &files {
+        let stem = f.file_stem()?.to_string_lossy().into_owned();
+        if stem != stem_wanted {
+            continue;
+        }
+        if let Some(d) = &dir_hint
+            && f.parent().is_none_or(|p| p.file_name().is_none_or(|n| n.to_string_lossy() != **d))
+        {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(f) else { continue };
+        let Some(lines) = module_surface(&src) else { continue };
+        let label = f.strip_prefix(&root).unwrap_or(f).to_string_lossy().into_owned();
+        return Some(format!(
+            "{label} — public surface ({} exports):\n{}\nUse ray_doc \"{stem}.<name>\" (with the same 'path') for the full doc of one export.",
+            lines.len(),
+            lines.join("\n"),
+        ));
+    }
+    None
+}
+
+/// Los `.ray` de un proyecto (raíz = el `ray.toml` más cercano hacia arriba de `path`, o su
+/// directorio) y de sus dependencias descargadas en `.ray-deps`, ordenados. Cap de archivos:
+/// esto es doc, no un indexador. La comparten `project_doc_text` y `project_module_listing`.
+fn project_files(path: &str) -> Option<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
+    let anchor = std::path::Path::new(path);
+    let anchor = anchor.canonicalize().ok()?;
+    let dir = if anchor.is_dir() { anchor.clone() } else { anchor.parent()?.to_path_buf() };
+    let root = match crate::manifest::Manifest::find(&dir) {
+        Some(toml) => toml.parent()?.to_path_buf(),
+        None => dir,
+    };
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(d) = pending.pop() {
+        if files.len() > 400 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if !name.starts_with('.') || name == ".ray-deps" {
+                    pending.push(p);
+                }
+            } else if name.ends_with(".ray") && !name.starts_with('.') {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    Some((root, files))
 }
 
 /// La firma legible de una función del AST (`nombre<T: A + B>(params) -> ret`). La comparten el
@@ -575,34 +678,7 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
         Some((m, f)) => (Some(m.to_string()), f.to_string()),
         None => (None, symbol.to_string()),
     };
-    let anchor = std::path::Path::new(path);
-    let anchor = anchor.canonicalize().ok()?;
-    let dir = if anchor.is_dir() { anchor.clone() } else { anchor.parent()?.to_path_buf() };
-    let root = match crate::manifest::Manifest::find(&dir) {
-        Some(toml) => toml.parent()?.to_path_buf(),
-        None => dir,
-    };
-    // Los fuentes del proyecto + los de sus dependencias descargadas.
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    let mut pending = vec![root.clone()];
-    while let Some(d) = pending.pop() {
-        if files.len() > 400 {
-            break; // cap: esto es doc, no un indexador
-        }
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
-        for e in entries.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().into_owned();
-            if p.is_dir() {
-                if !name.starts_with('.') || name == ".ray-deps" {
-                    pending.push(p);
-                }
-            } else if name.ends_with(".ray") && !name.starts_with('.') {
-                files.push(p);
-            }
-        }
-    }
-    files.sort();
+    let (root, files) = project_files(path)?;
     for f in &files {
         let stem = f.file_stem()?.to_string_lossy().into_owned();
         let matches_module = match &module {
@@ -974,6 +1050,34 @@ mod tests {
         assert!(t.contains("Parses a string as an integer"), "doc /// del prelude: {t}");
         let g = doc_text("assert_eq");
         assert!(g.contains("assert_eq<T: Eq + Show>"), "genéricos con bounds: {g}");
+    }
+
+    /// M305 (IDEAS §97 #11 y #34): constantes públicas de un módulo, listado de los módulos de
+    /// `std/collections/*` por su ruta completa y listado de un módulo de proyecto/paquete con `path`.
+    #[test]
+    fn ray_doc_covers_constants_collection_modules_and_project_modules() {
+        let d = doc_text("crypto.PASSWORD_ITERATIONS");
+        assert!(d.contains("std/crypto: const PASSWORD_ITERATIONS: int = 600000"), "{d}");
+        for q in ["std/collections/deque", "collections/deque", "deque"] {
+            let t = doc_text(q);
+            assert!(t.contains("public surface") && t.contains("push_back<T>(") && t.contains("import std/collections/deque;"), "{q}: {t}");
+        }
+        let base = std::env::temp_dir().join("ray_mcp_doc_project_listing");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::create_dir_all(base.join(".ray-deps/rpc")).unwrap();
+        std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+        std::fs::write(base.join("src/main.ray"), "fn main() { }\n").unwrap();
+        std::fs::write(base.join("src/util.ray"), "pub const LIMIT: int = 3;\n/// Adds one.\npub fn inc(x: int) -> int { x + 1 }\nfn hidden() { }\n").unwrap();
+        std::fs::write(base.join(".ray-deps/rpc/rpc.ray"), "pub struct Server { port: int, }\npub fn serve(s: Server) -> int { s.port }\n").unwrap();
+        let p = base.to_string_lossy().into_owned();
+        let t = doc_text_at("util", Some(&p));
+        assert!(t.contains("src/util.ray — public surface (2 exports)") && t.contains("const LIMIT: int = 3") && t.contains("inc(x: int) -> int") && !t.contains("hidden"), "{t}");
+        let t = doc_text_at("rpc/rpc", Some(&p));
+        assert!(t.contains("public surface") && t.contains("struct Server") && t.contains("serve(s: Server) -> int"), "{t}");
+        let t = doc_text_at("util.LIMIT", Some(&p));
+        assert!(t.contains("const LIMIT: int = 3"), "{t}");
+        assert!(doc_text_at("nope", Some(&p)).contains("is not a builtin"));
     }
 
     #[test]

@@ -14758,3 +14758,16 @@ al directorio del enlace, como hace el SO). Byte-idéntico en VM/intérprete/nat
 (`__ray_symlink_prim`). (5) `impl ToJson for Json` es `stringify(self)`: el builder acepta
 `Json.JNull` y cualquier valor de `parse`. Los seis en `tests/findings_batch_cli.rs`, tres motores.
 
+## 287. M305 — `ray doc` sabe de constantes, colecciones y paquetes (sep 2026)
+
+Origen: IDEAS §97 #11 y #34. `ray doc crypto.PASSWORD_ITERATIONS` negaba una constante que
+`print` daba; `ray_doc "std/collections/deque"` fallaba por la `/` interior (solo valía `deque`);
+y `ray_doc "rpc/rpc"` con `path` no listaba nada porque el modo proyecto solo resolvía
+`modulo.simbolo`. Tres huecos del mismo resolutor (`mcp::doc_text_at`), cerrados en su sitio:
+`source_symbol_doc` y los listados incluyen los `pub const` (firma con el valor si es literal, y
+sus `///`); `std_module_listing` quita también el prefijo `collections/`; y `project_module_listing`
+lista un módulo del proyecto o de `.ray-deps` por su stem, con el directorio como pista
+(`rpc/rpc`, `web/framework`) — sobre la misma caminata de archivos que `project_doc_text`, ahora
+compartida (`project_files`). El listado de un módulo (`module_surface`) es una sola función para
+los tres orígenes. #13 (`assert_eq` en octal) queda sin cambio, anotado en IDEAS.
+

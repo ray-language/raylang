@@ -2042,3 +2042,26 @@ fn dyn_trait_field_in_struct() {
     err_contains("struct H { g: dyn Nope }\nfn main() {}", "trait 'Nope' not declared");
 }
 
+
+/// M316 (findings #86): `f() == Option.None` toma `T` del otro operando, en cualquier orden y
+/// también con `!=` y `Result.Err(...)`; los operandos incompatibles siguen con su mensaje.
+#[test]
+fn equality_against_a_bare_none_infers_from_the_other_operand() {
+    check_src("fn f() -> Option<int> { Option.None }\nfn main() -> int { if (f() == Option.None) { 1 } else { 0 } }").expect("== None");
+    check_src("fn f() -> Option<int> { Option.None }\nfn main() -> int { if (Option.None != f()) { 1 } else { 0 } }").expect("None != f()");
+    check_src("fn main() -> int { let r: Result<int, string> = Result.Ok(1); if (r == Result.Err(\"x\")) { 1 } else { 0 } }").expect("== Err");
+    err_contains("fn main() -> int { if (3 == Option.None) { 1 } else { 0 } }", "could not infer");
+    err_contains("fn main() -> int { if (3 == \"a\") { 1 } else { 0 } }", "requires both operands of the same comparable type");
+}
+
+/// M316 (findings #89): un método de un trait de la stdlib implementado para el primitivo receptor
+/// dice qué importar; un método inexistente, no.
+#[test]
+fn a_std_trait_method_on_a_primitive_hints_the_import() {
+    err_contains(
+        "fn main() -> int { print(\"a\".to_json()); 0 }",
+        "no field or function 'to_json' applicable to string (the trait 'ToJson' in std/json declares it; add `import std/json;`)",
+    );
+    let e = check_src("fn main() -> int { 5.frobnicate() }").unwrap_err();
+    assert!(!e.msg.contains("declares it"), "{}", e.msg);
+}

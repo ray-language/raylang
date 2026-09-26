@@ -1277,6 +1277,8 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
 // =====================================================================
 
 pub(super) type BuiltinValueMap = HashMap<(usize, usize), (String, Vec<Type>, Type)>;
+/// M316: `(línea, col)` del `print`/`eprint` → el diccionario `Show` de su argumento.
+pub(super) type PrintShowMap = HashMap<(usize, usize), Expr>;
 
 pub(super) fn lower_builtin_values(program: &mut Program, sites: &BuiltinValueMap) {
     if sites.is_empty() {
@@ -1391,6 +1393,123 @@ fn lower_builtin_values_expr(expr: &mut Expr, sites: &BuiltinValueMap) {
             lower_builtin_values_block(body, sites);
         }
         ExprKind::Block(b) => lower_builtin_values_block(b, sites),
+        _ => {}
+    }
+}
+
+/// M316 (findings #79): `print`/`eprint` de un valor cuyo tipo contiene una tupla y tiene diccionario
+/// `Show` — el argumento pasa por el diccionario, para que la tupla salga `(a, b)` en los tres motores
+/// (el runtime la mostraría como el arreglo que es).
+pub(super) fn lower_print_shows(program: &mut Program, sites: &PrintShowMap) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_print_shows_block(&mut f.body, sites);
+    }
+}
+
+fn lower_print_shows_block(block: &mut Block, sites: &PrintShowMap) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_print_shows_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_print_shows_expr(start, sites); lower_print_shows_expr(end, sites); }
+                    ForIter::In(e) => lower_print_shows_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_print_shows_expr(expr, sites),
+                }
+                lower_print_shows_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => {
+                lower_print_shows_expr(target, sites);
+                lower_print_shows_expr(value, sites);
+            }
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_print_shows_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_print_shows_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_print_shows_expr(t, sites);
+    }
+}
+
+fn lower_print_shows_expr(expr: &mut Expr, sites: &PrintShowMap) {
+    // M316 (findings #79): `print(x)` registrado → `print({ let __ps = <dict Show>; __ps(x) })`.
+    if let ExprKind::Call { callee, args } = &mut expr.kind
+        && let ExprKind::Ident(name) = &callee.kind
+        && (name == "print" || name == "eprint")
+        && args.len() == 1
+        && let Some(dict) = sites.get(&(expr.line, expr.col))
+    {
+        let (line, col) = (expr.line, expr.col);
+        let at = |kind: ExprKind| Expr { kind, line, col };
+        let arg = std::mem::replace(&mut args[0], at(ExprKind::Int(0, crate::token::Radix::DEC)));
+        let bind = Stmt { kind: StmtKind::Let { name: "__ps".into(), ty: None, value: dict.clone(), mutable: false }, line, col };
+        let call = at(ExprKind::Call { callee: Box::new(at(ExprKind::Ident("__ps".into()))), args: vec![arg] });
+        args[0] = at(ExprKind::Block(Block { statements: vec![bind], tail: Some(Box::new(call)), line, col, end_line: line }));
+        // El argumento original sigue abajo (las demás bajadas lo recorren dentro del bloque).
+    }
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => lower_print_shows_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => {
+            lower_print_shows_expr(left, sites);
+            lower_print_shows_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_print_shows_expr(callee, sites);
+            for a in args {
+                lower_print_shows_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                lower_print_shows_expr(e, sites);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_print_shows_expr(k, sites); lower_print_shows_expr(v, sites); }
+        }
+        ExprKind::Index { array, index } => {
+            lower_print_shows_expr(array, sites);
+            lower_print_shows_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_print_shows_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_print_shows_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_print_shows_expr(object, sites),
+        ExprKind::Func(fe) => lower_print_shows_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_print_shows_expr(scrutinee, sites);
+            for arm in arms {
+                lower_print_shows_expr(&mut arm.body, sites);
+                if let Some(g) = &mut arm.guard { lower_print_shows_expr(g, sites); }
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_print_shows_expr(cond, sites);
+            lower_print_shows_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_print_shows_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body, .. } => {
+            lower_print_shows_expr(cond, sites);
+            lower_print_shows_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_print_shows_block(b, sites),
         _ => {}
     }
 }

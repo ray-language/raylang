@@ -101,9 +101,83 @@ pub fn embedded(name: &str) -> Option<&'static str> {
     MODULES.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
 }
 
+/// M316 (findings #89): `"a".to_json()` sin `import std/json;` moría con «no field or function
+/// 'to_json' applicable to string» sin decir qué importar. Índice (perezoso) de los métodos de los
+/// traits PÚBLICOS de la stdlib embebida que tienen `impl Trait for <primitivo>`: método + tipo
+/// receptor → (módulo, trait). El espejo selfhost (`std_trait_hint` en `selfhost/checker.ray`)
+/// lleva la misma tabla a mano; el test `primitive_trait_index_matches_the_selfhost_table` la fija.
+pub fn primitive_trait_method(method: &str, recv: &str) -> Option<(&'static str, &'static str)> {
+    static INDEX: std::sync::OnceLock<Vec<(String, String, &'static str, &'static str)>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        const PRIMITIVES: [&str; 6] = ["int", "float", "bool", "string", "bytes", "char"];
+        let mut out = Vec::new();
+        for (module, src) in MODULES {
+            // Métodos por trait público: `pub trait X {` … `fn m(self` … `}` (cierre en columna 0).
+            let mut traits: Vec<(String, Vec<String>)> = Vec::new();
+            let mut current: Option<(String, Vec<String>)> = None;
+            for line in src.lines() {
+                if let Some(rest) = line.strip_prefix("pub trait ") {
+                    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    current = Some((name, Vec::new()));
+                } else if line == "}" {
+                    if let Some(t) = current.take() {
+                        traits.push(t);
+                    }
+                } else if let Some((_, methods)) = current.as_mut()
+                    && let Some(rest) = line.trim_start().strip_prefix("fn ")
+                    && let Some(open) = rest.find('(')
+                    && rest[open + 1..].starts_with("self")
+                {
+                    methods.push(rest[..open].to_string());
+                }
+            }
+            // `impl Trait for <primitivo> {` (sin genéricos: los impls sobre primitivos no los llevan).
+            for line in src.lines() {
+                let Some(rest) = line.strip_prefix("impl ") else { continue };
+                let Some((trait_name, target)) = rest.split_once(" for ") else { continue };
+                let target = target.trim_end_matches('{').trim();
+                if !PRIMITIVES.contains(&target) {
+                    continue;
+                }
+                if let Some((tname, methods)) = traits.iter().find(|(n, _)| n == trait_name.trim()) {
+                    for m in methods {
+                        out.push((m.clone(), target.to_string(), *module, tname.clone().leak() as &'static str));
+                    }
+                }
+            }
+        }
+        out
+    });
+    index
+        .iter()
+        .find(|(m, t, _, _)| m == method && t == recv)
+        .map(|(_, _, module, trait_name)| (*module, *trait_name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M316: la tabla espejo `std_trait_hint` de selfhost/checker.ray lleva EXACTAMENTE estas
+    /// entradas; si este test cambia, cambia la tabla en tándem.
+    #[test]
+    fn primitive_trait_index_matches_the_selfhost_table() {
+        assert_eq!(primitive_trait_method("to_json", "string"), Some(("std/json", "ToJson")));
+        assert_eq!(primitive_trait_method("to_json", "int"), Some(("std/json", "ToJson")));
+        assert_eq!(primitive_trait_method("to_json", "float"), Some(("std/json", "ToJson")));
+        assert_eq!(primitive_trait_method("to_json", "bool"), Some(("std/json", "ToJson")));
+        assert_eq!(primitive_trait_method("abs", "int"), Some(("std/math", "Signed")));
+        assert_eq!(primitive_trait_method("abs", "float"), Some(("std/math", "Signed")));
+        assert_eq!(primitive_trait_method("to_json", "bytes"), None);
+        assert_eq!(primitive_trait_method("run", "int"), None);
+        // Nada más: cualquier trait público nuevo con impl sobre un primitivo aparece aquí.
+        let all: Vec<(&str, &str)> = ["to_json", "abs", "get", "set", "run", "find", "search", "wait", "write", "kill", "pid"]
+            .iter()
+            .flat_map(|m| ["int", "float", "bool", "string", "bytes", "char"].iter().map(move |t| (*m, *t)))
+            .filter(|(m, t)| primitive_trait_method(m, t).is_some())
+            .collect();
+        assert_eq!(all.len(), 6, "{all:?}");
+    }
 
     #[test]
     fn known_modules_resolve() {

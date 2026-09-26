@@ -1962,6 +1962,66 @@ fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result
     }
 }
 
+// M316 (findings #86): `f() == Option.None` — el operando cuyo genérico no se infiere solo lo toma
+// del OTRO lado, en cualquier orden. Solo `==`/`!=`, y solo ante el error de inferencia.
+// M316 (findings #89): espejo de `stdlib::primitive_trait_method` (Rust) — los métodos de traits
+// públicos de la stdlib con impl sobre un primitivo. Tabla a mano; la fija el test
+// `primitive_trait_index_matches_the_selfhost_table` de src/stdlib.rs.
+fn std_trait_hint(name: string, recv: string) -> string {
+    let numeric = recv == "int" || recv == "float";
+    if (name == "to_json" && (numeric || recv == "bool" || recv == "string")) {
+        return " (the trait 'ToJson' in std/json declares it; add `import std/json;`)";
+    }
+    if (name == "abs" && numeric) {
+        return " (the trait 'Signed' in std/math declares it; add `import std/math;`)";
+    }
+    ""
+}
+
+// (Un struct y no una tupla: el parser auto-alojado no lee tipos tupla, y este archivo se
+// verifica también sobre sí mismo.)
+struct BinOperands {
+    lt: Type,
+    rt: Type,
+}
+
+fn check_binary_operands(
+    c: Checker,
+    op: BinOp,
+    l: Expr,
+    r: Expr
+) -> Result<BinOperands, TypeError> {
+    let eq_op = match (op) {
+        BinOp.Eq => true,
+        BinOp.Ne => true,
+        _ => false,
+    };
+    match (check_expr(c, l)) {
+        Result.Ok(lt) => {
+            match (check_expr(c, r)) {
+                Result.Ok(rt) => Result.Ok(BinOperands { lt: lt, rt: rt }),
+                Result.Err(e) => {
+                    if (eq_op && e.msg.starts_with("could not infer the type parameter")) {
+                        let rt = check_expr_expected(c, r, lt)?;
+                        Result.Ok(BinOperands { lt: lt, rt: rt })
+                    } else {
+                        Result.Err(e)
+                    }
+                },
+            }
+        },
+        Result.Err(e) => {
+            if (eq_op && e.msg.starts_with("could not infer the type parameter")) {
+                let rt = check_expr(c, r)?;
+                let lt = check_expr_expected(c, l, rt)?;
+                Result.Ok(BinOperands { lt: lt, rt: rt })
+            } else {
+                Result.Err(e)
+            }
+        },
+    }
+}
+
 fn check_binary(
     c: Checker,
     op: BinOp,
@@ -1970,8 +2030,9 @@ fn check_binary(
     line: int,
     col: int
 ) -> Result<Type, TypeError> {
-    let lt = check_expr(c, l)?;
-    let rt = check_expr(c, r)?;
+    let ops = check_binary_operands(c, op, l, r)?;
+    let lt = ops.lt;
+    let rt = ops.rt;
     let kind = op_kind(op);
     if (kind == 0) {
         if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) {
@@ -2563,7 +2624,11 @@ fn check_ufcs(
                     terr(
                         line,
                         col,
-                        "no field or function '" + name + "' applicable to " + type_str(recv_ty)
+                        "no field or function '"
+                            + name
+                            + "' applicable to "
+                            + type_str(recv_ty)
+                            + std_trait_hint(name, type_str(recv_ty))
                     )
                 );
             },

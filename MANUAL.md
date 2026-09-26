@@ -2981,7 +2981,8 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios; --native [--release] sobre el binario nativo
-ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305)
+ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305);
+                         # `ray doc bytes.index_of_from` / `Result.map` (Tipo.metodo, M316) y, dentro de un proyecto, sus módulos y dependencias
 ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)

@@ -1102,6 +1102,22 @@ fn sort<T: Ord>(a: [T]) -> [T] {
     src
 }
 
+// M315 (findings #70): rebanada de un arreglo, con la misma semántica de *clamp* que `substring`
+// y `sub_bytes` (índices fuera de rango se acotan; `from > to` da `[]`). `args().slice(1, n)`.
+/// Returns a NEW array with the elements in `[from, to)`. Indices are clamped to the array
+/// (`xs.slice(1, xs.len())` drops the first element; `from >= to` gives `[]`).
+fn slice<T>(xs: [T], from: int, to: int) -> [T] {
+    var out: [T] = [];
+    let n = xs.len();
+    var i = if (from < 0) { 0 } else { from };
+    let hi = if (to > n) { n } else { to };
+    while (i < hi) {
+        out.push(xs[i]);
+        i = i + 1;
+    }
+    out
+}
+
 // M215 (ray-sublime #18): orden por COMPARADOR y por CLAVE, para el caso general que `sort` (un
 // único orden natural por `Ord`) no cubre: ordenar por otro campo, o un tipo que no es tuyo.
 // Mismo merge estable que `sort`; `less(a, b)` dice si `a` va antes que `b`.

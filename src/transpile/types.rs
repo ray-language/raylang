@@ -281,8 +281,12 @@ pub(super) fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
 }
 
 pub(super) fn generic_decl(tparams: &[String]) -> String {
-    generic_bound(tparams, "Clone + RayShow + 'static")
+    generic_bound(tparams, GENERIC_BOUND)
 }
+
+/// M313: todo parámetro de tipo lleva también `__RaySendConv` (conversión Send por trait, para que
+/// el código genérico pueda enviar/recibir valores que mencionan `T`).
+pub(super) const GENERIC_BOUND: &str = "Clone + RayShow + 'static + __RaySendConv";
 
 /// `<A: bound, B: bound>` para una lista de params de tipo (o "" si vacía).
 pub(super) fn generic_bound(tparams: &[String], bound: &str) -> String {
@@ -354,6 +358,17 @@ pub(super) fn unify(param: &Type, arg: &Type, tparams: &[String], subst: &mut Ha
                 for (p, a) in ps.iter().zip(&as2) { unify(p, a, tparams, subst); }
             }
         }
+        // M313: canales y tareas (`Channel<Slot<T>>` contra `Channel<Slot<int>>`).
+        Type::Channel(p) => {
+            if let Type::Channel(a2) = normalize_type(arg) {
+                unify(p, &a2, tparams, subst);
+            }
+        }
+        Type::Task(p) => {
+            if let Type::Task(a2) = normalize_type(arg) {
+                unify(p, &a2, tparams, subst);
+            }
+        }
         _ => {}
     }
 }
@@ -380,3 +395,17 @@ pub(super) fn subst_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
         other => other.clone(),
     }
 }
+
+/// M313: ¿el tipo lleva una función en alguna posición ESTRUCTURAL (sin mirar dentro de los tipos
+/// nominales)? Un valor así no cruza hilos: la conversión Send por trait lo rechaza al emitirse.
+pub(super) fn type_has_fn(ty: &Type) -> bool {
+    match ty {
+        Type::Fn(..) | Type::Dyn(_) => true,
+        Type::Array(e) | Type::Channel(e) | Type::Task(e) => type_has_fn(e),
+        Type::Map(k, v) => type_has_fn(k) || type_has_fn(v),
+        Type::Tuple(ts) => ts.iter().any(type_has_fn),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_fn),
+        _ => false,
+    }
+}
+

@@ -1271,3 +1271,127 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
         | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
     }
 }
+
+// =====================================================================
+// M315 (findings #70): builtins usados como VALOR → closure `fn(x0: A, …) -> R { builtin(x0, …) }`
+// =====================================================================
+
+pub(super) type BuiltinValueMap = HashMap<(usize, usize), (String, Vec<Type>, Type)>;
+
+pub(super) fn lower_builtin_values(program: &mut Program, sites: &BuiltinValueMap) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_builtin_values_block(&mut f.body, sites);
+    }
+}
+
+fn lower_builtin_values_block(block: &mut Block, sites: &BuiltinValueMap) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_builtin_values_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_builtin_values_expr(start, sites); lower_builtin_values_expr(end, sites); }
+                    ForIter::In(e) => lower_builtin_values_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_builtin_values_expr(expr, sites),
+                }
+                lower_builtin_values_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => {
+                lower_builtin_values_expr(target, sites);
+                lower_builtin_values_expr(value, sites);
+            }
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_builtin_values_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_builtin_values_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_builtin_values_expr(t, sites);
+    }
+}
+
+fn lower_builtin_values_expr(expr: &mut Expr, sites: &BuiltinValueMap) {
+    if let ExprKind::Ident(name) = &expr.kind
+        && let Some((builtin, params, ret)) = sites.get(&(expr.line, expr.col))
+        && builtin == name
+    {
+        let (line, col) = (expr.line, expr.col);
+        let at = |kind: ExprKind| Expr { kind, line, col };
+        let fparams: Vec<Param> = params
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| Param { name: format!("$bv{i}"), ty: ty.clone(), line, col })
+            .collect();
+        let args: Vec<Expr> = fparams.iter().map(|p| at(ExprKind::Ident(p.name.clone()))).collect();
+        let call = at(ExprKind::Call { callee: Box::new(at(ExprKind::Ident(builtin.clone()))), args });
+        let body = Block { statements: vec![], tail: Some(Box::new(call)), line, col, end_line: line };
+        // El `id` lo reasigna `renumber_fn_exprs` al final del chequeo (ids densos).
+        expr.kind = ExprKind::Func(Box::new(FnExpr { id: 0, params: fparams, return_type: ret.clone(), body, line, col }));
+        return;
+    }
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => lower_builtin_values_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => {
+            lower_builtin_values_expr(left, sites);
+            lower_builtin_values_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_builtin_values_expr(callee, sites);
+            for a in args {
+                lower_builtin_values_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                lower_builtin_values_expr(e, sites);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_builtin_values_expr(k, sites); lower_builtin_values_expr(v, sites); }
+        }
+        ExprKind::Index { array, index } => {
+            lower_builtin_values_expr(array, sites);
+            lower_builtin_values_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_builtin_values_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_builtin_values_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_builtin_values_expr(object, sites),
+        ExprKind::Func(fe) => lower_builtin_values_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_builtin_values_expr(scrutinee, sites);
+            for arm in arms {
+                lower_builtin_values_expr(&mut arm.body, sites);
+                if let Some(g) = &mut arm.guard { lower_builtin_values_expr(g, sites); }
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_builtin_values_expr(cond, sites);
+            lower_builtin_values_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_builtin_values_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body, .. } => {
+            lower_builtin_values_expr(cond, sites);
+            lower_builtin_values_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_builtin_values_block(b, sites),
+        _ => {}
+    }
+}
+

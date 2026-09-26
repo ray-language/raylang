@@ -187,6 +187,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Paso 3.3 (M28.3b): envolver en un `as u{w}` los literales enteros que el contexto coercionó a
     // un entero sin signo (`let x: u8 = 5`). Antes que el resto: el resultado es un `Cast` corriente.
     lower_uint_literals(program, &checker.uint_literal_sites);
+    // M315: builtins usados como valor → closure que los llama (tras UFCS: el sintético no debe
+    // caer en las tablas por posición de las bajadas anteriores).
+    lower_builtin_values(program, &checker.builtin_value_sites);
     // Paso 3.4 (M28.2): bajar los `?` que convierten el error — `expr?` (con `impl From<E1> for E2`)
     // a un `match` que aplica la conversión en la rama de error. Front-end puro: el `?` sin conversión
     // sigue siendo nativo; solo los sitios registrados se reescriben. Antes que el resto de bajadas,
@@ -702,6 +705,10 @@ struct Checker {
     /// esperado, u operando de un operador). `(línea, col)` → ancho. `lower_uint_literals` envuelve
     /// ese literal en un `Cast` al `u8`/`u32`/`u64` correspondiente (el runtime produce el UInt).
     uint_literal_sites: HashMap<(usize, usize), u8>,
+    /// M315 (findings #70): sitios donde un BUILTIN se usa como VALOR de tipo función
+    /// (`xs.map(to_string)`): posición del identificador → (builtin, tipos de los params, retorno).
+    /// El lowering los reescribe a un closure `fn(x: A) -> R { builtin(x) }`.
+    builtin_value_sites: HashMap<(usize, usize), (String, Vec<Type>, Type)>,
     /// Tabla de resolución de métodos de trait (M9): `(clave_de_tipo, método)` → nombre
     /// manglado de la función que lo implementa. La clave de tipo es el nombre del
     /// struct/enum o el primitivo (ver `type_key`). Un mismo `(tipo, método)` solo puede

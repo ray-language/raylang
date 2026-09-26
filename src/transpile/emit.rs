@@ -36,11 +36,15 @@ impl Transpiler {
         let prev_tparams = std::mem::take(&mut self.tparams);
         let prev_cells = std::mem::take(&mut self.cells);
         let prev_marked = std::mem::take(&mut self.send_fn_params);
+        let prev_ret = self.current_ret.replace(f.return_type.clone());
+        let prev_expected = self.expected_ty.take();
         let r = self.emit_function_inner(out, rust_name, f);
         self.scopes.truncate(base_scopes);
         self.tparams = prev_tparams;
         self.cells = prev_cells;
         self.send_fn_params = prev_marked;
+        self.current_ret = prev_ret;
+        self.expected_ty = prev_expected;
         r
     }
 
@@ -52,7 +56,7 @@ impl Transpiler {
         let mut gens: Vec<String> = f
             .type_params
             .iter()
-            .map(|t| format!("{}: Clone + RayShow + 'static", t))
+            .map(|t| format!("{}: {}", t, GENERIC_BOUND))
             .collect();
         let mut ptys = Vec::new();
         self.send_fn_params.clear();
@@ -675,7 +679,10 @@ impl Transpiler {
                 out.push_str("return");
                 if let Some(v) = value {
                     out.push(' ');
-                    self.emit_expr(out, v)?;
+                    match self.current_ret.clone() {
+                        Some(rt) => self.emit_typed(out, v, &rt)?,
+                        None => self.emit_expr(out, v)?,
+                    }
                 }
                 out.push_str(";\n");
             }
@@ -953,7 +960,13 @@ impl Transpiler {
                     write!(out, ") as u{}", w).unwrap(); // p. ej. un producto de literales i64 → uW
                 }
             }
-            _ => self.emit_expr(out, e)?,
+            _ => {
+                // M313: la expresión conoce su tipo esperado (turbofish de llamadas genéricas).
+                let prev = self.expected_ty.replace(exp.clone());
+                let r = self.emit_expr(out, e);
+                self.expected_ty = prev;
+                r?
+            }
         }
         Ok(())
     }
@@ -1510,11 +1523,28 @@ impl Transpiler {
                 // muera antes de evaluar el siguiente (que puede hacer `borrow_mut` del mismo
                 // objeto). Mismo orden de evaluación que la VM.
                 let hoist = fields.len() > 1;
+                // M313: el tipo de cada campo (struct no genérico) es el esperado de su valor.
+                let field_tys: HashMap<String, Type> = if self.struct_tparams.get(name).is_some_and(|t| t.is_empty()) {
+                    self.struct_fields.get(name).cloned().unwrap_or_default().into_iter().collect()
+                } else if let Some(Type::Struct(en, eargs)) = self.expected_ty.clone().map(|t| self.classify(&t))
+                    && &en == name
+                {
+                    // Struct genérico con tipo esperado (`let p: Pool<string> = Pool { … }`): los
+                    // campos se tipan sustituyendo los parámetros por los args esperados.
+                    let tps = self.struct_tparams.get(name).cloned().unwrap_or_default();
+                    let subst: HashMap<String, Type> = tps.into_iter().zip(eargs).collect();
+                    self.struct_fields.get(name).cloned().unwrap_or_default().into_iter().map(|(f, t)| (f, subst_type(&t, &subst))).collect()
+                } else {
+                    HashMap::new()
+                };
                 if hoist {
                     out.push_str("{ ");
-                    for (i, (_, val)) in fields.iter().enumerate() {
+                    for (i, (fname, val)) in fields.iter().enumerate() {
                         write!(out, "let __rt_a{} = ", i).unwrap();
-                        self.emit_expr(out, val)?;
+                        match field_tys.get(fname) {
+                            Some(ft) => self.emit_typed(out, val, &ft.clone())?,
+                            None => self.emit_expr(out, val)?,
+                        }
                         out.push_str("; ");
                     }
                 }
@@ -1526,9 +1556,14 @@ impl Transpiler {
                     write!(out, "{}: ", mangle(fname)).unwrap(); // el campo puede ser keyword de Rust
                     if hoist {
                         write!(out, "__rt_a{}", i).unwrap();
+                    } else if let Some(ft) = field_tys.get(fname) {
+                        self.emit_typed(out, val, &ft.clone())?;
                     } else {
                         self.emit_expr(out, val)?;
                     }
+                }
+                if self.phantom_structs.contains(name) {
+                    out.push_str(", __ray_ph: std::marker::PhantomData"); // M313
                 }
                 out.push_str(" }))");
                 if hoist {

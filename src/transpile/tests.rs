@@ -339,7 +339,7 @@ fn sort_on_a_generic_array_goes_through_the_less_dictionary() {
     let rust = transpile_src(
         "fn smallest<T: Ord>(a: [T]) -> [T] { sort(a) }\nfn main() {\n    print(smallest([3, 1, 2])[0]);\n    print(smallest([2.5, 1.5])[0]);\n}",
     );
-    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static>("), "{rust}");
+    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static + __RaySendConv>("), "{rust}");
     assert!(rust.contains("__ray_sort_by(&"), "{rust}");
     assert!(rust.contains("&T_HH_Ord_HH_less)"), "{rust}");
     assert!(!rust.contains("+ Ord>"), "{rust}");
@@ -471,7 +471,7 @@ fn transpiles_generic_functions() {
          fn neg(b: bool) -> bool { !b }\n\
          fn main() -> int { let a: int = id(5); print(apply(neg, false)); a }",
     );
-    assert!(rust.contains("fn id<T: Clone + RayShow + 'static>(mut x: T) -> T"), "{}", rust);
+    assert!(rust.contains("fn id<T: Clone + RayShow + 'static + __RaySendConv>(mut x: T) -> T"), "{}", rust);
     assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
     assert!(rust.contains("(Rc::new(neg) as Rc<dyn Fn(bool) -> bool>)"), "{}", rust); // función como valor → Rc::new(fn) as dyn (M222)
 }
@@ -1569,6 +1569,21 @@ fn fast_mode_emits_no_depth_prologue() {
     crate::checker::check(&mut prog).expect("check");
     let out = super::transpile_with_opts(&prog, &[], true).expect("transpile").source;
     assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
+}
+
+/// M313 (findings #71): genéricos sobre `Channel<Enum<T>>` — el `T` que solo aparece en el retorno
+/// va en turbofish desde el tipo esperado, un struct cuyo `T` solo vive en un canal lleva
+/// PhantomData, y las conversiones Send de tipos con `T` van por el trait `__RaySendConv`.
+#[test]
+fn generic_channels_use_turbofish_phantom_and_the_send_trait() {
+    let rust = transpile_src(
+        "enum Slot<T> { Ready(T), Empty }\nstruct Pool<T> { slots: Channel<Slot<T>>, size: int }\nfn fill<T>(size: int) -> Channel<Slot<T>> { let c: Channel<Slot<T>> = Channel.bounded(size); let e: Slot<T> = Slot.Empty; send(c, e); c }\nfn main() { let c: Channel<Slot<int>> = fill(1); let p: Pool<string> = Pool { slots: fill(1), size: 1 }; let _ = recv(c); print(p.size); }",
+    );
+    assert!(rust.contains("fill::<i64>(__rt_a0)"), "{rust}");
+    assert!(rust.contains("fill::<Rc<str>>(__rt_a0)"), "{rust}");
+    assert!(rust.contains("__ray_ph: std::marker::PhantomData<fn() -> (T,)>"), "{rust}");
+    assert!(rust.contains("__RaySendConv::__to_send(__rt_a1)") || rust.contains("__RaySendConv::__to_send("), "{rust}");
+    assert!(rust.contains("impl<T: Clone + RayShow + 'static + __RaySendConv> __RaySendConv for Rc<Slot<T>>"), "{rust}");
 }
 
 /// M311: tras el chequeo el AST no nombra alias (erasure): el transpilador ve los tipos expandidos.

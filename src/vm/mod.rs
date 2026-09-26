@@ -3076,6 +3076,17 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 // M115.1: fsync del handle → ["ok"] o ["err", msg].
+                OpCode::SyncDataHandle => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::sync_data_handle(handle) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::SyncHandle => {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");

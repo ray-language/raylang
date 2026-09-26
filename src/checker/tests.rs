@@ -1038,6 +1038,18 @@ fn if_branches_infer_each_other_without_an_expected_type() {
     err_contains("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "the if branches have different types: Option<int> and int");
 }
 
+/// M307 (IDEAS §97 #7): una constante puede ser una tupla, un arreglo de tuplas o referir a
+/// constantes declaradas antes; una llamada o una constante declarada después siguen sin valer.
+#[test]
+fn constants_accept_tuples_and_earlier_constants() {
+    let ok = "const ID_A: int = 1;\nconst ID_B: int = 2;\nconst IDS: [int] = [ID_A, ID_B];\nconst TABLE: [(int, string)] = [(ID_A, \"a\"), (2, \"b\")];\nconst NEG: [int] = [0 - 0, -1];\nfn main() -> int { let (i, s) = TABLE[0]; i + IDS.len() + s.len() }";
+    let r = check_src(ok.replace("0 - 0", "0").as_str());
+    assert!(r.is_ok(), "{r:?}");
+    err_contains("const X: [int] = [Y];\nconst Y: int = 1;\nfn main() -> int { 0 }", "must be a literal");
+    err_contains("const X: int = len(\"a\");\nfn main() -> int { 0 }", "must be a literal");
+    err_contains("const T: (int, string) = (1, 2);\nfn main() -> int { 0 }", "constant 'T' is declared as (int, string) but its value is (int, int)");
+}
+
 /// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no
 /// genéricos; en genéricos sigue siendo error, como los demás derives.
 #[test]

@@ -31,6 +31,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **Constantes con tuplas, `fs.sync_data` y la verdad sobre el móvil** (M307, IDEAS §97 #7, #35,
+  #28/#37). Una `const` puede ser una tupla, un arreglo de tuplas o referir a constantes declaradas
+  antes (`const TABLE: [(int, string)] = [(ID_A, "a.png")]`). `fs.sync_data(h)` es el fdatasync
+  barato (en macOS/APFS `sync` es F_FULLFSYNC, 4–5 ms; documentado). El MANUAL y `llms.txt` dicen
+  que `ray://app` es de los shells de escritorio (el móvil carga por HTTP local → `listen_local`)
+  y que `ui.reply_json` necesita un shell generado con ≥ 1.12.1.
+
 - **Red: plazos que aparcan y huecos de `net`/`web`/`rpc`** (M306, IDEAS §97 #14, #15, #16,
   #18, #33). `set_read_timeout(listener, ms)` acota también `tcp_accept` (`"read timeout"`;
   la doc lo prometía y colgaba para siempre) en los tres motores. `tcp_connect_timeout`

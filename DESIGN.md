@@ -14806,3 +14806,28 @@ de M297 para un handler crudo (net 0.3.6). `app.gzip()` aplica la negociación d
 sin `Accept-Encoding`), `rpc_cli` (`serve_on` con puerto efímero), `findings_batch_cli` (accept
 con plazo en tres motores; connect aparcado en VM determinista y nativo).
 
+## 289. M307 — Constantes con tuplas, `fs.sync_data` y la verdad sobre el móvil (sep 2026)
+
+Origen: IDEAS §97 #7, #35, #28/#37.
+
+**[7] Constantes.** M274 abrió las constantes a arreglos de literales; una tabla `(id, asset)`
+seguía siendo «must be a literal». Como los tres motores ya tratan la constante como su
+expresión inyectada en cada uso (la VM compila el literal en el sitio, el intérprete evalúa el
+`Expr`, el nativo emite `fn NAME() -> T`), bastó con que `is_const_literal` admita tuplas y el
+nombre de otra constante declarada ANTES (el orden es el del archivo: el checker las registra en
+secuencia y una referencia hacia adelante es el error de siempre, con el mensaje ampliado). Sin
+espejo: el checker autoalojado no tiene constantes.
+
+**[35] `sync_data`.** Medido por rayq/raykv: `fs.sync` en APFS cuesta 4–5 ms porque `sync_all`
+es `F_FULLFSYNC` (vuelca la caché del disco). `sync_data` (fdatasync) es la palanca honesta para
+el fsync-por-registro: barato, con la letra pequeña documentada (un corte de luz puede perder los
+últimos registros; `sync` en los checkpoints). Primitivo nuevo `__sync_data_handle` en los tres
+motores, el mismo camino que `__sync_handle`.
+
+**[28/37] El móvil.** Confirmado en el código: `bundle_ios.rs`/`bundle_android.rs` cargan la URL
+de `ui.open` por HTTP (`loadRequest`/`loadUrl`) — no hay `WKURLSchemeHandler` ni
+`WebViewAssetLoader` para `ray://app`, así que una app escritorio+móvil conserva el servidor
+local en el móvil (con `listen_local`, M297). Y `_deliver_json` viaja en los shells desde 1.12.1
+(M225): lo documentado es cómo detectar un shell viejo y que regenerar el bundle preserva firma,
+keystore e icono. Implementar `ray://app` en los shells móviles queda propuesto en §97.
+

@@ -259,3 +259,51 @@ fn main() -> int {
         assert!(ok(&out), "nativo: {out}");
     }
 }
+
+/// M307 (IDEAS §97 #7 y #35): constantes con tuplas y referencias a otras constantes, en los tres
+/// motores (la constante es su expresión inyectada en cada uso); y `fs.sync_data`.
+#[test]
+fn constant_tables_and_sync_data_run_on_all_engines() {
+    let d = tmp("consts_sync");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/fs;
+
+const ID_A: int = 1;
+const ID_B: int = 2;
+const IDS: [int] = [ID_A, ID_B];
+const TABLE: [(int, string)] = [(ID_A, "a.png"), (ID_B, "b.png")];
+const ORIGIN: (int, int) = (-3, 4);
+
+fn asset(id: int) -> string {
+    for t in TABLE {
+        let (k, name) = t;
+        if (k == id) {
+            return name;
+        }
+    }
+    "?"
+}
+
+fn main() -> int {
+    print(asset(ID_B));
+    print(IDS.len());
+    let (x, y) = ORIGIN;
+    print(x + y);
+    let dir = fs.make_temp_dir("raysync").unwrap();
+    let h = fs.open(dir + "/log", "w").unwrap();
+    let _ = fs.write(h, "rec\n");
+    print(fs.sync_data(h).is_ok());
+    print(fs.sync(h).is_ok());
+    let _ = close(h);
+    let r = fs.open(dir + "/log", "r").unwrap();
+    print(fs.sync_data(r).is_err());
+    let _ = close(r);
+    let _ = fs.remove_all(dir);
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "b.png\n2\n1\ntrue\ntrue\ntrue\n");
+}

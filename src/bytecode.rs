@@ -599,6 +599,9 @@ pub enum OpCode {
     /// estable (fsync) y empuja `["ok"]` / `["err", msg]`. Primitivo `__sync_handle`;
     /// `std/fs` → `Result<int, string>`.
     SyncHandle,
+    /// M307 (IDEAS §97 #35): `fs.sync_data` — fdatasync: datos a disco sin el vuelco completo
+    /// de metadatos/caché (en APFS `sync_all` es F_FULLFSYNC, 4–5 ms por llamada).
+    SyncDataHandle,
     /// M115.3: saca `mode` (int) y `path` (string); cambia los bits de permiso del archivo
     /// (chmod, solo los 12 bits bajos) y empuja `["ok"]` / `["err", msg]`. Primitivo `__chmod`;
     /// `std/fs` → `Result<int, string>`.

@@ -2016,6 +2016,16 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M115.1: fsync del handle → ["ok"] o ["err", msg].
+            "__sync_data_handle" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::sync_data_handle(*h) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__sync_handle" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::sync_handle(*h) {

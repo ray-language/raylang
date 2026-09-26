@@ -522,6 +522,13 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M307: fdatasync.
+            "sync_data" => {
+                self.needs_handles = true;
+                out.push_str("__ray_sync_data(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // M115.2: candado consultivo (Result<bool,string>) + unlock (Result<int,string>).
             "try_lock" => {
                 self.needs_handles = true;
@@ -2905,7 +2912,7 @@ impl Transpiler {
                         "make_temp_dir" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir" | "remove_all"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
-                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "unlock" => {
+                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "sync_data" | "unlock" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "try_lock" => Type::Enum("Result".into(), vec![Type::Bool, Type::String]),

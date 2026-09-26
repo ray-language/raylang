@@ -309,6 +309,15 @@ pub fn sync(h: int) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Like `sync`, but only the file's DATA (fdatasync): what a log or AOF needs per record. Much
+/// cheaper than `sync` on macOS/APFS, where `sync` is a full F_FULLFSYNC (4–5 ms per call: a
+/// sync-per-record design tops out at ~200 ops/s); `sync_data` there does not flush the drive
+/// cache, so a power cut can still lose the last records — use `sync` at checkpoints.
+pub fn sync_data(h: int) -> Result<int, string> {
+    let r = __sync_data_handle(h);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 // Candado consultivo EXCLUSIVO del archivo, sin bloquear (M115.2, flock). El patrón estándar del
 // proceso único: abrir un archivo LOCK al arrancar y try_lock — dos brokers sobre el mismo
 // directorio ya no se doble-entregan en silencio. Consultivo: solo protege frente a procesos que

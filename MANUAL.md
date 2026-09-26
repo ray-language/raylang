@@ -1360,6 +1360,19 @@ Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (ke
 APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
 por ray.toml (el README generado trae el paso a paso).
 
+**Lo que cambia en el móvil respecto al escritorio** (M307, IDEAS §97 #28/#37). (1) `ray://app`
+y `ui.mount_embed`/`mount_dir` son de los shells de ESCRITORIO (macOS, WebKitGTK, WebView2): los
+shells de iOS y Android cargan la URL que les pasa `ui.open` por HTTP desde el servidor embebido
+(`http://127.0.0.1:<puerto>`; en Android el cleartext está permitido solo para 127.0.0.1). Una app
+escritorio+móvil conserva por tanto el servidor local para el móvil — con `web.listen_local` /
+`webserver.local_limits(token)` (M297), que es lo que cierra ese puerto a otras apps del
+dispositivo — y puede usar `ray://app` en escritorio. (2) El puente `window.ray.request` con
+respuesta JSON (`ui.reply_json`) necesita el shim `_deliver_json` del shell, que generan
+`ray bundle --ios/--android` desde raylang **1.12.1** (M225; la forma `ui.reply` con string, desde
+1.5.0): un shell generado antes no lo trae y el síntoma es una promesa que nunca resuelve.
+Detectarlo: `grep _deliver_json` en el `ViewController.m` / `MainActivity.java` generados; el
+remedio es regenerar el bundle (firma, keystore e icono se preservan).
+
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
 van embebidos, no en rutas relativas —, y en v1 no hay firma/notarización: tu propio .app corre

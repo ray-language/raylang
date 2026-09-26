@@ -20,7 +20,7 @@ pub(super) fn is_hashable_key(t: &Type) -> bool {
 }
 
 /// ¿Es `e` un valor válido para una constante (M27.5)? Un literal, o un literal numérico negado (`-5`).
-pub(super) fn is_const_literal(e: &Expr) -> bool {
+pub(super) fn is_const_literal(e: &Expr, known: &HashMap<String, Type>) -> bool {
     match &e.kind {
         ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
@@ -30,7 +30,11 @@ pub(super) fn is_const_literal(e: &Expr) -> bool {
         // M274 (raystream [15]): un ARREGLO de literales (anidable) también es constante. Semántica
         // de literal inyectado: cada uso evalúa el arreglo de nuevo (sin estado compartido que un
         // alias pudiera mutar); en un bucle caliente se iza a un local.
-        ExprKind::ArrayLit(elems) => elems.iter().all(is_const_literal),
+        // M307 (IDEAS §97 #7): también una TUPLA de constantes (`[(1, "a"), (2, "b")]`, la tabla
+        // de pares) y una REFERENCIA a otra constante declarada antes (`[ID_A, ID_B]`): en los tres
+        // motores la constante es su expresión inyectada, así que el nombre se resuelve en el uso.
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => elems.iter().all(|x| is_const_literal(x, known)),
+        ExprKind::Ident(name) => known.contains_key(name),
         _ => false,
     }
 }

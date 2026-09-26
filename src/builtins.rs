@@ -1157,6 +1157,18 @@ pub fn write_bytes_handle(h: i64, data: &[u8]) -> Result<usize, String> {
     }
 }
 
+/// M307: `fdatasync` — los DATOS a disco sin el vuelco completo (`sync_data` del std: en Linux
+/// fdatasync; en macOS fsync sin F_FULLFSYNC, que es lo que hace `sync_all` costar 4–5 ms en APFS).
+pub fn sync_data_handle(h: i64) -> Result<(), String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => f.sync_data().map_err(|e| e.to_string()),
+        Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
+        Some(_) => Err("the handle is not a file open for writing".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
 /// Vuelca los búferes y fuerza el archivo a almacenamiento estable — fsync (M115.1). Solo sobre
 /// handles de escritura: es la pieza de durabilidad (WAL/AOF); en un lector no tiene sentido.
 pub fn sync_handle(h: i64) -> Result<(), String> {
@@ -4524,6 +4536,12 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__sync_handle", opcode: OpCode::SyncHandle, check: |a| {
         arity(a, 1, "__sync_handle", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__sync_handle expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __sync_data_handle(h) -> [string] (M307): ["ok"] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__sync_data_handle", opcode: OpCode::SyncDataHandle, check: |a| {
+        arity(a, 1, "__sync_data_handle", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sync_data_handle expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __try_lock_handle(h) -> [string] (M115.2): ["ok","1"/"0"] o ["err", msg]. std/fs → Result<bool,string>.

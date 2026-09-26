@@ -701,6 +701,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            // M307: fdatasync (espejo de builtins::sync_data_handle).
+            "fn __ray_sync_data(h: i64) -> Result<i64, Rc<str>> {\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Writer(f)) => f.sync_data().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
             // M115.2: candado consultivo flock (espejo de builtins::try_lock_handle/unlock_handle).
             "fn __ray_try_lock_file(f: &std::fs::File) -> Result<bool, Rc<str>> {\n",
             "    match f.try_lock() { Ok(()) => Ok(true), Err(std::fs::TryLockError::WouldBlock) => Ok(false), Err(std::fs::TryLockError::Error(e)) => Err(Rc::<str>::from(e.to_string())) } }\n",

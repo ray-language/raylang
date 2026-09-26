@@ -88,9 +88,9 @@ impl Checker {
         for c in &program.consts {
             self.ensure_type(&c.ty, c.line, c.col)?;
             let declared = self.resolve_type(&c.ty);
-            if !is_const_literal(&c.value) {
+            if !is_const_literal(&c.value, &self.consts) {
                 return Err(self.err(c.value.line, c.value.col,
-                    format!("the value of constant '{}' must be a literal", c.name)));
+                    format!("the value of constant '{}' must be a literal (or an array/tuple of literals and constants declared above)", c.name)));
             }
             let vt = self.check_expr(&c.value)?;
             if vt != declared {

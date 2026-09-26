@@ -569,6 +569,32 @@ fn var_uncaptured_mutable_stays_plain_local() {
 }
 
 #[test]
+fn a_pattern_binding_named_like_a_cell_var_of_another_arm_is_not_a_cell() {
+    // M298 (findings 1.27.11 #1): `var addr` capturada en un brazo y un binding `addr` de patrón
+    // capturado por una closure en OTRO brazo comparten nombre; la celda es léxica (manda la
+    // declaración más interna): el binding se lee pelado, no con `.borrow()` (antes E0599 sobre Rc<str>).
+    let rust = transpile_src(
+        "enum Msg { Down(int), Dial(string) }\n\
+         fn main() -> int {\n\
+             for m in [Msg.Down(1), Msg.Dial(\"b:2\")] {\n\
+                 match (m) {\n\
+                     Msg.Down(id) => { var addr = \"\"; let g = fn() { addr = \"a:1\"; }; g(); print(addr); },\n\
+                     Msg.Dial(addr) => { let f = fn() { print(addr); }; f(); },\n\
+                 }\n\
+             }\n\
+             0\n\
+         }",
+    );
+    assert!(rust.contains("let addr = Rc::new(std::cell::RefCell::new("), "la var del primer brazo es celda: {}", rust);
+    assert!(rust.contains("(addr.borrow().clone())") || rust.contains("(addr.borrow().clone()."), "lectura de la celda: {}", rust);
+    // El binding del segundo brazo se lee sin `.borrow()`: exactamente UNA lectura por borrow (la del
+    // primer brazo) y ninguna `addr.borrow()` dentro de la closure `f`.
+    let f_body = rust.split("let f = ").nth(1).expect("closure f");
+    let f_head = &f_body[..f_body.find("f()").unwrap_or(f_body.len())];
+    assert!(!f_head.contains("addr.borrow()"), "el binding de patron no es celda: {}", f_head);
+}
+
+#[test]
 fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
     // FFI (M41): `extern "m" { fn sqrt(x: float) -> float; }` → una decl `extern "C"` del símbolo C
     // (`__ffi_sqrt` con `#[link_name]`, bajo `#[link(name = "m")]`) + un wrapper que llama en `unsafe`.

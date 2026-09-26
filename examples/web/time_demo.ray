@@ -60,6 +60,21 @@ fn main() {
         Result.Ok(dt) => print(to_rfc1123(dt)),  // Thu, 29 Feb 2024 00:00:00 GMT
         Result.Err(e) => print("err: " + e),
     }
+    // M298: las formas BÁSICAS que produce este módulo (`date_stamp`, `to_iso8601_basic`) y la
+    // fecha sola se aceptan (medianoche UTC); `±HHMM` se normaliza como `±HH:MM`.
+    match (parse_iso8601("19941106")) {
+        Result.Ok(dt) => print(to_iso8601(dt)),  // 1994-11-06T00:00:00Z
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_iso8601("19941106T104937+0200")) {
+        Result.Ok(dt) => print(to_iso8601(dt)),  // 1994-11-06T08:49:37Z
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_iso8601("1994-11-06")) {
+        Result.Ok(dt) => print(to_iso8601(dt)),  // 1994-11-06T00:00:00Z
+        Result.Err(e) => print("err: " + e),
+    }
+    print(es_err(parse_iso8601_millis("19941106T0849")));  // true (básica incompleta)
 
     // --- now_utc coherente con time.now() (propiedad, no valor) ---
     let ahora = now_utc();

@@ -172,6 +172,12 @@ struct Transpiler {
     fused_splits: HashMap<String, String>,
 }
 
+/// Clave sintética con la que [`Transpiler::declare_cell`] marca en el ámbito que un nombre se
+/// declaró como var-celda (nunca colisiona con un identificador: lleva `\0`).
+pub(super) fn cell_key(name: &str) -> String {
+    format!("\0cell\0{name}")
+}
+
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
 /// El resultado de transpilar: el fuente Rust + las **features de `ray-runtime`** que el programa necesita
 /// (activadas bajo demanda al interceptar un builtin que envuelve un crate). Vacío → cero deps externas →

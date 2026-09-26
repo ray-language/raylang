@@ -276,6 +276,29 @@ fn a_broken_entry_without_tests_fails_the_suite() {
 }
 
 #[test]
+fn a_suite_with_a_syntax_error_counts_as_failed_to_compile() {
+    // M298 (findings 1.27.11 #10, raygate): una suite con error de SINTAXIS (falla al cargar, no en
+    // el checker) no sumaba al contador y el resumen decía "0 suite(s) failed to compile ✗".
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { 0 }\n"),
+        ("tests/broken.ray", "@test\nfn nope() -> bool { let s = `a ` b`; true }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_syntax_only", &files, &[]);
+    assert!(out.contains("result: no test ran — 1 suite(s) failed to compile ✗"), "{out}");
+    assert_eq!(code, 65, "{out}");
+
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/main.ray", "fn main() -> int { 0 }\n\n@test\nfn entry_ok() -> bool { true }\n"),
+        ("tests/broken.ray", "@test\nfn nope() -> bool { let s = `a ` b`; true }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_syntax_mixed", &files, &[]);
+    assert!(out.contains("result: 1 test(s) ran, 0 failed; 1 suite(s) failed to compile ✗"), "{out}");
+    assert_eq!(code, 65, "{out}");
+}
+
+#[test]
 fn first_arg_without_extension_is_filter() {
     // M101: `ray test <filtro>` (sin archivo) filtra sobre el proyecto del cwd.
     let files = [

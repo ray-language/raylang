@@ -249,6 +249,62 @@ fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
     Result.Ok(n)
 }
 
+// ¿Son dígitos todos los caracteres de `s` en `[ini, fin)`?
+fn digits(s: string, ini: int, fin: int) -> bool {
+    var i = ini;
+    while (i < fin) {
+        if (s[i] < '0' || s[i] > '9') {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// M298 (findings 1.27.11 #23): `parse_iso8601` rechazaba lo que `date_stamp` (`YYYYMMDD`) y
+// `to_iso8601_basic` (`YYYYMMDDTHHMMSSZ`) producen — raysite generaba posts que luego no parseaba.
+// Las formas "básicas" (sin separadores) y una fecha sola (`YYYY-MM-DD` = medianoche UTC) se
+// EXPANDEN a la forma extendida y siguen por el parser estricto de siempre; lo que no encaja se
+// devuelve intacto (y el parser dirá qué falla, citando la entrada original).
+fn expand_basic(s: string) -> string {
+    let n = s.len();
+    if (n == 10 && s[4] == '-' && s[7] == '-') {
+        return s + "T00:00:00Z";
+    }
+    if (n < 8 || !digits(s, 0, 8)) {
+        return s;
+    }
+    let date = s.substring(0, 4) + "-" + s.substring(4, 6) + "-" + s.substring(6, 8);
+    if (n == 8) {
+        return date + "T00:00:00Z";
+    }
+    if ((s[8] != 'T' && s[8] != 't') || n < 15 || !digits(s, 9, 15)) {
+        return s;
+    }
+    var out = date
+        + "T"
+        + s.substring(9, 11)
+        + ":"
+        + s.substring(11, 13)
+        + ":"
+        + s.substring(13, 15);
+    var i = 15;
+    // La fracción (`.fff…`) va tal cual.
+    if (i < n && s[i] == '.') {
+        var j = i + 1;
+        while (j < n && s[j] >= '0' && s[j] <= '9') {
+            j = j + 1;
+        }
+        out = out + s.substring(i, j);
+        i = j;
+    }
+    // Offset básico `±HHMM` → `±HH:MM`; `Z` y `±HH:MM` siguen igual.
+    if (i + 5 == n && (s[i] == '+' || s[i] == '-') && digits(s, i + 1, n)) {
+        return out + s.substring(i, i + 3) + ":" + s.substring(i + 3, n);
+    }
+    out + s.substring(i, n)
+}
+
 // Exige el separador `expected` en la posición `i`.
 fn separator(s: string, i: int, expected: char) -> Result<int, string> {
     if (s[i] != expected) {
@@ -273,9 +329,13 @@ fn separator(s: string, i: int, expected: char) -> Result<int, string> {
 /// since the Unix epoch, UTC** — the offset is normalized away and the fraction contributes the
 /// milliseconds. Err on non-numeric fields, out-of-range values (month 13, April 31, Feb 29 on a
 /// non-leap year…), a malformed offset, trailing text, or a result before 1970.
-pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
+/// Also accepts the "basic" forms this module produces — `YYYYMMDDTHHMMSS[Z|±HHMM]`
+/// (`to_iso8601_basic`) and the date-only `YYYYMMDD` (`date_stamp`) — and a date-only
+/// `YYYY-MM-DD`; a date without a time means midnight UTC.
+pub fn parse_iso8601_millis(raw: string) -> Result<int, string> {
+    let s = expand_basic(raw);
     if (s.len() < 20) {
-        return Result.Err("ISO 8601 too short: '" + s + "'");
+        return Result.Err("ISO 8601 too short: '" + raw + "'");
     }
     let year = field(s, 0, 4, "year")?;
     separator(s, 4, '-')?;

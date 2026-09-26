@@ -31,7 +31,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(unix)]
 unsafe extern "C" {
-    fn pipe(fds: *mut i32) -> i32;
+    fn socketpair(domain: i32, ty: i32, protocol: i32, fds: *mut i32) -> i32;
+    fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
     fn close(fd: i32) -> i32;
     // Variádica a propósito (lección de arm64, como en watch.rs/term).
@@ -46,6 +47,32 @@ const F_SETFL: i32 = 4;
 const O_NONBLOCK: i32 = 0o4000; // M156: bionic también es 0o4000 (android es unix, no "linux")
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 const O_NONBLOCK: i32 = 0x0004;
+// M298 (findings 1.27.11 #21): el "pipe" es un `socketpair` AF_UNIX/SOCK_STREAM con los buffers
+// acotados a la latencia pedida (SO_SNDBUF/SO_RCVBUF). Un pipe del SO tiene un buffer fijo
+// (64 KiB en macOS) que a tasas bajas es un suelo enorme: a 22050 Hz mono, 1,5 s en cola
+// hicieran lo que hicieran `open_latency` y el anillo del backend.
+#[cfg(unix)]
+const AF_UNIX: i32 = 1;
+#[cfg(unix)]
+const SOCK_STREAM: i32 = 1;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SOL_SOCKET: i32 = 1;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SO_SNDBUF: i32 = 7;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SO_RCVBUF: i32 = 8;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const SOL_SOCKET: i32 = 0xffff;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const SO_SNDBUF: i32 = 0x1001;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const SO_RCVBUF: i32 = 0x1002;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const SO_NOSIGPIPE: i32 = 0x1022;
+/// El mínimo de cola entre el programa y el alimentador (octetos): por debajo, el coste por
+/// syscall se come el margen. A 8 kHz mono son 128 ms; a 44,1 kHz estéreo, 12 ms.
+#[cfg(unix)]
+const MIN_QUEUE_BYTES: i64 = 2048;
 
 /// El control de una salida viva, para `drain`: cuántos octetos ha aceptado el alimentador que
 /// aún no ha entregado al backend, y los parámetros para estimar la latencia del dispositivo.
@@ -68,6 +95,18 @@ pub struct Ctl {
 fn ctls() -> &'static Mutex<HashMap<i64, Arc<Ctl>>> {
     static CTLS: OnceLock<Mutex<HashMap<i64, Arc<Ctl>>>> = OnceLock::new();
     CTLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// M298 (findings 1.27.11 #22): el alimentador retira SU entrada del mapa al terminar — solo si
+/// sigue siendo la suya. El SO reutiliza el fd/handle del extremo de escritura en cuanto se
+/// cierra, así que una salida abierta justo después heredaba la misma clave y el alimentador
+/// viejo, al acabar de drenar, borraba la entrada de la NUEVA: `played_ms` decía "not an open
+/// audio output" durante toda su vida mientras `write` seguía funcionando.
+fn forget_ctl(key: i64, own: &Arc<Ctl>) {
+    let mut map = ctls().lock().unwrap();
+    if map.get(&key).is_some_and(|c| Arc::ptr_eq(c, own)) {
+        map.remove(&key);
+    }
 }
 
 /// Abre una salida PCM s16le (`sample_rate` Hz, `channels` canales) y devuelve el extremo de
@@ -97,11 +136,29 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
     #[cfg(unix)]
     {
         let mut fds = [0i32; 2];
-        // SAFETY: pipe escribe dos fds válidos.
-        if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+        // SAFETY: socketpair escribe dos fds válidos.
+        if unsafe { socketpair(AF_UNIX, SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
             return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
         }
         let (fd_r, fd_w) = (fds[0], fds[1]);
+        // M298 (#21): la cola entre el programa y el alimentador se acota a la latencia pedida —
+        // es lo que hace que `open_latency` dimensione DE VERDAD lo encolado (antes el pipe del SO
+        // ponía un suelo de 64 KiB). Los dos buffers, en los dos extremos: en BSD manda el de
+        // recepción del par; en Linux, el de envío del emisor.
+        let budget = (bytes_per_sec * latency_ms / 1000).max(MIN_QUEUE_BYTES) as i32;
+        unsafe {
+            let v = &budget as *const i32 as *const core::ffi::c_void;
+            for fd in [fd_r, fd_w] {
+                setsockopt(fd, SOL_SOCKET, SO_SNDBUF, v, 4);
+                setsockopt(fd, SOL_SOCKET, SO_RCVBUF, v, 4);
+            }
+            // Un `write` con el alimentador ya muerto debe dar EPIPE, no matar el proceso.
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                let one: i32 = 1;
+                setsockopt(fd_w, SOL_SOCKET, SO_NOSIGPIPE, &one as *const i32 as *const core::ffi::c_void, 4);
+            }
+        }
         // El extremo de escritura NO-bloqueante: el contrato de `socket_write_nb` (WouldBlock =
         // lleno → la fibra aparca). El de lectura queda bloqueante para el alimentador.
         unsafe {
@@ -134,7 +191,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             }
             sink.finish();
             unsafe { close(fd_r) };
-            ctls().lock().unwrap().remove(&key);
+            forget_ctl(key, &ctl_thread);
         });
         // SAFETY: fd_w es nuestro; File toma la propiedad (su Drop = close = EOF del alimentador).
         Ok(unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_w) })
@@ -185,7 +242,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             }
             sink.finish();
             drop(reader);
-            ctls().lock().unwrap().remove(&key);
+            forget_ctl(key, &ctl_thread);
         });
         Ok(writer)
     }

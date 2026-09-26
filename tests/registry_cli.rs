@@ -387,6 +387,48 @@ fn remote_git_index_clones_and_resolves() {
     assert!(app.join(".ray-deps/.index/geo.toml").is_file(), "el índice quedó cacheado");
 }
 
+/// M298 (findings 1.27.11 #8): el clon cacheado del índice no se refrescaba nunca solo — una
+/// versión publicada después del clon daba "no version of 'geo' satisfies '1.1.0' in the index"
+/// hasta `rm -rf .ray-deps`. Ahora un requisito insatisfecho refresca el clon UNA vez y reintenta.
+#[test]
+fn a_stale_cached_index_is_refreshed_when_a_requirement_is_unsatisfied() {
+    let base = tmp("staleidx");
+    let index_repo = base.join("index-repo");
+    let repo1 = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 1 }\n");
+    write_index(&index_repo, "geo", &[("1.0.0", &repo1)]);
+    git(&index_repo, &["init", "-q"]);
+    git(&index_repo, &["add", "-A"]);
+    git(&index_repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "idx"]);
+
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    let manifest = |req: &str| {
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+file://{}\"\n\n[dependencies]\ngeo = \"{req}\"\n",
+            index_repo.display()
+        )
+    };
+    std::fs::write(app.join("ray.toml"), manifest("1.0.0")).unwrap();
+    let (out, err, code) = ray_plain(&app, &["run"]);
+    assert_eq!(code, 0, "primer run clona el índice\n{err}");
+    assert!(out.contains("1"), "{out}");
+
+    // El índice real gana 1.1.0 DESPUÉS del clon; el proyecto la exige.
+    let repo2 = publish(&base.join("v2"), "geo", "1.1.0", "pub fn v() -> int { 2 }\n");
+    write_index(&index_repo, "geo", &[("1.0.0", &repo1), ("1.1.0", &repo2)]);
+    git(&index_repo, &["add", "-A"]);
+    git(&index_repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "geo 1.1.0"]);
+    std::fs::write(app.join("ray.toml"), manifest("1.1.0")).unwrap();
+    let (out, err, code) = ray_plain(&app, &["run"]);
+    assert_eq!(code, 0, "resuelve tras refrescar el clon, sin rm -rf .ray-deps\n{err}");
+    assert!(err.contains("refreshing the package index"), "dice que refrescó:\n{err}");
+    assert!(out.contains("2"), "usa la 1.1.0 nueva\n{out}");
+
+    // `ray search` también ve la versión nueva sin borrar la caché (refresco best-effort).
+    let (out, _err, code) = ray_plain(&app, &["search", "geo"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("1.1.0"), "search refresca el índice:\n{out}");
+}
+
 #[test]
 fn spec_by_name_with_disabled_index_warns() {
     // M136: sin configurar nada, el default es el índice OFICIAL — el opt-out es explícito

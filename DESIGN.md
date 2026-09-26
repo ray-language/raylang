@@ -14595,3 +14595,67 @@ siembra de la cookie, los orígenes propio/no-http/ajeno y el proxy). Hallazgo l
 soltar el lector de stdout del servidor hijo mata al servidor por EPIPE en su segundo `print` —
 la conexión aparecía «reseteada por el peer»—; el lector se drena en un hilo.
 
+## 282. M298 — Los bugs del barrido de `ray-apps` a 1.27.11 (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` (25 sep 2026), el resumen de actualizar los 26 proyectos
+de `ray-apps/` a 1.27.11 — 37 hallazgos, de los que 9 eran bugs (resultado incorrecto o no
+compila). Todos reproducidos antes de tocar nada; el resto (ergonomía, huecos de API, doc
+desalineada) está clasificado en IDEAS §97 para arcos propios.
+
+**[36] El override léxico no cubría UFCS.** M270 hizo el override del prelude léxico a la raíz,
+pero solo en la llamada por nombre (`check_named_call_renamed`); `check_ufcs` resolvía el nombre
+pelado contra `self.functions` y `headers.get(k)` en `net/trace` iba a la `get` del usuario. La
+misma regla, en el mismo sitio de la cadena de resolución (paso 3, «nombre pelado»). `std/json`
+no lo delataba porque llama `get(obj, k)` directo.
+
+**[1] La celda del transpilador era por nombre.** `cell_vars(body)` decide qué `var` van en
+`Rc<RefCell<T>>` por nombre en toda la función, y `self.cells` era un set plano: un binding de
+patrón `addr` en otro brazo, capturado por su closure, se leía con `.borrow()`. Ahora la celda
+es **léxica**: `declare_cell` deja una marca en el ámbito (`cell_key(name)`) y `is_cell` consulta
+la declaración más interna en `self.scopes` (la limitación «shadowing de una var-celda» anotada
+en B1 desaparece de paso). La declaración del `var` sigue consultando el set del análisis.
+
+**[8] El índice cacheado no se refrescaba solo.** `ensure_index_clone` clona una vez y solo
+`ray update` lo refrescaba; un requisito insatisfecho decía «no version … satisfies» sin
+insinuar que la copia local podía estar vieja. `LazyIndex` refresca UNA vez por resolución al
+primer error «satisfies»/«is not in the index» y reintenta (`  refreshing the package index`);
+sin red, aviso y el error original. `ray add`/`ray search` refrescan antes de preguntar
+(best-effort), como `cargo add` actualiza su índice. Test con un índice git local que gana una
+versión después del clon (`registry_cli`).
+
+**[9] `ray fmt` expandía un `if` de valor dentro de una expresión.** En la pasada de envuelto
+todo `if` sub-expresión ponía `expand_block`, y `is_multiline_form` lo excluía del reparto de
+listas y cadenas: el resultado era `} else {` en medio de un `+` o de los campos de un struct.
+Un `if` **compacto** (ramas de un solo tail no-bloque, sin `else if`) como sub-expresión se
+emite en una línea si cabe en el ancho (medido desde la sangría del contexto), y el contenedor
+reparte; si no cabe, se expande como antes (`examples/stdlib/markdown.ray` lo cubre: dos
+operandos, sin cadena que repartir). `std/update.ray` cambió de forma con la regla nueva.
+
+**[10] `ray test` contaba solo los fallos del checker.** El bucle de carga marcaba
+`frontend_failed` sin sumar a `compile_failures`; con un syntax error el resumen decía «0
+suite(s) failed to compile ✗». Lo «intermitente» del hallazgo era eso: el mismo backtick fallaba
+unas veces en el lexer y otras en el checker según cómo quedara la cadena.
+
+**[23] `date_stamp` producía lo que `parse_iso8601` rechazaba.** `date_stamp` es el datestamp de
+AWS SigV4 (`YYYYMMDD`, correcto); el parser era RFC 3339 estricto. Decisión: el parser acepta las
+formas **básicas** que el propio módulo produce y la fecha sola (medianoche UTC) — se EXPANDEN a
+la forma extendida (`expand_basic`) y siguen por el parser estricto de siempre, que cita la
+entrada original en sus errores. Vectores nuevos en `time_demo.ray`/`time_cli`.
+
+**[21] El pipe del SO era un suelo de 64 KiB.** `open_latency` dimensionaba anillo, buffers y
+chunk, pero la cola entre el programa y el alimentador era un `pipe(2)` (64 KiB en macOS): a
+22050 Hz mono son 1,5 s encolados hicieran lo que hicieran los demás. Medido con la sonda del
+hallazgo antes/después (real / null): 22050×1 @30 ms 1580→140 / 1490→40; @500 2060→1100;
+44100×2 @30 400→60; @1000 1480→2220 (la cola es ~latencia + el anillo del backend, también
+~latencia). Decisión: `socketpair(AF_UNIX, SOCK_STREAM)` con `SO_SNDBUF`/`SO_RCVBUF` = octetos de
+la latencia (mínimo 2 KiB) en los dos extremos (en BSD manda el de recepción del par; en Linux el
+de envío), `SO_NOSIGPIPE` en macOS. Todo lo demás (no-bloqueante + kqueue en el extremo de
+escritura, `read` bloqueante, FIONREAD en `drain`) funciona igual sobre un socket. Windows sigue
+con su pipe anónimo (4 KiB: no tiene el problema).
+
+**[22] `played_ms` fallaba en la salida siguiente.** El mapa fd→`Ctl` se limpiaba en el hilo
+alimentador al terminar, por clave; el SO reutiliza el fd del extremo de escritura en cuanto se
+cierra, así que una salida abierta justo después heredaba la clave y el alimentador viejo borraba
+SU entrada. `forget_ctl` borra solo si la entrada sigue siendo la propia (`Arc::ptr_eq`). Test de
+seis ciclos seguidos en `audio_cli` junto al de la cola acotada.
+

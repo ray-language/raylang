@@ -364,6 +364,8 @@ documentada:
   que poseemos (`CoCreateInstance`/`Activate`/`GetService` los crean, `Release` en orden inverso),
   `WAVEFORMATEX` empaquetado a 1 byte vivo durante `Initialize`, y `GetBuffer`/`ReleaseBuffer` con
   exactamente los frames prestados; `PeekNamedPipe` sobre el pipe propio para `drain`.
+  M298: en unix la cola programa→alimentador es un `socketpair` (`socketpair`/`setsockopt`
+  declarados a mano; `SO_SNDBUF`/`SO_RCVBUF` acotados a la latencia, `SO_NOSIGPIPE` en macOS).
 - **`src/bundle_windows.rs`** — `ray bundle` en Windows (M180): `BeginUpdateResourceW`/`UpdateResourceW`/
   `EndUpdateResourceW` de kernel32 para inyectar icono y VERSIONINFO en el `.exe` recién copiado
   (ruta NUL-terminada y datos vivos durante la sesión; un fallo descarta la sesión sin tocar el

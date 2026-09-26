@@ -360,7 +360,7 @@ impl Transpiler {
                     // Solo `variable[idx]` con la variable un arreglo LOCAL de elemento escalar y
                     // no-celda (una celda lleva otro RefCell por medio: fuera del recorte).
                     let ExprKind::Ident(name) = &array.kind else { return None };
-                    if local.contains_key(name) || t.cells.contains(name) {
+                    if local.contains_key(name) || t.is_cell(name) {
                         return None;
                     }
                     let Some(Type::Array(elem)) = t.lookup(name) else { return None };
@@ -413,6 +413,33 @@ impl Transpiler {
 
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    /// Declara una **var-celda** (B1): además del tipo deja la marca `cell_key(name)` en el ámbito,
+    /// para que [`is_cell`] sepa que ESTA declaración (y no un homónimo de otro brazo/bloque) es la
+    /// que vive en `Rc<RefCell<T>>`.
+    pub(super) fn declare_cell(&mut self, name: &str, ty: Type) {
+        self.declare(name, ty);
+        self.scopes.last_mut().unwrap().insert(cell_key(name), Type::Unit);
+    }
+
+    /// ¿`name` se lee/escribe como celda AQUÍ? M298 (findings 1.27.11 #1): `self.cells` es el
+    /// conjunto plano de candidatas por función (análisis por nombre), pero la decisión es LÉXICA:
+    /// manda la declaración más interna en ámbito. Un `var addr` capturado en un brazo de `match` y
+    /// un binding `addr` de patrón en otro brazo comparten nombre y antes el segundo se emitía con
+    /// `.borrow()` sobre un `Rc<str>` (E0599). Sin declaración a la vista (captura por un `send`
+    /// que redeclara sin `declare`) se conserva el veredicto del análisis.
+    pub(super) fn is_cell(&self, name: &str) -> bool {
+        if !self.cells.contains(name) {
+            return false;
+        }
+        let key = cell_key(name);
+        for scope in self.scopes.iter().rev() {
+            if scope.contains_key(name) {
+                return scope.contains_key(&key);
+            }
+        }
+        true
     }
 
     pub(super) fn in_scope_channels(&self) -> Vec<String> {
@@ -545,11 +572,11 @@ impl Transpiler {
                 };
                 // Var-celda (B1): capturada+mutada por una closure → `let n = Rc::new(RefCell::new(init))`
                 // (el Rc es inmutable; la mutación va por el RefCell). Las lecturas/escrituras la desenvuelven.
-                if self.cells.contains(name) {
+                if *mutable && self.cells.contains(name) {
                     write!(out, "let {} = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap();
                     self.emit_typed(out, value, &vty)?;
                     out.push_str("));\n");
-                    self.declare(name, vty);
+                    self.declare_cell(name, vty);
                     return Ok(());
                 }
                 out.push_str(if *mutable { "let mut " } else { "let " });
@@ -599,7 +626,7 @@ impl Transpiler {
                 match &target.kind {
                     ExprKind::Ident(name) => {
                         let tty = self.type_of(target)?;
-                        if self.cells.contains(name) {
+                        if self.is_cell(name) {
                             // Var-celda (B1): `n = e` → `*n.borrow_mut() = e`. El RHS va a un temp ANTES del
                             // borrow_mut: si lee la MISMA celda (`n = n + 1`), evita el doble borrow.
                             out.push_str("{ let __rt_v = ");
@@ -935,7 +962,7 @@ impl Transpiler {
         // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
         let mut refd = std::collections::HashSet::new();
         idents_of_block(&fnexpr.body, &mut refd);
-        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c) && self.is_cell(c)).cloned().collect();
         // Toda captura de HEAP (no solo las celdas) se PRE-CLONA antes del `move`: dos closures
         // hermanos que capturan la misma local no-Copy (p. ej. los dos de `cors(origin)`) movían
         // la primera y el segundo veía E0382. Clonar un Rc comparte el valor inmutable — misma
@@ -1120,7 +1147,7 @@ impl Transpiler {
             ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
             ExprKind::Ident(name) if name == "std::math::E" => out.push_str("std::f64::consts::E"),
             ExprKind::Ident(name) => {
-                if self.cells.contains(name) {
+                if self.is_cell(name) {
                     // Var-celda (B1): leer = desenvolver la celda con un clon del valor (`n.borrow().clone()`).
                     // clone() vale para todo tipo (para int es copia); mantiene la semántica de "leer clona".
                     write!(out, "{}.borrow().clone()", mangle(name)).unwrap();
@@ -1386,7 +1413,7 @@ impl Transpiler {
                             // N6a: receptor = variable local (no celda) → `x.borrow()` directo, sin el
                             // `Rc::clone` intermedio (`borrow` toma &self; el clon solo movía refcounts).
                             ExprKind::Ident(name)
-                                if !self.cells.contains(name) && self.lookup(name).is_some() =>
+                                if !self.is_cell(name) && self.lookup(name).is_some() =>
                             {
                                 out.push_str(&mangle(name));
                                 out.push_str(".borrow()");

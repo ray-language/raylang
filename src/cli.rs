@@ -3828,6 +3828,8 @@ fn cmd_add(args: &[String]) {
             process::exit(65);
         }
     };
+    // M298 (#8): `ray add` pregunta al índice por la última versión → refresco best-effort.
+    crate::deps::refresh_index_best_effort(&m);
     // Requisito: el dado, o `^<latest>` si no se especifica versión.
     let req = match req_opt {
         Some(r) => r.to_string(),
@@ -3944,6 +3946,8 @@ fn cmd_search(args: &[String]) {
             process::exit(65);
         }
     };
+    // M298 (#8): buscar sobre la copia cacheada daba versiones viejas; se refresca (best-effort).
+    crate::deps::refresh_index_best_effort(&m);
     let entries = match fs::read_dir(&index) {
         Ok(rd) => rd,
         Err(e) => {

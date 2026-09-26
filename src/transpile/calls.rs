@@ -41,7 +41,7 @@ impl Transpiler {
                     ))
                 }
                 _ => {
-                    let is_cell = self.cells.contains(&name);
+                    let is_cell = self.is_cell(&name);
                     out.push((name, ty, is_cell));
                 }
             }

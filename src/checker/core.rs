@@ -2822,7 +2822,15 @@ impl Checker {
         } else if let Some(local) = self.module_local_fn(name, line, recv_ty) {
             local
         } else if self.functions.contains_key(name) {
-            name.to_string()
+            // M298 (findings 1.27.11 #36): el override de la raíz es LÉXICO también aquí — un
+            // `headers.get(k)` en un módulo/paquete va al alias `get#prelude`, como la llamada
+            // directa en `check_named_call_renamed`. Antes solo el camino directo lo aplicaba y
+            // `net/trace` moría con "'get' expects 3 argument(s)" por una `get` del usuario.
+            if !self.current_fn_is_root && self.overridden_prelude.contains(name) {
+                format!("{name}#prelude")
+            } else {
+                name.to_string()
+            }
         } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
             global
         } else if let Some(by_type) = self.type_module_fn(name, recv_ty) {

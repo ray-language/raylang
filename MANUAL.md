@@ -1252,8 +1252,9 @@ let _ = close(h);
 ```
 
 Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
-ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo y
-el chunk del alimentador. Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
+ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
+chunk del alimentador y la cola entre tu programa y el dispositivo: `write` aparca cuando hay
+~esa latencia encolada, también a tasas bajas (22050 Hz mono con 30 ms ≈ 140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
 devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
 escrito, que es lo que hace falta para pintar el compás exacto.
 

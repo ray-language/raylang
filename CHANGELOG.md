@@ -4,6 +4,33 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Los ocho bugs del barrido de `ray-apps` a 1.27.11** (M298, `RAYLANG-FINDINGS.md` del 25 sep
+  2026; el resto de hallazgos —ergonomía y documentación— queda clasificado en IDEAS §97).
+  - **Checker**: el override de una función del prelude en la raíz (`fn get(...)`) volvía a
+    filtrarse a los módulos y paquetes por la vía **UFCS** (`headers.get(k)` en `net/trace` →
+    «'get' expects 3 argument(s)»); la regla léxica de M270 se aplica ahora también ahí.
+  - **Nativo**: un `var x` capturado por una closure en un brazo de `match` y un binding `x` de
+    patrón capturado en OTRO brazo compartían nombre y el segundo se emitía como celda
+    (`.borrow()` sobre `Rc<str>`, E0599). La celda es léxica: manda la declaración más interna.
+  - **`ray build`/`run`**: el clon cacheado del índice (`.ray-deps/.index`) se refresca solo UNA
+    vez y se reintenta cuando un requisito no se satisface o el paquete no está («no version of
+    'net' satisfies '^0.3.3'» hasta `rm -rf .ray-deps`); `ray add` y `ray search` refrescan
+    antes de preguntar (best-effort: sin red, la caché).
+  - **`ray fmt`**: un `if` de valor simple como operando de una concatenación o valor de un campo
+    de struct se queda en una línea (`if (c) { a } else { b }`) y el reparto lo hace la cadena de
+    `+` o la lista de campos; antes las ramas se expandían con `} else {` en medio.
+  - **`ray test`**: una suite con error de sintaxis (falla al cargar) cuenta en «N suite(s)
+    failed to compile» (decía 0).
+  - **`std/time`**: `parse_iso8601[_millis]` acepta las formas básicas que produce el propio
+    módulo — `YYYYMMDD` (`date_stamp`), `YYYYMMDDTHHMMSS[Z|±HHMM]` (`to_iso8601_basic`) — y la
+    fecha sola `YYYY-MM-DD` (medianoche UTC).
+  - **`std/audio`**: la cola entre el programa y el alimentador es un `socketpair` acotado a la
+    latencia pedida — a 22050 Hz mono con 30 ms, ~140 ms en cola en vez de 1580 (el pipe del SO
+    ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
+    cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
+
 ## 1.27.11 — 2026-09-25
 
 - **`net` 0.3.5 / `web` 0.4.4: servidores locales de apps cerrados a su ventana** (M297, arco de

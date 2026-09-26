@@ -3727,3 +3727,41 @@ Lo que se revisó y está bien: framing HTTP (TE sobre CL, RFC 7230), límites d
 conexiones/tiempo, `static_response` sin `..`, templates con autoescape (`{{& }}` explícito),
 MySQL/PostgreSQL con sentencias preparadas reales, `ahash` con semilla aleatoria, saltos de
 redirección acotados. Impacto: paquetes `web`/`net` y stdlib; ningún cambio en el lenguaje.
+
+## 97. El barrido de `ray-apps` a 1.27.11: lo que queda tras los bugs (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` (25 sep 2026): 37 hallazgos al actualizar los 26 proyectos.
+Los 9 bugs (#1, #8, #9, #10, #21, #22, #23, #36 → ✅ **M298**; los 8 repros nativos de rayrelay
+ya estaban resueltos) salieron primero. El resto, por arcos:
+
+| # | Hallazgo | Clase | Estado |
+|---|---|---|---|
+| 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | PROPUESTO — tres apps lo pidieron; parser + checker (divergencia) + fmt + selfhost |
+| 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | PROPUESTO — análisis de divergencia: bucle infinito sin `break` = `!` |
+| 4 | `break` etiquetado | lenguaje | PROPUESTO (impacto medio: sintaxis nueva) |
+| 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | PROPUESTO — `is_comparable` + `values_equal` + nativo `PartialEq` |
+| 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | PROPUESTO — unificar ramas antes de fallar la inferencia |
+| 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | PROPUESTO |
+| 11 | `ray doc` de constantes de módulo | tooling | PROPUESTO |
+| 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | PROPUESTO (barato) |
+| 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor |
+| 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | PROPUESTO — `tcp_accept` con timeout, o corregir la doc |
+| 15 | `tcp_connect_timeout` que aparque la fibra | runtime | PROPUESTO — conexión no bloqueante + interés de escritura con plazo |
+| 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | PROPUESTO (net 0.3.6) |
+| 17 | README de `web`: `listen` reconstruye la app por petición (fuga de recursos si el builder abre conexiones) | doc/web | PROPUESTO — aviso + `on_close` |
+| 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | PROPUESTO |
+| 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | PROPUESTO (barato) |
+| 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | PROPUESTO (barato) |
+| 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | PROPUESTO |
+| 25 | `fs.symlink` | stdlib | PROPUESTO |
+| 26 | `last_index_of` en string y bytes | stdlib | PROPUESTO |
+| 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | PROPUESTO (barato) |
+| 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | PROPUESTO |
+| 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | PROPUESTO (barato, alto impacto: las apps llenas de `match` de cinco líneas) |
+| 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | PROPUESTO |
+| 31 | `bytes.index_of_from(needle, start)` | stdlib | PROPUESTO |
+| 32 | Deque con iteración e índice | stdlib | PROPUESTO |
+| 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | PROPUESTO |
+| 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | PROPUESTO |
+| 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | PROPUESTO |
+

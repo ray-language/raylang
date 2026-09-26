@@ -14903,3 +14903,49 @@ variante «solo si no cabe» no lo era, porque cada línea cabía).
 como `[T]`); `show` da la forma canónica del nativo. `serve_graceful` en `net`/`rpc` filtra
 SIGWINCH (`shutdown_signals()`).
 
+## 292. M310 — Patrones de tupla y literales, exhaustividad por matriz, `dyn` en campos (sep 2026)
+
+Tres hallazgos del segundo barrido (#44, #52, #53) que eran **el lenguaje**, no la caja de
+herramientas: raymart quería despachar `match ((method, path))`, ray808 comparar strings en un
+`match` sin guardas, y los puertos de una app querían vivir en un struct como `dyn Trait`.
+
+**Patrones.** `PatternKind::Tuple(Vec<Pattern>)` y `PatternKind::Literal(Expr)` (int con signo,
+string, char, bool). El parser los reconoce por el primer token (`(`, un literal o `-` seguido
+de número); un `(p)` de un solo elemento es error («a tuple pattern needs at least two
+elements»). El checker tipa cada posición con el tipo de la tupla y exige que el literal tenga
+el tipo del valor («the literal pattern is string, but the value here is int»). El escrutinio
+deja de tener que ser un enum: tupla, struct o primitivo también (una función, unit, canal o
+tarea siguen sin matchearse). Intérprete y VM: `Index` por posición y `Equal` + salto; nativo:
+patrón de tupla de Rust y literal tal cual, salvo el **string**, que un `Rc<str>` no casa con
+un literal de Rust → temporal diferido (el mecanismo de M287) y prueba `&**tmp == "lit"` en la
+guarda. Como rustc no ve la cobertura de los brazos guardados, un `match` con algún brazo así
+lleva `_ => unreachable!()` al final: la exhaustividad la probó el checker.
+
+**Exhaustividad por matriz.** La regla conservadora de M40.1c («una variante anidada es
+refutable → hace falta fallback») era la queja #53: `Ok(Some(v)) / Ok(None) / Err(e)` obligaba a
+un `_` que anulaba la red de seguridad. `patterns_exhaust(rows, tys)` es el algoritmo clásico
+de especialización por columna: para un enum, cada variante especializa la matriz (los comodines
+se expanden a comodines del payload) y se recurre; para una tupla/struct, se expanden las
+posiciones/campos; un `bool` se agota con `true` y `false`; el resto de primitivos, solo con un
+comodín. Dos cortes hacen que termine: una fila toda de comodines agota, y una columna sin
+constructores no se expande (sin esto, `enum List { Cons(int, List), Nil }` con un `_` se
+expandía sin fin — lo cazó la suite del checker con un SIGABRT). El mensaje distingue «missing
+variants: …» (faltan variantes de primer nivel) de «some nested cases are not covered (add a
+'_' arm or cover every case)». La inalcanzabilidad de patrones de tupla/literal no se
+diagnostica (solo la de variantes ya cubiertas, como antes).
+
+**`dyn` en campos.** «trait 'Greeter' not declared» al escribir `struct App { g: dyn Greeter }`
+era un problema de orden: los tipos de los campos se validaban antes de registrar los traits (que
+necesitan los tipos). Una pre-pasada mete los NOMBRES de los traits (con sus métodos, para la
+ambigüedad de `dyn A + B`) antes de validar campos; `register_traits_impls` comprueba la
+unicidad contra los vistos en su propia pasada. Al mostrar, un `dyn` es opaco — `<dyn Greeter>` —
+en la VM, el intérprete y el nativo; la VM enseñaba el struct interno (`__dyn_Greeter { data:
+…, hi: <fn> }`) y el nativo no compilaba (`derive(PartialEq)` sobre closures). Comparar con `==`
+un struct que guarda un `dyn` sigue siendo identidad de closures en la VM y no compila en
+nativo, igual que un struct con campos función: fuera de alcance. Y `dyn M.Trait` /
+`impl M.Trait for T` (rutas calificadas) parsean como un tipo calificado más.
+
+**Espejo selfhost.** El checker auto-alojado no conoce los patrones nuevos (tampoco los anidados
+de M40.1c): espeja la regla del escrutinio (struct/primitivo válidos con `_`/binding) y los
+mensajes nuevos byte a byte; el corpus de paridad tiene los cuatro casos.
+

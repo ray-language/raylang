@@ -1688,5 +1688,11 @@ fn collect_bindings(p: &Pattern, set: &mut HashSet<String>) {
                 collect_bindings(sub, set);
             }
         }
+        PatternKind::Tuple(subs) => {
+            for sub in subs {
+                collect_bindings(sub, set);
+            }
+        }
+        PatternKind::Literal(_) => {}
     }
 }

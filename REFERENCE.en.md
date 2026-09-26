@@ -99,6 +99,7 @@ Reserved (cannot be used as identifiers):
 | `\|>` | pipeline: `x \|> f(a)` ≡ `f(x, a)` |
 | `@` | annotations: `@test`, `@derive(…)` |
 | `_` | wildcard in patterns; discard in `let _ = …` |
+| `(p, q)` / `0` `"s"` `'c'` `true` | tuple pattern and literal patterns in `match` (M310; also inside a payload: `Shape.Rect(w, 0)`); exhaustiveness is checked recursively and an `int`/`string`/`char` always needs `_` |
 | `${…}` | interpolation inside a string literal |
 | `//` `///` | line comment; documentation comment (`ray doc`, LSP hover) |
 | `b"…"` | bytes literal |
@@ -139,7 +140,7 @@ Reserved (cannot be used as identifiers):
 | `Option<T>` / `Result<T, E>` | from the prelude; absence and error as values (there is no `null` and no exceptions) |
 | `Channel<T>` / `Task<T>` | concurrency (SPEC §9) |
 | your own `struct` / `enum` | reference semantics (struct/enum); generics with bounds (`struct Box<T: Show>`) |
-| `dyn Trait`, `dyn A + B` | trait objects (dynamic dispatch); *upcasting* to a subset of traits |
+| `dyn Trait`, `dyn A + B` | trait objects (dynamic dispatch); *upcasting* to a subset of traits; allowed as a struct field and with qualified paths (`dyn m.Trait`, `impl m.Trait for T`, M310); shown as `<dyn Trait>` |
 | `Iter<T>` | lazy iterator (closure-backed) |
 | `ptr` | opaque FFI pointer (not dereferenceable from raylang) |
 | `Set<T>` / `Deque<T>` / `StringBuilder` | from `std/collections` (§10) |
@@ -633,4 +634,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:c4c1f6dbeffb -->
+<!-- sync: sha256:b898f626ce42 -->

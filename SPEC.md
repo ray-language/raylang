@@ -138,9 +138,10 @@ tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes' | 'ptr'
      | '[' tipo ']'
      | '(' tipo ',' tipo { ',' tipo } ')'
      | 'fn' '(' [ tipo { ',' tipo } ] ')' [ '->' tipo ]
-     | 'dyn' IDENT { '+' IDENT }
+     | 'dyn' nombre_trait { '+' nombre_trait }
      | IDENT [ '<' tipo { ',' tipo } '>' ]        (* struct/enum/Map/Channel/Task/param de tipo *)
      | IDENT '.' IDENT [ '<' … '>' ] ;            (* tipo calificado por módulo: M.Punto *)
+nombre_trait = IDENT [ '.' IDENT ] ;                (* trait local o calificado por módulo: M.Trait (M310) *)
 ```
 
 - **Primitivos**: `int` (entero con signo de 64 bits), `float` (IEEE-754 doble), `bool`,
@@ -166,7 +167,10 @@ tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes' | 'ptr'
 - **Genéricos** con **erasure total**: `Type` de runtime no existe; la inferencia es del checker
   (§7). Bounds `T: A + B` en funciones, structs, enums e impls.
 - **Trait objects** `dyn A + B`: conjunto canónico (ordenado, sin duplicados); *upcasting* a un
-  subconjunto; un método que usa `Self` fuera del receptor no es invocable sobre el objeto.
+  subconjunto; un método que usa `Self` fuera del receptor no es invocable sobre el objeto. Vale
+  como tipo de **campo** de struct/enum (M310; los nombres de trait se conocen antes de validar
+  los campos, así que el trait puede declararse después) y el nombre puede ir calificado por
+  módulo (`dyn M.Trait`, `impl M.Trait for T`). Un valor `dyn` se muestra opaco (`<dyn A + B>`).
 - **`Channel<T>`** y **`Task<T>`**: tipos de la concurrencia (§9); `Self` solo dentro de
   traits/impls.
 
@@ -181,7 +185,7 @@ enum     = 'enum' IDENT [ genericos ] '{' variante { ',' variante } [ ',' ] '}' 
 variante = IDENT [ '(' tipo { ',' tipo } ')' ] ;
 trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}' ;
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
-impl     = 'impl' [ genericos ] IDENT [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
+impl     = 'impl' [ genericos ] nombre_trait [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
 const_valor = literal | '[' [ const_valor { ',' const_valor } ] ']' ;
 extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
@@ -346,16 +350,23 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 - **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
   (misma regla de divergencia; todos divergentes → unit). Un brazo cuyo valor no determina sus
   parámetros de tipo (`Result.Err(e)` sin tipo esperado) toma el tipo que fijan los demás brazos,
-  vaya antes o después (M204); si ninguno lo fija, es error de inferencia. **Exhaustivo** sobre enums. Patrones
-  `Enum.Variante(sub-patrón…)` (también `M.Enum.Variante`), binding suelto, `_`. **Patrones anidados**
+  vaya antes o después (M204); si ninguno lo fija, es error de inferencia. **Exhaustivo**. El escrutinio
+  es un enum, una **tupla**, un **struct** o un `int`/`string`/`char`/`bool`/`uN` (M310; una función,
+  unit, canal o tarea no se matchean). Patrones `Enum.Variante(sub-patrón…)` (también
+  `M.Enum.Variante`), binding suelto, `_`, **tupla** `(p1, p2, …)` (M310: dos o más sub-patrones, uno
+  por posición, anidables) y **literal** (M310: `int` con signo opcional, `string`, `char`, `bool`;
+  el literal debe tener el tipo del valor que casa). **Patrones anidados**
   (M40.1c): cada posición del payload es un sub-patrón completo, recursivo (`Result.Ok(Option.Some(v))`).
   **Guardas** (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los
   bindings del patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. **Patrón de struct**
   (M40.1d): `Nombre { campo [: sub-patrón], … }` destructura un struct (forma corta `{ x, y }` =
-  `{ x: x, y: y }`); solo anidado (el escrutinio es un enum). **Exhaustividad conservadora**: una
-  variante cubre solo si sus sub-patrones son **irrefutables** (`_`/binding, o un struct de campos
-  irrefutables como `Punto { x, y }`) y sin guarda; una variante anidada es refutable → hace falta un
-  fallback (`Ok(_)`). No hay patrones de literal (diferido).
+  `{ x: x, y: y }`), anidado o como patrón de primer nivel sobre un escrutinio struct (M310).
+  **Exhaustividad por matriz** (M310): los brazos sin guarda deben agotar el tipo del escrutinio,
+  **recursivamente** por variantes y posiciones — `Ok(Some(v)) / Ok(None) / Err(e)` es exhaustivo
+  sin `_`; `Some(Some(_)) / None` no lo es (falta `Some(None)`). Un `int`/`string`/`char` solo lo
+  agota un `_`/binding; un `bool` también `true` y `false`. Un brazo con guarda nunca cuenta. Un
+  brazo cuya variante ya cubría entera un brazo anterior es «inalcanzable» (error); la
+  inalcanzabilidad de patrones de tupla/literal no se diagnostica.
 - **Ambigüedad struct-literal/bloque**: `Nombre { … }` se reconoce como literal solo si el
   receptor es un identificador (o `M.Nombre`) en posición de expresión; en la cabecera de un
   `for`/`if`/`while` sin paréntesis el `{` abre el cuerpo. El escrutinio de `match` y las

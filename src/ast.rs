@@ -703,6 +703,12 @@ pub enum PatternKind {
         variant: String,
         subpatterns: Vec<Pattern>,
     },
+    /// `(p1, p2, …)` (M310, findings #53): patrón de TUPLA — un sub-patrón por posición. Irrefutable
+    /// si todos sus sub-patrones lo son.
+    Tuple(Vec<Pattern>),
+    /// Un literal `5`, `-1`, `"hello"`, `'c'`, `true` (M310, findings #44): casa por igualdad;
+    /// siempre refutable (hace falta un catch-all o cubrir el resto).
+    Literal(Expr),
     /// `Nombre { campo [: sub-patrón], … }` (M40.1d): destructura un struct. La forma corta
     /// `Nombre { x, y }` liga cada campo a un binding de su nombre (`x: x`); la larga `x: <patrón>`
     /// aplica un sub-patrón. Solo aparece **anidado** (el escrutinio de un match es un enum).

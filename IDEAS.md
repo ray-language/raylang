@@ -3777,7 +3777,7 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 41 | Android: `<input type="file">` | ✅ M309: `onShowFileChooser` |
 | 42 | `ray add` en el sitio equivocado | ✅ M309 |
 | 43 | `ray fmt`: struct con closures / `const` largo | ✅ M309 |
-| 44 | `Option`/`Result` sin `Eq`; patrones literales de string en `match` | ✅ `Eq`/`Show` (M309); los patrones de string literal siguen PROPUESTOS (junto a #53) |
+| 44 | `Option`/`Result` sin `Eq`; patrones literales de string en `match` | ✅ `Eq`/`Show` (M309); patrones literales (`int`/`string`/`char`/`bool`, anidados) (M310) |
 | 45 | iOS: objetos C con `minos` del SDK | ✅ M309: `IPHONEOS_DEPLOYMENT_TARGET` |
 | 46 | Firma iOS: Xcode escribe en el pbxproj | ✅ M309: rescate + docs |
 | 47 | `--ios-target sim` deja `libs/` vacío sin aviso | ✅ M309: aviso |
@@ -3785,8 +3785,8 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 49 | Hot reload del frontend en el teléfono | ✅ niveles 1–3 (M309: docs, `dev:device`, `RAY_DEV_FRONTEND_URL` con `--devtools`); nivel 4 (`ray dev --device`) PROPUESTO |
 | 50 | Hot reload del programa en el teléfono | PROPUESTO — arco: A (ventana remota, backend `RAY_UI_BACKEND=remote` sobre WebSocket a `ray dev`) primero; B (VM en la app) después |
 | 51 | iOS sin `NSLocalNetworkUsageDescription`; `[app.plist]` no llega a `--ios` | ✅ M309 |
-| 52 | `dyn Trait` en campos; `dyn mod.Trait` / `impl mod.Trait for` no parsean | PROPUESTO — rutas calificadas en `dyn`/`impl … for` (parser + resolución); `dyn` en campos requiere decidir la representación (hoy los puertos se inyectan por genéricos, documentado) |
-| 53 | Patrones de tupla en `match`; exhaustividad anidada de `Result<Option<T>>` | PROPUESTO — patrones de tupla + exhaustividad recursiva (hoy conservadora) |
+| 52 | `dyn Trait` en campos; `dyn mod.Trait` / `impl mod.Trait for` no parsean | ✅ M310: campos `dyn` (pre-pasada de nombres de trait; `<dyn T>` opaco al mostrar) y rutas calificadas en `dyn`/`impl … for` |
+| 53 | Patrones de tupla en `match`; exhaustividad anidada de `Result<Option<T>>` | ✅ M310: patrones de tupla y exhaustividad por matriz (recursiva) |
 | 54 | Primitivos como nombres de función (doc); alias de tipo | ✅ documentado en llms; `type Alias = …` PROPUESTO (sintaxis nueva: parser + checker + selfhost) |
 | 55 | `-o dir/app` sin `dir` | ✅ M309 |
 | 56 | mysql `caching_sha2_password` en claro | ✅ M309 (db 0.1.1) |

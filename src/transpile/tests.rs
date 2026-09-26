@@ -1566,3 +1566,17 @@ fn fast_mode_emits_no_depth_prologue() {
     assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
 }
 
+/// M310: patrones de tupla y literales en nativo — el int/char van como patrón de Rust, el string
+/// anidado como prueba diferida `== "lit"`, y un match con guardas de Rust lleva el comodín
+/// inalcanzable (la exhaustividad la probó el checker).
+#[test]
+fn tuple_and_literal_patterns_transpile() {
+    let rust = transpile_src(
+        "enum S { N(string), C(int) }\nfn f(t: (int, string), o: Option<S>) -> int {\n    let a = match (t) { (0, \"a\") => 1, (n, _) => n };\n    let b = match (o) { Option.Some(S.N(\"x\")) => 1, Option.Some(S.N(_)) => 2, Option.Some(S.C(0)) => 3, Option.Some(S.C(c)) => c, Option.None => 0 };\n    a + b\n}\nfn main() { print(f((0, \"a\"), Option.None)); }",
+    );
+    assert!(rust.contains("== \"a\""), "{rust}");
+    assert!(rust.contains("== \"x\""), "{rust}");
+    assert!(rust.contains("S::C(0)"), "{rust}");
+    assert!(rust.contains("_ => unreachable!("), "{rust}");
+}
+

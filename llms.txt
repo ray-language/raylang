@@ -31,9 +31,11 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 - Struct fields end with a comma; struct literals are `Name { field: value }`.
 - `main` returns `int` (the process exit code) or unit. `exit(code)` terminates the process
   immediately from any fiber (diverges like `panic`; stdout/stderr flushed).
-- Patterns: NO literals inside variant patterns (`Option.Some(true)` is a syntax error —
-  bind a name and test it, or use a guard). Nested variant patterns ARE fine (since 1.27.6):
-  `Result.Ok(Option.Some(v))`, `Option.Some(json.Json.JObject(m))`, with `_` inside. Qualified
+- Patterns (since 1.27.13): nested variants `Result.Ok(Option.Some(v))`, tuples
+  `match ((method, path)) { ("GET", "/") => …, (m, _) => … }`, literals (`int`, `-1`, `"str"`,
+  `'c'`, `true`) at top level or inside a payload (`Shape.Rect(w, 0)`), struct patterns
+  `Point { x, y }`. Exhaustiveness is checked recursively (`Ok(Some(v)) / Ok(None) / Err(e)`
+  needs no `_`); an `int`/`string`/`char` scrutinee always needs a `_` arm. Qualified
   patterns (`json.Json.JObject(m)`) and qualified types in signatures (`regex.Regex`) work.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
@@ -354,6 +356,7 @@ arity/type dualities.
 | `let m = Map.new();` | `type error at L:C: cannot infer the type of 'Map.new'; annotate it, e.g. 'let m: Map<string, int> = Map.new()'` | annotate as it says |
 | `if (c) { 1 }` used as value | `type error at L:C: an if without else has type unit, but its branch produces int (add an else)` | add `else` |
 | missing enum arm | `type error at L:C: non-exhaustive match on 'Shape': missing variants: Rect` | add the arm or `_` |
+| `match (n) { 0 => a, 1 => b }` on an int | `type error at L:C: non-exhaustive match on int: some nested cases are not covered (add a '_' arm or cover every case)` | add `_ => …` (literals never exhaust int/string/char) |
 | `f(1)` on `fn f(a: int, b: int)` | `type error at L:C: 'f' expects 2 argument(s), received 1` | fix arity |
 | `f("x")` on `fn f(a: int)` | `type error at L:C: argument 1 of 'f': expected int, got string` | fix the type |
 

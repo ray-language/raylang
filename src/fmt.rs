@@ -1868,6 +1868,25 @@ fn fmt_pattern(p: &Pattern) -> String {
                 .collect();
             format!("{} {{ {} }}", name, fs.join(", "))
         }
+        // M310: tupla y literal.
+        PatternKind::Tuple(subs) => {
+            let ps: Vec<String> = subs.iter().map(fmt_pattern).collect();
+            format!("({})", ps.join(", "))
+        }
+        PatternKind::Literal(e) => fmt_literal_pattern(e),
+    }
+}
+
+/// M310: el texto de un literal en posición de patrón (sin `Cur`: un literal no lleva comentarios).
+fn fmt_literal_pattern(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Int(v, r) => fmt_int(*v, *r),
+        ExprKind::Float(f) => fmt_float(*f),
+        ExprKind::Str(t) => fmt_string_lit(t),
+        ExprKind::Char(c) => fmt_char_lit(*c),
+        ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => format!("-{}", fmt_literal_pattern(expr)),
+        _ => "_".to_string(),
     }
 }
 
@@ -2007,6 +2026,15 @@ mod tests {
 
     fn fmt(src: &str) -> String {
         format_source(src).expect("formatea")
+    }
+
+    /// M310: los patrones de tupla y literales (incluido el negativo y el string) son estables.
+    #[test]
+    fn tuple_and_literal_patterns_roundtrip() {
+        let src = "fn f(t: (int, string), n: int) -> int {\n    match (t) {\n        (0, \"a\") => 1,\n        (-1, s) => 2,\n        (n, _) => n,\n    }\n}\n";
+        assert_eq!(fmt(src), src);
+        let src2 = "fn g(c: char, b: bool) -> int {\n    match ((c, b)) {\n        ('a', true) => 1,\n        (_, false) => 0,\n        _ => 2,\n    }\n}\n";
+        assert_eq!(fmt(src2), src2);
     }
 
     #[test]

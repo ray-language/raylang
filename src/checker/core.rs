@@ -171,6 +171,13 @@ impl Checker {
             self.structs.insert(s.name.clone(), fields);
         }
 
+        // M309 (findings #52): un campo `dyn Trait` en un struct se valida ANTES de registrar los
+        // traits (que necesitan los tipos) → «trait not declared». Se adelantan solo los NOMBRES
+        // (con sus métodos, para la ambigüedad de `dyn A + B`); `register_traits_impls` los
+        // registra de verdad después.
+        for t in &program.traits {
+            self.traits.entry(t.name.clone()).or_insert_with(|| t.methods.clone());
+        }
         // --- Validar los tipos referenciados (ahora que todos están registrados con
         // su aridad), con los parámetros de cada definición en ámbito ---
         for e in &program.enums {
@@ -457,12 +464,15 @@ impl Checker {
     /// `self.methods` (`(tipo, método)` → función manglada, para la resolución por punto)
     /// e `self.impl_fn_self` (función manglada → tipo implementador, para `current_self`).
     pub(super) fn register_traits_impls(&mut self, program: &Program) -> Result<(), TypeError> {
-        // 1) Traits: nombres únicos (no chocan con tipos ni funciones) y métodos únicos.
+        // 1) Traits: nombres únicos (no chocan con tipos ni funciones) y métodos únicos. (Los
+        // nombres ya pueden estar en `self.traits` por la pre-pasada de M310: la unicidad se
+        // comprueba contra los vistos en ESTA pasada.)
+        let mut seen_traits: HashSet<&str> = HashSet::new();
         for t in &program.traits {
             if self.structs.contains_key(&t.name) || self.enum_names.contains(&t.name) {
                 return Err(self.err(t.line, t.col, format!("'{}' is already a type; it cannot also be a trait", t.name)));
             }
-            if self.traits.contains_key(&t.name) {
+            if !seen_traits.insert(&t.name) {
                 return Err(self.err(t.line, t.col, format!("trait '{}' declared twice", t.name)));
             }
             let mut seen = HashSet::new();
@@ -1449,18 +1459,25 @@ impl Checker {
     ///   - debe ser **exhaustivo**: cubrir todas las variantes o tener un catch-all.
     pub(super) fn check_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let scrut_ty = self.check_expr(scrutinee)?;
+        // M310 (findings #44/#53): el escrutinio ya no tiene que ser un enum — una tupla (patrones
+        // de tupla), un string/int/char/bool (patrones literales) o un struct también valen.
         let enum_name = match &scrut_ty {
-            Type::Enum(n, _) => n.clone(),
+            Type::Enum(n, _) => Some(n.clone()),
+            Type::Tuple(_) | Type::Int | Type::String | Type::Char | Type::Bool | Type::UInt(_) => None,
+            Type::Struct(n, _) if self.structs.contains_key(n) => None,
             other => return Err(self.err(scrutinee.line, scrutinee.col, format!(
-                "match requires an enum, but the scrutinee is {}", other
+                "match requires an enum, a tuple, a struct or a primitive value, but the scrutinee is {}", other
             ))),
         };
         if arms.is_empty() {
             return Err(self.err(line, col, "a match cannot be empty".into()));
         }
-        // Variantes del enum (para la exhaustividad). La σ de tipos ya no hace falta aquí:
+        // Variantes del enum (para el mensaje de exhaustividad). La σ de tipos ya no hace falta aquí:
         // `check_subpattern` la resuelve del tipo de cada sub-valor (M40.1c).
-        let variants = self.enums.get(&enum_name).unwrap_or_else(|| crate::ice!("the enum '{}' is not in the checker table", enum_name)).clone();
+        let variants: Vec<(String, Vec<Type>)> = enum_name
+            .as_ref()
+            .and_then(|n| self.enums.get(n).cloned())
+            .unwrap_or_default();
 
         let mut covered: HashSet<String> = HashSet::new();
         let mut catchall = false;
@@ -1548,17 +1565,24 @@ impl Checker {
             }
         }
 
-        // Exhaustividad: sin catch-all, deben estar TODAS las variantes.
+        // Exhaustividad: sin catch-all, la matriz de patrones (brazos sin guarda) debe agotar el tipo
+        // (M310: anidado de verdad — `Ok(Some(x)) / Ok(None) / Err(e)` ya no exige un `_`).
         if !catchall {
-            let missing: Vec<&str> = variants
-                .iter()
-                .map(|(v, _)| v.as_str())
-                .filter(|v| !covered.contains(*v))
-                .collect();
-            if !missing.is_empty() {
+            let rows: Vec<Vec<Pattern>> = arms.iter().filter(|a| a.guard.is_none()).map(|a| vec![a.pattern.clone()]).collect();
+            if !self.patterns_exhaust(&rows, std::slice::from_ref(&scrut_ty)) {
+                let missing: Vec<&str> = variants
+                    .iter()
+                    .map(|(v, _)| v.as_str())
+                    .filter(|v| !covered.contains(*v) && !arms.iter().any(|a| matches!(&a.pattern.kind, PatternKind::Variant { variant, .. } if variant == *v)))
+                    .collect();
+                if missing.is_empty() {
+                    return Err(self.err(line, col, format!(
+                        "non-exhaustive match on {}: some nested cases are not covered (add a '_' arm or cover every case)", scrut_ty
+                    )));
+                }
                 return Err(self.err(line, col, format!(
                     "non-exhaustive match on '{}': missing variants: {}",
-                    enum_name, missing.join(", ")
+                    enum_name.as_deref().unwrap_or("?"), missing.join(", ")
                 )));
             }
         }
@@ -1744,6 +1768,153 @@ impl Checker {
                 }
                 Ok(binds)
             }
+            // M310 (findings #53): patrón de tupla — el valor debe ser una tupla de la misma aridad.
+            PatternKind::Tuple(subs) => {
+                let elems = match ty {
+                    Type::Tuple(ts) => ts.clone(),
+                    other => return Err(self.err(pat.line, pat.col, format!(
+                        "the pattern is a tuple of {} element(s), but the value here is {}", subs.len(), other
+                    ))),
+                };
+                if elems.len() != subs.len() {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "the pattern is a tuple of {} element(s), but the value here is a tuple of {}", subs.len(), elems.len()
+                    )));
+                }
+                let mut binds = Vec::new();
+                for (sub, ety) in subs.iter().zip(&elems) {
+                    binds.extend(self.check_subpattern(sub, ety)?);
+                }
+                Ok(binds)
+            }
+            // M310 (findings #44): patrón literal — del mismo tipo que el valor; no liga nada.
+            PatternKind::Literal(e) => {
+                let lt = self.check_expr(e)?;
+                if lt != *ty {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "the literal pattern is {}, but the value here is {}", lt, ty
+                    )));
+                }
+                if matches!(lt, Type::Float) {
+                    return Err(self.err(pat.line, pat.col, "a float cannot be a match pattern (compare with a guard)".into()));
+                }
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// M310 (findings #53): exhaustividad REAL sobre patrones anidados (el algoritmo de la matriz
+    /// de patrones): `rows` son los patrones de los brazos sin guarda, `tys` los tipos de las
+    /// columnas. Una columna de enum se especializa por variante; una tupla se expande en sus
+    /// posiciones; un struct en sus campos; un tipo "infinito" (int/string/char…) solo se agota con
+    /// un comodín (los literales nunca lo agotan). Así `Ok(Some(x)) / Ok(None) / Err(e)` es
+    /// exhaustivo sin catch-all, y `(Ok(a), Ok(b)) / (Err(e), _) / (_, Err(e))` también.
+    fn patterns_exhaust(&self, rows: &[Vec<Pattern>], tys: &[Type]) -> bool {
+        if tys.is_empty() {
+            return !rows.is_empty();
+        }
+        let ty = self.resolve_type(&tys[0]);
+        let rest: Vec<Type> = tys[1..].to_vec();
+        let wild = |line: usize, col: usize| Pattern { kind: PatternKind::Wildcard, line, col };
+        let is_wild = |p: &Pattern| matches!(p.kind, PatternKind::Wildcard | PatternKind::Binding(_));
+        // Una fila toda de comodines casa con cualquier valor: agotado. Y si ninguna fila tiene un
+        // constructor en la primera columna, no hay nada que expandir: se pasa a las siguientes.
+        // (Sin este corte, un tipo RECURSIVO —`enum List { Cons(int, List), Nil }`— con un comodín
+        // se expandiría sin fin.)
+        if rows.iter().any(|r| r.iter().all(is_wild)) {
+            return true;
+        }
+        if rows.iter().all(|r| is_wild(&r[0])) {
+            let spec: Vec<Vec<Pattern>> = rows.iter().map(|r| r[1..].to_vec()).collect();
+            return self.patterns_exhaust(&spec, &rest);
+        }
+        match &ty {
+            Type::Enum(name, targs) => {
+                let Some(variants) = self.enums.get(name).cloned() else { return false };
+                let tparams = self.enum_tparams.get(name).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                for (vname, payload) in &variants {
+                    let payload: Vec<Type> = payload.iter().map(|t| subst(t, &sigma)).collect();
+                    let mut spec: Vec<Vec<Pattern>> = Vec::new();
+                    for row in rows {
+                        let head = &row[0];
+                        let mut new_row: Vec<Pattern> = match &head.kind {
+                            PatternKind::Variant { variant, subpatterns, .. } if variant == vname => subpatterns.clone(),
+                            PatternKind::Variant { .. } => continue,
+                            _ if is_wild(head) => payload.iter().map(|_| wild(head.line, head.col)).collect(),
+                            _ => continue,
+                        };
+                        new_row.extend(row[1..].iter().cloned());
+                        spec.push(new_row);
+                    }
+                    let mut sub_tys = payload;
+                    sub_tys.extend(rest.iter().cloned());
+                    if !self.patterns_exhaust(&spec, &sub_tys) {
+                        return false;
+                    }
+                }
+                true
+            }
+            Type::Tuple(elems) => {
+                let mut spec: Vec<Vec<Pattern>> = Vec::new();
+                for row in rows {
+                    let head = &row[0];
+                    let mut new_row: Vec<Pattern> = match &head.kind {
+                        PatternKind::Tuple(subs) => subs.clone(),
+                        _ if is_wild(head) => elems.iter().map(|_| wild(head.line, head.col)).collect(),
+                        _ => continue,
+                    };
+                    new_row.extend(row[1..].iter().cloned());
+                    spec.push(new_row);
+                }
+                let mut sub_tys = elems.clone();
+                sub_tys.extend(rest.iter().cloned());
+                self.patterns_exhaust(&spec, &sub_tys)
+            }
+            Type::Struct(name, targs) if self.structs.contains_key(name) => {
+                let fields = self.structs.get(name).cloned().unwrap_or_default();
+                let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                let mut spec: Vec<Vec<Pattern>> = Vec::new();
+                for row in rows {
+                    let head = &row[0];
+                    let mut new_row: Vec<Pattern> = match &head.kind {
+                        PatternKind::Struct { fields: pf, .. } => fields
+                            .iter()
+                            .map(|(fname, _)| pf.iter().find(|(n, _)| n == fname).map(|(_, p)| p.clone()).unwrap_or_else(|| wild(head.line, head.col)))
+                            .collect(),
+                        _ if is_wild(head) => fields.iter().map(|_| wild(head.line, head.col)).collect(),
+                        _ => continue,
+                    };
+                    new_row.extend(row[1..].iter().cloned());
+                    spec.push(new_row);
+                }
+                let mut sub_tys: Vec<Type> = fields.iter().map(|(_, t)| subst(t, &sigma)).collect();
+                sub_tys.extend(rest.iter().cloned());
+                self.patterns_exhaust(&spec, &sub_tys)
+            }
+            Type::Bool => {
+                // bool: `true` y `false` juntos agotan la columna (además del comodín).
+                for want in [true, false] {
+                    let spec: Vec<Vec<Pattern>> = rows
+                        .iter()
+                        .filter(|r| match &r[0].kind {
+                            PatternKind::Literal(Expr { kind: ExprKind::Bool(b), .. }) => *b == want,
+                            _ => is_wild(&r[0]),
+                        })
+                        .map(|r| r[1..].to_vec())
+                        .collect();
+                    if !self.patterns_exhaust(&spec, &rest) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => {
+                // int/string/char/…: solo un comodín agota la columna (los literales no).
+                let spec: Vec<Vec<Pattern>> = rows.iter().filter(|r| is_wild(&r[0])).map(|r| r[1..].to_vec()).collect();
+                self.patterns_exhaust(&spec, &rest)
+            }
         }
     }
 
@@ -1773,9 +1944,14 @@ impl Checker {
                 }
                 // Si no cubre todo (un sub-patrón anidado), no se marca: sigue haciendo falta un fallback.
             }
-            // Un patrón de struct nunca es de primer nivel (el escrutinio de un match es un enum); no
-            // marca cobertura. Este brazo existe solo para la exhaustividad del `match` de Rust.
-            PatternKind::Struct { .. } => {}
+            // Un patrón de struct de primer nivel (escrutinio struct, M310) o una tupla irrefutable
+            // cubren todo; un literal no cubre nada (la exhaustividad real la decide `patterns_exhaust`).
+            PatternKind::Struct { .. } | PatternKind::Tuple(_) => {
+                if is_irrefutable(pat) {
+                    *catchall = true;
+                }
+            }
+            PatternKind::Literal(_) => {}
         }
         Ok(())
     }

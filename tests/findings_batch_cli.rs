@@ -448,3 +448,77 @@ fn output_dir_self_import_and_required_raylang() {
     assert_eq!(code, 0);
     assert_eq!(out, "1\n");
 }
+
+/// #44/#52/#53 (M310): patrones de tupla y literales (anidados en variantes), exhaustividad por
+/// matriz y `dyn Trait` como campo de struct, con la misma salida en los tres motores.
+#[test]
+fn tuple_and_literal_patterns_run_on_all_engines() {
+    let d = tmp("m310_patterns");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"enum Shape { Circle(int), Rect(int, int), Named(string) }
+trait Greeter { fn hi(self) -> string; }
+struct P { x: int }
+impl Greeter for P { fn hi(self) -> string { "p" } }
+struct Holder { g: dyn Greeter }
+
+fn classify(n: int) -> string {
+    match (n) { 0 => "zero", -1 => "minus", _ => "many" }
+}
+
+fn pair(t: (int, string)) -> string {
+    match (t) {
+        (0, "a") => "zero-a",
+        (0, s) => "zero-" + s,
+        (n, "b") => "b-" + n.to_string(),
+        (n, s) => s + n.to_string(),
+    }
+}
+
+fn nested(o: Option<Shape>) -> string {
+    match (o) {
+        Option.Some(Shape.Circle(0)) => "dot",
+        Option.Some(Shape.Circle(r)) => "circle " + r.to_string(),
+        Option.Some(Shape.Rect(w, 0)) => "line " + w.to_string(),
+        Option.Some(Shape.Rect(w, h)) => "rect " + (w * h).to_string(),
+        Option.Some(Shape.Named("x")) => "the x",
+        Option.Some(Shape.Named(nm)) => "named " + nm,
+        Option.None => "none",
+    }
+}
+
+fn flags(b: (bool, bool)) -> int {
+    match (b) { (true, true) => 3, (true, false) => 2, (false, true) => 1, (false, false) => 0 }
+}
+
+fn opts(o: (Option<int>, Option<int>)) -> int {
+    match (o) {
+        (Option.Some(a), Option.Some(b)) => a + b,
+        (Option.Some(a), Option.None) => a,
+        (Option.None, Option.Some(b)) => b,
+        (Option.None, Option.None) => 0,
+    }
+}
+
+fn main() -> int {
+    let h = Holder { g: P { x: 1 } };
+    print(h.g.hi());
+    print(h);
+    print(classify(0) + classify(-1) + classify(7));
+    print(pair((0, "a")) + pair((0, "z")) + pair((5, "b")) + pair((5, "q")));
+    print(nested(Option.Some(Shape.Circle(0))) + nested(Option.Some(Shape.Circle(3))));
+    print(nested(Option.Some(Shape.Rect(4, 0))) + nested(Option.Some(Shape.Rect(4, 5))));
+    print(nested(Option.Some(Shape.Named("x"))) + nested(Option.Some(Shape.Named("y"))) + nested(Option.None));
+    let n: Option<int> = Option.None;
+    print(flags((true, true)) + flags((false, true)) + opts((Option.Some(1), Option.Some(2))) + opts((n, Option.Some(5))) + opts((n, n)));
+    match ('a') { 'a' => 0, _ => 1 }
+}
+"#,
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "p\nHolder { g: <dyn Greeter> }\nzerominusmany\nzero-azero-zb-5q5\ndotcircle 3\nline 4rect 20\nthe xnamed ynone\n12\n",
+    );
+}
+

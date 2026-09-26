@@ -43,6 +43,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     nativo) — el estado va a una base de datos o un actor; los primitivos no pueden nombrar
     funciones; `signals()` y SIGWINCH.
 
+- **Patrones de tupla y literales, exhaustividad real y `dyn` en campos** (M310,
+  `RAYLANG-FINDINGS.md` #44/#52/#53).
+  - **`match` sobre tuplas, structs y primitivos**: `match ((method, path)) { ("GET", "/") => …,
+    (m, _) => … }`, `match (n) { 0 => …, -1 => …, _ => … }`, y literales `int`/`string`/`char`/
+    `bool` dentro de un payload (`Shape.Rect(w, 0)`). VM, intérprete, nativo y `ray fmt`.
+  - **Exhaustividad por matriz**: `Ok(Some(v)) / Ok(None) / Err(e)` ya no exige un `_`; el checker
+    señala qué falta con «some nested cases are not covered». Un `int`/`string`/`char` sigue
+    necesitando `_`; un `bool`, `true` y `false`.
+  - **`dyn Trait` como campo de struct** (el trait puede declararse después) y **rutas
+    calificadas** `dyn m.Trait` / `impl m.Trait for T`. Un valor `dyn` se muestra `<dyn Trait>`
+    en todos los motores (antes la VM enseñaba el struct interno `__dyn_…`).
+  - Nativo: un `match` con patrones diferidos (variante anidada de usuario o literal de string) lleva
+    su comodín inalcanzable (rustc no ve la cobertura que el checker probó).
+
 ## 1.27.12 — 2026-09-26
 
 - **Los ocho bugs del barrido de `ray-apps` a 1.27.11** (M298, `RAYLANG-FINDINGS.md` del 25 sep

@@ -828,6 +828,32 @@ match (evento) {
 }
 ```
 
+**Patrones de tupla y literales** (M310). El escrutinio no tiene por qué ser un enum: una tupla se
+destructura posición a posición, y un `int`/`string`/`char`/`bool` (también anidados en un payload)
+casan contra un literal. La exhaustividad es real, no conservadora: cubre cada combinación y no hace
+falta el `_`; sobre un `int`/`string`/`char` sí (solo el comodín los agota; un `bool` también con
+`true` y `false`).
+
+```rust
+match ((method, path)) {
+    ("GET", "/") => home(),
+    ("GET", p) => page(p),
+    (m, _) => not_allowed(m),                // el comodín final: string no se agota con literales
+}
+
+match (r) {                                  // exhaustivo SIN `_`: la matriz cubre los tres casos
+    Result.Ok(Option.Some(v)) => v,
+    Result.Ok(Option.None) => 0,
+    Result.Err(_) => 0 - 1,
+}
+
+match (shape) {
+    Shape.Rect(w, 0) => "line " + w.to_string(),   // literal dentro del payload
+    Shape.Rect(w, h) => "rect",
+    Shape.Circle(_) => "circle",
+}
+```
+
 Un brazo puede **salir de la función** con `return` como expresión (M220): `Option.None =>
 return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así que no fija el tipo del
 `match` (lo fija el otro brazo). Lo mismo en un `else` (`let v = if (ok) { x } else { return 99 };`).
@@ -3178,9 +3204,10 @@ Cosas que sorprenden viniendo de otros lenguajes:
   compilador los rechaza, y dentro de una función anónima están "fuera del bucle". Los patrones
   que suelen evitarlos (extraer a función, búsquedas de la stdlib, `.take(n)`) están en §4, "Salir
   temprano".
-- **`match` es solo para enums.** Destructura `Option`/`Result`/tus enums; **no** hay patrones de literal ni
-  `match` sobre `int`/`bool`/`string`. Para despachar sobre un primitivo, usa `if/else`. Las guardas
-  (`patrón if cond`) sí permiten condiciones dentro de un `match` de enum.
+- **`match` casa enums, tuplas, structs y primitivos** (M310): `match (n) { 0 => …, _ => … }`,
+  `match ((m, p)) { ("GET", "/") => …, _ => … }` y literales dentro de un payload
+  (`Shape.Rect(w, 0)`). Un `int`/`string`/`char` siempre necesita el brazo `_` (los literales no
+  los agotan); las guardas (`patrón if cond`) siguen valiendo para el resto de condiciones.
 - **Los brazos de `match` con cuerpo de bloque llevan coma.** `Option.Some(v) => { hacer(v); },` — la coma
   detrás de `}` es necesaria.
 - **El escrutinio de `match` va entre paréntesis** (`match (e) { … }`), como `if`/`while`. Evita la

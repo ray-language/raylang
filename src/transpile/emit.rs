@@ -1721,7 +1721,12 @@ impl Transpiler {
             writeln!(out, "impl RayShow for {} {{ fn ray_show(&self) -> String {{ \"<fn>\".to_string() }} }}", ft).unwrap();
         }
         for s in &prog.structs {
-            if s.name == "Iter" || s.name.starts_with("__dyn_") { continue; }
+            if s.name == "Iter" { continue; }
+            // M310 (findings #52): un `dyn Trait` se muestra opaco (`<dyn T>`), como en la VM.
+            if let Some(tr) = s.name.strip_prefix("__dyn_") {
+                writeln!(out, "impl RayShow for Rc<std::cell::RefCell<{}>> {{ fn ray_show(&self) -> String {{ \"<dyn {}>\".to_string() }} }}", mangle(&s.name), tr.replace("__", " + ")).unwrap();
+                continue;
+            }
             let gens = generic_decl(&s.type_params);
             let sfx = type_args(&s.type_params);
             // El nombre del TIPO en Rust va manglado (multi-módulo); en la cadena de Display, el nombre
@@ -1794,9 +1799,14 @@ impl Transpiler {
             self.classify(&t)
         };
         // Option/Result son NATIVOS de Rust (no `Rc<E>`): se matchea sobre `&opt`, no `&*Rc`.
-        let native = match &scrut_ty {
-            Type::Enum(n, _) => n == "Option" || n == "Result",
-            other => return Err(format!("match over {:?} (an enum was expected)", other)),
+        // M310: una tupla se matchea por referencia (`&(a, b)`), un string por `&*Rc<str>` (los
+        // literales `"x"` casan con `&str`) y un primitivo Copy por valor.
+        let prefix = match &scrut_ty {
+            Type::Enum(n, _) if n == "Option" || n == "Result" => "; match &",
+            Type::Enum(..) | Type::String => "; match &*",
+            Type::Tuple(_) | Type::Struct(..) => "; match &",
+            Type::Int | Type::Char | Type::Bool | Type::UInt(_) => "; match ",
+            other => return Err(format!("match over {:?} (an enum, tuple, struct or primitive was expected)", other)),
         };
         let temp = format!("__scrut{}", self.match_temp);
         self.match_temp += 1;
@@ -1804,9 +1814,12 @@ impl Transpiler {
         out.push_str(&temp);
         out.push_str(" = ");
         self.emit_expr(out, scrutinee)?;
-        out.push_str(if native { "; match &" } else { "; match &*" });
+        out.push_str(prefix);
         out.push_str(&temp);
         out.push_str(" {\n");
+        // M310: si algún brazo lleva guarda de Rust (patrón diferido o literal de string), rustc no
+        // ve la cobertura que el checker sí probó (`patterns_exhaust`) → brazo comodín inalcanzable.
+        let mut any_guarded = false;
         for arm in arms {
             self.scopes.push(HashMap::new());
             let mut binds: Vec<(String, Type)> = Vec::new();
@@ -1835,7 +1848,7 @@ impl Transpiler {
             // nivel (las anidadas más adentro van dentro de esa misma prueba).
             let mut conds: Vec<String> = Vec::new();
             for (temp, ty, pat) in &deferred {
-                conds.push(self.nested_test(&format!("&**{temp}"), pat, ty, &mut pn)?);
+                conds.push(self.deferred_test(temp, pat, ty, &mut pn)?);
             }
             // Prólogo del brazo: recuperar los bindings diferidos (worklist) y clonar TODOS los
             // bindings a valores propios. Los bindings se emiten manglados (pueden ser temps `$…` del
@@ -1848,6 +1861,9 @@ impl Transpiler {
             let mut work = deferred.clone();
             while !work.is_empty() {
                 let (dtemp, dty, dpat) = work.remove(0);
+                if matches!(&dpat.kind, PatternKind::Literal(_)) {
+                    continue; // M310: un literal diferido no liga nada (ya se probó en la guarda)
+                }
                 let mut patstr = String::new();
                 let mut inner_binds: Vec<(String, Type)> = Vec::new();
                 let mut inner_def: Vec<(String, Type, Pattern)> = Vec::new();
@@ -1866,6 +1882,7 @@ impl Transpiler {
                 conds.push(format!("{{ {prologue} {gs} }}"));
             }
             if !conds.is_empty() {
+                any_guarded = true;
                 out.push_str(" if ");
                 out.push_str(&conds.join(" && "));
             }
@@ -1874,6 +1891,9 @@ impl Transpiler {
             self.emit_expr(out, &arm.body)?;
             out.push_str("\n}\n");
             self.scopes.pop();
+        }
+        if any_guarded {
+            out.push_str("_ => unreachable!(\"match exhaustiveness proven by the checker\"),\n");
         }
         out.push_str("} }");
         Ok(())
@@ -1952,8 +1972,48 @@ impl Transpiler {
             PatternKind::Struct { .. } => {
                 return Err("struct destructuring pattern is not supported".into())
             }
+            // M310: tupla → patrón de tupla de Rust, con los tipos de cada posición.
+            PatternKind::Tuple(subs) => {
+                let elems = match normalize_type(expected) {
+                    Type::Tuple(ts) => ts,
+                    other => return Err(format!("tuple pattern over {:?}", other)),
+                };
+                out.push('(');
+                for (i, sp) in subs.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.emit_pattern(out, sp, &elems[i], binds, deferred, pn, false)?;
+                }
+                out.push(')');
+            }
+            // M310: literal — int/char/bool tal cual; un string ANIDADO (`Rc<str>` dentro de un
+            // payload) va como temporal diferido con su prueba `== "lit"` en la guarda; en el
+            // nivel del escrutinio el `match &*s` ya expone un `&str`.
+            PatternKind::Literal(e) => {
+                let is_str = matches!(e.kind, ExprKind::Str(_));
+                if is_str && !top {
+                    let temp = format!("__rt_p{}", *pn);
+                    *pn += 1;
+                    out.push_str(&temp);
+                    deferred.push((temp, expected.clone(), pat.clone()));
+                    return Ok(());
+                }
+                out.push_str(&rust_literal_pattern(e)?);
+            }
         }
         Ok(())
+    }
+
+    /// M310: prueba de un patrón diferido que es un LITERAL de string (`&**temp == "lit"`); el
+    /// resto sigue por `matches!`.
+    fn deferred_test(&self, temp: &str, pat: &Pattern, ty: &Type, pn: &mut usize) -> Result<String, String> {
+        if let PatternKind::Literal(e) = &pat.kind
+            && matches!(e.kind, ExprKind::Str(_))
+        {
+            return Ok(format!("&**{temp} == {}", rust_literal_pattern(e)?));
+        }
+        self.nested_test(&format!("&**{temp}"), pat, ty, pn)
     }
 
     /// M287: los payloads de una variante (Option/Result → args del tipo esperado; enum de usuario →
@@ -2033,6 +2093,32 @@ impl Transpiler {
                 Ok(out)
             }
             PatternKind::Struct { .. } => Err("struct destructuring pattern is not supported".into()),
+            // M310: tupla y literal en una prueba diferida (`matches!`).
+            PatternKind::Tuple(subs) => {
+                let elems = match normalize_type(expected) {
+                    Type::Tuple(ts) => ts,
+                    other => return Err(format!("tuple pattern over {:?}", other)),
+                };
+                let mut out = String::from("(");
+                for (i, sp) in subs.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&self.test_pattern(sp, &elems[i], pn, conds, false)?);
+                }
+                out.push(')');
+                Ok(out)
+            }
+            PatternKind::Literal(e) => {
+                if matches!(e.kind, ExprKind::Str(_)) {
+                    // Un `Rc<str>` no casa con un literal en un patrón de Rust: prueba por igualdad.
+                    let temp = format!("__rt_q{}", *pn);
+                    *pn += 1;
+                    conds.push(format!("&**{temp} == {}", rust_literal_pattern(e)?));
+                    return Ok(temp);
+                }
+                rust_literal_pattern(e)
+            }
         }
     }
 
@@ -2184,9 +2270,17 @@ impl Transpiler {
                                 out.insert(x.clone(), ty);
                             }
                             // M287: un subpatrón de variante también liga (recursivo).
-                            PatternKind::Variant { .. } => out.extend(self.pattern_binding_types(Some(&ty), sp)),
+                            PatternKind::Variant { .. } | PatternKind::Tuple(_) => out.extend(self.pattern_binding_types(Some(&ty), sp)),
                             _ => {}
                         }
+                    }
+                }
+            }
+            // M310: tupla — cada posición con su tipo.
+            PatternKind::Tuple(subs) => {
+                if let Some(Type::Tuple(ts)) = scrut_ty.map(|t| self.classify(t)) {
+                    for (sp, ty) in subs.iter().zip(ts) {
+                        out.extend(self.pattern_binding_types(Some(&ty), sp));
                     }
                 }
             }
@@ -2408,3 +2502,17 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
         StmtKind::Expr(e) => split_uses_expr(name, e, ks),
     }
 }
+
+/// M310: el literal de un patrón como patrón de Rust (`5i64` no vale en un patrón: `5`; char/bool
+/// tal cual; string como `"lit"` — casa con `&str`).
+fn rust_literal_pattern(e: &Expr) -> Result<String, String> {
+    Ok(match &e.kind {
+        ExprKind::Int(v, _) => v.to_string(),
+        ExprKind::Char(c) => format!("{c:?}"),
+        ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Str(t) => format!("{t:?}"),
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => format!("-{}", rust_literal_pattern(expr)?),
+        other => return Err(format!("unsupported literal pattern {:?}", other)),
+    })
+}
+

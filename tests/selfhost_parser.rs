@@ -239,6 +239,12 @@ fn dump_pattern(pat: &Pattern) -> String {
             let fs: String = fields.iter().map(|(f, p)| format!(" ({} {})", f, dump_pattern(p))).collect();
             format!("(struct-pat {}{}){}", name, fs, pp)
         }
+        // M310: patrones de tupla y literales (fuera del corpus auto-alojado).
+        PatternKind::Tuple(subs) => {
+            let ps: String = subs.iter().map(|p| format!(" {}", dump_pattern(p))).collect();
+            format!("(tuple-pat{}){}", ps, pp)
+        }
+        PatternKind::Literal(e) => format!("(lit-pat {}){}", dump_expr(e), pp),
     }
 }
 

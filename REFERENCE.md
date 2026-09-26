@@ -100,6 +100,7 @@ Reservadas (no pueden usarse como identificadores):
 | `\|>` | pipeline: `x \|> f(a)` ≡ `f(x, a)` |
 | `@` | anotaciones: `@test`, `@derive(…)` |
 | `_` | comodín en patrones; descarte en `let _ = …` |
+| `(p, q)` / `0` `"s"` `'c'` `true` | patrón de tupla y patrones literales en `match` (M310; también dentro de un payload: `Shape.Rect(w, 0)`); la exhaustividad se comprueba recursivamente y un `int`/`string`/`char` siempre necesita `_` |
 | `${…}` | interpolación dentro de un literal de string |
 | `//` `///` | comentario de línea; comentario de documentación (`ray doc`, hover del LSP) |
 | `b"…"` | literal de bytes |
@@ -140,7 +141,7 @@ Reservadas (no pueden usarse como identificadores):
 | `Option<T>` / `Result<T, E>` | del prelude; la ausencia y el error como valores (no hay `null` ni excepciones) |
 | `Channel<T>` / `Task<T>` | concurrencia (§9 de la SPEC) |
 | `struct` / `enum` propios | semántica de referencia (struct/enum); genéricos con bounds (`struct Caja<T: Show>`) |
-| `dyn Trait`, `dyn A + B` | trait objects (despacho dinámico); *upcasting* a un subconjunto de traits |
+| `dyn Trait`, `dyn A + B` | trait objects (despacho dinámico); *upcasting* a un subconjunto de traits; vale como campo de struct y admite rutas calificadas (`dyn m.Trait`, `impl m.Trait for T`, M310); se muestra `<dyn Trait>` |
 | `Iter<T>` | iterador perezoso (respaldado por closure) |
 | `ptr` | puntero opaco del FFI (no desreferenciable desde raylang) |
 | `Set<T>` / `Deque<T>` / `StringBuilder` | de `std/collections` (§10) |

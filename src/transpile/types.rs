@@ -311,6 +311,10 @@ pub(super) fn type_args(tparams: &[String]) -> String {
 /// ligando cada variable en `subst`. Asimétrico: las variables son las de la firma llamada (`tparams`).
 pub(super) fn unify(param: &Type, arg: &Type, tparams: &[String], subst: &mut HashMap<String, Type>) {
     let is_var = |n: &str| tparams.iter().any(|t| t == n);
+    // M316 (findings #92/#93): el param se NORMALIZA antes de casar — la firma guarda `Result<T, E>`
+    // como `Struct("Result")` y el tipo del argumento llega como `Enum("Result")`; sin esto un
+    // closure `fn() -> Result<Resp, string>` no ligaba `T`/`E` y el `let` sin anotar quedaba sin tipo.
+    let param = &normalize_type(param);
     match param {
         Type::Var(n) if is_var(n) => {
             subst.entry(n.clone()).or_insert_with(|| arg.clone());
@@ -339,15 +343,10 @@ pub(super) fn unify(param: &Type, arg: &Type, tparams: &[String], subst: &mut Ha
         }
         // Structs/enums genéricos (`Iter<T>`, `Caja<T>`, `Option<T>`) y tuplas: unificar arg-a-arg, para
         // resolver el `T` a través de cadenas de adaptadores (`iter().enumerate()` → `Iter<(int, T)>`).
-        Type::Struct(n, pargs) if !pargs.is_empty() => {
-            if let Type::Struct(an, aargs) = normalize_type(arg) {
-                if *n == an && pargs.len() == aargs.len() {
-                    for (p, a) in pargs.iter().zip(&aargs) { unify(p, a, tparams, subst); }
-                }
-            }
-        }
-        Type::Enum(n, pargs) => {
-            if let Type::Enum(an, aargs) = normalize_type(arg) {
+        // M316: un enum de usuario también puede llegar como `Struct` por un lado y `Enum` por el otro
+        // (la firma sin clasificar contra un tipo ya clasificado): casa por NOMBRE, no por variante.
+        Type::Struct(n, pargs) | Type::Enum(n, pargs) if !pargs.is_empty() => {
+            if let Type::Struct(an, aargs) | Type::Enum(an, aargs) = normalize_type(arg) {
                 if *n == an && pargs.len() == aargs.len() {
                     for (p, a) in pargs.iter().zip(&aargs) { unify(p, a, tparams, subst); }
                 }

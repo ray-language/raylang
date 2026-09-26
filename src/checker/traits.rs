@@ -324,11 +324,13 @@ pub(super) fn struct_tojson_body(a: &Annotation, fields: &[(String, Type)]) -> R
     if fields.is_empty() {
         return Ok("        \"{}\"".to_string());
     }
+    // M316 (findings #87): la forma COMPACTA de `json.stringify` (`{"k":1,"a":[1,2]}`) — un solo
+    // formato JSON en todo raylang (antes el derive y `json.obj()` escribían `{"k": 1}`).
     let mut parts: Vec<String> = Vec::new();
     for (n, ty) in fields {
-        parts.push(format!("\"\\\"{n}\\\": \" + {}", render_to_json(a, &format!("self.{n}"), ty)?));
+        parts.push(format!("\"\\\"{n}\\\":\" + {}", render_to_json(a, &format!("self.{n}"), ty)?));
     }
-    Ok(format!("        \"{{\" + {} + \"}}\"", parts.join(" + \", \" + ")))
+    Ok(format!("        \"{{\" + {} + \"}}\"", parts.join(" + \",\" + ")))
 }
 
 /// Construye y parsea `impl Trait for <name> {{ <firma> {{ body }} }}` para un derive.

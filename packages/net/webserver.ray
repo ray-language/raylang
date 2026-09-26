@@ -203,6 +203,15 @@ pub fn local_token_ok(req: Request, token: string) -> bool {
     ok
 }
 
+// M316 (findings #85): la misma comprobación diciendo POR DÓNDE llegó — un servidor con bucle de
+// accept propio siembra la cookie cuando el token vino en `?ray_token=`, sin re-parsear la query.
+/// Like `local_token_ok`, also telling how the token arrived: `(accepted, via_query)`.
+/// `via_query` is true only when the accepted token came in `?ray_token=` (the header and the
+/// cookie do not need seeding); pair it with `token_cookie` to set the `ray_local` cookie.
+pub fn local_token_via(req: Request, token: string) -> (bool, bool) {
+    local_token_check(req, token)
+}
+
 // M297: ¿trae el token local? Devuelve (aceptada, llegó-por-query). Comparación en tiempo constante.
 fn local_token_check(req: Request, token: string) -> (bool, bool) {
     let want = token.to_bytes();
@@ -1296,13 +1305,31 @@ fn read_with_deadline(conn: int, deadline: int) -> Result<bytes, string> {
 /// the connection before sending the full declared body, or if reading the whole request
 /// takes longer than `read_timeout_millis`.
 pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string> {
+    match (read_request_carry(conn, limits, b"")) {
+        Result.Ok(pair) => Result.Ok(pair.0),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// M316 (findings #81): la lectura con ARRASTRE. `carry` son los octetos que la lectura anterior
+// recibió de más (una petición pipelineada en el mismo `write` del cliente); devuelve la petición y
+// lo que sobra tras su cuerpo, para que el bucle keep-alive no lo pierda (antes, dos peticiones en
+// una escritura recibían UNA respuesta). Un cuerpo chunked consume su trozo y no arrastra.
+/// Like `read_request_limits`, with the bytes left over by the previous request on the same
+/// connection (`carry`): returns the request and the bytes that follow its body (the start of a
+/// pipelined request, or empty). For servers with their own keep-alive loop.
+pub fn read_request_carry(
+    conn: int,
+    limits: Limits,
+    carry: bytes
+) -> Result<(Request, bytes), string> {
     // El plazo total: instante monotónico en que la lectura de ESTA petición vence (0 = sin plazo).
     let deadline: int = if (limits.read_timeout_millis > 0) {
         time.monotonic() + limits.read_timeout_millis
     } else {
         0
     };
-    var acc: bytes = b"";
+    var acc: bytes = carry;
     var sep: int = 0 - 1;
     var start: int = 0;
     var follow: bool = true;
@@ -1405,6 +1432,8 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
 
             // M56.8: un cuerpo `Transfer-Encoding: chunked` se decodifica (antes llegaba vacío en
             // silencio). Tiene prioridad sobre Content-Length (RFC 7230 §3.3.3).
+            // M316: lo que sobra tras el cuerpo (el arrastre para la siguiente petición).
+            var rest: bytes = b"";
             var chunked: bool = false;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
@@ -1460,13 +1489,19 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                                     }
                                 }
                                 if (body.len() > n) {
+                                    rest = body.sub_bytes(n, body.len());
                                     body = body.sub_bytes(0, n);
                                 }
                             },
                             Option.None => { },
                         }
                     },
-                    Option.None => { },
+                    Option.None => {
+                        // Sin Content-Length ni chunked no hay cuerpo (RFC 7230 §3.3.3): lo que
+                        // vino tras las cabeceras es la SIGUIENTE petición.
+                        rest = body;
+                        body = b"";
+                    },
                 }
             }
 
@@ -1480,17 +1515,16 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 Result.Ok(a) => a,
                 Result.Err(_) => "",
             };
-            Result.Ok(
-                Request {
-                    method: method,
-                    path: path,
-                    query: query,
-                    version: version,
-                    headers: headers,
-                    body: body,
-                    remote: remote
-                }
-            )
+            let req: Request = Request {
+                method: method,
+                path: path,
+                query: query,
+                version: version,
+                headers: headers,
+                body: body,
+                remote: remote
+            };
+            Result.Ok((req, rest))
         },
     }
 }
@@ -1948,9 +1982,13 @@ fn wants_close(req: Request) -> bool {
 // fibra): un panic responde 500 y cierra, sin fugar nada y sin cruzar de hilo.
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     var follow: bool = true;
+    // M316 (findings #81): los octetos sobrantes de la petición anterior (pipelining HTTP/1.1).
+    var carry: bytes = b"";
     while (follow) {
-        match (read_request_limits(conn, limits)) {
-            Result.Ok(req) => {
+        match (read_request_carry(conn, limits, carry)) {
+            Result.Ok(pair) => {
+                let req: Request = pair.0;
+                carry = pair.1;
                 let close: bool = wants_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
                 let is_head: bool = req.method == "HEAD";

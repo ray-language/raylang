@@ -836,13 +836,13 @@ pub fn obj() -> Obj {
 
 /// Adds a field (any `ToJson` value: primitives, derived structs, nested `Obj`/`Arr`). Chainable.
 pub fn field<T: ToJson>(o: Obj, key: string, v: T) -> Obj {
-    o.parts.push(stringify(Json.JStr(key)) + ": " + v.to_json());
+    o.parts.push(stringify(Json.JStr(key)) + ":" + v.to_json());
     o
 }
 
-/// The object as a JSON document.
+/// The object as a JSON document, in the same compact form as `stringify` (`{"k":1,"a":[1,2]}`).
 pub fn render(o: Obj) -> string {
-    "{" + join(o.parts, ", ") + "}"
+    "{" + join(o.parts, ",") + "}"
 }
 
 /// Starts an empty JSON array.
@@ -870,7 +870,7 @@ pub fn list<T: ToJson>(vs: [T]) -> Arr {
 
 /// The array as a JSON document.
 pub fn render_arr(a: Arr) -> string {
-    "[" + join(a.items, ", ") + "]"
+    "[" + join(a.items, ",") + "]"
 }
 
 impl ToJson for Obj {

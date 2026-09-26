@@ -190,6 +190,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // M315: builtins usados como valor → closure que los llama (tras UFCS: el sintético no debe
     // caer en las tablas por posición de las bajadas anteriores).
     lower_builtin_values(program, &checker.builtin_value_sites);
+    // M316 (findings #79): `print` de tuplas por su diccionario `Show` (antes que el resto: el
+    // bloque sintético lleva el argumento original dentro y las demás bajadas lo recorren).
+    lower_print_shows(program, &checker.print_show_sites);
     // Paso 3.4 (M28.2): bajar los `?` que convierten el error — `expr?` (con `impl From<E1> for E2`)
     // a un `match` que aplica la conversión en la rama de error. Front-end puro: el `?` sin conversión
     // sigue siendo nativo; solo los sitios registrados se reescriben. Antes que el resto de bajadas,
@@ -709,6 +712,8 @@ struct Checker {
     /// (`xs.map(to_string)`): posición del identificador → (builtin, tipos de los params, retorno).
     /// El lowering los reescribe a un closure `fn(x: A) -> R { builtin(x) }`.
     builtin_value_sites: HashMap<(usize, usize), (String, Vec<Type>, Type)>,
+    /// M316 (findings #79): `print`/`eprint` cuyo argumento contiene una tupla → su diccionario `Show`.
+    print_show_sites: HashMap<(usize, usize), Expr>,
     /// Tabla de resolución de métodos de trait (M9): `(clave_de_tipo, método)` → nombre
     /// manglado de la función que lo implementa. La clave de tipo es el nombre del
     /// struct/enum o el primitivo (ver `type_key`). Un mismo `(tipo, método)` solo puede

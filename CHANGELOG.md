@@ -4,6 +4,40 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El cuarto barrido de `ray-apps`: la revisión de 1.27.13/1.27.14** (M316,
+  `RAYLANG-FINDINGS.md` #76–#93).
+  - **Nativo** (#92 —regresión de 1.27.14—, #93, #76, #78, #77, #79): un `let` sin anotar con el
+    resultado de una función genérica que recibe un closure vuelve a compilar (la unificación
+    normaliza `Result<T, E>` y el turbofish no emite genéricos del callee); un campo de ese valor
+    concatenado ya no muere con «unknown return type of '__concat'»; un canal guardado en una tupla
+    se usa y se cierra (`send(s.1, v)`); `if (c) { [] } else { [3, 4] }` toma el tipo de la otra
+    rama; un valor-función calculado (`run(mk(2))`) hacia un parámetro que cruza a `spawn` se
+    rechaza en raylang con el rodeo, no con tres E0277 de rustc; y `print` de un valor con tuplas
+    muestra `(1, a)` también en la VM y el intérprete (antes `[[1, a]]`; el nativo ya lo hacía).
+  - **Checker** (#86, #89): `f() == Option.None` (también `!=` y `Result.Err(...)`) toma `T` del
+    otro operando; `"a".to_json()` sin importar dice «the trait 'ToJson' in std/json declares it;
+    add `import std/json;`» (índice de los traits de la stdlib con impl sobre primitivos, con
+    espejo selfhost).
+  - **`ray fmt`** (#82, #88): al repartir una concatenación larga, una interpolación es un operando
+    (ya no se reescribe como `+ to_string(mark)`); `json.obj()` (módulo importado) se queda con su
+    receptor al repartir una cadena; un comentario tras un elemento interior de un arreglo reparte
+    la lista en vez de saltar detrás del `;`.
+  - **`ray doc`** (#83, #84): `string.last_index_of`, `bytes.index_of_from`, `Result.map`,
+    `Option.and_then` (forma `Tipo.metodo`; el nombre a secas lista todas las variantes); desde un
+    proyecto resuelve sus módulos y sus dependencias de `.ray-deps`; `ray doc --help` es ayuda.
+  - **JSON, un solo formato** (#87): `json.obj()…render()`, `render_arr` y `@derive(ToJson)`
+    escriben la forma compacta de `json.stringify` (`{"k":1,"a":[1,2]}`). Cambia los bytes para
+    quien comparaba texto crudo.
+  - **`net` 0.3.8** (#81, #85): el servidor atiende dos peticiones HTTP/1.1 pipelineadas en una
+    escritura (`read_request_carry(conn, limits, carry) -> (Request, bytes)` para bucles propios);
+    `local_token_via(req, token) -> (bool, bool)` dice si el token vino en `?ray_token=`.
+  - **Móvil y docs** (#80, #90, #91): `ray bundle --ios` conserva `xcshareddata/` y `xcuserdata/`
+    del `.xcodeproj`; el README de iOS lleva el nombre de la app (y va en inglés); `ui.app_url`
+    documenta `RAY_DEV_FRONTEND_URL`/`--devtools` y `ui.reply` la ventana `0` de los shells;
+    llms.txt ya no niega los alias de tipo.
+
 ## 1.27.14 — 2026-09-26
 
 - **El tercer barrido de `ray-apps`: raymart bajo carga y raygate** (M313–M315,

@@ -165,7 +165,10 @@ impl Transpiler {
         let mut args = Vec::new();
         for t in &sig.tparams {
             let ty = self.classify(&subst[t]);
-            if ty_mentions_tparam(&ty, &std::collections::HashSet::new()) && !ty_mentions_tparam(&ty, &self.tparams) {
+            // M316 (findings #92): una ligadura que aún menciona los genéricos del CALLEE (no los
+            // nuestros) no es un tipo cerrado — sin turbofish, que rustc lo infiera.
+            let callee_tps: std::collections::HashSet<String> = sig.tparams.iter().cloned().collect();
+            if ty_mentions_tparam(&ty, &callee_tps) && !ty_mentions_tparam(&ty, &self.tparams) {
                 return Ok(String::new());
             }
             args.push(rust_ty(&ty, &self.enums, &self.tparams)?);
@@ -202,6 +205,14 @@ impl Transpiler {
                 ExprKind::Ident(n) if self.send_fn_params.contains(n) => {
                     write!(out, "{}.clone()", mangle(n)).unwrap();
                     return Ok(());
+                }
+                // M316 (findings #77): un valor-función CALCULADO (`run(mk(2))`, `serve_on(l,
+                // handler(tok))`) también llega como `Rc<dyn Fn>` y rustc lo rechazaba con tres
+                // E0277 sin diagnóstico de raylang. Mismo remedio que el closure en variable.
+                _ if matches!(self.type_of(a).map(|t| normalize_type(&t)), Ok(Type::Fn(..))) => {
+                    return Err(
+                        "a function value computed here (e.g. returned by another function) cannot be passed to this parameter in the native binary (it crosses to other fibers); write the closure inline in the call, name a top-level function, or use a handler factory (e.g. serve_raw_with)".into()
+                    );
                 }
                 _ => {}
             }
@@ -3286,7 +3297,7 @@ impl Transpiler {
                         // Función de usuario (quizá genérica), o llamada a un closure en ámbito.
                         if let Some(s) = self.funcs.get(n) {
                             if s.tparams.is_empty() {
-                                s.ret.clone()
+                                normalize_type(&s.ret)
                             } else {
                                 // Genérica: unifica los params con los tipos de los args → sustituye el retorno.
                                 let (params, ret, tps) = (s.params.clone(), s.ret.clone(), s.tparams.clone());
@@ -3302,6 +3313,10 @@ impl Transpiler {
                             }
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
+                        } else if let Some(Type::Fn(_, r)) = self.probe_binds.borrow().iter().rev().find_map(|m| m.get(n).cloned()) {
+                            // M316: un closure ligado por un `let` de un bloque en posición de argumento
+                            // (`print({ let __ps = dict; __ps(x) })`, `lower_print_shows`).
+                            (*r).clone()
                         } else if matches!(n, "min" | "max") {
                             // Terminales `min`/`max` de iterador: funciones del prelude con bound
                             // `T: Ord` cuya DEFINICIÓN se salta (is_handled_builtin) y no tiene brazo
@@ -3317,8 +3332,16 @@ impl Transpiler {
                     }
                 }
             }
-            ExprKind::If { then_branch, .. } => match &then_branch.tail {
-                Some(t) => self.type_of(t)?,
+            // M316 (findings #78): si la rama `then` no se deja tipar sola (`[]` sin anotación), el
+            // tipo lo da la rama `else` — como infiere el checker.
+            ExprKind::If { then_branch, else_branch, .. } => match &then_branch.tail {
+                Some(t) => match self.type_of(t) {
+                    Ok(ty) => ty,
+                    Err(e) => match else_branch.as_deref() {
+                        Some(el) => self.type_of(el)?,
+                        None => return Err(e),
+                    },
+                },
                 None => Type::Unit,
             },
             ExprKind::Block(b) => {
@@ -3452,7 +3475,9 @@ impl Transpiler {
                 // Tupla: `t.0` → el tipo del i-ésimo elemento.
                 if let Type::Tuple(ts) = &obj_ty {
                     let i: usize = name.parse().map_err(|_| "non-numeric tuple field")?;
-                    return ts.get(i).cloned().ok_or_else(|| "tuple field out of range".into());
+                    // M316 (findings #76): el elemento se normaliza (`Channel<int>` escrito en una
+                    // firma llega como `Struct("Channel")` → `send(s.1, v)` no lo reconocía).
+                    return ts.get(i).map(normalize_type).ok_or_else(|| "tuple field out of range".into());
                 }
                 let sn = match &obj_ty {
                     Type::Struct(n, _) => n.clone(),

@@ -174,13 +174,13 @@ fn framework_cors_cache_y_json_of() {
     // json_of: el JSON de un valor ToJson — ahora DERIVADO (@derive(ToJson), M93.5).
     let r = ask(port, "GET /yo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("application/json"), "json_of content-type: {r}");
-    assert!(r.contains("{\"id\": 7, \"name\": \"Ada\"}"), "json_of cuerpo derivado: {r}");
+    assert!(r.contains("{\"id\":7,\"name\":\"Ada\"}"), "json_of cuerpo derivado: {r}");
 
     // Builder de std/json (M93.5): orden de claves preservado, string con comillas ESCAPADO por
     // construcción, struct derivado anidado y arreglo vía list().
     let r = ask(port, "GET /perfil HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(
-        r.contains("{\"user\": {\"id\": 7, \"name\": \"Ada\"}, \"motto\": \"di \\\"hola\\\"\", \"tags\": [\"admin\", \"dev\"]}"),
+        r.contains("{\"user\":{\"id\":7,\"name\":\"Ada\"},\"motto\":\"di \\\"hola\\\"\",\"tags\":[\"admin\",\"dev\"]}"),
         "builder anidado con escapado: {r}"
     );
 

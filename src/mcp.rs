@@ -706,23 +706,74 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
     if symbol.starts_with("__") || symbol.contains('#') {
         return None; // primitivos internos / métodos manglados: no son superficie
     }
-    let funcs = crate::prelude::functions();
-    let f = funcs.iter().find(|f| f.name == symbol)?;
-    let sig = fn_signature(f);
-    // Las líneas `///` contiguas encima del `fn <symbol>(` en el fuente del prelude.
-    let mut doc_lines: Vec<&str> = Vec::new();
+    // M316 (findings #83): `string.last_index_of`, `bytes.index_of_from`, `Result.map`,
+    // `Option.and_then` — la forma `Tipo.metodo` resuelve la función libre cuyo PRIMER parámetro es
+    // de ese tipo (UFCS) o el método de un trait del prelude implementado para ese tipo; el nombre a
+    // secas lista TODAS las variantes (antes solo la función libre, y `bytes.last_index_of` «no existía»).
+    let (recv, name) = match symbol.split_once('.') {
+        Some((r, n)) => (Some(r), n),
+        None => (None, symbol),
+    };
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
-    if let Some(i) = lines.iter().position(|l| l.trim_start().starts_with(&format!("fn {symbol}("))) {
-        let mut j = i;
-        while j > 0 && lines[j - 1].trim_start().starts_with("///") {
-            j -= 1;
-            doc_lines.insert(0, lines[j].trim_start().trim_start_matches("///").trim());
+    // Las `///` contiguas encima de la primera línea >= `from` que empieza por `head`.
+    let doc_above = |head: &str, from: usize| -> String {
+        let mut doc_lines: Vec<&str> = Vec::new();
+        if let Some(i) = lines.iter().skip(from).position(|l| l.trim_start().starts_with(head)) {
+            let mut j = i + from;
+            while j > 0 && lines[j - 1].trim_start().starts_with("///") {
+                j -= 1;
+                doc_lines.insert(0, lines[j].trim_start().trim_start_matches("///").trim());
+            }
+        }
+        doc_lines.join(" ")
+    };
+    let with_doc = |sig: String, doc: String| if doc.is_empty() { sig } else { format!("{sig}\n{doc}") };
+    let mut found: Vec<String> = Vec::new();
+    for f in crate::prelude::functions().iter().filter(|f| f.name == name) {
+        let first = f.params.first().map(|p| type_head(&p.ty));
+        if recv.is_none() || first.as_deref() == recv {
+            found.push(with_doc(fn_signature(f), doc_above(&format!("fn {name}("), 0)));
         }
     }
-    if doc_lines.is_empty() {
-        Some(sig)
-    } else {
-        Some(format!("{sig}\n{}", doc_lines.join(" ")))
+    let impls = crate::prelude::impls();
+    for t in crate::prelude::traits().iter() {
+        let Some(m) = t.methods.iter().find(|m| m.name == name) else { continue };
+        let targets: Vec<String> = impls
+            .iter()
+            .filter(|i| i.trait_name == t.name)
+            .map(|i| type_head(&i.target))
+            .filter(|h| recv.is_none_or(|r| r == h))
+            .collect();
+        if targets.is_empty() {
+            continue;
+        }
+        // Las posiciones del prelude viven en su banda alta (`LINE_BASE`): se vuelve a la línea real.
+        let doc = doc_above(&format!("fn {name}("), t.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1));
+        for target in targets {
+            found.push(with_doc(format!("{target}.{}", trait_method_signature(&t.name, m)), doc.clone()));
+        }
+    }
+    if found.is_empty() { None } else { Some(found.join("\n\n")) }
+}
+
+/// El nombre de cabeza de un tipo para casarlo con un receptor escrito (`Result<T, E>` → `Result`,
+/// `[T]` → `array`, `Map<K, V>` → `Map`, `string` → `string`).
+fn type_head(t: &crate::ast::Type) -> String {
+    match t {
+        crate::ast::Type::Array(_) => "array".into(),
+        other => {
+            let shown = other.to_string();
+            shown.split('<').next().unwrap_or(&shown).to_string()
+        }
+    }
+}
+
+/// M316 (findings #84): el `ray doc` del CLI con el proyecto de `path` como contexto (sus módulos y
+/// sus dependencias de `.ray-deps`), como el `ray_doc` del MCP con 'path'.
+pub fn doc_text_in(symbol: &str, path: Option<&std::path::Path>) -> String {
+    match path {
+        Some(p) => doc_text_at(symbol, p.to_str()),
+        None => doc_text(symbol),
     }
 }
 
@@ -997,6 +1048,21 @@ mod tests {
         let listing = doc_text("std/ui");
         assert!(listing.contains("struct MenuItem { tag: string"), "el listado muestra los campos: {listing}");
         assert!(listing.contains("declared by this module"), "{listing}");
+    }
+
+    /// M316 (findings #83): `Tipo.metodo` resuelve la función libre por su primer parámetro
+    /// (`string.last_index_of`) y los métodos de trait del prelude por su impl (`bytes.index_of_from`,
+    /// `Result.map`, `Option.and_then`); el nombre a secas lista todas las variantes.
+    #[test]
+    fn ray_doc_resolves_type_dot_method_and_lists_overloads() {
+        assert!(doc_text("string.last_index_of").starts_with("last_index_of(s: string, sub: string) -> Option<int>"));
+        let b = doc_text("bytes.index_of_from");
+        assert!(b.starts_with("bytes.index_of_from(self, needle: bytes, start: int) -> Option<int>") && b.contains("BytesOps") && b.contains("at or after `start`"), "{b}");
+        assert!(doc_text("Result.map").contains("Result.map(self, f: fn(T) -> U) -> Result<U, E>"));
+        assert!(doc_text("Option.and_then").contains("Option.and_then(self, f: fn(T) -> Option<U>) -> Option<U>"));
+        let all = doc_text("last_index_of");
+        assert!(all.contains("last_index_of(s: string") && all.contains("bytes.last_index_of(self"), "{all}");
+        assert!(doc_text("bytes.no_such_method").contains("is not a builtin"));
     }
 
     #[test]

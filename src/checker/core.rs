@@ -40,6 +40,7 @@ impl Checker {
             try_conversions: HashMap::new(),
             uint_literal_sites: HashMap::new(),
             builtin_value_sites: HashMap::new(),
+            print_show_sites: HashMap::new(),
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
@@ -2684,8 +2685,28 @@ impl Checker {
         line: usize,
         col: usize,
     ) -> Result<Type, TypeError> {
-        let lt = self.check_expr(left)?;
-        let rt = self.check_expr(right)?;
+        // M316 (findings #86): `f() == Option.None` — el operando cuyo genérico no se infiere solo
+        // (`Option.None`, `Result.Err(e)`) lo toma del OTRO lado, en cualquier orden. Solo `==`/`!=`:
+        // el resto de operadores no comparan enums. Se reintenta únicamente ante el error de
+        // inferencia, así los demás mensajes (operandos incompatibles) no cambian.
+        let is_infer_err = |e: &TypeError| e.msg.starts_with("could not infer the type parameter");
+        let eq_op = matches!(op, BinaryOp::Eq | BinaryOp::Ne);
+        let (lt, rt) = match self.check_expr(left) {
+            Ok(lt) => match self.check_expr(right) {
+                Ok(rt) => (lt, rt),
+                Err(e) if eq_op && is_infer_err(&e) => {
+                    let rt = self.check_expr_expected(right, &lt)?;
+                    (lt, rt)
+                }
+                Err(e) => return Err(e),
+            },
+            Err(e) if eq_op && is_infer_err(&e) => {
+                let rt = self.check_expr(right)?;
+                let lt = self.check_expr_expected(left, &rt)?;
+                (lt, rt)
+            }
+            Err(e) => return Err(e),
+        };
         // M28.3b: si un operando es uint y el otro un literal entero, el literal adopta el ancho
         // (`x + 100` con `x: u8` trata `100` como u8). No es promoción: solo cede el LITERAL.
         let (lt, rt) = self.coerce_uint_binop(left, right, lt, rt)?;
@@ -3170,8 +3191,16 @@ impl Checker {
         } else if let Some(by_type) = self.type_module_fn(name, recv_ty) {
             by_type
         } else {
+            // M316 (findings #89): si es un método de un trait de la stdlib implementado para este
+            // primitivo (`"a".to_json()` sin `import std/json;`), se dice qué importar.
+            let hint = match crate::stdlib::primitive_trait_method(name, &recv_ty.to_string()) {
+                Some((module, trait_name)) => format!(
+                    " (the trait '{trait_name}' in {module} declares it; add `import {module};`)"
+                ),
+                None => String::new(),
+            };
             return Err(self.err(line, col, format!(
-                "no field or function '{}' applicable to {}", name, recv_ty
+                "no field or function '{}' applicable to {}{}", name, recv_ty, hint
             )));
         };
         let mut all_args = Vec::with_capacity(args.len() + 1);
@@ -3305,6 +3334,18 @@ impl Checker {
                 let ty = self.check_named_call_recv(&show, args, line, col, expected, &at)?;
                 self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), show);
                 return Ok(ty);
+            }
+        }
+        // M316 (findings #79): `print([(1, "a")])` mostraba `[[1, a]]` (en el runtime una tupla es un
+        // arreglo) mientras `to_string`/`assert_eq` daban `(1, a)` por el diccionario `Show` de M302.
+        // Si el tipo CONTIENE una tupla y tiene diccionario, `print(x)` baja a
+        // `print({ let __ps = dict; __ps(x) })` (`lower_print_shows`): la misma forma en los tres motores.
+        if (name == "print" || name == "eprint") && args.len() == 1 {
+            let at = self.check_expr(&args[0])?;
+            if type_contains_tuple(&at)
+                && let Ok(dict) = self.dict_for(&at, "Show", "show", line, col)
+            {
+                self.print_show_sites.insert((line, col), dict);
             }
         }
         // [1]: el override de una función del prelude es LÉXICO a la raíz: un módulo (la stdlib, un
@@ -3945,5 +3986,17 @@ fn builtin_arg_expected(name: &str, first: &Type, i: usize) -> Option<Type> {
         ("get" | "remove" | "contains_key", Type::Map(k, _), 1) => Some((**k).clone()),
         ("send" | "try_send", Type::Channel(t), 1) => Some((**t).clone()),
         _ => None,
+    }
+}
+
+/// M316 (findings #79): ¿el tipo lleva una tupla en alguna posición (elemento, valor de Map, argumento
+/// de un genérico como `Option<(int, string)>`)?
+fn type_contains_tuple(t: &Type) -> bool {
+    match t {
+        Type::Tuple(_) => true,
+        Type::Array(e) => type_contains_tuple(e),
+        Type::Map(k, v) => type_contains_tuple(k) || type_contains_tuple(v),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_contains_tuple),
+        _ => false,
     }
 }

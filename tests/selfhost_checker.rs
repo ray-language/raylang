@@ -96,6 +96,9 @@ fn programas_valid_vals() {
     compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { Option.None }; let p = if (true) { Option.None } else { Option.Some(2) }; let xs = if (true) { [] } else { [1] }; match (o) { Option.Some(v) => v + xs.len(), Option.None => 0 } }", "sc_if_infers_other_branch.ray");
     compare("fn main() -> int { let o = if (true) { Option.None } else { Option.None }; 0 }", "sc_if_both_none.ray");
     compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "sc_if_mismatch.ray");
+    // M316 (findings #89): la pista de import para un método de trait de la stdlib sobre un primitivo.
+    compare("fn main() -> int { print(\"a\".to_json()); 0 }", "sc_std_trait_hint.ray");
+    compare("fn main() -> int { 5.frobnicate() }", "sc_no_hint.ray");
     // M308: etiquetas de bucle — válida, desconocida, fuera de la función (closure) y la divergencia
     // de `while (true)` con un `break etiqueta` desde el bucle interior.
     compare("fn main() -> int { var i = 0; outer: while (i < 3) { i = i + 1; while (true) { break outer; } } i }", "sc_label_ok.ray");

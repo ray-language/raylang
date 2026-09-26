@@ -40,8 +40,7 @@ fn main() -> int {
 
     // El builder: directorio + entorno + stdin (se escribe y se CIERRA) + salida fusionada
     // (stderr al MISMO pipe -> el orden es el real del kernel, no uno inventado).
-    show(process
-        .cmd("sh", ["-c", "printf start:; cat; printf \":$V:$PWD\"; printf X >&2"])
+    show(process.cmd("sh", ["-c", "printf start:; cat; printf \":$V:$PWD\"; printf X >&2"])
         .dir("/")
         .env("V", "v1")
         .stdin("IN".to_bytes())

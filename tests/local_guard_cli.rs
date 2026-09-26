@@ -22,10 +22,12 @@ fn handler(req: webserver.Request) -> webserver.Response {
 // M306 (#16): un handler CRUDO (bucle de accept propio, WebSocket de larga vida) comprueba el token
 // con la función pública, sin reimplementar la cookie ni la comparación en tiempo constante.
 fn raw_handler(req: webserver.Request) -> webserver.Response {
-    if (webserver.cross_site_blocked(req) || !webserver.local_token_ok(req, "s3cr3t")) {
+    // M316 (findings #85): `local_token_via` dice además si el token vino en `?ray_token=`.
+    let (ok, via_query) = webserver.local_token_via(req, "s3cr3t");
+    if (webserver.cross_site_blocked(req) || !ok) {
         return webserver.text(403, "nope");
     }
-    webserver.ok("raw " + req.path)
+    webserver.ok("raw " + req.path + (if (via_query) { " via-query" } else { "" }))
 }
 
 fn main() -> int {
@@ -144,8 +146,30 @@ fn a_raw_handler_checks_the_local_token_with_the_public_function() {
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"))), 403);
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: s3cr3t\r\nConnection: close\r\n\r\n"))), 200);
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nCookie: other=1; ray_local=s3cr3t\r\nConnection: close\r\n\r\n"))), 200);
-    assert_eq!(status(&ask(port, &format!("GET /a?ray_token=s3cr3t HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"))), 200);
+    let via = ask(port, &format!("GET /a?ray_token=s3cr3t HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"));
+    assert_eq!(status(&via), 200);
+    assert!(via.contains("raw /a via-query"), "{via}");
+    let hdr = ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: s3cr3t\r\nConnection: close\r\n\r\n"));
+    assert!(hdr.contains("raw /a\r\n") || hdr.ends_with("raw /a"), "sin via-query por cabecera: {hdr}");
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: wrong\r\nConnection: close\r\n\r\n"))), 403);
+    child.kill().ok();
+    child.wait().ok();
+}
+
+/// M316 (findings #81): dos peticiones HTTP/1.1 pipelineadas en UNA escritura reciben DOS respuestas
+/// por la misma conexión (antes la segunda se perdía con el resto del búfer).
+#[test]
+fn pipelined_requests_in_one_write_get_one_response_each() {
+    let (mut child, port) = launch("plain");
+    let host = format!("127.0.0.1:{port}");
+    let two = format!(
+        "GET /first HTTP/1.1\r\nHost: {host}\r\n\r\nPOST /second HTTP/1.1\r\nHost: {host}\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+    );
+    let r = ask(port, &two);
+    assert_eq!(r.matches("HTTP/1.1 200").count(), 2, "{r}");
+    let first = r.find("hello /first").expect("primera");
+    let second = r.find("hello /second").expect("segunda");
+    assert!(first < second, "{r}");
     child.kill().ok();
     child.wait().ok();
 }

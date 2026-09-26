@@ -188,7 +188,7 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    three_engines(&d, "3\ntrue\n3\n6\n6\ntrue\n20\n42\n4\n3!\ntrue\n4\n3\ntrue\n3\n2\n3\n2\ntrue\nsymlink\nhi\ntrue\n{\"d\": null, \"n\": 1, \"arr\": [1,2]}\n");
+    three_engines(&d, "3\ntrue\n3\n6\n6\ntrue\n20\n42\n4\n3!\ntrue\n4\n3\ntrue\n3\n2\n3\n2\ntrue\nsymlink\nhi\ntrue\n{\"d\":null,\"n\":1,\"arr\":[1,2]}\n");
 }
 
 /// M306 (IDEAS §97 #14): `set_read_timeout(listener, ms)` acota también `tcp_accept` (la doc lo
@@ -735,3 +735,73 @@ fn main() -> int {
     );
 }
 
+
+/// M316 (findings #76, #78, #79, #92, #93): un `let` sin anotar con el resultado de una función
+/// genérica que recibe un closure (regresión 1.27.14), un campo de ese valor concatenado, un canal
+/// guardado en una tupla, `[]` inferido desde la otra rama del `if` y la tupla mostrada como `[a, b]`
+/// `(1, a)` también en `print` (VM/intérprete: antes `[[1, a]]`) — todo en VM y nativo.
+#[test]
+fn generic_closure_results_tuple_channels_and_empty_branches_run_natively() {
+    let d = tmp("generic_closure_results");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"struct Resp { status: int }
+fn attempt<T, E>(f: fn() -> Result<T, E>) -> Result<T, E> { f() }
+fn start() -> (int, Channel<int>) {
+    let stop: Channel<int> = Channel.new();
+    (7, stop)
+}
+fn main() -> int {
+    let n = 200;
+    let result = attempt(fn() -> Result<Resp, string> { Result.Ok(Resp { status: n }) });
+    match (result) {
+        Result.Ok(r) => print("ok " + to_string(r.status)),
+        Result.Err(e) => print(e),
+    }
+    let s = start();
+    send(s.1, 5);
+    let v = recv(s.1);
+    close(s.1);
+    print(v);
+    let c = args().len() > 5;
+    let xs = if (c) { [] } else { [3, 4] };
+    print(xs.len());
+    print([(1, "a")]);
+    print(Option.Some((1, "a")));
+    let pairs: [(int, string)] = [(1, "a"), (2, "b")];
+    print(pairs);
+    0
+}
+"#,
+    )
+    .unwrap();
+    vm_and_native(&d, "ok 200\nOption.Some(5)\n2\n[(1, a)]\nOption.Some((1, a))\n[(1, a), (2, b)]\n");
+}
+
+/// M316 (findings #77): un valor-función CALCULADO (`run(mk(2))`) hacia un parámetro que cruza a
+/// `spawn` se rechaza en raylang (antes: tres E0277 de rustc sobre código generado).
+#[test]
+fn a_computed_function_value_crossing_to_spawn_is_diagnosed_in_raylang() {
+    if !has_rustc() {
+        return;
+    }
+    let d = tmp("computed_fn_spawn");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn mk(k: int) -> fn(int) -> int { fn(x: int) -> int { x * k } }
+fn run(f: fn(int) -> int) -> int {
+    let t = spawn(fn() -> int { f(21) });
+    join(t)
+}
+fn main() -> int { print(run(mk(2))); 0 }
+"#,
+    )
+    .unwrap();
+    let (out, _, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!((code, out.as_str()), (0, "42\n"), "vm");
+    let bin = d.join("prog_bin");
+    let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_ne!(code, 0, "el nativo debe rechazarlo");
+    assert!(err.contains("a function value computed here") && err.contains("write the closure inline"), "{err}");
+    assert!(!err.contains("E0277"), "sin errores de rustc: {err}");
+}

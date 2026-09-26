@@ -40,8 +40,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
 - Primitive type names cannot name a function: `pub fn int(key: string)` / `fn u32(…)` are
-  errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`). There are no type
-  aliases yet (`type Handler = fn(...)` is a syntax error): repeat the signature.
+  errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`). Type aliases exist
+  since 1.27.13 (`type Handler = …;`, `pub type` exports; see the canonical forms below).
 - Server handlers (web/rpc/gRPC) receive a COPY of what they capture: fiber heaps are isolated,
   so a captured `Map` mutated inside a handler does not persist — per connection on the VM
   (one connection "works"), per call on native. Shared state lives in a database or an actor
@@ -380,7 +380,7 @@ ray build file.ray          # check only (also: ray build --native for a machine
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray test --native [--release]  # same tests on the NATIVE binary (one binary per suite, one process per test); same report/exit codes
 ray fmt file.ray            # canonical formatting
-ray doc file.ray            # API docs (raydoc)
+ray doc file.ray            # API docs (raydoc); `ray doc Type.method` (e.g. bytes.index_of_from, Result.map) — inside a project it also resolves its modules and dependencies
 ray serve [dir]             # static file server for previews (127.0.0.1:8000; --host/--port; --port 0 = free)
 ```
 

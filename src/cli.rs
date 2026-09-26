@@ -2302,10 +2302,29 @@ fn cmd_bundle(args: &[String]) {
             manifest.as_ref().and_then(|m| m.ios_development_team.as_deref()),
             &previous,
         );
+        // M316 (findings #90): lo que Xcode guarda DENTRO del .xcodeproj — los esquemas compartidos
+        // (`xcshareddata/`, con las variables de entorno del esquema) y los datos del desarrollador
+        // (`xcuserdata/`) — se preserva: regenerar reescribe `project.pbxproj`, no la configuración
+        // del desarrollador.
+        let xcodeproj = proj.join(format!("{name}.xcodeproj"));
+        let kept_xcode: Vec<(std::path::PathBuf, Vec<u8>)> = ["xcshareddata", "xcuserdata"]
+            .iter()
+            .flat_map(|d| read_tree(&xcodeproj.join(d), &xcodeproj))
+            .collect();
         let _ = fs::remove_dir_all(&proj);
         if let Err(e) = fs::create_dir_all(proj.join("libs")).and_then(|_| fs::create_dir_all(proj.join("libs-sim"))) {
             eprintln!("bundle: could not create '{}': {e}", proj.display());
             process::exit(74);
+        }
+        for (rel, bytes) in &kept_xcode {
+            let dst = xcodeproj.join(rel);
+            let r = dst.parent().map(fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| fs::write(&dst, bytes));
+            if let Err(e) = r {
+                eprintln!("bundle: warning: could not restore '{}': {e}", dst.display());
+            }
+        }
+        if !kept_xcode.is_empty() {
+            eprintln!("[bundle] preserved {} file(s) under {}.xcodeproj/xcshareddata and xcuserdata", kept_xcode.len(), name);
         }
         // Nombre FIJO del archive en ambos dirs (el `-lray_app` del xcconfig): la ruta decide.
         let place = |built: bool, src_a: &Path, kept: &Option<Vec<u8>>, dst: std::path::PathBuf| {
@@ -2346,7 +2365,7 @@ fn cmd_bundle(args: &[String]) {
         println!("  simulator: xcodebuild -project {name}.xcodeproj -target {name} -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO");
         match &signing.team {
             Some(team) => println!("  device:    signing team {team} already in App.xcconfig; open the project in Xcode and run"),
-            None => println!("  device:    open the project in Xcode and pick your signing team (persist it with [ios] development_team in ray.toml)"),
+            None => println!("  device:    open the project in Xcode and pick your signing team once (the next `ray bundle --ios` rescues it from the project; persist it with [ios] development_team in ray.toml)"),
         }
         return;
     }
@@ -4782,15 +4801,54 @@ fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
 // proyecto ni staleness por mtime. `ray build --templates-only` sigue materializando el generado
 // bajo demanda (inspección).
 
+/// M316 (findings #90): todos los archivos bajo `dir` como (ruta relativa a `base`, contenido).
+/// Vacío si `dir` no existe.
+fn read_tree(dir: &Path, base: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else { return out };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            out.extend(read_tree(&p, base));
+        } else if let Ok(bytes) = fs::read(&p)
+            && let Ok(rel) = p.strip_prefix(base)
+        {
+            out.push((rel.to_path_buf(), bytes));
+        }
+    }
+    out
+}
+
 fn cmd_doc(args: &[String]) {
+    const USAGE: &str = "usage: ray doc <file | std/<module> | <module>.<symbol> | <Type>.<method> | <builtin>>\n\
+       Run it inside a project (a directory with ray.toml above it) to also resolve the project's own\n\
+       modules and its dependencies (e.g. `ray doc webserver.local_token_ok` with net in [dependencies]).";
     let Some(path) = args.first() else {
-        eprintln!("usage: ray doc <file | std/<module> | <module>.<symbol> | <builtin>>");
+        eprintln!("{USAGE}");
         process::exit(64);
     };
+    // M316 (findings #84): `--help` es ayuda, no un símbolo.
+    if path == "--help" || path == "-h" || path == "help" {
+        println!("{USAGE}");
+        return;
+    }
     // M217 (ray-sublime #7): lo que no es un archivo es un SÍMBOLO — la misma resolución que
     // `ray_doc` del MCP: `std/ui` lista el módulo, `ui.MenuItem` o `json.parse` dan firma + doc.
+    // M316 (findings #84): con el proyecto del directorio actual (el `ray.toml` más cercano hacia
+    // arriba) como contexto, resuelve también sus módulos y sus dependencias de `.ray-deps`.
     if !Path::new(path).exists() {
-        let text = mcp::doc_text(path);
+        let root = std::env::current_dir().ok().and_then(|d| {
+            let mut d = d;
+            loop {
+                if d.join("ray.toml").is_file() {
+                    return Some(d);
+                }
+                if !d.pop() {
+                    return None;
+                }
+            }
+        });
+        let text = mcp::doc_text_in(path, root.as_deref());
         if text.contains("is not a builtin, a prelude function, nor a public std/* function") {
             eprintln!("{text}");
             process::exit(66);

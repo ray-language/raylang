@@ -236,6 +236,10 @@ struct Cur {
     /// M298: el PRÓXIMO bloque es una rama de un `if` compacto → se emite inline `{ expr }` aunque
     /// en la fuente ocupara varias líneas (si no encierra comentarios). Lo consume `fmt_block`.
     inline_block: bool,
+    /// M316 (findings #88): los nombres locales de los módulos importados (`import std/json;` →
+    /// `json`). `json.obj()` es una llamada de MÓDULO, no un eslabón de cadena: al repartir una
+    /// cadena se queda pegada al receptor (`json.obj()` / `.field(…)`), no `json` / `.obj()`.
+    modules: std::collections::HashSet<String>,
 }
 
 impl Cur {
@@ -261,6 +265,7 @@ impl Cur {
             expand_block: false,
             compact_if: false,
             inline_block: false,
+            modules: program.imports.iter().map(|i| i.leaf().to_string()).collect(),
         }
     }
 
@@ -347,7 +352,9 @@ impl Cur {
     fn has_inner_trailing(&self, first: usize, last: usize) -> bool {
         // Estrictamente interiores: el de la primera línea lo pega la sentencia plana, y el de la
         // última lo pega la sentencia repartida (tras su `;`), así que ninguno de los dos cuenta.
-        self.items[self.i..].iter().take_while(|c| c.line < last).any(|c| c.trailing && c.line > first)
+        // M316 (findings #88): en una sentencia multilínea, el de la PRIMERA línea también es interior
+        // (`[1, // c` + `2]`): la forma plana ya no lo consume (pega el de la última línea).
+        self.items[self.i..].iter().take_while(|c| c.line < last).any(|c| c.trailing && (c.line > first || last > first))
     }
 
     /// Vuelca **todos** los comentarios restantes (fin de archivo), cada uno en su línea con sangría `pad`.
@@ -871,7 +878,12 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         // El trailing de la línea en que TERMINA la sentencia: la propia si es de una línea; si se
         // repartió (M189), la última de la fuente — el comentario del último operando/elemento queda
         // tras el `;`, y un `}  // fin` se queda en su `}`.
-        let end = if text.contains('\n') { stmt_last_line(cur, st) } else { st.line };
+        // M316 (findings #88): si la fuente ocupaba varias líneas y el resultado es UNA, el trailing
+        // de la sentencia sigue siendo el de su ÚLTIMA línea — el de la primera anotaba un elemento
+        // interior (`[1, // c` + `2]`) y pegarlo tras el `;` lo cambiaba de sitio; queda para que
+        // `retry_wrapped` reparta la lista y lo devuelva a su elemento.
+        let last = stmt_last_line(cur, st);
+        let end = if text.contains('\n') || last > st.line { last } else { st.line };
         s.push_str(&cur.trailing_on(end));
         s.push('\n');
     }
@@ -886,7 +898,7 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         let text = retry_wrapped(cur, base + 1, Some((tail.line, last)), |c| fmt_value(c, tail, base + 1));
         s.push_str(&inner);
         s.push_str(&text);
-        let end = if text.contains('\n') { last } else { tail.line };
+        let end = if text.contains('\n') || last > tail.line { last } else { tail.line };
         s.push_str(&cur.trailing_on(end));
         s.push('\n');
     }
@@ -1168,7 +1180,7 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     // M105/M106: en la pasada de envuelto, lo que no cabe se reparte — una cadena de 2+ eslabones, o
     // una lista delimitada (argumentos, arreglo, tupla, struct, Map). El aplanado se renderiza igual
     // para medirlo, restaurando el cursor de comentarios (renderizar los consume).
-    if cur.wrap && (chain_links(e).is_some() || could_wrap_list(e) || bin_chain(e).is_some()) {
+    if cur.wrap && (chain_links(e).is_some() || could_wrap_list(e) || bin_chain(cur, e).is_some()) {
         // Se consume ANTES de renderizar: si no, la medición del aplanado repartiría ya a un hijo.
         let force = std::mem::take(&mut cur.force);
         let save = cur.i;
@@ -1177,7 +1189,7 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
             flat
         } else {
             cur.i = save;
-            if let Some((op, operands)) = bin_chain(e) {
+            if let Some((op, operands)) = bin_chain(cur, e) {
                 fmt_bin_chain_wrapped(cur, op, &operands)
             } else if let Some((recv, links)) = chain_links(e) {
                 fmt_chain_wrapped(cur, recv, &links)
@@ -1245,7 +1257,7 @@ fn user_parens(cur: &Cur, e: &Expr) -> bool {
 /// (M189): `&&`, `||` y `+` (concatenaciones largas). Devuelve `(op, operandos en orden)`; `None` con
 /// menos de dos operandos o si algún operando es ya multilínea por su cuenta. Solo el spine izquierdo:
 /// `a && b && c` es `And(And(a, b), c)`; un `&&` a la derecha (`a && (b && c)`) es un operando.
-fn bin_chain(e: &Expr) -> Option<(BinaryOp, Vec<&Expr>)> {
+fn bin_chain<'a>(cur: &Cur, e: &'a Expr) -> Option<(BinaryOp, Vec<&'a Expr>)> {
     let ExprKind::Binary { op, .. } = &e.kind else { return None };
     if !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Add) {
         return None;
@@ -1254,6 +1266,11 @@ fn bin_chain(e: &Expr) -> Option<(BinaryOp, Vec<&Expr>)> {
     let mut node = e;
     while let ExprKind::Binary { op: o, left, right } = &node.kind {
         if o != op {
+            break;
+        }
+        // M316 (findings #82): una interpolación desazucarada (`"a ${x} b"` = `"a " + to_string(x)
+        // + " b"`) es UN operando: aplanarla la reescribía como sus piezas (`+ to_string(x)`).
+        if cur.interp.get(&interp_leaf_key(node)).is_some_and(|segs| segs.len() == interp_spine_pieces(node)) {
             break;
         }
         operands.push(right);
@@ -1267,10 +1284,11 @@ fn bin_chain(e: &Expr) -> Option<(BinaryOp, Vec<&Expr>)> {
     // Un `+` solo es cadena si CONSTRUYE TEXTO (algún operando literal de string) o es larga de verdad:
     // el forzado del envuelto parte "la primera expresión repartible" sin medir, y `i + 1` dentro de un
     // índice o `a + b` en una fórmula no son eso.
-    if *op == BinaryOp::Add
-        && operands.len() < 4
-        && !operands.iter().any(|o| matches!(o.kind, ExprKind::Str(_)))
-    {
+    let is_text = |o: &Expr| {
+        matches!(o.kind, ExprKind::Str(_))
+            || cur.interp.get(&interp_leaf_key(o)).is_some_and(|segs| segs.len() == interp_spine_pieces(o))
+    };
+    if *op == BinaryOp::Add && operands.len() < 4 && !operands.iter().any(|o| is_text(o)) {
         return None;
     }
     Some((*op, operands))
@@ -1449,7 +1467,15 @@ fn chain_links<'a>(e: &'a Expr) -> Option<(&'a Expr, Vec<(&'a str, &'a [Expr])>)
 /// último eslabón (forma canónica elegida: la más compacta).
 fn fmt_chain_wrapped(cur: &mut Cur, recv: &Expr, links: &[(&str, &[Expr])]) -> String {
     let pad = INDENT.repeat(cur.base + 1);
-    let mut s = fmt_expr(cur, recv, 13); // el receptor liga a nivel de llamada/campo
+    // M316 (findings #88): `json.obj()` — receptor = módulo importado → la primera llamada es una
+    // función del módulo y se queda en la línea del receptor.
+    let (mut s, links) = match (&recv.kind, links.split_first()) {
+        (ExprKind::Ident(n), Some(((name, args), rest))) if cur.modules.contains(n) => {
+            let a: Vec<String> = args.iter().map(|x| fmt_expr(cur, x, 0)).collect();
+            (format!("{}.{}({})", n, name, a.join(", ")), rest)
+        }
+        _ => (fmt_expr(cur, recv, 13), links), // el receptor liga a nivel de llamada/campo
+    };
     for (name, args) in links {
         s.push('\n');
         s.push_str(&pad);
@@ -2037,6 +2063,32 @@ mod tests {
 
     fn fmt(src: &str) -> String {
         format_source(src).expect("formatea")
+    }
+
+    /// M316 (findings #82): al repartir una concatenación larga, una interpolación es UN operando —
+    /// antes se reescribía como sus piezas (`+ to_string(mark)`, `+ to_string(to_string(n))`).
+    #[test]
+    fn a_wrapped_concat_keeps_its_interpolation() {
+        let src = "fn main() -> int {\n    let mark = \"x\";\n    let n = 3;\n    let cached = 1;\n    print(\"  input   ${mark}${to_string(n)} tokens with a long enough tail\" + if (cached > 0) { \" (${to_string(cached)} from cache)\" } else { \"\" });\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("        \"  input   ${mark}${to_string(n)} tokens with a long enough tail\"\n            + if (cached > 0)"), "{out}");
+        assert!(!out.contains("to_string(to_string"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M316 (findings #88): `json.obj()` es una llamada de módulo importado: al repartir la cadena se
+    /// queda en la línea del receptor; y un comentario tras un elemento interior de un arreglo lo
+    /// reparte (antes el comentario saltaba detrás del `;`).
+    #[test]
+    fn module_calls_stay_with_their_receiver_and_interior_comments_split_the_list() {
+        let src = "import std/json;\nfn main() -> int {\n    let xs = [1, // sobre el uno\n        2];\n    let o = json.obj().field(\"k\", 1).field(\"longer_name_here\", \"value\").field(\"third\", true).render();\n    print(o);\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    let xs = [\n        1,  // sobre el uno\n        2\n    ];\n"), "{out}");
+        assert!(out.contains("    let o = json.obj()\n        .field(\"k\", 1)\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // Un receptor que NO es módulo sigue partiendo en el primer eslabón.
+        let src2 = "fn main() -> int {\n    let o = builder.obj().field(\"k\", 1).field(\"longer_name_here\", \"value\").field(\"third\", true).render();\n    0\n}\n";
+        assert!(fmt(src2).contains("    let o = builder\n        .obj()\n"), "{}", fmt(src2));
     }
 
     /// M311: los alias de tipo son estables (con `pub`, genéricos y doc-comment).

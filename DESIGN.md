@@ -15082,3 +15082,96 @@ esperado, el error dice cómo anotarlo. Una variable local homónima gana al bui
 **`slice`** en el prelude, con el *clamp* de `substring`/`sub_bytes`; y la doc destaca que el
 comparador de `sort_by` devuelve `bool`.
 
+
+## 298. M316 — La revisión de 1.27.13/1.27.14 desde las apps (sep 2026)
+
+El cuarto barrido de `ray-apps` (`RAYLANG-FINDINGS.md` #76–#93) salió de verificar los arreglos
+anteriores en las 30 apps con la release y solo las herramientas MCP como documentación. Dieciséis
+de los dieciocho hallazgos reproducían; se resolvieron todos en un arco (M316). Lo que merece
+crónica:
+
+**La regresión #92 y su raíz común con #93.** El transpilador tipa por su cuenta cada `let` sin
+anotar (`type_of`), y para una llamada genérica unifica los parámetros de la firma con los tipos
+de los argumentos. La firma guarda `Result<T, E>` tal como lo escribió el parser —`Struct("Result")`—
+y el tipo del argumento llega ya clasificado —`Enum("Result")`—, así que `unify` no casaba y
+`T`/`E` quedaban sin ligar. En 1.27.13 eso solo dejaba el `let` sin tipo (de ahí el
+«unknown return type of '__concat'» de #93 al usar un campo del valor); en 1.27.14 el turbofish de
+M313 tomó ese resultado a medias como tipo esperado y emitió `attempt::<T, E>` con los genéricos
+del *callee*. Dos arreglos: `unify` normaliza el parámetro antes de casar y acepta `Struct`/`Enum`
+del mismo nombre a ambos lados; y el turbofish comprueba que la ligadura no mencione los genéricos
+del callee (la guarda anterior comparaba contra un conjunto vacío y nunca disparaba). El test de
+tres motores fija el patrón entero (`resilience.retry`/`pool.run` de las apps).
+
+**Normalizar en los bordes (#76, #78).** El elemento de una tupla (`s.1`) y el retorno de una
+función no genérica salían de `type_of` sin normalizar (`Struct("Channel")` en vez de `Channel`),
+y `send`/`close` no los reconocían; y el tipo de un `if` era el de su rama `then` sin más, así que
+`[]` sin anotación moría aunque la rama `else` lo fijara (lo que el checker ya hacía desde M303).
+La regla general: `type_of` devuelve tipos normalizados y, si la rama `then` no se tipa sola, la
+`else` decide.
+
+**Un diagnóstico en raylang antes que tres E0277 (#77).** M271 ya rechazaba un closure guardado en
+una variable hacia un parámetro que cruza a `spawn`; el valor *calculado* (`run(mk(2))`,
+`serve_on(l, handler(tok))`) caía por el mismo agujero sin diagnóstico. El mismo brazo, por el tipo
+del argumento, con el mismo rodeo (closure inline, función nombrada, fábrica).
+
+**Tuplas: `(a, b)` también en `print` (#79).** La VM y el intérprete mostraban `[(1, "a")]` como
+`[[1, a]]` porque en su modelo de valores una tupla *es* un arreglo (erasure), mientras
+`to_string`/`assert_eq` daban `(1, a)` por el diccionario `Show` que M302 sintetiza —y el nativo,
+con su `RayShow` propio, siempre `(1, a)`. La forma canónica es la de M302. Distinguir tuplas en
+el runtime exigiría una marca solo para la presentación; en su lugar `print`/`eprint` de un valor
+cuyo tipo *contiene* una tupla y tiene diccionario `Show` baja a `print({ let __ps = dict;
+__ps(x) })` (`lower_print_shows`, antes de las demás bajadas): el mismo camino que ya recorren
+`to_string` y `assert_eq`, sin tocar el runtime. Un valor sin diccionario (un struct sin `Show`
+con un campo tupla) sigue por la presentación del runtime.
+
+**`==` con `Option.None` (#86).** `check_binary` tipaba cada operando por separado y
+`Option.None` no puede inferir `T` sola. Ahora, solo para `==`/`!=` y solo ante ese error de
+inferencia, el operando que no se tipa toma el tipo del otro (`check_expr_expected`), en cualquier
+orden: los demás mensajes (operandos incompatibles) no cambian, y el espejo selfhost hace lo
+mismo. Quedó a la vista que el checker selfhost no compara `Option` con `==` (gap previo, no
+cubierto por el corpus).
+
+**La pista de `import` (#89).** «no field or function 'to_json' applicable to string» no decía que
+`to_json` es un método del trait `ToJson` de `std/json`. El checker consulta un índice perezoso
+(`stdlib::primitive_trait_method`) construido escaneando la stdlib embebida: los métodos de los
+traits públicos que tienen `impl Trait for <primitivo>`. Hoy son dos traits (`ToJson` y `Signed`);
+el selfhost lleva la tabla a mano y un test de `stdlib.rs` la fija para que no derive.
+
+**`ray fmt` (#82, #88).** El reparto de una cadena de `+` aplanaba el spine entero, incluidas las
+piezas del azúcar de interpolación (que M29.3 reconstruye por su hoja izquierda y su cuenta de
+piezas): al aplanar, ninguna sub-expresión coincidía y salían `+ to_string(mark)`. `bin_chain`
+detiene el aplanado en un nodo que es raíz de interpolación y lo trata como texto al decidir si
+la cadena merece reparto. `json.obj()` se partía como `json` / `.obj()` porque `chain_links` no
+distingue un módulo de un receptor: el formateador ahora conoce los nombres locales de los
+`import` del archivo y deja la primera llamada con el módulo. Y el comentario tras un elemento
+interior de un arreglo escrito en varias líneas caía detrás del `;` porque una sentencia que sale
+en una línea pegaba el trailing de su *primera* línea de fuente; ahora pega el de la última y
+`has_inner_trailing` cuenta el de la primera como interior, con lo que `retry_wrapped` reparte la
+lista y el comentario vuelve a su elemento.
+
+**`ray doc` (#83, #84).** La forma `Tipo.metodo` resuelve una función libre por el tipo de su
+primer parámetro (UFCS: `string.last_index_of`) o un método de trait del prelude por sus `impl`
+(`bytes.index_of_from`, `Result.map`); el nombre a secas lista todas las variantes. Las líneas
+del prelude viven en su banda alta (`LINE_BASE`), así que la doc `///` se busca restando la base.
+El CLI, dentro de un proyecto, pasa la raíz (el `ray.toml` más cercano) al mismo resolutor que el
+MCP con `path`.
+
+**Un solo formato JSON (#87).** `json.obj()…render()` escribía `{"k": v, …}` y `stringify`
+`{"k":v,…}`; `@derive(ToJson)` seguía al builder. Se elige la forma compacta: `stringify` es el
+serializador canónico (claves ordenadas, ida y vuelta con `parse`) y es lo que un cliente HTTP
+espera por defecto. Es un cambio de bytes para quien comparaba texto crudo; va en el CHANGELOG.
+
+**Pipelining en `net/webserver` (#81).** `read_request_limits` leía de la conexión hasta el fin
+de cabeceras y descartaba lo que sobraba tras el cuerpo, así que dos peticiones en un `write`
+producían una respuesta. La lectura con arrastre (`read_request_carry`) recibe los octetos
+sobrantes de la petición anterior y devuelve los que siguen al cuerpo de esta; `handle_http`
+los enhebra entre iteraciones. Sin Content-Length ni chunked ya no hay cuerpo (RFC 7230
+§3.3.3): lo que venía tras las cabeceras es la siguiente petición. Un cuerpo chunked consume su
+trozo y no arrastra. `read_request_limits` queda como el caso `carry = b""`.
+
+**`local_token_via` (#85), `ray bundle --ios` (#90) y la doc móvil (#91)** son lo que dicen: la
+comprobación del token también informa por dónde llegó; la regeneración del proyecto Xcode
+preserva `xcshareddata/` y `xcuserdata/` (los esquemas compartidos guardan variables de entorno
+como la URL del frontend de desarrollo); el README de iOS va con el nombre de la app y en
+inglés, y `ui.app_url`/`ui.reply` documentan `RAY_DEV_FRONTEND_URL` y la ventana `0` de los
+shells.

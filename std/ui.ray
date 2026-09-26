@@ -35,6 +35,10 @@ pub struct UiEvent {
 /// with `mount_embed`. Any other URL is returned unchanged, except that under `ray dev` an
 /// `http://` URL of your own webserver also swaps its origin for the dev server's (so a
 /// webserver-backed app develops against Vite too). `open`/`open_with` apply it to `app://` URLs.
+/// A DEVELOPMENT build (`ray run --devtools`, `ray build --native --devtools`, `ray bundle
+/// --devtools`) also honours `RAY_DEV_FRONTEND_URL`: if that dev server answers, `app://` resolves
+/// there instead of the embedded build (hot reload on a phone); a build without `--devtools`
+/// always ignores it.
 pub fn app_url(url: string) -> string {
     let dev = __ui_frontend_url();
     if (url.starts_with("app://")) {
@@ -219,7 +223,8 @@ pub fn as_request(e: UiEvent) -> Option<(int, string)> {
 /// Resolves the page's Promise for the request `id` with `value` (M157): the page's
 /// `window.ray.request(...).then(v => …)` receives it as a string. Delivered over the same
 /// fire-and-forget `eval_js`; the JS literal is escaped natively in one pass (M225: linear —
-/// a 1 MB reply takes milliseconds, not seconds).
+/// a 1 MB reply takes milliseconds, not seconds). In the iOS/Android shells the page's events
+/// arrive with `window == 0` (the shell's single webview): `reply(0, id, value)` answers it.
 pub fn reply(window: int, id: int, value: string) -> Result<int, string> {
     let r = __ui_reply(window, id, value, false);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

@@ -31,6 +31,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **La stdlib que las apps rodeaban** (M304, IDEAS §97 #24, #25, #26, #30, #31, #32).
+  `s.last_index_of(sub)` y `b.last_index_of(needle)`; `b.index_of_from(needle, start)` sin
+  copiar; los combinadores `Option.and_then/unwrap_or_else` y
+  `Result.map/and_then/map_err/unwrap_or_else`; `Deque` con `get`, `peek_back`, `to_array` e
+  `iter`; `fs.symlink(target, link)`; y `json.Json` implementa `ToJson`, así que
+  `obj().field("d", Json.JNull)` y un valor parseado entran en el builder.
+
 - **Tres huecos del checker que las apps rodeaban** (M301–M303, IDEAS §97 #3, #5, #6).
   `while (true)` sin un `break` propio **diverge**: una `fn -> Result<…>` puede terminar en él
   sin el `Result.Err("unreachable")` muerto (el nativo lo emite como `loop`). `assert_eq` (y

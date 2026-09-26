@@ -33,6 +33,8 @@ pub enum FsOp {
     MakeTempDir,
     /// M265 (ray-sublime #97): la ruta real — symlinks seguidos, `.`/`..` resueltos (`fs.real_path`).
     RealPath,
+    /// M304 (IDEAS §97 #25): crea un enlace simbólico `link` → `target` (`fs.symlink`).
+    Symlink,
 }
 
 impl FsOp {
@@ -40,7 +42,7 @@ impl FsOp {
     pub fn argc(self) -> usize {
         match self {
             FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath => 1,
-            FsOp::Rename | FsOp::CopyFile => 2,
+            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink => 2,
             FsOp::TempDir => 0,
         }
     }

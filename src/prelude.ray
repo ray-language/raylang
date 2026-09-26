@@ -248,6 +248,11 @@ trait BytesOps {
     fn index_of(self, needle: bytes) -> Option<int>;
     /// Whether the bytes begin with `prefix` (an empty prefix always matches).
     fn starts_with(self, prefix: bytes) -> bool;
+    /// Octet index of the first occurrence of `needle` at or after `start`, or `None`. No
+    /// allocation: the incremental parser's `find(buf, from)` without copying with `sub_bytes`.
+    fn index_of_from(self, needle: bytes, start: int) -> Option<int>;
+    /// Octet index of the LAST occurrence of `needle`, or `None` (`Some(len)` for an empty needle).
+    fn last_index_of(self, needle: bytes) -> Option<int>;
 }
 
 impl BytesOps for bytes {
@@ -260,6 +265,50 @@ impl BytesOps for bytes {
     }
 
     fn starts_with(self, prefix: bytes) -> bool { __bytes_starts_with(self, prefix) }
+
+    // M304 (IDEAS §97 #31): búsqueda desde un offset SIN copiar (`b[i]` es O(1)).
+    fn index_of_from(self, needle: bytes, start: int) -> Option<int> {
+        let n = self.len();
+        let m = needle.len();
+        var i = if (start < 0) { 0 } else { start };
+        if (m == 0) {
+            return if (i <= n) { Option.Some(i) } else { Option.None };
+        }
+        while (i + m <= n) {
+            if (self[i] == needle[0]) {
+                var j = 1;
+                while (j < m && self[i + j] == needle[j]) {
+                    j = j + 1;
+                }
+                if (j == m) {
+                    return Option.Some(i);
+                }
+            }
+            i = i + 1;
+        }
+        Option.None
+    }
+
+    // M304 (IDEAS §97 #26): la ÚLTIMA ocurrencia (el `:` final de un `kitty_event`).
+    fn last_index_of(self, needle: bytes) -> Option<int> {
+        let n = self.len();
+        let m = needle.len();
+        if (m == 0) {
+            return Option.Some(n);
+        }
+        var i = n - m;
+        while (i >= 0) {
+            var j = 0;
+            while (j < m && self[i + j] == needle[j]) {
+                j = j + 1;
+            }
+            if (j == m) {
+                return Option.Some(i);
+            }
+            i = i - 1;
+        }
+        Option.None
+    }
 }
 
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
@@ -746,6 +795,10 @@ trait OptionOps<T> {
     fn ok_or<E>(self, err: E) -> Result<T, E>;
     /// Transforms the contained value with `f`, if any: `Some(x)` → `Some(f(x))`.
     fn map<U>(self, f: fn(T) -> U) -> Option<U>;
+    /// Chains a fallible step: `Some(x)` → `f(x)`, `None` → `None`.
+    fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U>;
+    /// The contained value, or `f()` when `None` (the default is computed only if needed).
+    fn unwrap_or_else(self, f: fn() -> T) -> T;
 }
 
 impl<T> OptionOps<T> for Option<T> {
@@ -788,6 +841,21 @@ impl<T> OptionOps<T> for Option<T> {
             Option.None => Option.None,
         }
     }
+
+    // M304 (IDEAS §97 #30): los combinadores que faltaban.
+    fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U> {
+        match (self) {
+            Option.Some(x) => f(x),
+            Option.None => Option.None,
+        }
+    }
+
+    fn unwrap_or_else(self, f: fn() -> T) -> T {
+        match (self) {
+            Option.Some(x) => x,
+            Option.None => f(),
+        }
+    }
 }
 
 /// Ergonomic accessors for `Result`: query, extract with a default, or panic with context.
@@ -805,6 +873,14 @@ trait ResultOps<T, E> {
     fn unwrap(self) -> T;
     /// Converts to an `Option`, discarding the error: `Ok(x)` → `Some(x)`.
     fn ok(self) -> Option<T>;
+    /// Transforms the `Ok` value with `f`: `Ok(x)` → `Ok(f(x))`; an `Err` passes through.
+    fn map<U>(self, f: fn(T) -> U) -> Result<U, E>;
+    /// Chains a fallible step: `Ok(x)` → `f(x)`; an `Err` passes through.
+    fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E>;
+    /// Transforms the error with `f`: `Err(e)` → `Err(f(e))`; an `Ok` passes through.
+    fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F>;
+    /// The `Ok` value, or `f(e)` computed from the error.
+    fn unwrap_or_else(self, f: fn(E) -> T) -> T;
 }
 
 impl<T, E> ResultOps<T, E> for Result<T, E> {
@@ -838,6 +914,35 @@ impl<T, E> ResultOps<T, E> for Result<T, E> {
         match (self) {
             Result.Ok(x) => Option.Some(x),
             Result.Err(e) => Option.None,
+        }
+    }
+
+    // M304 (IDEAS §97 #30): los combinadores que faltaban.
+    fn map<U>(self, f: fn(T) -> U) -> Result<U, E> {
+        match (self) {
+            Result.Ok(x) => Result.Ok(f(x)),
+            Result.Err(e) => Result.Err(e),
+        }
+    }
+
+    fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+        match (self) {
+            Result.Ok(x) => f(x),
+            Result.Err(e) => Result.Err(e),
+        }
+    }
+
+    fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F> {
+        match (self) {
+            Result.Ok(x) => Result.Ok(x),
+            Result.Err(e) => Result.Err(f(e)),
+        }
+    }
+
+    fn unwrap_or_else(self, f: fn(E) -> T) -> T {
+        match (self) {
+            Result.Ok(x) => x,
+            Result.Err(e) => f(e),
         }
     }
 }
@@ -1235,6 +1340,32 @@ fn env(name: string) -> Option<string> {
 fn index_of(s: string, sub: string) -> Option<int> {
     let r = __index_of(s, sub);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// M304 (IDEAS §97 #26): índice (de carácter) de la ÚLTIMA ocurrencia de `sub` en `s`; None si no
+// aparece. Sobre los arreglos de chars (índice O(1)); `Some(s.len())` con `sub` vacío.
+/// Returns the character index of the LAST occurrence of `sub` in `s`, or `None` if absent
+/// (`Some(s.len())` for an empty `sub`).
+fn last_index_of(s: string, sub: string) -> Option<int> {
+    let hay = s.chars();
+    let pat = sub.chars();
+    let n = hay.len();
+    let m = pat.len();
+    if (m == 0) {
+        return Option.Some(n);
+    }
+    var i = n - m;
+    while (i >= 0) {
+        var j = 0;
+        while (j < m && hay[i + j] == pat[j]) {
+            j = j + 1;
+        }
+        if (j == m) {
+            return Option.Some(i);
+        }
+        i = i - 1;
+    }
+    Option.None
 }
 
 // M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.

@@ -121,3 +121,58 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "4\ntrue\n7\ns\nassert_eq failed: (1, (2, true), z) != (1, (2, false), z)\nassert_eq failed: (1, a) != (1, b)\n");
 }
+
+/// M304 (IDEAS §97 #24, #25, #26, #30, #31, #32): la stdlib que las apps rodeaban — `last_index_of`
+/// (string y bytes), `bytes.index_of_from`, los combinadores de `Option`/`Result`, `Deque` con
+/// acceso e iteración, `fs.symlink` y `Json` como `ToJson` en el builder.
+#[test]
+fn stdlib_batch_runs_on_all_engines() {
+    let d = tmp("stdlib_batch");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/collections/deque;
+import std/fs;
+import std/json;
+
+fn main() -> int {
+    print("a:b:c".last_index_of(":").unwrap_or(0 - 1));
+    print("abc".last_index_of("x").is_none());
+    print("abc".last_index_of("").unwrap_or(0 - 1));
+    print(b"ab\r\nab\r\n".last_index_of(b"\r\n").unwrap_or(0 - 1));
+    print(b"ab\r\nab\r\n".index_of_from(b"\r\n", 3).unwrap_or(0 - 1));
+    print(b"abc".index_of_from(b"c", 5).is_none());
+    let o = Option.Some(2);
+    print(o.and_then(fn(x: int) -> Option<int> { if (x > 1) { Option.Some(x * 10) } else { Option.None } }).unwrap_or(0));
+    let n: Option<int> = Option.None;
+    print(n.unwrap_or_else(fn() -> int { 42 }));
+    let r: Result<int, string> = Result.Ok(3);
+    print(r.map(fn(x: int) -> int { x + 1 }).unwrap_or(0));
+    print(r.and_then(fn(x: int) -> Result<string, string> { Result.Ok(to_string(x) + "!") }).unwrap_or("?"));
+    let e: Result<int, string> = Result.Err("boom");
+    print(e.map_err(fn(m: string) -> int { m.len() }).is_err());
+    print(e.unwrap_or_else(fn(m: string) -> int { m.len() }));
+    var q: deque.Deque<int> = deque.new();
+    deque.push_back(q, 1);
+    deque.push_back(q, 2);
+    deque.push_back(q, 3);
+    let _ = deque.pop_front(q);
+    print(deque.get(q, 1).unwrap_or(0));
+    print(deque.get(q, 2).is_none());
+    print(deque.peek_back(q).unwrap_or(0));
+    for x in deque.iter(q) { print(x); }
+    print(deque.to_array(q).len());
+    let dir = fs.make_temp_dir("raysym").unwrap();
+    let _ = fs.write_file(dir + "/target.txt", "hi");
+    print(fs.symlink("target.txt", dir + "/link.txt").is_ok());
+    print(fs.stat(dir + "/link.txt").unwrap().kind);
+    print(fs.read_file(dir + "/link.txt").unwrap_or("?"));
+    print(fs.symlink("target.txt", dir + "/link.txt").is_err());
+    let _ = fs.remove_all(dir);
+    print(json.obj().field("d", json.Json.JNull).field("n", 1).field("arr", json.parse("[1,2]").unwrap()).to_json());
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "3\ntrue\n3\n6\n6\ntrue\n20\n42\n4\n3!\ntrue\n4\n3\ntrue\n3\n2\n3\n2\ntrue\nsymlink\nhi\ntrue\n{\"d\": null, \"n\": 1, \"arr\": [1,2]}\n");
+}

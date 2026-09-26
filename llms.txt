@@ -200,9 +200,12 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    `char_code(c) -> int`, `char_from_code(n) -> Option<char>`. When in doubt, `ray_doc <name>` gives the
    exact signature.
    `Option`/`Result` METHODS (prelude traits, no import; prefer them over a five-line `match`):
-   `o.is_some() o.is_none() o.unwrap_or(d) o.expect(msg) o.unwrap() o.ok_or(e)` (Option → Result) ·
-   `r.is_ok() r.is_err() r.unwrap_or(d) r.expect(msg) r.unwrap() r.ok()` (Result → Option). There is NO
-   `map`/`and_then`/`map_err`/`unwrap_or_else` on them yet: use `match` or `?` for those.
+   `o.is_some() o.is_none() o.unwrap_or(d) o.unwrap_or_else(f) o.expect(msg) o.unwrap() o.map(f)
+   o.and_then(f) o.ok_or(e)` (Option → Result) · `r.is_ok() r.is_err() r.unwrap_or(d)
+   r.unwrap_or_else(f) r.expect(msg) r.unwrap() r.map(f) r.and_then(f) r.map_err(f) r.ok()`
+   (Result → Option). Closures are typed in full: `o.map(fn(x: int) -> int { x * 2 })`.
+   Searches: `s.index_of(x) s.last_index_of(x)`, `b.index_of(n) b.index_of_from(n, start)
+   b.last_index_of(n)` (all `Option<int>`).
 3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
    are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*

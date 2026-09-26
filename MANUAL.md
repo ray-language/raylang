@@ -275,6 +275,15 @@ let back: Option<int> = r.ok();                 // Result → Option (descarta e
 let y = r.expect("config");                     // panic con contexto si es Err
 ```
 
+Y para ENCADENAR sin desenvolver, los combinadores (M304):
+
+```rust
+let port = env("PORT").and_then(fn(s: string) -> Option<int> { s.parse_int() }).unwrap_or(8080);
+let n = "42".parse_int().map(fn(x: int) -> int { x * 2 });          // Some(84)
+let cfg = fs.read_file(path).map_err(fn(e: string) -> string { "config: " + e });
+let v = r.and_then(fn(x: int) -> Result<int, string> { check(x) }).unwrap_or_else(fn(e: string) -> int { 0 });
+```
+
 Para PROPAGAR un fallo, el operador `?` (§5) sigue siendo la herramienta: `let v = r?;`.
 
 ### Sobrecarga de operadores

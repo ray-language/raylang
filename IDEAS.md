@@ -3752,15 +3752,15 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | PROPUESTO |
 | 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | ✅ **M299**: READMEs del monorepo y cabecera generada por `tools/publish-packages.sh` (`ray add` / `^ver` primero; git directo solo sin índice) — se refleja en los espejos en la próxima publicación |
 | 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | ✅ **M299** («Fan-out desde un actor» en el patrón actor) |
-| 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | PROPUESTO |
-| 25 | `fs.symlink` | stdlib | PROPUESTO |
-| 26 | `last_index_of` en string y bytes | stdlib | PROPUESTO |
+| 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | ✅ **M304** |
+| 25 | `fs.symlink` | stdlib | ✅ **M304**: `symlink(target, link)` (primitivo `__symlink`, tres motores; Windows elige archivo/directorio por el destino) |
+| 26 | `last_index_of` en string y bytes | stdlib | ✅ **M304** (en raylang, sobre `chars()`/`b[i]`) |
 | 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | ✅ **M299** (sigue vetado el literal dentro de un patrón de variante, que es lo que de verdad falla) |
 | 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | PROPUESTO |
 | 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | ✅ **M299**: tabla en REFERENCE §8 (+en), sección «Los métodos de `Option` y `Result`» en el MANUAL, línea en `llms.txt` (que además dice cuáles NO existen → #30) |
-| 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | PROPUESTO |
-| 31 | `bytes.index_of_from(needle, start)` | stdlib | PROPUESTO |
-| 32 | Deque con iteración e índice | stdlib | PROPUESTO |
+| 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | ✅ **M304** (+ `Result.unwrap_or_else`; `Option.map` ya existía) |
+| 31 | `bytes.index_of_from(needle, start)` | stdlib | ✅ **M304** (sin copiar; O(n·m) simple sobre `b[i]`) |
+| 32 | Deque con iteración e índice | stdlib | ✅ **M304**: `get`, `peek_back`, `to_array`, `iter` (instantánea) |
 | 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | PROPUESTO |
 | 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | PROPUESTO |
 | 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | PROPUESTO |

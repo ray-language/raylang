@@ -365,6 +365,14 @@ pub fn real_path(path: string) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+/// Creates a symbolic link at `link` pointing to `target` (`ln -s target link`); `Ok(0)` or
+/// `Err(message)`. `target` may be relative (resolved from the link's directory, as the OS does)
+/// and need not exist. `stat(link).kind` is `"symlink"`; `real_path(link)` follows it.
+pub fn symlink(target: string, link: string) -> Result<int, string> {
+    let r = __symlink(target, link);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Whether `inner` lives under `outer` once BOTH are resolved to their real paths — the check a
 /// program needs before touching a path a user or a model asked for: a symlink inside the folder
 /// that points outside it fails here even though its name looks internal. `Err` if either path

@@ -14738,3 +14738,23 @@ idea con dos ramas: si `then` tipa sin variables libres, `else` se chequea con e
 `check_function` en modo acumulativo). Si ninguna fija nada, el error original. Espejo en el
 selfhost con su `type_has_var(t, c.tparams)`.
 
+## 286. M304 — La stdlib que las apps rodeaban (sep 2026)
+
+Origen: IDEAS §97 #24, #25, #26, #30, #31, #32 — seis huecos pequeños, cada uno con su rodeo en
+alguna app (un bucle a mano para el último `:`, un `sub_bytes` por búsqueda en el parser RESP,
+un `match` de cinco líneas donde iba un `and_then`, un deque rotado entero con pop/push para
+recorrerlo, `ln -s` por `std/process`, y un builder JSON que no admitía `null`).
+
+Decisiones: (1) `last_index_of` e `index_of_from` van **en raylang** en el prelude — sobre
+`chars()` (índice O(1) en un arreglo) y `b[i]` (O(1)): O(n·m) simple, sin un primitivo nuevo por
+motor; el día que un perfil lo pida se baja a builtin sin cambiar la firma. (2) Los combinadores
+son métodos más de `OptionOps`/`ResultOps` (M61.3), con sus parámetros de tipo propios como ya
+hacía `ok_or<E>`; `Option.map` ya existía y `llms.txt` decía que no. (3) `Deque` no implementa
+`Iterator` (un `for x in d` que consumiera la cola sería una trampa): `iter(d)` es una
+instantánea perezosa (`to_array(d).iter()`), y `get(d, i)`/`peek_back` acceden sin mover nada.
+(4) `fs.symlink` sí es un primitivo (`FsOp::Symlink`, dos rutas, el mismo camino que `rename`):
+`std::os::unix::fs::symlink`, y en Windows `symlink_dir`/`symlink_file` según el destino (relativo
+al directorio del enlace, como hace el SO). Byte-idéntico en VM/intérprete/nativo
+(`__ray_symlink_prim`). (5) `impl ToJson for Json` es `stringify(self)`: el builder acepta
+`Json.JNull` y cualquier valor de `parse`. Los seis en `tests/findings_batch_cli.rs`, tres motores.
+

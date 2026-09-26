@@ -405,6 +405,29 @@ pub fn append_bytes_to_file(path: &str, data: &[u8]) -> std::io::Result<()> {
 
 /// M265: la ruta canónica como texto. Windows: `canonicalize` devuelve la forma extendida
 /// `\\?\C:\…`; se quita el prefijo para que compare con las rutas que escribe el programa.
+/// M304: enlace simbólico `link` → `target` (byte-idéntico al `__ray_symlink_prim` del nativo).
+pub fn symlink(target: &str, link: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let is_dir = std::path::Path::new(link)
+            .parent()
+            .map(|d| d.join(target))
+            .filter(|p| p.is_dir())
+            .is_some()
+            || std::path::Path::new(target).is_dir();
+        if is_dir { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::other("symlink is not supported on this platform"))
+    }
+}
+
 pub fn real_path_display(p: &std::path::Path) -> String {
     let s = p.to_string_lossy().into_owned();
     match s.strip_prefix(r"\\?\") {
@@ -448,6 +471,9 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
         }
         FsOp::Rename => std::fs::rename(&args[0], &args[1]),
         FsOp::CopyFile => std::fs::copy(&args[0], &args[1]).map(|_| ()),
+        // M304: `symlink(target, link)`. En Windows el tipo del enlace se elige por el destino
+        // (directorio → symlink_dir); un destino inexistente se enlaza como archivo.
+        FsOp::Symlink => symlink(&args[0], &args[1]),
         // M265: ["ok", ruta_real] — `canonicalize` (symlinks seguidos, `.`/`..` resueltos; la ruta
         // debe existir). En Windows se quita el prefijo `\\?\` que añade el kernel para que la
         // ruta sea comparable con lo que el programa escribe.
@@ -4322,6 +4348,13 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__rename", " (origen, target)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__rename expects a string (the source), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__rename expects a string (the target), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __symlink(target, link) -> [string] (M304): ["ok"] o ["err", msg]. std/fs → Result<int, string>.
+    Builtin { name: "__symlink", opcode: OpCode::FsTagged(FsOp::Symlink), check: |a| {
+        arity(a, 2, "__symlink", " (target, link)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__symlink expects a string (the target), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__symlink expects a string (the link path), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__copy_file", opcode: OpCode::FsTagged(FsOp::CopyFile), check: |a| {

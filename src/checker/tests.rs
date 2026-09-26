@@ -1895,3 +1895,12 @@ fn derive_show_unsupported_field_is_error() {
         "cannot derive Show for a field of type fn(int) -> int",
     );
 }
+
+/// M299 (findings 1.27.11 #12): un struct de la raíz (sin módulo) al que le falta un campo no lleva
+/// sugerencia de constructor; el caso con módulo (`ui.MenuItem` → `ui.item(...)`) va por el loader
+/// en `tests/ui_cli.rs`.
+#[test]
+fn missing_field_of_a_root_struct_has_no_constructor_hint() {
+    let e = check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1 }; p.x }").expect_err("falta y");
+    assert!(e.msg.contains("missing field 'y' in the literal of 'P'") && !e.msg.contains("constructor"), "{}", e.msg);
+}

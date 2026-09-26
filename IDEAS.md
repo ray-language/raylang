@@ -3743,21 +3743,21 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | PROPUESTO — unificar ramas antes de fallar la inferencia |
 | 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | PROPUESTO |
 | 11 | `ray doc` de constantes de módulo | tooling | PROPUESTO |
-| 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | PROPUESTO (barato) |
+| 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | ✅ **M299**: todo campo ausente en un struct de módulo sugiere el constructor público del módulo que lo devuelve (Rust + selfhost) |
 | 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor |
 | 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | PROPUESTO — `tcp_accept` con timeout, o corregir la doc |
 | 15 | `tcp_connect_timeout` que aparque la fibra | runtime | PROPUESTO — conexión no bloqueante + interés de escritura con plazo |
 | 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | PROPUESTO (net 0.3.6) |
-| 17 | README de `web`: `listen` reconstruye la app por petición (fuga de recursos si el builder abre conexiones) | doc/web | PROPUESTO — aviso + `on_close` |
+| 17 | README de `web`: `listen` reconstruye la app por petición (fuga de recursos si el builder abre conexiones) | doc/web | ✅ **M299** aviso en el README (el builder corre por CONEXIÓN); `on_close` sigue PROPUESTO |
 | 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | PROPUESTO |
-| 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | PROPUESTO (barato) |
-| 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | PROPUESTO (barato) |
+| 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | ✅ **M299**: READMEs del monorepo y cabecera generada por `tools/publish-packages.sh` (`ray add` / `^ver` primero; git directo solo sin índice) — se refleja en los espejos en la próxima publicación |
+| 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | ✅ **M299** («Fan-out desde un actor» en el patrón actor) |
 | 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | PROPUESTO |
 | 25 | `fs.symlink` | stdlib | PROPUESTO |
 | 26 | `last_index_of` en string y bytes | stdlib | PROPUESTO |
-| 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | PROPUESTO (barato) |
+| 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | ✅ **M299** (sigue vetado el literal dentro de un patrón de variante, que es lo que de verdad falla) |
 | 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | PROPUESTO |
-| 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | PROPUESTO (barato, alto impacto: las apps llenas de `match` de cinco líneas) |
+| 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | ✅ **M299**: tabla en REFERENCE §8 (+en), sección «Los métodos de `Option` y `Result`» en el MANUAL, línea en `llms.txt` (que además dice cuáles NO existen → #30) |
 | 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | PROPUESTO |
 | 31 | `bytes.index_of_from(needle, start)` | stdlib | PROPUESTO |
 | 32 | Deque con iteración e índice | stdlib | PROPUESTO |

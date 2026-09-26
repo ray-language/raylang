@@ -31,6 +31,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **El lote barato del barrido: diagnóstico y documentación** (M299, IDEAS §97 #12, #17, #19,
+  #20, #27, #29). Un campo ausente en el literal de un struct de módulo sugiere el constructor
+  público que lo devuelve (`missing field 'icon' in the literal of 'std::ui::MenuItem' (use the
+  constructor ui.item(string, string, string) — …)`, también en el checker autoalojado). Los
+  READMEs de `net`/`web` y la cabecera de los espejos enseñan el índice (`ray add`, `^ver`) antes
+  que el `git+https://…`; el de `web` avisa de que el builder de `listen` corre por conexión. El
+  MANUAL estrena «Los métodos de `Option` y `Result`» y «Fan-out desde un actor» (`try_send`);
+  REFERENCE (+en) lista los métodos de `Option`/`Result`; `llms.txt` los lista, dice cuáles no
+  existen aún y corrige que los patrones anidados sí existen desde 1.27.6.
+
 ## 1.27.11 — 2026-09-25
 
 - **`net` 0.3.5 / `web` 0.4.4: servidores locales de apps cerrados a su ventana** (M297, arco de

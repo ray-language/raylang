@@ -14659,3 +14659,31 @@ cierra, así que una salida abierta justo después heredaba la clave y el alimen
 SU entrada. `forget_ctl` borra solo si la entrada sigue siendo la propia (`Arc::ptr_eq`). Test de
 seis ciclos seguidos en `audio_cli` junto al de la cola acotada.
 
+## 283. M299 — El lote barato del barrido: diagnóstico y documentación (sep 2026)
+
+Origen: IDEAS §97 (los hallazgos no-bug de `RAYLANG-FINDINGS.md`), empezando por lo que cuesta
+poco y evita lo que más se repitió en las apps.
+
+**[12] El constructor como pista.** `ui.MenuItem` ganó `icon/enabled/checked` en 1.15 y dos apps
+que lo construían a mano dejaron de compilar con «missing field 'icon'» y nada más. La regla
+general, no un caso especial: si el struct es de un módulo (`M::Nombre`) y `M` tiene una función
+**pública** cuyo retorno es ese struct, el error la sugiere con los tipos de sus parámetros
+(`ui.item(string, string, string)`); la primera por orden de nombre, determinista. Un struct de
+la raíz no lleva pista. El espejo selfhost emite el mismo texto (nunca se dispara ahí: es
+pre-loader y no ve módulos, pero la regla de byte-identidad no admite excepciones).
+
+**[19] El índice primero.** Los READMEs del monorepo enseñaban `path:` y la cabecera que
+`tools/publish-packages.sh` antepone en los espejos, el índice y el `git+https://…@vX` al mismo
+nivel; ahora `ray add`/`^ver` es el camino y el git directo queda para el pin sin índice. Los
+espejos lo recogen en la próxima publicación (`--refresh-readme`).
+
+**[17], [20], [27], [29] Documentación.** El builder de `web.listen` corre por CONEXIÓN (no por
+petición: la fibra de cada conexión lo llama una vez y sirve su keep-alive con esa App) — el
+README lo dice y manda el estado compartido al patrón actor. Ese patrón gana el párrafo de
+fan-out: `send` sobre un canal cerrado es fatal y sobre uno lleno bloquea al actor; `try_send`
+y dar de baja al suscriptor. `llms.txt` decía que no había patrones anidados (M287 los trajo):
+ahora distingue lo que sí falla (un literal dentro de un patrón de variante). Y los métodos de
+`Option`/`Result` que ya existían (`OptionOps`/`ResultOps` del prelude) no estaban en ninguna
+referencia — por eso las apps llenas de `match` de cinco líneas para un default: tabla en
+REFERENCE, sección en el MANUAL, línea en `llms.txt` que además dice cuáles NO existen (#30).
+

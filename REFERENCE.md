@@ -339,7 +339,21 @@ definiendo el mismo nombre).
 | `Len` / `Push<T>` / `Contains<T>` | `len`/`push`/`contains` | los métodos de contenedor, como traits |
 | `Signed` | `abs(self) -> Self` | para el `abs` genérico de `std/math` |
 
-`Option<T>` (`Some`/`None`) y `Result<T, E>` (`Ok`/`Err`) son enums del prelude.
+`Option<T>` (`Some`/`None`) y `Result<T, E>` (`Ok`/`Err`) son enums del prelude, con estos
+**métodos** (traits `OptionOps`/`ResultOps` del prelude; se usan sin importar nada):
+
+| Receptor | Método | Descripción |
+|---|---|---|
+| `Option<T>` | `is_some() / is_none() -> bool` | ¿hay valor? |
+| `Option<T>` | `unwrap_or(default: T) -> T` | el valor o el default |
+| `Option<T>` | `expect(msg: string) -> T` / `unwrap() -> T` | el valor o `panic` (con `msg` de contexto; prefiere `expect`) |
+| `Option<T>` | `ok_or(err: E) -> Result<T, E>` | `None` → `Err(err)` |
+| `Result<T, E>` | `is_ok() / is_err() -> bool` | ¿éxito? |
+| `Result<T, E>` | `unwrap_or(default: T) -> T` | el valor o el default |
+| `Result<T, E>` | `expect(msg: string) -> T` / `unwrap() -> T` | el valor o `panic` |
+| `Result<T, E>` | `ok() -> Option<T>` | descarta el error |
+
+(No hay `map`/`and_then`/`map_err`/`unwrap_or_else`: IDEAS §97 #30.)
 
 ## 9. Iteradores
 

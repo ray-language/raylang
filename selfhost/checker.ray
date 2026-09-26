@@ -196,6 +196,68 @@ fn is_integer_type(t: Type) -> bool {
     }
 }
 
+// M299 (findings 1.27.11 #12): espejo de `constructor_hint` — el constructor público del módulo
+// que devuelve el struct al que le falta un campo (`ui.item(string, string, string)`).
+fn constructor_hint(c: Checker, struct_name: string) -> string {
+    let sep = struct_name.last_index_of_str("::");
+    if (sep < 0) {
+        return "";
+    }
+    let prefix = struct_name.substring(0, sep);
+    let msep = prefix.last_index_of_str("::");
+    let module = if (msep < 0) { prefix } else { prefix.substring(msep + 2, prefix.len()) };
+    var best = "";
+    for (fname, sig) in c.funcs {
+        if (!fname.starts_with(prefix + "::") || fname.contains("#")) {
+            continue;
+        }
+        let bare = fname.substring(prefix.len() + 2, fname.len());
+        if (bare.contains("::") || !c.pub_funcs.contains_key(fname)) {
+            continue;
+        }
+        let is_ctor = match (sig.ret) {
+            Type.TNamed(n, _) => n == struct_name,
+            _ => false,
+        };
+        if (is_ctor && (best == "" || fname < best)) {
+            best = fname;
+        }
+    }
+    if (best == "") {
+        return "";
+    }
+    let sig = c.funcs.get(best).unwrap();
+    var params = "";
+    var i = 0;
+    while (i < sig.params.len()) {
+        if (i > 0) {
+            params = params + ", ";
+        }
+        params = params + type_str(sig.params[i]);
+        i = i + 1;
+    }
+    let bare = best.substring(prefix.len() + 2, best.len());
+    " (use the constructor "
+        + module
+        + "."
+        + bare
+        + "("
+        + params
+        + ") — it fills the other fields with their defaults)"
+}
+
+// Índice del ÚLTIMO `sub` en `s` (-1 si no está): el `rsplit_once` del checker en Rust.
+fn last_index_of_str(s: string, sub: string) -> int {
+    var i = s.len() - sub.len();
+    while (i >= 0) {
+        if (s.substring(i, i + sub.len()) == sub) {
+            return i;
+        }
+        i = i - 1;
+    }
+    0 - 1
+}
+
 fn type_str(t: Type) -> string {
     match (t) {
         Type.TInt => "int",
@@ -3980,7 +4042,12 @@ fn check_struct_lit(
                         terr(
                             line,
                             col,
-                            "missing field '" + df.name + "' in the literal of '" + name + "'"
+                            "missing field '"
+                                + df.name
+                                + "' in the literal of '"
+                                + name
+                                + "'"
+                                + constructor_hint(c, name)
                         )
                     );
                 }

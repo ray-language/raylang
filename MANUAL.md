@@ -259,6 +259,24 @@ let f = "2.5".parse_float();            // Some(2.5) : Option<float>
 
 Para el caso interactivo, `read_int()` ya combina `input` + `parse_int` (→ `Option<int>`).
 
+### Los métodos de `Option` y `Result`
+
+Un `Option`/`Result` se desenvuelve con `match`, pero para los casos de siempre hay métodos (traits
+del prelude, disponibles sin importar nada) y ahorran el `match` de cinco líneas:
+
+```rust
+let n = "42".parse_int().unwrap_or(0);          // valor por defecto
+let ok = o.is_some();  let none = o.is_none();
+let v = o.expect("port is required");           // panic con contexto si es None (mejor que unwrap)
+let r: Result<int, string> = o.ok_or("missing"); // Option → Result
+
+let x = r.unwrap_or(0);  let good = r.is_ok();  let bad = r.is_err();
+let back: Option<int> = r.ok();                 // Result → Option (descarta el error)
+let y = r.expect("config");                     // panic con contexto si es Err
+```
+
+Para PROPAGAR un fallo, el operador `?` (§5) sigue siendo la herramienta: `let v = r?;`.
+
 ### Sobrecarga de operadores
 
 `+ - * /` y el `-` unario se sobrecargan implementando los traits `Add`/`Sub`/`Mul`/`Div`/`Neg`:
@@ -2735,6 +2753,12 @@ mismo emisor), y una operación servida entera por el actor es **atómica** — 
 read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás funciones**
 (una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
 y el actor muere cuando su canal se cierra (`close(ch)`).
+
+**Fan-out desde un actor** (un suscriptor por canal: SSE, WebSockets, notificaciones): el actor
+NO debe usar `send` a secas hacia sus suscriptores — `send` sobre un canal **cerrado** es un
+error fatal (tumba la fibra del actor) y sobre uno acotado y **lleno** bloquea al actor entero
+por un suscriptor lento. La forma correcta es `try_send(sub, v)`: `false` = ese suscriptor está
+cerrado o saturado, y el actor lo da de baja (o descarta el evento) y sigue con los demás.
 
 Las formas empaquetadas de este patrón, para no recablearlo: `kv.share`/`kv.open_shared` (un
 `Store` clave/valor compartido, con `incr`/`set_if` atómicos servidos por el actor), y en el

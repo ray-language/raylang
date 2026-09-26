@@ -1317,7 +1317,7 @@ impl Checker {
         for (dname, dty) in &declared {
             let matches: Vec<&(String, Expr)> = fields.iter().filter(|(fname, _)| fname == dname).collect();
             match matches.as_slice() {
-                [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'", dname, name))),
+                [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'{}", dname, name, self.constructor_hint(name)))),
                 [(_, value)] => {
                     let vt = self.check_value_against(value, dty, &sigma)?;
                     unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
@@ -2871,6 +2871,34 @@ impl Checker {
         } else {
             String::new()
         }
+    }
+
+    /// M299 (findings 1.27.11 #12): un literal de struct de un MÓDULO al que le falta un campo
+    /// —típicamente porque el struct ganó campos en una versión nueva (`ui.MenuItem` con
+    /// `icon/enabled/checked` en 1.15 rompió ray-remote y raydesk)— sugiere el **constructor
+    /// público** del módulo que devuelve ese struct (`ui.item(string, string, string)`), que es el
+    /// que rellena los campos nuevos con sus defaults. Solo structs con prefijo de módulo; el
+    /// candidato es la primera función pública de `M::` cuyo retorno es el struct (orden por
+    /// nombre, determinista). Espejo byte-idéntico en `selfhost/checker.ray`.
+    fn constructor_hint(&self, struct_name: &str) -> String {
+        let Some((prefix, _)) = struct_name.rsplit_once("::") else { return String::new() };
+        let module = prefix.rsplit("::").next().unwrap_or(prefix);
+        let mut candidates: Vec<&String> = self.functions.iter()
+            .filter(|(fname, sig)| {
+                fname.starts_with(prefix) && fname[prefix.len()..].starts_with("::")
+                    && !fname[prefix.len() + 2..].contains("::")
+                    && !fname.contains('#')
+                    && self.pub_functions.contains(*fname)
+                    && matches!(&sig.ret, Type::Struct(n, _) if n == struct_name)
+            })
+            .map(|(fname, _)| fname)
+            .collect();
+        candidates.sort();
+        let Some(fname) = candidates.first() else { return String::new() };
+        let sig = &self.functions[*fname];
+        let params: Vec<String> = sig.params.iter().map(|t| t.to_string()).collect();
+        let bare = &fname[prefix.len() + 2..];
+        format!(" (use the constructor {module}.{bare}({}) — it fills the other fields with their defaults)", params.join(", "))
     }
 
     /// M206 — paso 5 de §6.3, UFCS **dirigido por el tipo del receptor**: si `recv_ty` es un struct

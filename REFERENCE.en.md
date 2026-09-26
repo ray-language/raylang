@@ -338,7 +338,21 @@ defining the same name).
 | `Len` / `Push<T>` / `Contains<T>` | `len`/`push`/`contains` | the container methods, as traits |
 | `Signed` | `abs(self) -> Self` | for the generic `abs` of `std/math` |
 
-`Option<T>` (`Some`/`None`) and `Result<T, E>` (`Ok`/`Err`) are prelude enums.
+`Option<T>` (`Some`/`None`) and `Result<T, E>` (`Ok`/`Err`) are prelude enums, with these
+**methods** (prelude traits `OptionOps`/`ResultOps`; no import needed):
+
+| Receiver | Method | Description |
+|---|---|---|
+| `Option<T>` | `is_some() / is_none() -> bool` | is there a value? |
+| `Option<T>` | `unwrap_or(default: T) -> T` | the value or the default |
+| `Option<T>` | `expect(msg: string) -> T` / `unwrap() -> T` | the value or `panic` (with `msg` as context; prefer `expect`) |
+| `Option<T>` | `ok_or(err: E) -> Result<T, E>` | `None` → `Err(err)` |
+| `Result<T, E>` | `is_ok() / is_err() -> bool` | success? |
+| `Result<T, E>` | `unwrap_or(default: T) -> T` | the value or the default |
+| `Result<T, E>` | `expect(msg: string) -> T` / `unwrap() -> T` | the value or `panic` |
+| `Result<T, E>` | `ok() -> Option<T>` | drops the error |
+
+(No `map`/`and_then`/`map_err`/`unwrap_or_else` yet: IDEAS §97 #30.)
 
 ## 9. Iterators
 
@@ -609,4 +623,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:c25524d825b3 -->
+<!-- sync: sha256:0c09f956162b -->

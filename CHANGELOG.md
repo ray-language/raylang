@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.13 — 2026-09-26
 
 - **El segundo barrido de `ray-apps`: móvil, distribuido y bases de datos** (M309,
   `RAYLANG-FINDINGS.md` #38–#66; lo pendiente, en IDEAS §98).

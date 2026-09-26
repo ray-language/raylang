@@ -35,6 +35,7 @@ use emit::*;
 
 /// Firma de una función del usuario: params, retorno y sus parámetros de tipo (para inferir las
 /// llamadas genéricas por unificación).
+#[derive(Clone)]
 struct FnSig {
     params: Vec<Type>,
     ret: Type,
@@ -76,6 +77,16 @@ struct Transpiler {
     /// Nombres de los params marcados de la FUNCIÓN EN CURSO (para las capturas de spawn: se clonan,
     /// no se convierten — su bound ya garantiza Send).
     send_fn_params: std::collections::HashSet<String>,
+    /// M313: structs genéricos con campo `__ray_ph: PhantomData` (ver `phantom_structs` al construir).
+    phantom_structs: std::collections::HashSet<String>,
+    /// M313 (findings #71): el tipo ESPERADO de la expresión en curso (anotación de `let`, campo de un
+    /// literal de struct, `return`, argumento de llamada). Lo consume la llamada a una función genérica
+    /// cuyos parámetros de tipo no se deducen de los argumentos (aparecen solo en el retorno, como
+    /// `fn fill<T>(n: int) -> Channel<Slot<T>>`): rustc no puede inferirlos a través del tipo erasure
+    /// del canal (`__RayChan<__RaySend>`), así que se emiten en turbofish (`fill::<i64>(…)`).
+    expected_ty: Option<Type>,
+    /// M313: tipo de retorno de la función en curso (esperado de un `return`).
+    current_ret: Option<Type>,
     /// Conversores Send generados bajo demanda (H21-N5a): (tipo concreto, su rust_ty como clave única).
     /// El índice en el Vec es el id de las fns `__to_send_N`/`__from_send_N`; se emiten al final
     /// (worklist: generar el cuerpo de uno puede registrar otros — tipos anidados).
@@ -290,6 +301,19 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         prog.enums.iter().filter(|e| e.name != "Option" && e.name != "Result").map(|e| e.name.clone()).collect();
     let struct_fields = prog.structs.iter().map(|s| (s.name.clone(), s.fields.clone())).collect();
     let struct_tparams = prog.structs.iter().map(|s| (s.name.clone(), s.type_params.clone())).collect();
+    // M313 (findings #71): un struct genérico cuyo `T` solo aparece dentro de un `Channel`/`Task`
+    // (erasure: `__RayChan<__RaySend>`) no usaría `T` en Rust (E0392) → lleva un campo PhantomData.
+    let phantom_structs: std::collections::HashSet<String> = prog
+        .structs
+        .iter()
+        .filter(|s| {
+            s.type_params.iter().any(|tp| {
+                let one: std::collections::HashSet<String> = std::iter::once(tp.clone()).collect();
+                !s.fields.iter().any(|(_, ft)| ty_mentions_tparam(&normalize_type(ft), &one))
+            })
+        })
+        .map(|s| s.name.clone())
+        .collect();
     let enum_variants = prog
         .enums
         .iter()
@@ -332,6 +356,9 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         match_temp: 0,
         fn_marks: marks,
         send_fn_params: std::collections::HashSet::new(),
+        phantom_structs,
+        expected_ty: None,
+        current_ret: None,
         send_convs: Vec::new(),
         consts,
         trait_method_sigs,
@@ -410,6 +437,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             // El nombre de campo puede ser palabra reservada de Rust (`type`, `ref`, …): mismo mangle
             // que en literal/acceso/asignación → consistente.
             writeln!(out, "    {}: {},", mangle(fname), rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
+        }
+        if t.phantom_structs.contains(&s.name) {
+            // `fn() -> (T, …)`: Send + Sync + Clone + PartialEq sean cuales sean los `T`.
+            writeln!(out, "    __ray_ph: std::marker::PhantomData<fn() -> ({},)>,", s.type_params.join(", ")).unwrap();
         }
         out.push_str("}\n");
     }
@@ -709,6 +740,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // H21-N5a: los conversores Send registrados durante la emisión (tipos que cruzan hilos). Worklist:
     // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
     // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
+    t.emit_send_conv_impls(&mut out, prog)?; // M313: antes, porque registra conversores concretos
     t.emit_send_convs(&mut out)?;
     emit_runtime_features(&mut out, &mut t);
     // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.

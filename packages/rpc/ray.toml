@@ -3,6 +3,6 @@
 # `ray registry publish` — un paquete sin mod.ray la declara explícita).
 [package]
 name = "rpc"
-version = "0.1.2"
+version = "0.1.3"
 license = "Apache-2.0"
 entry = "rpc.ray"

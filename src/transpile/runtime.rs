@@ -292,6 +292,40 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
         // (`__RayChan<T>`/`__RayTask<T>` son genéricos y el árbol es monomórfico); `from` downcastea.
         "Ch(std::sync::Arc<dyn std::any::Any + Send + Sync>) }\n",
     ));
+    // M313 (findings #71): la conversión Send como TRAIT, para el código GENÉRICO. Los conversores
+    // numerados (`__to_send_N`) son por tipo concreto y no pueden nombrar el `T` de una función
+    // genérica (`fn fill<T>(…) -> Channel<Slot<T>>` emitía `Rc<Slot<T>>` fuera de ámbito: E0425).
+    // Un tipo que menciona un parámetro de tipo se convierte por el trait, que rustc monomorfiza;
+    // todo parámetro de tipo lleva el bound `__RaySendConv`, y cada struct/enum del programa recibe
+    // su impl genérico (`emit_send_conv_impls`). Los primitivos y contenedores van aquí.
+    out.push_str(concat!(
+        "trait __RaySendConv: Sized { fn __to_send(self) -> __RaySend; fn __from_send(__ss: __RaySend) -> Self; }\n",
+        "impl __RaySendConv for i64 { fn __to_send(self) -> __RaySend { __RaySend::I(self) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::I(__sx) => __sx, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for f64 { fn __to_send(self) -> __RaySend { __RaySend::F(self) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::F(__sx) => __sx, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for bool { fn __to_send(self) -> __RaySend { __RaySend::B(self) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::B(__sx) => __sx, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for char { fn __to_send(self) -> __RaySend { __RaySend::C(self) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::C(__sx) => __sx, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for () { fn __to_send(self) -> __RaySend { __RaySend::U } fn __from_send(__ss: __RaySend) -> Self { let _ = __ss; } }\n",
+        "impl __RaySendConv for u8 { fn __to_send(self) -> __RaySend { __RaySend::UI(self as u64) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::UI(__sx) => __sx as u8, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for u32 { fn __to_send(self) -> __RaySend { __RaySend::UI(self as u64) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::UI(__sx) => __sx as u32, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for u64 { fn __to_send(self) -> __RaySend { __RaySend::UI(self) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::UI(__sx) => __sx, _ => unreachable!() } } }\n",
+        "impl __RaySendConv for Rc<str> { fn __to_send(self) -> __RaySend { __RaySend::S(std::sync::Arc::<str>::from(&*self)) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::S(__sx) => Rc::<str>::from(&*__sx), _ => unreachable!() } } }\n",
+        "impl __RaySendConv for Rc<[u8]> { fn __to_send(self) -> __RaySend { __RaySend::By(std::sync::Arc::<[u8]>::from(&*self)) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::By(__sx) => Rc::<[u8]>::from(&*__sx), _ => unreachable!() } } }\n",
+        "impl<T: __RaySendConv + Clone> __RaySendConv for Rc<std::cell::RefCell<Vec<T>>> { fn __to_send(self) -> __RaySend { __RaySend::A(self.borrow().iter().map(|__sx| __sx.clone().__to_send()).collect()) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::A(__sa) => Rc::new(std::cell::RefCell::new(__sa.into_iter().map(T::__from_send).collect::<Vec<_>>())), _ => unreachable!() } } }\n",
+        "impl<T: __RaySendConv> __RaySendConv for Option<T> { fn __to_send(self) -> __RaySend { match self { Some(__sx) => __RaySend::E(0, vec![__sx.__to_send()]), None => __RaySend::E(1, vec![]) } } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::E(0, mut __sp) => Some(T::__from_send(__sp.remove(0))), __RaySend::E(_, _) => None, _ => unreachable!() } } }\n",
+        "impl<T: __RaySendConv, E: __RaySendConv> __RaySendConv for Result<T, E> { fn __to_send(self) -> __RaySend { match self { Ok(__sx) => __RaySend::E(0, vec![__sx.__to_send()]), Err(__sx) => __RaySend::E(1, vec![__sx.__to_send()]) } } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::E(0, mut __sp) => Ok(T::__from_send(__sp.remove(0))), __RaySend::E(_, mut __sp) => Err(E::__from_send(__sp.remove(0))), _ => unreachable!() } } }\n",
+    ));
+    // Tuplas de 2 a 8 elementos (impls explícitos; sin macro_rules: el fuente generado no lleva `$`).
+    for arity in 2..=8usize {
+        let names: Vec<String> = (0..arity).map(|i| format!("__T{i}")).collect();
+        let bounds: Vec<String> = names.iter().map(|n| format!("{n}: __RaySendConv")).collect();
+        let tos: Vec<String> = (0..arity).map(|i| format!("self.{i}.__to_send()")).collect();
+        let froms: Vec<String> = names.iter().map(|n| format!("{n}::__from_send(__si.next().unwrap())")).collect();
+        writeln!(
+            out,
+            "impl<{}> __RaySendConv for ({},) {{ fn __to_send(self) -> __RaySend {{ __RaySend::T(vec![{}]) }} fn __from_send(__ss: __RaySend) -> Self {{ match __ss {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); ({},) }}, _ => unreachable!() }} }} }}",
+            bounds.join(", "), names.join(", "), tos.join(", "), froms.join(", ")
+        ).unwrap();
+    }
     // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
     // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
     // ~2× en puro int-loop, ~20 % en fib, ~0 en código idiomático), wrapping — pero div/mod por
@@ -387,6 +421,8 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     } else {
         out.push_str("use std::collections::HashMap as __RayMap;\n");
     }
+    // M313: Map en la conversión Send por trait (ver `__RaySendConv`).
+    out.push_str("impl<K: __RaySendConv + Clone + std::hash::Hash + Eq, V: __RaySendConv + Clone> __RaySendConv for Rc<std::cell::RefCell<__RayMap<K, V>>> { fn __to_send(self) -> __RaySend { __RaySend::M(self.borrow().iter().map(|(__k, __v)| (__k.clone().__to_send(), __v.clone().__to_send())).collect()) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__k, __v)| (K::__from_send(__k), V::__from_send(__v))).collect::<__RayMap<_, _>>())), _ => unreachable!() } } }\n");
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
     // M280: `sort` sobre un `[T]` genérico ordena con el diccionario `less` del bound `T: Ord` (estable,
@@ -1716,6 +1752,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // Un canal dentro de un struct/enum mostrable se renderiza `<channel>`, como la VM
             // (`format_value`: canal/tarea no se inspeccionan textualmente).
             "impl<T> RayShow for __RayChan<T> { fn ray_show(&self) -> String { \"<channel>\".to_string() } }\n",
+            // M313: un canal cruza COMPARTIÉNDOSE también por el trait (mismo `Ch` type-erased).
+            "impl<T: Send + Sync + 'static> __RaySendConv for __RayChan<T> { fn __to_send(self) -> __RaySend { __RaySend::Ch(std::sync::Arc::new(self) as std::sync::Arc<dyn std::any::Any + Send + Sync>) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::Ch(__sc) => __sc.downcast_ref::<__RayChan<T>>().expect(\"channel type mismatch across threads\").clone(), _ => unreachable!() } } }\n",
             "impl<T: Send> __RayChan<T> {\n",
             "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new(__ray_sync_new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 })) } }\n",
             "    fn send(&self, v: T) {\n",
@@ -1929,6 +1967,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "struct __RayTask<T> { inner: std::sync::Arc<__RaySync<__TaskState<T>>>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, consumed: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
             "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone(), consumed: self.consumed.clone() } } }\n",
             "impl<T> RayShow for __RayTask<T> { fn ray_show(&self) -> String { \"<task>\".to_string() } }\n",
+            "impl<T: Send + Sync + 'static> __RaySendConv for __RayTask<T> { fn __to_send(self) -> __RaySend { __RaySend::Ch(std::sync::Arc::new(self) as std::sync::Arc<dyn std::any::Any + Send + Sync>) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::Ch(__sc) => __sc.downcast_ref::<__RayTask<T>>().expect(\"task type mismatch across threads\").clone(), _ => unreachable!() } } }\n",
             "const __RAY_TASK_CONSUMED: &str = \"task already consumed (join/try_join takes the task)\";\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",

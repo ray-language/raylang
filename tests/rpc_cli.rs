@@ -366,3 +366,134 @@ fn main() -> int {
     let _ = server.kill();
     let _ = server.wait();
 }
+
+/// M314 (findings #73/#74): el pool prefiere una conexión YA MARCADA a marcar otra, y una
+/// conexión reutilizada que falla por el cable (el servidor se reinició) se reemplaza y la
+/// llamada se repite UNA vez — salvo `retry: false` (métodos no idempotentes), que devuelve el
+/// error y deja el hueco vacío para la siguiente.
+#[test]
+fn pool_prefers_ready_connections_and_retries_once_after_a_restart() {
+    let base = project("pool_retry");
+    // Servidor con puerto FIJO (argumento), para poder reiniciarlo en el mismo sitio.
+    std::fs::write(
+        base.join("src/fixed.ray"),
+        r#"import rpc/rpc;
+from std/json import Json;
+
+fn main() -> int {
+    let port = match (parse_int(args()[0])) {
+        Option.Some(p) => p,
+        Option.None => panic("bad port"),
+    };
+    let stop: Channel<int> = Channel.new();
+    let r = rpc.serve_shutdown("127.0.0.1", port, stop, 200, fn(req: rpc.Req) -> Result<Json, string> {
+        if (req.method == "ping") {
+            Result.Ok(Json.JStr("pong"))
+        } else if (req.method == "apagar") {
+            send(stop, 1);
+            Result.Ok(Json.JStr("bye"))
+        } else {
+            Result.Err("método unknown: " + req.method)
+        }
+    });
+    0
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/retry.ray"),
+        r#"import rpc/rpc;
+from std/json import Json, stringify;
+import std/time;
+
+fn main() -> int {
+    let port = match (parse_int(args()[0])) {
+        Option.Some(p) => p,
+        Option.None => panic("bad port"),
+    };
+    let p = rpc.pool("127.0.0.1", port, 2);
+    // Dos llamadas CONCURRENTES: los dos huecos marcan conexión.
+    let t1 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "ping", Json.JNull) });
+    let t2 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "ping", Json.JNull) });
+    let _ = join(t1);
+    let _ = join(t2);
+    // El servidor se apaga (la llamada va por una conexión del pool y responde antes de parar).
+    let _ = rpc.pool_call(p, "apagar", Json.JNull);
+    print("stopped");
+    // El harness relanza el servidor en el mismo puerto: se espera a que acepte.
+    var up = false;
+    var tries = 0;
+    while (!up && tries < 200) {
+        match (rpc.connect("127.0.0.1", port)) {
+            Result.Ok(c) => { rpc.disconnect(c); up = true; },
+            Result.Err(_) => { time.sleep(25); tries = tries + 1; },
+        }
+    }
+    print("restarted=" + to_string(up));
+    // 1) sin reintento: la conexión reutilizada está muerta → error (y el hueco queda vacío).
+    var o = rpc.pool_opts();
+    o.retry = false;
+    match (rpc.pool_call_with(p, "ping", Json.JNull, o)) {
+        Result.Ok(_) => print("noretry=?"),
+        Result.Err(_) => print("noretry=err"),
+    }
+    // 2) con reintento (default): la OTRA conexión muerta se reemplaza y la llamada sale bien.
+    match (rpc.pool_call(p, "ping", Json.JNull)) {
+        Result.Ok(j) => print("retry=" + stringify(j)),
+        Result.Err(e) => print("retry err=" + e),
+    }
+    // 3) la conexión sana se prefiere al hueco vacío: sigue funcionando sin marcar otra.
+    match (rpc.pool_call(p, "ping", Json.JNull)) {
+        Result.Ok(j) => print("again=" + stringify(j)),
+        Result.Err(e) => print("again err=" + e),
+    }
+    rpc.pool_close(p);
+    0
+}
+"#,
+    )
+    .unwrap();
+    // Puerto libre: se toma del SO y se suelta.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let launch = |base: &std::path::Path| -> Child {
+        let mut child = Command::new(BIN)
+            .args(["run", "src/fixed.ray", &port.to_string()])
+            .current_dir(base)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("lanza el servidor fijo");
+        let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("lee el port");
+        assert!(line.contains(&port.to_string()), "anuncio del puerto: {line:?}");
+        child.stdout = Some(reader.into_inner());
+        child
+    };
+    let mut server = launch(&base);
+    let mut client = Command::new(BIN)
+        .args(["run", "src/retry.ray", &port.to_string()])
+        .current_dir(&base)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lanza el cliente");
+    let mut reader = BufReader::new(client.stdout.take().expect("stdout"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee 'stopped'");
+    assert_eq!(line.trim(), "stopped");
+    server.wait().ok(); // el servidor A suelta el puerto
+    let mut server_b = launch(&base);
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut reader, &mut rest).unwrap();
+    let status = client.wait().unwrap();
+    server_b.kill().ok();
+    server_b.wait().ok();
+    let mut err = String::new();
+    std::io::Read::read_to_string(client.stderr.as_mut().unwrap(), &mut err).ok();
+    assert_eq!(status.code(), Some(0), "stderr: {err}");
+    let lines: Vec<&str> = rest.lines().collect();
+    assert_eq!(lines, vec!["restarted=true", "noretry=err", "retry=\"pong\"", "again=\"pong\""], "salida: {rest:?}\n{err}");
+}
+

@@ -219,7 +219,8 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | suma un iterador (vía UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **terminales de iterador** (no son el mínimo de dos valores: eso es `math.min`) |
 | `sort` | `(xs: [T: Ord]) -> [T]` | ordena un arreglo (copia ordenada, estable); `T` primitivo o de usuario con `impl Ord` — también en nativo (M212) |
-| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | orden por **comparador** (`less(a, b)` = "a va antes") o por **clave** (M215); estables, copia nueva; también vía UFCS `xs.sort_by(…)` |
+| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | orden por **comparador** (`less(a, b)` = "a va antes"; devuelve **`bool`**, no un entero de tres valores) o por **clave** (M215); estables, copia nueva; también vía UFCS `xs.sort_by(…)` |
+| builtin como valor | `xs.map(to_string)` · `let f: fn(int) -> string = to_string` | M315: un builtin se pasa como función donde se **espera** un tipo función (su firma depende del tipo del argumento: `to_string` sobre `int` es `fn(int) -> string`); sin tipo esperado (`let g = to_string`) hay que anotar |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | aserciones del runner de tests; fallan con `panic` |
 
 ## 6. Métodos por tipo de receptor
@@ -260,6 +261,7 @@ que también existen como llamada libre (`metodo(recv, args)`).
 | `a.contains(x)` | `bool` | pertenencia (igualdad estructural) |
 | `a.position(x)` | `Option<int>` | índice de la primera ocurrencia |
 | `a.reverse()` | `[T]` | copia invertida |
+| `a.slice(from, to)` | `[T]` | copia de `[from, to)` con *clamp* como `substring` (M315; `args().slice(1, args().len())`) |
 | `a.sort()` | `[T]` | copia ordenada (`T: Ord`) |
 | `a.join(sep)` | `string` | solo `[string]` |
 | `a.map(f)` / `a.filter(p)` / `a.fold(init, f)` | eager | materializan un arreglo/valor (§9 para la versión perezosa) |

@@ -218,7 +218,8 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | sums an iterator (via UFCS: `it.sum()`) |
 | `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **iterator terminals** (not the minimum of two values: that is `math.min`) |
 | `sort` | `(xs: [T: Ord]) -> [T]` | sorts an array (sorted copy, stable); `T` primitive or a user type with `impl Ord` — natively too (M212) |
-| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | sort by **comparator** (`less(a, b)` = "a goes first") or by **key** (M215); stable, new copy; also via UFCS `xs.sort_by(…)` |
+| `sort_by` / `sort_by_key` | `(xs: [T], less: fn(T, T) -> bool) -> [T]` · `(xs: [T], key: fn(T) -> K: Ord) -> [T]` | sort by **comparator** (`less(a, b)` = "a goes first") or by **key** (M215); stable, new copy; also via UFCS `xs.sort_by(…)`  — `less(a, b)` returns **`bool`**, not a three-way integer |
+| builtin as a value | `xs.map(to_string)` · `let f: fn(int) -> string = to_string` | M315: a builtin can be passed as a function wherever a function type is **expected** (its signature depends on the argument type: `to_string` on `int` is `fn(int) -> string`); with no expected type (`let g = to_string`) annotate it |
 | `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | test-runner assertions; they fail with `panic` |
 
 ## 6. Methods by receiver type
@@ -259,6 +260,7 @@ also exist as free calls (`method(recv, args)`).
 | `a.contains(x)` | `bool` | membership (structural equality) |
 | `a.position(x)` | `Option<int>` | index of the first occurrence |
 | `a.reverse()` | `[T]` | reversed copy |
+| `a.slice(from, to)` | `[T]` | copy of `[from, to)`, clamped like `substring` (M315; `args().slice(1, args().len())`) |
 | `a.sort()` | `[T]` | sorted copy (`T: Ord`) |
 | `a.join(sep)` | `string` | only `[string]` |
 | `a.map(f)` / `a.filter(p)` / `a.fold(init, f)` | eager | materialize an array/value (§9 for the lazy version) |
@@ -635,4 +637,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:931ea00aff36 -->
+<!-- sync: sha256:1679dcdc2414 -->

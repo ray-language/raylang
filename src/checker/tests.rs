@@ -2007,6 +2007,20 @@ fn tuple_and_literal_patterns_exhaustiveness() {
     assert!(check_src("fn f(t: (int, string)) -> string { match (t) { (n, s) => s + n.to_string() } }\nfn main() {}").is_ok());
 }
 
+/// M315 (findings #70): un builtin como VALOR donde se espera un tipo función.
+#[test]
+fn builtins_as_function_values() {
+    assert!(check_src("fn main() { let xs = [1, 2]; let ss: [string] = xs.map(to_string); print(ss.len()); }").is_ok());
+    assert!(check_src("fn main() { let f: fn(int) -> string = to_string; print(f(1)); }").is_ok());
+    assert!(check_src("fn apply(f: fn(char) -> int, c: char) -> int { f(c) }\nfn main() { print(apply(char_code, 'a')); }").is_ok());
+    // Un tipo que el builtin no acepta, un retorno que no cuadra y el uso sin tipo esperado.
+    err_contains("struct P { x: int }\nfn main() { let ps = [P { x: 1 }]; print(ps.map(to_string)); }", "the builtin 'to_string' cannot be used as a value of type fn(P) -> U");
+    err_contains("fn main() { let f: fn(int) -> int = to_string; }", "'f' is declared as fn(int) -> int but initialized with fn(int) -> string");
+    err_contains("fn main() { let g = to_string; }", "name 'to_string' not declared (the builtin 'to_string' can be a value only where a function type is expected");
+    // Una variable local con el nombre del builtin gana (no es el builtin).
+    assert!(check_src("fn main() { let to_string = fn(x: int) -> int { x }; let f: fn(int) -> int = to_string; print(f(1)); }").is_ok());
+}
+
 /// M311 (findings #54): alias de tipo — expansión en firmas, campos, genéricos y cadenas; errores.
 #[test]
 fn type_aliases_expand_and_are_validated() {

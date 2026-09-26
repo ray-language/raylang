@@ -39,6 +39,7 @@ impl Checker {
             from_impls: HashMap::new(),
             try_conversions: HashMap::new(),
             uint_literal_sites: HashMap::new(),
+            builtin_value_sites: HashMap::new(),
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
@@ -1504,10 +1505,28 @@ impl Checker {
     pub(super) fn check_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
         let exp = subst(declared, sigma);
         if type_has_var(&exp) {
+            // M315 (findings #70): `xs.map(to_string)` — el parámetro es `fn(T) -> U` con `T` ya
+            // inferido y `U` libre: el builtin como valor fija `U` con su regla de tipado.
+            if let Type::Fn(params, _) = &exp
+                && self.builtin_as_value(value).is_some()
+                && !params.iter().any(type_has_var)
+            {
+                return self.check_expr_expected(value, &exp);
+            }
             self.check_expr(value)
         } else {
             self.check_expr_expected(value, &exp)
         }
+    }
+
+    /// M315: ¿`expr` es un identificador que solo puede ser un BUILTIN (no una variable, función,
+    /// constante ni parámetro de tipo con ese nombre)? Devuelve el builtin.
+    fn builtin_as_value(&self, expr: &Expr) -> Option<&'static crate::builtins::Builtin> {
+        let ExprKind::Ident(name) = &expr.kind else { return None };
+        if self.lookup(name).is_some() || self.functions.contains_key(name) || self.consts.contains_key(name) {
+            return None;
+        }
+        crate::builtins::lookup(name)
     }
 
     /// Para cada parámetro de tipo, recupera lo inferido en `σ` (en orden), o error si
@@ -2098,6 +2117,25 @@ impl Checker {
                 return self.coerce_to_dyn(expr, &traits.clone(), expr.line, expr.col);
             }
         }
+        // M315 (findings #70): un builtin en posición de VALOR con tipo función esperado
+        // (`xs.map(to_string)`, `let f: fn(int) -> string = to_string`) — su regla de tipado, aplicada
+        // a los params esperados, da el retorno; el lowering lo convierte en un closure que lo llama.
+        if let Type::Fn(params, _) = expected
+            && let Some(b) = self.builtin_as_value(expr)
+            && !params.iter().any(type_has_var)
+        {
+            let params: Vec<Type> = params.iter().map(|p| self.resolve_type(p)).collect();
+            return match (b.check)(&params) {
+                Ok(ret) => {
+                    let ret = self.resolve_type(&ret);
+                    self.builtin_value_sites.insert((expr.line, expr.col), (b.name.to_string(), params.clone(), ret.clone()));
+                    Ok(Type::Fn(params, Box::new(ret)))
+                }
+                Err((_, msg)) => Err(self.err(expr.line, expr.col, format!(
+                    "the builtin '{}' cannot be used as a value of type {}: {}", b.name, expected, msg
+                ))),
+            };
+        }
         // M28.3b: un literal entero adopta el ancho sin signo esperado (`let x: u8 = 5`).
         if let Type::UInt(w) = expected {
             if let Some(t) = self.coerce_uint_literal(expr, *w)? {
@@ -2367,6 +2405,14 @@ impl Checker {
                     let def = self.fn_defs.get(name).copied();
                     self.record_ident(expr.line, expr.col, name, &ty, def); // M10.2b
                     return Ok(ty);
+                }
+                // M315: un builtin solo es valor donde se espera un tipo función (su firma depende
+                // del tipo del argumento); sin esperado, se dice cómo.
+                if crate::builtins::lookup(name).is_some() {
+                    return Err(self.err(expr.line, expr.col, format!(
+                        "name '{}' not declared (the builtin '{}' can be a value only where a function type is expected: annotate it, e.g. 'let f: fn(int) -> string = {}', or pass it to a function parameter)",
+                        name, name, name
+                    )));
                 }
                 Err(self.err(expr.line, expr.col, format!("name '{}' not declared", name)))
             }

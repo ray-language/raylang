@@ -101,18 +101,30 @@ impl Transpiler {
     /// módulo — y el brazo genérico del final, nombres calificados `mod::fn`).
     pub(super) fn emit_user_call_hoisted(&mut self, out: &mut String, name: &str, eff: &[&Expr]) -> Result<(), String> {
         let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
+        let expected = self.expected_ty.take(); // pertenece a ESTA llamada, no a sus argumentos
+        let turbofish = self.generic_turbofish(name, eff, expected.as_ref(), &marked)?;
         if eff.is_empty() {
             out.push_str(&mangle(name));
+            out.push_str(&turbofish);
             out.push_str("()");
             return Ok(());
         }
         out.push_str("{ ");
+        let sig_params: Vec<Type> = self.funcs.get(name).map(|s| s.params.clone()).unwrap_or_default();
         for (i, a) in eff.iter().enumerate() {
             write!(out, "let __rt_a{} = ", i).unwrap();
-            self.emit_call_arg(out, a, marked.contains(&i))?;
+            // M313: el tipo del parámetro es el esperado del argumento (si no menciona genéricos del callee).
+            let no_marked = !marked.contains(&i);
+            match sig_params.get(i) {
+                Some(pt) if no_marked && !ty_mentions_tparam(pt, &std::collections::HashSet::new()) && matches!(a.kind, ExprKind::Call { .. }) => {
+                    let pt = pt.clone();
+                    self.emit_typed(out, a, &pt)?;
+                }
+                _ => self.emit_call_arg(out, a, marked.contains(&i))?,
+            }
             out.push_str("; ");
         }
-        write!(out, "{}(", mangle(name)).unwrap();
+        write!(out, "{}{}(", mangle(name), turbofish).unwrap();
         for i in 0..eff.len() {
             if i > 0 {
                 out.push_str(", ");
@@ -121,6 +133,47 @@ impl Transpiler {
         }
         out.push_str(") }");
         Ok(())
+    }
+
+    /// M313: los argumentos de tipo explícitos (`::<A, B>`) de una llamada a una función genérica de
+    /// usuario cuando alguno de sus parámetros de tipo NO se deduce de los argumentos (solo aparece en
+    /// el retorno) pero sí del tipo esperado. Los genéricos `__F` de los params marcados van como `_`.
+    /// Cadena vacía si no hace falta (o no se puede: sin esperado, o sin tipo cerrado).
+    fn generic_turbofish(&mut self, name: &str, eff: &[&Expr], expected: Option<&Type>, marked: &std::collections::HashSet<usize>) -> Result<String, String> {
+        let Some(sig) = self.funcs.get(name).cloned() else { return Ok(String::new()) };
+        if sig.tparams.is_empty() {
+            return Ok(String::new());
+        }
+        let mut subst: HashMap<String, Type> = HashMap::new();
+        for (p, a) in sig.params.iter().zip(eff) {
+            if let Ok(at) = self.type_of(a) {
+                let p = self.classify(p);
+                unify(&p, &self.classify(&at), &sig.tparams, &mut subst);
+            }
+        }
+        if sig.tparams.iter().all(|t| subst.contains_key(t)) {
+            return Ok(String::new()); // rustc los infiere de los argumentos
+        }
+        let Some(exp) = expected else { return Ok(String::new()) };
+        // El retorno se clasifica (Channel/Enum) como el esperado; el `T` del callee no está en
+        // `self.tparams`, así que queda como `Struct("T")` y `unify` lo trata como variable.
+        let ret = self.classify(&sig.ret);
+        unify(&ret, &self.classify(exp), &sig.tparams, &mut subst);
+        if !sig.tparams.iter().all(|t| subst.contains_key(t)) {
+            return Ok(String::new());
+        }
+        let mut args = Vec::new();
+        for t in &sig.tparams {
+            let ty = self.classify(&subst[t]);
+            if ty_mentions_tparam(&ty, &std::collections::HashSet::new()) && !ty_mentions_tparam(&ty, &self.tparams) {
+                return Ok(String::new());
+            }
+            args.push(rust_ty(&ty, &self.enums, &self.tparams)?);
+        }
+        for _ in marked {
+            args.push("_".into());
+        }
+        Ok(format!("::<{}>", args.join(", ")))
     }
 
     pub(super) fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
@@ -193,6 +246,14 @@ impl Transpiler {
 
     /// Expresión Rust que convierte `expr` (repr del PROGRAMA, owned) a `__RaySend` (deep copy).
     pub(super) fn to_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
+        // M313 (findings #71): un tipo que menciona un parámetro de tipo del ítem en curso no tiene
+        // conversor numerado (nombraría un `T` de otro ámbito): va por el trait, que rustc monomorfiza.
+        if ty_mentions_tparam(&self.classify(t), &self.tparams) {
+            if type_has_fn(&self.classify(t)) {
+                return Err("a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend".into());
+            }
+            return Ok(format!("__RaySendConv::__to_send({expr})"));
+        }
         Ok(match self.classify(t) {
             Type::Int => format!("__RaySend::I({expr})"),
             Type::Float => format!("__RaySend::F({expr})"),
@@ -256,6 +317,13 @@ impl Transpiler {
     /// Expresión Rust que reconstruye la repr del PROGRAMA desde `expr` (un `__RaySend` owned).
     pub(super) fn from_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
         let un = "_ => unreachable!()";
+        if ty_mentions_tparam(&self.classify(t), &self.tparams) {
+            if type_has_fn(&self.classify(t)) {
+                return Err("a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend".into());
+            }
+            let rty = rust_ty(t, &self.enums, &self.tparams)?;
+            return Ok(format!("<{rty} as __RaySendConv>::__from_send({expr})"));
+        }
         Ok(match self.classify(t) {
             Type::Int => format!("match {expr} {{ __RaySend::I(__sx) => __sx, {un} }}"),
             Type::Float => format!("match {expr} {{ __RaySend::F(__sx) => __sx, {un} }}"),
@@ -354,6 +422,109 @@ impl Transpiler {
         Ok(())
     }
 
+    /// M313: el `impl __RaySendConv` GENÉRICO de cada struct/enum del programa (sobre sus propios
+    /// parámetros de tipo), más un impl-stub para cada tipo función que aparece en campos/payloads
+    /// (como los `impl RayShow` de `<fn>`). Un tipo que no puede cruzar (campos función, `dyn`)
+    /// recibe un impl que panica — misma filosofía que los conversores numerados. Va ANTES de
+    /// `emit_send_convs`: los cuerpos pueden registrar conversores de tipos concretos anidados.
+    pub(super) fn emit_send_conv_impls(&mut self, out: &mut String, prog: &Program) -> Result<(), String> {
+        let stub = |name: &str| format!("value of a type holding functions cannot cross a thread boundary in the native backend (type '{name}'); rebuild it inside the fiber (e.g. web/framework's listen_app)");
+        let saved = std::mem::take(&mut self.tparams);
+        for s in &prog.structs {
+            self.tparams = s.type_params.iter().cloned().collect();
+            let gens = generic_bound(&s.type_params, GENERIC_BOUND);
+            let rty = format!("Rc<std::cell::RefCell<{}{}>>", mangle(&s.name), type_args(&s.type_params));
+            let body = (|| -> Result<String, String> {
+                // Un `dyn Trait` (struct sintético `__dyn_T`: closures que capturan el valor; sin
+                // campo `data` en Rust) nunca cruza hilos.
+                if s.name.starts_with("__dyn_") {
+                    return Err("dyn".into());
+                }
+                let mut tos = Vec::new();
+                let mut froms = Vec::new();
+                for (fname, fty) in &s.fields {
+                    tos.push(self.to_send_expr(fty, &format!("__sb.{}.clone()", mangle(fname)))?);
+                    froms.push(format!("{}: {}", mangle(fname), self.from_send_expr(fty, "__si.next().unwrap()")?));
+                }
+                if self.phantom_structs.contains(&s.name) {
+                    froms.push("__ray_ph: std::marker::PhantomData".into());
+                }
+                Ok(format!(
+                    "fn __to_send(self) -> __RaySend {{ let __sb = self.borrow(); __RaySend::T(vec![{}]) }} fn __from_send(__ss: __RaySend) -> Self {{ match __ss {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); Rc::new(std::cell::RefCell::new({} {{ {} }})) }}, _ => unreachable!() }} }}",
+                    tos.join(", "), mangle(&s.name), froms.join(", ")
+                ))
+            })();
+            let body = body.unwrap_or_else(|_| {
+                let msg = stub(&s.name);
+                format!("fn __to_send(self) -> __RaySend {{ panic!(\"{{}}\", {msg:?}) }} fn __from_send(__ss: __RaySend) -> Self {{ panic!(\"{{}}\", {msg:?}) }}")
+            });
+            writeln!(out, "#[allow(unused_variables, unused_mut)] impl{gens} __RaySendConv for {rty} {{ {body} }}").unwrap();
+        }
+        for e in &prog.enums {
+            if e.name == "Option" || e.name == "Result" {
+                continue;
+            }
+            self.tparams = e.type_params.iter().cloned().collect();
+            let gens = generic_bound(&e.type_params, GENERIC_BOUND);
+            let ename = mangle(&e.name);
+            let rty = format!("Rc<{}{}>", ename, type_args(&e.type_params));
+            // Mismo orden de variantes (por nombre) que los conversores numerados: to y from cuadran.
+            let mut variants: Vec<&crate::ast::VariantDef> = e.variants.iter().collect();
+            variants.sort_by(|a, b| a.name.cmp(&b.name));
+            let body = (|| -> Result<String, String> {
+                let mut to_arms = Vec::new();
+                let mut from_arms = Vec::new();
+                for (vi, v) in variants.iter().enumerate() {
+                    if v.payload.is_empty() {
+                        to_arms.push(format!("{ename}::{} => __RaySend::E({vi}, vec![])", mangle(&v.name)));
+                        from_arms.push(format!("({vi}, _) => Rc::new({ename}::{})", mangle(&v.name)));
+                    } else {
+                        let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__sp{i}")).collect();
+                        let mut tos = Vec::new();
+                        let mut froms = Vec::new();
+                        for (i, pty) in v.payload.iter().enumerate() {
+                            tos.push(self.to_send_expr(pty, &format!("__sp{i}.clone()"))?);
+                            froms.push(self.from_send_expr(pty, "__si.next().unwrap()")?);
+                        }
+                        to_arms.push(format!("{ename}::{}({}) => __RaySend::E({vi}, vec![{}])", mangle(&v.name), binds.join(", "), tos.join(", ")));
+                        from_arms.push(format!("({vi}, __sp) => {{ let mut __si = __sp.into_iter(); Rc::new({ename}::{}({})) }}", mangle(&v.name), froms.join(", ")));
+                    }
+                }
+                Ok(format!(
+                    "fn __to_send(self) -> __RaySend {{ match &*self {{ {} }} }} fn __from_send(__ss: __RaySend) -> Self {{ match __ss {{ __RaySend::E(__svi, __sp) => match (__svi, __sp) {{ {}, _ => unreachable!() }}, _ => unreachable!() }} }}",
+                    to_arms.join(", "), from_arms.join(", ")
+                ))
+            })();
+            let body = body.unwrap_or_else(|_| {
+                let msg = stub(&e.name);
+                format!("fn __to_send(self) -> __RaySend {{ panic!(\"{{}}\", {msg:?}) }} fn __from_send(__ss: __RaySend) -> Self {{ panic!(\"{{}}\", {msg:?}) }}")
+            });
+            writeln!(out, "#[allow(unused_variables, unused_mut)] impl{gens} __RaySendConv for {rty} {{ {body} }}").unwrap();
+        }
+        self.tparams = saved;
+        // Tipos función en campos/payloads: impl-stub (una función no cruza hilos).
+        let mut fn_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for s in &prog.structs {
+            let tps: std::collections::HashSet<String> = s.type_params.iter().cloned().collect();
+            for (_, fty) in &s.fields {
+                collect_fn_rayshow(fty, &self.enums, &tps, &mut fn_types);
+            }
+        }
+        for e in &prog.enums {
+            let tps: std::collections::HashSet<String> = e.type_params.iter().cloned().collect();
+            for v in &e.variants {
+                for pty in &v.payload {
+                    collect_fn_rayshow(pty, &self.enums, &tps, &mut fn_types);
+                }
+            }
+        }
+        for ft in &fn_types {
+            let msg = "a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend";
+            writeln!(out, "impl __RaySendConv for {ft} {{ fn __to_send(self) -> __RaySend {{ panic!(\"{{}}\", {msg:?}) }} fn __from_send(__ss: __RaySend) -> Self {{ panic!(\"{{}}\", {msg:?}) }} }}").unwrap();
+        }
+        Ok(())
+    }
+
     /// El cuerpo de UN par de conversores (`__to_send_id`/`__from_send_id`) para el tipo nominal `t`.
     pub(super) fn emit_send_conv_one(&mut self, out: &mut String, id: usize, t: &Type, rty: &str) -> Result<(), String> {
         {
@@ -385,6 +556,9 @@ impl Transpiler {
                         tos.join(", ")
                     )
                     .unwrap();
+                    if self.phantom_structs.contains(&n) {
+                        froms.push("__ray_ph: std::marker::PhantomData".into());
+                    }
                     writeln!(
                         out,
                         "fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ match __ss {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); Rc::new(std::cell::RefCell::new({} {{ {} }})) }}, _ => unreachable!() }} }}",

@@ -1100,10 +1100,6 @@ pub(super) fn subst_named_block(block: &mut Block, sigma: &HashMap<String, Type>
     map_types_block(block, &|t| subst_named(t, sigma));
 }
 
-pub(super) fn subst_named_expr(expr: &mut Expr, sigma: &HashMap<String, Type>) {
-    map_types_expr(expr, &|t| subst_named(t, sigma));
-}
-
 /// M311: aplica `f` a TODAS las anotaciones de tipo de un bloque (tipos de `let`, firmas de
 /// closures, casts), recursivamente. Generaliza `subst_named_block` (M40.2c); lo usa también la
 /// expansión de alias de tipo (`lower_type_aliases`).

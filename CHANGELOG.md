@@ -43,6 +43,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     nativo) — el estado va a una base de datos o un actor; los primitivos no pueden nombrar
     funciones; `signals()` y SIGWINCH.
 
+- **`ray test --native [--release]`** (M312, `RAYLANG-FINDINGS.md` #66): las mismas pruebas
+  sobre el binario nativo — cada suite se compila una vez (un `main` que despacha por el nombre
+  de la prueba) y cada prueba corre como proceso; mismo informe y códigos de salida, sin la
+  línea `at módulo:línea:col` (el nativo no lleva traza). Honra `[native] without`, los assets
+  embebidos y `[app]`; combinable con `--watch` y el filtro.
 - **Alias de tipo** (M311, `RAYLANG-FINDINGS.md` #54): `[pub] type Nombre<T, …> = tipo;` —
   `type Id = int`, `type Pair<T> = (T, T)`, `type Handler = fn(Req) -> Result<Json, string>`.
   Un nombre para un tipo, no un tipo nuevo: se expande en el checker y ningún motor lo ve; los

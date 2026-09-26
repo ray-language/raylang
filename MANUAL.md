@@ -2972,7 +2972,7 @@ manda — la variable siempre gana al default.
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
-ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
+ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios; --native [--release] sobre el binario nativo
 ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305)
 ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
@@ -3118,6 +3118,14 @@ suite aparte. Un fallo reporta su mensaje **y su ubicación** (`at módulo:líne
 `ray test` sale con **0** (todo verde) o **1** (hubo fallos) — ideal para CI; 65 si algo no
 compila. Un filtro (`ray test suma`, o `ray test archivo.ray suma`) selecciona por subcadena del
 nombre.
+
+**`ray test --native [--release]`** (M312) corre las mismas pruebas sobre el **binario nativo**:
+cada suite se compila una vez a un ejecutable cuyo `main` despacha por el nombre de la prueba, y
+cada prueba corre como un proceso aparte (aislada, como en la VM). El informe y los códigos de
+salida son los mismos; la única diferencia es que un fallo no trae la línea `at módulo:línea:col`
+(el nativo no lleva traza). Honra `[native] without`, los assets embebidos y `[app]` del
+proyecto; `--release` usa el perfil optimizado. Úsalo en CI junto al `ray test` normal: es la
+forma de cazar una divergencia VM/nativo antes de que la vea un usuario del binario.
 
 ### Templates compilados (`.ray.html`)
 

@@ -14984,3 +14984,32 @@ ve («unknown type: 'geo.Hidden' not declared»). El checker auto-alojado no lo 
 de paridad no usa alias y la stdlib tampoco (regla: la stdlib no usa sintaxis fuera del
 subconjunto metacircular).
 
+## 294. M312 — `ray test --native` (sep 2026)
+
+El hallazgo #66: las apps se prueban en la VM y se entregan en nativo, y una divergencia entre
+los dos motores (la clase de bugs de M309: E0277 en el reenvío de un handler, un `dyn` que no
+compilaba) solo aparecía al construir el binario final. Con `ray test --native` la misma suite
+corre sobre el nativo, en CI, con el mismo informe.
+
+**Un binario por suite, un proceso por prueba.** Compilar un binario por prueba costaría un
+build de cargo por cada `@test`. En su lugar el runner sintetiza, como AST (igual que el `main`
+por prueba de la VM, M101), un `main` de despacho: `if (args()[0] == "t1") { <cuerpo de t1> }
+else if (…) { … } else { 66 }`, donde cada rama es exactamente el cuerpo que la VM ejecuta por
+prueba (`() -> bool` → `if (t()) { 0 } else { 1 }`; `() -> unit` → `t(); 0`). Cada prueba corre
+como un proceso con su nombre global por argumento: el aislamiento es el del proceso (más fuerte
+que el de la VM, que cierra handles entre pruebas). El contrato de salida es el del `main`
+nativo: 0 pasa, 1 devolvió `false`, 70 error de ejecución (`runtime error: …` por stderr, que el
+runner recorta al mensaje), 66 nombre desconocido. stdout pasa tal cual (los `print` de una
+prueba se ven, como en la VM).
+
+**Lo que se comparte.** `build_native` se partió en carga+chequeo y `build_native_checked`
+(programa ya chequeado → binario), que el runner usa con la política del proyecto (`[native]
+without`, fibras según el host, assets embebidos y `[app]` de la entrada de la suite) y sin
+`--target` (las pruebas corren aquí). Un fallo del build nativo sale del proceso con el error de
+rustc (como `ray build --native`); un fallo de front-end sigue siendo «suite que no compila».
+
+**Lo que no hay.** La línea `at módulo:línea:col` de un fallo: el nativo no lleva traza (los
+errores de ejecución son un `panic_any(__RayErr)` sin posición, decisión de H6). Es la única
+diferencia visible del informe, y queda documentada. Los flags (`--native`, `--release`) no son
+ni suite ni filtro para `split_test_args`, y el watch los reenvía en la corrida selectiva.
+

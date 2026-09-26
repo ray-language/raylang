@@ -3799,5 +3799,5 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 63 | Servidor gRPC en `net` | PROPUESTO — `net/grpc_server` (+ generador de codecs desde `.proto`); raymart tiene la referencia (h2c, deadlines, metadata, interop grpcurl) |
 | 64 | `signals()` entrega SIGWINCH | ✅ M309: `serve_graceful` filtra; `shutdown_signals()`; docs |
 | 65 | HEAD y release con el mismo número | ✅ M309: `+dev.<sha>` y `[package] raylang` |
-| 66 | `ray test --native` | PROPUESTO — compilar cada suite a nativo (un binario por suite con su `main` sintético) |
+| 66 | `ray test --native` | ✅ M312: un binario por suite (`main` de despacho por nombre), una prueba por proceso; `--release`; combinable con `--watch` |
 

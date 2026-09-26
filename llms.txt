@@ -373,6 +373,7 @@ ray dev file.ray            # run + auto-restart on saved changes (hot reload; s
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
+ray test --native [--release]  # same tests on the NATIVE binary (one binary per suite, one process per test); same report/exit codes
 ray fmt file.ray            # canonical formatting
 ray doc file.ray            # API docs (raydoc)
 ray serve [dir]             # static file server for previews (127.0.0.1:8000; --host/--port; --port 0 = free)

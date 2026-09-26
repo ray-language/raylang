@@ -26,7 +26,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::ast::{Block, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type};
+use crate::ast::{BinaryOp, Block, Expr, ExprKind, Function, Program, Stmt, StmtKind, Type};
 use crate::loader::{self, Loaded};
 use crate::runtime::{TraceFrame, Value};
 use crate::{checker, diagnostic};
@@ -51,6 +51,8 @@ struct Test {
 /// fusionado y sus pruebas ya filtradas.
 struct Suite {
     display: String,
+    /// Ruta de la entrada de la suite (M312: ancla del build nativo — assets, `[app]`, nombre).
+    path: PathBuf,
     loaded: Loaded,
     tests: Vec<Test>,
 }
@@ -65,6 +67,15 @@ struct Suite {
 /// selecciona las pruebas cuyo nombre de cara al usuario lo **contiene** (subcadena). Imprime el
 /// informe y los errores.
 pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>) -> i32 {
+    run_with(suite_paths, dep_roots, filter, None)
+}
+
+/// M312 (findings #66): como `run`, con el modo de ejecución. `native = Some(opts)` compila cada
+/// suite a UN binario nativo (`main` sintético que despacha por el nombre de la prueba recibido
+/// como argumento) y corre cada prueba como un proceso: mismo informe, mismos códigos de salida.
+/// Una suite cuyo binario no compila aborta la corrida (el build nativo sale del proceso con el
+/// error de rustc; un fallo de front-end sigue contando como «suite que no compila», 65).
+pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>, native: Option<crate::cli::NativeTestOptions>) -> i32 {
     // M146: una suite no abre ventanas reales por defecto — std/ui corre headless bajo el
     // runner (RAY_UI_BACKEND en el entorno sigue mandando si el usuario lo puso).
     #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
@@ -81,7 +92,7 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
         match loader::load_with_deps(path, dep_roots) {
             Ok(loaded) => {
                 let tests = collect_tests(&loaded.program, filter, i > 0);
-                suites.push(Suite { display: display_path(path), loaded, tests });
+                suites.push(Suite { display: display_path(path), path: path.clone(), loaded, tests });
             }
             Err(e) => {
                 eprintln!("{}", e.message);
@@ -128,21 +139,34 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
         return 0;
     }
 
-    println!("running {} test(s)\n", total);
+    match &native {
+        Some(opts) => println!("running {} test(s) — native binaries{}\n", total, if opts.release { " (release)" } else { "" }),
+        None => println!("running {} test(s)\n", total),
+    }
+    // M312: un binario por suite, en un directorio temporal propio (se borra al terminar).
+    let native_dir = native.as_ref().map(|_| std::env::temp_dir().join(format!("ray_test_native_{}", std::process::id())));
     let multi_suite = suites.iter().filter(|s| !s.tests.is_empty()).count() > 1;
     let mut failures = 0;
     let mut ran = 0;
-    for (suite, ok) in suites.iter().zip(&compiles) {
+    for (idx, (suite, ok)) in suites.iter().zip(&compiles).enumerate() {
         if suite.tests.is_empty() || !ok {
             continue;
         }
+        let binary = match (&native, &native_dir) {
+            (Some(opts), Some(dir)) => Some(build_suite_binary(suite, idx, dir, opts)),
+            _ => None,
+        };
         if multi_suite {
             println!("-- {}", suite.display);
         }
         for test in &suite.tests {
             ran += 1;
             let started = Instant::now();
-            match run_one(suite, test) {
+            let outcome = match &binary {
+                Some(bin) => run_one_native(bin, test),
+                None => run_one(suite, test),
+            };
+            match outcome {
                 Ok(()) => println!("ok    {} ({} ms)", test.display, started.elapsed().as_millis()),
                 Err(reason) => {
                     println!("FAIL  {}", test.display);
@@ -160,6 +184,9 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
 
     if !multi_suite {
         println!();
+    }
+    if let Some(dir) = &native_dir {
+        let _ = std::fs::remove_dir_all(dir);
     }
     // El resumen cuenta lo EJECUTADO: una suite que no compila deja fuera sus pruebas (y el
     // código de salida 65 ya lo delata).
@@ -238,29 +265,7 @@ fn check_suite(suite: &Suite) -> Result<(), String> {
 /// prueba, lo verifica (el check también **baja** el programa: enums, UFCS, dicts…) y lo corre.
 /// `Ok(())` = pasó; `Err(líneas)` = falló, con el motivo y —si la hay— la ubicación.
 fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
-    let call = call_expr(&test.global);
-    let body = match test.kind {
-        // bool: `fn main() -> int { if (t()) { 0 } else { 1 } }`.
-        Kind::Bool => Block {
-            statements: vec![],
-            tail: Some(Box::new(expr(ExprKind::If {
-                cond: Box::new(call),
-                then_branch: int_block(0),
-                else_branch: Some(Box::new(expr(ExprKind::Block(int_block(1))))),
-            }))),
-            line: 1,
-            col: 1,
-            end_line: 1,
-        },
-        // unit: `fn main() -> int { t(); 0 }` — un panic/aserción aborta con error.
-        Kind::Unit => Block {
-            statements: vec![stmt_call(&test.global)],
-            tail: Some(Box::new(expr(ExprKind::Int(0, crate::token::Radix::DEC)))),
-            line: 1,
-            col: 1,
-            end_line: 1,
-        },
-    };
+    let body = test_body(test);
     let mut program = swap_main(suite.loaded.program.clone(), synth_main(body));
     if let Err(e) = checker::check(&mut program) {
         // No debería pasar (el chequeo de la suite ya corrió), pero el check es obligatorio
@@ -290,6 +295,119 @@ fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
             }
             Err(lines)
         }
+    }
+}
+
+/// M312: compila la suite a un binario nativo cuyo `main` despacha por el nombre de la prueba
+/// (`args()[0]`): `if (args()[0] == "t1") { … } else if (…) { … } else { 66 }`. El cuerpo de cada
+/// rama es el mismo `main` sintético que la VM ejecuta por prueba.
+fn build_suite_binary(suite: &Suite, idx: usize, dir: &Path, opts: &crate::cli::NativeTestOptions) -> PathBuf {
+    let mut chain = int_block(66);
+    for test in suite.tests.iter().rev() {
+        let selector = expr(ExprKind::Index {
+            array: Box::new(call_expr("args")),
+            index: Box::new(expr(ExprKind::Int(0, crate::token::Radix::DEC))),
+        });
+        let cond = expr(ExprKind::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(selector),
+            right: Box::new(expr(ExprKind::Str(test.global.clone()))),
+        });
+        let branch = expr(ExprKind::If {
+            cond: Box::new(cond),
+            then_branch: test_body(test),
+            else_branch: Some(Box::new(expr(ExprKind::Block(chain)))),
+        });
+        chain = Block { statements: vec![], tail: Some(Box::new(branch)), line: 1, col: 1, end_line: 1 };
+    }
+    let mut program = swap_main(suite.loaded.program.clone(), synth_main(chain));
+    if let Err(mut e) = checker::check(&mut program) {
+        // No debería pasar (la suite ya se chequeó); se renderiza como `check_suite`.
+        let (module, source, local, col, len) = suite.loaded.locate(e.line, e.col, e.len);
+        e.line = local;
+        e.col = col;
+        let head = if suite.loaded.multi_module() { format!("[{}] {}", module, e) } else { e.to_string() };
+        eprintln!("{}", diagnostic::render(source, local, col, len, &head));
+        std::process::exit(65);
+    }
+    let _ = std::fs::create_dir_all(dir);
+    let stem = suite.path.file_stem().and_then(|s| s.to_str()).unwrap_or("suite");
+    let out = dir.join(format!("{stem}_{idx}"));
+    let entry = suite.path.to_string_lossy().into_owned();
+    let built = crate::cli::build_native_test_binary(&program, &entry, &out.to_string_lossy(), opts);
+    PathBuf::from(built)
+}
+
+/// M312: corre UNA prueba del binario de su suite. Contrato del `main` sintético: 0 = pasa, 1 =
+/// devolvió `false`, 70 = error de ejecución (`runtime error: …` en stderr, sin posición: el
+/// nativo no lleva traza), 66 = nombre desconocido (no debería pasar). stdout pasa tal cual.
+fn run_one_native(binary: &Path, test: &Test) -> Result<(), Vec<String>> {
+    let output = match std::process::Command::new(binary)
+        .arg(&test.global)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped())
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => return Err(vec![format!("could not run the test binary '{}': {e}", binary.display())]),
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lines = || -> Vec<String> {
+        stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| l.strip_prefix("runtime error: ").unwrap_or(l).to_string())
+            .collect()
+    };
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(1) => Err(vec!["the test returned false".into()]),
+        Some(70) => {
+            let mut lines = stderr_lines();
+            if lines.is_empty() {
+                lines.push("runtime error".into());
+            }
+            Err(lines)
+        }
+        Some(code) => {
+            let mut lines = vec![format!("the test binary exited with code {code}")];
+            lines.extend(stderr_lines());
+            Err(lines)
+        }
+        None => {
+            let mut lines = vec!["the test binary was killed by a signal".to_string()];
+            lines.extend(stderr_lines());
+            Err(lines)
+        }
+    }
+}
+
+/// El cuerpo del `main` sintético de una prueba (compartido por la VM y el nativo).
+fn test_body(test: &Test) -> Block {
+    let call = call_expr(&test.global);
+    match test.kind {
+        // bool: `fn main() -> int { if (t()) { 0 } else { 1 } }`.
+        Kind::Bool => Block {
+            statements: vec![],
+            tail: Some(Box::new(expr(ExprKind::If {
+                cond: Box::new(call),
+                then_branch: int_block(0),
+                else_branch: Some(Box::new(expr(ExprKind::Block(int_block(1))))),
+            }))),
+            line: 1,
+            col: 1,
+            end_line: 1,
+        },
+        // unit: `fn main() -> int { t(); 0 }` — un panic/aserción aborta con error.
+        Kind::Unit => Block {
+            statements: vec![stmt_call(&test.global)],
+            tail: Some(Box::new(expr(ExprKind::Int(0, crate::token::Radix::DEC)))),
+            line: 1,
+            col: 1,
+            end_line: 1,
+        },
     }
 }
 

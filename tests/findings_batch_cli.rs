@@ -449,6 +449,45 @@ fn output_dir_self_import_and_required_raylang() {
     assert_eq!(out, "1\n");
 }
 
+/// #66 (M312): `ray test --native` compila cada suite a un binario (un `main` de despacho por
+/// nombre de prueba) y corre cada prueba como proceso: mismo informe y códigos que la VM, sin la
+/// línea `at módulo:línea:col` (el nativo no lleva traza).
+#[test]
+fn ray_test_native_runs_each_suite_as_a_binary() {
+    if !has_rustc() {
+        return;
+    }
+    let d = tmp("m312_test_native");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::create_dir_all(d.join("tests")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"m312\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(
+        d.join("src/math.ray"),
+        "pub fn double(x: int) -> int { x * 2 }\n@test\nfn double_ok() -> bool { double(2) == 4 }\n@test\nfn double_fails() -> bool { double(2) == 5 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import math;\n@test\nfn prints_and_passes() { print(\"hello from test\"); assert_eq(math.double(3), 6); }\n@test\nfn asserts_fail() { assert_eq(math.double(3), 7); }\n@test\nfn panics() { panic(\"boom\"); }\nfn main() -> int { print(math.double(21)); 0 }\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("tests/extra.ray"), "import math;\n@test\nfn extra_ok() -> bool { math.double(5) == 10 }\n").unwrap();
+    let (out, err, code) = ray(&d, &["test", "--native"]);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(out.contains("running 6 test(s) — native binaries"), "{out}");
+    assert!(out.contains("hello from test\nok    prints_and_passes ("), "{out}");
+    assert!(out.contains("FAIL  asserts_fail\n        assert_eq failed: 6 != 7\n"), "{out}");
+    assert!(out.contains("FAIL  panics\n        boom\n"), "{out}");
+    assert!(out.contains("FAIL  math.double_fails\n        the test returned false\n"), "{out}");
+    assert!(out.contains("-- tests/extra.ray\nok    extra_ok ("), "{out}");
+    assert!(out.contains("result: 3 of 6 test(s) failed ✗"), "{out}");
+    // Filtro + `--release`: solo la prueba pedida, en verde; los flags no se toman por filtro.
+    let (out, err, code) = ray(&d, &["test", "--native", "double_ok", "--release"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 1 test(s) — native binaries (release)"), "{out}");
+    assert!(out.contains("result: 1 test(s), all passed ✓"), "{out}");
+}
+
 /// #54 (M311): alias de tipo — en firmas, campos, genéricos, closures, `Map`, `Option`/`Result`,
 /// y a través de módulos (`pub type`, `geo.Pt`, `from geo import Named`; un alias privado no se ve).
 #[test]

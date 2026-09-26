@@ -109,7 +109,7 @@ Project:
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
-  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
+  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
   serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
@@ -2986,7 +2986,15 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     }
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_entry(&program, exclude, fast, fibers, embed, lib_mode) {
+    build_native_checked(&program, path, output, release, exclude, target, fast, no_stubs, fibers, embed, lib_mode)
+}
+
+/// M312 (findings #66): la mitad de `build_native` que parte de un programa YA cargado y chequeado —
+/// compartida con `ray test --native`, que sintetiza el `main` de cada suite como AST (no hay
+/// archivo que cargar). Devuelve la ruta del binario; sale del proceso si el build falla.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+    let transpiled = match crate::transpile::transpile_entry(program, exclude, fast, fibers, embed, lib_mode) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
@@ -3061,6 +3069,30 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target, lib_mode);
     }
     out_bin
+}
+
+/// M312 (findings #66): opciones del build nativo de `ray test --native`: la política estable del
+/// proyecto (`[native] without` del ray.toml) y el modo fibras que le corresponde; sin `--target`
+/// (las suites corren en el host) y con el perfil dev salvo `--release`.
+pub(crate) struct NativeTestOptions {
+    pub release: bool,
+    exclude: Vec<String>,
+    fibers: bool,
+}
+
+pub(crate) fn native_test_options(release: bool) -> NativeTestOptions {
+    let exclude: Vec<String> = load_manifest().map(|m| m.native_without).unwrap_or_default();
+    let without_fibers = exclude.iter().any(|d| d == "fibers");
+    let fibers = fibers_for_target(None, without_fibers);
+    NativeTestOptions { release, exclude, fibers }
+}
+
+/// M312: compila el programa de una suite (con su `main` sintético de despacho) a un binario en
+/// `out_bin`. Los assets embebidos y el `[app]` salen del proyecto de la suite, como en `ray build`.
+pub(crate) fn build_native_test_binary(program: &crate::ast::Program, suite_path: &str, out_bin: &str, opts: &NativeTestOptions) -> String {
+    let embed = collect_embed(suite_path, None);
+    configure_native_app_info(suite_path);
+    build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, false, opts.fibers, &embed, false)
 }
 
 /// M186: la extensión que Windows EXIGE en el nombre de salida — `.exe` para un binario, `.lib` para
@@ -3592,25 +3624,32 @@ fn cmd_test_sub(args: &[String]) {
     if watch {
         cmd_test_watch(&args);
     }
+    // M312 (findings #66): `--native` compila cada suite a un binario nativo (con un `main` de
+    // despacho) y corre cada prueba como proceso; `--release` elige el perfil optimizado.
+    let (native, args) = take_flag_bool(&args, "--native");
+    let (release, args) = take_flag_bool(&args, "--release");
     let (explicit, filter) = split_test_args(&args);
     let (suites, roots) = test_suites_and_roots(&explicit);
-    process::exit(test_runner::run(&suites, &roots, filter.as_deref()));
+    let mode = if native { Some(native_test_options(release)) } else { None };
+    process::exit(test_runner::run_with(&suites, &roots, filter.as_deref(), mode));
 }
 
 /// Separa los argumentos de `ray test`: los `.ray` iniciales son suites explícitas (una o
 /// VARIAS, M141 — la vía del watch selectivo) y el primer argumento que no termina en `.ray`
 /// es el filtro por nombre.
 fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
+    // M312: los flags (`--native`, `--release`) no son ni suite ni filtro (el watch los reenvía).
+    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let mut explicit = Vec::new();
     let mut idx = 0;
     while let Some(a) = args.get(idx) {
         if !a.ends_with(".ray") {
             break;
         }
-        explicit.push(a.clone());
+        explicit.push((*a).clone());
         idx += 1;
     }
-    (explicit, args.get(idx).cloned())
+    (explicit, args.get(idx).map(|a| (*a).clone()))
 }
 
 /// Las suites y raíces de una invocación de `ray test`: las explícitas tal cual o, sin
@@ -3685,7 +3724,9 @@ fn cmd_test_watch(args: &[String]) -> ! {
         first = false;
         let run_args: Vec<String> = match &selection {
             Some(subset) => {
-                subset.iter().map(|p| p.display().to_string()).chain(filter.clone()).collect()
+                // M312: los flags (`--native`, `--release`) viajan también en la corrida selectiva.
+                let flags = args.iter().filter(|a| a.starts_with("--")).cloned();
+                subset.iter().map(|p| p.display().to_string()).chain(filter.clone()).chain(flags).collect()
             }
             None => args.to_vec(),
         };

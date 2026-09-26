@@ -29,6 +29,10 @@ pub enum PlistValue {
 pub struct Manifest {
     pub name: String,
     pub version: String,
+    /// M309 (findings #65): `[package] raylang = "1.27.12"` — la versión MÍNIMA del lenguaje que el
+    /// proyecto exige. Un toolchain más viejo se niega; uno de desarrollo (`+dev.<sha>`) avisa de
+    /// que lo que compila aquí puede no compilar con esa release.
+    pub raylang: Option<String>,
     /// El archivo de entrada del programa, relativo a la raíz. Por defecto `src/main.ray`.
     pub entry: String,
     /// M268: `[package] description` — una línea que dice qué es el paquete; va al índice
@@ -205,6 +209,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_notary = None;
     let mut app_entitlements = None;
     let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
+    let mut raylang_min: Option<String> = None;
     let mut android_application_id = None;
     let mut app_description = None;
 
@@ -239,6 +244,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         match section.as_str() {
             "package" => match key {
                 "name" => name = Some(as_string()?),
+                "raylang" => raylang_min = Some(as_string()?),
                 "version" => version = Some(as_string()?),
                 "entry" => entry = Some(as_string()?),
                 // M268: metadatos de búsqueda del índice.
@@ -364,6 +370,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_icon,
         app_id,
         app_plist,
+        raylang: raylang_min,
         app_description,
         app_public_key,
         app_sign,
@@ -406,9 +413,13 @@ pub fn upsert_dependency(src: &str, name: &str, req: &str) -> String {
         match existing {
             Some(off) => lines[start + 1 + off] = new_line, // reemplaza el requisito
             None => {
-                // Inserta tras la última línea no vacía de la sección (antes de los blancos finales).
+                // Inserta tras la última línea no vacía de la sección (antes de los blancos finales
+                // y de los COMENTARIOS que encabezan la tabla siguiente — M309, findings #42: `ray add
+                // web` se colaba entre el comentario de `[frontend]` y su cabecera).
                 let mut insert_at = end;
-                while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+                while insert_at > start + 1
+                    && (lines[insert_at - 1].trim().is_empty() || lines[insert_at - 1].trim().starts_with('#'))
+                {
                     insert_at -= 1;
                 }
                 lines.insert(insert_at, new_line);
@@ -466,6 +477,17 @@ mod tests {
 
     fn parse_src(src: &str) -> Result<Manifest, String> {
         parse(src, PathBuf::from("/proj"))
+    }
+
+    /// M309 (findings #42): `ray add` no se cuela entre el comentario que encabeza la tabla
+    /// siguiente y su cabecera; y `[package] raylang = "…"` se lee.
+    #[test]
+    fn upsert_keeps_the_next_tables_comment_with_its_header_and_raylang_key_parses() {
+        let base = "[package]\nname = \"x\"\nversion = \"0.1.0\"\nraylang = \"1.27.12\"\n\n[dependencies]\nnet = \"^0.3\"\n\n# El frontend (Vite)\n[frontend]\ndev = \"npm run dev\"\n";
+        let out = upsert_dependency(base, "web", "^0.4");
+        assert!(out.contains("net = \"^0.3\"\nweb = \"^0.4\"\n\n# El frontend (Vite)\n[frontend]\n"), "{out}");
+        let m = parse_src(base).unwrap();
+        assert_eq!(m.raylang.as_deref(), Some("1.27.12"));
     }
 
     #[test]

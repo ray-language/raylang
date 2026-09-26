@@ -149,6 +149,39 @@ fn payload_str(fields: [bson.Field]) -> Result<string, string> {
     };
 }
 
+// Un campo booleano de la respuesta (false si falta o no es bool): `done` del SASL.
+fn bool_field(fields: [bson.Field], name: string) -> bool {
+    return match (bson.get(fields, name)) {
+        Option.Some(v) => match (v) {
+            bson.Bson.Bool(b) => b,
+            _ => false,
+        },
+        Option.None => false,
+    };
+}
+
+// M309 (findings #57): `insert`/`update`/`delete` responden `ok: 1` aunque un documento falle
+// (clave duplicada…); el fallo viene en `writeErrors: [{index, code, errmsg}]`. Antes un
+// duplicado devolvía `Ok(0)` y el llamante tenía que mirar el contador.
+fn write_errors(fields: [bson.Field]) -> Result<int, string> {
+    return match (bson.get(fields, "writeErrors")) {
+        Option.Some(v) => match (v) {
+            bson.Bson.Arr(items) => {
+                if (items.len() == 0) {
+                    return Result.Ok(0);
+                }
+                let first = match (items[0]) {
+                    bson.Bson.Doc(f) => error_of(f),
+                    _ => "write error",
+                };
+                Result.Err("mongo: " + first)
+            },
+            _ => Result.Ok(0),
+        },
+        Option.None => Result.Ok(0),
+    };
+}
+
 // Un campo entero de la respuesta (0 si falta o no es entero): conversationId, n, nModified…
 fn int_field(fields: [bson.Field], name: string) -> int {
     return match (bson.get(fields, name)) {
@@ -217,6 +250,11 @@ fn session(
         close(handle);
         return Result.Err("mongo: " + error_of(hr));
     }
+    // M309 (findings #57): sin usuario no hay SCRAM — un servidor sin `--auth` (desarrollo,
+    // contenedores de prueba) acepta la sesión tras el `hello`.
+    if (user == "") {
+        return Result.Ok(c);
+    }
 
     // 2. saslStart con el client-first de SCRAM (reusa net/scram, como PostgreSQL).
     let sc = scram_first(user, nonce);
@@ -255,11 +293,13 @@ fn session(
         c,
         [
             bson.field("saslContinue", bson.Bson.Int(1)),
-            bson.field("conversationId", bson.Bson.Int(conv)),
+            bson.field("conversationId", bson.Bson.Int32(conv)),
             bson.field("payload", bson.Bson.Bin(final_msg.to_bytes())),
             bson.field("$db", bson.Bson.Str(database))
         ]
     )?;
+    // M309: MongoDB 6+ exige el conversationId como int32 (el int64 da "BSON field
+    // 'saslContinue.conversationId' is the wrong type").
     if (!is_ok(r2)) {
         close(handle);
         return Result.Err("mongo: " + error_of(r2));
@@ -276,6 +316,26 @@ fn session(
     if (!scram_verify(sc, server_final)) {
         close(handle);
         return Result.Err("mongo: the server signature does not verify (authentication failed)");
+    }
+    // 5. M309: el intercambio termina cuando el servidor dice `done: true`; MongoDB 6+ lo hace
+    // en un `saslContinue` más, con payload vacío (hasta entonces la sesión no está autenticada).
+    var last = r2;
+    var rounds = 0;
+    while (!bool_field(last, "done") && rounds < 3) {
+        last = run_command(
+            c,
+            [
+                bson.field("saslContinue", bson.Bson.Int(1)),
+                bson.field("conversationId", bson.Bson.Int32(conv)),
+                bson.field("payload", bson.Bson.Bin(b"")),
+                bson.field("$db", bson.Bson.Str(database))
+            ]
+        )?;
+        if (!is_ok(last)) {
+            close(handle);
+            return Result.Err("mongo: " + error_of(last));
+        }
+        rounds = rounds + 1;
     }
     Result.Ok(c)
 }
@@ -304,6 +364,7 @@ pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string
         ]
     )?;
     let _ = check_ok(r)?;
+    let _ = write_errors(r)?;
     Result.Ok(int_field(r, "n"))
 }
 
@@ -409,6 +470,7 @@ pub fn update(
         ]
     )?;
     let _ = check_ok(r)?;
+    let _ = write_errors(r)?;
     Result.Ok(int_field(r, "nModified"))
 }
 
@@ -429,6 +491,7 @@ pub fn delete(c: Conn, coll: string, filter: [bson.Field]) -> Result<int, string
         ]
     )?;
     let _ = check_ok(r)?;
+    let _ = write_errors(r)?;
     Result.Ok(int_field(r, "n"))
 }
 

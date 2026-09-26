@@ -147,6 +147,11 @@ pub(super) fn format_value(heap: &Heap, structs: &[crate::bytecode::CompiledStru
             }
             Obj::Struct(s) => {
                 let def = &structs[s.struct_idx];
+                // M310 (findings #52): un valor `dyn Trait` es un struct interno `__dyn_T` (M9.3b);
+                // se muestra opaco, como una función (`<dyn T>`), no con su representación interna.
+                if let Some(tr) = def.name.strip_prefix("__dyn_") {
+                    return format!("<dyn {}>", tr.replace("__", " + "));
+                }
                 let parts: Vec<String> = def.fields.iter().zip(&s.fields)
                     .map(|(n, v)| format!("{}: {}", n, format_value(heap, structs, enums, v))).collect();
                 format!("{} {{ {} }}", def.name, parts.join(", "))

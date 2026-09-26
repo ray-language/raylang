@@ -85,7 +85,8 @@ fn run() {
         Some("release") => cmd_release(&rest[1..]),
         Some("toolchain") => crate::toolchain::run(&rest[1..]),
         Some("version") | Some("--version") | Some("-V") => {
-            println!("raylang {}", env!("CARGO_PKG_VERSION"));
+            // M309 (findings #65): `1.27.12` en una release; `1.27.12+dev.<sha>` compilado de la HEAD.
+            println!("raylang {}", env!("RAYLANG_VERSION_FULL"));
         }
         Some("help") | Some("-h") | Some("--help") => print_help(),
         // Modo legado por flags (compat): --lsp, --repl, --fmt, --vm/--interp/--test, o `<archivo>`.
@@ -108,7 +109,7 @@ Project:
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
-  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
+  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
   serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
@@ -137,7 +138,7 @@ Tooling:
   version           the language version
   help              this help
 ",
-        v = env!("CARGO_PKG_VERSION")
+        v = env!("RAYLANG_VERSION_FULL")
     );
 }
 
@@ -2268,6 +2269,14 @@ fn cmd_bundle(args: &[String]) {
         // conserva (como la firma): regenerar no debe dejar cojo lo que ya funcionaba.
         let kept_dev = (!build_dev).then(|| fs::read(proj.join("libs/libray_app.a")).ok()).flatten();
         let kept_sim = (!build_sim).then(|| fs::read(proj.join("libs-sim/libray_app.a")).ok()).flatten();
+        // M309 (findings #47): con un solo lado y sin proyecto anterior, el otro `libs*/` queda
+        // vacío y Xcode falla con «Library 'ray_app' not found» sin decir por qué.
+        if !build_dev && kept_dev.is_none() {
+            eprintln!("[bundle] warning: no device library (libs/libray_app.a) to preserve — this project only builds for the simulator; run `ray bundle --ios` (or `--ios-target both`) before building for an iPhone");
+        }
+        if !build_sim && kept_sim.is_none() {
+            eprintln!("[bundle] warning: no simulator library (libs-sim/libray_app.a) to preserve — this project only builds for a device; run `ray bundle --ios` (or `--ios-target both`) before running in the simulator");
+        }
         // M151 (raydesk #9): la firma del xcconfig ANTERIOR se lee ANTES del borrado — cada
         // regeneración la pisaba (Xcode la escribe al elegir equipo) y había que reponerla a
         // mano tras cada bundle. `[ios] development_team` del ray.toml manda; lo preservado
@@ -2275,6 +2284,20 @@ fn cmd_bundle(args: &[String]) {
         let previous = fs::read_to_string(proj.join("App.xcconfig"))
             .map(|t| crate::bundle_ios::Signing::from_xcconfig(&t))
             .unwrap_or_default();
+        // M309 (findings #46): elegir el equipo en Xcode (Signing & Capabilities) lo escribe en
+        // `project.pbxproj`, no en el xcconfig — y el pbxproj se reescribe entero en cada bundle.
+        // Se rescata de ahí como último recurso (manifest > xcconfig > pbxproj anterior).
+        let previous = if previous.team.is_none() {
+            let pbx = fs::read_to_string(proj.join(format!("{name}.xcodeproj/project.pbxproj"))).unwrap_or_default();
+            let team = pbx
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("DEVELOPMENT_TEAM = "))
+                .map(|v| v.trim_end_matches(';').trim().trim_matches('"').to_string())
+                .find(|v| !v.is_empty() && v != "$(DEVELOPMENT_TEAM)");
+            crate::bundle_ios::Signing { team, style: previous.style }
+        } else {
+            previous
+        };
         let signing = crate::bundle_ios::Signing::resolve(
             manifest.as_ref().and_then(|m| m.ios_development_team.as_deref()),
             &previous,
@@ -2300,7 +2323,18 @@ fn cmd_bundle(args: &[String]) {
         };
         place(build_dev, &dev_a, &kept_dev, proj.join("libs/libray_app.a"));
         place(build_sim, &sim_a, &kept_sim, proj.join("libs-sim/libray_app.a"));
-        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, devtools) {
+        // M309 (findings #51): `[app.plist]` también en iOS, y `NSLocalNetworkUsageDescription`
+        // (iOS 14+ lo exige para la red local) cuando el programa habla con la red o es un build
+        // con devtools (un dev server en la LAN). Sin la clave, iOS deniega en silencio.
+        let mut ios_plist: Vec<(String, crate::manifest::PlistValue)> =
+            manifest.as_ref().map(|m| m.app_plist.clone()).unwrap_or_default();
+        if (uses_network(&path) || devtools) && !ios_plist.iter().any(|(k, _)| k == "NSLocalNetworkUsageDescription") {
+            ios_plist.push((
+                "NSLocalNetworkUsageDescription".to_string(),
+                crate::manifest::PlistValue::Str(format!("{name} connects to devices on your local network.")),
+            ));
+        }
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, devtools, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
         }
@@ -2939,9 +2973,28 @@ fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
 /// Devuelve la ruta del artefacto REALMENTE escrito: en Windows no coincide con lo pedido (M186 le
 /// añade la extensión que el SO exige), y `ray bundle` necesita el nombre de verdad para empaquetar.
 fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+    // M309 (findings #55): `-o dir/app` con `dir` inexistente fallaba AL FINAL, tras compilar entero,
+    // con «could not copy the binary» (parecía de permisos). El directorio se crea antes de nada.
+    if let Some(out) = output
+        && let Some(parent) = Path::new(out).parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        eprintln!("native build: cannot create the output directory '{}': {e}", parent.display());
+        process::exit(65);
+    }
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_entry(&program, exclude, fast, fibers, embed, lib_mode) {
+    build_native_checked(&program, path, output, release, exclude, target, fast, no_stubs, fibers, embed, lib_mode)
+}
+
+/// M312 (findings #66): la mitad de `build_native` que parte de un programa YA cargado y chequeado —
+/// compartida con `ray test --native`, que sintetiza el `main` de cada suite como AST (no hay
+/// archivo que cargar). Devuelve la ruta del binario; sale del proceso si el build falla.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+    let transpiled = match crate::transpile::transpile_entry(program, exclude, fast, fibers, embed, lib_mode) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
@@ -3016,6 +3069,30 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target, lib_mode);
     }
     out_bin
+}
+
+/// M312 (findings #66): opciones del build nativo de `ray test --native`: la política estable del
+/// proyecto (`[native] without` del ray.toml) y el modo fibras que le corresponde; sin `--target`
+/// (las suites corren en el host) y con el perfil dev salvo `--release`.
+pub(crate) struct NativeTestOptions {
+    pub release: bool,
+    exclude: Vec<String>,
+    fibers: bool,
+}
+
+pub(crate) fn native_test_options(release: bool) -> NativeTestOptions {
+    let exclude: Vec<String> = load_manifest().map(|m| m.native_without).unwrap_or_default();
+    let without_fibers = exclude.iter().any(|d| d == "fibers");
+    let fibers = fibers_for_target(None, without_fibers);
+    NativeTestOptions { release, exclude, fibers }
+}
+
+/// M312: compila el programa de una suite (con su `main` sintético de despacho) a un binario en
+/// `out_bin`. Los assets embebidos y el `[app]` salen del proyecto de la suite, como en `ray build`.
+pub(crate) fn build_native_test_binary(program: &crate::ast::Program, suite_path: &str, out_bin: &str, opts: &NativeTestOptions) -> String {
+    let embed = collect_embed(suite_path, None);
+    configure_native_app_info(suite_path);
+    build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, false, opts.fibers, &embed, false)
 }
 
 /// M186: la extensión que Windows EXIGE en el nombre de salida — `.exe` para un binario, `.lib` para
@@ -3365,6 +3442,13 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
+        // M309 (findings #45): los objetos C que compila el crate `cc` (ring: montgomery, aes,
+        // curve25519…) toman `minos` del SDK instalado si nadie fija el deployment target —
+        // 26.5 con Xcode 26.5 — y `ld` avisa al enlazar contra el proyecto (15.0); en un iPhone
+        // más viejo la app puede no cargar. El MISMO valor que escribe el xcconfig generado.
+        if t.contains("apple-ios") {
+            cmd.env("IPHONEOS_DEPLOYMENT_TARGET", crate::bundle_ios::IOS_DEPLOYMENT_TARGET);
+        }
     }
     // M156: toolchain del NDK inyectado por env — SIN cargo-ndk: el linker del target y el
     // CC/AR que usan los build scripts (ring/rusqlite/mimalloc) apuntan al clang/llvm-ar del
@@ -3540,25 +3624,32 @@ fn cmd_test_sub(args: &[String]) {
     if watch {
         cmd_test_watch(&args);
     }
+    // M312 (findings #66): `--native` compila cada suite a un binario nativo (con un `main` de
+    // despacho) y corre cada prueba como proceso; `--release` elige el perfil optimizado.
+    let (native, args) = take_flag_bool(&args, "--native");
+    let (release, args) = take_flag_bool(&args, "--release");
     let (explicit, filter) = split_test_args(&args);
     let (suites, roots) = test_suites_and_roots(&explicit);
-    process::exit(test_runner::run(&suites, &roots, filter.as_deref()));
+    let mode = if native { Some(native_test_options(release)) } else { None };
+    process::exit(test_runner::run_with(&suites, &roots, filter.as_deref(), mode));
 }
 
 /// Separa los argumentos de `ray test`: los `.ray` iniciales son suites explícitas (una o
 /// VARIAS, M141 — la vía del watch selectivo) y el primer argumento que no termina en `.ray`
 /// es el filtro por nombre.
 fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
+    // M312: los flags (`--native`, `--release`) no son ni suite ni filtro (el watch los reenvía).
+    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let mut explicit = Vec::new();
     let mut idx = 0;
     while let Some(a) = args.get(idx) {
         if !a.ends_with(".ray") {
             break;
         }
-        explicit.push(a.clone());
+        explicit.push((*a).clone());
         idx += 1;
     }
-    (explicit, args.get(idx).cloned())
+    (explicit, args.get(idx).map(|a| (*a).clone()))
 }
 
 /// Las suites y raíces de una invocación de `ray test`: las explícitas tal cual o, sin
@@ -3633,7 +3724,9 @@ fn cmd_test_watch(args: &[String]) -> ! {
         first = false;
         let run_args: Vec<String> = match &selection {
             Some(subset) => {
-                subset.iter().map(|p| p.display().to_string()).chain(filter.clone()).collect()
+                // M312: los flags (`--native`, `--release`) viajan también en la corrida selectiva.
+                let flags = args.iter().filter(|a| a.starts_with("--")).cloned();
+                subset.iter().map(|p| p.display().to_string()).chain(filter.clone()).chain(flags).collect()
             }
             None => args.to_vec(),
         };
@@ -4859,11 +4952,35 @@ fn dependency_roots() -> Vec<PathBuf> {
 fn load_manifest() -> Option<Manifest> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match Manifest::load(&cwd) {
-        Ok(m) => m,
+        Ok(m) => {
+            if let Some(m) = &m {
+                check_required_raylang(m);
+            }
+            m
+        }
         Err(e) => {
             eprintln!("{e}");
             process::exit(65);
         }
+    }
+}
+
+/// M309 (findings #65): `[package] raylang = "X"` es la versión mínima del lenguaje que el
+/// proyecto exige. Un toolchain más viejo se niega (65); uno de DESARROLLO (`+dev.<sha>`, la
+/// HEAD del repo) avisa una vez: lo que compila con él puede no compilar con la release X.
+fn check_required_raylang(m: &Manifest) {
+    let Some(req) = m.raylang.as_deref() else { return };
+    let current = env!("CARGO_PKG_VERSION");
+    let (Some(want), Some(have)) = (crate::semver::parse_version(req), crate::semver::parse_version(current)) else {
+        eprintln!("ray.toml: [package] raylang = \"{req}\" is not a version (expected MAJOR.MINOR.PATCH)");
+        process::exit(65);
+    };
+    if have < want {
+        eprintln!("this project requires raylang {req} or newer; this toolchain is {} — update with `ray update-self`", env!("RAYLANG_VERSION_FULL"));
+        process::exit(65);
+    }
+    if !env!("RAYLANG_BUILD_SUFFIX").is_empty() {
+        eprintln!("warning: raylang {} is a development build; the project pins raylang = \"{req}\" — code that compiles here may not compile with that release", env!("RAYLANG_VERSION_FULL"));
     }
 }
 

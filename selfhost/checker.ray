@@ -4379,27 +4379,47 @@ fn check_match(
     let scrut_ty = check_expr(c, scrut)?;
     var enum_name = "";
     var enum_targs: [Type] = [];
+    // M310 (findings #44/#53): el escrutinio ya no tiene que ser un enum — un struct o un
+    // int/string/char/bool también valen (el espejo solo cubre los patrones `_`/binding sobre
+    // ellos; los patrones literales y de tupla no están en el subconjunto auto-alojado).
+    var plain = false;
     match (scrut_ty) {
         Type.TNamed(n, targs) => {
             if (is_enum(c, n)) {
                 enum_name = n;
                 enum_targs = targs;
+            } else if (c.structs.contains_key(n)) {
+                plain = true;
             } else {
                 return Result.Err(
                     terr(
                         scrut.line,
                         scrut.col,
-                        "match requires an enum, but the scrutinee is " + type_str(scrut_ty)
+                        "match requires an enum, a tuple, a struct or a primitive value, but the scrutinee is "
+                            + type_str(scrut_ty)
                     )
                 );
             }
+        },
+        Type.TInt => {
+            plain = true;
+        },
+        Type.TString => {
+            plain = true;
+        },
+        Type.TChar => {
+            plain = true;
+        },
+        Type.TBool => {
+            plain = true;
         },
         _ => {
             return Result.Err(
                 terr(
                     scrut.line,
                     scrut.col,
-                    "match requires an enum, but the scrutinee is " + type_str(scrut_ty)
+                    "match requires an enum, a tuple, a struct or a primitive value, but the scrutinee is "
+                        + type_str(scrut_ty)
                 )
             );
         },
@@ -4528,7 +4548,19 @@ fn check_match(
         }
         di = di + 1;
     }
-    // Exhaustividad: sin catch-all, deben estar TODAS las variantes.
+    // Exhaustividad: sin catch-all, deben estar TODAS las variantes. Sobre un escrutinio no-enum
+    // (M310) solo el comodín agota los casos (el espejo no conoce los patrones literales).
+    if (plain && !st.catchall) {
+        return Result.Err(
+            terr(
+                line,
+                col,
+                "non-exhaustive match on "
+                    + type_str(scrut_ty)
+                    + ": some nested cases are not covered (add a '_' arm or cover every case)"
+            )
+        );
+    }
     if (!st.catchall) {
         var missing: [string] = [];
         var vi = 0;
@@ -4582,6 +4614,19 @@ fn check_pattern(
             Result.Ok(binds)
         },
         PKind.PVariant(pat_enum, variant, bindings) => {
+            // M310: un patrón de variante sobre un escrutinio que no es enum.
+            if (enum_name == "") {
+                return Result.Err(
+                    terr(
+                        pat.line,
+                        pat.col,
+                        "the pattern is of enum '"
+                            + pat_enum
+                            + "', but the value here is "
+                            + type_str(scrut_ty)
+                    )
+                );
+            }
             if (pat_enum != enum_name) {
                 return Result.Err(
                     terr(

@@ -177,6 +177,10 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Pasos 2–3: pre-pasada y verificación.
     let mut checker = Checker::new();
     checker.check_program(program)?;
+    // Paso 3.0 (M311): expandir los alias de tipo en TODAS las posiciones de tipo del AST. El
+    // checker ya los resolvió al vuelo (`resolve_type`); los clientes que leen tipos del AST
+    // después (el transpilador nativo, con su propio `type_of`) no deben verlos.
+    lower_type_aliases(program, &checker.aliases);
     // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
     // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
     // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
@@ -223,6 +227,85 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // entrar en las tablas por posición de las pasadas anteriores.
     lower_concat(program, &checker.concat_sites);
     Ok(())
+}
+
+/// M311: expande los alias de tipo en todo el programa (structs, enums, traits, impls, funciones,
+/// constantes y los cuerpos: `let`, closures, casts). Erasure total: tras esta pasada
+/// `program.type_aliases` queda vacío y ningún tipo del AST nombra un alias.
+fn lower_type_aliases(program: &mut Program, aliases: &HashMap<String, (Vec<String>, Type)>) {
+    if aliases.is_empty() {
+        program.type_aliases.clear();
+        return;
+    }
+    fn expand(ty: &Type, aliases: &HashMap<String, (Vec<String>, Type)>) -> Type {
+        match ty {
+            Type::Struct(n, args) | Type::Enum(n, args) => {
+                let args: Vec<Type> = args.iter().map(|a| expand(a, aliases)).collect();
+                if let Some((params, target)) = aliases.get(n)
+                    && params.len() == args.len()
+                {
+                    let sigma: HashMap<String, Type> = params.iter().cloned().zip(args).collect();
+                    return expand(&subst_named(target, &sigma), aliases);
+                }
+                if matches!(ty, Type::Enum(..)) { Type::Enum(n.clone(), args) } else { Type::Struct(n.clone(), args) }
+            }
+            Type::Array(e) => Type::Array(Box::new(expand(e, aliases))),
+            Type::Map(k, v) => Type::Map(Box::new(expand(k, aliases)), Box::new(expand(v, aliases))),
+            Type::Channel(t) => Type::Channel(Box::new(expand(t, aliases))),
+            Type::Task(t) => Type::Task(Box::new(expand(t, aliases))),
+            Type::Fn(ps, r) => Type::Fn(ps.iter().map(|p| expand(p, aliases)).collect(), Box::new(expand(r, aliases))),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| expand(t, aliases)).collect()),
+            other => other.clone(),
+        }
+    }
+    let f = |t: &Type| expand(t, aliases);
+    let expand_fn = |func: &mut Function| {
+        for p in &mut func.params {
+            p.ty = f(&p.ty);
+        }
+        func.return_type = f(&func.return_type);
+        map_types_block(&mut func.body, &f);
+    };
+    for s in &mut program.structs {
+        for (_, ty) in &mut s.fields {
+            *ty = f(ty);
+        }
+    }
+    for e in &mut program.enums {
+        for v in &mut e.variants {
+            for ty in &mut v.payload {
+                *ty = f(ty);
+            }
+        }
+    }
+    for c in &mut program.consts {
+        c.ty = f(&c.ty);
+        map_types_expr(&mut c.value, &f);
+    }
+    for t in &mut program.traits {
+        for m in &mut t.methods {
+            for p in &mut m.params {
+                p.ty = f(&p.ty);
+            }
+            m.return_type = f(&m.return_type);
+            if let Some(b) = &mut m.default_body {
+                map_types_block(b, &f);
+            }
+        }
+    }
+    for imp in &mut program.impls {
+        imp.target = f(&imp.target);
+        for a in &mut imp.trait_args {
+            *a = f(a);
+        }
+        for m in &mut imp.methods {
+            expand_fn(m);
+        }
+    }
+    for func in &mut program.functions {
+        expand_fn(func);
+    }
+    program.type_aliases.clear();
 }
 
 /// Recolecta el **índice semántico** (M10.2b): corre el front-end hasta `check_program` con el
@@ -542,6 +625,8 @@ struct Checker {
     /// Dan la aridad (para validar `Caja<int>`) y los nombres (para sustituir).
     enum_tparams: HashMap<String, Vec<String>>,
     struct_tparams: HashMap<String, Vec<String>>,
+    /// M311: alias de tipo → (parámetros, tipo destino CRUDO). `resolve_type` los expande.
+    aliases: HashMap<String, (Vec<String>, Type)>,
     /// Bounds de los parámetros de tipo de cada struct/enum (M9.4): nombre → `[(T, Trait), ...]`.
     /// Se verifican en la construcción del valor (no hay runtime).
     struct_bounds: HashMap<String, Vec<(String, String)>>,

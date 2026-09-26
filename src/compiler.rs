@@ -747,6 +747,28 @@ impl<'a> Compiler<'a> {
                     self.emit_pattern_test(fpat, sub_slot, to_next, line, col)?;
                 }
             }
+            // M310: tupla = arreglo en runtime; cada posición se indexa a un temporal y se casa.
+            PatternKind::Tuple(subs) => {
+                for (i, sub) in subs.iter().enumerate() {
+                    if matches!(sub.kind, PatternKind::Wildcard) {
+                        continue;
+                    }
+                    self.emit(OpCode::GetLocal(val_slot), line, col);
+                    self.emit_int(i as i64, line, col);
+                    self.emit(OpCode::Index, line, col);
+                    let sub_slot = self.declare_local("$sub");
+                    self.emit(OpCode::InitLocal(sub_slot), line, col);
+                    self.emit_pattern_test(sub, sub_slot, to_next, line, col)?;
+                }
+            }
+            // M310: literal = igualdad; si no casa, al siguiente brazo (dejando el bool).
+            PatternKind::Literal(e) => {
+                self.emit(OpCode::GetLocal(val_slot), line, col);
+                self.emit_expr(e)?;
+                self.emit(OpCode::Equal, line, col);
+                to_next.push(self.emit(OpCode::JumpIfFalse(0), line, col));
+                self.emit(OpCode::Pop, line, col);
+            }
         }
         Ok(())
     }

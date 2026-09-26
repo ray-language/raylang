@@ -3174,7 +3174,52 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
             }
             Some(binds)
         }
+        // M310: una tupla es un arreglo en runtime — sub-patrón por posición.
+        PatternKind::Tuple(subs) => {
+            let elems = match value {
+                Value::Array(a) => a.borrow().clone(),
+                _ => return None,
+            };
+            if elems.len() != subs.len() {
+                return None;
+            }
+            let mut binds = Vec::new();
+            for (sub, v) in subs.iter().zip(&elems) {
+                binds.extend(match_pattern(sub, v)?);
+            }
+            Some(binds)
+        }
+        // M310: un literal casa por igualdad.
+        PatternKind::Literal(e) => {
+            let lit = literal_value(e)?;
+            let equal = match (&lit, value) {
+                (Value::Int(a), Value::Int(b)) => a == b,
+                (Value::Float(a), Value::Float(b)) => a == b,
+                (Value::Str(a), Value::Str(b)) => a == b,
+                (Value::Char(a), Value::Char(b)) => a == b,
+                (Value::Bool(a), Value::Bool(b)) => a == b,
+                _ => false,
+            };
+            if equal { Some(Vec::new()) } else { None }
+        }
     }
+}
+
+/// M310: el valor de un literal de patrón (int, float, string, char, bool, o un int/float negado).
+fn literal_value(e: &Expr) -> Option<Value> {
+    Some(match &e.kind {
+        ExprKind::Int(v, _) => Value::Int(*v),
+        ExprKind::Float(f) => Value::Float(*f),
+        ExprKind::Str(t) => Value::Str(t.clone()),
+        ExprKind::Char(c) => Value::Char(*c),
+        ExprKind::Bool(b) => Value::Bool(*b),
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => match literal_value(expr)? {
+            Value::Int(v) => Value::Int(-v),
+            Value::Float(f) => Value::Float(-f),
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 // =====================================================================

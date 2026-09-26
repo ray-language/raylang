@@ -193,6 +193,11 @@ fn data_errors() {
     compare("enum F { C(float) } fn main() -> int { let x = F.C(true); 0 }", "scde_payty.ray");
     // match.
     compare("fn main() -> int { match (3) { _ => 0 } }", "scde_match_nonen.ray");
+    // M310: escrutinio no-enum — válido con comodín; sin él, no exhaustivo; con patrón de variante, error.
+    compare("fn main() -> int { match (3) { x => x } }", "sc_match_int_bind.ray");
+    compare("fn main() -> int { match (\"a\") { x => 0 } }", "sc_match_str_bind.ray");
+    compare("fn main() -> int { match (main) { _ => 0 } }", "scde_match_fn.ray");
+    compare("enum E { A } fn main() -> int { match (3) { E.A => 0, _ => 1 } }", "scde_match_variant_on_int.ray");
     compare("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1 } }", "scde_nonexh.ray");
     compare("enum E { A, B } fn main() -> int { match (E.A) { _ => 1, E.A => 2 } }", "scde_unreach.ray");
     compare("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.A => 2, E.B => 3 } }", "scde_covered.ray");

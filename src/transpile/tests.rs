@@ -594,6 +594,36 @@ fn a_pattern_binding_named_like_a_cell_var_of_another_arm_is_not_a_cell() {
     assert!(!f_head.contains("addr.borrow()"), "el binding de patron no es celda: {}", f_head);
 }
 
+/// M309 (findings #59): capturar en un `spawn` un valor cuyo tipo guarda funciones es error de
+/// TRANSPILACIÓN (antes compilaba y panicaba solo en nativo, en ejecución).
+#[test]
+fn a_spawn_capture_holding_functions_is_a_transpile_error() {
+    let src = "struct Router { routes: Map<string, fn(int) -> int> }\n\
+               fn main() { let r = Router { routes: Map.new() }; spawn(fn() { let n = r.routes.len(); print(n); }); }";
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    let err = transpile(&prog).err().expect("debe fallar al transpilar");
+    assert!(err.contains("'r' (type Router) holds function values and cannot be captured by a 'spawn' closure"), "{err}");
+}
+
+/// M309 (findings #60): un param fn MARCADO (cruza un spawn) usado como VALOR se coerciona al
+/// `Rc<dyn Fn>` del tipo raylang — antes E0308 «found type parameter __F1».
+#[test]
+fn a_marked_fn_param_used_as_a_value_is_coerced_to_dyn() {
+    let rust = transpile_src(
+        "fn keep(m: Map<string, fn(int) -> int>, f: fn(int) -> int) { m.insert(\"k\", f); }\n\
+         fn serve(h: fn(int) -> int) { spawn(fn() { let m: Map<string, fn(int) -> int> = Map.new(); keep(m, h); }); }\n\
+         fn main() { serve(fn(x: int) -> int { x + 1 }); }",
+    );
+    // Dentro de `keep`, `f` (marcado por punto fijo) va al mapa coercionado…
+    assert!(rust.contains("(Rc::new(f.clone()) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+    // …pero el REENVÍO marcado→marcado (`keep(m, h)`) pasa el genérico tal cual: un `Rc<dyn Fn>` ni
+    // es `Fn` ni es `Send` (el CI lo cazó con tres E0277 sobre serve → loop → handle → spawn).
+    assert!(rust.contains("let __rt_a1 = h.clone(); keep(__rt_a0, __rt_a1)"), "{rust}");
+    assert!(!rust.contains("(Rc::new(h.clone())"), "{rust}");
+}
+
 #[test]
 fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
     // FFI (M41): `extern "m" { fn sqrt(x: float) -> float; }` → una decl `extern "C"` del símbolo C
@@ -1539,5 +1569,27 @@ fn fast_mode_emits_no_depth_prologue() {
     crate::checker::check(&mut prog).expect("check");
     let out = super::transpile_with_opts(&prog, &[], true).expect("transpile").source;
     assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
+}
+
+/// M311: tras el chequeo el AST no nombra alias (erasure): el transpilador ve los tipos expandidos.
+#[test]
+fn type_aliases_are_erased_before_transpiling() {
+    let rust = transpile_src("type Id = int;\ntype Pair<T> = (T, T);\nstruct U { id: Id }\nfn swap(p: Pair<Id>) -> Pair<Id> { (p.1, p.0) }\nfn main() { let u = U { id: 1 }; let q: Pair<Id> = (u.id, 2); print(swap(q).0.to_string()); }");
+    assert!(rust.contains("fn swap(mut p: (i64, i64,)) -> (i64, i64,)"), "{rust}");
+    assert!(!rust.contains("Pair") && !rust.contains(" Id"), "{rust}");
+}
+
+/// M310: patrones de tupla y literales en nativo — el int/char van como patrón de Rust, el string
+/// anidado como prueba diferida `== "lit"`, y un match con guardas de Rust lleva el comodín
+/// inalcanzable (la exhaustividad la probó el checker).
+#[test]
+fn tuple_and_literal_patterns_transpile() {
+    let rust = transpile_src(
+        "enum S { N(string), C(int) }\nfn f(t: (int, string), o: Option<S>) -> int {\n    let a = match (t) { (0, \"a\") => 1, (n, _) => n };\n    let b = match (o) { Option.Some(S.N(\"x\")) => 1, Option.Some(S.N(_)) => 2, Option.Some(S.C(0)) => 3, Option.Some(S.C(c)) => c, Option.None => 0 };\n    a + b\n}\nfn main() { print(f((0, \"a\"), Option.None)); }",
+    );
+    assert!(rust.contains("== \"a\""), "{rust}");
+    assert!(rust.contains("== \"x\""), "{rust}");
+    assert!(rust.contains("S::C(0)"), "{rust}");
+    assert!(rust.contains("_ => unreachable!("), "{rust}");
 }
 

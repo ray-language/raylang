@@ -801,7 +801,7 @@ fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     fn type_ok(t: &Type, ok: &HashSet<String>) -> bool {
         match t {
-            Type::Fn(_, _) => false,
+            Type::Fn(_, _) | Type::Dyn(_) => false,
             Type::Struct(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
             Type::Enum(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
             Type::Array(e) => type_ok(e, ok),

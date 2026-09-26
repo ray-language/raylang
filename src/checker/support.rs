@@ -252,7 +252,9 @@ pub(super) fn is_irrefutable(p: &Pattern) -> bool {
     match &p.kind {
         PatternKind::Wildcard | PatternKind::Binding(_) => true,
         PatternKind::Struct { fields, .. } => fields.iter().all(|(_, f)| is_irrefutable(f)),
-        PatternKind::Variant { .. } => false,
+        // M310: una tupla es irrefutable si lo son todas sus posiciones; un literal nunca.
+        PatternKind::Tuple(subs) => subs.iter().all(is_irrefutable),
+        PatternKind::Variant { .. } | PatternKind::Literal(_) => false,
     }
 }
 

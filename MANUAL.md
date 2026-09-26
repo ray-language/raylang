@@ -516,6 +516,28 @@ fn main() -> int {
 }
 ```
 
+### Alias de tipo `type`
+
+Un alias da nombre a un tipo que se repite (M311). No crea un tipo nuevo: `Id` **es** `int`, y
+un valor `Pair<int>` es una tupla `(int, int)` — nada que envolver ni desenvolver. Los alias
+genéricos toman sus argumentos en cada uso, y `pub type` se exporta del módulo como un struct.
+
+```rust
+type Id = int;
+type Pair<T> = (T, T);
+type Handler = fn(Req) -> Result<Json, string>;
+pub type Lookup<V> = Map<string, V>;
+
+fn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }
+fn route(h: Handler) { … }
+let users: Lookup<Id> = Map.new();
+```
+
+Los diagnósticos muestran el tipo expandido (`expected int, got string`, no `Id`). Un alias no
+lleva bounds (van en la función o el struct que lo usa) ni puede ser recursivo; la construcción
+sigue usando el nombre real (`Shape.Circle(1)`, `Point { … }`), y `type` sigue siendo un nombre
+válido para campos y variables (`r.type`): solo abre un ítem cuando va seguido de un nombre.
+
 ## 6. Strings, chars y bytes
 
 ### Strings
@@ -825,6 +847,32 @@ match (evento) {
     Evento.Tecla(c) if c == 'q' => 0 - 1,    // guarda: patrón if condición
     Evento.Tecla(_) => 0,
     otro => procesar(otro),                  // binding suelto (captura el valor entero)
+}
+```
+
+**Patrones de tupla y literales** (M310). El escrutinio no tiene por qué ser un enum: una tupla se
+destructura posición a posición, y un `int`/`string`/`char`/`bool` (también anidados en un payload)
+casan contra un literal. La exhaustividad es real, no conservadora: cubre cada combinación y no hace
+falta el `_`; sobre un `int`/`string`/`char` sí (solo el comodín los agota; un `bool` también con
+`true` y `false`).
+
+```rust
+match ((method, path)) {
+    ("GET", "/") => home(),
+    ("GET", p) => page(p),
+    (m, _) => not_allowed(m),                // el comodín final: string no se agota con literales
+}
+
+match (r) {                                  // exhaustivo SIN `_`: la matriz cubre los tres casos
+    Result.Ok(Option.Some(v)) => v,
+    Result.Ok(Option.None) => 0,
+    Result.Err(_) => 0 - 1,
+}
+
+match (shape) {
+    Shape.Rect(w, 0) => "line " + w.to_string(),   // literal dentro del payload
+    Shape.Rect(w, h) => "rect",
+    Shape.Circle(_) => "circle",
 }
 ```
 
@@ -1356,8 +1404,12 @@ la URL al webview del shell: el fuente de escritorio corre sin tocar. El ciclo d
 como eventos (`kind="lifecycle"`, `tag="background"/"foreground"`). Simulador: compilar sin
 firma y `simctl install/launch`; dispositivo: declara tu team una vez en el ray.toml —
 `[ios] development_team = "ABCDE12345"` — y cada regeneración lo escribe en el `App.xcconfig`
-(sin declararlo, el bundle **preserva** la firma que Xcode dejó en el xcconfig anterior; solo
-la primera vez toca elegir team en Xcode). `--ios` excluye `process` (fork/exec denegado en
+(o escríbelo tú en el xcconfig: `DEVELOPMENT_TEAM = ABCDE12345`). Elegir el equipo en Xcode
+(Signing & Capabilities) NO basta: Xcode lo guarda en `project.pbxproj`, que el bundle
+reescribe; desde M309 el bundle rescata ese `DEVELOPMENT_TEAM` del pbxproj anterior al
+xcconfig, pero la fuente de verdad es el xcconfig o el `ray.toml`. Y tras cambiar solo el
+programa o el frontend no hace falta regenerar: `ray build --native --lib --release --target
+aarch64-apple-ios -o <App>-ios/libs/libray_app.a` deja el proyecto Xcode intacto. `--ios` excluye `process` (fork/exec denegado en
 iOS) y `audio` (backend sin validar ahí).
 
 Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — shell Java con
@@ -1726,6 +1778,19 @@ El punto de partida es `ray new miapp --frontend react-ts` (cualquier plantilla 
 lo inyecta al arrancar cada documento), así que un componente React llama al backend con
 `window.ray.request({op: "list"})` igual en desarrollo y en producción; si prefieres HTTP, tu
 webserver embebido sigue ahí y en `vite.config` un `server.proxy` de `/api` lo hace mismo-origen.
+
+**Iterar la UI en el teléfono** (M309, findings #49). Como el shell inyecta `window.ray` en
+cualquier página que cargue el webview, la app del iPhone o del emulador puede cargar el dev
+server del Mac y conservar el puente: (1) arranca Vite escuchando en la red — `npm --prefix
+frontend run dev -- --host 0.0.0.0` (añádelo como script `dev:device` en el `package.json`);
+(2) construye la app con devtools (`ray bundle --ios --devtools` o `ray build --native --devtools
+--lib …`); (3) lánzala con `RAY_DEV_FRONTEND_URL=http://<ip-del-mac>:5173` en el entorno (una
+variable del esquema de Xcode; en Android, un extra del intent o `adb reverse tcp:5173
+tcp:5173` y `http://127.0.0.1:5173`). Un build de desarrollo comprueba que la URL responde y
+entonces `app://` resuelve contra ella (HMR incluido); si no responde, usa la build embebida.
+Un build `--release` (sin devtools) ignora la variable siempre. En iOS la primera conexión a la
+red local falla mientras el sistema pide el permiso (`NSLocalNetworkUsageDescription`, que el
+bundle ya declara): la comprobación reintenta una vez.
 
 
 ### Markdown (`std/markdown`)
@@ -2611,7 +2676,9 @@ fn main() -> int {
   que en un programa con fibras es normal, no excepcional (el `send` a secas es error).
 - `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2, y
   SIGWINCH=28 para el re-maquetado de TUIs), para el **apagado ordenado** de un servicio: compone
-  con `recv`/`select` (drena tu canal de trabajo O apaga). Singleton del proceso; unix (VM y
+  con `recv`/`select` (drena tu canal de trabajo O apaga). ⚠️ Comprueba el VALOR: un servidor que
+  se apaga «con cualquier señal» se para al redimensionar la terminal (SIGWINCH llega por el
+  mismo canal; `serve_graceful` ya lo filtra). Singleton del proceso; unix (VM y
   binario nativo). Ejemplo completo en
   [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray). Para un servidor web no
   hace falta cablearlo a mano: `webserver.serve_graceful(host, port, drain_ms, handler)` ya lo
@@ -2791,6 +2858,14 @@ read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás 
 (una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
 y el actor muere cuando su canal se cierra (`close(ch)`).
 
+**Lo que captura un handler es una COPIA** (M309, findings #58). Un servidor `web`, `rpc` o gRPC
+corre cada conexión en su fibra, y lo que el handler captura del ámbito exterior (un `Map` de
+estado, un contador) se copia al arrancar la fibra: mutarlo dentro del handler no persiste fuera.
+En la VM la copia es **por conexión** (un test con una sola conexión «funciona»); en el binario
+nativo, los closures que cruzan a `spawn` se reconstruyen **en cada invocación**, así que ni eso.
+El estado compartido de un servicio vive en una base de datos o en un actor (esta sección):
+nunca en un valor capturado.
+
 **Fan-out desde un actor** (un suscriptor por canal: SSE, WebSockets, notificaciones): el actor
 NO debe usar `send` a secas hacia sus suscriptores — `send` sobre un canal **cerrado** es un
 error fatal (tumba la fibra del actor) y sobre uno acotado y **lleno** bloquea al actor entero
@@ -2897,7 +2972,7 @@ manda — la variable siempre gana al default.
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
-ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
+ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios; --native [--release] sobre el binario nativo
 ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305)
 ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
@@ -3044,6 +3119,14 @@ suite aparte. Un fallo reporta su mensaje **y su ubicación** (`at módulo:líne
 compila. Un filtro (`ray test suma`, o `ray test archivo.ray suma`) selecciona por subcadena del
 nombre.
 
+**`ray test --native [--release]`** (M312) corre las mismas pruebas sobre el **binario nativo**:
+cada suite se compila una vez a un ejecutable cuyo `main` despacha por el nombre de la prueba, y
+cada prueba corre como un proceso aparte (aislada, como en la VM). El informe y los códigos de
+salida son los mismos; la única diferencia es que un fallo no trae la línea `at módulo:línea:col`
+(el nativo no lleva traza). Honra `[native] without`, los assets embebidos y `[app]` del
+proyecto; `--release` usa el perfil optimizado. Úsalo en CI junto al `ray test` normal: es la
+forma de cazar una divergencia VM/nativo antes de que la vea un usuario del binario.
+
 ### Templates compilados (`.ray.html`)
 
 Para SSR, además del motor runtime (`std/template`, §12), un template puede **compilarse a una
@@ -3151,9 +3234,10 @@ Cosas que sorprenden viniendo de otros lenguajes:
   compilador los rechaza, y dentro de una función anónima están "fuera del bucle". Los patrones
   que suelen evitarlos (extraer a función, búsquedas de la stdlib, `.take(n)`) están en §4, "Salir
   temprano".
-- **`match` es solo para enums.** Destructura `Option`/`Result`/tus enums; **no** hay patrones de literal ni
-  `match` sobre `int`/`bool`/`string`. Para despachar sobre un primitivo, usa `if/else`. Las guardas
-  (`patrón if cond`) sí permiten condiciones dentro de un `match` de enum.
+- **`match` casa enums, tuplas, structs y primitivos** (M310): `match (n) { 0 => …, _ => … }`,
+  `match ((m, p)) { ("GET", "/") => …, _ => … }` y literales dentro de un payload
+  (`Shape.Rect(w, 0)`). Un `int`/`string`/`char` siempre necesita el brazo `_` (los literales no
+  los agotan); las guardas (`patrón if cond`) siguen valiendo para el resto de condiciones.
 - **Los brazos de `match` con cuerpo de bloque llevan coma.** `Option.Some(v) => { hacer(v); },` — la coma
   detrás de `}` es necesaria.
 - **El escrutinio de `match` va entre paréntesis** (`match (e) { … }`), como `if`/`while`. Evita la

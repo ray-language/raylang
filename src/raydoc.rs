@@ -18,7 +18,8 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
     let has_pub = program.functions.iter().any(|f| f.is_pub)
         || program.structs.iter().any(|s| s.is_pub)
         || program.enums.iter().any(|e| e.is_pub)
-        || program.traits.iter().any(|t| t.is_pub);
+        || program.traits.iter().any(|t| t.is_pub)
+        || program.type_aliases.iter().any(|a| a.is_pub);
     let include = |is_pub: bool| is_pub || !has_pub;
 
     let mut out = String::new();
@@ -45,6 +46,16 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
         for s in structs {
             out.push_str(&format!("### `{}`\n\n", sig_struct(s)));
             emit_doc(&mut out, &lines, s.line);
+        }
+    }
+
+    // --- Alias de tipo (M311) ---
+    let aliases: Vec<&TypeAliasDef> = program.type_aliases.iter().filter(|a| include(a.is_pub)).collect();
+    if !aliases.is_empty() {
+        out.push_str("## Type aliases\n\n");
+        for a in aliases {
+            out.push_str(&format!("### `type {}{} = {}`\n\n", a.name, generics(&a.type_params, &[]), a.target));
+            emit_doc(&mut out, &lines, a.line);
         }
     }
 
@@ -201,6 +212,11 @@ fn privada() -> int { 0 }
         let md = generate(src, "m.ray").unwrap();
         assert!(md.contains("# m.ray"));
         assert!(md.contains("### `struct Point { x: int, y: int }`"));
+        // M311: los alias públicos se documentan con su expansión.
+        let md2 = generate("/// A point as a pair.\npub type Pt<T> = (T, T);\ntype Hidden = int;\npub fn f() -> Pt<int> { (0, 0) }\n", "g.ray").unwrap();
+        assert!(md2.contains("## Type aliases"), "{md2}");
+        assert!(md2.contains("### `type Pt<T> = (T, T)`\n\nA point as a pair."), "{md2}");
+        assert!(!md2.contains("Hidden"), "{md2}");
         assert!(md.contains("Un punto. En 2D.")); // multi-línea unida
         assert!(md.contains("### `fn sum(a: int, b: int) -> int`"));
         assert!(md.contains("Suma dos."));

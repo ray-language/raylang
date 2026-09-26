@@ -870,8 +870,11 @@ fn match_binding_arity_incorrect() {
 
 #[test]
 fn match_about_no_enum() {
+    // M310: un `match` sobre int/string/char/bool/tupla/struct es válido (patrones literales y
+    // de tupla); lo que sigue sin admitirse es un escrutinio sin estructura (fn, unit, canal…).
+    assert!(check_src("fn f(n: int) -> int { match (n) { _ => 0 } } fn main() {}").is_ok());
     err_contains(
-        "fn f(n: int) -> int { match (n) { _ => 0 } } fn main() {}",
+        "fn f(g: fn() -> int) -> int { match (g) { _ => 0 } } fn main() {}",
         "match requires an enum",
     );
 }
@@ -1978,3 +1981,50 @@ fn missing_field_of_a_root_struct_has_no_constructor_hint() {
     let e = check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1 }; p.x }").expect_err("falta y");
     assert!(e.msg.contains("missing field 'y' in the literal of 'P'") && !e.msg.contains("constructor"), "{}", e.msg);
 }
+
+/// M310 (findings #44/#53): patrones de tupla y literales; exhaustividad por matriz (anidada).
+#[test]
+fn tuple_and_literal_patterns_exhaustiveness() {
+    // Tupla de bools cubierta por literales.
+    assert!(check_src("fn f(t: (bool, bool)) -> int { match (t) { (true, true) => 1, (true, false) => 2, (false, _) => 0 } }\nfn main() {}").is_ok());
+    err_contains(
+        "fn f(t: (bool, bool)) -> int { match (t) { (true, true) => 1, (false, _) => 0 } }\nfn main() {}",
+        "non-exhaustive match on (bool, bool): some nested cases are not covered",
+    );
+    // Literales de int/string: hace falta un comodín.
+    err_contains("fn f(n: int) -> int { match (n) { 0 => 1, 1 => 2 } }\nfn main() {}", "non-exhaustive match on int");
+    assert!(check_src("fn f(s: string) -> int { match (s) { \"a\" => 1, _ => 0 } }\nfn main() {}").is_ok());
+    // Anidado: `Some(Some(_))` + `None` no cubre `Some(None)`; con él, sí (sin comodín).
+    err_contains(
+        "fn f(o: Option<Option<int>>) -> int { match (o) { Option.Some(Option.Some(_)) => 1, Option.None => 0 } }\nfn main() {}",
+        "non-exhaustive match on Option<Option<int>>",
+    );
+    assert!(check_src("fn f(o: Option<Option<int>>) -> int { match (o) { Option.Some(Option.Some(_)) => 1, Option.Some(Option.None) => 2, Option.None => 0 } }\nfn main() {}").is_ok());
+    // Literal con tipo equivocado y tupla de aridad distinta.
+    err_contains("fn f(n: int) -> int { match (n) { \"a\" => 1, _ => 0 } }\nfn main() {}", "the literal pattern is string, but the value here is int");
+    err_contains("fn f(t: (int, int)) -> int { match (t) { (a, b, c) => 1 } }\nfn main() {}", "the pattern is a tuple of 3 element(s), but the value here is a tuple of 2");
+    // Los bindings de una tupla reciben el tipo de su posición.
+    assert!(check_src("fn f(t: (int, string)) -> string { match (t) { (n, s) => s + n.to_string() } }\nfn main() {}").is_ok());
+}
+
+/// M311 (findings #54): alias de tipo — expansión en firmas, campos, genéricos y cadenas; errores.
+#[test]
+fn type_aliases_expand_and_are_validated() {
+    assert!(check_src("type Id = int;\ntype Ids = [Id];\ntype Pair<T> = (T, T);\ntype Res<T> = Result<T, string>;\ntype Lookup<K, V> = Map<K, V>;\nstruct U { id: Id, tags: Ids }\nfn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }\nfn f(m: Lookup<string, Id>) -> Res<Ids> { Result.Ok([m.len()]) }\nfn main() { let u = U { id: 1, tags: [2] }; let p: Pair<Id> = (u.id, u.tags[0]); print(swap(p).0); let h: fn(Id) -> Id = fn(x: Id) -> Id { x + 1 }; print(h(1)); }").is_ok());
+    // Un alias es el tipo: `Id` e `int` son intercambiables; un alias de tupla casa con la tupla.
+    assert!(check_src("type Id = int;\nfn g(x: int) -> Id { x }\nfn main() { let a: Id = g(1); let b: int = a; print(b); }").is_ok());
+    err_contains("type A = [B];\ntype B = A;\nfn main() {}", "type alias 'A' refers to itself (through 'A' -> 'B' -> 'A')");
+    err_contains("type A = int;\nstruct A { x: int }\nfn main() {}", "'A' is already a type; it cannot also be a type alias");
+    err_contains("type P<T> = (T, T);\nfn f(p: P<int, int>) {}\nfn main() {}", "'P' expects 1 type argument(s), got 2");
+    err_contains("type P<T> = (T, T);\ntype P<U> = U;\nfn main() {}", "type alias 'P' declared twice");
+    err_contains("type Q = Nope;\nfn main() {}", "unknown type: 'Nope' not declared");
+    err_contains("type Id = int;\nfn main() { let s: Id = \"x\"; }", "'s' is declared as int but initialized with string");
+}
+
+/// M310 (findings #52): `dyn Trait` como tipo de campo de struct (el trait se declara después).
+#[test]
+fn dyn_trait_field_in_struct() {
+    assert!(check_src("struct H { g: dyn G }\ntrait G { fn hi(self) -> string; }\nstruct P { x: int }\nimpl G for P { fn hi(self) -> string { \"p\" } }\nfn main() { let h = H { g: P { x: 1 } }; print(h.g.hi()); }").is_ok());
+    err_contains("struct H { g: dyn Nope }\nfn main() {}", "trait 'Nope' not declared");
+}
+

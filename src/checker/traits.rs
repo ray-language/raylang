@@ -1097,61 +1097,68 @@ pub(super) fn subst_named(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
 /// defecto genérico puede anotar un parámetro del trait —`filter` escribe `Option<T>`—, y sobre un
 /// impl concreto (`impl Iterator<int>`) ese `T` debe volverse `int` (no queda en `type_params`).
 pub(super) fn subst_named_block(block: &mut Block, sigma: &HashMap<String, Type>) {
+    map_types_block(block, &|t| subst_named(t, sigma));
+}
+
+/// M311: aplica `f` a TODAS las anotaciones de tipo de un bloque (tipos de `let`, firmas de
+/// closures, casts), recursivamente. Generaliza `subst_named_block` (M40.2c); lo usa también la
+/// expansión de alias de tipo (`lower_type_aliases`).
+pub(super) fn map_types_block(block: &mut Block, f: &dyn Fn(&Type) -> Type) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { ty, value, .. } => {
-                if let Some(t) = ty { *t = subst_named(t, sigma); }
-                subst_named_expr(value, sigma);
+                if let Some(t) = ty { *t = f(t); }
+                map_types_expr(value, f);
             }
-            StmtKind::LetTuple { value, .. } => subst_named_expr(value, sigma),
+            StmtKind::LetTuple { value, .. } => map_types_expr(value, f),
             StmtKind::For { iter, body, .. } => {
                 match iter {
-                    ForIter::Range { start, end } => { subst_named_expr(start, sigma); subst_named_expr(end, sigma); }
-                    ForIter::In(e) => subst_named_expr(e, sigma),
-                    ForIter::Iter { expr, .. } => subst_named_expr(expr, sigma),
+                    ForIter::Range { start, end } => { map_types_expr(start, f); map_types_expr(end, f); }
+                    ForIter::In(e) => map_types_expr(e, f),
+                    ForIter::Iter { expr, .. } => map_types_expr(expr, f),
                 }
-                subst_named_block(body, sigma);
+                map_types_block(body, f);
             }
-            StmtKind::Assign { target, value } => { subst_named_expr(target, sigma); subst_named_expr(value, sigma); }
+            StmtKind::Assign { target, value } => { map_types_expr(target, f); map_types_expr(value, f); }
             StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
-            StmtKind::Return { value } => { if let Some(v) = value { subst_named_expr(v, sigma); } }
-            StmtKind::Expr(e) => subst_named_expr(e, sigma),
+            StmtKind::Return { value } => { if let Some(v) = value { map_types_expr(v, f); } }
+            StmtKind::Expr(e) => map_types_expr(e, f),
         }
     }
-    if let Some(t) = &mut block.tail { subst_named_expr(t, sigma); }
+    if let Some(t) = &mut block.tail { map_types_expr(t, f); }
 }
 
-pub(super) fn subst_named_expr(expr: &mut Expr, sigma: &HashMap<String, Type>) {
+pub(super) fn map_types_expr(expr: &mut Expr, f: &dyn Fn(&Type) -> Type) {
     match &mut expr.kind {
-        ExprKind::Cast { expr: inner, ty } => { subst_named_expr(inner, sigma); *ty = subst_named(ty, sigma); }
-        ExprKind::Unary { expr: inner, .. } | ExprKind::Try(inner) => subst_named_expr(inner, sigma),
-        ExprKind::Binary { left, right, .. } => { subst_named_expr(left, sigma); subst_named_expr(right, sigma); }
-        ExprKind::Call { callee, args } => { subst_named_expr(callee, sigma); for a in args { subst_named_expr(a, sigma); } }
-        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { subst_named_expr(e, sigma); } }
-        ExprKind::MapLit(pares) => { for (k, v) in pares { subst_named_expr(k, sigma); subst_named_expr(v, sigma); } }
-        ExprKind::Index { array, index } => { subst_named_expr(array, sigma); subst_named_expr(index, sigma); }
-        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { subst_named_expr(e, sigma); } }
-        ExprKind::EnumLit { args, .. } => { for a in args { subst_named_expr(a, sigma); } }
-        ExprKind::Field { object, .. } => subst_named_expr(object, sigma),
+        ExprKind::Cast { expr: inner, ty } => { map_types_expr(inner, f); *ty = f(ty); }
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Try(inner) => map_types_expr(inner, f),
+        ExprKind::Binary { left, right, .. } => { map_types_expr(left, f); map_types_expr(right, f); }
+        ExprKind::Call { callee, args } => { map_types_expr(callee, f); for a in args { map_types_expr(a, f); } }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { map_types_expr(e, f); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { map_types_expr(k, f); map_types_expr(v, f); } }
+        ExprKind::Index { array, index } => { map_types_expr(array, f); map_types_expr(index, f); }
+        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { map_types_expr(e, f); } }
+        ExprKind::EnumLit { args, .. } => { for a in args { map_types_expr(a, f); } }
+        ExprKind::Field { object, .. } => map_types_expr(object, f),
         ExprKind::Func(fe) => {
-            for p in &mut fe.params { p.ty = subst_named(&p.ty, sigma); }
-            fe.return_type = subst_named(&fe.return_type, sigma);
-            subst_named_block(&mut fe.body, sigma);
+            for p in &mut fe.params { p.ty = f(&p.ty); }
+            fe.return_type = f(&fe.return_type);
+            map_types_block(&mut fe.body, f);
         }
         ExprKind::Match { scrutinee, arms } => {
-            subst_named_expr(scrutinee, sigma);
+            map_types_expr(scrutinee, f);
             for arm in arms {
-                subst_named_expr(&mut arm.body, sigma);
-                if let Some(g) = &mut arm.guard { subst_named_expr(g, sigma); }
+                map_types_expr(&mut arm.body, f);
+                if let Some(g) = &mut arm.guard { map_types_expr(g, f); }
             }
         }
         ExprKind::If { cond, then_branch, else_branch } => {
-            subst_named_expr(cond, sigma);
-            subst_named_block(then_branch, sigma);
-            if let Some(e) = else_branch { subst_named_expr(e, sigma); }
+            map_types_expr(cond, f);
+            map_types_block(then_branch, f);
+            if let Some(e) = else_branch { map_types_expr(e, f); }
         }
-        ExprKind::While { cond, body, .. } => { subst_named_expr(cond, sigma); subst_named_block(body, sigma); }
-        ExprKind::Block(b) => subst_named_block(b, sigma),
+        ExprKind::While { cond, body, .. } => { map_types_expr(cond, f); map_types_block(body, f); }
+        ExprKind::Block(b) => map_types_block(b, f),
         _ => {}
     }
 }

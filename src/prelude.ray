@@ -947,6 +947,57 @@ impl<T, E> ResultOps<T, E> for Result<T, E> {
     }
 }
 
+// M309 (findings #44): `Option`/`Result` satisfacen `Eq`/`Show` cuando sus parámetros lo hacen —
+// `assert_eq(json.get_int(s, "tempo"), Option.Some(133))`. `show` da la forma canónica
+// `Option.Some(x)`/`Result.Err(e)`, la misma que imprime el nativo.
+impl<T: Eq> Eq for Option<T> {
+    fn eq(self, other: Option<T>) -> bool {
+        match (self) {
+            Option.Some(a) => match (other) {
+                Option.Some(b) => a.eq(b),
+                Option.None => false,
+            },
+            Option.None => match (other) {
+                Option.Some(_) => false,
+                Option.None => true,
+            },
+        }
+    }
+}
+
+impl<T: Show> Show for Option<T> {
+    fn show(self) -> string {
+        match (self) {
+            Option.Some(a) => "Option.Some(" + a.show() + ")",
+            Option.None => "Option.None",
+        }
+    }
+}
+
+impl<T: Eq, E: Eq> Eq for Result<T, E> {
+    fn eq(self, other: Result<T, E>) -> bool {
+        match (self) {
+            Result.Ok(a) => match (other) {
+                Result.Ok(b) => a.eq(b),
+                Result.Err(_) => false,
+            },
+            Result.Err(x) => match (other) {
+                Result.Ok(_) => false,
+                Result.Err(y) => x.eq(y),
+            },
+        }
+    }
+}
+
+impl<T: Show, E: Show> Show for Result<T, E> {
+    fn show(self) -> string {
+        match (self) {
+            Result.Ok(a) => "Result.Ok(" + a.show() + ")",
+            Result.Err(e) => "Result.Err(" + e.show() + ")",
+        }
+    }
+}
+
 // Eq/Show para bytes (M61.3): `==` ya compara bytes estructuralmente y `to_string(bytes)` ya da
 // hex — estos impls solo lo exponen a los genéricos acotados (`assert_eq(a, b"...")`).
 impl Eq for bytes {

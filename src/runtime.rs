@@ -203,6 +203,10 @@ impl std::fmt::Display for Value {
             }
             Value::Struct(rc) => {
                 let s = rc.borrow();
+                // M310 (findings #52): un `dyn Trait` (struct interno `__dyn_T`) se muestra opaco.
+                if let Some(tr) = s.name.strip_prefix("__dyn_") {
+                    return write!(f, "<dyn {}>", tr.replace("__", " + "));
+                }
                 let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, v)).collect();
                 write!(f, "{} {{ {} }}", s.name, parts.join(", "))
             }

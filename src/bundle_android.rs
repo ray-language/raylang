@@ -83,20 +83,50 @@ const NETWORK_SECURITY_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 const MAIN_ACTIVITY_JAVA: &str = r#"package org.raylang.shell;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
+    // M309 (findings #41): el <input type="file"> de la página abre el selector del sistema.
+    private static final int RAY_FILE_CHOOSER = 7001;
+    private ValueCallback<Uri[]> rayFileCallback = null;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // M309 (findings #40): el programa corre con cwd=/ y sin HOME — no tendría dónde escribir.
+        // HOME = el directorio de datos privado de la app; TMPDIR = su caché (fs.temp_dir()).
+        try {
+            android.system.Os.setenv("HOME", getFilesDir().getAbsolutePath(), true);
+            android.system.Os.setenv("TMPDIR", getCacheDir().getAbsolutePath(), true);
+        } catch (Exception e) { }
         WebView web = new WebView(this);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
+        web.getSettings().setAllowFileAccess(true);
         /*RAY_DEVTOOLS*/
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (rayFileCallback != null) { rayFileCallback.onReceiveValue(null); }
+                rayFileCallback = cb;
+                Intent intent = params.createIntent();
+                try {
+                    startActivityForResult(intent, RAY_FILE_CHOOSER);
+                } catch (Exception e) {
+                    rayFileCallback = null;
+                    return false;
+                }
+                return true;
+            }
+        });
         web.addJavascriptInterface(new RayJs(), "RayAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -118,6 +148,18 @@ public class MainActivity extends Activity {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
         }
         RayBridge.startOnce();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == RAY_FILE_CHOOSER) {
+            if (rayFileCallback != null) {
+                rayFileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                rayFileCallback = null;
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override

@@ -4,6 +4,71 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El segundo barrido de `ray-apps`: móvil, distribuido y bases de datos** (M309,
+  `RAYLANG-FINDINGS.md` #38–#66; lo pendiente, en IDEAS §98).
+  - **`db` 0.1.1**: `db/mongo` se autentica contra MongoDB 6+ (`conversationId` como int32 —
+    `Bson.Int32` —, y el `saslContinue` vacío hasta `done: true`), acepta servidores sin auth
+    (`user = ""`) y devuelve `Err` en `insert`/`update`/`delete` con `writeErrors` (clave
+    duplicada; antes `Ok(0)`). `db/mysql` completa el full-path de `caching_sha2_password` en
+    claro con el intercambio RSA del protocolo (RSA-OAEP/SHA-1 sobre `std/bigint`): un
+    `mysql:8.4` recién creado entra sin `--mysql-native-password`.
+  - **Nativo**: capturar en un `spawn` un valor cuyo tipo guarda funciones es error de compilación
+    con el rodeo (antes panic en ejecución, solo en nativo); un parámetro función que cruza un
+    `spawn` puede guardarse en un mapa o pasarse como valor (E0308 antes).
+  - **Móvil**: `ui.reply`/`eval_js` sobre la ventana `0` es la ventana del shell (la Promise de
+    `window.ray.request` no resolvía nunca en iOS/Android); el shell Android fija `HOME`/`TMPDIR`
+    al directorio de la app y atiende `<input type="file">`; `ray bundle --ios` exporta
+    `IPHONEOS_DEPLOYMENT_TARGET` al compilar (los objetos C de `ring` declaraban el SDK
+    instalado), escribe `NSLocalNetworkUsageDescription` y `[app.plist]` en el Info.plist,
+    rescata el `DEVELOPMENT_TEAM` elegido en Xcode del pbxproj anterior y avisa cuando
+    `--ios-target sim|device` deja el otro lado vacío. README generado y MANUAL: tras cambiar el
+    programa basta `ray build --native --lib`.
+  - **Frontend en el teléfono**: un build con `--devtools` honra `RAY_DEV_FRONTEND_URL` si
+    responde (con respaldo a la build embebida); un release la ignora.
+  - **Herramientas**: `ray version` dice `+dev.<sha>` en un toolchain de la HEAD y
+    `[package] raylang = "X"` exige una versión mínima (y avisa en un toolchain de desarrollo);
+    `ray build --native -o dir/app` crea `dir` antes de compilar; un paquete se importa a sí
+    mismo por su nombre desde sus tests aunque declare `entry`; `ray add` ya no se cuela entre
+    un comentario y la cabecera de la tabla siguiente; «module not found» sugiere `ray add`
+    cuando el módulo es de un paquete (las dependencias no son transitivas); `ray fmt` reparte
+    los `const` largos y los literales de struct con closures (un campo por línea).
+  - **Lenguaje**: `Option`/`Result` implementan `Eq`/`Show` cuando sus parámetros lo hacen
+    (`assert_eq(o, Option.Some(1))`).
+  - **`net` 0.3.7 / `rpc` 0.1.2**: `serve_graceful` solo se apaga con SIGTERM/SIGINT (`signals()`
+    también trae SIGWINCH y un servidor se paraba al redimensionar la terminal);
+    `webserver.shutdown_signals()`.
+  - **Docs**: los handlers reciben una copia de lo capturado (por conexión en la VM, por llamada en
+    nativo) — el estado va a una base de datos o un actor; los primitivos no pueden nombrar
+    funciones; `signals()` y SIGWINCH.
+
+- **`ray test --native [--release]`** (M312, `RAYLANG-FINDINGS.md` #66): las mismas pruebas
+  sobre el binario nativo — cada suite se compila una vez (un `main` que despacha por el nombre
+  de la prueba) y cada prueba corre como proceso; mismo informe y códigos de salida, sin la
+  línea `at módulo:línea:col` (el nativo no lleva traza). Honra `[native] without`, los assets
+  embebidos y `[app]`; combinable con `--watch` y el filtro.
+- **Alias de tipo** (M311, `RAYLANG-FINDINGS.md` #54): `[pub] type Nombre<T, …> = tipo;` —
+  `type Id = int`, `type Pair<T> = (T, T)`, `type Handler = fn(Req) -> Result<Json, string>`.
+  Un nombre para un tipo, no un tipo nuevo: se expande en el checker y ningún motor lo ve; los
+  diagnósticos muestran el tipo expandido. `pub type` se exporta y califica como un tipo
+  (`geo.Pt`, `from geo import Pt`). `type` es contextual (sigue valiendo como campo o variable).
+  `ray fmt`, `ray doc` (sección «Type aliases») y el hover del LSP (`type Pair<T> = (T, T)`) lo
+  conocen.
+- **Patrones de tupla y literales, exhaustividad real y `dyn` en campos** (M310,
+  `RAYLANG-FINDINGS.md` #44/#52/#53).
+  - **`match` sobre tuplas, structs y primitivos**: `match ((method, path)) { ("GET", "/") => …,
+    (m, _) => … }`, `match (n) { 0 => …, -1 => …, _ => … }`, y literales `int`/`string`/`char`/
+    `bool` dentro de un payload (`Shape.Rect(w, 0)`). VM, intérprete, nativo y `ray fmt`.
+  - **Exhaustividad por matriz**: `Ok(Some(v)) / Ok(None) / Err(e)` ya no exige un `_`; el checker
+    señala qué falta con «some nested cases are not covered». Un `int`/`string`/`char` sigue
+    necesitando `_`; un `bool`, `true` y `false`.
+  - **`dyn Trait` como campo de struct** (el trait puede declararse después) y **rutas
+    calificadas** `dyn m.Trait` / `impl m.Trait for T`. Un valor `dyn` se muestra `<dyn Trait>`
+    en todos los motores (antes la VM enseñaba el struct interno `__dyn_…`).
+  - Nativo: un `match` con patrones diferidos (variante anidada de usuario o literal de string) lleva
+    su comodín inalcanzable (rustc no ve la cobertura que el checker probó).
+
 ## 1.27.12 — 2026-09-26
 
 - **Los ocho bugs del barrido de `ray-apps` a 1.27.11** (M298, `RAYLANG-FINDINGS.md` del 25 sep

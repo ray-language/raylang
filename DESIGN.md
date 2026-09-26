@@ -14856,3 +14856,160 @@ etiquetas de Rust, `'ray_outer:` delante del `loop`/`for`/`while` que implementa
 `for` (ocho formas, una por optimización). (6) Los cuatro espejos selfhost (parser, checker,
 intérprete, compilador) y `parse_dump` con la etiqueta en el volcado de paridad.
 
+## 291. M309 — El segundo barrido: móvil, distribuido y bases de datos (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 — ray808 (app móvil con frontend React llevada a
+iOS y Android), su hot reload en el teléfono, y raymart (cuatro APIs hexagonales con rpc, gRPC,
+rayq, outbox y saga, compiladas a nativo en Docker contra la release). Lo hecho, por decisión:
+
+**Bases de datos, verificadas contra servidores reales.** `db/mongo` contra mongod 8.3 con y sin
+`--auth`: MongoDB 6+ exige `conversationId` int32 (nuevo `Bson.Int32`, solo para CODIFICAR: lo
+decodificado sigue llegando como `Int`, que es lo que todo el código existente casa) y cierra el
+SASL con un `saslContinue` vacío hasta `done: true`; sin usuario no hay SCRAM; `writeErrors` es
+`Err` (un duplicado era `Ok(0)`). `db/mysql` contra `mysql:8.4` recién creado en los tres motores:
+el full-path de `caching_sha2_password` en claro es el intercambio RSA del protocolo (petición
+0x02 de la clave pública, RSA-OAEP con SHA-1 sobre `password+NUL XOR scramble`), escrito en
+raylang sobre `std/bigint` (base64 y DER a mano; es un cliente, sin exigencia de tiempo
+constante). Antes solo TLS o `mysql_native_password`.
+
+**Nativo: fallar en compilación, no en ejecución.** Un valor cuyo tipo guarda funciones (un
+`Router` con `Map<string, fn>`) capturado por un closure de `spawn` compilaba y panicaba al
+arrancar la fibra — solo en nativo. Como la conversión `__to_send` corre AL crear la fibra, el
+programa fallaría siempre: el error de transpilación es estrictamente mejor (`type_holds_fn`
+recorre campos, payloads, elementos y valores). Y un parámetro función MARCADO (genérico
+`__F: Fn + Send`, H21-N5c) usado como valor se coerciona al `Rc<dyn Fn>` del tipo raylang.
+
+**Móvil.** `0` es «la ventana del shell» en `eval_js`/`reply` (los shells entregan `window = 0`).
+El shell Android fija `HOME`/`TMPDIR` (`android.system.Os.setenv`) y trae `onShowFileChooser`.
+`ray bundle --ios`: `IPHONEOS_DEPLOYMENT_TARGET` en el entorno de cargo (los objetos C de `ring`
+tomaban el `minos` del SDK), `[app.plist]` + `NSLocalNetworkUsageDescription` en el Info.plist
+del shell (iOS 14+), rescate del `DEVELOPMENT_TEAM` del pbxproj anterior (Xcode lo escribe ahí,
+no en el xcconfig: la doc decía lo contrario) y aviso cuando `--ios-target` deja un lado vacío.
+Hot reload nivel 1–3: `RAY_DEV_FRONTEND_URL` honrada solo por builds con `--devtools` y solo si
+responde (sonda TCP con reintento: iOS falla la primera conexión local mientras pide permiso).
+Los niveles 4 (`ray dev --device`) y el nivel 2 del programa (ventana remota / VM en la app)
+quedan en IDEAS §98 como arcos.
+
+**Herramientas.** `1.27.12+dev.<sha>` (build.rs: `git describe --exact-match` contra `v<versión>`;
+`RAYLANG_RELEASE_BUILD` lo fuerza limpio — el CI de release lo exporta, porque su checkout no
+trae tags) y `[package] raylang = "X"` (mínimo; aviso en dev). `-o dir/app` crea `dir` antes de
+compilar. Un paquete cuyo directorio se llama como él se resuelve por su nombre desde dentro
+aunque tenga `entry`. `ray add` respeta el comentario que encabeza la tabla siguiente. «module
+not found» sugiere `ray add pkg`. `ray fmt`: los `const` pasan por `retry_wrapped`, y un literal
+de struct con un campo multilínea va un campo por línea SIEMPRE (canónico e idempotente; la
+variante «solo si no cabe» no lo era, porque cada línea cabía).
+
+**Lenguaje y paquetes.** `impl<T: Eq> Eq for Option<T>` y compañía en el prelude (composición,
+como `[T]`); `show` da la forma canónica del nativo. `serve_graceful` en `net`/`rpc` filtra
+SIGWINCH (`shutdown_signals()`).
+
+## 292. M310 — Patrones de tupla y literales, exhaustividad por matriz, `dyn` en campos (sep 2026)
+
+Tres hallazgos del segundo barrido (#44, #52, #53) que eran **el lenguaje**, no la caja de
+herramientas: raymart quería despachar `match ((method, path))`, ray808 comparar strings en un
+`match` sin guardas, y los puertos de una app querían vivir en un struct como `dyn Trait`.
+
+**Patrones.** `PatternKind::Tuple(Vec<Pattern>)` y `PatternKind::Literal(Expr)` (int con signo,
+string, char, bool). El parser los reconoce por el primer token (`(`, un literal o `-` seguido
+de número); un `(p)` de un solo elemento es error («a tuple pattern needs at least two
+elements»). El checker tipa cada posición con el tipo de la tupla y exige que el literal tenga
+el tipo del valor («the literal pattern is string, but the value here is int»). El escrutinio
+deja de tener que ser un enum: tupla, struct o primitivo también (una función, unit, canal o
+tarea siguen sin matchearse). Intérprete y VM: `Index` por posición y `Equal` + salto; nativo:
+patrón de tupla de Rust y literal tal cual, salvo el **string**, que un `Rc<str>` no casa con
+un literal de Rust → temporal diferido (el mecanismo de M287) y prueba `&**tmp == "lit"` en la
+guarda. Como rustc no ve la cobertura de los brazos guardados, un `match` con algún brazo así
+lleva `_ => unreachable!()` al final: la exhaustividad la probó el checker.
+
+**Exhaustividad por matriz.** La regla conservadora de M40.1c («una variante anidada es
+refutable → hace falta fallback») era la queja #53: `Ok(Some(v)) / Ok(None) / Err(e)` obligaba a
+un `_` que anulaba la red de seguridad. `patterns_exhaust(rows, tys)` es el algoritmo clásico
+de especialización por columna: para un enum, cada variante especializa la matriz (los comodines
+se expanden a comodines del payload) y se recurre; para una tupla/struct, se expanden las
+posiciones/campos; un `bool` se agota con `true` y `false`; el resto de primitivos, solo con un
+comodín. Dos cortes hacen que termine: una fila toda de comodines agota, y una columna sin
+constructores no se expande (sin esto, `enum List { Cons(int, List), Nil }` con un `_` se
+expandía sin fin — lo cazó la suite del checker con un SIGABRT). El mensaje distingue «missing
+variants: …» (faltan variantes de primer nivel) de «some nested cases are not covered (add a
+'_' arm or cover every case)». La inalcanzabilidad de patrones de tupla/literal no se
+diagnostica (solo la de variantes ya cubiertas, como antes).
+
+**`dyn` en campos.** «trait 'Greeter' not declared» al escribir `struct App { g: dyn Greeter }`
+era un problema de orden: los tipos de los campos se validaban antes de registrar los traits (que
+necesitan los tipos). Una pre-pasada mete los NOMBRES de los traits (con sus métodos, para la
+ambigüedad de `dyn A + B`) antes de validar campos; `register_traits_impls` comprueba la
+unicidad contra los vistos en su propia pasada. Al mostrar, un `dyn` es opaco — `<dyn Greeter>` —
+en la VM, el intérprete y el nativo; la VM enseñaba el struct interno (`__dyn_Greeter { data:
+…, hi: <fn> }`) y el nativo no compilaba (`derive(PartialEq)` sobre closures). Comparar con `==`
+un struct que guarda un `dyn` sigue siendo identidad de closures en la VM y no compila en
+nativo, igual que un struct con campos función: fuera de alcance. Y `dyn M.Trait` /
+`impl M.Trait for T` (rutas calificadas) parsean como un tipo calificado más.
+
+**Espejo selfhost.** El checker auto-alojado no conoce los patrones nuevos (tampoco los anidados
+de M40.1c): espeja la regla del escrutinio (struct/primitivo válidos con `_`/binding) y los
+mensajes nuevos byte a byte; el corpus de paridad tiene los cuatro casos.
+
+## 293. M311 — Alias de tipo (sep 2026)
+
+El hallazgo #54 (raymart quería `type Handler = fn(Req) -> Result<Json, string>` y raylang no
+tenía cómo nombrar un tipo). La decisión de diseño es que un alias **no es un tipo nuevo**: es
+un nombre que se expande, como en Rust/TypeScript y a diferencia de un *newtype*. Eso lo hace
+barato y sin sorpresas (`Id` e `int` son el mismo tipo; nada que envolver) y deja la puerta
+abierta a un newtype de verdad si algún día hace falta (`IDEAS`).
+
+**Erasure en dos tiempos.** El checker registra `nombre → (params, destino crudo)` antes de
+resolver ningún tipo y `resolve_type` expande cada uso (sustituye los parámetros por los
+argumentos ya resueltos y vuelve a resolver: un alias puede nombrar otro alias); `ensure_type`
+solo comprueba la aridad del uso, porque el destino se validó al declararlo con sus parámetros
+en ámbito. Como el transpilador nativo tiene su propio `type_of` sobre el AST, tras el chequeo
+`lower_type_aliases` reescribe TODAS las posiciones de tipo del programa (campos, payloads,
+firmas, impls, constantes y los cuerpos: `let`, closures, casts) y vacía `program.type_aliases`.
+Para eso `subst_named_block/expr` (M40.2c) se generalizó en `map_types_block/expr` con un
+`Fn(&Type) -> Type`. Ningún motor sabe de alias; los diagnósticos enseñan el tipo expandido.
+
+**Ciclos y choques.** `type A = [B]; type B = A;` haría que la expansión no terminara: se
+detecta al registrar (recorrido por los alias del destino) con la cadena en el mensaje. Un alias
+con el nombre de un struct/enum/trait es error, igual que repetirlo. Sin bounds: irían en la
+función o el struct que usa el alias, y aceptarlos aquí prometería una verificación que no
+existe (un alias no se instancia).
+
+**`type` contextual.** La palabra ya vive en campos y variables de programas reales (`r.type`,
+`let type = …`, el JSON de medio mundo), así que no puede ser reservada. Como `from` (M192):
+solo abre un ítem cuando va al inicio y le sigue un nombre.
+
+**Módulos.** Un alias se namespacia como un tipo (`geo::Pt`), entra en la superficie pública si
+es `pub` (`geo.Pt`, `from geo import Pt`) y su destino es una posición de tipo más para el
+`TypeRewriter` del loader (con sus parámetros en ámbito). Un alias privado de otro módulo no se
+ve («unknown type: 'geo.Hidden' not declared»). El checker auto-alojado no lo conoce: el corpus
+de paridad no usa alias y la stdlib tampoco (regla: la stdlib no usa sintaxis fuera del
+subconjunto metacircular).
+
+## 294. M312 — `ray test --native` (sep 2026)
+
+El hallazgo #66: las apps se prueban en la VM y se entregan en nativo, y una divergencia entre
+los dos motores (la clase de bugs de M309: E0277 en el reenvío de un handler, un `dyn` que no
+compilaba) solo aparecía al construir el binario final. Con `ray test --native` la misma suite
+corre sobre el nativo, en CI, con el mismo informe.
+
+**Un binario por suite, un proceso por prueba.** Compilar un binario por prueba costaría un
+build de cargo por cada `@test`. En su lugar el runner sintetiza, como AST (igual que el `main`
+por prueba de la VM, M101), un `main` de despacho: `if (args()[0] == "t1") { <cuerpo de t1> }
+else if (…) { … } else { 66 }`, donde cada rama es exactamente el cuerpo que la VM ejecuta por
+prueba (`() -> bool` → `if (t()) { 0 } else { 1 }`; `() -> unit` → `t(); 0`). Cada prueba corre
+como un proceso con su nombre global por argumento: el aislamiento es el del proceso (más fuerte
+que el de la VM, que cierra handles entre pruebas). El contrato de salida es el del `main`
+nativo: 0 pasa, 1 devolvió `false`, 70 error de ejecución (`runtime error: …` por stderr, que el
+runner recorta al mensaje), 66 nombre desconocido. stdout pasa tal cual (los `print` de una
+prueba se ven, como en la VM).
+
+**Lo que se comparte.** `build_native` se partió en carga+chequeo y `build_native_checked`
+(programa ya chequeado → binario), que el runner usa con la política del proyecto (`[native]
+without`, fibras según el host, assets embebidos y `[app]` de la entrada de la suite) y sin
+`--target` (las pruebas corren aquí). Un fallo del build nativo sale del proceso con el error de
+rustc (como `ray build --native`); un fallo de front-end sigue siendo «suite que no compila».
+
+**Lo que no hay.** La línea `at módulo:línea:col` de un fallo: el nativo no lleva traza (los
+errores de ejecución son un `panic_any(__RayErr)` sin posición, decisión de H6). Es la única
+diferencia visible del informe, y queda documentada. Los flags (`--native`, `--release`) no son
+ni suite ni filtro para `split_test_args`, y el watch los reenvía en la corrida selectiva.
+

@@ -167,6 +167,11 @@ static void ray_eval(const char *js) {
 
 /// Info.plist del shell (placeholders de build settings; `UILaunchScreen` vacío = pantalla de
 /// lanzamiento por defecto sin storyboard; ATS con local networking como en el .app de mac).
+/// M309 (findings #45): la versión mínima de iOS del proyecto generado (`App.xcconfig`) — y la que
+/// `ray build --native --target *-apple-ios*` exporta como `IPHONEOS_DEPLOYMENT_TARGET` para que
+/// los objetos C de las dependencias (ring) declaren el mismo `minos`.
+pub const IOS_DEPLOYMENT_TARGET: &str = "15.0";
+
 const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -199,6 +204,25 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 "#;
+
+/// M309 (findings #51): el Info.plist del shell con las claves extra (`[app.plist]` del ray.toml y
+/// `NSLocalNetworkUsageDescription` cuando toca), insertadas antes del cierre del diccionario.
+pub fn info_plist(extra: &[(String, crate::manifest::PlistValue)]) -> String {
+    if extra.is_empty() {
+        return INFO_PLIST.to_string();
+    }
+    let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let mut keys = String::new();
+    for (k, v) in extra {
+        let value = match v {
+            crate::manifest::PlistValue::Str(s) => format!("<string>{}</string>", esc(s)),
+            crate::manifest::PlistValue::Bool(true) => "<true/>".to_string(),
+            crate::manifest::PlistValue::Bool(false) => "<false/>".to_string(),
+        };
+        keys.push_str(&format!("  <key>{}</key>{value}\n", esc(k)));
+    }
+    INFO_PLIST.replacen("</dict>\n</plist>", &format!("{keys}</dict>\n</plist>"), 1)
+}
 
 /// M151 (raydesk #9): la firma que el xcconfig generado debe llevar. `team` viene de
 /// `[ios] development_team` en ray.toml o, en su defecto, PRESERVADA del `App.xcconfig`
@@ -311,13 +335,20 @@ fn pbxproj(name: &str) -> String {
 const README: &str = r#"# App iOS generada por `ray bundle --ios`
 
 - `libs/` y `libs-sim/` llevan el staticlib del programa (dispositivo / simulador); el
-  xcconfig elige por SDK. Para regenerarlos tras cambiar el programa:
-  `ray bundle --ios` de nuevo — con `--ios-target device|sim` construye solo un lado (el
-  otro `.a` se conserva) — o `ray build --native --lib --target aarch64-apple-ios…`.
+  xcconfig elige por SDK. **Tras cambiar el programa o el frontend basta recompilar la
+  librería**, sin tocar el proyecto Xcode (ni la firma):
+  `ray build --native --lib --release --target aarch64-apple-ios -o <Name>-ios/libs/libray_app.a`
+  (y `--target aarch64-apple-ios-sim -o <Name>-ios/libs-sim/libray_app.a` para el simulador).
+  `ray bundle --ios` de nuevo solo al cambiar `[app]` o al actualizar raylang — con
+  `--ios-target device|sim` construye solo un lado (el otro `.a` se conserva si existía).
 - Simulador (sin firma):
   `xcodebuild -project <Name>.xcodeproj -target <Name> -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO`
   y luego `xcrun simctl boot <device>` + `install` + `launch`.
-- Dispositivo: abrir el `.xcodeproj` en Xcode y elegir tu equipo de firma (Signing & Teams).
+- Dispositivo (firma): declara `[ios] development_team = "ABCDE12345"` en `ray.toml`, o
+  añade `DEVELOPMENT_TEAM = ABCDE12345` a `App.xcconfig`. Es lo que sobrevive a regenerar el
+  bundle: elegir el equipo en Xcode (Signing & Capabilities) lo guarda en `project.pbxproj`,
+  que cada `ray bundle --ios` reescribe — el bundle rescata ese `DEVELOPMENT_TEAM` del pbxproj
+  anterior al xcconfig, pero la fuente de verdad es el xcconfig o el `ray.toml`.
 - El programa raylang corre DENTRO de la app (staticlib): su webserver embebido sirve la UI y
   `ui.open(title, url)` carga la URL en el webview. Los eventos de ciclo de vida llegan por
   `ui.next_event()` como kind="lifecycle", tag="background"/"foreground".
@@ -333,7 +364,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_ios_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), devtools).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), devtools, &[]).unwrap();
             let src = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
             assert_eq!(src.contains("rayWebView.inspectable = YES"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -349,6 +380,7 @@ pub fn write_project(
     version: &str,
     signing: &Signing,
     devtools: bool,
+    plist_extra: &[(String, crate::manifest::PlistValue)],
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -369,7 +401,7 @@ pub fn write_project(
         ""
     };
     write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
-    write("Shell/Info.plist", INFO_PLIST)?;
+    write("Shell/Info.plist", &info_plist(plist_extra))?;
     write("App.xcconfig", &xcconfig(name, bundle_id, version, signing))?;
     write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name))?;
     write("README.md", README)?;
@@ -379,6 +411,19 @@ pub fn write_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M309 (findings #51): las claves extra (`[app.plist]`, NSLocalNetworkUsageDescription) entran
+    /// en el Info.plist del shell antes del cierre del diccionario; sin extras, el plist de siempre.
+    #[test]
+    fn info_plist_takes_extra_keys() {
+        assert_eq!(info_plist(&[]), INFO_PLIST);
+        let p = info_plist(&[
+            ("NSLocalNetworkUsageDescription".to_string(), crate::manifest::PlistValue::Str("X <talks> & more".to_string())),
+            ("UIFileSharingEnabled".to_string(), crate::manifest::PlistValue::Bool(true)),
+        ]);
+        assert!(p.contains("<key>NSLocalNetworkUsageDescription</key><string>X &lt;talks&gt; &amp; more</string>\n  <key>UIFileSharingEnabled</key><true/>\n</dict>\n</plist>"), "{p}");
+        assert!(p.contains("NSAllowsLocalNetworking"), "ATS sigue: {p}");
+    }
 
     #[test]
     fn signing_resolution_prefers_the_manifest_and_preserves_the_previous() {

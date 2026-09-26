@@ -229,6 +229,21 @@ impl Parser {
             let value = self.expression()?;
             self.expect(&TokenKind::Semicolon, "';' at the end of the constant")?;
             acc.consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
+        } else if self.check_ident("type") && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(_))) {
+            // M311 (findings #54): `type Nombre[<T, …>] = tipo;`. `type` es palabra clave CONTEXTUAL:
+            // solo al inicio de un ítem seguido de un nombre; en cualquier otra posición sigue siendo
+            // un identificador (campos `type`, variables `type`).
+            self.no_annotations(&anns, "a type alias")?;
+            let kw = self.advance();
+            let (name, _, _) = self.expect_ident("the alias name")?;
+            let (type_params, bounds) = self.type_params_with_bounds()?;
+            if let Some((tp, tr)) = bounds.first() {
+                return Err(self.error_here(format!("a type alias takes no bounds ('{tp}: {tr}'); put the bound on the function or struct that uses it")));
+            }
+            self.expect(&TokenKind::Eq, "'=' after the alias name")?;
+            let target = self.parse_type()?;
+            self.expect(&TokenKind::Semicolon, "';' at the end of the type alias")?;
+            acc.type_aliases.push(TypeAliasDef { is_pub: pub_tok.is_some(), name, type_params, target, line: kw.line, col: kw.col });
         } else if self.check(&TokenKind::Struct) {
             let mut s = self.struct_def()?;
             s.annotations = anns;
@@ -558,7 +573,12 @@ impl Parser {
         // Parámetros de tipo del impl (M9.2b): `impl<T: A + B> Trait for Caja<T>`. Sin `<`,
         // ambos quedan vacíos (impl concreto de M9.1).
         let (type_params, bounds) = self.type_params_with_bounds()?;
-        let (trait_name, _, _) = self.expect_ident("the trait name")?;
+        let (mut trait_name, _, _) = self.expect_ident("the trait name")?;
+        // M309 (findings #52): `impl ports.Repo for MysqlOrders` — trait calificado por módulo.
+        if self.eat(&TokenKind::Dot) {
+            let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
+            trait_name = format!("{}.{}", trait_name, t);
+        }
         // M28.2: argumentos de tipo del trait, `impl From<string> for E`. Sin `<`, vacío.
         let trait_args = self.type_args()?;
         // `for` es palabra clave desde M27.2 (antes era un identificador aquí). Se conserva el mensaje de
@@ -729,7 +749,13 @@ impl Parser {
         if self.eat(&TokenKind::Dyn) {
             let mut traits = Vec::new();
             loop {
-                let (name, line, col) = self.expect_ident("the trait name after 'dyn'")?;
+                let (mut name, line, col) = self.expect_ident("the trait name after 'dyn'")?;
+                // M309 (findings #52): trait calificado por módulo, `dyn ports.Repo` — el `.` va en
+                // el nombre y el loader lo resuelve a `ports::Repo`, como `M.Tipo`.
+                if self.eat(&TokenKind::Dot) {
+                    let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
+                    name = format!("{}.{}", name, t);
+                }
                 self.type_name_sites.push((line, col, name.clone())); // M288: hover/def del trait
                 traits.push(name);
                 if !self.eat(&TokenKind::Plus) {
@@ -1787,6 +1813,44 @@ impl Parser {
     /// un identificador seguido de `.` es una variante; uno suelto, un binding; `_`,
     /// el comodín.
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
+        // M310 (findings #53): patrón de tupla `(p1, p2, …)`.
+        if self.check(&TokenKind::LParen) {
+            let open = self.advance();
+            let mut subs = Vec::new();
+            loop {
+                subs.push(self.pattern()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' to close the tuple pattern")?;
+            if subs.len() < 2 {
+                return Err(ParseError { msg: "a tuple pattern needs at least two elements".into(), line: open.line, col: open.col, len: 1 });
+            }
+            return Ok(Pattern { kind: PatternKind::Tuple(subs), line: open.line, col: open.col });
+        }
+        // M310 (findings #44): patrón literal (`"hello"`, `5`, `-1`, `'c'`, `true`).
+        let negative = matches!(self.peek_kind(), TokenKind::Minus)
+            && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Int(..)) | Some(TokenKind::Float(_)));
+        if negative || matches!(self.peek_kind(), TokenKind::Int(..) | TokenKind::Str(_) | TokenKind::Char(_) | TokenKind::True | TokenKind::False) {
+            let (line, col) = (self.peek().line, self.peek().col);
+            let neg = negative && { self.advance(); true };
+            let tok = self.advance();
+            let lit = match tok.kind {
+                TokenKind::Int(v, r) => ExprKind::Int(v, r),
+                TokenKind::Float(f) => ExprKind::Float(f),
+                TokenKind::Str(t) => ExprKind::Str(t),
+                TokenKind::Char(c) => ExprKind::Char(c),
+                TokenKind::True => ExprKind::Bool(true),
+                TokenKind::False => ExprKind::Bool(false),
+                _ => crate::ice!("literal pattern token"),
+            };
+            let mut e = Expr { kind: lit, line, col };
+            if neg {
+                e = Expr { kind: ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(e) }, line, col };
+            }
+            return Ok(Pattern { kind: PatternKind::Literal(e), line, col });
+        }
         let (name, line, col) = self.expect_ident("a pattern (variant, name or '_')")?;
         // Comodín.
         if name == "_" {
@@ -2098,6 +2162,23 @@ fn is_lvalue(e: &Expr) -> bool {
 // =====================================================================
 #[cfg(test)]
 mod tests {
+    /// M310: patrones de tupla (anidables) y literales, con negativo.
+    #[test]
+    fn tuple_and_literal_patterns_parse() {
+        let src = "fn f(t: (int, (bool, string))) -> int { match (t) { (0, (true, \"a\")) => 1, (-2, _) => 2, _ => 0 } }";
+        let prog = parse(crate::lexer::lex(src).unwrap()).expect("parse");
+        let ExprKind::Match { arms, .. } = &prog.functions[0].body.tail.as_ref().unwrap().kind else { panic!("match") };
+        let PatternKind::Tuple(subs) = &arms[0].pattern.kind else { panic!("tupla") };
+        assert!(matches!(&subs[0].kind, PatternKind::Literal(Expr { kind: ExprKind::Int(0, _), .. })));
+        let PatternKind::Tuple(inner) = &subs[1].kind else { panic!("tupla anidada") };
+        assert!(matches!(&inner[0].kind, PatternKind::Literal(Expr { kind: ExprKind::Bool(true), .. })));
+        assert!(matches!(&inner[1].kind, PatternKind::Literal(Expr { kind: ExprKind::Str(_), .. })));
+        let PatternKind::Tuple(subs2) = &arms[1].pattern.kind else { panic!("tupla 2") };
+        assert!(matches!(&subs2[0].kind, PatternKind::Literal(Expr { kind: ExprKind::Unary { .. }, .. })));
+        let err = parse(crate::lexer::lex("fn f(t: (int, int)) -> int { match (t) { (1) => 1, _ => 0 } }").unwrap()).unwrap_err();
+        assert!(err.msg.contains("at least two elements"), "{}", err.msg);
+    }
+
     /// M217 (ray-sublime #22): un tipo primitivo como nombre de función dice que está reservado.
     #[test]
     fn a_primitive_type_cannot_name_a_function() {
@@ -2120,6 +2201,22 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    /// M311: `type` es palabra clave contextual — ítem `type X<T> = …;` al inicio, identificador en
+    /// cualquier otra posición (campo `type`, variable `type`).
+    #[test]
+    fn type_alias_items_and_type_as_identifier() {
+        let p = parse_prog("pub type Pair<T> = (T, T);\ntype Id = int;\nstruct R { type: string }\nfn main() { let type = 1; let r = R { type: \"a\" }; print(r.type + type.to_string()); }");
+        assert_eq!(p.type_aliases.len(), 2);
+        assert!(p.type_aliases[0].is_pub && p.type_aliases[0].name == "Pair" && p.type_aliases[0].type_params == vec!["T".to_string()]);
+        assert!(matches!(&p.type_aliases[0].target, Type::Tuple(ts) if ts.len() == 2));
+        assert!(!p.type_aliases[1].is_pub && p.type_aliases[1].target == Type::Int);
+        assert_eq!(p.structs[0].fields[0].0, "type");
+        let e = parse(crate::lexer::lex("type P<T: Show> = T; fn main() {}").unwrap()).unwrap_err();
+        assert!(e.msg.contains("a type alias takes no bounds"), "{}", e.msg);
+        let e = parse(crate::lexer::lex("@derive(Eq) type P = int; fn main() {}").unwrap()).unwrap_err();
+        assert!(e.msg.contains("type alias"), "{}", e.msg);
     }
 
     #[test]
@@ -2407,6 +2504,11 @@ mod tests {
                 let fs: Vec<String> = fields.iter().map(|(f, p)| format!("{}: {}", f, spat(p))).collect();
                 format!("{} {{ {} }}", name, fs.join(", "))
             }
+            PatternKind::Tuple(subs) => {
+                let bs: Vec<String> = subs.iter().map(spat).collect();
+                format!("({})", bs.join(", "))
+            }
+            PatternKind::Literal(e) => sx(e),
         }
     }
 

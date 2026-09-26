@@ -31,12 +31,25 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 - Struct fields end with a comma; struct literals are `Name { field: value }`.
 - `main` returns `int` (the process exit code) or unit. `exit(code)` terminates the process
   immediately from any fiber (diverges like `panic`; stdout/stderr flushed).
-- Patterns: NO literals inside variant patterns (`Option.Some(true)` is a syntax error —
-  bind a name and test it, or use a guard). Nested variant patterns ARE fine (since 1.27.6):
-  `Result.Ok(Option.Some(v))`, `Option.Some(json.Json.JObject(m))`, with `_` inside. Qualified
+- Patterns (since 1.27.13): nested variants `Result.Ok(Option.Some(v))`, tuples
+  `match ((method, path)) { ("GET", "/") => …, (m, _) => … }`, literals (`int`, `-1`, `"str"`,
+  `'c'`, `true`) at top level or inside a payload (`Shape.Rect(w, 0)`), struct patterns
+  `Point { x, y }`. Exhaustiveness is checked recursively (`Ok(Some(v)) / Ok(None) / Err(e)`
+  needs no `_`); an `int`/`string`/`char` scrutinee always needs a `_` arm. Qualified
   patterns (`json.Json.JObject(m)`) and qualified types in signatures (`regex.Regex`) work.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
+- Primitive type names cannot name a function: `pub fn int(key: string)` / `fn u32(…)` are
+  errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`). There are no type
+  aliases yet (`type Handler = fn(...)` is a syntax error): repeat the signature.
+- Server handlers (web/rpc/gRPC) receive a COPY of what they capture: fiber heaps are isolated,
+  so a captured `Map` mutated inside a handler does not persist — per connection on the VM
+  (one connection "works"), per call on native. Shared state lives in a database or an actor
+  fiber reached through channels; never in a captured value.
+- `signals()` also delivers SIGWINCH (28, terminal resize): a graceful-shutdown loop must
+  check the value (15/2), not stop on "any signal" (`webserver.shutdown_signals()` is that filter).
+- `ray version` prints `X.Y.Z+dev.<sha>` for a toolchain built from the repo HEAD: it accepts
+  code a release may not. `[package] raylang = "X.Y.Z"` in ray.toml pins the minimum release.
 - Integer literals: decimal or `0xFF` / `0o755` / `0b1010`. String/char escapes include
   `\0`, `\xNN` and `\u{1F600}`.
 
@@ -49,6 +62,7 @@ fn main() -> int { 0 }
 let a = 3;                                       // immutable
 var b = 0;                                       // mutable; b = b + 1; later
 const LIMIT: int = 100;                          // top-level constant (literals, arrays/tuples of them, earlier consts)
+type Pair<T> = (T, T);                           // type alias (1.27.13): a name, not a new type; `pub type` exports it
 
 if (cond) { 1 } else { 2 }                       // if is an EXPRESSION (both branches typed)
 while (i < n) { i = i + 1; }
@@ -343,6 +357,7 @@ arity/type dualities.
 | `let m = Map.new();` | `type error at L:C: cannot infer the type of 'Map.new'; annotate it, e.g. 'let m: Map<string, int> = Map.new()'` | annotate as it says |
 | `if (c) { 1 }` used as value | `type error at L:C: an if without else has type unit, but its branch produces int (add an else)` | add `else` |
 | missing enum arm | `type error at L:C: non-exhaustive match on 'Shape': missing variants: Rect` | add the arm or `_` |
+| `match (n) { 0 => a, 1 => b }` on an int | `type error at L:C: non-exhaustive match on int: some nested cases are not covered (add a '_' arm or cover every case)` | add `_ => …` (literals never exhaust int/string/char) |
 | `f(1)` on `fn f(a: int, b: int)` | `type error at L:C: 'f' expects 2 argument(s), received 1` | fix arity |
 | `f("x")` on `fn f(a: int)` | `type error at L:C: argument 1 of 'f': expected int, got string` | fix the type |
 
@@ -358,6 +373,7 @@ ray dev file.ray            # run + auto-restart on saved changes (hot reload; s
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
+ray test --native [--release]  # same tests on the NATIVE binary (one binary per suite, one process per test); same report/exit codes
 ray fmt file.ray            # canonical formatting
 ray doc file.ray            # API docs (raydoc)
 ray serve [dir]             # static file server for previews (127.0.0.1:8000; --host/--port; --port 0 = free)

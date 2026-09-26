@@ -267,11 +267,22 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                 };
                 match resolved {
                     Some(mp) => pending.push((dep.clone(), mp, false)),
-                    None => return Err(rend(line, col, 1, &format!(
-                        "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {})",
-                        dep, dep, dep,
-                        roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
-                    ))),
+                    None => {
+                        // M309 (findings #62): las dependencias no son transitivas — un módulo
+                        // `pkg/…` de un paquete que solo trae otra dependencia hay que declararlo.
+                        let hint = match dep.split_once('/') {
+                            Some((pkg, _)) if pkg != "std" && crate::deps::valid_package_name(pkg) => format!(
+                                "; if '{pkg}' is a package (also when another dependency imports it: dependencies are not transitive), declare it in [dependencies] — `ray add {pkg}`"
+                            ),
+                            _ => String::new(),
+                        };
+                        return Err(rend(line, col, 1, &format!(
+                            "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {}){}",
+                            dep, dep, dep,
+                            roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", "),
+                            hint
+                        )));
+                    }
                 }
             }
         }
@@ -292,7 +303,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), module_bands: Vec::new(),
         expr_spans: HashMap::new(), field_name_pos: HashMap::new(), type_name_sites: Vec::new(),
-        externs: Vec::new(),
+        externs: Vec::new(), type_aliases: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
         interp_sites: HashMap::new(), pipe_sites: HashMap::new(), paren_sites: HashSet::new(), if_let_sites: HashSet::new(), return_expr_sites: HashSet::new(),
     };
@@ -370,6 +381,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         }
         merged.structs.append(&mut m.program.structs);
         merged.enums.append(&mut m.program.enums);
+        merged.type_aliases.append(&mut m.program.type_aliases); // M311 (ya renombrados a su global)
         // M49.1c: los `const` de un módulo no-entrada se namespacan como las funciones (`modulo::CONST`)
         // → encapsulados: solo accesibles calificados (`M.CONST`), no como un `CONST` global filtrado.
         for mut c in std::mem::take(&mut m.program.consts) {
@@ -433,6 +445,9 @@ pub fn shift_program(program: &mut Program, delta: usize) {
         for a in &mut s.annotations {
             a.line += delta;
         }
+    }
+    for a in &mut program.type_aliases {
+        a.line += delta;
     }
     for e in &mut program.enums {
         e.line += delta;
@@ -756,6 +771,9 @@ fn build_own_types(program: &Program, prefix: &Option<String>) -> NameMap {
     for t in &program.traits {
         map.insert(t.name.clone(), global_fn(prefix, &t.name));
     }
+    for a in &program.type_aliases {
+        map.insert(a.name.clone(), global_fn(prefix, &a.name)); // M311: un alias se namespacia como un tipo
+    }
     map
 }
 
@@ -775,6 +793,11 @@ fn rename_type_defs(program: &mut Program, own_types: &NameMap) {
     for t in &mut program.traits {
         if let Some(g) = own_types.get(&t.name) {
             t.name = g.clone();
+        }
+    }
+    for a in &mut program.type_aliases {
+        if let Some(g) = own_types.get(&a.name) {
+            a.name = g.clone();
         }
     }
 }
@@ -875,6 +898,11 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
         for t in &m.program.traits {
             if t.is_pub {
                 s.types.insert(t.name.clone(), global_fn(&prefix, &t.name));
+            }
+        }
+        for a in &m.program.type_aliases {
+            if a.is_pub {
+                s.types.insert(a.name.clone(), global_fn(&prefix, &a.name)); // M311
             }
         }
     }
@@ -1423,6 +1451,12 @@ impl<'a> TypeRewriter<'a> {
     }
 
     fn rewrite_program(&mut self, program: &mut Program) {
+        // M311: el destino de un alias es una posición de tipo más (con sus parámetros en ámbito).
+        for a in &mut program.type_aliases {
+            self.tparams.push(a.type_params.iter().cloned().collect());
+            self.rewrite_type(&mut a.target);
+            self.tparams.pop();
+        }
         for s in &mut program.structs {
             self.tparams.push(s.type_params.iter().cloned().collect());
             for (_, ty) in &mut s.fields {
@@ -1677,5 +1711,11 @@ fn collect_bindings(p: &Pattern, set: &mut HashSet<String>) {
                 collect_bindings(sub, set);
             }
         }
+        PatternKind::Tuple(subs) => {
+            for sub in subs {
+                collect_bindings(sub, set);
+            }
+        }
+        PatternKind::Literal(_) => {}
     }
 }

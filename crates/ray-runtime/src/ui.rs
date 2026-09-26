@@ -1391,7 +1391,29 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
 
 /// Ejecuta JavaScript en la página de la ventana, SIN esperar el resultado (v1: el
 /// completionHandler es nil — el eval con retorno exige el ABI de blocks y queda para v2).
+/// M309 (findings #38): los shells iOS/Android entregan los mensajes de la página con `window = 0`
+/// (no conocen el handle del programa), y `ui.reply(0, …)`/`eval_js(0, …)` buscaba la ventana 0:
+/// «not an open window», y la Promise de `window.ray.request` nunca resolvía. `0` es «la ventana
+/// del shell»: la única `Win::Shell` abierta.
+#[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+fn shell_window_alias(id: i64) -> i64 {
+    if id != 0 {
+        return id;
+    }
+    let map = windows().lock().unwrap();
+    map.iter()
+        .filter(|(_, w)| !w.closed && matches!(w.win, Win::Shell))
+        .map(|(k, _)| *k)
+        .min()
+        .unwrap_or(0)
+}
+#[cfg(not(any(target_os = "ios", target_os = "android", feature = "ui-shell")))]
+fn shell_window_alias(id: i64) -> i64 {
+    id
+}
+
 pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
+    let id = shell_window_alias(id);
     let map = windows().lock().unwrap();
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),

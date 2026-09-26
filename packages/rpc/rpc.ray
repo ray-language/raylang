@@ -291,7 +291,32 @@ pub fn serve_graceful(
     drain_ms: int,
     handler: fn(Req) -> Result<Json, string>
 ) -> Result<int, string> {
-    serve_shutdown(host, port, signals(), drain_ms, handler)
+    serve_shutdown(host, port, shutdown_signals(), drain_ms, handler)
+}
+
+// M309 (findings #64): solo SIGTERM/SIGINT apagan — `signals()` también trae SIGWINCH (28).
+fn shutdown_signals() -> Channel<int> {
+    let stop: Channel<int> = Channel.new();
+    let sig = signals();
+    spawn(fn() {
+        var forwarding = true;
+        while (forwarding) {
+            match (recv(sig)) {
+                Option.Some(n) => {
+                    if (n == 15 || n == 2) {
+                        send(stop, n);
+                        close(stop);
+                        forwarding = false;
+                    }
+                },
+                Option.None => {
+                    close(stop);
+                    forwarding = false;
+                },
+            }
+        }
+    });
+    stop
 }
 
 // El bucle drenable, port recortado del de webserver (M88.1b) fiel al modelo de actores (M38):

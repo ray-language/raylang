@@ -998,6 +998,9 @@ pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String
     for s in &program.structs {
         if s.is_pub { items.push((s.name.clone(), 22, None)); }
     }
+    for a in &program.type_aliases {
+        if a.is_pub { items.push((a.name.clone(), 5, None)); } // 5 = Class (alias de tipo, M311)
+    }
     for e in &program.enums {
         if e.is_pub { items.push((e.name.clone(), 13, None)); }
     }
@@ -1628,6 +1631,9 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
     }
     for s in &program.structs {
         if visible(&s.name) { items.push((s.name.clone(), 22)); }
+    }
+    for a in &program.type_aliases {
+        if visible(&a.name) { items.push((a.name.clone(), 5)); } // M311
     }
     for e in &program.enums {
         if visible(&e.name) { items.push((e.name.clone(), 13)); }

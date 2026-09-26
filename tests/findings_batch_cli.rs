@@ -383,3 +383,253 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "2\n1\n-2\n3\ntrue\n6\n3\n");
 }
+
+/// M309 (findings #44): `Option`/`Result` satisfacen `Eq`/`Show` (con `assert_eq`) en los tres
+/// motores, con la forma canónica `Option.Some(x)` en el mensaje.
+#[test]
+fn option_and_result_satisfy_eq_and_show_on_all_engines() {
+    let d = tmp("option_eq");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() -> int {
+    assert_eq(Option.Some(133), Option.Some(133));
+    let r: Result<int, string> = Result.Ok(2);
+    assert_eq(r, Result.Ok(2));
+    let e: Result<int, string> = Result.Err("x");
+    assert_eq(e, Result.Err("x"));
+    match (try_call(fn() { assert_eq(Option.Some((1, "a")), Option.None); })) {
+        Result.Ok(_) => print("bad"),
+        Result.Err(m) => print(m),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "assert_eq failed: Option.Some((1, a)) != Option.None\n");
+}
+
+/// M309 (findings #55, #61, #65): `-o dir/app` crea `dir`; un paquete se importa a sí mismo por su
+/// nombre desde sus propios tests aunque declare `entry`; `[package] raylang = "X"` exige un
+/// toolchain ≥ X.
+#[test]
+fn output_dir_self_import_and_required_raylang() {
+    // #55: el directorio de salida se crea antes de compilar.
+    let d = tmp("outdir");
+    std::fs::write(d.join("prog.ray"), "fn main() { print(7); }\n").unwrap();
+    if has_rustc() {
+        let out = d.join("deep/er/app");
+        let (_o, err, code) = ray(&d, &["build", "--native", "prog.ray", "-o", out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.is_file(), "el binario está en el directorio creado");
+    }
+
+    // #61: un paquete-librería con entry que se importa por su nombre en sus tests.
+    let p = tmp("selfimport").join("libs").join("grpc");
+    std::fs::create_dir_all(p.join("tests")).unwrap();
+    std::fs::write(p.join("ray.toml"), "[package]\nname = \"grpc\"\nversion = \"0.1.0\"\nentry = \"grpc.ray\"\n").unwrap();
+    std::fs::write(p.join("grpc.ray"), "import grpc/h2;\npub fn hello() -> string { h2.frame(\"x\") }\n").unwrap();
+    std::fs::write(p.join("h2.ray"), "pub fn frame(s: string) -> string { \"<\" + s + \">\" }\n").unwrap();
+    std::fs::write(p.join("tests/h2_test.ray"), "import grpc/h2;\n@test\nfn frames() -> bool { h2.frame(\"a\") == \"<a>\" }\n").unwrap();
+    let (out, err, code) = ray(&p, &["test"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ok    "), "{out}");
+
+    // #65: la versión mínima del lenguaje.
+    let q = tmp("reqver");
+    std::fs::create_dir_all(q.join("src")).unwrap();
+    std::fs::write(q.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nraylang = \"99.0.0\"\n").unwrap();
+    std::fs::write(q.join("src/main.ray"), "fn main() { print(1); }\n").unwrap();
+    let (_o, err, code) = ray(&q, &["run"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("requires raylang 99.0.0 or newer"), "{err}");
+    std::fs::write(q.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nraylang = \"1.0.0\"\n").unwrap();
+    let (out, _e, code) = ray(&q, &["run"]);
+    assert_eq!(code, 0);
+    assert_eq!(out, "1\n");
+}
+
+/// #66 (M312): `ray test --native` compila cada suite a un binario (un `main` de despacho por
+/// nombre de prueba) y corre cada prueba como proceso: mismo informe y códigos que la VM, sin la
+/// línea `at módulo:línea:col` (el nativo no lleva traza).
+#[test]
+fn ray_test_native_runs_each_suite_as_a_binary() {
+    if !has_rustc() {
+        return;
+    }
+    let d = tmp("m312_test_native");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::create_dir_all(d.join("tests")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"m312\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(
+        d.join("src/math.ray"),
+        "pub fn double(x: int) -> int { x * 2 }\n@test\nfn double_ok() -> bool { double(2) == 4 }\n@test\nfn double_fails() -> bool { double(2) == 5 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import math;\n@test\nfn prints_and_passes() { print(\"hello from test\"); assert_eq(math.double(3), 6); }\n@test\nfn asserts_fail() { assert_eq(math.double(3), 7); }\n@test\nfn panics() { panic(\"boom\"); }\nfn main() -> int { print(math.double(21)); 0 }\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("tests/extra.ray"), "import math;\n@test\nfn extra_ok() -> bool { math.double(5) == 10 }\n").unwrap();
+    let (out, err, code) = ray(&d, &["test", "--native"]);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(out.contains("running 6 test(s) — native binaries"), "{out}");
+    assert!(out.contains("hello from test\nok    prints_and_passes ("), "{out}");
+    assert!(out.contains("FAIL  asserts_fail\n        assert_eq failed: 6 != 7\n"), "{out}");
+    assert!(out.contains("FAIL  panics\n        boom\n"), "{out}");
+    assert!(out.contains("FAIL  math.double_fails\n        the test returned false\n"), "{out}");
+    assert!(out.contains("-- tests/extra.ray\nok    extra_ok ("), "{out}");
+    assert!(out.contains("result: 3 of 6 test(s) failed ✗"), "{out}");
+    // Filtro + `--release`: solo la prueba pedida, en verde; los flags no se toman por filtro.
+    let (out, err, code) = ray(&d, &["test", "--native", "double_ok", "--release"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 1 test(s) — native binaries (release)"), "{out}");
+    assert!(out.contains("result: 1 test(s), all passed ✓"), "{out}");
+}
+
+/// #54 (M311): alias de tipo — en firmas, campos, genéricos, closures, `Map`, `Option`/`Result`,
+/// y a través de módulos (`pub type`, `geo.Pt`, `from geo import Named`; un alias privado no se ve).
+#[test]
+fn type_aliases_run_on_all_engines_and_across_modules() {
+    let d = tmp("m311_aliases");
+    std::fs::write(
+        d.join("geo.ray"),
+        "pub type Pt = (int, int);\npub type Named<T> = (string, T);\ntype Hidden = int;\npub fn origin() -> Pt { (0, 0) }\npub fn tag(n: string, p: Pt) -> Named<Pt> { (n, p) }\npub fn hidden() -> Hidden { 7 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import geo;
+from geo import Named;
+
+type Id = int;
+type Ids = [Id];
+type Pair<T> = (T, T);
+type Lookup<K, V> = Map<K, V>;
+type Handler = fn(Id) -> string;
+type MaybeId = Option<Id>;
+type Res<T> = Result<T, string>;
+type Point = geo.Pt;
+
+struct User { id: Id, tags: Ids, pos: Point }
+enum Ev { Moved(Point), Named(Named<Id>) }
+
+fn describe(u: User, h: Handler) -> string { h(u.id) + " at " + u.pos.0.to_string() }
+fn swap<T>(p: Pair<T>) -> Pair<T> { (p.1, p.0) }
+fn find(m: Lookup<string, Id>, k: string) -> MaybeId { m.get(k) }
+fn parse(s: string) -> Res<Id> {
+    match (parse_int(s)) { Option.Some(v) => Result.Ok(v), Option.None => Result.Err("bad " + s) }
+}
+
+fn main() -> int {
+    let u = User { id: 3, tags: [1, 2], pos: geo.origin() };
+    let h: Handler = fn(i: Id) -> string { "user#" + i.to_string() };
+    print(describe(u, h));
+    let p: Pair<string> = ("a", "b");
+    print(swap(p).0 + swap(p).1);
+    var m: Lookup<string, Id> = Map.new();
+    m.insert("x", 9);
+    print(find(m, "x"));
+    print(find(m, "y"));
+    print(parse("12"));
+    print(parse("zz"));
+    let e = Ev.Named(("n", 5));
+    let tg = geo.tag("n", geo.origin());
+    let inner = tg.1;
+    print(inner.1);
+    match (e) { Ev.Moved(q) => print(q.0), Ev.Named((n, _)) => print(n) }
+    let t: Named<Point> = ("t", (1, 2));
+    print(t.0);
+    print(geo.hidden());
+    let ids: Ids = u.tags;
+    let type = 4;
+    ids.len() + type - 6
+}
+"#,
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "user#3 at 0\nba\nOption.Some(9)\nOption.None\nResult.Ok(12)\nResult.Err(bad zz)\n0\nn\nt\n7\n",
+    );
+    // Un alias privado de otro módulo no se ve; el mensaje es el de un tipo desconocido calificado.
+    std::fs::write(d.join("bad.ray"), "import geo;\ntype H = geo.Hidden;\nfn main() {}\n").unwrap();
+    let (_o, e, code) = ray(&d, &["run", "bad.ray"]);
+    assert_eq!(code, 65, "{e}");
+    assert!(e.contains("unknown type: 'geo.Hidden' not declared"), "{e}");
+}
+
+/// #44/#52/#53 (M310): patrones de tupla y literales (anidados en variantes), exhaustividad por
+/// matriz y `dyn Trait` como campo de struct, con la misma salida en los tres motores.
+#[test]
+fn tuple_and_literal_patterns_run_on_all_engines() {
+    let d = tmp("m310_patterns");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"enum Shape { Circle(int), Rect(int, int), Named(string) }
+trait Greeter { fn hi(self) -> string; }
+struct P { x: int }
+impl Greeter for P { fn hi(self) -> string { "p" } }
+struct Holder { g: dyn Greeter }
+
+fn classify(n: int) -> string {
+    match (n) { 0 => "zero", -1 => "minus", _ => "many" }
+}
+
+fn pair(t: (int, string)) -> string {
+    match (t) {
+        (0, "a") => "zero-a",
+        (0, s) => "zero-" + s,
+        (n, "b") => "b-" + n.to_string(),
+        (n, s) => s + n.to_string(),
+    }
+}
+
+fn nested(o: Option<Shape>) -> string {
+    match (o) {
+        Option.Some(Shape.Circle(0)) => "dot",
+        Option.Some(Shape.Circle(r)) => "circle " + r.to_string(),
+        Option.Some(Shape.Rect(w, 0)) => "line " + w.to_string(),
+        Option.Some(Shape.Rect(w, h)) => "rect " + (w * h).to_string(),
+        Option.Some(Shape.Named("x")) => "the x",
+        Option.Some(Shape.Named(nm)) => "named " + nm,
+        Option.None => "none",
+    }
+}
+
+fn flags(b: (bool, bool)) -> int {
+    match (b) { (true, true) => 3, (true, false) => 2, (false, true) => 1, (false, false) => 0 }
+}
+
+fn opts(o: (Option<int>, Option<int>)) -> int {
+    match (o) {
+        (Option.Some(a), Option.Some(b)) => a + b,
+        (Option.Some(a), Option.None) => a,
+        (Option.None, Option.Some(b)) => b,
+        (Option.None, Option.None) => 0,
+    }
+}
+
+fn main() -> int {
+    let h = Holder { g: P { x: 1 } };
+    print(h.g.hi());
+    print(h);
+    print(classify(0) + classify(-1) + classify(7));
+    print(pair((0, "a")) + pair((0, "z")) + pair((5, "b")) + pair((5, "q")));
+    print(nested(Option.Some(Shape.Circle(0))) + nested(Option.Some(Shape.Circle(3))));
+    print(nested(Option.Some(Shape.Rect(4, 0))) + nested(Option.Some(Shape.Rect(4, 5))));
+    print(nested(Option.Some(Shape.Named("x"))) + nested(Option.Some(Shape.Named("y"))) + nested(Option.None));
+    let n: Option<int> = Option.None;
+    print(flags((true, true)) + flags((false, true)) + opts((Option.Some(1), Option.Some(2))) + opts((n, Option.Some(5))) + opts((n, n)));
+    match ('a') { 'a' => 0, _ => 1 }
+}
+"#,
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "p\nHolder { g: <dyn Greeter> }\nzerominusmany\nzero-azero-zb-5q5\ndotcircle 3\nline 4rect 20\nthe xnamed ynone\n12\n",
+    );
+}
+

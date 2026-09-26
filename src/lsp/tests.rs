@@ -1212,6 +1212,16 @@ fn hover_and_definition_of_type_names_in_annotations() {
     assert_eq!(hover(4, 15), Some(("p: P".into(), 15, 16)));
 }
 
+/// M311: un alias en una anotación tiene hover (con su expansión) e ir-a-definición.
+#[test]
+fn hover_and_definition_of_type_aliases() {
+    let src = "type Pair<T> = (T, T);\nfn f(p: Pair<int>) -> int { p.0 }\nfn main() -> int { 0 }\n";
+    let (t, s, e) = hover_at(None, src, 1, 8).expect("hover del alias");
+    assert_eq!((t.as_str(), s, e), ("type Pair<T> = (T, T)", 8, 12));
+    let (_, line, _, _) = definition_at("file:///t.ray", src, 1, 8).expect("def del alias");
+    assert_eq!(line, 0);
+}
+
 #[test]
 fn hover_and_definition_of_qualified_type_across_modules() {
     // M288: `geo.Circle` en una anotación → hover `struct geo.Circle` (forma de fachada, con sus

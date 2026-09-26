@@ -14771,3 +14771,38 @@ lista un módulo del proyecto o de `.ray-deps` por su stem, con el directorio co
 compartida (`project_files`). El listado de un módulo (`module_surface`) es una sola función para
 los tres orígenes. #13 (`assert_eq` en octal) queda sin cambio, anotado en IDEAS.
 
+## 288. M306 — Red: plazos que aparcan y huecos de `net`/`web`/`rpc` (sep 2026)
+
+Origen: IDEAS §97 #14, #15, #16, #18, #33.
+
+**[14] El accept con plazo.** La VM ya aparcaba el accept con el `deadline` de `read_timeouts`,
+pero al vencer la fibra despertaba, reintentaba el accept no bloqueante y volvía a aparcar: el
+opcode no consumía la marca (`take_read_timeout`) como sí hacen las lecturas. Un `if` al
+principio del opcode. En el intérprete y en el nativo hilo-por-tarea no hay park: `SO_RCVTIMEO`
+no rige el `accept` en BSD/macOS, así que el plazo se aplica a mano (accept no bloqueante + espera
+de 2 ms hasta el deadline). Lección: el flag no-bloqueante es de la *open file description* y el
+clon (`try_clone`) lo comparte con el listener del registro — hay que reponerlo al salir, o el
+siguiente accept sin plazo falla con WouldBlock (lo cazó la sonda en modo hilos). En fibras,
+`wait_readable_timeout` con el `rd_to` del ctx, como las lecturas.
+
+**[15] El dial que no retiene al worker.** `TcpStream::connect_timeout` es bloqueante y el std
+no expone el connect no bloqueante (EINPROGRESS + interés de escritura + SO_ERROR): hacerlo bien
+exige sockets crudos en tres SO. La forma elegida usa lo que ya existe: en la VM el connect corre
+en un hilo auxiliar y la fibra **aparca sobre un socket UDP "waker"** registrado como handle
+(kqueue/epoll/WSAPoll lo entienden; un pipe no valdría en Windows); el hilo manda un datagrama al
+terminar y el opcode re-ejecutado recoge el resultado por el handle del waker, que ocupa la
+posición del host en la pila. En el nativo con fibras, `run_blocking` (el pool de las `extern
+blocking`). Intérprete e hilo-por-tarea siguen bloqueando su propio hilo, que es lo correcto ahí.
+Solo `tcp_connect_timeout` con `ms > 0`: un `tcp_connect` a secas sigue siendo la llamada
+directa (rápida en la práctica; el coste del hilo + waker no se paga en el camino caliente).
+Sonda de la prueba: con un solo worker, la fibra principal cuenta ticks mientras otra marca a
+`10.255.255.1` con 1200 ms de plazo; antes contaba cero.
+
+**[16], [18], [33] Los huecos de los paquetes.** `local_token_ok` es la mitad pública de la guarda
+de M297 para un handler crudo (net 0.3.6). `app.gzip()` aplica la negociación de
+`webserver.gzip` a la `Response` ya convertida — un `finish` en `handle`, no un hook `after` sobre
+`Res` (web 0.4.5). `serve_on*` en rpc: todo `serve*` delega ya en el bucle sobre listener
+(rpc 0.1.1). Tests: `local_guard_cli` (handler crudo), `framework_cli` (`/big` del demo con y
+sin `Accept-Encoding`), `rpc_cli` (`serve_on` con puerto efímero), `findings_batch_cli` (accept
+con plazo en tres motores; connect aparcado en VM determinista y nativo).
+

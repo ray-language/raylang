@@ -108,6 +108,8 @@ pub struct App {
     mounts: [Mount],
     nf_handlers: [fn(Ctx, Res)],
     log_on: bool,
+    // M306 (IDEAS §97 #18): gzip negociado para TODA respuesta terminada (ver `gzip`).
+    gzip_on: bool,
 }
 
 /// Creates an empty application.
@@ -117,7 +119,15 @@ pub fn new_app() -> App {
     var af: [fn(Ctx, Res)] = [];
     var mounts: [Mount] = [];
     var nf: [fn(Ctx, Res)] = [];
-    App { routes: rs, middlewares: ms, afters: af, mounts: mounts, nf_handlers: nf, log_on: false }
+    App {
+        routes: rs,
+        middlewares: ms,
+        afters: af,
+        mounts: mounts,
+        nf_handlers: nf,
+        log_on: false,
+        gzip_on: false
+    }
 }
 
 // --- Registro de rutas (con UFCS: `app.GET("/", handler)`) ---
@@ -329,6 +339,18 @@ pub fn not_found(app: App, handler: fn(Ctx, Res)) {
 /// W3C `traceparent`, or starts a fresh trace — correlation behind a gateway for free).
 pub fn log_requests(app: App) {
     app.log_on = true;
+}
+
+// M306 (IDEAS §97 #18): `webserver.gzip` opera sobre `webserver.Response`, no sobre el `Res` del
+// framework — apilar hooks `after` era la única forma de post-procesar (store mantenía su propio
+// `compress.ray`). El interruptor aplica la negociación a la respuesta ya convertida.
+/// Enables gzip for every finished response of the app (`app.gzip()`): the negotiation of
+/// `webserver.gzip` — only if the client accepts gzip, the response is not streamed, has no
+/// `Content-Encoding` yet, its body is ≥ 512 bytes and compression actually shrinks it. Static
+/// files, JSON and HTML alike; `Vary: Accept-Encoding` is added. Costs CPU per response
+/// (`std/deflate` is pure raylang: cheap on native, measurable on the VM).
+pub fn gzip(app: App) {
+    app.gzip_on = true;
 }
 
 /// Enables CORS for `origin` (`"*"` or a concrete origin) in one line (M93.2d): answers the
@@ -968,10 +990,10 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
 // o estrena trace) vía net/log.
 fn handle(app: App, req: webserver.Request) -> webserver.Response {
     if (!app.log_on) {
-        return dispatch(app, req);
+        return finish(app, req, dispatch(app, req));
     }
     let t0: int = time.monotonic();
-    let resp: webserver.Response = dispatch(app, req);
+    let resp: webserver.Response = finish(app, req, dispatch(app, req));
     let tid: string = webserver.trace_of(req).trace_id;
     var e = log.info(log.with_trace(log.logger("web"), tid), "request");
     e = log.field(e, "method", req.method);
@@ -980,6 +1002,11 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
     e = log.field_int(e, "ms", time.monotonic() - t0);
     log.emit(e);
     resp
+}
+
+// M306: el post-proceso de la respuesta terminada (hoy solo gzip, si está activado).
+fn finish(app: App, req: webserver.Request, resp: webserver.Response) -> webserver.Response {
+    if (app.gzip_on) { webserver.gzip(req, resp) } else { resp }
 }
 
 // --- Arranque (M93.3: UNA sola familia, sobre el patrón builder) ---

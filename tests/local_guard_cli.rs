@@ -19,12 +19,22 @@ fn handler(req: webserver.Request) -> webserver.Response {
     webserver.ok("hello " + req.path)
 }
 
+// M306 (#16): un handler CRUDO (bucle de accept propio, WebSocket de larga vida) comprueba el token
+// con la función pública, sin reimplementar la cookie ni la comparación en tiempo constante.
+fn raw_handler(req: webserver.Request) -> webserver.Response {
+    if (webserver.cross_site_blocked(req) || !webserver.local_token_ok(req, "s3cr3t")) {
+        return webserver.text(403, "nope");
+    }
+    webserver.ok("raw " + req.path)
+}
+
 fn main() -> int {
     let mode = args()[0];
     let srv = match (net.tcp_listen("127.0.0.1", 0)) { Result.Ok(s) => s, Result.Err(e) => { print(e); return 1; } };
     print(net.local_port(srv));
     let limits = if (mode == "token") { webserver.local_limits("s3cr3t") } else { webserver.default_limits() };
-    match (webserver.serve_on_limits(srv, limits, handler)) {
+    let h = if (mode == "raw") { raw_handler } else { handler };
+    match (webserver.serve_on_limits(srv, limits, h)) {
         Result.Ok(_) => 0,
         Result.Err(e) => { print("serve: " + e); 1 },
     }
@@ -121,6 +131,21 @@ fn local_token_gates_every_request_and_seeds_the_cookie() {
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nCookie: ray_local=s3cr3t\r\nConnection: close\r\n\r\n"))), 200);
     // La guarda de origen sigue delante: token correcto pero Origin ajeno → 403.
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: s3cr3t\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n"))), 403);
+    child.kill().ok();
+    child.wait().ok();
+}
+
+/// M306 (IDEAS §97 #16): `local_token_ok(req, token)` es la comprobación pública que un handler
+/// crudo aplica por su cuenta (cabecera, cookie o query; sin token → su propio 403).
+#[test]
+fn a_raw_handler_checks_the_local_token_with_the_public_function() {
+    let (mut child, port) = launch("raw");
+    let host = format!("127.0.0.1:{port}");
+    assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"))), 403);
+    assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: s3cr3t\r\nConnection: close\r\n\r\n"))), 200);
+    assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nCookie: other=1; ray_local=s3cr3t\r\nConnection: close\r\n\r\n"))), 200);
+    assert_eq!(status(&ask(port, &format!("GET /a?ray_token=s3cr3t HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"))), 200);
+    assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: wrong\r\nConnection: close\r\n\r\n"))), 403);
     child.kill().ok();
     child.wait().ok();
 }

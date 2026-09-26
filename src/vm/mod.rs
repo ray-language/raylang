@@ -3870,23 +3870,68 @@ impl<'a> Vm<'a> {
                 }
                 // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
                 // el intento vencido devuelve el error estable "connect timeout".
+                // M306 (IDEAS §97 #15): con plazo, el connect corre en un hilo auxiliar y la fibra
+                // APARCA sobre el waker (`tcp_connect_begin`); al despertar, el opcode re-ejecutado
+                // encuentra el handle del waker donde iba el host y recoge el resultado. Antes la
+                // espera acotada retenía al worker entero (una malla de fibras se congelaba).
                 OpCode::TcpConnectTimeout => {
                     let ms = match self.pop() { HeapValue::Int(m) => m, _ => unreachable!("the checker guarantees an int") };
-                    let port = self.pop();
+                    let port = match self.pop() { HeapValue::Int(p) => p, _ => unreachable!("the checker guarantees an int") };
                     let host = self.pop();
-                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("the checker guarantees string, int");
-                    };
-                    let elems = match crate::builtins::tcp_connect_timeout(&host, port, ms) {
-                        Ok(h) => {
-                            // Igual que TcpConnect: la VM usa sockets NO bloqueantes (M15.5).
-                            let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
+                    // `Ok(Some(wh))` = connect en curso sobre el waker `wh`; `Ok(None)` = resuelto ya
+                    // (resultado empujado); `Err` = fallo al arrancar.
+                    let pending: Result<Option<i64>, String> = match host {
+                        HeapValue::Int(wh) => Ok(Some(wh)), // re-ejecución tras el aparcado
+                        HeapValue::Str(host) if ms <= 0 => {
+                            // Sin plazo: como TcpConnect (bloqueante, rápido en la práctica).
+                            let elems = match crate::builtins::tcp_connect(&host, port) {
+                                Ok(h) => {
+                                    let _ = crate::builtins::set_nonblocking(h);
+                                    vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
+                                }
+                                Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                            };
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                            Ok(None)
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                        HeapValue::Str(host) => crate::builtins::tcp_connect_begin(&host, port, ms).map(Some),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
-                    let h = self.cur.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    match pending {
+                        Ok(None) => {}
+                        Err(e) => {
+                            let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(Some(wh)) => match crate::builtins::tcp_connect_finish(wh) {
+                            Some(r) => {
+                                let elems = match r {
+                                    Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                                    Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                                };
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            None => {
+                                // Sigue en curso: aparcar sobre el waker y re-ejecutar al despertar.
+                                self.push(HeapValue::Int(wh));
+                                self.push(HeapValue::Int(port));
+                                self.push(HeapValue::Int(ms));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
+                                {
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle: wh, deadline: None });
+                                    sh.running -= 1;
+                                }
+                                let (l, c2) = pos!();
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                            }
+                        },
+                    }
                 }
                 // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb_ms,
                 // na_ms, san...] / ["err", msg]. El wrapper de std/net construye el struct PeerCert.
@@ -4163,8 +4208,17 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("the checker guarantees an int"),
                     };
+                    // M306 (IDEAS §97 #14): `set_read_timeout(listener, ms)` aplica también al
+                    // accept — el aparcado ya llevaba el deadline, pero al vencer la fibra
+                    // despertaba, reintentaba y volvía a aparcar (para siempre). La marca del
+                    // scheduler se consume aquí, como en las lecturas: "read timeout".
+                    let accepted = if crate::builtins::take_read_timeout(handle) {
+                        Err("read timeout".to_string())
+                    } else {
+                        crate::builtins::tcp_accept_nb(handle)
+                    };
                     // M15.5: accept no bloqueante. WouldBlock (Ok(None)) → aparcar y reintentar.
-                    match crate::builtins::tcp_accept_nb(handle) {
+                    match accepted {
                         Ok(Some(c)) => {
                             let elems = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(c.to_string().into())];
                             let h = self.cur.heap.allocate(Obj::Array(elems));

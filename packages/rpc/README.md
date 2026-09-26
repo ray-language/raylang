@@ -50,7 +50,9 @@ fn main() -> int {
   cablea `signals()` (SIGTERM/SIGINT → dejar de aceptar, drenar con plazo, devolver 0);
   `serve_shutdown[_limits]` apaga con cualquier canal `stop` (testeable sin señales); `serve` es
   la forma que bloquea para siempre. **Un solo bucle**: `serve` = `serve_shutdown` con un canal
-  que nunca llega.
+  que nunca llega. M306: `serve_on[_shutdown[_limits]](listener, …)` sirven sobre un listener ya
+  abierto (`net.tcp_listen(host, 0)` + `net.local_port` = puerto efímero sin carrera: tests y apps
+  de escritorio).
 - Límites: `Limits { max_frame_bytes }` (default 10 MiB) — un peer hostil no puede hacer
   reservar memoria sin tope.
 

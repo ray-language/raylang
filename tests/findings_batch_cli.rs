@@ -176,3 +176,86 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "3\ntrue\n3\n6\n6\ntrue\n20\n42\n4\n3!\ntrue\n4\n3\ntrue\n3\n2\n3\n2\ntrue\nsymlink\nhi\ntrue\n{\"d\": null, \"n\": 1, \"arr\": [1,2]}\n");
 }
+
+/// M306 (IDEAS §97 #14): `set_read_timeout(listener, ms)` acota también `tcp_accept` (la doc lo
+/// prometía y colgaba para siempre): "read timeout" en los tres motores, y el listener sigue
+/// sirviendo después (el flag no-bloqueante del plazo se repone).
+#[test]
+fn accept_honours_the_read_timeout_on_all_engines() {
+    let d = tmp("accept_timeout");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/net;
+import std/time;
+
+fn main() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    net.set_read_timeout(l, 200);
+    let t0 = time.monotonic();
+    match (net.tcp_accept(l)) {
+        Result.Ok(_) => print("bad: accepted"),
+        Result.Err(e) => print(e),
+    }
+    let dt = time.monotonic() - t0;
+    print(dt >= 150 && dt < 5000);
+    net.set_read_timeout(l, 300);
+    print(net.tcp_accept(l).is_err());
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "read timeout\ntrue\ntrue\n");
+}
+
+/// M306 (IDEAS §97 #15): `tcp_connect_timeout` APARCA la fibra en la VM (un solo worker,
+/// `--deterministic`) y en el nativo con fibras (`RAYLANG_THREADS=1`): mientras el dial a una
+/// dirección que descarta SYNs espera su plazo, la fibra principal sigue contando ticks. Si la
+/// red rechaza al instante (sin ruta), el dial es "fast" y la prueba no afirma nada más.
+#[test]
+fn connect_timeout_parks_the_fiber() {
+    let d = tmp("connect_parks");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/net;
+import std/time;
+
+fn main() -> int {
+    let done: Channel<int> = Channel.new();
+    spawn(fn() {
+        let t0 = time.monotonic();
+        let r = net.tcp_connect_timeout("10.255.255.1", 81, 1200);
+        print(r.is_err());
+        send(done, time.monotonic() - t0);
+    });
+    var ticks = 0;
+    var took = 0;
+    var waiting = true;
+    while (waiting) {
+        match (select_timeout([done], 50)) {
+            Option.Some(_) => {
+                took = recv(done).unwrap_or(0);
+                waiting = false;
+            },
+            Option.None => { ticks = ticks + 1; },
+        }
+    }
+    print(if (took < 300) { "fast" } else { to_string(ticks >= 3) });
+    0
+}
+"#,
+    )
+    .unwrap();
+    let ok = |out: &str| out == "true\ntrue\n" || out == "true\nfast\n";
+    let (out, err, code) = ray(&d, &["run", "--deterministic", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(ok(&out), "VM: {out}");
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        let out = Command::new(&bin).env("RAYLANG_THREADS", "1").output().unwrap();
+        let out = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(ok(&out), "nativo: {out}");
+    }
+}

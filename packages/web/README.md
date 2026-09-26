@@ -33,6 +33,10 @@ fn main() -> int {
   solo GET/HEAD.
 - **Logging** (`log_requests`): una línea JSON por petición (`net/log`) con método, ruta, status y
   duración en ms.
+- **gzip** (`app.gzip()`, M306): la negociación de `webserver.gzip` para toda respuesta terminada —
+  solo si el cliente acepta gzip, no es streaming, no trae `Content-Encoding`, mide ≥ 512 octetos
+  y comprimir encoge; añade `Vary: Accept-Encoding`. Cuesta CPU por respuesta (`std/deflate` es
+  raylang puro: barato en nativo, medible en la VM).
 - **Despliegue**: `listen` (keep-alive + límites por defecto + panic-del-handler→500, herencia de
   `webserver.serve`), `listen_tls(cert, key)` (HTTPS, M56.3), `listen_graceful(drain_ms)` (apagado
   ordenado con SIGTERM/SIGINT, M88.1b) y `listen_limits(webserver.Limits)`.

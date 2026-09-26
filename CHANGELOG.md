@@ -31,6 +31,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **Red: plazos que aparcan y huecos de `net`/`web`/`rpc`** (M306, IDEAS §97 #14, #15, #16,
+  #18, #33). `set_read_timeout(listener, ms)` acota también `tcp_accept` (`"read timeout"`;
+  la doc lo prometía y colgaba para siempre) en los tres motores. `tcp_connect_timeout`
+  **aparca la fibra** en la VM y en el nativo con fibras (el dial corre en un hilo auxiliar): una
+  malla que marca desde fibras ya no se congela. `net` 0.3.6: `webserver.local_token_ok(req,
+  token)` pública para servidores con accept propio. `web` 0.4.5: `app.gzip()`. `rpc` 0.1.1:
+  `serve_on[_shutdown[_limits]](listener, …)` para puertos efímeros.
+
 - **`ray doc` / `ray_doc` más completos** (M305, IDEAS §97 #11, #34). Las constantes públicas
   de un módulo (`ray doc crypto.PASSWORD_ITERATIONS` → `const PASSWORD_ITERATIONS: int = 600000`
   + su `///`), los módulos de colecciones por su ruta (`ray doc std/collections/deque`) y, en el

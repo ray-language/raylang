@@ -3745,11 +3745,11 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 11 | `ray doc` de constantes de módulo | tooling | ✅ **M305**: `pub const` con firma, valor literal y `///`; también en los listados |
 | 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | ✅ **M299**: todo campo ausente en un struct de módulo sugiere el constructor público del módulo que lo devuelve (Rust + selfhost) |
 | 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor — sin cambio: para permisos, `assert_eq(to_string(mode), "384")` o un `assert` con mensaje propio; un `assert_eq` con formato rompería la simetría `Show` |
-| 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | PROPUESTO — `tcp_accept` con timeout, o corregir la doc |
-| 15 | `tcp_connect_timeout` que aparque la fibra | runtime | PROPUESTO — conexión no bloqueante + interés de escritura con plazo |
-| 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | PROPUESTO (net 0.3.6) |
+| 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | ✅ **M306**: aplica (VM: el opcode consume la marca del deadline; intérprete y nativo hilos: accept no bloqueante hasta el plazo; nativo fibras: `wait_readable_timeout`) → `"read timeout"` |
+| 15 | `tcp_connect_timeout` que aparque la fibra | runtime | ✅ **M306**: el dial corre en un hilo auxiliar y la fibra aparca sobre un waker UDP (VM) / `run_blocking` (nativo fibras); el connect no-bloqueante puro (EINPROGRESS + SO_ERROR) queda para cuando haya sockets crudos |
+| 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | ✅ **M306** (net 0.3.6) |
 | 17 | README de `web`: `listen` reconstruye la app por petición (fuga de recursos si el builder abre conexiones) | doc/web | ✅ **M299** aviso en el README (el builder corre por CONEXIÓN); `on_close` sigue PROPUESTO |
-| 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | PROPUESTO |
+| 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | ✅ **M306** (web 0.4.5): `app.gzip()` aplica la negociación de `webserver.gzip` a toda respuesta terminada |
 | 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | ✅ **M299**: READMEs del monorepo y cabecera generada por `tools/publish-packages.sh` (`ray add` / `^ver` primero; git directo solo sin índice) — se refleja en los espejos en la próxima publicación |
 | 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | ✅ **M299** («Fan-out desde un actor» en el patrón actor) |
 | 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | ✅ **M304** |
@@ -3761,7 +3761,7 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | ✅ **M304** (+ `Result.unwrap_or_else`; `Option.map` ya existía) |
 | 31 | `bytes.index_of_from(needle, start)` | stdlib | ✅ **M304** (sin copiar; O(n·m) simple sobre `b[i]`) |
 | 32 | Deque con iteración e índice | stdlib | ✅ **M304**: `get`, `peek_back`, `to_array`, `iter` (instantánea) |
-| 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | PROPUESTO |
+| 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | ✅ **M306** (rpc 0.1.1): `serve_on[_shutdown[_limits]]`; todo `serve*` delega en el bucle sobre listener |
 | 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | ✅ **M305**: `std/collections/deque` por ruta; con `path`, listado de un módulo del proyecto o de `.ray-deps` (`rpc/rpc`, `web/framework`) |
 | 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | PROPUESTO |
 

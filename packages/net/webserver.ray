@@ -192,6 +192,17 @@ pub fn cross_site_blocked(req: Request) -> bool {
     oh != host
 }
 
+// M306 (IDEAS §97 #16): la comprobación del token, PÚBLICA, para un servidor con bucle de accept
+// propio (ray-remote: WebSocket de larga vida sobre `serve_on`/handler crudo) — antes tenía
+// `cross_site_blocked` pero reimplementaba el parseo de la cookie `ray_local` y la comparación.
+/// Whether `req` carries the local token (`X-Ray-Token`, the `ray_local` cookie or
+/// `?ray_token=`), compared in constant time. The check `local_limits` applies, exposed for
+/// servers with their own accept loop or raw handlers; pair it with `cross_site_blocked`.
+pub fn local_token_ok(req: Request, token: string) -> bool {
+    let (ok, _) = local_token_check(req, token);
+    ok
+}
+
 // M297: ¿trae el token local? Devuelve (aceptada, llegó-por-query). Comparación en tiempo constante.
 fn local_token_check(req: Request, token: string) -> (bool, bool) {
     let want = token.to_bytes();

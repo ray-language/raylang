@@ -3204,13 +3204,112 @@ pub fn tcp_accept(h: i64) -> Result<i64, String> {
     if is_nonblocking(h) {
         listener.set_nonblocking(true).map_err(|e| e.to_string())?; // M170b: Windows no lo hereda
     }
-    let (stream, _addr) = listener.accept().map_err(|e| e.to_string())?;
+    // M306 (IDEAS §97 #14): `set_read_timeout(listener, ms)` aplica también al accept (la doc lo
+    // prometía: "cualquier espera bloqueante del handle"). SO_RCVTIMEO no vale para accept en
+    // todos los SO (BSD/macOS lo ignora), así que el plazo se aplica a mano: accept no bloqueante
+    // + espera corta hasta el deadline → "read timeout".
+    let timeout_ms = read_timeouts().lock().unwrap().get(&h).copied();
+    let (stream, _addr) = match timeout_ms {
+        None => listener.accept().map_err(|e| e.to_string())?,
+        Some(ms) => {
+            // El flag no-bloqueante es de la open file description: el clon lo comparte con el
+            // listener del registro → se repone al salir (si no, el siguiente accept sin plazo
+            // fallaría con WouldBlock).
+            listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+            let restore = |l: &std::net::TcpListener| {
+                if !is_nonblocking(h) {
+                    let _ = l.set_nonblocking(false);
+                }
+            };
+            loop {
+                match listener.accept() {
+                    Ok(pair) => {
+                        restore(&listener);
+                        break pair;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
+                        if std::time::Instant::now() >= deadline {
+                            restore(&listener);
+                            return Err(READ_TIMEOUT_MSG.to_string());
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(e) => {
+                        restore(&listener);
+                        return Err(e.to_string());
+                    }
+                }
+            }
+        }
+    };
     let _ = stream.set_nodelay(true); // Nagle+delayed-ACK (M96b)
+    if timeout_ms.is_some() && !is_nonblocking(h) {
+        let _ = stream.set_nonblocking(false); // el clon heredó el no-bloqueante del plazo
+    }
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
     reg.open.insert(id, OpenHandle::Tcp(stream));
     Ok(id)
+}
+
+// ── M306 (IDEAS §97 #15): connect con plazo SIN retener al worker de la VM ───────────────────
+//
+// `TcpStream::connect_timeout` es bloqueante y el std no expone el connect no-bloqueante
+// (EINPROGRESS + interés de escritura + SO_ERROR); un dial desde una malla de fibras (msg)
+// congelaba a todas las demás mientras esperaba. La forma: el connect corre en un hilo
+// auxiliar y la fibra APARCA sobre un socket UDP "waker" (registrado como handle: el poller
+// —kqueue/epoll/WSAPoll— lo entiende en los tres SO); al terminar, el hilo manda un datagrama y
+// la fibra despierta, recoge el resultado (`tcp_connect_finish`) y cierra el waker.
+struct PendingConnect {
+    result: std::sync::Mutex<Option<Result<i64, String>>>,
+}
+
+fn pending_connects() -> &'static std::sync::Mutex<std::collections::HashMap<i64, std::sync::Arc<PendingConnect>>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, std::sync::Arc<PendingConnect>>>> = std::sync::OnceLock::new();
+    P.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Arranca un connect (con plazo `ms`, o sin plazo si `ms <= 0`) en un hilo auxiliar; devuelve el
+/// handle del socket waker sobre el que la fibra debe aparcar (interés de lectura).
+pub fn tcp_connect_begin(host: &str, port: i64, ms: i64) -> Result<i64, String> {
+    let waker = std::net::UdpSocket::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    udp_disable_connreset(&waker);
+    let addr = waker.local_addr().map_err(|e| e.to_string())?;
+    let notifier = std::net::UdpSocket::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let _ = waker.set_nonblocking(true);
+    let wh = {
+        let mut reg = registry().lock().unwrap();
+        let id = reg.next;
+        reg.next += 1;
+        reg.open.insert(id, OpenHandle::Udp(waker));
+        id
+    };
+    let slot = std::sync::Arc::new(PendingConnect { result: std::sync::Mutex::new(None) });
+    pending_connects().lock().unwrap().insert(wh, slot.clone());
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        let r = if ms > 0 { tcp_connect_timeout(&host, port, ms) } else { tcp_connect(&host, port) };
+        if let Ok(h) = &r {
+            let _ = set_nonblocking(*h); // como TcpConnect en la VM: las lecturas aparcan
+        }
+        *slot.result.lock().unwrap() = Some(r);
+        let _ = notifier.send_to(&[1u8], addr);
+    });
+    Ok(wh)
+}
+
+/// El resultado del connect arrancado con [`tcp_connect_begin`], si ya terminó (`None` = sigue
+/// en curso: la fibra vuelve a aparcar). Al entregarlo, cierra el waker.
+pub fn tcp_connect_finish(wh: i64) -> Option<Result<i64, String>> {
+    let slot = pending_connects().lock().unwrap().get(&wh).cloned()?;
+    let done = slot.result.lock().unwrap().take();
+    if done.is_some() {
+        pending_connects().lock().unwrap().remove(&wh);
+        close_handle(wh);
+    }
+    done
 }
 
 /// El puerto local de un socket de escucha o de conexión; `0` si el handle no es un socket o falla.

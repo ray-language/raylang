@@ -85,6 +85,7 @@ fn build_app(st: AppState) -> App {
 
     // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
     app.log_requests();
+    app.gzip();  // M306: gzip negociado para toda respuesta ≥ 512 octetos si el cliente lo acepta
 
     // Hook `after` (M93.2a): corre tras el enrutado (también en 404) y puede mutar la respuesta —
     // aquí, una cabecera común a todo.
@@ -153,6 +154,9 @@ fn build_app(st: AppState) -> App {
     });
 
     // Parámetro de la query string: /saluda?nombre=Ada → c.query("nombre").
+    app.GET("/big", fn(c: Ctx, r: Res) {
+        r.text("raylang ".repeat(400));  // 3200 octetos: sale gzip si el cliente lo acepta
+    });
     app.GET("/saluda", fn(c: Ctx, r: Res) {
         var quien: string = c.query("nombre");
         if (quien == "") {

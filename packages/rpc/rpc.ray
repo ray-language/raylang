@@ -309,7 +309,42 @@ pub fn serve_shutdown_limits(
 ) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
-        Result.Ok(srv) => {
+        Result.Ok(srv) => serve_on_shutdown_limits(srv, limits, stop, drain_ms, handler),
+    }
+}
+
+// M306 (IDEAS §97 #33): servir sobre un LISTENER ya abierto — `net.tcp_listen(host, 0)` +
+// `net.local_port` da un puerto efímero sin carrera (el patrón `serve_on` de webserver); los E2E
+// de raycall/rayq necesitaban puertos fijos.
+/// Like `serve`, on a LISTENER you already opened (`net.tcp_listen(host, 0)` + `net.local_port`
+/// for an ephemeral port with no close/re-bind race — tests and desktop apps). Blocks forever.
+pub fn serve_on(listener: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+    let never: Channel<int> = Channel.new();
+    serve_on_shutdown_limits(listener, default_limits(), never, 0, handler)
+}
+
+/// Like `serve_shutdown`, on a listener you already opened.
+pub fn serve_on_shutdown(
+    listener: int,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
+    serve_on_shutdown_limits(listener, default_limits(), stop, drain_ms, handler)
+}
+
+/// Like `serve_shutdown_limits`, on a listener you already opened (the loop every other `serve*`
+/// delegates to). The listener is closed when the server stops.
+pub fn serve_on_shutdown_limits(
+    listener: int,
+    limits: Limits,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
+    let srv = listener;
+    {
+        {
             print("rpc listening on port " + to_string(net.local_port(srv)));
             let conns: Channel<int> = Channel.new();
             let done: Channel<int> = Channel.new();
@@ -414,7 +449,7 @@ pub fn serve_shutdown_limits(
                 }
             }
             Result.Ok(0)
-        },
+        }
     }
 }
 

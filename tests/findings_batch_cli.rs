@@ -73,3 +73,51 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "3\n3\n");
 }
+
+/// #3 (M301): `while (true)` sin `break` como cuerpo de una función `-> Result`; #6 (M303):
+/// `Option.None` inferido de la otra rama; #5 (M302): `assert_eq` sobre tuplas (y `Show` de
+/// tuplas con la forma `(a, b)`, idéntica en los tres motores).
+#[test]
+fn infinite_loop_divergence_if_inference_and_tuple_bounds_run_on_all_engines() {
+    let d = tmp("lang_batch");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn first_even(xs: [int]) -> Result<int, string> {
+    var i = 0;
+    while (true) {
+        if (i >= xs.len()) {
+            return Result.Err("none");
+        }
+        if (xs[i] % 2 == 0) {
+            return Result.Ok(xs[i]);
+        }
+        i = i + 1;
+    }
+}
+
+fn pair() -> (string, int) { ("h", 81) }
+
+fn main() -> int {
+    print(first_even([1, 3, 4, 5]).unwrap_or(0 - 1));
+    print(first_even([1, 3]).is_err());
+    let o = if (true) { Option.Some(7) } else { Option.None };
+    let p = if (false) { Option.None } else { Option.Some("s") };
+    print(o.unwrap_or(0));
+    print(p.unwrap_or("?"));
+    assert_eq(pair(), ("h", 81));
+    assert_eq((1, (2, true)), (1, (2, true)));
+    match (try_call(fn() { assert_eq((1, (2, true), "z"), (1, (2, false), "z")); })) {
+        Result.Ok(_) => print("bad"),
+        Result.Err(e) => print(e),
+    }
+    match (try_call(fn() { assert_eq((1, "a"), (1, "b")); })) {
+        Result.Ok(_) => print("bad"),
+        Result.Err(e) => print(e),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "4\ntrue\n7\ns\nassert_eq failed: (1, (2, true), z) != (1, (2, false), z)\nassert_eq failed: (1, a) != (1, b)\n");
+}

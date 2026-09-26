@@ -1291,9 +1291,16 @@ impl Transpiler {
                 }
             }
             ExprKind::While { cond, body } => {
-                out.push_str("while ");
-                self.emit_expr(out, cond)?;
-                out.push(' ');
+                // M301 (IDEAS §97 #3): `while (true)` sin `break` DIVERGE para el checker (una
+                // función `-> Result` puede terminar en él); en Rust solo `loop` tiene tipo `!`
+                // (`while true` es `()` y no compila como cola de esa función).
+                if matches!(cond.kind, ExprKind::Bool(true)) {
+                    out.push_str("loop ");
+                } else {
+                    out.push_str("while ");
+                    self.emit_expr(out, cond)?;
+                    out.push(' ');
+                }
                 self.emit_block(out, body)?;
             }
             ExprKind::Block(b) => self.emit_block(out, b)?,

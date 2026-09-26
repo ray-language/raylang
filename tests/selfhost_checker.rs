@@ -88,6 +88,14 @@ fn programas_valid_vals() {
     compare("fn main() -> int { 0 }", "sc_min.ray");
     compare("fn main() { }", "sc_unit.ray");
     compare("fn main() -> int { let x = 3; let y = x + 1; y }", "sc_let.ray");
+    // M301: `while (true)` sin `break` propio diverge; con `break`, no.
+    compare("fn f() -> int { while (true) { return 1; } }\nfn main() -> int { f() }", "sc_while_true_diverges.ray");
+    compare("fn f() -> int { while (true) { break; } }\nfn main() -> int { f() }", "sc_while_true_break.ray");
+    compare("fn f() -> int { while (true) { while (true) { break; } return 1; } }\nfn main() -> int { f() }", "sc_while_true_nested_break.ray");
+    // M303: la otra rama del `if` fija `T` (`Option.None`) o el tipo del `[]` vacío.
+    compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { Option.None }; let p = if (true) { Option.None } else { Option.Some(2) }; let xs = if (true) { [] } else { [1] }; match (o) { Option.Some(v) => v + xs.len(), Option.None => 0 } }", "sc_if_infers_other_branch.ray");
+    compare("fn main() -> int { let o = if (true) { Option.None } else { Option.None }; 0 }", "sc_if_both_none.ray");
+    compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "sc_if_mismatch.ray");
     compare("fn main() -> int { var i = 0; while (i < 10) { i = i + 1; } i }", "sc_while.ray");
     compare("fn main() -> int { if (1 < 2) { 1 } else { 2 } }", "sc_if.ray");
     compare("fn double(x: int) -> int { x * 2 } fn main() -> int { double(21) }", "sc_call.ray");

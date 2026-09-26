@@ -1001,6 +1001,43 @@ fn break_and_continue_as_expressions_diverge_in_arms() {
     err_contains("fn main() -> int { let x = match (Option.Some(1)) { Option.Some(v) => v, Option.None => continue }; x }", "'continue' outside a loop");
 }
 
+/// M301 (IDEAS §97 #3): `while (true)` sin `break` propio diverge (una función `-> Result` puede
+/// terminar en él); con un `break` del propio bucle, no; un `break` de un bucle anidado no cuenta.
+#[test]
+fn an_infinite_while_without_break_diverges() {
+    let ok = "fn f() -> Result<string, string> { while (true) { return Result.Ok(\"x\"); } }\nfn g() -> int { while (true) { while (true) { break; } return 1; } }\nfn main() -> int { 0 }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn f() -> Result<string, string> { while (true) { if (true) { break; } } }\nfn main() -> int { 0 }",
+        "declares return type Result<string, string>, but its body produces unit",
+    );
+    err_contains(
+        "fn f(c: bool) -> int { while (c) { return 1; } }\nfn main() -> int { 0 }",
+        "declares return type int, but its body produces unit",
+    );
+}
+
+/// M302 (IDEAS §97 #5): una tupla satisface `Eq`/`Show` por composición (`assert_eq` sobre tuplas);
+/// otros traits siguen sin implementación.
+#[test]
+fn tuples_satisfy_eq_and_show_bounds() {
+    let ok = "fn f() -> (string, int) { (\"h\", 81) }\nfn main() -> int { assert_eq(f(), (\"h\", 81)); assert_eq((1, (2.5, true)), (1, (2.5, true))); 0 }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn main() -> int { let xs = sort([(1, 2), (0, 1)]); xs.len() }",
+        "(int, int) cannot implement the trait 'Ord'",
+    );
+}
+
+/// M303 (IDEAS §97 #6): sin anotación, la otra rama del `if` fija `T` de `Option.None`/`[]`.
+#[test]
+fn if_branches_infer_each_other_without_an_expected_type() {
+    let ok = "fn main() -> int { let o = if (true) { Option.Some(1) } else { Option.None }; let p = if (true) { Option.None } else { Option.Some(\"s\") }; let xs = if (true) { [] } else { [1, 2] }; match (o) { Option.Some(v) => v + xs.len() + match (p) { Option.Some(s) => s.len(), Option.None => 0 }, Option.None => 0 } }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { let o = if (true) { Option.None } else { Option.None }; 0 }", "could not infer the type parameter 'T'");
+    err_contains("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "the if branches have different types: Option<int> and int");
+}
+
 /// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no
 /// genéricos; en genéricos sigue siendo error, como los demás derives.
 #[test]

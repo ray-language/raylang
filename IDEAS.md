@@ -3737,10 +3737,10 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | # | Hallazgo | Clase | Estado |
 |---|---|---|---|
 | 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | ✅ **M300**: el mismo azúcar de bloque que `return e` (M220) en los dos parsers; `{ break }` como cola sin `;`; fmt lo conserva; tres motores |
-| 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | PROPUESTO — análisis de divergencia: bucle infinito sin `break` = `!` |
+| 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | ✅ **M301**: `expr_diverges` + espejo selfhost; el nativo emite `loop` para `while (true)` (en Rust solo `loop` tiene tipo `!`) |
 | 4 | `break` etiquetado | lenguaje | PROPUESTO (impacto medio: sintaxis nueva) |
-| 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | PROPUESTO — `is_comparable` + `values_equal` + nativo `PartialEq` |
-| 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | PROPUESTO — unificar ramas antes de fallar la inferencia |
+| 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | ✅ **M302**: `==` ya existía; los bounds `Eq`/`Show` de una tupla se satisfacen por composición (closure sintetizado en `dict_for`, tres motores) |
+| 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | ✅ **M303**: la regla M204 de los brazos de `match` aplicada al `if` (también `[]`), Rust + selfhost |
 | 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | PROPUESTO |
 | 11 | `ray doc` de constantes de módulo | tooling | PROPUESTO |
 | 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | ✅ **M299**: todo campo ausente en un struct de módulo sugiere el constructor público del módulo que lo devuelve (Rust + selfhost) |

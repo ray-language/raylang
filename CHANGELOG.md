@@ -31,6 +31,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **Tres huecos del checker que las apps rodeaban** (M301–M303, IDEAS §97 #3, #5, #6).
+  `while (true)` sin un `break` propio **diverge**: una `fn -> Result<…>` puede terminar en él
+  sin el `Result.Err("unreachable")` muerto (el nativo lo emite como `loop`). `assert_eq` (y
+  cualquier bound `Eq`/`Show`) acepta **tuplas**, por composición de sus elementos:
+  `assert_eq(f(), ("h", 81))`, con `(h, 81)` en el mensaje. Y sin anotación, la otra rama de un
+  `if` fija el tipo de `Option.None`/`[]` (`let o = if (c) { Option.Some(1) } else { Option.None };`),
+  como ya hacían los brazos de `match`. Espejos en el checker autoalojado.
+
 - **`break` y `continue` como expresión** (M300, IDEAS §97 #2; lo pidieron tres apps).
   `Result.Err(e) => break,` en un brazo de `match` dentro de un bucle, o
   `let w = if (v < 0) { continue } else { v };`, valen sin llaves — el mismo azúcar de bloque que

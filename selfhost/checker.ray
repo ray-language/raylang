@@ -805,6 +805,63 @@ fn block_diverges(b: Block) -> bool {
     }
 }
 
+// M301: ¿hay un `break` que salga de ESTE bucle en `body`? Solo la espina de sentencias
+// (bloques, ramas de `if`, brazos de `match`, valores de `let`/asignación/`return`); un bucle
+// anidado o una closure cortan la búsqueda (espejo de `loop_breaks` del checker en Rust).
+fn loop_breaks(body: Block) -> bool {
+    var i = 0;
+    while (i < body.stmts.len()) {
+        if (stmt_breaks(body.stmts[i])) {
+            return true;
+        }
+        i = i + 1;
+    }
+    match (body.tail) {
+        Option.Some(t) => expr_breaks(t),
+        Option.None => false,
+    }
+}
+
+fn stmt_breaks(s: Stmt) -> bool {
+    match (s.kind) {
+        SKind.SBreak => true,
+        SKind.SLet(_, _, value, _) => expr_breaks(value),
+        SKind.SAssign(_, value) => expr_breaks(value),
+        SKind.SReturn(v) => match (v) {
+            Option.Some(e) => expr_breaks(e),
+            Option.None => false,
+        },
+        SKind.SExpr(e) => expr_breaks(e),
+        _ => false,
+    }
+}
+
+fn expr_breaks(e: Expr) -> bool {
+    match (e.kind) {
+        EKind.EBlock(b) => loop_breaks(b),
+        EKind.EIf(cond, then_b, elseopt) => {
+            expr_breaks(cond) || loop_breaks(then_b) || match (elseopt) {
+                Option.Some(x) => expr_breaks(x),
+                Option.None => false,
+            }
+        },
+        EKind.EMatch(scrut, arms) => {
+            if (expr_breaks(scrut)) {
+                return true;
+            }
+            var i = 0;
+            while (i < arms.len()) {
+                if (expr_breaks(arms[i].body)) {
+                    return true;
+                }
+                i = i + 1;
+            }
+            false
+        },
+        _ => false,
+    }
+}
+
 fn stmt_diverges(s: Stmt) -> bool {
     match (s.kind) {
         SKind.SReturn(_) => true,
@@ -836,6 +893,14 @@ fn expr_diverges(e: Expr) -> bool {
                 i = i + 1;
             }
             true
+        },
+        // M301: `while (true)` sin un `break` propio nunca termina normalmente (espejo).
+        EKind.EWhile(cond, body) => {
+            let infinite = match (cond.kind) {
+                EKind.EBool(b) => b,
+                _ => false,
+            };
+            infinite && !loop_breaks(body)
         },
         // panic(...) / exit(...) nunca retornan.
         EKind.ECall(callee, _) => {
@@ -3600,7 +3665,54 @@ fn check_if(
             terr(cond.line, cond.col, "the if condition must be bool, not " + type_str(ct))
         );
     }
-    let then_ty = check_block_opt(c, then_b, expected)?;
+    // M303: sin esperado, la OTRA rama fija los parámetros de tipo (espejo del checker en Rust:
+    // la pasada fallida se descarta, recortando el ámbito que dejó a medias).
+    let depth = c.scopes.len();
+    let no_expected = match (expected) {
+        Option.Some(_) => false,
+        Option.None => true,
+    };
+    var then_ty = Type.TUnit;
+    var else_done: Option<Type> = Option.None;
+    match (check_block_opt(c, then_b, expected)) {
+        Result.Ok(t) => {
+            then_ty = t;
+            match (elseopt) {
+                Option.Some(else_e) => {
+                    if (no_expected && !type_has_var(t, c.tparams)) {
+                        else_done = Option.Some(check_expr_expected(c, else_e, t)?);
+                    } else {
+                        else_done = Option.Some(check_expr_opt(c, else_e, expected)?);
+                    }
+                },
+                Option.None => { },
+            }
+        },
+        Result.Err(e) => {
+            let retry = no_expected
+                && (e.msg.starts_with("could not infer the type parameter")
+                    || e.msg.starts_with("cannot infer the type of [] here"));
+            match (elseopt) {
+                Option.Some(else_e) => {
+                    if (!retry) {
+                        return Result.Err(e);
+                    }
+                    while (c.scopes.len() > depth) {
+                        pop_scope(c);
+                    }
+                    let et = check_expr(c, else_e)?;
+                    if (type_has_var(et, c.tparams)) {
+                        return Result.Err(e);
+                    }
+                    then_ty = check_block_expected(c, then_b, et)?;
+                    else_done = Option.Some(et);
+                },
+                Option.None => {
+                    return Result.Err(e);
+                },
+            }
+        },
+    }
     match (elseopt) {
         Option.None => {
             if (!type_eq(then_ty, Type.TUnit)) {
@@ -3617,7 +3729,7 @@ fn check_if(
             Result.Ok(Type.TUnit)
         },
         Option.Some(else_e) => {
-            let else_ty = check_expr_opt(c, else_e, expected)?;
+            let else_ty = else_done.unwrap();
             if (block_diverges(then_b)) {
                 return Result.Ok(else_ty);
             }

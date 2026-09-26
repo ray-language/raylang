@@ -267,6 +267,40 @@ pub(super) fn expr_diverges(expr: &Expr) -> bool {
         // siempre sobre cualquier homónimo (un builtin no se tapa), así que el chequeo por nombre
         // es seguro.
         ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic" || n == "exit"),
+        // M301 (IDEAS §97 #3): `while (true)` sin un `break` PROPIO nunca termina normalmente —
+        // solo sale por `return` (o no sale). Las apps ponían un `Result.Err("unreachable")`
+        // muerto tras el bucle. Un `break` de un bucle anidado no cuenta; `continue` tampoco.
+        ExprKind::While { cond, body } => matches!(cond.kind, ExprKind::Bool(true)) && !loop_breaks(body),
+        _ => false,
+    }
+}
+
+/// ¿Hay un `break` que salga de ESTE bucle en `body`? Solo se miran las posiciones donde el
+/// checker admite `break` (la espina de sentencias: bloques, ramas de `if`, brazos de `match` y
+/// valores de `let`/asignación/`return`); un bucle anidado o una closure cortan la búsqueda.
+pub(super) fn loop_breaks(body: &Block) -> bool {
+    body.statements.iter().any(stmt_breaks) || body.tail.as_ref().is_some_and(|t| expr_breaks(t))
+}
+
+fn stmt_breaks(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Break => true,
+        StmtKind::Continue | StmtKind::For { .. } => false,
+        StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Assign { value, .. } => expr_breaks(value),
+        StmtKind::Return { value } => value.as_ref().is_some_and(expr_breaks),
+        StmtKind::Expr(e) => expr_breaks(e),
+    }
+}
+
+fn expr_breaks(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Block(b) => loop_breaks(b),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            expr_breaks(cond) || loop_breaks(then_branch) || else_branch.as_ref().is_some_and(|e| expr_breaks(e))
+        }
+        ExprKind::Match { scrutinee, arms } => expr_breaks(scrutinee) || arms.iter().any(|a| expr_breaks(&a.body)),
+        // Un bucle anidado es dueño de sus `break`; una closure corta el ámbito (M191). Cualquier
+        // otra forma no admite `break` dentro (error de M191), así que no hay nada que buscar.
         _ => false,
     }
 }

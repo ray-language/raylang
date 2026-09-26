@@ -322,7 +322,7 @@ defining the same name).
 | `try_call` / `try_join` | failure recovery | see §5 |
 | `recv` | `(Channel<T>) -> Option<T>` | see §5 |
 | `assert` | `(bool) -> unit` | aborts if false |
-| `assert_eq` | `(a: T, b: T)` with `T: Eq + Show` | aborts showing both values |
+| `assert_eq` | `(a: T, b: T)` with `T: Eq + Show` | aborts showing both values; tuples work (element-wise `Eq`/`Show`, M302) |
 | `pop` / `position` / `index_of` / `from_utf8` | — | see §6 |
 
 ### Traits
@@ -625,4 +625,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:1faf3d630eeb -->
+<!-- sync: sha256:bcda1862c4f0 -->

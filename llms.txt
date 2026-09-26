@@ -112,7 +112,13 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Arrays `[T]`, structs and `Map` have REFERENCE semantics (aliases share the object;
   `push`/`a[i] = v`/`p.x = v` mutate in place). Primitives copy.
 - "Indeterminate" expressions need an expected type or annotation: `[]`, `Option.None`,
-  `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`.
+  `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`. The other
+  branch of an `if`/arm of a `match` counts as context: `if (c) { Option.Some(1) } else {
+  Option.None }` infers `Option<int>`.
+- A `while (true)` with no `break` of its own DIVERGES: a `fn f() -> Result<T, E>` may end in
+  it (exit with `return`) — no dead `Result.Err("unreachable")` after the loop.
+- Tuples support `==` and satisfy `Eq`/`Show` bounds element-wise: `assert_eq(f(), ("h", 81))`
+  works (there is no `print(tuple)` / `to_string(tuple)`: show is only via those bounds).
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.

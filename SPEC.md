@@ -274,7 +274,10 @@ iterable  = expresion [ '..' expresion ] ;
   de `let`/asignación/`return` —la **espina de sentencias**—, pero **no** dentro de una
   expresión que no sea forma-con-bloque (argumento de llamada, operando, elemento de literal,
   índice): ahí es error de tipos (la expresión envolvente quedaría a medio evaluar). Ambas
-  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto). Como
+  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto). Un
+  **`while (true)`** sin un `break` que salga de él **diverge** (M301): solo termina por
+  `return`, así que puede ser la cola de una función con retorno declarado (`fn f() -> Result<…>
+  { while (true) { … return Result.Ok(x); … } }`); un `break` de un bucle anidado no cuenta. Como
   `return`, también son **expresión** (M300): `Result.Err(e) => break,` en un brazo de `match`
   o `if (c) { continue } else { v }` equivalen a `{ break; }` / `{ continue; }` — el mismo azúcar
   del parser, con la misma restricción a la espina de sentencias; como cola de un bloque no
@@ -326,7 +329,9 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 
 - **`if (cond) bloque [else (bloque | if …)]`** es **expresión**: con `else`, ambas ramas deben
   converger en tipo (una rama que **diverge** —`return`, `panic`— cede el tipo a la otra); sin
-  `else`, unit.
+  `else`, unit. Sin tipo esperado, una rama cuyo valor no determina sus parámetros de tipo
+  (`Option.None`, `[]`) toma el tipo que fija la otra rama (M303, la regla M204 de los brazos
+  de `match`); si ninguna lo fija, es error de inferencia.
 - **`if let patrón = expr bloque [else (bloque | if …)]`** (M40.1b) es azúcar de **`match (expr) {
   patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
@@ -404,7 +409,9 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   del mismo tipo. `==`/`<` no son sobrecargables (usar `igual`/`menor` de `Eq`/`Ord`).
 - **Igualdad `==`/`!=`**: primitivos, `string`, `char`, `bytes`, `u*` (mismo ancho) y
   **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
-  Eq`, vía `igual` (no `==`). **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
+  Eq`, vía `igual` (no `==`). Una **tupla** satisface los bounds `Eq` y `Show` cuando todos
+  sus elementos los satisfacen (M302: `assert_eq(f(), ("h", 81))`; `show` da `(h, 81)`); no
+  tiene impl propio ni satisface otros traits. **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.
 - **Divergencia**: `return`, `break`, `continue`, `panic(…)`, `exit(…)` y las ramas que
   terminan en ellos tipan como "cede el tipo al resto".

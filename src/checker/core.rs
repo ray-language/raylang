@@ -2268,8 +2268,36 @@ impl Checker {
                 if ct != Type::Bool {
                     return Err(self.err(cond.line, cond.col, format!("the if condition must be bool, not {}", ct)));
                 }
-                let then_ty = self.check_block(then_branch)?;
-                match else_branch {
+                // M303 (IDEAS §97 #6): sin tipo esperado, la OTRA rama fija los parámetros de
+                // tipo de una construcción indeterminada (`if (c) { Option.Some(1) } else {
+                // Option.None }` moría con «could not infer the type parameter 'T'»). Es el
+                // M204 de los brazos de `match`, aplicado al `if`: la rama que sí tipa da el
+                // esperado a la que no pudo. El ámbito que dejó a medias la pasada fallida se
+                // recorta antes de repetirla.
+                let depth = self.scopes.len();
+                let then_first = self.check_block(then_branch);
+                let (then_ty, else_ty) = match (then_first, else_branch) {
+                    (Ok(then_ty), None) => (then_ty, None),
+                    (Ok(then_ty), Some(else_e)) => {
+                        let else_ty = if type_has_var(&then_ty) {
+                            self.check_expr(else_e)?
+                        } else {
+                            self.check_expr_expected(else_e, &then_ty)?
+                        };
+                        (then_ty, Some(else_ty))
+                    }
+                    (Err(e), Some(else_e)) if e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here") => {
+                        self.scopes.truncate(depth);
+                        let else_ty = self.check_expr(else_e)?;
+                        if type_has_var(&else_ty) {
+                            return Err(e);
+                        }
+                        let then_ty = self.check_block_expected(then_branch, &else_ty)?;
+                        (then_ty, Some(else_ty))
+                    }
+                    (Err(e), _) => return Err(e),
+                };
+                match else_ty {
                     None => {
                         // Un if sin else tiene tipo unit; entonces la rama 'then'
                         // tampoco puede producir un valor útil.
@@ -2281,8 +2309,8 @@ impl Checker {
                         }
                         Ok(Type::Unit)
                     }
-                    Some(else_e) => {
-                        let else_ty = self.check_expr(else_e)?;
+                    Some(else_ty) => {
+                        let else_e = else_branch.as_ref().expect("else present");
                         // M13.2a: si una rama diverge (p.ej. termina en `panic`), el if toma el
                         // tipo de la otra; solo la rama que sí produce valor manda.
                         if block_diverges(then_branch) {
@@ -3342,6 +3370,13 @@ impl Checker {
                 "the type parameter '{}' is not bounded by '{}' (required by the call)", u, trait_name
             )));
         }
+        // M302 (IDEAS §97 #5): una TUPLA implementa `Eq`/`Show` por composición de sus elementos
+        // (como el impl genérico de `[T]` del prelude, pero sin impl: se sintetiza el closure).
+        if let Type::Tuple(ts) = concrete
+            && (trait_name == "Eq" || trait_name == "Show")
+        {
+            return self.synth_tuple_dict(ts, trait_name, method, line, col);
+        }
         // Tipo concreto: debe implementar el trait → usar el método manglado del impl.
         let key = type_key_of(concrete).ok_or_else(|| self.err(line, col, format!(
             "{} cannot implement the trait '{}'", concrete, trait_name
@@ -3380,6 +3415,62 @@ impl Checker {
     ///
     /// El `id` del fn-expr es provisional (0): `renumber_fn_exprs`, al final del lowering, le da
     /// uno denso. Reusa closures (M4): cero cambios de runtime.
+    /// M302 (IDEAS §97 #5): el diccionario de `Eq`/`Show` para una tupla `(T0, …, Tn)`, sintetizado
+    /// como closure sobre los diccionarios de sus elementos (recursivo: tuplas de tuplas, arreglos
+    /// de tuplas…). `assert_eq(f(), ("h", 81))` moría con «(string, int) cannot implement the
+    /// trait 'Eq'» aunque `==` ya comparaba tuplas. Sin impl en el prelude porque las tuplas no
+    /// tienen clave de tipo (una por aridad) y el closure es exactamente lo que un impl genérico
+    /// acotado produciría (`synth_dict_closure`). `Show` da `(a, b)`, la forma del nativo.
+    ///   eq:   `fn(__d0: T, __d1: T) -> bool { d0(__d0.0, __d1.0) && d1(__d0.1, __d1.1) … }`
+    ///   show: `fn(__d0: T) -> string { "(" + d0(__d0.0) + ", " + d1(__d0.1) + … + ")" }`
+    fn synth_tuple_dict(&self, elems: &[Type], trait_name: &str, method: &str, line: usize, col: usize)
+        -> Result<Expr, TypeError>
+    {
+        let tuple_ty = Type::Tuple(elems.to_vec());
+        let field = |var: &str, i: usize| Expr {
+            kind: ExprKind::Field { object: Box::new(ident_expr(var, line, col)), name: i.to_string() },
+            line, col,
+        };
+        let call = |callee: Expr, args: Vec<Expr>| Expr { kind: ExprKind::Call { callee: Box::new(callee), args }, line, col };
+        let bin = |op: BinaryOp, l: Expr, r: Expr| Expr { kind: ExprKind::Binary { op, left: Box::new(l), right: Box::new(r) }, line, col };
+        let lit = |s: &str| Expr { kind: ExprKind::Str(s.to_string()), line, col };
+        let mut dicts = Vec::with_capacity(elems.len());
+        for t in elems {
+            dicts.push(self.dict_for(t, trait_name, method, line, col)?);
+        }
+        let (params, ret, body) = if trait_name == "Eq" {
+            let mut acc: Option<Expr> = None;
+            for (i, d) in dicts.into_iter().enumerate() {
+                let c = call(d, vec![field("__d0", i), field("__d1", i)]);
+                acc = Some(match acc { None => c, Some(prev) => bin(BinaryOp::And, prev, c) });
+            }
+            (
+                vec![
+                    Param { name: "__d0".into(), ty: tuple_ty.clone(), line, col },
+                    Param { name: "__d1".into(), ty: tuple_ty.clone(), line, col },
+                ],
+                Type::Bool,
+                acc.expect("a tuple has elements"),
+            )
+        } else {
+            let mut acc = lit("(");
+            for (i, d) in dicts.into_iter().enumerate() {
+                if i > 0 {
+                    acc = bin(BinaryOp::Add, acc, lit(", "));
+                }
+                acc = bin(BinaryOp::Add, acc, call(d, vec![field("__d0", i)]));
+            }
+            (
+                vec![Param { name: "__d0".into(), ty: tuple_ty.clone(), line, col }],
+                Type::String,
+                bin(BinaryOp::Add, acc, lit(")")),
+            )
+        };
+        let block = Block { statements: Vec::new(), tail: Some(Box::new(body)), line, col, end_line: line };
+        let fe = FnExpr { id: 0, params, return_type: ret, body: block, line, col };
+        Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
+    }
+
     pub(super) fn synth_dict_closure(&self, gi: &GenImpl, key: &str, sig: &MethodSig, concrete: &Type, line: usize, col: usize)
         -> Result<Expr, TypeError>
     {

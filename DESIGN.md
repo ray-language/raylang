@@ -14702,3 +14702,39 @@ un bloque (`if (c) { continue } else { v }`) la sentencia no necesita `;`, como 
 parser autoalojado aplica el mismo azúcar; el corpus de paridad incluye el caso; tres motores en
 `tests/findings_batch_cli.rs` (la suite de los hallazgos de lenguaje de §97).
 
+## 285. M301–M303 — Tres huecos del checker que las apps rodeaban (sep 2026)
+
+Origen: IDEAS §97 #3, #5 y #6. Los tres eran rodeos visibles en el código de las apps: un
+`Result.Err("unreachable")` muerto tras un `while (true)`, un `match` de cinco líneas donde bastaba
+`assert_eq` sobre una tupla, y una anotación `: Option<int>` en un `let` cuyo `if` ya lo decía.
+
+**[3] `while (true)` diverge (M301).** `expr_diverges` no sabía nada de bucles. Ahora un `while`
+cuya condición es el literal `true` y cuyo cuerpo no contiene un `break` PROPIO (la búsqueda va por
+la espina de sentencias —bloques, ramas, brazos, valores de `let`/asignación/`return`— y se corta
+en un bucle anidado o una closure; en cualquier otra posición un `break` ya es error de M191)
+diverge como `return`. Solo el literal: `while (c)` con `c: bool` puede no entrar. La consecuencia
+que no se veía: el transpilador emitía `while true { … }`, que en Rust tiene tipo `()` y no
+compila como cola de una función con retorno — solo `loop` tiene tipo `!`, así que `while (true)`
+se emite como `loop`. Espejo en el checker autoalojado y casos en su corpus de veredictos.
+
+**[5] Tuplas con `Eq`/`Show` (M302).** `==` sobre tuplas ya existía (M27.1); lo que fallaba era
+el BOUND: `dict_for` busca una clave de tipo y una tupla no la tiene (una por aridad). Se rechazó
+un impl en el prelude (`impl<A: Eq, B: Eq> Eq for (A, B)`: una clave por aridad, el parser de
+impls sobre tipos-tupla y el prelude cargado en el selfhost) a favor de lo que ese impl habría
+producido: el closure que `synth_dict_closure` sintetiza para un impl genérico acotado, escrito
+directo — `eq` es la conjunción de los `eq` de los elementos sobre `t.i`; `show` concatena
+`"(" … ", " … ")"`, la misma forma que el `RayShow` del nativo para tuplas. Recursivo: tuplas de
+tuplas y arreglos de tuplas (el impl genérico de `[T]` pide el diccionario del elemento y lo
+recibe). Solo `Eq` y `Show`: `Ord`/`Hash` siguen diciendo «cannot implement». Es puro lowering
+(el AST sintetizado va a los tres motores tal cual); el selfhost no tiene tuplas, nada que
+espejar. `print(tupla)`/`to_string(tupla)` siguen fuera: la representación en VM/intérprete es
+un arreglo y saldría `[1, a]`, distinto del nativo — el `show` compuesto es el camino honesto.
+
+**[6] La otra rama del `if` fija `T` (M303).** El `if` sin tipo esperado chequeaba `then` y `else`
+sin pasarse información; `match` ya tenía M204 (brazos diferidos hasta conocer el tipo). La misma
+idea con dos ramas: si `then` tipa sin variables libres, `else` se chequea con ese esperado; si
+`then` falla con «could not infer»/«cannot infer the type of []», se chequea `else` primero y
+`then` se repite con su tipo (recortando el ámbito que la pasada fallida dejó a medias, como hace
+`check_function` en modo acumulativo). Si ninguna fija nada, el error original. Espejo en el
+selfhost con su `type_has_var(t, c.tparams)`.
+

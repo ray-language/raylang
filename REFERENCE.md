@@ -323,7 +323,7 @@ definiendo el mismo nombre).
 | `try_call` / `try_join` | recuperación de fallos | ver §5 |
 | `recv` | `(Channel<T>) -> Option<T>` | ver §5 |
 | `assert` | `(bool) -> unit` | aborta si es falso |
-| `assert_eq` | `(a: T, b: T)` con `T: Eq + Show` | aborta mostrando ambos valores |
+| `assert_eq` | `(a: T, b: T)` con `T: Eq + Show` | aborta mostrando ambos valores; las tuplas valen (`Eq`/`Show` por elementos, M302) |
 | `pop` / `position` / `index_of` / `from_utf8` | — | ver §6 |
 
 ### Traits

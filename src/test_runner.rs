@@ -75,6 +75,7 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
         crate::cli::configure_embed(&first.to_string_lossy());
     }
     let mut frontend_failed = false;
+    let mut compile_failures = 0;
     let mut suites: Vec<Suite> = Vec::new();
     for (i, path) in suite_paths.iter().enumerate() {
         match loader::load_with_deps(path, dep_roots) {
@@ -85,6 +86,10 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
             Err(e) => {
                 eprintln!("{}", e.message);
                 frontend_failed = true;
+                // M298 (findings 1.27.11 #10): un fallo de CARGA (léxico/sintaxis/loader) también
+                // es una suite que no compila — antes solo contaban los del checker y el resumen
+                // decía "0 suite(s) failed to compile ✗" tras un syntax error.
+                compile_failures += 1;
             }
         }
     }
@@ -94,7 +99,6 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
     // entrada del proyecto, que nadie importa— podía tener un error de tipos y la suite salía
     // verde; el error aparecía en `ray build`, o en un commit. El chequeo es único por suite (un
     // `main` sintético que llama a todas sus pruebas), y sin pruebas es el chequeo del programa.
-    let mut compile_failures = 0;
     let mut compiles: Vec<bool> = Vec::with_capacity(suites.len());
     for suite in &suites {
         match check_suite(suite) {

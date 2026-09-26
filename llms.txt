@@ -31,10 +31,10 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 - Struct fields end with a comma; struct literals are `Name { field: value }`.
 - `main` returns `int` (the process exit code) or unit. `exit(code)` terminates the process
   immediately from any fiber (diverges like `panic`; stdout/stderr flushed).
-- Patterns are shallow: NO literals inside variant patterns (`Option.Some(true)` is a
-  syntax error) and NO nested qualified patterns (`Option.Some(mod.Enum.V(x))`) — bind a
-  name (`Option.Some(v)`) and match again. Qualified patterns themselves are fine:
-  `json.Json.JObject(m)` works, and so do qualified types in signatures (`regex.Regex`).
+- Patterns: NO literals inside variant patterns (`Option.Some(true)` is a syntax error —
+  bind a name and test it, or use a guard). Nested variant patterns ARE fine (since 1.27.6):
+  `Result.Ok(Option.Some(v))`, `Option.Some(json.Json.JObject(m))`, with `_` inside. Qualified
+  patterns (`json.Json.JObject(m)`) and qualified types in signatures (`regex.Regex`) work.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
 - Integer literals: decimal or `0xFF` / `0o755` / `0b1010`. String/char escapes include
@@ -48,7 +48,7 @@ fn main() -> int { 0 }
 
 let a = 3;                                       // immutable
 var b = 0;                                       // mutable; b = b + 1; later
-const LIMIT: int = 100;                          // top-level constant
+const LIMIT: int = 100;                          // top-level constant (literals, arrays/tuples of them, earlier consts)
 
 if (cond) { 1 } else { 2 }                       // if is an EXPRESSION (both branches typed)
 while (i < n) { i = i + 1; }
@@ -101,7 +101,10 @@ fn setup() -> Result<int, string> {
 ```
 
 `return e` is also an EXPRESSION (diverges): `Option.None => return -1,` in a match arm,
-`else { return 99 }` as a block tail. `?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
+`else { return 99 }` as a block tail. So are `break` and `continue` (since M300):
+`Result.Err(e) => break,` in a match arm inside a loop, `if (c) { continue } else { v }`.
+Labeled loops (M308): `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
+— `break outer` / `continue outer` from any inner loop of the same function (`outer: while` too). `?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
 otherwise: `'?' on Result<int, string> requires the function to return Result<_, string>,
 but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 `assert_eq(a, b)` (no custom-message variant — use `panic`).
@@ -111,7 +114,13 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Arrays `[T]`, structs and `Map` have REFERENCE semantics (aliases share the object;
   `push`/`a[i] = v`/`p.x = v` mutate in place). Primitives copy.
 - "Indeterminate" expressions need an expected type or annotation: `[]`, `Option.None`,
-  `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`.
+  `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`. The other
+  branch of an `if`/arm of a `match` counts as context: `if (c) { Option.Some(1) } else {
+  Option.None }` infers `Option<int>`.
+- A `while (true)` with no `break` of its own DIVERGES: a `fn f() -> Result<T, E>` may end in
+  it (exit with `return`) — no dead `Result.Err("unreachable")` after the loop.
+- Tuples support `==` and satisfy `Eq`/`Show` bounds element-wise: `assert_eq(f(), ("h", 81))`
+  works (there is no `print(tuple)` / `to_string(tuple)`: show is only via those bounds).
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
@@ -192,6 +201,13 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    `fs.read_file(p) -> Result<string, string>`, `fs.read_file_bytes(p) -> Result<bytes, string>`,
    `char_code(c) -> int`, `char_from_code(n) -> Option<char>`. When in doubt, `ray_doc <name>` gives the
    exact signature.
+   `Option`/`Result` METHODS (prelude traits, no import; prefer them over a five-line `match`):
+   `o.is_some() o.is_none() o.unwrap_or(d) o.unwrap_or_else(f) o.expect(msg) o.unwrap() o.map(f)
+   o.and_then(f) o.ok_or(e)` (Option → Result) · `r.is_ok() r.is_err() r.unwrap_or(d)
+   r.unwrap_or_else(f) r.expect(msg) r.unwrap() r.map(f) r.and_then(f) r.map_err(f) r.ok()`
+   (Result → Option). Closures are typed in full: `o.map(fn(x: int) -> int { x * 2 })`.
+   Searches: `s.index_of(x) s.last_index_of(x)`, `b.index_of(n) b.index_of_from(n, start)
+   b.last_index_of(n)` (all `Option<int>`).
 3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
    are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
    min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*
@@ -280,7 +296,10 @@ tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h
 titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.focus(h)`,
 `ui.eval_js(h, js)`, requests from the page via `ui.next_event()` + `ui.reply(h, id, s)` /
 `ui.reply_json`; serve the frontend from the process with `ui.mount_embed("", "assets")`
-(+ `mount_dir`, `mount_bytes`) and open `ray://app/index.html` — no local HTTP server; menus:
+(+ `mount_dir`, `mount_bytes`) and open `ray://app/index.html` — no local HTTP server (desktop
+shells: macOS/WebKitGTK/WebView2; the iOS/Android shells load `http://127.0.0.1:<port>` from
+the embedded server — use `web.listen_local`/`local_limits` there; `ui.reply_json` needs a
+shell generated with raylang ≥ 1.12.1, regenerate with `ray bundle --ios/--android`); menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
@@ -358,7 +377,8 @@ the recommended base for servers and for desktop/mobile app backends with `std/u
 
 If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
 diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` (a bare module name like "std/kv"
-lists its whole public surface) — sandboxed (instruction fuel +
+or "std/collections/deque" lists its whole public surface — constants included; with `path`,
+also a project or package module like "web/framework") — sandboxed (instruction fuel +
 heap cap + wall deadline), plus this file as the resource `raylang://llms.txt`. Connect it
 with `claude mcp add raylang -- ray mcp` (details in docs/mcp.md).
 

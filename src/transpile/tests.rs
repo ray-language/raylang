@@ -30,7 +30,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__make_temp_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
-    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__chmod", "__watch", "__watch_next", "__remove_dir",
+    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__chmod", "__watch", "__watch_next", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",
@@ -566,6 +566,32 @@ fn var_uncaptured_mutable_stays_plain_local() {
     let rust = transpile_src("fn main() { var x: int = 0; x = x + 1; print(x); }");
     assert!(rust.contains("let mut x: i64 = 0i64;"), "x es local normal: {}", rust);
     assert!(!rust.contains("let x = Rc::new(std::cell::RefCell"), "x NO va en celda: {}", rust);
+}
+
+#[test]
+fn a_pattern_binding_named_like_a_cell_var_of_another_arm_is_not_a_cell() {
+    // M298 (findings 1.27.11 #1): `var addr` capturada en un brazo y un binding `addr` de patrón
+    // capturado por una closure en OTRO brazo comparten nombre; la celda es léxica (manda la
+    // declaración más interna): el binding se lee pelado, no con `.borrow()` (antes E0599 sobre Rc<str>).
+    let rust = transpile_src(
+        "enum Msg { Down(int), Dial(string) }\n\
+         fn main() -> int {\n\
+             for m in [Msg.Down(1), Msg.Dial(\"b:2\")] {\n\
+                 match (m) {\n\
+                     Msg.Down(id) => { var addr = \"\"; let g = fn() { addr = \"a:1\"; }; g(); print(addr); },\n\
+                     Msg.Dial(addr) => { let f = fn() { print(addr); }; f(); },\n\
+                 }\n\
+             }\n\
+             0\n\
+         }",
+    );
+    assert!(rust.contains("let addr = Rc::new(std::cell::RefCell::new("), "la var del primer brazo es celda: {}", rust);
+    assert!(rust.contains("(addr.borrow().clone())") || rust.contains("(addr.borrow().clone()."), "lectura de la celda: {}", rust);
+    // El binding del segundo brazo se lee sin `.borrow()`: exactamente UNA lectura por borrow (la del
+    // primer brazo) y ninguna `addr.borrow()` dentro de la closure `f`.
+    let f_body = rust.split("let f = ").nth(1).expect("closure f");
+    let f_head = &f_body[..f_body.find("f()").unwrap_or(f_body.len())];
+    assert!(!f_head.contains("addr.borrow()"), "el binding de patron no es celda: {}", f_head);
 }
 
 #[test]

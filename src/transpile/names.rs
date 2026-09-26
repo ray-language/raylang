@@ -140,6 +140,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
                 name,
                 "std::fs::stat" | "std::fs::chmod" | "std::fs::watch" | "std::fs::next_event" | "std::fs::next_event_timeout" | "std::fs::copy_all"
                     | "std::fs::real_path" | "std::fs::is_within_real" // M265: emitidos sobre el primitivo __real_path
+                    | "std::fs::symlink" // M304: emitida sobre el primitivo __symlink
             ))
     {
         return true;

@@ -26,6 +26,7 @@ impl Checker {
             errors: Vec::new(),
             current_return: Type::Unit,
             loop_depth: 0,
+            loop_labels: Vec::new(),
             break_ok: false,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
@@ -88,9 +89,9 @@ impl Checker {
         for c in &program.consts {
             self.ensure_type(&c.ty, c.line, c.col)?;
             let declared = self.resolve_type(&c.ty);
-            if !is_const_literal(&c.value) {
+            if !is_const_literal(&c.value, &self.consts) {
                 return Err(self.err(c.value.line, c.value.col,
-                    format!("the value of constant '{}' must be a literal", c.name)));
+                    format!("the value of constant '{}' must be a literal (or an array/tuple of literals and constants declared above)", c.name)));
             }
             let vt = self.check_expr(&c.value)?;
             if vt != declared {
@@ -856,7 +857,7 @@ impl Checker {
                     ))),
                 }
             }
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, label } => {
                 // M27.2: determina el/los tipo(s) de la(s) variable(s) según el iterable, los liga en un
                 // ámbito nuevo y verifica el cuerpo.
                 let bindings: Vec<(String, Type)> = match iter {
@@ -926,16 +927,24 @@ impl Checker {
                 for (n, t) in bindings {
                     self.declare(&n, t, false, (stmt.line, stmt.col));
                 }
-                self.check_loop_body(body)?;
+                self.check_loop_body(body, label.as_deref())?;
                 self.pop_scope();
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
-            StmtKind::Break | StmtKind::Continue => {
+            StmtKind::Break { label } | StmtKind::Continue { label } => {
                 // M191: solo dentro de un bucle de esta función, y solo en la espina de sentencias.
-                let kw = if matches!(stmt.kind, StmtKind::Break) { "break" } else { "continue" };
+                let kw = if matches!(stmt.kind, StmtKind::Break { .. }) { "break" } else { "continue" };
                 if self.loop_depth == 0 {
                     return Err(self.err(stmt.line, stmt.col, format!("'{}' outside a loop", kw)));
+                }
+                // M308: la etiqueta debe ser la de un bucle abierto de ESTA función.
+                if let Some(l) = label
+                    && !self.loop_labels.iter().any(|x| x.as_deref() == Some(l.as_str()))
+                {
+                    return Err(self.err(stmt.line, stmt.col, format!(
+                        "unknown loop label '{}' for '{}' (label a loop with '{}: while' or '{}: for')", l, kw, l, l
+                    )));
                 }
                 if !self.break_ok {
                     return Err(self.err(stmt.line, stmt.col, format!(
@@ -1317,7 +1326,7 @@ impl Checker {
         for (dname, dty) in &declared {
             let matches: Vec<&(String, Expr)> = fields.iter().filter(|(fname, _)| fname == dname).collect();
             match matches.as_slice() {
-                [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'", dname, name))),
+                [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'{}", dname, name, self.constructor_hint(name)))),
                 [(_, value)] => {
                     let vt = self.check_value_against(value, dty, &sigma)?;
                     unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
@@ -2249,12 +2258,12 @@ impl Checker {
                 // capturado sigue siendo error). Solo guardamos/restauramos el tipo
                 // de retorno, que cambia al de esta función.
                 let saved_ret = self.current_return.clone();
-                let saved_loop = (self.loop_depth, self.break_ok);
+                let saved_loop = (self.loop_depth, self.break_ok, std::mem::take(&mut self.loop_labels));
                 self.loop_depth = 0; // M191: un bucle exterior no es alcanzable desde aquí
                 self.break_ok = false;
                 let r = self.check_fn_body(&fe.params, &fe.return_type, &fe.body, fe.line, fe.col, "the anonymous function");
                 self.current_return = saved_ret;
-                (self.loop_depth, self.break_ok) = saved_loop;
+                (self.loop_depth, self.break_ok, self.loop_labels) = saved_loop;
                 r?;
 
                 Ok(Type::Fn(
@@ -2268,8 +2277,36 @@ impl Checker {
                 if ct != Type::Bool {
                     return Err(self.err(cond.line, cond.col, format!("the if condition must be bool, not {}", ct)));
                 }
-                let then_ty = self.check_block(then_branch)?;
-                match else_branch {
+                // M303 (IDEAS §97 #6): sin tipo esperado, la OTRA rama fija los parámetros de
+                // tipo de una construcción indeterminada (`if (c) { Option.Some(1) } else {
+                // Option.None }` moría con «could not infer the type parameter 'T'»). Es el
+                // M204 de los brazos de `match`, aplicado al `if`: la rama que sí tipa da el
+                // esperado a la que no pudo. El ámbito que dejó a medias la pasada fallida se
+                // recorta antes de repetirla.
+                let depth = self.scopes.len();
+                let then_first = self.check_block(then_branch);
+                let (then_ty, else_ty) = match (then_first, else_branch) {
+                    (Ok(then_ty), None) => (then_ty, None),
+                    (Ok(then_ty), Some(else_e)) => {
+                        let else_ty = if type_has_var(&then_ty) {
+                            self.check_expr(else_e)?
+                        } else {
+                            self.check_expr_expected(else_e, &then_ty)?
+                        };
+                        (then_ty, Some(else_ty))
+                    }
+                    (Err(e), Some(else_e)) if e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here") => {
+                        self.scopes.truncate(depth);
+                        let else_ty = self.check_expr(else_e)?;
+                        if type_has_var(&else_ty) {
+                            return Err(e);
+                        }
+                        let then_ty = self.check_block_expected(then_branch, &else_ty)?;
+                        (then_ty, Some(else_ty))
+                    }
+                    (Err(e), _) => return Err(e),
+                };
+                match else_ty {
                     None => {
                         // Un if sin else tiene tipo unit; entonces la rama 'then'
                         // tampoco puede producir un valor útil.
@@ -2281,8 +2318,8 @@ impl Checker {
                         }
                         Ok(Type::Unit)
                     }
-                    Some(else_e) => {
-                        let else_ty = self.check_expr(else_e)?;
+                    Some(else_ty) => {
+                        let Some(else_e) = else_branch.as_ref() else { crate::ice!("an if with an else type has an else branch") };
                         // M13.2a: si una rama diverge (p.ej. termina en `panic`), el if toma el
                         // tipo de la otra; solo la rama que sí produce valor manda.
                         if block_diverges(then_branch) {
@@ -2302,13 +2339,13 @@ impl Checker {
                 }
             }
 
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, label } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
                     return Err(self.err(cond.line, cond.col, format!("the while condition must be bool, not {}", ct)));
                 }
                 // El valor del cuerpo se descarta en cada iteración; el while es unit.
-                self.check_loop_body(body)?;
+                self.check_loop_body(body, label.as_deref())?;
                 Ok(Type::Unit)
             }
 
@@ -2319,11 +2356,13 @@ impl Checker {
     /// Verifica un bloque en su propio ámbito y devuelve su tipo-valor (el de la
     /// expresión final, o unit si no hay).
     /// El cuerpo de un `while`/`for` (M191): un nivel más de bucle y la espina de sentencias abierta.
-    pub(super) fn check_loop_body(&mut self, body: &Block) -> Result<Type, TypeError> {
+    pub(super) fn check_loop_body(&mut self, body: &Block, label: Option<&str>) -> Result<Type, TypeError> {
         let saved = self.break_ok;
         self.loop_depth += 1;
+        self.loop_labels.push(label.map(str::to_string));
         self.break_ok = true;
         let r = self.check_block(body);
+        self.loop_labels.pop();
         self.loop_depth -= 1;
         self.break_ok = saved;
         r
@@ -2822,7 +2861,15 @@ impl Checker {
         } else if let Some(local) = self.module_local_fn(name, line, recv_ty) {
             local
         } else if self.functions.contains_key(name) {
-            name.to_string()
+            // M298 (findings 1.27.11 #36): el override de la raíz es LÉXICO también aquí — un
+            // `headers.get(k)` en un módulo/paquete va al alias `get#prelude`, como la llamada
+            // directa en `check_named_call_renamed`. Antes solo el camino directo lo aplicaba y
+            // `net/trace` moría con "'get' expects 3 argument(s)" por una `get` del usuario.
+            if !self.current_fn_is_root && self.overridden_prelude.contains(name) {
+                format!("{name}#prelude")
+            } else {
+                name.to_string()
+            }
         } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
             global
         } else if let Some(by_type) = self.type_module_fn(name, recv_ty) {
@@ -2863,6 +2910,34 @@ impl Checker {
         } else {
             String::new()
         }
+    }
+
+    /// M299 (findings 1.27.11 #12): un literal de struct de un MÓDULO al que le falta un campo
+    /// —típicamente porque el struct ganó campos en una versión nueva (`ui.MenuItem` con
+    /// `icon/enabled/checked` en 1.15 rompió ray-remote y raydesk)— sugiere el **constructor
+    /// público** del módulo que devuelve ese struct (`ui.item(string, string, string)`), que es el
+    /// que rellena los campos nuevos con sus defaults. Solo structs con prefijo de módulo; el
+    /// candidato es la primera función pública de `M::` cuyo retorno es el struct (orden por
+    /// nombre, determinista). Espejo byte-idéntico en `selfhost/checker.ray`.
+    fn constructor_hint(&self, struct_name: &str) -> String {
+        let Some((prefix, _)) = struct_name.rsplit_once("::") else { return String::new() };
+        let module = prefix.rsplit("::").next().unwrap_or(prefix);
+        let mut candidates: Vec<&String> = self.functions.iter()
+            .filter(|(fname, sig)| {
+                fname.starts_with(prefix) && fname[prefix.len()..].starts_with("::")
+                    && !fname[prefix.len() + 2..].contains("::")
+                    && !fname.contains('#')
+                    && self.pub_functions.contains(*fname)
+                    && matches!(&sig.ret, Type::Struct(n, _) if n == struct_name)
+            })
+            .map(|(fname, _)| fname)
+            .collect();
+        candidates.sort();
+        let Some(fname) = candidates.first() else { return String::new() };
+        let sig = &self.functions[*fname];
+        let params: Vec<String> = sig.params.iter().map(|t| t.to_string()).collect();
+        let bare = &fname[prefix.len() + 2..];
+        format!(" (use the constructor {module}.{bare}({}) — it fills the other fields with their defaults)", params.join(", "))
     }
 
     /// M206 — paso 5 de §6.3, UFCS **dirigido por el tipo del receptor**: si `recv_ty` es un struct
@@ -3306,6 +3381,13 @@ impl Checker {
                 "the type parameter '{}' is not bounded by '{}' (required by the call)", u, trait_name
             )));
         }
+        // M302 (IDEAS §97 #5): una TUPLA implementa `Eq`/`Show` por composición de sus elementos
+        // (como el impl genérico de `[T]` del prelude, pero sin impl: se sintetiza el closure).
+        if let Type::Tuple(ts) = concrete
+            && (trait_name == "Eq" || trait_name == "Show")
+        {
+            return self.synth_tuple_dict(ts, trait_name, method, line, col);
+        }
         // Tipo concreto: debe implementar el trait → usar el método manglado del impl.
         let key = type_key_of(concrete).ok_or_else(|| self.err(line, col, format!(
             "{} cannot implement the trait '{}'", concrete, trait_name
@@ -3344,6 +3426,62 @@ impl Checker {
     ///
     /// El `id` del fn-expr es provisional (0): `renumber_fn_exprs`, al final del lowering, le da
     /// uno denso. Reusa closures (M4): cero cambios de runtime.
+    /// M302 (IDEAS §97 #5): el diccionario de `Eq`/`Show` para una tupla `(T0, …, Tn)`, sintetizado
+    /// como closure sobre los diccionarios de sus elementos (recursivo: tuplas de tuplas, arreglos
+    /// de tuplas…). `assert_eq(f(), ("h", 81))` moría con «(string, int) cannot implement the
+    /// trait 'Eq'» aunque `==` ya comparaba tuplas. Sin impl en el prelude porque las tuplas no
+    /// tienen clave de tipo (una por aridad) y el closure es exactamente lo que un impl genérico
+    /// acotado produciría (`synth_dict_closure`). `Show` da `(a, b)`, la forma del nativo.
+    ///   eq:   `fn(__d0: T, __d1: T) -> bool { d0(__d0.0, __d1.0) && d1(__d0.1, __d1.1) … }`
+    ///   show: `fn(__d0: T) -> string { "(" + d0(__d0.0) + ", " + d1(__d0.1) + … + ")" }`
+    fn synth_tuple_dict(&self, elems: &[Type], trait_name: &str, method: &str, line: usize, col: usize)
+        -> Result<Expr, TypeError>
+    {
+        let tuple_ty = Type::Tuple(elems.to_vec());
+        let field = |var: &str, i: usize| Expr {
+            kind: ExprKind::Field { object: Box::new(ident_expr(var, line, col)), name: i.to_string() },
+            line, col,
+        };
+        let call = |callee: Expr, args: Vec<Expr>| Expr { kind: ExprKind::Call { callee: Box::new(callee), args }, line, col };
+        let bin = |op: BinaryOp, l: Expr, r: Expr| Expr { kind: ExprKind::Binary { op, left: Box::new(l), right: Box::new(r) }, line, col };
+        let lit = |s: &str| Expr { kind: ExprKind::Str(s.to_string()), line, col };
+        let mut dicts = Vec::with_capacity(elems.len());
+        for t in elems {
+            dicts.push(self.dict_for(t, trait_name, method, line, col)?);
+        }
+        let (params, ret, body) = if trait_name == "Eq" {
+            let mut acc: Option<Expr> = None;
+            for (i, d) in dicts.into_iter().enumerate() {
+                let c = call(d, vec![field("__d0", i), field("__d1", i)]);
+                acc = Some(match acc { None => c, Some(prev) => bin(BinaryOp::And, prev, c) });
+            }
+            (
+                vec![
+                    Param { name: "__d0".into(), ty: tuple_ty.clone(), line, col },
+                    Param { name: "__d1".into(), ty: tuple_ty.clone(), line, col },
+                ],
+                Type::Bool,
+                acc.unwrap_or_else(|| crate::ice!("a tuple type has at least two elements")),
+            )
+        } else {
+            let mut acc = lit("(");
+            for (i, d) in dicts.into_iter().enumerate() {
+                if i > 0 {
+                    acc = bin(BinaryOp::Add, acc, lit(", "));
+                }
+                acc = bin(BinaryOp::Add, acc, call(d, vec![field("__d0", i)]));
+            }
+            (
+                vec![Param { name: "__d0".into(), ty: tuple_ty.clone(), line, col }],
+                Type::String,
+                bin(BinaryOp::Add, acc, lit(")")),
+            )
+        };
+        let block = Block { statements: Vec::new(), tail: Some(Box::new(body)), line, col, end_line: line };
+        let fe = FnExpr { id: 0, params, return_type: ret, body: block, line, col };
+        Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
+    }
+
     pub(super) fn synth_dict_closure(&self, gi: &GenImpl, key: &str, sig: &MethodSig, concrete: &Type, line: usize, col: usize)
         -> Result<Expr, TypeError>
     {

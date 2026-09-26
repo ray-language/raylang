@@ -59,14 +59,15 @@ transform_readme() {
 > [`raylang/packages/@PKG@`](https://github.com/ray-language/raylang/tree/main/packages/@PKG@);
 > el desarrollo y los PRs van al monorepo.
 >
-> **Instalación** — en tu `ray.toml`:
+> **Instalación** — `ray add @PKG@` en tu proyecto (el índice oficial va por defecto), o a
+> mano en `ray.toml`:
 >
 > ```toml
-> [registry]
-> index = "git+https://github.com/ray-language/ray-index@main"
+> [dependencies]
+> @PKG@ = "^@VER@"
 > ```
 >
-> y `ray add @PKG@` — o la dependencia directa:
+> Sin índice, la dependencia git directa:
 > `@PKG@ = "git+https://github.com/ray-language/@PKG@@v@VER@"`.
 
 EOF

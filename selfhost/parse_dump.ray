@@ -138,7 +138,14 @@ fn dump_expr(e: Expr) -> string {
         EKind.EField(o, nm) => "(field " + dump_expr(o) + " " + nm + ")" + pp,
         EKind.EArray(elems) => "(array" + dump_exprs(elems) + ")" + pp,
         EKind.EIf(c, then_b, alt) => "(if " + dump_expr(c) + " " + dump_block(then_b) + dump_opt_expr(alt) + ")" + pp,
-        EKind.EWhile(c, body) => "(while " + dump_expr(c) + " " + dump_block(body) + ")" + pp,
+        EKind.EWhile(c, body, l) => "(while"
+            + if (l == "") { "" } else { ":" + l }
+            + " "
+            + dump_expr(c)
+            + " "
+            + dump_block(body)
+            + ")"
+            + pp,
         EKind.EBlock(b) => dump_block(b),
         EKind.EStructLit(name, fields) => "(struct-lit " + name + dump_inits(fields) + ")" + pp,
         EKind.EFunc(fe) => dump_fnexpr(fe),
@@ -245,8 +252,8 @@ fn dump_stmt(st: Stmt) -> string {
         },
         SKind.SAssign(target, value) => "(assign " + dump_expr(target) + " " + dump_expr(value) + ")" + pp,
         SKind.SReturn(value) => "(return" + dump_opt_expr(value) + ")" + pp,
-        SKind.SBreak => "(break)" + pp,
-        SKind.SContinue => "(continue)" + pp,
+        SKind.SBreak(l) => "(break" + if (l == "") { "" } else { " " + l } + ")" + pp,
+        SKind.SContinue(l) => "(continue" + if (l == "") { "" } else { " " + l } + ")" + pp,
         SKind.SExpr(e) => "(expr " + dump_expr(e) + ")" + pp,
     }
 }

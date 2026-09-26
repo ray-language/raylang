@@ -259,6 +259,33 @@ let f = "2.5".parse_float();            // Some(2.5) : Option<float>
 
 Para el caso interactivo, `read_int()` ya combina `input` + `parse_int` (→ `Option<int>`).
 
+### Los métodos de `Option` y `Result`
+
+Un `Option`/`Result` se desenvuelve con `match`, pero para los casos de siempre hay métodos (traits
+del prelude, disponibles sin importar nada) y ahorran el `match` de cinco líneas:
+
+```rust
+let n = "42".parse_int().unwrap_or(0);          // valor por defecto
+let ok = o.is_some();  let none = o.is_none();
+let v = o.expect("port is required");           // panic con contexto si es None (mejor que unwrap)
+let r: Result<int, string> = o.ok_or("missing"); // Option → Result
+
+let x = r.unwrap_or(0);  let good = r.is_ok();  let bad = r.is_err();
+let back: Option<int> = r.ok();                 // Result → Option (descarta el error)
+let y = r.expect("config");                     // panic con contexto si es Err
+```
+
+Y para ENCADENAR sin desenvolver, los combinadores (M304):
+
+```rust
+let port = env("PORT").and_then(fn(s: string) -> Option<int> { s.parse_int() }).unwrap_or(8080);
+let n = "42".parse_int().map(fn(x: int) -> int { x * 2 });          // Some(84)
+let cfg = fs.read_file(path).map_err(fn(e: string) -> string { "config: " + e });
+let v = r.and_then(fn(x: int) -> Result<int, string> { check(x) }).unwrap_or_else(fn(e: string) -> int { 0 });
+```
+
+Para PROPAGAR un fallo, el operador `?` (§5) sigue siendo la herramienta: `let v = r?;`.
+
 ### Sobrecarga de operadores
 
 `+ - * /` y el `-` unario se sobrecargan implementando los traits `Add`/`Sub`/`Mul`/`Div`/`Neg`:
@@ -804,6 +831,21 @@ match (evento) {
 Un brazo puede **salir de la función** con `return` como expresión (M220): `Option.None =>
 return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así que no fija el tipo del
 `match` (lo fija el otro brazo). Lo mismo en un `else` (`let v = if (ok) { x } else { return 99 };`).
+Y dentro de un bucle, **`break` y `continue`** son expresión igual (M300): `Result.Err(e) => break,`
+en el brazo de un `match`, `let w = if (v < 0) { continue } else { v };`.
+
+**Bucles etiquetados** (M308): para salir de (o reanudar) un bucle EXTERIOR desde uno interior,
+etiquétalo — `nombre:` delante del `while`/`for` — y nombra la etiqueta en el `break`/`continue`.
+Sin la bandera que raycode arrastraba para salir de dos bucles:
+
+```rust
+rows: for row in grid {
+    for cell in row {
+        if (cell < 0) { continue rows; }     // siguiente fila
+        if (cell == target) { break rows; }  // fuera de los dos bucles
+    }
+}
+```
 
 Y azúcar `if let` para un solo caso:
 
@@ -1252,8 +1294,9 @@ let _ = close(h);
 ```
 
 Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
-ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo y
-el chunk del alimentador. Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
+ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
+chunk del alimentador y la cola entre tu programa y el dispositivo: `write` aparca cuando hay
+~esa latencia encolada, también a tasas bajas (22050 Hz mono con 30 ms ≈ 140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
 devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
 escrito, que es lo que hace falta para pintar el compás exacto.
 
@@ -1329,6 +1372,19 @@ Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (ke
 `keystore.properties` en la raíz del proyecto generado — `gradle assembleRelease` produce el
 APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
 por ray.toml (el README generado trae el paso a paso).
+
+**Lo que cambia en el móvil respecto al escritorio** (M307, IDEAS §97 #28/#37). (1) `ray://app`
+y `ui.mount_embed`/`mount_dir` son de los shells de ESCRITORIO (macOS, WebKitGTK, WebView2): los
+shells de iOS y Android cargan la URL que les pasa `ui.open` por HTTP desde el servidor embebido
+(`http://127.0.0.1:<puerto>`; en Android el cleartext está permitido solo para 127.0.0.1). Una app
+escritorio+móvil conserva por tanto el servidor local para el móvil — con `web.listen_local` /
+`webserver.local_limits(token)` (M297), que es lo que cierra ese puerto a otras apps del
+dispositivo — y puede usar `ray://app` en escritorio. (2) El puente `window.ray.request` con
+respuesta JSON (`ui.reply_json`) necesita el shim `_deliver_json` del shell, que generan
+`ray bundle --ios/--android` desde raylang **1.12.1** (M225; la forma `ui.reply` con string, desde
+1.5.0): un shell generado antes no lo trae y el síntoma es una promesa que nunca resuelve.
+Detectarlo: `grep _deliver_json` en el `ViewController.m` / `MainActivity.java` generados; el
+remedio es regenerar el bundle (firma, keystore e icono se preservan).
 
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
@@ -2735,6 +2791,12 @@ read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás 
 (una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
 y el actor muere cuando su canal se cierra (`close(ch)`).
 
+**Fan-out desde un actor** (un suscriptor por canal: SSE, WebSockets, notificaciones): el actor
+NO debe usar `send` a secas hacia sus suscriptores — `send` sobre un canal **cerrado** es un
+error fatal (tumba la fibra del actor) y sobre uno acotado y **lleno** bloquea al actor entero
+por un suscriptor lento. La forma correcta es `try_send(sub, v)`: `false` = ese suscriptor está
+cerrado o saturado, y el actor lo da de baja (o descarta el evento) y sigue con los demás.
+
 Las formas empaquetadas de este patrón, para no recablearlo: `kv.share`/`kv.open_shared` (un
 `Store` clave/valor compartido, con `incr`/`set_if` atómicos servidos por el actor), y en el
 framework `web`: `web.sessions` (estado por-sesión con cookie) y `web.state` (estado de
@@ -2836,7 +2898,7 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
-ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui` o `ray doc ui.MenuItem` (M217)
+ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305)
 ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)

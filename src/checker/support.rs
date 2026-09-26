@@ -20,7 +20,7 @@ pub(super) fn is_hashable_key(t: &Type) -> bool {
 }
 
 /// ¿Es `e` un valor válido para una constante (M27.5)? Un literal, o un literal numérico negado (`-5`).
-pub(super) fn is_const_literal(e: &Expr) -> bool {
+pub(super) fn is_const_literal(e: &Expr, known: &HashMap<String, Type>) -> bool {
     match &e.kind {
         ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
@@ -30,7 +30,11 @@ pub(super) fn is_const_literal(e: &Expr) -> bool {
         // M274 (raystream [15]): un ARREGLO de literales (anidable) también es constante. Semántica
         // de literal inyectado: cada uso evalúa el arreglo de nuevo (sin estado compartido que un
         // alias pudiera mutar); en un bucle caliente se iza a un local.
-        ExprKind::ArrayLit(elems) => elems.iter().all(is_const_literal),
+        // M307 (IDEAS §97 #7): también una TUPLA de constantes (`[(1, "a"), (2, "b")]`, la tabla
+        // de pares) y una REFERENCIA a otra constante declarada antes (`[ID_A, ID_B]`): en los tres
+        // motores la constante es su expresión inyectada, así que el nombre se resuelve en el uso.
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => elems.iter().all(|x| is_const_literal(x, known)),
+        ExprKind::Ident(name) => known.contains_key(name),
         _ => false,
     }
 }
@@ -234,7 +238,7 @@ pub(super) fn is_block_form(e: &Expr) -> bool {
 pub(super) fn stmt_diverges(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // M191: `break`/`continue` abandonan el bloque igual que `return` (ceden el tipo).
-        StmtKind::Return { .. } | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::Return { .. } | StmtKind::Break { .. } | StmtKind::Continue { .. } => true,
         StmtKind::Expr(e) => expr_diverges(e),
         _ => false,
     }
@@ -267,6 +271,57 @@ pub(super) fn expr_diverges(expr: &Expr) -> bool {
         // siempre sobre cualquier homónimo (un builtin no se tapa), así que el chequeo por nombre
         // es seguro.
         ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic" || n == "exit"),
+        // M301 (IDEAS §97 #3): `while (true)` sin un `break` PROPIO nunca termina normalmente —
+        // solo sale por `return` (o no sale). Las apps ponían un `Result.Err("unreachable")`
+        // muerto tras el bucle. Un `break` de un bucle anidado no cuenta; `continue` tampoco.
+        ExprKind::While { cond, body, label } => {
+            matches!(cond.kind, ExprKind::Bool(true)) && !loop_breaks(body, label.as_deref())
+        }
+        _ => false,
+    }
+}
+
+/// ¿Hay un `break` que salga de ESTE bucle en `body`? Solo se miran las posiciones donde el
+/// checker admite `break` (la espina de sentencias: bloques, ramas de `if`, brazos de `match` y
+/// valores de `let`/asignación/`return`); una closure corta la búsqueda. Un bucle anidado es
+/// dueño de sus `break` sin etiqueta, pero un `break etiqueta` (M308) dentro de él sí sale de
+/// este bucle si `etiqueta` es la suya.
+pub(super) fn loop_breaks(body: &Block, label: Option<&str>) -> bool {
+    loop_breaks_in(body, label, 0)
+}
+
+fn loop_breaks_in(body: &Block, label: Option<&str>, depth: usize) -> bool {
+    body.statements.iter().any(|s| stmt_breaks(s, label, depth))
+        || body.tail.as_ref().is_some_and(|t| expr_breaks(t, label, depth))
+}
+
+fn stmt_breaks(stmt: &Stmt, label: Option<&str>, depth: usize) -> bool {
+    match &stmt.kind {
+        StmtKind::Break { label: None } => depth == 0,
+        StmtKind::Break { label: Some(l) } => label == Some(l.as_str()),
+        StmtKind::Continue { .. } => false,
+        StmtKind::For { body, .. } => label.is_some() && loop_breaks_in(body, label, depth + 1),
+        StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Assign { value, .. } => expr_breaks(value, label, depth),
+        StmtKind::Return { value } => value.as_ref().is_some_and(|v| expr_breaks(v, label, depth)),
+        StmtKind::Expr(e) => expr_breaks(e, label, depth),
+    }
+}
+
+fn expr_breaks(expr: &Expr, label: Option<&str>, depth: usize) -> bool {
+    match &expr.kind {
+        ExprKind::Block(b) => loop_breaks_in(b, label, depth),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            expr_breaks(cond, label, depth)
+                || loop_breaks_in(then_branch, label, depth)
+                || else_branch.as_ref().is_some_and(|e| expr_breaks(e, label, depth))
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            expr_breaks(scrutinee, label, depth) || arms.iter().any(|a| expr_breaks(&a.body, label, depth))
+        }
+        // Un bucle anidado: solo un `break etiqueta` que apunte a ESTE bucle cuenta.
+        ExprKind::While { body, .. } => label.is_some() && loop_breaks_in(body, label, depth + 1),
+        // Una closure corta el ámbito (M191). Cualquier otra forma no admite `break` dentro
+        // (error de M191), así que no hay nada que buscar.
         _ => false,
     }
 }

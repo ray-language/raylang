@@ -218,9 +218,9 @@ pub struct Program {
     /// `match` — un formateador que cambia la construcción elegida deja de ser un formateador
     /// (feedback 22 de ray-remote). Solo lo usa `fmt` para reemitir `if let`.
     pub if_let_sites: std::collections::HashSet<(usize, usize)>,
-    /// Posiciones `(línea, col)` de los `return [e]` en posición de EXPRESIÓN (M220): el parser
-    /// los desazucara a un bloque `{ return e; }` (que diverge) y el formateador los reemite
-    /// como `return e`. Solo lo usa `fmt`.
+    /// Posiciones `(línea, col)` de los `return [e]` (M220) y `break`/`continue` (M300) en
+    /// posición de EXPRESIÓN: el parser los desazucara a un bloque `{ return e; }` / `{ break; }`
+    /// (que diverge) y el formateador los reemite como se escribieron. Solo lo usa `fmt`.
     pub return_expr_sites: std::collections::HashSet<(usize, usize)>,
     /// Ver [`Program::interp_sites`]. `(receptor, rhs)` de un pipeline: `x |> f(a)` → `(x, f(a))`.
     pub pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
@@ -530,11 +530,15 @@ pub enum StmtKind {
         pat: ForPat,
         iter: ForIter,
         body: Block,
+        /// M308 (IDEAS §97 #4): etiqueta del bucle (`outer: for x in xs { … break outer; }`).
+        label: Option<String>,
     },
     /// M191: `break;` — sale del bucle más interno. Solo dentro de `while`/`for` (checker).
-    Break,
+    /// `break [etiqueta];` — sin etiqueta sale del bucle más interno; con ella, del bucle así
+    /// etiquetado (M308).
+    Break { label: Option<String> },
     /// M191: `continue;` — siguiente iteración del bucle más interno.
-    Continue,
+    Continue { label: Option<String> },
     /// Asignación a un *lvalue*: `x = e;`, `a[i] = e;`, `p.x = e;` (M3.2).
     /// `target` es una expresión asignable (`Ident`, `Index`, o `Field`).
     Assign { target: Expr, value: Expr },
@@ -657,7 +661,7 @@ pub enum ExprKind {
         else_branch: Option<Box<Expr>>,
     },
     /// `while (cond) { body }`. Su valor siempre es `unit`.
-    While { cond: Box<Expr>, body: Block },
+    While { cond: Box<Expr>, body: Block, label: Option<String> },
     /// Un bloque usado como expresión: `{ ...; valor }`.
     Block(Block),
 }
@@ -744,7 +748,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(target, acc);
                 walk_expr(value, acc);
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     walk_expr(e, acc);
@@ -817,7 +821,7 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(e, acc);
             }
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, .. } => {
             walk_expr(cond, acc);
             walk_block(body, acc);
         }

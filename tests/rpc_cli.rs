@@ -317,3 +317,52 @@ fn main() -> int {
         "salida completa: {stdout:?}"
     );
 }
+
+/// M306 (IDEAS §97 #33): `serve_on(listener, handler)` sirve sobre un listener ya abierto — el
+/// puerto efímero lo elige el SO (`tcp_listen(host, 0)` + `local_port`) sin carrera de re-bind, y el
+/// E2E no necesita puertos fijos.
+#[test]
+fn serve_on_uses_an_already_open_listener() {
+    let base = project("serve_on");
+    std::fs::write(
+        base.join("src/server.ray"),
+        r#"import rpc/rpc;
+import std/net;
+from std/json import Json;
+
+fn main() -> int {
+    let l = match (net.tcp_listen("127.0.0.1", 0)) { Result.Ok(x) => x, Result.Err(e) => panic(e), };
+    print("port " + to_string(net.local_port(l)));
+    let r = rpc.serve_on(l, fn(req: rpc.Req) -> Result<Json, string> {
+        if (req.method == "ping") { Result.Ok(Json.JStr("pong")) } else { Result.Err("unknown") }
+    });
+    0
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/client.ray"),
+        r#"import rpc/rpc;
+from std/json import Json, stringify;
+
+fn main() -> int {
+    let port = match (parse_int(args()[0])) { Option.Some(p) => p, Option.None => panic("port"), };
+    let c = match (rpc.connect("127.0.0.1", port)) { Result.Ok(x) => x, Result.Err(e) => panic(e), };
+    match (rpc.call(c, "ping", Json.JNull)) {
+        Result.Ok(j) => print("ping=" + stringify(j)),
+        Result.Err(e) => print("ping err=" + e),
+    }
+    rpc.disconnect(c);
+    0
+}
+"#,
+    )
+    .unwrap();
+    let (mut server, port) = launch_server(&base);
+    let (out, code) = run_client(&base, port);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "ping=\"pong\"\n");
+    let _ = server.kill();
+    let _ = server.wait();
+}

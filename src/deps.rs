@@ -303,7 +303,15 @@ fn to_gitspec(
                  '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX"
             )
         })?;
-        crate::index::resolve_pinned(&dir, name, spec, locked, update)
+        match crate::index::resolve_pinned(&dir, name, spec, locked, update) {
+            // M298 (#8): la copia cacheada del índice no conoce el paquete o la versión → se
+            // refresca UNA vez y se reintenta. Antes solo `rm -rf .ray-deps` o `ray update` lo
+            // arreglaban, y el mensaje no decía que el índice local podía estar viejo.
+            Err(e) if may_be_stale_index(&e) && index.refresh_once() => {
+                crate::index::resolve_pinned(&dir, name, spec, locked, update)
+            }
+            r => r,
+        }
     } else {
         parse_spec(spec).map(|s| (s, None))
     }
@@ -315,11 +323,14 @@ fn to_gitspec(
 struct LazyIndex<'a> {
     manifest: &'a Manifest,
     dir: Option<Option<std::path::PathBuf>>,
+    /// M298 (findings 1.27.11 #8): ¿ya se refrescó el clon remoto en esta resolución? Se
+    /// refresca UNA vez, y solo cuando un requisito no se satisface con la copia cacheada.
+    refreshed: bool,
 }
 
 impl<'a> LazyIndex<'a> {
     fn new(manifest: &'a Manifest) -> Self {
-        LazyIndex { manifest, dir: None }
+        LazyIndex { manifest, dir: None, refreshed: false }
     }
 
     fn get(&mut self) -> Result<Option<&Path>, String> {
@@ -327,6 +338,49 @@ impl<'a> LazyIndex<'a> {
             self.dir = Some(index_dir(self.manifest)?);
         }
         Ok(self.dir.as_ref().unwrap().as_deref())
+    }
+
+    /// Refresca el clon remoto cacheado una sola vez por resolución; `Ok(false)` si ya se hizo
+    /// o si el índice es local (nada que refrescar). Un fallo de red NO es fatal: el llamador
+    /// devuelve el error original de resolución (con la copia cacheada).
+    fn refresh_once(&mut self) -> bool {
+        if self.refreshed || !index_is_remote(self.manifest) {
+            return false;
+        }
+        self.refreshed = true;
+        match refresh_index(self.manifest) {
+            Ok(()) => {
+                eprintln!("  refreshing the package index");
+                true
+            }
+            Err(e) => {
+                eprintln!("warning: could not refresh the package index ({e}); using the cached copy");
+                false
+            }
+        }
+    }
+}
+
+/// ¿El índice configurado es un clon remoto (`git+…`) cacheado en `.ray-deps/.index`?
+fn index_is_remote(manifest: &Manifest) -> bool {
+    index_raw(manifest).is_some_and(|r| r.starts_with("git+"))
+}
+
+/// M298 (findings 1.27.11 #8): un error de resolución que puede deberse a un clon del índice
+/// VIEJO (el paquete o la versión existen ya en el índice real, pero no en la copia cacheada).
+fn may_be_stale_index(err: &str) -> bool {
+    err.contains(" satisfies ") || err.contains("is not in the index")
+}
+
+/// Refresco *best-effort* del índice remoto para los comandos que le PREGUNTAN al índice
+/// (`ray add`, `ray search`): buscar sobre una copia vieja daba versiones que ya no eran las
+/// últimas (`ray search net` → 0.2.0 con 0.3.5 publicada). Sin red se sigue con la caché.
+pub fn refresh_index_best_effort(manifest: &Manifest) {
+    if !index_is_remote(manifest) {
+        return;
+    }
+    if let Err(e) = refresh_index(manifest) {
+        eprintln!("warning: could not refresh the package index ({e}); using the cached copy");
     }
 }
 

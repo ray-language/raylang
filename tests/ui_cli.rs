@@ -1417,3 +1417,22 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// M299 (findings 1.27.11 #12): `ui.MenuItem` ganó campos (`icon/enabled/checked`, 1.15) y las apps
+/// que lo construían a mano dejaron de compilar sin pista. El error de campo ausente sugiere el
+/// constructor público del módulo que devuelve el struct (rellena los defaults).
+#[test]
+fn missing_field_of_a_module_struct_suggests_its_constructor() {
+    let base = tmp("ctor_hint");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() { let m = ui.MenuItem { tag: \"a\", title: \"A\", shortcut: \"\" }; print(m.title); }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["build", "prog.ray"]).current_dir(&base).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("missing field 'icon' in the literal of 'std::ui::MenuItem' (use the constructor ui.item(string, string, string) — it fills the other fields with their defaults)"),
+        "{err}"
+    );
+}

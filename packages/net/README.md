@@ -18,13 +18,16 @@ resistencia a canales laterales de temporización (requisito para tocar secretos
 
 ## Cómo usarlo
 
-Declara el paquete en tu `ray.toml` (por ruta si desarrollas en el monorepo; git desde el
-espejo publicado):
+Declara el paquete en tu `ray.toml`. El camino recomendado es el **índice** (`ray add net`
+lo escribe por ti; con el índice oficial por defecto no hay nada que configurar):
 
 ```toml
 [dependencies]
-net = "path:../ruta/a/packages/net"
+net = "^0.3"
 ```
+
+Si desarrollas en el monorepo, por ruta (`net = "path:../ruta/a/packages/net"`); la dependencia
+git directa (`git+https://github.com/ray-language/net@v0.3.6`) queda para un pin sin índice.
 
 y luego importa el módulo que necesites (como con `std/`):
 

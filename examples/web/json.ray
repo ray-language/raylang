@@ -805,6 +805,12 @@ impl ToJson for string {
     fn to_json(self) -> string { stringify(Json.JStr(self)) }
 }
 
+// M304 (IDEAS §97 #24): un `Json` ya parseado o construido (`Json.JNull`, el resultado de
+// `parse`) se incrusta tal cual en el builder: `json.obj().field("d", Json.JNull)`.
+impl ToJson for Json {
+    fn to_json(self) -> string { stringify(self) }
+}
+
 // --- Builders de objeto/arreglo (M93.5): JSON ad-hoc con escapado por construcción ---
 // Para el JSON que no espeja un struct (claves calculadas, payloads compuestos):
 //   obj().field("id", 7).field("name", name).render()

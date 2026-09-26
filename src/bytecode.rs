@@ -33,6 +33,8 @@ pub enum FsOp {
     MakeTempDir,
     /// M265 (ray-sublime #97): la ruta real — symlinks seguidos, `.`/`..` resueltos (`fs.real_path`).
     RealPath,
+    /// M304 (IDEAS §97 #25): crea un enlace simbólico `link` → `target` (`fs.symlink`).
+    Symlink,
 }
 
 impl FsOp {
@@ -40,7 +42,7 @@ impl FsOp {
     pub fn argc(self) -> usize {
         match self {
             FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath => 1,
-            FsOp::Rename | FsOp::CopyFile => 2,
+            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink => 2,
             FsOp::TempDir => 0,
         }
     }
@@ -597,6 +599,9 @@ pub enum OpCode {
     /// estable (fsync) y empuja `["ok"]` / `["err", msg]`. Primitivo `__sync_handle`;
     /// `std/fs` → `Result<int, string>`.
     SyncHandle,
+    /// M307 (IDEAS §97 #35): `fs.sync_data` — fdatasync: datos a disco sin el vuelco completo
+    /// de metadatos/caché (en APFS `sync_all` es F_FULLFSYNC, 4–5 ms por llamada).
+    SyncDataHandle,
     /// M115.3: saca `mode` (int) y `path` (string); cambia los bits de permiso del archivo
     /// (chmod, solo los 12 bits bajos) y empuja `["ok"]` / `["err", msg]`. Primitivo `__chmod`;
     /// `std/fs` → `Result<int, string>`.

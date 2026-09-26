@@ -152,7 +152,7 @@ fn dump_expr(e: &Expr) -> String {
                 pp
             )
         }
-        ExprKind::While { cond, body } => format!("(while {} {}){}", dump_expr(cond), dump_block(body), pp),
+        ExprKind::While { cond, body, label } => format!("(while{} {} {}){}", label.as_ref().map(|l| format!(":{l}")).unwrap_or_default(), dump_expr(cond), dump_block(body), pp),
         ExprKind::Block(b) => dump_block(b),
         ExprKind::StructLit { name, fields } => {
             let inits: String = fields
@@ -310,7 +310,7 @@ fn dump_stmt(st: &Stmt) -> String {
             let ns: String = names.iter().map(|n| format!(" {}", n.clone().unwrap_or_else(|| "_".to_string()))).collect();
             format!("({} (tuple{}) {}){}", kw, ns, dump_expr(value), pp)
         }
-        StmtKind::For { pat, iter, body } => {
+        StmtKind::For { pat, iter, body, .. } => {
             let p = match pat {
                 raylang::ast::ForPat::Single(n) => n.clone(),
                 raylang::ast::ForPat::Tuple(ns) => format!("(tuple{})", ns.iter().map(|n| format!(" {}", n.clone().unwrap_or_else(|| "_".to_string()))).collect::<String>()),
@@ -330,8 +330,8 @@ fn dump_stmt(st: &Stmt) -> String {
             Some(e) => format!("(return {}){}", dump_expr(e), pp),
             None => format!("(return){}", pp),
         },
-        StmtKind::Break => format!("(break){}", pp),
-        StmtKind::Continue => format!("(continue){}", pp),
+        StmtKind::Break { label } => format!("(break{}){}", label.as_ref().map(|l| format!(" {l}")).unwrap_or_default(), pp),
+        StmtKind::Continue { label } => format!("(continue{}){}", label.as_ref().map(|l| format!(" {l}")).unwrap_or_default(), pp),
         StmtKind::Expr(e) => format!("(expr {}){}", dump_expr(e), pp),
     }
 }
@@ -490,6 +490,10 @@ fn function_minima() {
     compare("fn main() -> int { 0 }", "sp_min.ray");
     // M191: break/continue como sentencias (dump `(break)`/`(continue)`).
     compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; if (i == 2) { continue; } break; } i }", "sp_break.ray");
+    // M300: break/continue como EXPRESIÓN (el mismo azúcar de bloque que `return e`, M220).
+    compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; let v = match (Option.Some(i)) { Option.Some(x) => x, Option.None => break }; let w = if (v == 1) { continue } else { v }; i = i + w; } i }", "sp_break_expr.ray");
+    // M308: bucles etiquetados (`outer: while`), `break outer` / `continue outer` (también como expresión).
+    compare("fn main() -> int { var i = 0; outer: while (i < 5) { i = i + 1; var j = 0; while (j < 5) { j = j + 1; if (j == 2) { continue outer; } if (i == 4) { break outer; } let _ = if (j == 3) { break outer } else { j }; } } i }", "sp_labels.ray");
     // M188: `from` como nombre de parámetro → el mismo mensaje de palabra reservada.
     compare("fn slice(bits: [int], from: int) -> [int] { bits }", "sp_from_param.ray");
     compare("fn nada() { }", "sp_unit.ray");

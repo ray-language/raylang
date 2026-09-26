@@ -360,7 +360,7 @@ impl Transpiler {
                     // Solo `variable[idx]` con la variable un arreglo LOCAL de elemento escalar y
                     // no-celda (una celda lleva otro RefCell por medio: fuera del recorte).
                     let ExprKind::Ident(name) = &array.kind else { return None };
-                    if local.contains_key(name) || t.cells.contains(name) {
+                    if local.contains_key(name) || t.is_cell(name) {
                         return None;
                     }
                     let Some(Type::Array(elem)) = t.lookup(name) else { return None };
@@ -413,6 +413,33 @@ impl Transpiler {
 
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    /// Declara una **var-celda** (B1): además del tipo deja la marca `cell_key(name)` en el ámbito,
+    /// para que [`is_cell`] sepa que ESTA declaración (y no un homónimo de otro brazo/bloque) es la
+    /// que vive en `Rc<RefCell<T>>`.
+    pub(super) fn declare_cell(&mut self, name: &str, ty: Type) {
+        self.declare(name, ty);
+        self.scopes.last_mut().unwrap().insert(cell_key(name), Type::Unit);
+    }
+
+    /// ¿`name` se lee/escribe como celda AQUÍ? M298 (findings 1.27.11 #1): `self.cells` es el
+    /// conjunto plano de candidatas por función (análisis por nombre), pero la decisión es LÉXICA:
+    /// manda la declaración más interna en ámbito. Un `var addr` capturado en un brazo de `match` y
+    /// un binding `addr` de patrón en otro brazo comparten nombre y antes el segundo se emitía con
+    /// `.borrow()` sobre un `Rc<str>` (E0599). Sin declaración a la vista (captura por un `send`
+    /// que redeclara sin `declare`) se conserva el veredicto del análisis.
+    pub(super) fn is_cell(&self, name: &str) -> bool {
+        if !self.cells.contains(name) {
+            return false;
+        }
+        let key = cell_key(name);
+        for scope in self.scopes.iter().rev() {
+            if scope.contains_key(name) {
+                return scope.contains_key(&key);
+            }
+        }
+        true
     }
 
     pub(super) fn in_scope_channels(&self) -> Vec<String> {
@@ -545,11 +572,11 @@ impl Transpiler {
                 };
                 // Var-celda (B1): capturada+mutada por una closure → `let n = Rc::new(RefCell::new(init))`
                 // (el Rc es inmutable; la mutación va por el RefCell). Las lecturas/escrituras la desenvuelven.
-                if self.cells.contains(name) {
+                if *mutable && self.cells.contains(name) {
                     write!(out, "let {} = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap();
                     self.emit_typed(out, value, &vty)?;
                     out.push_str("));\n");
-                    self.declare(name, vty);
+                    self.declare_cell(name, vty);
                     return Ok(());
                 }
                 out.push_str(if *mutable { "let mut " } else { "let " });
@@ -599,7 +626,7 @@ impl Transpiler {
                 match &target.kind {
                     ExprKind::Ident(name) => {
                         let tty = self.type_of(target)?;
-                        if self.cells.contains(name) {
+                        if self.is_cell(name) {
                             // Var-celda (B1): `n = e` → `*n.borrow_mut() = e`. El RHS va a un temp ANTES del
                             // borrow_mut: si lee la MISMA celda (`n = n + 1`), evita el doble borrow.
                             out.push_str("{ let __rt_v = ");
@@ -640,8 +667,10 @@ impl Transpiler {
             }
             // M191: los bucles se emiten como `while`/`for`/`loop` de Rust sin closures por medio,
             // así que `break`/`continue` van tal cual al bucle más interno.
-            StmtKind::Break => out.push_str("break;\n"),
-            StmtKind::Continue => out.push_str("continue;\n"),
+            StmtKind::Break { label: None } => out.push_str("break;\n"),
+            StmtKind::Continue { label: None } => out.push_str("continue;\n"),
+            StmtKind::Break { label: Some(l) } => writeln!(out, "break 'ray_{};", l).unwrap(),
+            StmtKind::Continue { label: Some(l) } => writeln!(out, "continue 'ray_{};", l).unwrap(),
             StmtKind::Return { value } => {
                 out.push_str("return");
                 if let Some(v) = value {
@@ -654,7 +683,10 @@ impl Transpiler {
                 self.emit_expr(out, e)?;
                 out.push_str(";\n");
             }
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, label } => {
+                // M308: la etiqueta del bucle va delante del `loop`/`for`/`while` de Rust que lo
+                // implementa (`'ray_outer: for …`); `break outer` → `break 'ray_outer`.
+                let lbl = label.as_ref().map(|l| format!("'ray_{}: ", l)).unwrap_or_default();
                 // `for (a, b) in <iterador que entrega tuplas>` (M40.2: `enumerate`/`zip`): el `next(it)`
                 // devuelve `Option<(A, B)>` → se destructura en el `match Some((a, b))`. Mismo `loop` que el
                 // caso simple pero ligando dos nombres.
@@ -679,7 +711,7 @@ impl Transpiler {
                     let binders: Vec<String> = names.iter().map(binder).collect();
                     out.push_str("{ let __rt_it = ");
                     self.emit_expr(out, expr)?;
-                    write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some((", mangle(next_fn)).unwrap();
+                    write!(out, "; {}loop {{ match {}(__rt_it.clone()) {{ Some((", lbl, mangle(next_fn)).unwrap();
                     out.push_str(&binders.join(", "));
                     out.push_str(")) => ");
                     self.scopes.push(HashMap::new());
@@ -703,7 +735,7 @@ impl Transpiler {
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
-                    write!(out, "for ({}, {}) in __ray_pairs(&", kn, vn).unwrap();
+                    write!(out, "{}for ({}, {}) in __ray_pairs(&", lbl, kn, vn).unwrap();
                     self.emit_expr(out, expr)?;
                     out.push_str(") ");
                     self.scopes.push(HashMap::new());
@@ -749,13 +781,13 @@ impl Transpiler {
                                 writeln!(out, "    let {} = {}.borrow();", guard, mangle(name)).unwrap();
                                 self.hoisted_borrows.insert(name.clone(), guard);
                             }
-                            write!(out, "    for {} in __rt_lo..__rt_hi ", mangle(&var)).unwrap();
+                            write!(out, "    {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
                         } else {
                             // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
                             // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
                             // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
                             // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
-                            write!(out, "for {} in (", mangle(&var)).unwrap();
+                            write!(out, "{}for {} in (", lbl, mangle(&var)).unwrap();
                             self.emit_expr(out, start)?;
                             out.push_str(")..(");
                             self.emit_expr(out, end)?;
@@ -786,7 +818,7 @@ impl Transpiler {
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
                         if is_string {
-                            write!(out, "for {} in ", mangle(&var)).unwrap();
+                            write!(out, "{}for {} in ", lbl, mangle(&var)).unwrap();
                             self.emit_expr(out, expr)?;
                             out.push_str(".chars() ");
                             self.scopes.push(HashMap::new());
@@ -803,7 +835,7 @@ impl Transpiler {
                             self.emit_expr(out, s)?;
                             out.push_str("; let __rt_spsep = ");
                             self.emit_expr(out, sep)?;
-                            out.push_str("; for __rt_spw in __rt_sps.split(&*__rt_spsep) { let ");
+                            write!(out, "; {}for __rt_spw in __rt_sps.split(&*__rt_spsep) {{ let ", lbl).unwrap();
                             out.push_str(&mangle(&var));
                             out.push_str(" = Rc::<str>::from(__rt_spw); ");
                             self.scopes.push(HashMap::new());
@@ -820,7 +852,7 @@ impl Transpiler {
                             // el incremento va ANTES del cuerpo → `continue` avanza correctamente.
                             out.push_str("{ let __rt_it = ");
                             self.emit_expr(out, expr)?;
-                            out.push_str(".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; while __rt_i < __rt_n { let ");
+                            write!(out, ".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; {}while __rt_i < __rt_n {{ let ", lbl).unwrap();
                             out.push_str(&mangle(&var));
                             out.push_str(" = __rt_it.borrow()[__rt_i].clone(); __rt_i += 1; ");
                             self.scopes.push(HashMap::new());
@@ -853,7 +885,7 @@ impl Transpiler {
                         };
                         out.push_str("{ let __rt_it = ");
                         self.emit_expr(out, expr)?;
-                        write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some(", mangle(next_fn)).unwrap();
+                        write!(out, "; {}loop {{ match {}(__rt_it.clone()) {{ Some(", lbl, mangle(next_fn)).unwrap();
                         out.push_str(&mangle(&var));
                         out.push_str(") => ");
                         self.scopes.push(HashMap::new());
@@ -935,7 +967,7 @@ impl Transpiler {
         // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
         let mut refd = std::collections::HashSet::new();
         idents_of_block(&fnexpr.body, &mut refd);
-        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c) && self.is_cell(c)).cloned().collect();
         // Toda captura de HEAP (no solo las celdas) se PRE-CLONA antes del `move`: dos closures
         // hermanos que capturan la misma local no-Copy (p. ej. los dos de `cors(origin)`) movían
         // la primera y el segundo veía E0382. Clonar un Rc comparte el valor inmutable — misma
@@ -1120,7 +1152,7 @@ impl Transpiler {
             ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
             ExprKind::Ident(name) if name == "std::math::E" => out.push_str("std::f64::consts::E"),
             ExprKind::Ident(name) => {
-                if self.cells.contains(name) {
+                if self.is_cell(name) {
                     // Var-celda (B1): leer = desenvolver la celda con un clon del valor (`n.borrow().clone()`).
                     // clone() vale para todo tipo (para int es copia); mantiene la semántica de "leer clona".
                     write!(out, "{}.borrow().clone()", mangle(name)).unwrap();
@@ -1263,10 +1295,21 @@ impl Transpiler {
                     self.emit_expr(out, eb)?;
                 }
             }
-            ExprKind::While { cond, body } => {
-                out.push_str("while ");
-                self.emit_expr(out, cond)?;
-                out.push(' ');
+            ExprKind::While { cond, body, label } => {
+                // M308: etiqueta → `'ray_l: loop`/`'ray_l: while`.
+                if let Some(l) = label {
+                    write!(out, "'ray_{}: ", l).unwrap();
+                }
+                // M301 (IDEAS §97 #3): `while (true)` sin `break` DIVERGE para el checker (una
+                // función `-> Result` puede terminar en él); en Rust solo `loop` tiene tipo `!`
+                // (`while true` es `()` y no compila como cola de esa función).
+                if matches!(cond.kind, ExprKind::Bool(true)) {
+                    out.push_str("loop ");
+                } else {
+                    out.push_str("while ");
+                    self.emit_expr(out, cond)?;
+                    out.push(' ');
+                }
                 self.emit_block(out, body)?;
             }
             ExprKind::Block(b) => self.emit_block(out, b)?,
@@ -1386,7 +1429,7 @@ impl Transpiler {
                             // N6a: receptor = variable local (no celda) → `x.borrow()` directo, sin el
                             // `Rc::clone` intermedio (`borrow` toma &self; el clon solo movía refcounts).
                             ExprKind::Ident(name)
-                                if !self.cells.contains(name) && self.lookup(name).is_some() =>
+                                if !self.is_cell(name) && self.lookup(name).is_some() =>
                             {
                                 out.push_str(&mangle(name));
                                 out.push_str(".borrow()");
@@ -2284,7 +2327,7 @@ fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
                 && split_uses_block(name, then_branch, ks)
                 && else_branch.as_ref().is_none_or(|x| split_uses_expr(name, x, ks))
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, .. } => {
             split_uses_expr(name, cond, ks) && split_uses_block(name, body, ks)
         }
         ExprKind::Block(b) => split_uses_block(name, b, ks),
@@ -2312,7 +2355,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
         StmtKind::LetTuple { names, value, .. } => {
             !names.iter().flatten().any(|n| n == name) && split_uses_expr(name, value, ks)
         }
-        StmtKind::For { pat, iter, body } => {
+        StmtKind::For { pat, iter, body, .. } => {
             let binds = match pat {
                 crate::ast::ForPat::Single(n) => n == name,
                 crate::ast::ForPat::Tuple(ns) => ns.iter().flatten().any(|n| n == name),
@@ -2348,7 +2391,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
             }
             target_reads(name, target, ks) && split_uses_expr(name, value, ks)
         }
-        StmtKind::Break | StmtKind::Continue => true, // sin expresiones: como `return;`
+        StmtKind::Break { .. } | StmtKind::Continue { .. } => true, // sin expresiones: como `return;`
         StmtKind::Return { value } => value.as_ref().is_none_or(|v| split_uses_expr(name, v, ks)),
         StmtKind::Expr(e) => split_uses_expr(name, e, ks),
     }

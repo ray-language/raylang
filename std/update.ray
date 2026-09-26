@@ -355,11 +355,11 @@ fn absolutize(base: string, loc: string) -> string {
     match (parse_url(base)) {
         Result.Ok(u) => {
             let scheme = if (u.tls) { "https://" } else { "http://" };
-            scheme + u.host + ":" + to_string(u.port) + if (loc.starts_with("/")) {
-                loc
-            } else {
-                "/" + loc
-            }
+            scheme
+                + u.host
+                + ":"
+                + to_string(u.port)
+                + if (loc.starts_with("/")) { loc } else { "/" + loc }
         },
         Result.Err(_) => loc,
     }

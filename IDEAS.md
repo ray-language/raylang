@@ -3727,3 +3727,41 @@ Lo que se revisó y está bien: framing HTTP (TE sobre CL, RFC 7230), límites d
 conexiones/tiempo, `static_response` sin `..`, templates con autoescape (`{{& }}` explícito),
 MySQL/PostgreSQL con sentencias preparadas reales, `ahash` con semilla aleatoria, saltos de
 redirección acotados. Impacto: paquetes `web`/`net` y stdlib; ningún cambio en el lenguaje.
+
+## 97. El barrido de `ray-apps` a 1.27.11: lo que queda tras los bugs (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` (25 sep 2026): 37 hallazgos al actualizar los 26 proyectos.
+Los 9 bugs (#1, #8, #9, #10, #21, #22, #23, #36 → ✅ **M298**; los 8 repros nativos de rayrelay
+ya estaban resueltos) salieron primero. El resto, por arcos:
+
+| # | Hallazgo | Clase | Estado |
+|---|---|---|---|
+| 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | ✅ **M300**: el mismo azúcar de bloque que `return e` (M220) en los dos parsers; `{ break }` como cola sin `;`; fmt lo conserva; tres motores |
+| 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | ✅ **M301**: `expr_diverges` + espejo selfhost; el nativo emite `loop` para `while (true)` (en Rust solo `loop` tiene tipo `!`) |
+| 4 | `break` etiquetado | lenguaje | ✅ **M308**: `outer: while`/`outer: for` + `break outer`/`continue outer` (también como expresión) en parser, checker (etiquetas por función; divergencia), VM, intérprete, nativo (`'ray_outer:`), fmt y los espejos selfhost |
+| 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | ✅ **M302**: `==` ya existía; los bounds `Eq`/`Show` de una tupla se satisfacen por composición (closure sintetizado en `dict_for`, tres motores) |
+| 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | ✅ **M303**: la regla M204 de los brazos de `match` aplicada al `if` (también `[]`), Rust + selfhost |
+| 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | ✅ **M307**: `is_const_literal` admite tuplas y nombres de constantes declaradas antes; los tres motores ya inyectaban la expresión |
+| 11 | `ray doc` de constantes de módulo | tooling | ✅ **M305**: `pub const` con firma, valor literal y `///`; también en los listados |
+| 12 | El error por campos nuevos de `ui.MenuItem` sugiere `ui.item(...)` | diagnósticos | ✅ **M299**: todo campo ausente en un struct de módulo sugiere el constructor público del módulo que lo devuelve (Rust + selfhost) |
+| 13 | `assert_eq` de enteros: mensaje/octal | tooling | menor — sin cambio: para permisos, `assert_eq(to_string(mode), "384")` o un `assert` con mensaje propio; un `assert_eq` con formato rompería la simetría `Show` |
+| 14 | `set_read_timeout` no aplica a `tcp_accept` (la doc dice «cualquier espera») | runtime/doc | ✅ **M306**: aplica (VM: el opcode consume la marca del deadline; intérprete y nativo hilos: accept no bloqueante hasta el plazo; nativo fibras: `wait_readable_timeout`) → `"read timeout"` |
+| 15 | `tcp_connect_timeout` que aparque la fibra | runtime | ✅ **M306**: el dial corre en un hilo auxiliar y la fibra aparca sobre un waker UDP (VM) / `run_blocking` (nativo fibras); el connect no-bloqueante puro (EINPROGRESS + SO_ERROR) queda para cuando haya sockets crudos |
+| 16 | net: `local_token_ok(req, token)` público para servidores con accept propio | net | ✅ **M306** (net 0.3.6) |
+| 17 | README de `web`: `listen` reconstruye la app por petición (fuga de recursos si el builder abre conexiones) | doc/web | ✅ **M299** aviso en el README (el builder corre por CONEXIÓN); `on_close` sigue PROPUESTO |
+| 18 | gzip a nivel `web` (`app.gzip()` o en `static_mount`) | web | ✅ **M306** (web 0.4.5): `app.gzip()` aplica la negociación de `webserver.gzip` a toda respuesta terminada |
+| 19 | README de `net`/`web` enseñan `git+https://…` en vez del índice | doc | ✅ **M299**: READMEs del monorepo y cabecera generada por `tools/publish-packages.sh` (`ray add` / `^ver` primero; git directo solo sin índice) — se refleja en los espejos en la próxima publicación |
+| 20 | MANUAL §15: `try_send` para fan-out desde un actor (`send` sobre canal cerrado es fatal) | doc | ✅ **M299** («Fan-out desde un actor» en el patrón actor) |
+| 24 | `json.Json` implementa `ToJson` (incrustar valores dinámicos/null en el builder) | stdlib | ✅ **M304** |
+| 25 | `fs.symlink` | stdlib | ✅ **M304**: `symlink(target, link)` (primitivo `__symlink`, tres motores; Windows elige archivo/directorio por el destino) |
+| 26 | `last_index_of` en string y bytes | stdlib | ✅ **M304** (en raylang, sobre `chars()`/`b[i]`) |
+| 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | ✅ **M299** (sigue vetado el literal dentro de un patrón de variante, que es lo que de verdad falla) |
+| 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | ✅ **M307** documentado (MANUAL, llms): `ray://app`/`mount_embed` son de escritorio, el móvil carga por HTTP local (→ `listen_local`); `_deliver_json` desde 1.12.1, regenerar el bundle. Implementar `ray://app` en WKWebView/WebViewAssetLoader sigue PROPUESTO |
+| 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | ✅ **M299**: tabla en REFERENCE §8 (+en), sección «Los métodos de `Option` y `Result`» en el MANUAL, línea en `llms.txt` (que además dice cuáles NO existen → #30) |
+| 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | ✅ **M304** (+ `Result.unwrap_or_else`; `Option.map` ya existía) |
+| 31 | `bytes.index_of_from(needle, start)` | stdlib | ✅ **M304** (sin copiar; O(n·m) simple sobre `b[i]`) |
+| 32 | Deque con iteración e índice | stdlib | ✅ **M304**: `get`, `peek_back`, `to_array`, `iter` (instantánea) |
+| 33 | `rpc` sirviendo en puerto efímero (`serve_on`) | rpc | ✅ **M306** (rpc 0.1.1): `serve_on[_shutdown[_limits]]`; todo `serve*` delega en el bucle sobre listener |
+| 34 | `ray_doc` con módulos de colecciones y de paquetes | MCP | ✅ **M305**: `std/collections/deque` por ruta; con `path`, listado de un módulo del proyecto o de `.ray-deps` (`rpc/rpc`, `web/framework`) |
+| 35 | Coste de `fs.sync` en APFS (`F_FULLFSYNC`, 4–5 ms): documentar u ofrecer `fdatasync` | doc/runtime | ✅ **M307**: `fs.sync_data(h)` (fdatasync; VM/intérprete/nativo) + aviso del coste en REFERENCE |
+

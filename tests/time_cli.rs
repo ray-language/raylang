@@ -25,6 +25,11 @@ const EXPECTED: &[&str] = &[
     "true",                          // sin offset = Err
     "true",                          // texto sobrante = Err
     "Thu, 29 Feb 2024 00:00:00 GMT", // 29-feb bisiesto sí parsea
+    // M298 (findings 1.27.11 #23): formas básicas y fecha sola
+    "1994-11-06T00:00:00Z",          // date_stamp `YYYYMMDD`
+    "1994-11-06T08:49:37Z",          // `YYYYMMDDTHHMMSS+HHMM` normalizado
+    "1994-11-06T00:00:00Z",          // `YYYY-MM-DD` = medianoche UTC
+    "true",                          // básica incompleta = Err
     "true",                          // now_utc coherente con now()
     "1h2m3s",
     "45s",

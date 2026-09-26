@@ -14595,3 +14595,264 @@ siembra de la cookie, los orígenes propio/no-http/ajeno y el proxy). Hallazgo l
 soltar el lector de stdout del servidor hijo mata al servidor por EPIPE en su segundo `print` —
 la conexión aparecía «reseteada por el peer»—; el lector se drena en un hilo.
 
+## 282. M298 — Los bugs del barrido de `ray-apps` a 1.27.11 (sep 2026)
+
+Origen: `ray-apps/RAYLANG-FINDINGS.md` (25 sep 2026), el resumen de actualizar los 26 proyectos
+de `ray-apps/` a 1.27.11 — 37 hallazgos, de los que 9 eran bugs (resultado incorrecto o no
+compila). Todos reproducidos antes de tocar nada; el resto (ergonomía, huecos de API, doc
+desalineada) está clasificado en IDEAS §97 para arcos propios.
+
+**[36] El override léxico no cubría UFCS.** M270 hizo el override del prelude léxico a la raíz,
+pero solo en la llamada por nombre (`check_named_call_renamed`); `check_ufcs` resolvía el nombre
+pelado contra `self.functions` y `headers.get(k)` en `net/trace` iba a la `get` del usuario. La
+misma regla, en el mismo sitio de la cadena de resolución (paso 3, «nombre pelado»). `std/json`
+no lo delataba porque llama `get(obj, k)` directo.
+
+**[1] La celda del transpilador era por nombre.** `cell_vars(body)` decide qué `var` van en
+`Rc<RefCell<T>>` por nombre en toda la función, y `self.cells` era un set plano: un binding de
+patrón `addr` en otro brazo, capturado por su closure, se leía con `.borrow()`. Ahora la celda
+es **léxica**: `declare_cell` deja una marca en el ámbito (`cell_key(name)`) y `is_cell` consulta
+la declaración más interna en `self.scopes` (la limitación «shadowing de una var-celda» anotada
+en B1 desaparece de paso). La declaración del `var` sigue consultando el set del análisis.
+
+**[8] El índice cacheado no se refrescaba solo.** `ensure_index_clone` clona una vez y solo
+`ray update` lo refrescaba; un requisito insatisfecho decía «no version … satisfies» sin
+insinuar que la copia local podía estar vieja. `LazyIndex` refresca UNA vez por resolución al
+primer error «satisfies»/«is not in the index» y reintenta (`  refreshing the package index`);
+sin red, aviso y el error original. `ray add`/`ray search` refrescan antes de preguntar
+(best-effort), como `cargo add` actualiza su índice. Test con un índice git local que gana una
+versión después del clon (`registry_cli`).
+
+**[9] `ray fmt` expandía un `if` de valor dentro de una expresión.** En la pasada de envuelto
+todo `if` sub-expresión ponía `expand_block`, y `is_multiline_form` lo excluía del reparto de
+listas y cadenas: el resultado era `} else {` en medio de un `+` o de los campos de un struct.
+Un `if` **compacto** (ramas de un solo tail no-bloque, sin `else if`) como sub-expresión se
+emite en una línea si cabe en el ancho (medido desde la sangría del contexto), y el contenedor
+reparte; si no cabe, se expande como antes (`examples/stdlib/markdown.ray` lo cubre: dos
+operandos, sin cadena que repartir). `std/update.ray` cambió de forma con la regla nueva.
+
+**[10] `ray test` contaba solo los fallos del checker.** El bucle de carga marcaba
+`frontend_failed` sin sumar a `compile_failures`; con un syntax error el resumen decía «0
+suite(s) failed to compile ✗». Lo «intermitente» del hallazgo era eso: el mismo backtick fallaba
+unas veces en el lexer y otras en el checker según cómo quedara la cadena.
+
+**[23] `date_stamp` producía lo que `parse_iso8601` rechazaba.** `date_stamp` es el datestamp de
+AWS SigV4 (`YYYYMMDD`, correcto); el parser era RFC 3339 estricto. Decisión: el parser acepta las
+formas **básicas** que el propio módulo produce y la fecha sola (medianoche UTC) — se EXPANDEN a
+la forma extendida (`expand_basic`) y siguen por el parser estricto de siempre, que cita la
+entrada original en sus errores. Vectores nuevos en `time_demo.ray`/`time_cli`.
+
+**[21] El pipe del SO era un suelo de 64 KiB.** `open_latency` dimensionaba anillo, buffers y
+chunk, pero la cola entre el programa y el alimentador era un `pipe(2)` (64 KiB en macOS): a
+22050 Hz mono son 1,5 s encolados hicieran lo que hicieran los demás. Medido con la sonda del
+hallazgo antes/después (real / null): 22050×1 @30 ms 1580→140 / 1490→40; @500 2060→1100;
+44100×2 @30 400→60; @1000 1480→2220 (la cola es ~latencia + el anillo del backend, también
+~latencia). Decisión: `socketpair(AF_UNIX, SOCK_STREAM)` con `SO_SNDBUF`/`SO_RCVBUF` = octetos de
+la latencia (mínimo 2 KiB) en los dos extremos (en BSD manda el de recepción del par; en Linux el
+de envío), `SO_NOSIGPIPE` en macOS. Todo lo demás (no-bloqueante + kqueue en el extremo de
+escritura, `read` bloqueante, FIONREAD en `drain`) funciona igual sobre un socket. Windows sigue
+con su pipe anónimo (4 KiB: no tiene el problema).
+
+**[22] `played_ms` fallaba en la salida siguiente.** El mapa fd→`Ctl` se limpiaba en el hilo
+alimentador al terminar, por clave; el SO reutiliza el fd del extremo de escritura en cuanto se
+cierra, así que una salida abierta justo después heredaba la clave y el alimentador viejo borraba
+SU entrada. `forget_ctl` borra solo si la entrada sigue siendo la propia (`Arc::ptr_eq`). Test de
+seis ciclos seguidos en `audio_cli` junto al de la cola acotada.
+
+## 283. M299 — El lote barato del barrido: diagnóstico y documentación (sep 2026)
+
+Origen: IDEAS §97 (los hallazgos no-bug de `RAYLANG-FINDINGS.md`), empezando por lo que cuesta
+poco y evita lo que más se repitió en las apps.
+
+**[12] El constructor como pista.** `ui.MenuItem` ganó `icon/enabled/checked` en 1.15 y dos apps
+que lo construían a mano dejaron de compilar con «missing field 'icon'» y nada más. La regla
+general, no un caso especial: si el struct es de un módulo (`M::Nombre`) y `M` tiene una función
+**pública** cuyo retorno es ese struct, el error la sugiere con los tipos de sus parámetros
+(`ui.item(string, string, string)`); la primera por orden de nombre, determinista. Un struct de
+la raíz no lleva pista. El espejo selfhost emite el mismo texto (nunca se dispara ahí: es
+pre-loader y no ve módulos, pero la regla de byte-identidad no admite excepciones).
+
+**[19] El índice primero.** Los READMEs del monorepo enseñaban `path:` y la cabecera que
+`tools/publish-packages.sh` antepone en los espejos, el índice y el `git+https://…@vX` al mismo
+nivel; ahora `ray add`/`^ver` es el camino y el git directo queda para el pin sin índice. Los
+espejos lo recogen en la próxima publicación (`--refresh-readme`).
+
+**[17], [20], [27], [29] Documentación.** El builder de `web.listen` corre por CONEXIÓN (no por
+petición: la fibra de cada conexión lo llama una vez y sirve su keep-alive con esa App) — el
+README lo dice y manda el estado compartido al patrón actor. Ese patrón gana el párrafo de
+fan-out: `send` sobre un canal cerrado es fatal y sobre uno lleno bloquea al actor; `try_send`
+y dar de baja al suscriptor. `llms.txt` decía que no había patrones anidados (M287 los trajo):
+ahora distingue lo que sí falla (un literal dentro de un patrón de variante). Y los métodos de
+`Option`/`Result` que ya existían (`OptionOps`/`ResultOps` del prelude) no estaban en ninguna
+referencia — por eso las apps llenas de `match` de cinco líneas para un default: tabla en
+REFERENCE, sección en el MANUAL, línea en `llms.txt` que además dice cuáles NO existen (#30).
+
+## 284. M300 — `break` y `continue` como expresión (sep 2026)
+
+Origen: IDEAS §97 #2, pedido por tres apps del barrido (raybot/raysync, raycode, raygate):
+`match (r) { Result.Err(e) => break, … }` era «expected an expression, found Break» y obligaba a
+`=> { break; },`. La decisión es la de M220 para `return`, sin añadir nada al sistema de tipos:
+en posición de expresión, `break`/`continue` son azúcar del bloque `{ break; }`, anotado en el
+mismo `return_expr_sites` para que `ray fmt` lo reemita como se escribió. Todo lo demás ya
+existía: el análisis de divergencia trataba `break`/`continue` como `return` (M191), así que el
+brazo cede el tipo al otro; y la restricción a la espina de sentencias del bucle (`break_ok`) se
+aplica tal cual, porque el bloque desazucarado pasa por el mismo `check_expr` — `1 + break`
+sigue siendo el error de M191 y `=> continue` fuera de un bucle, «outside a loop». Como cola de
+un bloque (`if (c) { continue } else { v }`) la sentencia no necesita `;`, como `return e`. El
+parser autoalojado aplica el mismo azúcar; el corpus de paridad incluye el caso; tres motores en
+`tests/findings_batch_cli.rs` (la suite de los hallazgos de lenguaje de §97).
+
+## 285. M301–M303 — Tres huecos del checker que las apps rodeaban (sep 2026)
+
+Origen: IDEAS §97 #3, #5 y #6. Los tres eran rodeos visibles en el código de las apps: un
+`Result.Err("unreachable")` muerto tras un `while (true)`, un `match` de cinco líneas donde bastaba
+`assert_eq` sobre una tupla, y una anotación `: Option<int>` en un `let` cuyo `if` ya lo decía.
+
+**[3] `while (true)` diverge (M301).** `expr_diverges` no sabía nada de bucles. Ahora un `while`
+cuya condición es el literal `true` y cuyo cuerpo no contiene un `break` PROPIO (la búsqueda va por
+la espina de sentencias —bloques, ramas, brazos, valores de `let`/asignación/`return`— y se corta
+en un bucle anidado o una closure; en cualquier otra posición un `break` ya es error de M191)
+diverge como `return`. Solo el literal: `while (c)` con `c: bool` puede no entrar. La consecuencia
+que no se veía: el transpilador emitía `while true { … }`, que en Rust tiene tipo `()` y no
+compila como cola de una función con retorno — solo `loop` tiene tipo `!`, así que `while (true)`
+se emite como `loop`. Espejo en el checker autoalojado y casos en su corpus de veredictos.
+
+**[5] Tuplas con `Eq`/`Show` (M302).** `==` sobre tuplas ya existía (M27.1); lo que fallaba era
+el BOUND: `dict_for` busca una clave de tipo y una tupla no la tiene (una por aridad). Se rechazó
+un impl en el prelude (`impl<A: Eq, B: Eq> Eq for (A, B)`: una clave por aridad, el parser de
+impls sobre tipos-tupla y el prelude cargado en el selfhost) a favor de lo que ese impl habría
+producido: el closure que `synth_dict_closure` sintetiza para un impl genérico acotado, escrito
+directo — `eq` es la conjunción de los `eq` de los elementos sobre `t.i`; `show` concatena
+`"(" … ", " … ")"`, la misma forma que el `RayShow` del nativo para tuplas. Recursivo: tuplas de
+tuplas y arreglos de tuplas (el impl genérico de `[T]` pide el diccionario del elemento y lo
+recibe). Solo `Eq` y `Show`: `Ord`/`Hash` siguen diciendo «cannot implement». Es puro lowering
+(el AST sintetizado va a los tres motores tal cual); el selfhost no tiene tuplas, nada que
+espejar. `print(tupla)`/`to_string(tupla)` siguen fuera: la representación en VM/intérprete es
+un arreglo y saldría `[1, a]`, distinto del nativo — el `show` compuesto es el camino honesto.
+
+**[6] La otra rama del `if` fija `T` (M303).** El `if` sin tipo esperado chequeaba `then` y `else`
+sin pasarse información; `match` ya tenía M204 (brazos diferidos hasta conocer el tipo). La misma
+idea con dos ramas: si `then` tipa sin variables libres, `else` se chequea con ese esperado; si
+`then` falla con «could not infer»/«cannot infer the type of []», se chequea `else` primero y
+`then` se repite con su tipo (recortando el ámbito que la pasada fallida dejó a medias, como hace
+`check_function` en modo acumulativo). Si ninguna fija nada, el error original. Espejo en el
+selfhost con su `type_has_var(t, c.tparams)`.
+
+## 286. M304 — La stdlib que las apps rodeaban (sep 2026)
+
+Origen: IDEAS §97 #24, #25, #26, #30, #31, #32 — seis huecos pequeños, cada uno con su rodeo en
+alguna app (un bucle a mano para el último `:`, un `sub_bytes` por búsqueda en el parser RESP,
+un `match` de cinco líneas donde iba un `and_then`, un deque rotado entero con pop/push para
+recorrerlo, `ln -s` por `std/process`, y un builder JSON que no admitía `null`).
+
+Decisiones: (1) `last_index_of` e `index_of_from` van **en raylang** en el prelude — sobre
+`chars()` (índice O(1) en un arreglo) y `b[i]` (O(1)): O(n·m) simple, sin un primitivo nuevo por
+motor; el día que un perfil lo pida se baja a builtin sin cambiar la firma. (2) Los combinadores
+son métodos más de `OptionOps`/`ResultOps` (M61.3), con sus parámetros de tipo propios como ya
+hacía `ok_or<E>`; `Option.map` ya existía y `llms.txt` decía que no. (3) `Deque` no implementa
+`Iterator` (un `for x in d` que consumiera la cola sería una trampa): `iter(d)` es una
+instantánea perezosa (`to_array(d).iter()`), y `get(d, i)`/`peek_back` acceden sin mover nada.
+(4) `fs.symlink` sí es un primitivo (`FsOp::Symlink`, dos rutas, el mismo camino que `rename`):
+`std::os::unix::fs::symlink`, y en Windows `symlink_dir`/`symlink_file` según el destino (relativo
+al directorio del enlace, como hace el SO). Byte-idéntico en VM/intérprete/nativo
+(`__ray_symlink_prim`). (5) `impl ToJson for Json` es `stringify(self)`: el builder acepta
+`Json.JNull` y cualquier valor de `parse`. Los seis en `tests/findings_batch_cli.rs`, tres motores.
+
+## 287. M305 — `ray doc` sabe de constantes, colecciones y paquetes (sep 2026)
+
+Origen: IDEAS §97 #11 y #34. `ray doc crypto.PASSWORD_ITERATIONS` negaba una constante que
+`print` daba; `ray_doc "std/collections/deque"` fallaba por la `/` interior (solo valía `deque`);
+y `ray_doc "rpc/rpc"` con `path` no listaba nada porque el modo proyecto solo resolvía
+`modulo.simbolo`. Tres huecos del mismo resolutor (`mcp::doc_text_at`), cerrados en su sitio:
+`source_symbol_doc` y los listados incluyen los `pub const` (firma con el valor si es literal, y
+sus `///`); `std_module_listing` quita también el prefijo `collections/`; y `project_module_listing`
+lista un módulo del proyecto o de `.ray-deps` por su stem, con el directorio como pista
+(`rpc/rpc`, `web/framework`) — sobre la misma caminata de archivos que `project_doc_text`, ahora
+compartida (`project_files`). El listado de un módulo (`module_surface`) es una sola función para
+los tres orígenes. #13 (`assert_eq` en octal) queda sin cambio, anotado en IDEAS.
+
+## 288. M306 — Red: plazos que aparcan y huecos de `net`/`web`/`rpc` (sep 2026)
+
+Origen: IDEAS §97 #14, #15, #16, #18, #33.
+
+**[14] El accept con plazo.** La VM ya aparcaba el accept con el `deadline` de `read_timeouts`,
+pero al vencer la fibra despertaba, reintentaba el accept no bloqueante y volvía a aparcar: el
+opcode no consumía la marca (`take_read_timeout`) como sí hacen las lecturas. Un `if` al
+principio del opcode. En el intérprete y en el nativo hilo-por-tarea no hay park: `SO_RCVTIMEO`
+no rige el `accept` en BSD/macOS, así que el plazo se aplica a mano (accept no bloqueante + espera
+de 2 ms hasta el deadline). Lección: el flag no-bloqueante es de la *open file description* y el
+clon (`try_clone`) lo comparte con el listener del registro — hay que reponerlo al salir, o el
+siguiente accept sin plazo falla con WouldBlock (lo cazó la sonda en modo hilos). En fibras,
+`wait_readable_timeout` con el `rd_to` del ctx, como las lecturas.
+
+**[15] El dial que no retiene al worker.** `TcpStream::connect_timeout` es bloqueante y el std
+no expone el connect no bloqueante (EINPROGRESS + interés de escritura + SO_ERROR): hacerlo bien
+exige sockets crudos en tres SO. La forma elegida usa lo que ya existe: en la VM el connect corre
+en un hilo auxiliar y la fibra **aparca sobre un socket UDP "waker"** registrado como handle
+(kqueue/epoll/WSAPoll lo entienden; un pipe no valdría en Windows); el hilo manda un datagrama al
+terminar y el opcode re-ejecutado recoge el resultado por el handle del waker, que ocupa la
+posición del host en la pila. En el nativo con fibras, `run_blocking` (el pool de las `extern
+blocking`). Intérprete e hilo-por-tarea siguen bloqueando su propio hilo, que es lo correcto ahí.
+Solo `tcp_connect_timeout` con `ms > 0`: un `tcp_connect` a secas sigue siendo la llamada
+directa (rápida en la práctica; el coste del hilo + waker no se paga en el camino caliente).
+Sonda de la prueba: con un solo worker, la fibra principal cuenta ticks mientras otra marca a
+`10.255.255.1` con 1200 ms de plazo; antes contaba cero.
+
+**[16], [18], [33] Los huecos de los paquetes.** `local_token_ok` es la mitad pública de la guarda
+de M297 para un handler crudo (net 0.3.6). `app.gzip()` aplica la negociación de
+`webserver.gzip` a la `Response` ya convertida — un `finish` en `handle`, no un hook `after` sobre
+`Res` (web 0.4.5). `serve_on*` en rpc: todo `serve*` delega ya en el bucle sobre listener
+(rpc 0.1.1). Tests: `local_guard_cli` (handler crudo), `framework_cli` (`/big` del demo con y
+sin `Accept-Encoding`), `rpc_cli` (`serve_on` con puerto efímero), `findings_batch_cli` (accept
+con plazo en tres motores; connect aparcado en VM determinista y nativo).
+
+## 289. M307 — Constantes con tuplas, `fs.sync_data` y la verdad sobre el móvil (sep 2026)
+
+Origen: IDEAS §97 #7, #35, #28/#37.
+
+**[7] Constantes.** M274 abrió las constantes a arreglos de literales; una tabla `(id, asset)`
+seguía siendo «must be a literal». Como los tres motores ya tratan la constante como su
+expresión inyectada en cada uso (la VM compila el literal en el sitio, el intérprete evalúa el
+`Expr`, el nativo emite `fn NAME() -> T`), bastó con que `is_const_literal` admita tuplas y el
+nombre de otra constante declarada ANTES (el orden es el del archivo: el checker las registra en
+secuencia y una referencia hacia adelante es el error de siempre, con el mensaje ampliado). Sin
+espejo: el checker autoalojado no tiene constantes.
+
+**[35] `sync_data`.** Medido por rayq/raykv: `fs.sync` en APFS cuesta 4–5 ms porque `sync_all`
+es `F_FULLFSYNC` (vuelca la caché del disco). `sync_data` (fdatasync) es la palanca honesta para
+el fsync-por-registro: barato, con la letra pequeña documentada (un corte de luz puede perder los
+últimos registros; `sync` en los checkpoints). Primitivo nuevo `__sync_data_handle` en los tres
+motores, el mismo camino que `__sync_handle`.
+
+**[28/37] El móvil.** Confirmado en el código: `bundle_ios.rs`/`bundle_android.rs` cargan la URL
+de `ui.open` por HTTP (`loadRequest`/`loadUrl`) — no hay `WKURLSchemeHandler` ni
+`WebViewAssetLoader` para `ray://app`, así que una app escritorio+móvil conserva el servidor
+local en el móvil (con `listen_local`, M297). Y `_deliver_json` viaja en los shells desde 1.12.1
+(M225): lo documentado es cómo detectar un shell viejo y que regenerar el bundle preserva firma,
+keystore e icono. Implementar `ray://app` en los shells móviles queda propuesto en §97.
+
+## 290. M308 — Bucles etiquetados (sep 2026)
+
+Origen: IDEAS §97 #4 — raycode conservaba una bandera para salir de dos bucles anidados en su
+bucle SSE. Sintaxis: `etiqueta: while (…) {…}` / `etiqueta: for … {…}` en posición de sentencia
+(una etiqueta no es una expresión: `x: 1;` sigue siendo el error de siempre; el parser mira tres
+tokens —`IDENT ':' while|for`— y solo entonces la consume), y `break etiqueta` /
+`continue etiqueta`, también como expresión (M300). Un `while` etiquetado sigue el camino
+normal de la forma-con-bloque: al final de un bloque es su cola, como uno sin etiqueta — el
+primer intento lo empujaba siempre como sentencia y `ray fmt` le colgaba un `;` fantasma.
+
+Decisiones: (1) la etiqueta vive en los nodos (`ExprKind::While { label }`, `StmtKind::For {
+label }`, `Break { label }`), no en una sentencia envolvente: cada recorrido del AST que destruye
+el nodo deja de compilar hasta que lo trata, y ningún walker (lowering, análisis del nativo)
+puede olvidarse por silencio. (2) El checker guarda las etiquetas de los bucles abiertos de la
+función (`loop_labels`, que una closure vacía como hace con `loop_depth`) y valida el destino;
+la divergencia de `while (true)` (M301) cuenta un `break etiqueta` desde un bucle interior como
+salida del exterior (`loop_breaks_in` desciende a los bucles anidados solo buscando esa
+etiqueta). (3) VM: `LoopCtx` lleva la etiqueta y `break` parchea el salto en el bucle destino —
+la pila de operandos sigue limpia (espina de sentencias) y los locales viven en el register file,
+así que saltar por encima de un `for` interior no deja nada colgado. (4) Intérprete:
+`Flow::Break(Option<String>)`; un bucle que no reconoce la etiqueta la propaga. (5) Nativo:
+etiquetas de Rust, `'ray_outer:` delante del `loop`/`for`/`while` que implementa cada forma del
+`for` (ocho formas, una por optimización). (6) Los cuatro espejos selfhost (parser, checker,
+intérprete, compilador) y `parse_dump` con la etiqueta en el volcado de paridad.
+

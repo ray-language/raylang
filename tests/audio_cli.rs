@@ -147,3 +147,88 @@ fn latency_hint_and_played_position_match_on_all_three_engines() {
         assert_eq!(out, WANT, "native ≡ VM");
     }
 }
+
+/// M298 (findings 1.27.11 #21 y #22). [21] La cola entre el programa y el alimentador es un
+/// `socketpair` acotado a la latencia pedida: a 8000 Hz mono con 20 ms el buffer es el mínimo
+/// (2 KiB ≈ 128 ms), así que escribir 600 ms de audio BLOQUEA ~470 ms — antes el pipe del SO
+/// (64 KiB = 4 s a esa tasa) se lo tragaba sin aparcar. [22] Seis ciclos open/write/drain/close
+/// seguidos: `played_ms` responde en todos (el alimentador viejo ya no borra la entrada de una
+/// salida nueva que heredó su fd).
+const V3_PROG: &str = r#"import std/audio;
+import std/time;
+
+fn main() {
+    var chunk = b"";
+    var i = 0;
+    while (i < 4800) {
+        chunk = chunk + b"\x00\x00";
+        i = i + 1;
+    }
+    let h = match (audio.open_latency(8000, 1, 20)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => {
+            print("open failed: " + e);
+            return;
+        },
+    };
+    let t0 = time.monotonic();
+    let _ = audio.write(h, chunk);
+    let dt = time.monotonic() - t0;
+    print("write paced by the latency hint: " + to_string(dt >= 300));
+    let _ = close(h);
+
+    var small = b"";
+    i = 0;
+    while (i < 800) {
+        small = small + b"\x00\x00";
+        i = i + 1;
+    }
+    var ok = true;
+    var n = 0;
+    while (n < 6) {
+        match (audio.open(8000, 1)) {
+            Result.Err(e) => {
+                print("open failed: " + e);
+                return;
+            },
+            Result.Ok(h2) => {
+                let _ = audio.write(h2, small);
+                let _ = audio.drain(h2);
+                match (audio.played_ms(h2)) {
+                    Result.Ok(ms) => { if (ms <= 0) { ok = false; } },
+                    Result.Err(_) => { ok = false; },
+                }
+                let _ = close(h2);
+            },
+        }
+        n = n + 1;
+    }
+    print("played_ms after reopen: " + to_string(ok));
+}
+"#;
+
+#[test]
+fn queue_is_bounded_by_the_latency_hint_and_reopen_keeps_played_ms() {
+    const WANT: &str = "write paced by the latency hint: true\nplayed_ms after reopen: true\n";
+    let base = tmp("v3");
+    std::fs::write(base.join("prog.ray"), V3_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code, _) = run_timed(
+            Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]).current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0\n{out}");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code, _) = run_timed(&mut Command::new(&bin));
+        assert_eq!(code, 0, "nativo: exit 0\n{out}");
+        assert_eq!(out, WANT, "nativo ≡ VM");
+    }
+}

@@ -701,6 +701,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            // M307: fdatasync (espejo de builtins::sync_data_handle).
+            "fn __ray_sync_data(h: i64) -> Result<i64, Rc<str>> {\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Writer(f)) => f.sync_data().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
             // M115.2: candado consultivo flock (espejo de builtins::try_lock_handle/unlock_handle).
             "fn __ray_try_lock_file(f: &std::fs::File) -> Result<bool, Rc<str>> {\n",
             "    match f.try_lock() { Ok(()) => Ok(true), Err(std::fs::TryLockError::WouldBlock) => Ok(false), Err(std::fs::TryLockError::Error(e)) => Err(Rc::<str>::from(e.to_string())) } }\n",
@@ -747,6 +755,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    __ray_tagged(match std::fs::canonicalize(path) {\n",
             "        Ok(p) => { let s = p.to_string_lossy().into_owned(); let s = match s.strip_prefix(r\"\\\\?\\\") { Some(rest) if cfg!(windows) => rest.to_string(), _ => s }; vec![\"ok\".to_string(), s] }\n",
             "        Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
+            "fn __ray_symlink_prim(target: &str, link: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    #[cfg(unix)]\n",
+            "    let r = std::os::unix::fs::symlink(target, link);\n",
+            "    #[cfg(windows)]\n",
+            "    let r = { let is_dir = std::path::Path::new(link).parent().map(|d| d.join(target)).filter(|p| p.is_dir()).is_some() || std::path::Path::new(target).is_dir(); if is_dir { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) } };\n",
+            "    #[cfg(not(any(unix, windows)))]\n",
+            "    let r: std::io::Result<()> = { let _ = (target, link); Err(std::io::Error::other(\"symlink is not supported on this platform\")) };\n",
+            "    __ray_tagged(match r { Ok(()) => vec![\"ok\".to_string()], Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
             "fn __ray_chmod_prim(path: &str, mode: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    #[cfg(unix)]\n",
             "    let r = { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode((mode as u32) & 0o7777)).map_err(|e| e.to_string()) };\n",
@@ -1045,26 +1061,35 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
                 // el intento vencido devuelve el error estable "connect timeout".
+                // M306 (IDEAS §97 #15): la espera acotada corre en el POOL bloqueante
+                // (`run_blocking`) y la fibra aparca — un dial lento ya no congela al worker.
                 "fn __ray_tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, Rc<str>> {\n",
                 "    if ms <= 0 { return __ray_tcp_connect(host, port); }\n",
-                "    use std::net::ToSocketAddrs;\n",
-                "    let addr = (host, port as u16).to_socket_addrs().map_err(|e| Rc::<str>::from(e.to_string()))?.next().ok_or_else(|| Rc::<str>::from(format!(\"could not resolve host '{}'\", host)))?;\n",
-                "    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {\n",
-                "        Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }\n",
-                "        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => Err(Rc::<str>::from(\"connect timeout\")),\n",
-                "        Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                "    let host = host.to_string();\n",
+                "    let r: Result<std::net::TcpStream, String> = ray_runtime::fibers::run_blocking(move || {\n",
+                "        use std::net::ToSocketAddrs;\n",
+                "        let addr = (host.as_str(), port as u16).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or_else(|| format!(\"could not resolve host '{}'\", host))?;\n",
+                "        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {\n",
+                "            Ok(s) => Ok(s),\n",
+                "            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => Err(\"connect timeout\".to_string()),\n",
+                "            Err(e) => Err(e.to_string()) } });\n",
+                "    match r { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e)) } }\n",
                 "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => { let _ = l.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Listener(l))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 // El accept RE-RESUELVE el handle en cada vuelta (como la VM): así el `close` del
                 // listener en el apagado ordenado lo despierta (poke) y la siguiente vuelta ve el
                 // handle ausente → error, no un accept eterno sobre un dup vivo. Se aparca sobre
                 // el fd del REGISTRO (estable hasta el close), no el del clon (muere con el drop).
+                // M306 (#14): `set_read_timeout(listener, ms)` acota también el accept (el plazo
+                // vive en el park, como en las lecturas) → "read timeout".
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
+                "    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n",
+                "    let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "    loop {\n",
                 "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
                 "        match l.accept() {\n",
                 "            Ok((s, _)) => { let _ = s.set_nonblocking(true); let _ = s.set_nodelay(true); return Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); }\n",
-                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); ray_runtime::fibers::wait_readable(fd); }\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); let ms = match dl { None => 0, Some(d) => { let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 { return Err(Rc::<str>::from(\"read timeout\")); } rem } }; if ray_runtime::fibers::wait_readable_timeout(fd, ms) { return Err(Rc::<str>::from(\"read timeout\")); } }\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
                 "            Err(e) => return Err(Rc::<str>::from(e.to_string())),\n",
                 "        }\n",
@@ -1094,6 +1119,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
                 "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
+                "    let to = __RAY_LST_TO.with(|m| m.borrow().get(&h).copied().unwrap_or(0));\n",
+                // El flag no-bloqueante es de la open file description (el clon lo comparte con
+                // el listener del registro): se repone al salir del bucle con plazo.
+                "    if to > 0 { let _ = l.set_nonblocking(true); let dl = std::time::Instant::now() + std::time::Duration::from_millis(to as u64); let r = loop { match l.accept() { Ok((s, _)) => { let _ = s.set_nonblocking(false); let _ = s.set_nodelay(true); break Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); } Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => { if std::time::Instant::now() >= dl { break Err(Rc::<str>::from(\"read timeout\")); } std::thread::sleep(std::time::Duration::from_millis(2)); } Err(e) => break Err(Rc::<str>::from(e.to_string())) } }; let _ = l.set_nonblocking(false); return r; }\n",
                 "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             ));
         }
@@ -1219,8 +1248,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M121: el timeout de lectura aplica también a UDP (SO_RCVTIMEO real: hilo-por-tarea
             // usa el recv bloqueante, y la espera vencida se mapea a "read timeout" en el recv).
             "        Some(__RayHandle::Udp(s)) => { let _ = s.set_read_timeout(d); }\n",
+            // M306 (#14): un listener no tiene SO_RCVTIMEO para accept (BSD lo ignora): el plazo se
+            // guarda y `__ray_tcp_accept` lo aplica a mano (accept no bloqueante + espera corta).
+            "        Some(__RayHandle::Listener(_)) => { drop(reg); __RAY_LST_TO.with(|m| { let mut m = m.borrow_mut(); if ms <= 0 { m.remove(&h); } else { m.insert(h, ms); } }); }\n",
             "        _ => {}\n",
             "    } }\n",
+            "thread_local! { static __RAY_LST_TO: std::cell::RefCell<std::collections::HashMap<i64, i64>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
             ));
         }
         out.push_str(concat!(

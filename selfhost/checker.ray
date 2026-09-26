@@ -101,6 +101,8 @@ struct Checker {
     // M191: bucles abiertos de la función en curso y "espina de sentencias" (espejo de Rust).
     loop_depth: int,
     break_ok: bool,
+    // M308: etiquetas de los bucles abiertos de esta función ("" = sin etiqueta).
+    loop_labels: [string],
     tparams: [string],
     bounds: [Bound],
 }
@@ -194,6 +196,81 @@ fn is_integer_type(t: Type) -> bool {
         Type.TNamed(n, args) => args.len() == 0 && (n == "u8" || n == "u32" || n == "u64"),
         _ => false,
     }
+}
+
+// M299 (findings 1.27.11 #12): espejo de `constructor_hint` — el constructor público del módulo
+// que devuelve el struct al que le falta un campo (`ui.item(string, string, string)`).
+fn constructor_hint(c: Checker, struct_name: string) -> string {
+    let sep = last_index_of_str(struct_name, "::");
+    if (sep < 0) {
+        return "";
+    }
+    let prefix = struct_name.substring(0, sep);
+    let msep = last_index_of_str(prefix, "::");
+    let module = if (msep < 0) { prefix } else { prefix.substring(msep + 2, prefix.len()) };
+    // Sin `for` ni `.unwrap()`: el toolchain autoalojado (metacircular) no los tiene.
+    var best = "";
+    let names = c.funcs.keys();
+    var ni = 0;
+    while (ni < names.len()) {
+        let fname = names[ni];
+        ni = ni + 1;
+        if (!fname.starts_with(prefix + "::") || fname.contains("#")) {
+            continue;
+        }
+        let bare = fname.substring(prefix.len() + 2, fname.len());
+        if (bare.contains("::") || !c.pub_funcs.contains_key(fname)) {
+            continue;
+        }
+        let is_ctor = match (c.funcs.get(fname)) {
+            Option.Some(sig) => match (sig.ret) {
+                Type.TNamed(n, _) => n == struct_name,
+                _ => false,
+            },
+            Option.None => false,
+        };
+        if (is_ctor && (best == "" || fname < best)) {
+            best = fname;
+        }
+    }
+    if (best == "") {
+        return "";
+    }
+    let sig = match (c.funcs.get(best)) {
+        Option.Some(x) => x,
+        Option.None => {
+            return "";
+        },
+    };
+    var params = "";
+    var i = 0;
+    while (i < sig.params.len()) {
+        if (i > 0) {
+            params = params + ", ";
+        }
+        params = params + type_str(sig.params[i]);
+        i = i + 1;
+    }
+    let bare = best.substring(prefix.len() + 2, best.len());
+    " (use the constructor "
+        + module
+        + "."
+        + bare
+        + "("
+        + params
+        + ") — it fills the other fields with their defaults)"
+}
+
+// Índice del ÚLTIMO `sub` en `s` (-1 si no está): el `rsplit_once` del checker en Rust.
+fn last_index_of_str(s: string, sub: string) -> int {
+    var i = s.len() - sub.len();
+    while (i >= 0) {
+        if (s.substring(i, i + sub.len()) == sub) {
+            return i;
+        }
+        i = i - 1;
+    }
+    0 - 1
 }
 
 fn type_str(t: Type) -> string {
@@ -743,11 +820,76 @@ fn block_diverges(b: Block) -> bool {
     }
 }
 
+// M301: ¿hay un `break` que salga de ESTE bucle en `body`? Solo la espina de sentencias
+// (bloques, ramas de `if`, brazos de `match`, valores de `let`/asignación/`return`); un bucle
+// anidado o una closure cortan la búsqueda (espejo de `loop_breaks` del checker en Rust).
+fn loop_breaks(body: Block, label: string) -> bool {
+    loop_breaks_in(body, label, 0)
+}
+
+// M308: un bucle anidado es dueño de sus `break` sin etiqueta; un `break etiqueta` dentro de él
+// sí cuenta si `etiqueta` es la de este bucle (espejo de `loop_breaks_in` en Rust).
+fn loop_breaks_in(body: Block, label: string, depth: int) -> bool {
+    var i = 0;
+    while (i < body.stmts.len()) {
+        if (stmt_breaks(body.stmts[i], label, depth)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    match (body.tail) {
+        Option.Some(t) => expr_breaks(t, label, depth),
+        Option.None => false,
+    }
+}
+
+fn stmt_breaks(s: Stmt, label: string, depth: int) -> bool {
+    match (s.kind) {
+        SKind.SBreak(l) => if (l == "") { depth == 0 } else { label != "" && l == label },
+        SKind.SLet(_, _, value, _) => expr_breaks(value, label, depth),
+        SKind.SAssign(_, value) => expr_breaks(value, label, depth),
+        SKind.SReturn(v) => match (v) {
+            Option.Some(e) => expr_breaks(e, label, depth),
+            Option.None => false,
+        },
+        SKind.SExpr(e) => expr_breaks(e, label, depth),
+        _ => false,
+    }
+}
+
+fn expr_breaks(e: Expr, label: string, depth: int) -> bool {
+    match (e.kind) {
+        EKind.EBlock(b) => loop_breaks_in(b, label, depth),
+        EKind.EIf(cond, then_b, elseopt) => {
+            expr_breaks(cond, label, depth)
+                || loop_breaks_in(then_b, label, depth) || match (elseopt) {
+                Option.Some(x) => expr_breaks(x, label, depth),
+                Option.None => false,
+            }
+        },
+        EKind.EMatch(scrut, arms) => {
+            if (expr_breaks(scrut, label, depth)) {
+                return true;
+            }
+            var i = 0;
+            while (i < arms.len()) {
+                if (expr_breaks(arms[i].body, label, depth)) {
+                    return true;
+                }
+                i = i + 1;
+            }
+            false
+        },
+        EKind.EWhile(_, b, _) => label != "" && loop_breaks_in(b, label, depth + 1),
+        _ => false,
+    }
+}
+
 fn stmt_diverges(s: Stmt) -> bool {
     match (s.kind) {
         SKind.SReturn(_) => true,
-        SKind.SBreak => true,
-        SKind.SContinue => true,
+        SKind.SBreak(_) => true,
+        SKind.SContinue(_) => true,
         SKind.SExpr(e) => expr_diverges(e),
         _ => false,
     }
@@ -774,6 +916,14 @@ fn expr_diverges(e: Expr) -> bool {
                 i = i + 1;
             }
             true
+        },
+        // M301: `while (true)` sin un `break` propio nunca termina normalmente (espejo).
+        EKind.EWhile(cond, body, label) => {
+            let infinite = match (cond.kind) {
+                EKind.EBool(b) => b,
+                _ => false,
+            };
+            infinite && !loop_breaks(body, label)
         },
         // panic(...) / exit(...) nunca retornan.
         EKind.ECall(callee, _) => {
@@ -1425,8 +1575,8 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
             Result.Ok(0)
         },
         SKind.SAssign(target, value) => check_assign(c, target, value, stmt.line, stmt.col),
-        SKind.SBreak => check_break(c, "break", stmt.line, stmt.col),
-        SKind.SContinue => check_break(c, "continue", stmt.line, stmt.col),
+        SKind.SBreak(l) => check_break(c, "break", l, stmt.line, stmt.col),
+        SKind.SContinue(l) => check_break(c, "continue", l, stmt.line, stmt.col),
         SKind.SReturn(valopt) => {
             var vt = Type.TUnit;
             match (valopt) {
@@ -1574,7 +1724,7 @@ fn check_expr_inner(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EBinary(op, l, r) => check_binary(c, op, l, r, e.line, e.col),
         EKind.ECall(callee, cargs) => check_call(c, callee, cargs, Option.None, e.line, e.col),
         EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, Option.None, e.line, e.col),
-        EKind.EWhile(cond, body) => check_while(c, cond, body, e.line, e.col),
+        EKind.EWhile(cond, body, label) => check_while(c, cond, body, label, e.line, e.col),
         EKind.EBlock(b) => check_block(c, b),
         EKind.EArray(elems) => check_array(c, elems, e.line, e.col),
         EKind.EIndex(arr, idx) => check_index(c, arr, idx),
@@ -1601,12 +1751,16 @@ fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
     let saved = c.current_return;
     let saved_depth = c.loop_depth;
     let saved_ok = c.break_ok;
+    let saved_labels = c.loop_labels;
     c.loop_depth = 0;  // M191: un bucle exterior no es alcanzable desde una función anónima
     c.break_ok = false;
+    var no_labels: [string] = [];
+    c.loop_labels = no_labels;
     let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "the anonymous function");
     c.current_return = saved;
     c.loop_depth = saved_depth;
     c.break_ok = saved_ok;
+    c.loop_labels = saved_labels;
     r?;
     var ps: [Type] = [];
     pi = 0;
@@ -3469,7 +3623,7 @@ fn block_like(e: Expr) -> bool {
     match (e.kind) {
         EKind.EIf(cnd, tb, eb) => true,
         EKind.EMatch(sc, arms) => true,
-        EKind.EWhile(cnd, b) => true,
+        EKind.EWhile(cnd, b, _) => true,
         EKind.EBlock(b) => true,
         _ => false,
     }
@@ -3538,7 +3692,54 @@ fn check_if(
             terr(cond.line, cond.col, "the if condition must be bool, not " + type_str(ct))
         );
     }
-    let then_ty = check_block_opt(c, then_b, expected)?;
+    // M303: sin esperado, la OTRA rama fija los parámetros de tipo (espejo del checker en Rust:
+    // la pasada fallida se descarta, recortando el ámbito que dejó a medias).
+    let depth = c.scopes.len();
+    let no_expected = match (expected) {
+        Option.Some(_) => false,
+        Option.None => true,
+    };
+    var then_ty = Type.TUnit;
+    var else_done: Option<Type> = Option.None;
+    match (check_block_opt(c, then_b, expected)) {
+        Result.Ok(t) => {
+            then_ty = t;
+            match (elseopt) {
+                Option.Some(else_e) => {
+                    if (no_expected && !type_has_var(t, c.tparams)) {
+                        else_done = Option.Some(check_expr_expected(c, else_e, t)?);
+                    } else {
+                        else_done = Option.Some(check_expr_opt(c, else_e, expected)?);
+                    }
+                },
+                Option.None => { },
+            }
+        },
+        Result.Err(e) => {
+            let retry = no_expected
+                && (e.msg.starts_with("could not infer the type parameter")
+                    || e.msg.starts_with("cannot infer the type of [] here"));
+            match (elseopt) {
+                Option.Some(else_e) => {
+                    if (!retry) {
+                        return Result.Err(e);
+                    }
+                    while (c.scopes.len() > depth) {
+                        pop_scope(c);
+                    }
+                    let et = check_expr(c, else_e)?;
+                    if (type_has_var(et, c.tparams)) {
+                        return Result.Err(e);
+                    }
+                    then_ty = check_block_expected(c, then_b, et)?;
+                    else_done = Option.Some(et);
+                },
+                Option.None => {
+                    return Result.Err(e);
+                },
+            }
+        },
+    }
     match (elseopt) {
         Option.None => {
             if (!type_eq(then_ty, Type.TUnit)) {
@@ -3555,7 +3756,10 @@ fn check_if(
             Result.Ok(Type.TUnit)
         },
         Option.Some(else_e) => {
-            let else_ty = check_expr_opt(c, else_e, expected)?;
+            let else_ty = match (else_done) {
+                Option.Some(t) => t,
+                Option.None => Type.TUnit,
+            };
             if (block_diverges(then_b)) {
                 return Result.Ok(else_ty);
             }
@@ -3600,6 +3804,7 @@ fn check_while(
     c: Checker,
     cond: Expr,
     body: Block,
+    label: string,
     line: int,
     col: int
 ) -> Result<Type, TypeError> {
@@ -3609,25 +3814,51 @@ fn check_while(
             terr(cond.line, cond.col, "the while condition must be bool, not " + type_str(ct))
         );
     }
-    check_loop_body(c, body)?;
+    check_loop_body(c, body, label)?;
     Result.Ok(Type.TUnit)
 }
 
 // M191: el cuerpo de un bucle — un nivel más y la espina de sentencias abierta.
-fn check_loop_body(c: Checker, body: Block) -> Result<Type, TypeError> {
+fn check_loop_body(c: Checker, body: Block, label: string) -> Result<Type, TypeError> {
     let saved = c.break_ok;
     c.loop_depth = c.loop_depth + 1;
+    c.loop_labels.push(label);
     c.break_ok = true;
     let r = check_block(c, body);
+    let _ = pop(c.loop_labels);
     c.loop_depth = c.loop_depth - 1;
     c.break_ok = saved;
     r
 }
 
 // M191: `break`/`continue` — solo dentro de un bucle de esta función y en la espina de sentencias.
-fn check_break(c: Checker, kw: string, line: int, col: int) -> Result<int, TypeError> {
+fn check_break(
+    c: Checker,
+    kw: string,
+    label: string,
+    line: int,
+    col: int
+) -> Result<int, TypeError> {
     if (c.loop_depth == 0) {
         return Result.Err(terr(line, col, "'" + kw + "' outside a loop"));
+    }
+    // M308: la etiqueta debe ser la de un bucle abierto de ESTA función.
+    if (label != "" && !contains_str(c.loop_labels, label)) {
+        return Result.Err(
+            terr(
+                line,
+                col,
+                "unknown loop label '"
+                    + label
+                    + "' for '"
+                    + kw
+                    + "' (label a loop with '"
+                    + label
+                    + ": while' or '"
+                    + label
+                    + ": for')"
+            )
+        );
     }
     if (!c.break_ok) {
         return Result.Err(
@@ -3647,7 +3878,7 @@ fn check_break(c: Checker, kw: string, line: int, col: int) -> Result<int, TypeE
 fn is_block_form(e: Expr) -> bool {
     match (e.kind) {
         EKind.EIf(a, b, d) => true,
-        EKind.EWhile(a, b) => true,
+        EKind.EWhile(a, b, _) => true,
         EKind.EMatch(a, b) => true,
         EKind.EBlock(b) => true,
         _ => false,
@@ -3980,7 +4211,12 @@ fn check_struct_lit(
                         terr(
                             line,
                             col,
-                            "missing field '" + df.name + "' in the literal of '" + name + "'"
+                            "missing field '"
+                                + df.name
+                                + "' in the literal of '"
+                                + name
+                                + "'"
+                                + constructor_hint(c, name)
                         )
                     );
                 }
@@ -5211,6 +5447,7 @@ pub fn check(prog: Program) -> Result<int, TypeError> {
         scopes: [],
         current_return: Type.TUnit,
         loop_depth: 0,
+        loop_labels: [],
         break_ok: false,
         tparams: [],
         bounds: []

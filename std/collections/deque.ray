@@ -74,3 +74,31 @@ pub fn push_front<T>(d: Deque<T>, x: T) {
 pub fn peek_front<T>(d: Deque<T>) -> Option<T> {
     if (d.head < d.data.len()) { Option.Some(d.data[d.head]) } else { Option.None }
 }
+
+// M304 (IDEAS §97 #32): recorrer y acceder por índice sin rotar la cola con pop/push.
+/// Returns the back element without removing it, or `None` if the deque is empty.
+pub fn peek_back<T>(d: Deque<T>) -> Option<T> {
+    if (d.data.len() > d.head) { Option.Some(d.data[d.data.len() - 1]) } else { Option.None }
+}
+
+/// The element at position `i` (0 = front) without removing it, or `None` if out of range.
+pub fn get<T>(d: Deque<T>, i: int) -> Option<T> {
+    if (i >= 0 && i < len(d)) { Option.Some(d.data[d.head + i]) } else { Option.None }
+}
+
+/// A NEW array with the elements from front to back (the deque is left untouched).
+pub fn to_array<T>(d: Deque<T>) -> [T] {
+    var out: [T] = [];
+    var i = d.head;
+    while (i < d.data.len()) {
+        out.push(d.data[i]);
+        i = i + 1;
+    }
+    out
+}
+
+/// A lazy iterator over the elements from front to back: `for x in deque.iter(d) { … }`.
+/// Iterates a snapshot: pushes and pops during the loop do not affect it.
+pub fn iter<T>(d: Deque<T>) -> Iter<T> {
+    to_array(d).iter()
+}

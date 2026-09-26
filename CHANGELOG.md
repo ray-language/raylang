@@ -4,6 +4,90 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Los ocho bugs del barrido de `ray-apps` a 1.27.11** (M298, `RAYLANG-FINDINGS.md` del 25 sep
+  2026; el resto de hallazgos —ergonomía y documentación— queda clasificado en IDEAS §97).
+  - **Checker**: el override de una función del prelude en la raíz (`fn get(...)`) volvía a
+    filtrarse a los módulos y paquetes por la vía **UFCS** (`headers.get(k)` en `net/trace` →
+    «'get' expects 3 argument(s)»); la regla léxica de M270 se aplica ahora también ahí.
+  - **Nativo**: un `var x` capturado por una closure en un brazo de `match` y un binding `x` de
+    patrón capturado en OTRO brazo compartían nombre y el segundo se emitía como celda
+    (`.borrow()` sobre `Rc<str>`, E0599). La celda es léxica: manda la declaración más interna.
+  - **`ray build`/`run`**: el clon cacheado del índice (`.ray-deps/.index`) se refresca solo UNA
+    vez y se reintenta cuando un requisito no se satisface o el paquete no está («no version of
+    'net' satisfies '^0.3.3'» hasta `rm -rf .ray-deps`); `ray add` y `ray search` refrescan
+    antes de preguntar (best-effort: sin red, la caché).
+  - **`ray fmt`**: un `if` de valor simple como operando de una concatenación o valor de un campo
+    de struct se queda en una línea (`if (c) { a } else { b }`) y el reparto lo hace la cadena de
+    `+` o la lista de campos; antes las ramas se expandían con `} else {` en medio.
+  - **`ray test`**: una suite con error de sintaxis (falla al cargar) cuenta en «N suite(s)
+    failed to compile» (decía 0).
+  - **`std/time`**: `parse_iso8601[_millis]` acepta las formas básicas que produce el propio
+    módulo — `YYYYMMDD` (`date_stamp`), `YYYYMMDDTHHMMSS[Z|±HHMM]` (`to_iso8601_basic`) — y la
+    fecha sola `YYYY-MM-DD` (medianoche UTC).
+  - **`std/audio`**: la cola entre el programa y el alimentador es un `socketpair` acotado a la
+    latencia pedida — a 22050 Hz mono con 30 ms, ~140 ms en cola en vez de 1580 (el pipe del SO
+    ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
+    cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
+
+- **Bucles etiquetados** (M308, IDEAS §97 #4). `outer: for row in grid { for x in row { if (x == 0)
+  { break outer; } } }` — `break outer` / `continue outer` (también como expresión) salen de o
+  reanudan un bucle exterior de la misma función; `outer: while` igual. Una etiqueta desconocida es
+  error de tipos y `ray fmt` las conserva. El último hallazgo de lenguaje del barrido.
+
+- **Constantes con tuplas, `fs.sync_data` y la verdad sobre el móvil** (M307, IDEAS §97 #7, #35,
+  #28/#37). Una `const` puede ser una tupla, un arreglo de tuplas o referir a constantes declaradas
+  antes (`const TABLE: [(int, string)] = [(ID_A, "a.png")]`). `fs.sync_data(h)` es el fdatasync
+  barato (en macOS/APFS `sync` es F_FULLFSYNC, 4–5 ms; documentado). El MANUAL y `llms.txt` dicen
+  que `ray://app` es de los shells de escritorio (el móvil carga por HTTP local → `listen_local`)
+  y que `ui.reply_json` necesita un shell generado con ≥ 1.12.1.
+
+- **Red: plazos que aparcan y huecos de `net`/`web`/`rpc`** (M306, IDEAS §97 #14, #15, #16,
+  #18, #33). `set_read_timeout(listener, ms)` acota también `tcp_accept` (`"read timeout"`;
+  la doc lo prometía y colgaba para siempre) en los tres motores. `tcp_connect_timeout`
+  **aparca la fibra** en la VM y en el nativo con fibras (el dial corre en un hilo auxiliar): una
+  malla que marca desde fibras ya no se congela. `net` 0.3.6: `webserver.local_token_ok(req,
+  token)` pública para servidores con accept propio. `web` 0.4.5: `app.gzip()`. `rpc` 0.1.1:
+  `serve_on[_shutdown[_limits]](listener, …)` para puertos efímeros.
+
+- **`ray doc` / `ray_doc` más completos** (M305, IDEAS §97 #11, #34). Las constantes públicas
+  de un módulo (`ray doc crypto.PASSWORD_ITERATIONS` → `const PASSWORD_ITERATIONS: int = 600000`
+  + su `///`), los módulos de colecciones por su ruta (`ray doc std/collections/deque`) y, en el
+  MCP con `path`, la superficie entera de un módulo del proyecto o de un paquete de `.ray-deps`
+  (`ray_doc "rpc/rpc"`, `"web/framework"`).
+
+- **La stdlib que las apps rodeaban** (M304, IDEAS §97 #24, #25, #26, #30, #31, #32).
+  `s.last_index_of(sub)` y `b.last_index_of(needle)`; `b.index_of_from(needle, start)` sin
+  copiar; los combinadores `Option.and_then/unwrap_or_else` y
+  `Result.map/and_then/map_err/unwrap_or_else`; `Deque` con `get`, `peek_back`, `to_array` e
+  `iter`; `fs.symlink(target, link)`; y `json.Json` implementa `ToJson`, así que
+  `obj().field("d", Json.JNull)` y un valor parseado entran en el builder.
+
+- **Tres huecos del checker que las apps rodeaban** (M301–M303, IDEAS §97 #3, #5, #6).
+  `while (true)` sin un `break` propio **diverge**: una `fn -> Result<…>` puede terminar en él
+  sin el `Result.Err("unreachable")` muerto (el nativo lo emite como `loop`). `assert_eq` (y
+  cualquier bound `Eq`/`Show`) acepta **tuplas**, por composición de sus elementos:
+  `assert_eq(f(), ("h", 81))`, con `(h, 81)` en el mensaje. Y sin anotación, la otra rama de un
+  `if` fija el tipo de `Option.None`/`[]` (`let o = if (c) { Option.Some(1) } else { Option.None };`),
+  como ya hacían los brazos de `match`. Espejos en el checker autoalojado.
+
+- **`break` y `continue` como expresión** (M300, IDEAS §97 #2; lo pidieron tres apps).
+  `Result.Err(e) => break,` en un brazo de `match` dentro de un bucle, o
+  `let w = if (v < 0) { continue } else { v };`, valen sin llaves — el mismo azúcar de bloque que
+  `return e` (1.11): divergen, ceden el tipo al resto y siguen limitados a la espina de
+  sentencias del bucle. Como cola de un bloque no necesitan `;`. `ray fmt` los conserva.
+
+- **El lote barato del barrido: diagnóstico y documentación** (M299, IDEAS §97 #12, #17, #19,
+  #20, #27, #29). Un campo ausente en el literal de un struct de módulo sugiere el constructor
+  público que lo devuelve (`missing field 'icon' in the literal of 'std::ui::MenuItem' (use the
+  constructor ui.item(string, string, string) — …)`, también en el checker autoalojado). Los
+  READMEs de `net`/`web` y la cabecera de los espejos enseñan el índice (`ray add`, `^ver`) antes
+  que el `git+https://…`; el de `web` avisa de que el builder de `listen` corre por conexión. El
+  MANUAL estrena «Los métodos de `Option` y `Result`» y «Fan-out desde un actor» (`try_send`);
+  REFERENCE (+en) lista los métodos de `Option`/`Result`; `llms.txt` los lista, dice cuáles no
+  existen aún y corrige que los patrones anidados sí existen desde 1.27.6.
+
 ## 1.27.11 — 2026-09-25
 
 - **`net` 0.3.5 / `web` 0.4.4: servidores locales de apps cerrados a su ventana** (M297, arco de

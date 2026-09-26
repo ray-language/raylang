@@ -65,6 +65,42 @@ fn main() -> int {
     three_engines(&d, "{\"a\":1}\n7\n");
 }
 
+/// #36 del barrido 1.27.11 (M298): el override léxico también en UFCS. Un módulo que llama
+/// `h.get(k)` sobre un Map seguía resolviendo a la `get` de la raíz (solo la llamada directa
+/// aplicaba el alias `get#prelude`): "[net/trace] type error … 'get' expects 3 argument(s)".
+#[test]
+fn a_root_override_does_not_leak_into_ufcs_calls_of_modules() {
+    let d = tmp("override_ufcs");
+    std::fs::write(
+        d.join("hdr.ray"),
+        r#"pub fn lookup(h: Map<string, string>) -> string {
+    match (h.get("k")) {
+        Option.Some(v) => v,
+        Option.None => "none",
+    }
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import hdr;
+
+fn get(a: int, b: int, c: int) -> int { a + b + c }
+
+fn main() -> int {
+    var h: Map<string, string> = Map.new();
+    h.insert("k", "v");
+    print(hdr.lookup(h));
+    print(get(1, 2, 3));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "v\n6\n");
+}
+
 /// [8] Un tipo con el nombre de un trait del prelude: error en EL TIPO DEL USUARIO, con su posición
 /// real (antes: "type error at 1000000666:1: 'Sub' is already a type; it cannot also be a trait").
 #[test]

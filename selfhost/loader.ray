@@ -389,8 +389,8 @@ fn resolve_stmt(r: Resolver, s: Stmt) {
             resolve_expr(r, target);
             resolve_expr(r, value);
         },
-        SKind.SBreak => { },
-        SKind.SContinue => { },
+        SKind.SBreak(_) => { },
+        SKind.SContinue(_) => { },
         SKind.SReturn(opt) => {
             match (opt) {
                 Option.Some(v) => resolve_expr(r, v),
@@ -488,7 +488,7 @@ fn resolve_expr(r: Resolver, e: Expr) {
                 Option.None => { },
             }
         },
-        EKind.EWhile(cond, body) => {
+        EKind.EWhile(cond, body, _) => {
             resolve_expr(r, cond);
             resolve_block(r, body);
         },
@@ -797,8 +797,8 @@ fn tw_stmt(tw: TypeRewriter, s: Stmt) {
             tw_expr(tw, target);
             tw_expr(tw, value);
         },
-        SKind.SBreak => { },
-        SKind.SContinue => { },
+        SKind.SBreak(_) => { },
+        SKind.SContinue(_) => { },
         SKind.SReturn(opt) => {
             match (opt) {
                 Option.Some(v) => tw_expr(tw, v),
@@ -879,7 +879,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
                 Option.None => { },
             }
         },
-        EKind.EWhile(cond, body) => {
+        EKind.EWhile(cond, body, _) => {
             tw_expr(tw, cond);
             tw_block(tw, body);
         },

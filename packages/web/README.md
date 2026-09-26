@@ -33,19 +33,31 @@ fn main() -> int {
   solo GET/HEAD.
 - **Logging** (`log_requests`): una línea JSON por petición (`net/log`) con método, ruta, status y
   duración en ms.
+- **gzip** (`app.gzip()`, M306): la negociación de `webserver.gzip` para toda respuesta terminada —
+  solo si el cliente acepta gzip, no es streaming, no trae `Content-Encoding`, mide ≥ 512 octetos
+  y comprimir encoge; añade `Vary: Accept-Encoding`. Cuesta CPU por respuesta (`std/deflate` es
+  raylang puro: barato en nativo, medible en la VM).
 - **Despliegue**: `listen` (keep-alive + límites por defecto + panic-del-handler→500, herencia de
   `webserver.serve`), `listen_tls(cert, key)` (HTTPS, M56.3), `listen_graceful(drain_ms)` (apagado
   ordenado con SIGTERM/SIGINT, M88.1b) y `listen_limits(webserver.Limits)`.
+  ⚠️ El **builder corre por CONEXIÓN**: `listen(build_app, …)` llama a `build_app()` en la fibra de
+  cada conexión (y la usa para todas sus peticiones keep-alive). No abras recursos dentro del
+  builder —una conexión SQLite, un archivo, un cliente— o tendrás una fuga por conexión (raydevbox:
+  200 peticiones = 201 ficheros abiertos). El estado compartido va en una fibra dueña a la que los
+  handlers hablan por canal (MANUAL §15, patrón actor), o se abre en el handler y se cierra al salir.
 
 ## Instalación
 
-En tu `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
+En tu `ray.toml`, por el **índice** (`ray add web` lo escribe por ti; `web` arrastra `net`):
 
 ```toml
 [dependencies]
-web = "path:../raylang/packages/web"
-net = "path:../raylang/packages/net"   # web se apoya en net/webserver y net/log
+web = "^0.4"
 ```
+
+En el monorepo, por ruta (`web = "path:../raylang/packages/web"` y `net = "path:../raylang/packages/net"`,
+porque `web` se apoya en `net/webserver` y `net/log`); la dependencia git directa queda para un
+pin sin índice.
 
 Demo completo: [`examples/web/framework/`](../../examples/web/framework/).
 

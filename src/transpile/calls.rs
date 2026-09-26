@@ -41,7 +41,7 @@ impl Transpiler {
                     ))
                 }
                 _ => {
-                    let is_cell = self.cells.contains(&name);
+                    let is_cell = self.is_cell(&name);
                     out.push((name, ty, is_cell));
                 }
             }
@@ -519,6 +519,13 @@ impl Transpiler {
             "sync" => {
                 self.needs_handles = true;
                 out.push_str("__ray_sync(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            // M307: fdatasync.
+            "sync_data" => {
+                self.needs_handles = true;
+                out.push_str("__ray_sync_data(");
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
@@ -1046,7 +1053,7 @@ impl Transpiler {
         // M235: copy_all es raylang puro sobre is_dir/mkdir/list_dir/copy_file → su cuerpo se emite.
         // M265: real_path/is_within_real se emiten sobre el primitivo `__real_path` (como stat).
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real") {
+            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real" | "symlink") {
                 return self.emit_fs(out, ffn, &eff);
             }
         }
@@ -2342,6 +2349,15 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M304: `__symlink(target, link)` → el mismo ["ok"]/["err", msg] que `builtins::symlink`.
+            "symlink" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_symlink_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "chmod" if name.starts_with("__") => {
                 self.needs_fs_meta = true;
                 out.push_str("__ray_chmod_prim(&*");
@@ -2887,7 +2903,7 @@ impl Transpiler {
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
                 // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
                 if let Some(ffn) = n.strip_prefix("std::fs::")
-                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real")
+                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real" | "symlink")
                 {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
@@ -2896,7 +2912,7 @@ impl Transpiler {
                         "make_temp_dir" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir" | "remove_all"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
-                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "unlock" => {
+                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "sync_data" | "unlock" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "try_lock" => Type::Enum("Result".into(), vec![Type::Bool, Type::String]),

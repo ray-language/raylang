@@ -469,3 +469,20 @@ fn main() -> int {
     assert!(r.starts_with("HTTP/1.1 404"), "{r}");
     let _ = child.kill();
 }
+
+/// M306 (IDEAS §97 #18): `app.gzip()` — la negociación de `webserver.gzip` para toda respuesta
+/// terminada: con `Accept-Encoding: gzip` y un cuerpo ≥ 512 octetos sale comprimida (con `Vary`);
+/// sin la cabecera, o con un cuerpo pequeño, sale tal cual.
+#[test]
+fn app_level_gzip_negotiates_per_request() {
+    let (mut child, port) = launch();
+    let r = ask(port, "GET /big HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, deflate\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("200 OK") && r.contains("Content-Encoding: gzip") && r.contains("Vary: Accept-Encoding"), "gzip: {r}");
+    assert!(!r.contains("raylang raylang raylang"), "el cuerpo va comprimido: {r}");
+    let r = ask(port, "GET /big HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("200 OK") && !r.contains("Content-Encoding") && r.contains("raylang raylang raylang"), "sin Accept-Encoding: {r}");
+    let r = ask(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("418") && !r.contains("Content-Encoding"), "cuerpo pequeño sin gzip: {r}");
+    let _ = child.kill();
+    let _ = child.wait();
+}

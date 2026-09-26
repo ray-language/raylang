@@ -48,8 +48,10 @@ pub fn tcp_connect(host: string, port: int) -> Result<int, string> {
 // acotada pero BLOQUEANTE (no cede la fibra); la resolución del nombre va aparte del plazo.
 /// Like `tcp_connect`, with a DEADLINE: an attempt that outlives `ms` milliseconds fails with the
 /// stable error "connect timeout" instead of waiting for the OS default (~75 s against a host
-/// that drops SYNs). `ms <= 0` behaves exactly like `tcp_connect`. The bounded wait is blocking
-/// (it does not park the fiber); name resolution happens before the deadline starts.
+/// that drops SYNs). `ms <= 0` behaves exactly like `tcp_connect`. On the VM and the native
+/// fiber scheduler the wait PARKS the fiber (the dial runs on a helper thread; other fibers keep
+/// running); on the interpreter and the thread-per-task native mode it blocks only its own
+/// thread. Name resolution happens before the deadline starts.
 pub fn tcp_connect_timeout(host: string, port: int, ms: int) -> Result<int, string> {
     let r = __tcp_connect_timeout(host, port, ms);
     if (r[0] == "ok") {
@@ -251,7 +253,9 @@ pub fn local_port(h: int) -> int {
 // también a los sockets UDP (`udp.recv_from` — antes un datagrama perdido esperaba para siempre).
 /// Sets (ms > 0) or clears (ms <= 0) the read timeout of socket `h`: a read that waits longer
 /// fails with the stable error "read timeout". Applies to any blocking wait on the handle —
-/// TCP/TLS reads and UDP receives (M121). Total: non-socket handles are ignored.
+/// TCP/TLS reads, UDP receives (M121) and, on a LISTENER, `tcp_accept` (M306: an accept that
+/// waits longer than `ms` fails with "read timeout" — the way to poll a listener with a
+/// deadline instead of closing it from another fiber). Total: non-socket handles are ignored.
 pub fn set_read_timeout(h: int, ms: int) {
     __socket_set_read_timeout(h, ms);
 }

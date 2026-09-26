@@ -227,6 +227,15 @@ struct Cur {
     /// pone una firma cuyos parámetros se repartieron: `) -> string { rail }` tras seis líneas de
     /// parámetros se lee mal. Lo consume el propio `fmt_block`.
     expand_block: bool,
+    /// M298 (findings 1.27.11 #9): el PRÓXIMO `if` es una SUB-expresión compacta (operando de `+`,
+    /// valor de un campo de struct, argumento…) — se emite en una línea `if (c) { a } else { b }`
+    /// aunque la sentencia esté en la pasada de envuelto; el reparto lo decide el contenedor (la
+    /// cadena de `+`, la lista de campos). Antes sus ramas se expandían y quedaban `} else {` en
+    /// medio de la concatenación o de los campos del struct. Lo consume la emisión del `if`.
+    compact_if: bool,
+    /// M298: el PRÓXIMO bloque es una rama de un `if` compacto → se emite inline `{ expr }` aunque
+    /// en la fuente ocupara varias líneas (si no encierra comentarios). Lo consume `fmt_block`.
+    inline_block: bool,
 }
 
 impl Cur {
@@ -250,7 +259,15 @@ impl Cur {
             wrap: false,
             force: false,
             expand_block: false,
+            compact_if: false,
+            inline_block: false,
         }
+    }
+
+    /// ¿Hay algún comentario en las líneas `[first, last)`? (M298: un bloque con comentarios dentro
+    /// no puede colapsarse a `{ expr }` sin perderlos.)
+    fn has_comments_in(&self, first: usize, last: usize) -> bool {
+        self.items[self.i..].iter().take_while(|c| c.line < last).any(|c| c.line >= first)
     }
 
     /// ¿Era un BACKTICK el literal que empieza en `(line, col)`? (M95: se mira el fuente.)
@@ -779,6 +796,7 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
 /// cada sentencia (con la sangría del cuerpo) y re-pega los *trailing* de sentencias de una línea.
 fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     let expand = std::mem::take(&mut cur.expand_block); // solo afecta a ESTE bloque, no a los de dentro
+    let inline = std::mem::take(&mut cur.inline_block); // M298: rama de un `if` compacto
     // Un bloque ABRE líneas nuevas: lo que va dentro ya no comparte la línea de la sentencia que lo
     // contiene, así que el "repártete sí o sí" del padre no le aplica. Sin esto, el primer
     // `Option.Some(x)` de un `if … { … } else if … { … }` de una línea se repartía —y en la siguiente
@@ -802,8 +820,8 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     if !expand
         && b.statements.is_empty()
         && let Some(tail) = &b.tail
-        && tail.line == b.line
-        && b.end_line == b.line
+        && ((tail.line == b.line && b.end_line == b.line)
+            || (inline && !cur.has_comments_in(b.line, b.end_line)))
         && !is_block_form(tail)
     {
         // El tail puede REPARTIRSE (M106: un literal o una llamada larga). Si sale multilínea, el
@@ -893,7 +911,7 @@ fn stmt_last_line(cur: &Cur, st: &Stmt) -> usize {
             cur.end_line(value)
         }
         StmtKind::Return { value: Some(e) } | StmtKind::Expr(e) => cur.end_line(e),
-        StmtKind::Return { value: None } | StmtKind::Break | StmtKind::Continue => st.line,
+        StmtKind::Return { value: None } | StmtKind::Break { .. } | StmtKind::Continue { .. } => st.line,
         StmtKind::For { body, .. } => body.end_line,
     }
 }
@@ -972,7 +990,7 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             let ns: Vec<String> = names.iter().map(|n| n.clone().unwrap_or_else(|| "_".to_string())).collect();
             format!("{} ({}) = {};", kw, ns.join(", "), fmt_value(cur, value, indent))
         }
-        StmtKind::For { pat, iter, body } => {
+        StmtKind::For { pat, iter, body, label } => {
             let p = match pat {
                 ForPat::Single(n) => n.clone(),
                 ForPat::Tuple(names) => {
@@ -985,7 +1003,7 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
                 ForIter::In(e) => fmt_expr(cur, e, 0),
                 ForIter::Iter { expr, .. } => fmt_expr(cur, expr, 0),
             };
-            format!("for {} in {} {}", p, it, fmt_block(cur, body, indent))
+            format!("{}for {} in {} {}", label_prefix(label), p, it, fmt_block(cur, body, indent))
         }
         StmtKind::Assign { target, value } => {
             format!("{} = {};", fmt_expr(cur, target, 0), fmt_value(cur, value, indent))
@@ -994,8 +1012,8 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             Some(e) => format!("return {};", fmt_value(cur, e, indent)),
             None => "return;".to_string(),
         },
-        StmtKind::Break => "break;".to_string(),
-        StmtKind::Continue => "continue;".to_string(),
+        StmtKind::Break { label } => format!("break{};", label_suffix(label)),
+        StmtKind::Continue { label } => format!("continue{};", label_suffix(label)),
         StmtKind::Expr(e) => {
             // Las formas con bloque (if/while/match/bloque) como sentencia no llevan `;`.
             if is_block_form(e) {
@@ -1015,17 +1033,30 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
 }
 
 /// M220: `return [e]` en posición de expresión — el parser lo dejó como bloque `{ return e; }` y
-/// anotó el sitio; se reemite como `return e` (no como bloque).
+/// anotó el sitio; se reemite como `return e` (no como bloque). M300: ídem `break`/`continue`.
 fn fmt_return_expr(cur: &mut Cur, e: &Expr) -> Option<String> {
     let ExprKind::Block(b) = &e.kind else { return None };
     if !cur.return_exprs.contains(&(e.line, e.col)) || b.statements.len() != 1 || b.tail.is_some() {
         return None;
     }
-    let StmtKind::Return { value } = &b.statements[0].kind else { return None };
-    Some(match value {
-        Some(v) => format!("return {}", fmt_expr(cur, v, 0)),
-        None => "return".to_string(),
+    Some(match &b.statements[0].kind {
+        StmtKind::Return { value: Some(v) } => format!("return {}", fmt_expr(cur, v, 0)),
+        StmtKind::Return { value: None } => "return".to_string(),
+        // M300: el mismo azúcar para `break`/`continue` en posición de expresión.
+        StmtKind::Break { label } => format!("break{}", label_suffix(label)),
+        StmtKind::Continue { label } => format!("continue{}", label_suffix(label)),
+        _ => return None,
     })
+}
+
+/// M308: `outer: ` delante de un bucle etiquetado; nada sin etiqueta.
+fn label_prefix(label: &Option<String>) -> String {
+    label.as_ref().map(|l| format!("{l}: ")).unwrap_or_default()
+}
+
+/// M308: ` outer` tras `break`/`continue` etiquetados.
+fn label_suffix(label: &Option<String>) -> String {
+    label.as_ref().map(|l| format!(" {l}")).unwrap_or_default()
 }
 
 fn is_block_form(e: &Expr) -> bool {
@@ -1429,7 +1460,17 @@ fn fmt_chain_wrapped(cur: &mut Cur, recv: &Expr, links: &[(&str, &[Expr])]) -> S
 /// `fmt_block` relativas a `cur.base`, y repartir la lista además desplazaría `spawn(fn() { … })`
 /// a una forma que nadie escribe.
 fn is_multiline_form(e: &Expr) -> bool {
-    is_block_form(e) || matches!(e.kind, ExprKind::Func(_))
+    !is_compact_if(e) && (is_block_form(e) || matches!(e.kind, ExprKind::Func(_)))
+}
+
+/// M298 (findings 1.27.11 #9): un `if` de VALOR simple — `if (c) { a } else { b }` con ambas ramas
+/// de un solo tail que no es forma con bloque, sin `else if` — cabe en una línea como
+/// sub-expresión, y así se emite (el contenedor decide el reparto).
+fn is_compact_if(e: &Expr) -> bool {
+    let ExprKind::If { then_branch, else_branch: Some(eb), .. } = &e.kind else { return false };
+    let ExprKind::Block(else_block) = &eb.kind else { return false };
+    let simple = |b: &Block| b.statements.is_empty() && b.tail.as_ref().is_some_and(|t| !is_block_form(t));
+    simple(then_branch) && simple(else_block)
 }
 
 /// Emite una **lista delimitada** repartida (M106): `head` + apertura, un elemento por línea a un
@@ -1655,9 +1696,46 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         ExprKind::Match { .. } | ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) => {
             // Forma multilínea como SUB-expresión (argumento de llamada, operando, elemento…): se indenta
             // relativa a la línea del contexto, que `fmt_stmt`/`fmt_value` dejaron en `cur.base`.
+            // M298: un `if` de valor simple se queda en UNA línea aquí (ver `is_compact_if`).
+            cur.compact_if = is_compact_if(e);
             fmt_expr_indented(cur, e, cur.base)
         }
     }
+}
+
+/// El `if` de `fmt_expr_indented_inner`: `if (c) { … } [else if … | else { … }]`. Con `compact`
+/// (M298) las ramas se emiten inline (`{ expr }`) y la condición no se reparte.
+fn fmt_if_expr(cur: &mut Cur, cond: &Expr, then_branch: &Block, else_branch: Option<&Expr>, base: usize, compact: bool) -> String {
+    // M189: si la sentencia no cabe (pasada de envuelto), la cadena `if … { a } else if … { b }
+    // …` se expande ENTERA — antes quedaba en una línea de 300 columnas, porque el reparto solo
+    // conocía listas y cadenas de métodos y el forzado partía la CONDICIÓN (`if (f(\n a,\n b\n))`,
+    // que además no convergía). La condición se mide, no se fuerza; las ramas se expanden.
+    let expand = cur.wrap && !compact;
+    let c = fmt_cond(cur, cond, "if (", expand);
+    cur.expand_block = expand;
+    cur.inline_block = compact;
+    let mut s = format!("if ({}) {}", c, fmt_block(cur, then_branch, base));
+    if let Some(eb) = else_branch {
+        match &eb.kind {
+            // `else if ...`: se encadena sin bloque intermedio.
+            ExprKind::If { .. } => {
+                s.push_str(" else ");
+                s.push_str(&fmt_expr_indented(cur, eb, base));
+            }
+            ExprKind::Block(b) => {
+                s.push_str(" else ");
+                cur.expand_block = expand;
+                cur.inline_block = compact;
+                s.push_str(&fmt_block(cur, b, base));
+            }
+            _ => {
+                // Un else con una expresión no-bloque: envolver en bloque canónico.
+                s.push_str(&format!(" else {{\n{}{}\n{}}}",
+                    INDENT.repeat(base + 1), fmt_expr(cur, eb, 0), INDENT.repeat(base)));
+            }
+        }
+    }
+    s
 }
 
 /// Formatea una forma con bloque (if/while/match/block) con la indentación `base` (la de su línea).
@@ -1677,38 +1755,23 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
     }
     match &e.kind {
         ExprKind::If { cond, then_branch, else_branch } => {
-            // M189: si la sentencia no cabe (pasada de envuelto), la cadena `if … { a } else if … { b }
-            // …` se expande ENTERA — antes quedaba en una línea de 300 columnas, porque el reparto solo
-            // conocía listas y cadenas de métodos y el forzado partía la CONDICIÓN (`if (f(\n a,\n b\n))`,
-            // que además no convergía). La condición se mide, no se fuerza; las ramas se expanden.
-            let expand = cur.wrap;
-            let c = fmt_cond(cur, cond, "if (", expand);
-            cur.expand_block = expand;
-            let mut s = format!("if ({}) {}", c, fmt_block(cur, then_branch, base));
-            if let Some(eb) = else_branch {
-                match &eb.kind {
-                    // `else if ...`: se encadena sin bloque intermedio.
-                    ExprKind::If { .. } => {
-                        s.push_str(" else ");
-                        s.push_str(&fmt_expr_indented(cur, eb, base));
-                    }
-                    ExprKind::Block(b) => {
-                        s.push_str(" else ");
-                        cur.expand_block = expand;
-                        s.push_str(&fmt_block(cur, b, base));
-                    }
-                    _ => {
-                        // Un else con una expresión no-bloque: envolver en bloque canónico.
-                        s.push_str(&format!(" else {{\n{}{}\n{}}}",
-                            INDENT.repeat(base + 1), fmt_expr(cur, eb, 0), INDENT.repeat(base)));
-                    }
+            // M298 (findings 1.27.11 #9): como sub-expresión compacta se intenta primero en UNA
+            // línea; si no cabe en el ancho (medida desde la sangría del contexto: el contenedor ya
+            // repartió y el operando/campo vive en su propia línea) se expande como siempre.
+            let compact = std::mem::take(&mut cur.compact_if);
+            if compact {
+                let save = cur.i;
+                let s = fmt_if_expr(cur, cond, then_branch, else_branch.as_deref(), base, true);
+                if !cur.wrap || (!s.contains('\n') && indent_width(cur) + s.chars().count() <= MAX_WIDTH) {
+                    return s;
                 }
+                cur.i = save;
             }
-            s
+            fmt_if_expr(cur, cond, then_branch, else_branch.as_deref(), base, false)
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, label } => {
             let c = fmt_cond(cur, cond, "while (", cur.wrap);
-            format!("while ({}) {}", c, fmt_block(cur, body, base))
+            format!("{}while ({}) {}", label_prefix(label), c, fmt_block(cur, body, base))
         }
         ExprKind::Block(b) => fmt_block(cur, b, base),
         ExprKind::Match { scrutinee, arms } if cur.if_lets.contains(&(e.line, e.col)) && arms.len() == 2 => {
@@ -2056,6 +2119,55 @@ mod tests {
         assert!(out.contains("        Option.None => return 0 - 1,\n"), "{out}");
         assert!(out.contains("else { return 99; }") || out.contains("else {\n        return 99;\n    }"), "{out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M300 (IDEAS §97 #2): `break`/`continue` en posición de expresión se conservan como se
+    /// escribieron (no se reescriben como `{ break; }`).
+    #[test]
+    fn keeps_break_and_continue_as_expressions() {
+        let src = "fn f(xs: [Result<int, string>]) -> int {\n    var total = 0;\n    for r in xs {\n        let v = match (r) {\n            Result.Ok(v) => v,\n            Result.Err(_) => break,\n        };\n        if (v < 0) { continue; }\n        total = total + v;\n    }\n    total\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("            Result.Err(_) => break,\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        let src2 = "fn main() {\n    var i = 0;\n    while (i < 5) {\n        i = i + 1;\n        let _ = if (i == 2) { continue } else { i };\n    }\n}\n";
+        // Como cola de un bloque queda canónico con `;` (igual que `return e`, M220).
+        let out2 = fmt(src2);
+        assert!(out2.contains("if (i == 2) {\n            continue;\n        } else {"), "{out2}");
+        assert_eq!(fmt(&out2), out2, "idempotente");
+    }
+
+    /// M308: las etiquetas de bucle y de `break`/`continue` se conservan.
+    #[test]
+    fn keeps_loop_labels() {
+        let src = "fn main() {\n    var n = 0;\n    rows: for i in 0..3 {\n        inner: while (n < 10) {\n            n = n + 1;\n            if (n == 2) {\n                continue rows;\n            }\n            let _ = if (n == 5) {\n                break rows;\n            } else { n };\n            break inner;\n        }\n    }\n}\n";
+        let out = fmt(src);
+        assert_eq!(out, src, "etiquetas intactas: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M298 (findings 1.27.11 #9): un `if` de valor como OPERANDO de una concatenación larga o como
+    /// VALOR de un campo de struct se queda en una línea; el reparto lo hace la cadena de `+` (un
+    /// operando por línea) o la lista de campos (uno por línea). Antes las ramas se expandían y
+    /// quedaban `} else {` en medio de la cadena / de los campos.
+    #[test]
+    fn a_compact_if_inside_a_long_concatenation_or_struct_literal_stays_on_one_line() {
+        let src = "struct Link {\n    name: string,\n    send_dir: int,\n    recv_dir: int,\n}\n\nfn main() {\n    let n = 3;\n    let x = \"zzz\";\n    let c = true;\n    let s = to_string(n) + \" \" + if (n == 1) { \"elemento seleccionado\" } else { \"elementos seleccionados\" } + \" · \" + x + \" · \" + x;\n    let l = Link { name: \"n\", send_dir: if (c) { 1 } else { 2 }, recv_dir: if (c) { 3 } else { 4 }, extra: 0 };\n    print(s);\n    print(l.send_dir);\n}\n";
+        let out = fmt(src);
+        for l in out.lines() {
+            assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
+        }
+        assert!(out.contains("        + if (n == 1) { \"elemento seleccionado\" } else { \"elementos seleccionados\" }\n        + \" · \"\n"), "operando en una linea: {out}");
+        assert!(out.contains("        send_dir: if (c) { 1 } else { 2 },\n        recv_dir: if (c) { 3 } else { 4 },\n"), "campo en una linea: {out}");
+        assert!(!out.contains("} else {\n"), "sin ramas expandidas: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // La forma YA estropeada (ramas expandidas en medio de la cadena) converge a la compacta.
+        let messy = "fn main() {\n    let n = 3;\n    let x = \"zzz\";\n    let s = to_string(n)\n        + \" \" + if (n == 1) {\n        \"elemento seleccionado\"\n    } else {\n        \"elementos seleccionados\"\n    } + \" · \" + x + \" · \" + x;\n    print(s);\n}\n";
+        let out2 = fmt(messy);
+        assert!(out2.contains("        + if (n == 1) { \"elemento seleccionado\" } else { \"elementos seleccionados\" }\n"), "{out2}");
+        assert_eq!(fmt(&out2), out2, "idempotente");
+        // Un `if` de valor en posición de SENTENCIA (`let x = if …`) no cambia: sigue expandiéndose.
+        let stmt = "fn main() {\n    let c = true;\n    let v = if (c) {\n        1\n    } else {\n        2\n    };\n    print(v);\n}\n";
+        assert_eq!(fmt(stmt), stmt);
     }
 
     /// M201 (feedback 22 de ray-remote): `if let` se conserva — con `else`, con `else if` encadenado,
@@ -2535,7 +2647,7 @@ mod tests {
                     cm_expr(eb, n);
                 }
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 cm_expr(cond, n);
                 cm_block(body, n);
             }
@@ -2590,7 +2702,7 @@ mod tests {
                 cm_expr(target, n);
                 cm_expr(value, n);
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     cm_expr(e, n);

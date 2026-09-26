@@ -200,10 +200,12 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
   por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
-- `const` de nivel superior: el valor es un **literal** (o literal negado) o un **arreglo de
-  literales** (anidable; M274). Un `const` arreglo tiene semántica de **literal inyectado**: cada
-  uso del nombre evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo
-  a través de un alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
+- `const` de nivel superior: el valor es un **literal** (o literal negado), un **arreglo o una
+  tupla de valores constantes** (anidable; M274/M307) o el **nombre de otra constante declarada
+  antes** (M307: `const IDS: [int] = [ID_A, ID_B];`, `const TABLE: [(int, string)] = [(ID_A,
+  "a")]`). Un `const` arreglo tiene semántica de **literal inyectado**: cada uso del nombre
+  evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo a través de un
+  alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
 - **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
   cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
   carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
@@ -237,10 +239,10 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | 'var' IDENT [ ':' tipo ] '=' expresion ';'
           | destino '=' expresion ';'
           | 'return' [ expresion ] ';'
-          | 'break' ';'
-          | 'continue' ';'
-          | 'while' '(' expresion ')' bloque
-          | 'for' patron_for 'in' iterable bloque
+          | 'break' [ IDENT ] ';'
+          | 'continue' [ IDENT ] ';'
+          | [ IDENT ':' ] 'while' '(' expresion ')' bloque
+          | [ IDENT ':' ] 'for' patron_for 'in' iterable bloque
           | expresion ';'
           | expresion_con_bloque ;                   (* if/match/bloque como sentencia, sin ';' *)
 expresion_con_bloque = expresion_if | expresion_while | expresion_match | bloque ;
@@ -274,7 +276,20 @@ iterable  = expresion [ '..' expresion ] ;
   de `let`/asignación/`return` —la **espina de sentencias**—, pero **no** dentro de una
   expresión que no sea forma-con-bloque (argumento de llamada, operando, elemento de literal,
   índice): ahí es error de tipos (la expresión envolvente quedaría a medio evaluar). Ambas
-  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto).
+  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto). Un
+  **`while (true)`** sin un `break` que salga de él **diverge** (M301): solo termina por
+  `return`, así que puede ser la cola de una función con retorno declarado (`fn f() -> Result<…>
+  { while (true) { … return Result.Ok(x); … } }`); un `break` de un bucle anidado no cuenta. Como
+  `return`, también son **expresión** (M300): `Result.Err(e) => break,` en un brazo de `match`
+  o `if (c) { continue } else { v }` equivalen a `{ break; }` / `{ continue; }` — el mismo azúcar
+  del parser, con la misma restricción a la espina de sentencias; como cola de un bloque no
+  necesitan `;`. **Bucles etiquetados** (M308): `outer: while (c) { … }` / `outer: for x in xs {
+  … }` en posición de sentencia; `break outer;` y `continue outer;` (también como expresión)
+  salen de / reanudan ese bucle desde cualquier bucle interior de la **misma función** (una
+  función anónima corta el ámbito, como sin etiqueta). Una etiqueta desconocida es error de
+  tipos; un `break outer` desde un bucle interior cuenta como salida de `outer` para la
+  divergencia del `while (true)`. La etiqueta solo precede a un bucle: `x: 1;` sigue siendo
+  error de sintaxis.
 - **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
   que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
   ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente
@@ -322,7 +337,9 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 
 - **`if (cond) bloque [else (bloque | if …)]`** es **expresión**: con `else`, ambas ramas deben
   converger en tipo (una rama que **diverge** —`return`, `panic`— cede el tipo a la otra); sin
-  `else`, unit.
+  `else`, unit. Sin tipo esperado, una rama cuyo valor no determina sus parámetros de tipo
+  (`Option.None`, `[]`) toma el tipo que fija la otra rama (M303, la regla M204 de los brazos
+  de `match`); si ninguna lo fija, es error de inferencia.
 - **`if let patrón = expr bloque [else (bloque | if …)]`** (M40.1b) es azúcar de **`match (expr) {
   patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
@@ -400,7 +417,9 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   del mismo tipo. `==`/`<` no son sobrecargables (usar `igual`/`menor` de `Eq`/`Ord`).
 - **Igualdad `==`/`!=`**: primitivos, `string`, `char`, `bytes`, `u*` (mismo ancho) y
   **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
-  Eq`, vía `igual` (no `==`). **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
+  Eq`, vía `igual` (no `==`). Una **tupla** satisface los bounds `Eq` y `Show` cuando todos
+  sus elementos los satisfacen (M302: `assert_eq(f(), ("h", 81))`; `show` da `(h, 81)`); no
+  tiene impl propio ni satisface otros traits. **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.
 - **Divergencia**: `return`, `break`, `continue`, `panic(…)`, `exit(…)` y las ramas que
   terminan en ellos tipan como "cede el tipo al resto".

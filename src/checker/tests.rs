@@ -73,7 +73,7 @@ fn call_targets(src: &str) -> Vec<String> {
                 walk_expr(left, acc);
                 walk_expr(right, acc);
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 walk_expr(cond, acc);
                 walk_block(body, acc);
             }
@@ -991,6 +991,80 @@ fn return_as_expression_diverges_in_arms_and_else() {
     );
 }
 
+/// M300 (IDEAS §97 #2): `break`/`continue` como expresión divergen igual que con llaves, y fuera
+/// de la espina de sentencias del bucle siguen siendo el error de M191.
+#[test]
+fn break_and_continue_as_expressions_diverge_in_arms() {
+    let ok = "fn f(xs: [Result<int, string>]) -> int { var t = 0; for r in xs { let v = match (r) { Result.Ok(v) => v, Result.Err(_) => break }; let w = if (v < 0) { continue } else { v }; t = t + w; } t }\nfn main() -> int { f([]) }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { while (true) { print(1 + break); } 0 }", "'break' must be a statement of the loop body");
+    err_contains("fn main() -> int { let x = match (Option.Some(1)) { Option.Some(v) => v, Option.None => continue }; x }", "'continue' outside a loop");
+}
+
+/// M301 (IDEAS §97 #3): `while (true)` sin `break` propio diverge (una función `-> Result` puede
+/// terminar en él); con un `break` del propio bucle, no; un `break` de un bucle anidado no cuenta.
+#[test]
+fn an_infinite_while_without_break_diverges() {
+    let ok = "fn f() -> Result<string, string> { while (true) { return Result.Ok(\"x\"); } }\nfn g() -> int { while (true) { while (true) { break; } return 1; } }\nfn main() -> int { 0 }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn f() -> Result<string, string> { while (true) { if (true) { break; } } }\nfn main() -> int { 0 }",
+        "declares return type Result<string, string>, but its body produces unit",
+    );
+    err_contains(
+        "fn f(c: bool) -> int { while (c) { return 1; } }\nfn main() -> int { 0 }",
+        "declares return type int, but its body produces unit",
+    );
+}
+
+/// M302 (IDEAS §97 #5): una tupla satisface `Eq`/`Show` por composición (`assert_eq` sobre tuplas);
+/// otros traits siguen sin implementación.
+#[test]
+fn tuples_satisfy_eq_and_show_bounds() {
+    let ok = "fn f() -> (string, int) { (\"h\", 81) }\nfn main() -> int { assert_eq(f(), (\"h\", 81)); assert_eq((1, (2.5, true)), (1, (2.5, true))); 0 }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains(
+        "fn main() -> int { let xs = sort([(1, 2), (0, 1)]); xs.len() }",
+        "(int, int) cannot implement the trait 'Ord'",
+    );
+}
+
+/// M303 (IDEAS §97 #6): sin anotación, la otra rama del `if` fija `T` de `Option.None`/`[]`.
+#[test]
+fn if_branches_infer_each_other_without_an_expected_type() {
+    let ok = "fn main() -> int { let o = if (true) { Option.Some(1) } else { Option.None }; let p = if (true) { Option.None } else { Option.Some(\"s\") }; let xs = if (true) { [] } else { [1, 2] }; match (o) { Option.Some(v) => v + xs.len() + match (p) { Option.Some(s) => s.len(), Option.None => 0 }, Option.None => 0 } }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { let o = if (true) { Option.None } else { Option.None }; 0 }", "could not infer the type parameter 'T'");
+    err_contains("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "the if branches have different types: Option<int> and int");
+}
+
+/// M307 (IDEAS §97 #7): una constante puede ser una tupla, un arreglo de tuplas o referir a
+/// constantes declaradas antes; una llamada o una constante declarada después siguen sin valer.
+#[test]
+fn constants_accept_tuples_and_earlier_constants() {
+    let ok = "const ID_A: int = 1;\nconst ID_B: int = 2;\nconst IDS: [int] = [ID_A, ID_B];\nconst TABLE: [(int, string)] = [(ID_A, \"a\"), (2, \"b\")];\nconst NEG: [int] = [0 - 0, -1];\nfn main() -> int { let (i, s) = TABLE[0]; i + IDS.len() + s.len() }";
+    let r = check_src(ok.replace("0 - 0", "0").as_str());
+    assert!(r.is_ok(), "{r:?}");
+    err_contains("const X: [int] = [Y];\nconst Y: int = 1;\nfn main() -> int { 0 }", "must be a literal");
+    err_contains("const X: int = len(\"a\");\nfn main() -> int { 0 }", "must be a literal");
+    err_contains("const T: (int, string) = (1, 2);\nfn main() -> int { 0 }", "constant 'T' is declared as (int, string) but its value is (int, int)");
+}
+
+/// M308 (IDEAS §97 #4): `break etiqueta`/`continue etiqueta` apuntan a un bucle etiquetado de la
+/// misma función; una etiqueta desconocida o de fuera de una closure es error; un `break etiqueta`
+/// desde un bucle interior cuenta como salida del exterior para la divergencia (M301).
+#[test]
+fn loop_labels_are_checked_and_count_for_divergence() {
+    let ok = "fn f(xs: [[int]]) -> int { var n = 0; rows: for r in xs { for x in r { if (x < 0) { continue rows; } if (x == 0) { break rows; } n = n + x; } } n }\nfn g() -> int { outer: while (true) { while (true) { break; } return 1; } }\nfn main() -> int { f([]) + g() }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { while (true) { break nope; } 0 }", "unknown loop label 'nope' for 'break'");
+    err_contains("fn main() -> int { a: while (true) { let f = fn() { break a; }; f(); } 0 }", "'break' outside a loop");
+    err_contains(
+        "fn f() -> int { outer: while (true) { while (true) { break outer; } } }\nfn main() -> int { f() }",
+        "declares return type int, but its body produces unit",
+    );
+}
+
 /// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no
 /// genéricos; en genéricos sigue siendo error, como los demás derives.
 #[test]
@@ -1894,4 +1968,13 @@ fn derive_show_unsupported_field_is_error() {
         "@derive(Show) struct S { f: fn(int) -> int } fn main() -> int { 0 }",
         "cannot derive Show for a field of type fn(int) -> int",
     );
+}
+
+/// M299 (findings 1.27.11 #12): un struct de la raíz (sin módulo) al que le falta un campo no lleva
+/// sugerencia de constructor; el caso con módulo (`ui.MenuItem` → `ui.item(...)`) va por el loader
+/// en `tests/ui_cli.rs`.
+#[test]
+fn missing_field_of_a_root_struct_has_no_constructor_hint() {
+    let e = check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1 }; p.x }").expect_err("falta y");
+    assert!(e.msg.contains("missing field 'y' in the literal of 'P'") && !e.msg.contains("constructor"), "{}", e.msg);
 }

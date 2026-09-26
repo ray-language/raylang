@@ -76,7 +76,7 @@ pub enum EKind {
     EField(Expr, string),  // objeto, nombre del campo
     EArray([Expr]),
     EIf(Expr, Block, Option<Expr>),  // cond, then, else (bloque-expr u otro if)
-    EWhile(Expr, Block),
+    EWhile(Expr, Block, string),  // cond, cuerpo, etiqueta ("" = sin etiqueta; M308)
     EBlock(Block),
     EStructLit(string, [FieldInit]),  // Nombre { campo: valor, ... }
     EFunc(FnExpr),  // función anónima fn(...) { ... }
@@ -148,8 +148,8 @@ pub enum SKind {
     SAssign(Expr, Expr),  // destino, valor
     SReturn(Option<Expr>),
     // M191: `break;` / `continue;` (solo dentro de un bucle: lo decide el checker).
-    SBreak,
-    SContinue,
+    SBreak(string),  // etiqueta ("" = el bucle más interno; M308)
+    SContinue(string),
     SExpr(Expr),
 }
 
@@ -478,6 +478,29 @@ fn check_next_ident_named(p: Parser, name: string) -> bool {
 // El token SIGUIENTE (uno por delante) es `name`. Para el lookahead de `pub from …`.
 fn check_next(p: Parser, name: string) -> bool {
     if (p.pos + 1 < p.toks.len()) { tok_name(p.toks[p.pos + 1].kind) == name } else { false }
+}
+
+// M308: la etiqueta opcional tras `break`/`continue`: un identificador; "" si no hay.
+fn loop_label_ref(p: Parser) -> string {
+    match (cur_kind(p)) {
+        TokKind.Ident(name) => {
+            advance(p);
+            name
+        },
+        _ => "",
+    }
+}
+
+// M308: ¿`nombre: while` en la posición actual?
+fn at_loop_label(p: Parser) -> bool {
+    let is_ident = match (cur_kind(p)) {
+        TokKind.Ident(_) => true,
+        _ => false,
+    };
+    is_ident
+        && check_next(p, ":")
+        && p.pos + 2 < p.toks.len()
+        && tok_name(p.toks[p.pos + 2].kind) == "while"
 }
 
 // Consume y devuelve el token actual (no avanza más allá de Eof).
@@ -1106,7 +1129,22 @@ fn block(p: Parser) -> Result<Block, ParseError> {
         } else if (check(p, "break") || check(p, "continue")) {
             stmts.push(break_stmt(p)?);
         } else {
-            let e = expression(p)?;
+            // M308: `outer: while (c) {…}` — la etiqueta se consume y el `while` sigue el camino
+            // normal (sentencia o cola del bloque, como uno sin etiqueta; espejo del parser Rust).
+            var pending = "";
+            if (at_loop_label(p)) {
+                pending = expect_ident(p, "a loop label")?;
+                expect(p, ":", "':' after the loop label")?;
+            }
+            let parsed = expression(p)?;
+            let e = if (pending == "") {
+                parsed
+            } else {
+                match (parsed.kind) {
+                    EKind.EWhile(cnd, b, _) => Expr { kind: EKind.EWhile(cnd, b, pending), line: parsed.line, col: parsed.col },
+                    _ => parsed,
+                }
+            };
             let line = e.line;
             let col = e.col;
             if (eat(p, "=")) {
@@ -1154,8 +1192,13 @@ fn break_stmt(p: Parser) -> Result<Stmt, ParseError> {
     let kw = advance(p);
     let is_break = tok_name(kw.kind) == "break";
     let what = if (is_break) { "break" } else { "continue" };
-    expect(p, ";", "';' after '" + what + "'")?;
-    let kind = if (is_break) { SKind.SBreak } else { SKind.SContinue };
+    // M308: etiqueta opcional (`break outer;`).
+    let label = loop_label_ref(p);
+    // M300: como cola de un bloque no necesita `;` (espejo del parser Rust).
+    if (!check(p, "}")) {
+        expect(p, ";", "';' after '" + what + "'")?;
+    }
+    let kind = if (is_break) { SKind.SBreak(label) } else { SKind.SContinue(label) };
     Result.Ok(Stmt { kind: kind, line: kw.line, col: kw.col })
 }
 
@@ -1404,6 +1447,24 @@ fn primary(p: Parser) -> Result<Expr, ParseError> {
     if (check(p, "match")) {
         return match_expr(p);
     }
+    // M300: `break`/`continue` como expresión → bloque `{ break; }` (espejo del parser Rust).
+    if (check(p, "break") || check(p, "continue")) {
+        let kw = advance(p);
+        let label = loop_label_ref(p);
+        let kind = if (tok_name(kw.kind) == "break") {
+            SKind.SBreak(label)
+        } else {
+            SKind.SContinue(label)
+        };
+        let stmt = Stmt { kind: kind, line: kw.line, col: kw.col };
+        return Result.Ok(
+            Expr {
+                kind: EKind.EBlock(Block { stmts: [stmt], tail: Option.None, line: kw.line, col: kw.col }),
+                line: kw.line,
+                col: kw.col
+            }
+        );
+    }
     // M220: `return [e]` como expresión → bloque `{ return e; }` (espejo del parser Rust).
     if (check(p, "return")) {
         let kw = advance(p);
@@ -1493,7 +1554,7 @@ fn while_expr(p: Parser) -> Result<Expr, ParseError> {
     let cond = expression(p)?;
     expect(p, ")", "')' after the condition")?;
     let body = block(p)?;
-    Result.Ok(Expr { kind: EKind.EWhile(cond, body), line: kw.line, col: kw.col })
+    Result.Ok(Expr { kind: EKind.EWhile(cond, body, ""), line: kw.line, col: kw.col })
 }
 
 // arrayLiteral = '[' [ expression { ',' expression } [ ',' ] ] ']'
@@ -1657,7 +1718,7 @@ fn make_pipeline(recv: Expr, rhs: Expr) -> Expr {
 fn expr_has_block(e: Expr) -> bool {
     match (e.kind) {
         EKind.EIf(_, _, _) => true,
-        EKind.EWhile(_, _) => true,
+        EKind.EWhile(_, _, _) => true,
         EKind.EBlock(_) => true,
         EKind.EMatch(_, _) => true,
         _ => false,

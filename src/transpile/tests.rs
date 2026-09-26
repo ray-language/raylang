@@ -616,7 +616,12 @@ fn a_marked_fn_param_used_as_a_value_is_coerced_to_dyn() {
          fn serve(h: fn(int) -> int) { spawn(fn() { let m: Map<string, fn(int) -> int> = Map.new(); keep(m, h); }); }\n\
          fn main() { serve(fn(x: int) -> int { x + 1 }); }",
     );
-    assert!(rust.contains("(Rc::new(h.clone()) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+    // Dentro de `keep`, `f` (marcado por punto fijo) va al mapa coercionado…
+    assert!(rust.contains("(Rc::new(f.clone()) as Rc<dyn Fn(i64) -> i64>)"), "{rust}");
+    // …pero el REENVÍO marcado→marcado (`keep(m, h)`) pasa el genérico tal cual: un `Rc<dyn Fn>` ni
+    // es `Fn` ni es `Send` (el CI lo cazó con tres E0277 sobre serve → loop → handle → spawn).
+    assert!(rust.contains("let __rt_a1 = h.clone(); keep(__rt_a0, __rt_a1)"), "{rust}");
+    assert!(!rust.contains("(Rc::new(h.clone())"), "{rust}");
 }
 
 #[test]

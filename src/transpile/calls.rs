@@ -142,6 +142,14 @@ impl Transpiler {
                         "'{n}': a closure stored in a variable cannot be passed here in the native binary (this parameter crosses to other fibers); write the closure inline in the call, name a top-level function, or use a handler factory (e.g. serve_raw_with)"
                     ));
                 }
+                // Reenvío marcado→marcado (`fn indirecto(h) { corre(h) }`): el genérico `__F` pasa
+                // tal cual (clonado, como los canales). Sin este arm, `emit_expr` lo coercionaría al
+                // `Rc<dyn Fn>` del tipo raylang (M309, para usos como VALOR), que no es `Send` — el CI
+                // lo cazó con tres E0277 sobre el patrón serve → loop → handle → spawn.
+                ExprKind::Ident(n) if self.send_fn_params.contains(n) => {
+                    write!(out, "{}.clone()", mangle(n)).unwrap();
+                    return Ok(());
+                }
                 _ => {}
             }
         }

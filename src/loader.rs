@@ -501,7 +501,7 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
             shift_expr(target, delta);
             shift_expr(value, delta);
         }
-        StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
         StmtKind::Return { value } => {
             if let Some(v) = value {
                 shift_expr(v, delta);
@@ -586,7 +586,7 @@ fn shift_expr(e: &mut Expr, delta: usize) {
                 shift_expr(x, delta);
             }
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, .. } => {
             shift_expr(cond, delta);
             shift_block(body, delta);
         }
@@ -1150,7 +1150,7 @@ impl<'a> Resolver<'a> {
                     self.declare(n);
                 }
             }
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, .. } => {
                 match iter {
                     ForIter::Range { start, end } => {
                         self.resolve_expr(start, src, module)?;
@@ -1175,7 +1175,7 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(target, src, module)?;
                 self.resolve_expr(value, src, module)?;
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     self.resolve_expr(v, src, module)?;
@@ -1264,7 +1264,7 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(e, src, module)?;
                 }
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 self.resolve_expr(cond, src, module)?;
                 self.resolve_block(body, src, module)?;
             }
@@ -1536,7 +1536,7 @@ impl<'a> TypeRewriter<'a> {
                 self.rewrite_expr(target);
                 self.rewrite_expr(value);
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
                     self.rewrite_expr(v);
@@ -1634,7 +1634,7 @@ impl<'a> TypeRewriter<'a> {
                     self.rewrite_expr(e);
                 }
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 self.rewrite_expr(cond);
                 self.rewrite_block(body);
             }

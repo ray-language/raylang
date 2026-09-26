@@ -3738,7 +3738,7 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 |---|---|---|---|
 | 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | ✅ **M300**: el mismo azúcar de bloque que `return e` (M220) en los dos parsers; `{ break }` como cola sin `;`; fmt lo conserva; tres motores |
 | 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | ✅ **M301**: `expr_diverges` + espejo selfhost; el nativo emite `loop` para `while (true)` (en Rust solo `loop` tiene tipo `!`) |
-| 4 | `break` etiquetado | lenguaje | PROPUESTO (impacto medio: sintaxis nueva) |
+| 4 | `break` etiquetado | lenguaje | ✅ **M308**: `outer: while`/`outer: for` + `break outer`/`continue outer` (también como expresión) en parser, checker (etiquetas por función; divergencia), VM, intérprete, nativo (`'ray_outer:`), fmt y los espejos selfhost |
 | 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | ✅ **M302**: `==` ya existía; los bounds `Eq`/`Show` de una tupla se satisfacen por composición (closure sintetizado en `dict_for`, tres motores) |
 | 6 | `Option.None` infiere `T` de la otra rama del `if` | checker | ✅ **M303**: la regla M204 de los brazos de `match` aplicada al `if` (también `[]`), Rust + selfhost |
 | 7 | Constantes arreglo con tuplas y referencias a otras `const` | checker/compilador | ✅ **M307**: `is_const_literal` admite tuplas y nombres de constantes declaradas antes; los tres motores ya inyectaban la expresión |

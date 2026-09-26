@@ -563,6 +563,9 @@ struct Checker {
     /// M191: profundidad de bucles (`while`/`for`) de la FUNCIÓN en curso — `break`/`continue`
     /// fuera de un bucle es error. Una función anónima la pone a 0 mientras verifica su cuerpo.
     loop_depth: usize,
+    /// M308: las etiquetas de los bucles abiertos de ESTA función (de fuera adentro; `None` = sin
+    /// etiqueta), para validar `break etiqueta`/`continue etiqueta`.
+    loop_labels: Vec<Option<String>>,
     /// M191: ¿estamos en la "espina de sentencias" del cuerpo del bucle? `break`/`continue` solo
     /// valen ahí (cuerpo, ramas de `if`, brazos de `match`, bloques, valores de `let`/asignación):
     /// en un argumento, operando, literal, índice o condición dejarían la expresión envolvente a

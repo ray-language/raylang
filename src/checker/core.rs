@@ -26,6 +26,7 @@ impl Checker {
             errors: Vec::new(),
             current_return: Type::Unit,
             loop_depth: 0,
+            loop_labels: Vec::new(),
             break_ok: false,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
@@ -856,7 +857,7 @@ impl Checker {
                     ))),
                 }
             }
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, label } => {
                 // M27.2: determina el/los tipo(s) de la(s) variable(s) según el iterable, los liga en un
                 // ámbito nuevo y verifica el cuerpo.
                 let bindings: Vec<(String, Type)> = match iter {
@@ -926,16 +927,24 @@ impl Checker {
                 for (n, t) in bindings {
                     self.declare(&n, t, false, (stmt.line, stmt.col));
                 }
-                self.check_loop_body(body)?;
+                self.check_loop_body(body, label.as_deref())?;
                 self.pop_scope();
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
-            StmtKind::Break | StmtKind::Continue => {
+            StmtKind::Break { label } | StmtKind::Continue { label } => {
                 // M191: solo dentro de un bucle de esta función, y solo en la espina de sentencias.
-                let kw = if matches!(stmt.kind, StmtKind::Break) { "break" } else { "continue" };
+                let kw = if matches!(stmt.kind, StmtKind::Break { .. }) { "break" } else { "continue" };
                 if self.loop_depth == 0 {
                     return Err(self.err(stmt.line, stmt.col, format!("'{}' outside a loop", kw)));
+                }
+                // M308: la etiqueta debe ser la de un bucle abierto de ESTA función.
+                if let Some(l) = label
+                    && !self.loop_labels.iter().any(|x| x.as_deref() == Some(l.as_str()))
+                {
+                    return Err(self.err(stmt.line, stmt.col, format!(
+                        "unknown loop label '{}' for '{}' (label a loop with '{}: while' or '{}: for')", l, kw, l, l
+                    )));
                 }
                 if !self.break_ok {
                     return Err(self.err(stmt.line, stmt.col, format!(
@@ -2249,12 +2258,12 @@ impl Checker {
                 // capturado sigue siendo error). Solo guardamos/restauramos el tipo
                 // de retorno, que cambia al de esta función.
                 let saved_ret = self.current_return.clone();
-                let saved_loop = (self.loop_depth, self.break_ok);
+                let saved_loop = (self.loop_depth, self.break_ok, std::mem::take(&mut self.loop_labels));
                 self.loop_depth = 0; // M191: un bucle exterior no es alcanzable desde aquí
                 self.break_ok = false;
                 let r = self.check_fn_body(&fe.params, &fe.return_type, &fe.body, fe.line, fe.col, "the anonymous function");
                 self.current_return = saved_ret;
-                (self.loop_depth, self.break_ok) = saved_loop;
+                (self.loop_depth, self.break_ok, self.loop_labels) = saved_loop;
                 r?;
 
                 Ok(Type::Fn(
@@ -2330,13 +2339,13 @@ impl Checker {
                 }
             }
 
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, label } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
                     return Err(self.err(cond.line, cond.col, format!("the while condition must be bool, not {}", ct)));
                 }
                 // El valor del cuerpo se descarta en cada iteración; el while es unit.
-                self.check_loop_body(body)?;
+                self.check_loop_body(body, label.as_deref())?;
                 Ok(Type::Unit)
             }
 
@@ -2347,11 +2356,13 @@ impl Checker {
     /// Verifica un bloque en su propio ámbito y devuelve su tipo-valor (el de la
     /// expresión final, o unit si no hay).
     /// El cuerpo de un `while`/`for` (M191): un nivel más de bucle y la espina de sentencias abierta.
-    pub(super) fn check_loop_body(&mut self, body: &Block) -> Result<Type, TypeError> {
+    pub(super) fn check_loop_body(&mut self, body: &Block, label: Option<&str>) -> Result<Type, TypeError> {
         let saved = self.break_ok;
         self.loop_depth += 1;
+        self.loop_labels.push(label.map(str::to_string));
         self.break_ok = true;
         let r = self.check_block(body);
+        self.loop_labels.pop();
         self.loop_depth -= 1;
         self.break_ok = saved;
         r

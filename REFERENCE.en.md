@@ -47,6 +47,8 @@ Reserved (cannot be used as identifiers):
 > the rest; as a block tail it needs no `;` (`else { return 99 }`). `ray fmt` keeps it.
 > Likewise **`break` and `continue`** (M300): `Result.Err(e) => break,` in an arm inside a loop,
 > `if (c) { continue } else { v }`; same statement-spine restriction as with braces.
+> **Labeled loops** (M308): `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
+> — `break outer` / `continue outer` from any inner loop of the same function (`outer: while` too).
 
 ## 2. Symbols and operators
 
@@ -631,4 +633,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:c79b3c3b4aaa -->
+<!-- sync: sha256:de5d87843b51 -->

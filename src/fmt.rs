@@ -911,7 +911,7 @@ fn stmt_last_line(cur: &Cur, st: &Stmt) -> usize {
             cur.end_line(value)
         }
         StmtKind::Return { value: Some(e) } | StmtKind::Expr(e) => cur.end_line(e),
-        StmtKind::Return { value: None } | StmtKind::Break | StmtKind::Continue => st.line,
+        StmtKind::Return { value: None } | StmtKind::Break { .. } | StmtKind::Continue { .. } => st.line,
         StmtKind::For { body, .. } => body.end_line,
     }
 }
@@ -990,7 +990,7 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             let ns: Vec<String> = names.iter().map(|n| n.clone().unwrap_or_else(|| "_".to_string())).collect();
             format!("{} ({}) = {};", kw, ns.join(", "), fmt_value(cur, value, indent))
         }
-        StmtKind::For { pat, iter, body } => {
+        StmtKind::For { pat, iter, body, label } => {
             let p = match pat {
                 ForPat::Single(n) => n.clone(),
                 ForPat::Tuple(names) => {
@@ -1003,7 +1003,7 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
                 ForIter::In(e) => fmt_expr(cur, e, 0),
                 ForIter::Iter { expr, .. } => fmt_expr(cur, expr, 0),
             };
-            format!("for {} in {} {}", p, it, fmt_block(cur, body, indent))
+            format!("{}for {} in {} {}", label_prefix(label), p, it, fmt_block(cur, body, indent))
         }
         StmtKind::Assign { target, value } => {
             format!("{} = {};", fmt_expr(cur, target, 0), fmt_value(cur, value, indent))
@@ -1012,8 +1012,8 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             Some(e) => format!("return {};", fmt_value(cur, e, indent)),
             None => "return;".to_string(),
         },
-        StmtKind::Break => "break;".to_string(),
-        StmtKind::Continue => "continue;".to_string(),
+        StmtKind::Break { label } => format!("break{};", label_suffix(label)),
+        StmtKind::Continue { label } => format!("continue{};", label_suffix(label)),
         StmtKind::Expr(e) => {
             // Las formas con bloque (if/while/match/bloque) como sentencia no llevan `;`.
             if is_block_form(e) {
@@ -1043,10 +1043,20 @@ fn fmt_return_expr(cur: &mut Cur, e: &Expr) -> Option<String> {
         StmtKind::Return { value: Some(v) } => format!("return {}", fmt_expr(cur, v, 0)),
         StmtKind::Return { value: None } => "return".to_string(),
         // M300: el mismo azúcar para `break`/`continue` en posición de expresión.
-        StmtKind::Break => "break".to_string(),
-        StmtKind::Continue => "continue".to_string(),
+        StmtKind::Break { label } => format!("break{}", label_suffix(label)),
+        StmtKind::Continue { label } => format!("continue{}", label_suffix(label)),
         _ => return None,
     })
+}
+
+/// M308: `outer: ` delante de un bucle etiquetado; nada sin etiqueta.
+fn label_prefix(label: &Option<String>) -> String {
+    label.as_ref().map(|l| format!("{l}: ")).unwrap_or_default()
+}
+
+/// M308: ` outer` tras `break`/`continue` etiquetados.
+fn label_suffix(label: &Option<String>) -> String {
+    label.as_ref().map(|l| format!(" {l}")).unwrap_or_default()
 }
 
 fn is_block_form(e: &Expr) -> bool {
@@ -1759,9 +1769,9 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
             }
             fmt_if_expr(cur, cond, then_branch, else_branch.as_deref(), base, false)
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, label } => {
             let c = fmt_cond(cur, cond, "while (", cur.wrap);
-            format!("while ({}) {}", c, fmt_block(cur, body, base))
+            format!("{}while ({}) {}", label_prefix(label), c, fmt_block(cur, body, base))
         }
         ExprKind::Block(b) => fmt_block(cur, b, base),
         ExprKind::Match { scrutinee, arms } if cur.if_lets.contains(&(e.line, e.col)) && arms.len() == 2 => {
@@ -2124,6 +2134,15 @@ mod tests {
         let out2 = fmt(src2);
         assert!(out2.contains("if (i == 2) {\n            continue;\n        } else {"), "{out2}");
         assert_eq!(fmt(&out2), out2, "idempotente");
+    }
+
+    /// M308: las etiquetas de bucle y de `break`/`continue` se conservan.
+    #[test]
+    fn keeps_loop_labels() {
+        let src = "fn main() {\n    var n = 0;\n    rows: for i in 0..3 {\n        inner: while (n < 10) {\n            n = n + 1;\n            if (n == 2) {\n                continue rows;\n            }\n            let _ = if (n == 5) {\n                break rows;\n            } else { n };\n            break inner;\n        }\n    }\n}\n";
+        let out = fmt(src);
+        assert_eq!(out, src, "etiquetas intactas: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     /// M298 (findings 1.27.11 #9): un `if` de valor como OPERANDO de una concatenación larga o como
@@ -2628,7 +2647,7 @@ mod tests {
                     cm_expr(eb, n);
                 }
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 cm_expr(cond, n);
                 cm_block(body, n);
             }
@@ -2683,7 +2702,7 @@ mod tests {
                 cm_expr(target, n);
                 cm_expr(value, n);
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(e) = value {
                     cm_expr(e, n);

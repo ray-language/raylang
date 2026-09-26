@@ -136,6 +136,24 @@ struct Fscope {
 struct LoopCtx {
     breaks: [int],
     continues: [int],
+    label: string,  // M308: "" = sin etiqueta
+}
+
+// M308: el índice del bucle destino de un `break`/`continue`: el más interno sin etiqueta, o el
+// etiquetado así (el checker garantiza que existe).
+fn loop_target(comp: Comp, label: string) -> int {
+    let loops = top(comp).loops;
+    if (label == "") {
+        return loops.len() - 1;
+    }
+    var i = loops.len() - 1;
+    while (i >= 0) {
+        if (loops[i].label == label) {
+            return i;
+        }
+        i = i - 1;
+    }
+    panic("the checker validates loop labels")
 }
 
 fn new_fscope() -> Fscope {
@@ -409,12 +427,12 @@ fn emit_expr(comp: Comp, e: Expr) {
             }
             patch_jump(comp, to_end);
         },
-        EKind.EWhile(cond, body) => {
+        EKind.EWhile(cond, body, label) => {
             let loop_start = top(comp).code.len();
             emit_expr(comp, cond);
             let exit = emit(comp, Op.OJumpIfFalse(0));
             emit(comp, Op.OPop);
-            top(comp).loops.push(LoopCtx { breaks: [], continues: [] });
+            top(comp).loops.push(LoopCtx { breaks: [], continues: [], label: label });
             emit_block(comp, body);
             emit(comp, Op.OPop);
             // M191: `continue` cae aquí (tras el Pop del cuerpo), justo antes del salto atrás.
@@ -644,14 +662,14 @@ fn emit_stmt(comp: Comp, s: Stmt) {
         },
         // M191: un salto con destino pendiente; el bucle lo parchea (pila limpia: el checker solo
         // admite break/continue en la espina de sentencias).
-        SKind.SBreak => {
+        SKind.SBreak(label) => {
             let j = emit(comp, Op.OJump(0));
-            let lp = top(comp).loops[top(comp).loops.len() - 1];
+            let lp = top(comp).loops[loop_target(comp, label)];
             lp.breaks.push(j);
         },
-        SKind.SContinue => {
+        SKind.SContinue(label) => {
             let j = emit(comp, Op.OJump(0));
-            let lp = top(comp).loops[top(comp).loops.len() - 1];
+            let lp = top(comp).loops[loop_target(comp, label)];
             lp.continues.push(j);
         },
         SKind.SExpr(e) => {

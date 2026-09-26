@@ -239,10 +239,10 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | 'var' IDENT [ ':' tipo ] '=' expresion ';'
           | destino '=' expresion ';'
           | 'return' [ expresion ] ';'
-          | 'break' ';'
-          | 'continue' ';'
-          | 'while' '(' expresion ')' bloque
-          | 'for' patron_for 'in' iterable bloque
+          | 'break' [ IDENT ] ';'
+          | 'continue' [ IDENT ] ';'
+          | [ IDENT ':' ] 'while' '(' expresion ')' bloque
+          | [ IDENT ':' ] 'for' patron_for 'in' iterable bloque
           | expresion ';'
           | expresion_con_bloque ;                   (* if/match/bloque como sentencia, sin ';' *)
 expresion_con_bloque = expresion_if | expresion_while | expresion_match | bloque ;
@@ -283,7 +283,13 @@ iterable  = expresion [ '..' expresion ] ;
   `return`, también son **expresión** (M300): `Result.Err(e) => break,` en un brazo de `match`
   o `if (c) { continue } else { v }` equivalen a `{ break; }` / `{ continue; }` — el mismo azúcar
   del parser, con la misma restricción a la espina de sentencias; como cola de un bloque no
-  necesitan `;`.
+  necesitan `;`. **Bucles etiquetados** (M308): `outer: while (c) { … }` / `outer: for x in xs {
+  … }` en posición de sentencia; `break outer;` y `continue outer;` (también como expresión)
+  salen de / reanudan ese bucle desde cualquier bucle interior de la **misma función** (una
+  función anónima corta el ámbito, como sin etiqueta). Una etiqueta desconocida es error de
+  tipos; un `break outer` desde un bucle interior cuenta como salida de `outer` para la
+  divergencia del `while (true)`. La etiqueta solo precede a un bucle: `x: 1;` sigue siendo
+  error de sintaxis.
 - **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
   que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
   ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente

@@ -47,6 +47,8 @@ Reservadas (no pueden usarse como identificadores):
 > al resto; como cola de un bloque no necesita `;` (`else { return 99 }`). `ray fmt` lo conserva.
 > Lo mismo **`break` y `continue`** (M300): `Result.Err(e) => break,` en un brazo dentro de un
 > bucle, `if (c) { continue } else { v }`; misma restricción a la espina de sentencias que con llaves.
+> **Bucles etiquetados** (M308): `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
+> — `break outer` / `continue outer` desde cualquier bucle interior de la misma función (`outer: while` igual).
 
 ## 2. Símbolos y operadores
 

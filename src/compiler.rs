@@ -158,6 +158,8 @@ struct Local {
 struct LoopCtx {
     breaks: Vec<usize>,
     continues: Vec<usize>,
+    /// M308: la etiqueta del bucle (`outer: while`), destino de `break outer`/`continue outer`.
+    label: Option<String>,
 }
 
 struct FnScope {
@@ -392,7 +394,7 @@ impl<'a> Compiler<'a> {
 
     /// Compila el cuerpo de un `for` (M27.2). El escrutinio ya está en un ámbito (`begin_scope`). Casos:
     /// rango `a..b`, y `in` sobre arreglo/string (por índice) o `Map` (por keys/values ordenados).
-    fn emit_for(&mut self, pat: &ForPat, iter: &ForIter, body: &Block, line: usize, col: usize) -> Result<(), CompileError> {
+    fn emit_for(&mut self, pat: &ForPat, iter: &ForIter, body: &Block, label: Option<&str>, line: usize, col: usize) -> Result<(), CompileError> {
         // Emite: idx (en `idx_slot`) recorre 0..len; cada iteración liga la(s) variable(s) y ejecuta el
         // cuerpo. `bind` genera el código que, dado `idx` en la pila NO, liga la(s) variable(s).
         match iter {
@@ -415,7 +417,7 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::Less, line, col);
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col);
-                self.begin_loop();
+                self.begin_loop(label);
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col);
                 self.continue_here();
@@ -455,7 +457,7 @@ impl<'a> Compiler<'a> {
                     let names = match pat { ForPat::Tuple(ns) => ns.clone(), _ => unreachable!() };
                     let k_slot = names[0].as_ref().map(|n| self.declare_local(n));
                     let v_slot = names[1].as_ref().map(|n| self.declare_local(n));
-                    self.emit_counted_loop(keys_slot, body, line, col, &mut |c, idx| {
+                    self.emit_counted_loop(keys_slot, body, label, line, col, &mut |c, idx| {
                         if let Some(ks) = k_slot {
                             c.emit(OpCode::GetLocal(keys_slot), line, col);
                             c.emit(OpCode::GetLocal(idx), line, col);
@@ -474,7 +476,7 @@ impl<'a> Compiler<'a> {
                     let arr_slot = self.declare_local("$arr");
                     self.emit(OpCode::InitLocal(arr_slot), line, col);
                     let x_slot = self.declare_local(&name);
-                    self.emit_counted_loop(arr_slot, body, line, col, &mut |c, idx| {
+                    self.emit_counted_loop(arr_slot, body, label, line, col, &mut |c, idx| {
                         c.emit(OpCode::GetLocal(arr_slot), line, col);
                         c.emit(OpCode::GetLocal(idx), line, col);
                         c.emit(OpCode::Index, line, col);
@@ -523,7 +525,7 @@ impl<'a> Compiler<'a> {
                         self.emit(OpCode::InitLocal(*s), line, col);
                     }
                 }
-                self.begin_loop();
+                self.begin_loop(label);
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
                 self.continue_here();
@@ -587,6 +589,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         arr_slot: usize,
         body: &Block,
+        label: Option<&str>,
         line: usize,
         col: usize,
         bind: &mut dyn FnMut(&mut Self, usize),
@@ -605,7 +608,7 @@ impl<'a> Compiler<'a> {
         let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
         self.emit(OpCode::Pop, line, col);
         bind(self, idx_slot); // liga la(s) variable(s) de la iteración
-        self.begin_loop();
+        self.begin_loop(label);
         self.emit_block(body)?;
         self.emit(OpCode::Pop, line, col);
         self.continue_here();
@@ -633,8 +636,18 @@ impl<'a> Compiler<'a> {
 
     /// Parchea un salto previamente emitido para que apunte al final actual.
     /// M191: abre un bucle (antes de emitir su cuerpo).
-    fn begin_loop(&mut self) {
-        self.cur().loops.push(LoopCtx::default());
+    fn begin_loop(&mut self, label: Option<&str>) {
+        self.cur().loops.push(LoopCtx { label: label.map(str::to_string), ..LoopCtx::default() });
+    }
+
+    /// M308: el índice (en `loops`) del bucle al que apunta un `break`/`continue`: el más interno
+    /// sin etiqueta, o el etiquetado así (el checker garantiza que existe).
+    fn loop_target(&mut self, label: Option<&str>) -> usize {
+        let loops = &self.cur().loops;
+        match label {
+            None => loops.len().checked_sub(1).expect("the checker keeps break inside a loop"),
+            Some(l) => loops.iter().rposition(|c| c.label.as_deref() == Some(l)).expect("the checker validates loop labels"),
+        }
     }
 
     /// M191: el punto al que salta `continue` — justo tras el `Pop` del valor del cuerpo, antes
@@ -852,9 +865,9 @@ impl<'a> Compiler<'a> {
                 }
             }
             // M27.2: bucle `for`. Se compila a un bucle contado con locales temporales (`$…`, no chocan).
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, label } => {
                 let saved = self.begin_scope();
-                self.emit_for(pat, iter, body, line, col)?;
+                self.emit_for(pat, iter, body, label.as_deref(), line, col)?;
                 self.end_scope(saved);
             }
             StmtKind::Assign { target, value } => match &target.kind {
@@ -896,13 +909,15 @@ impl<'a> Compiler<'a> {
             // M191: un salto con destino pendiente; el bucle lo parchea. La pila de operandos
             // está limpia aquí (el checker solo admite break/continue en la espina de sentencias:
             // cond/escrutinio ya consumidos, locales en el register file), así que basta el Jump.
-            StmtKind::Break => {
+            StmtKind::Break { label } => {
                 let j = self.emit(OpCode::Jump(0), line, col);
-                self.cur().loops.last_mut().expect("the checker keeps break inside a loop").breaks.push(j);
+                let t = self.loop_target(label.as_deref());
+                self.cur().loops[t].breaks.push(j);
             }
-            StmtKind::Continue => {
+            StmtKind::Continue { label } => {
                 let j = self.emit(OpCode::Jump(0), line, col);
-                self.cur().loops.last_mut().expect("the checker keeps continue inside a loop").continues.push(j);
+                let t = self.loop_target(label.as_deref());
+                self.cur().loops[t].continues.push(j);
             }
             StmtKind::Expr(e) => {
                 self.emit_expr(e)?;
@@ -1051,12 +1066,12 @@ impl<'a> Compiler<'a> {
                 self.patch_jump(to_end);
             }
 
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, label } => {
                 let loop_start = self.cur().chunk.code.len();
                 self.emit_expr(cond)?;
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col); // cond true → descartarla
-                self.begin_loop();
+                self.begin_loop(label.as_deref());
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
                 self.continue_here();

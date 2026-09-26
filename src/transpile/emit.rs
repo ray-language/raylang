@@ -667,8 +667,10 @@ impl Transpiler {
             }
             // M191: los bucles se emiten como `while`/`for`/`loop` de Rust sin closures por medio,
             // así que `break`/`continue` van tal cual al bucle más interno.
-            StmtKind::Break => out.push_str("break;\n"),
-            StmtKind::Continue => out.push_str("continue;\n"),
+            StmtKind::Break { label: None } => out.push_str("break;\n"),
+            StmtKind::Continue { label: None } => out.push_str("continue;\n"),
+            StmtKind::Break { label: Some(l) } => writeln!(out, "break 'ray_{};", l).unwrap(),
+            StmtKind::Continue { label: Some(l) } => writeln!(out, "continue 'ray_{};", l).unwrap(),
             StmtKind::Return { value } => {
                 out.push_str("return");
                 if let Some(v) = value {
@@ -681,7 +683,10 @@ impl Transpiler {
                 self.emit_expr(out, e)?;
                 out.push_str(";\n");
             }
-            StmtKind::For { pat, iter, body } => {
+            StmtKind::For { pat, iter, body, label } => {
+                // M308: la etiqueta del bucle va delante del `loop`/`for`/`while` de Rust que lo
+                // implementa (`'ray_outer: for …`); `break outer` → `break 'ray_outer`.
+                let lbl = label.as_ref().map(|l| format!("'ray_{}: ", l)).unwrap_or_default();
                 // `for (a, b) in <iterador que entrega tuplas>` (M40.2: `enumerate`/`zip`): el `next(it)`
                 // devuelve `Option<(A, B)>` → se destructura en el `match Some((a, b))`. Mismo `loop` que el
                 // caso simple pero ligando dos nombres.
@@ -706,7 +711,7 @@ impl Transpiler {
                     let binders: Vec<String> = names.iter().map(binder).collect();
                     out.push_str("{ let __rt_it = ");
                     self.emit_expr(out, expr)?;
-                    write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some((", mangle(next_fn)).unwrap();
+                    write!(out, "; {}loop {{ match {}(__rt_it.clone()) {{ Some((", lbl, mangle(next_fn)).unwrap();
                     out.push_str(&binders.join(", "));
                     out.push_str(")) => ");
                     self.scopes.push(HashMap::new());
@@ -730,7 +735,7 @@ impl Transpiler {
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
-                    write!(out, "for ({}, {}) in __ray_pairs(&", kn, vn).unwrap();
+                    write!(out, "{}for ({}, {}) in __ray_pairs(&", lbl, kn, vn).unwrap();
                     self.emit_expr(out, expr)?;
                     out.push_str(") ");
                     self.scopes.push(HashMap::new());
@@ -776,13 +781,13 @@ impl Transpiler {
                                 writeln!(out, "    let {} = {}.borrow();", guard, mangle(name)).unwrap();
                                 self.hoisted_borrows.insert(name.clone(), guard);
                             }
-                            write!(out, "    for {} in __rt_lo..__rt_hi ", mangle(&var)).unwrap();
+                            write!(out, "    {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
                         } else {
                             // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
                             // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
                             // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
                             // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
-                            write!(out, "for {} in (", mangle(&var)).unwrap();
+                            write!(out, "{}for {} in (", lbl, mangle(&var)).unwrap();
                             self.emit_expr(out, start)?;
                             out.push_str(")..(");
                             self.emit_expr(out, end)?;
@@ -813,7 +818,7 @@ impl Transpiler {
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
                         if is_string {
-                            write!(out, "for {} in ", mangle(&var)).unwrap();
+                            write!(out, "{}for {} in ", lbl, mangle(&var)).unwrap();
                             self.emit_expr(out, expr)?;
                             out.push_str(".chars() ");
                             self.scopes.push(HashMap::new());
@@ -830,7 +835,7 @@ impl Transpiler {
                             self.emit_expr(out, s)?;
                             out.push_str("; let __rt_spsep = ");
                             self.emit_expr(out, sep)?;
-                            out.push_str("; for __rt_spw in __rt_sps.split(&*__rt_spsep) { let ");
+                            write!(out, "; {}for __rt_spw in __rt_sps.split(&*__rt_spsep) {{ let ", lbl).unwrap();
                             out.push_str(&mangle(&var));
                             out.push_str(" = Rc::<str>::from(__rt_spw); ");
                             self.scopes.push(HashMap::new());
@@ -847,7 +852,7 @@ impl Transpiler {
                             // el incremento va ANTES del cuerpo → `continue` avanza correctamente.
                             out.push_str("{ let __rt_it = ");
                             self.emit_expr(out, expr)?;
-                            out.push_str(".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; while __rt_i < __rt_n { let ");
+                            write!(out, ".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; {}while __rt_i < __rt_n {{ let ", lbl).unwrap();
                             out.push_str(&mangle(&var));
                             out.push_str(" = __rt_it.borrow()[__rt_i].clone(); __rt_i += 1; ");
                             self.scopes.push(HashMap::new());
@@ -880,7 +885,7 @@ impl Transpiler {
                         };
                         out.push_str("{ let __rt_it = ");
                         self.emit_expr(out, expr)?;
-                        write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some(", mangle(next_fn)).unwrap();
+                        write!(out, "; {}loop {{ match {}(__rt_it.clone()) {{ Some(", lbl, mangle(next_fn)).unwrap();
                         out.push_str(&mangle(&var));
                         out.push_str(") => ");
                         self.scopes.push(HashMap::new());
@@ -1290,7 +1295,11 @@ impl Transpiler {
                     self.emit_expr(out, eb)?;
                 }
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, label } => {
+                // M308: etiqueta → `'ray_l: loop`/`'ray_l: while`.
+                if let Some(l) = label {
+                    write!(out, "'ray_{}: ", l).unwrap();
+                }
                 // M301 (IDEAS §97 #3): `while (true)` sin `break` DIVERGE para el checker (una
                 // función `-> Result` puede terminar en él); en Rust solo `loop` tiene tipo `!`
                 // (`while true` es `()` y no compila como cola de esa función).
@@ -2318,7 +2327,7 @@ fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
                 && split_uses_block(name, then_branch, ks)
                 && else_branch.as_ref().is_none_or(|x| split_uses_expr(name, x, ks))
         }
-        ExprKind::While { cond, body } => {
+        ExprKind::While { cond, body, .. } => {
             split_uses_expr(name, cond, ks) && split_uses_block(name, body, ks)
         }
         ExprKind::Block(b) => split_uses_block(name, b, ks),
@@ -2346,7 +2355,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
         StmtKind::LetTuple { names, value, .. } => {
             !names.iter().flatten().any(|n| n == name) && split_uses_expr(name, value, ks)
         }
-        StmtKind::For { pat, iter, body } => {
+        StmtKind::For { pat, iter, body, .. } => {
             let binds = match pat {
                 crate::ast::ForPat::Single(n) => n == name,
                 crate::ast::ForPat::Tuple(ns) => ns.iter().flatten().any(|n| n == name),
@@ -2382,7 +2391,7 @@ fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool 
             }
             target_reads(name, target, ks) && split_uses_expr(name, value, ks)
         }
-        StmtKind::Break | StmtKind::Continue => true, // sin expresiones: como `return;`
+        StmtKind::Break { .. } | StmtKind::Continue { .. } => true, // sin expresiones: como `return;`
         StmtKind::Return { value } => value.as_ref().is_none_or(|v| split_uses_expr(name, v, ks)),
         StmtKind::Expr(e) => split_uses_expr(name, e, ks),
     }

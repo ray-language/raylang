@@ -307,3 +307,79 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "b.png\n2\n1\ntrue\ntrue\ntrue\n");
 }
+
+/// M308 (IDEAS §97 #4): bucles etiquetados — `break outer`/`continue outer` desde un bucle
+/// interior (`for` y `while`, sobre rangos, arreglos, strings y en posición de expresión), en los
+/// tres motores.
+#[test]
+fn labeled_break_and_continue_run_on_all_engines() {
+    let d = tmp("labels");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn find(grid: [[int]], target: int) -> (int, int) {
+    var found = (-1, -1);
+    rows: for i in 0..grid.len() {
+        let row = grid[i];
+        var j = 0;
+        while (j < row.len()) {
+            if (row[j] == target) {
+                found = (i, j);
+                break rows;
+            }
+            if (row[j] < 0) {
+                continue rows;
+            }
+            j = j + 1;
+        }
+    }
+    found
+}
+
+fn first_pair(xs: [int]) -> Result<(int, int), string> {
+    outer: while (true) {
+        for a in xs {
+            for b in xs {
+                if (a + b == 10) {
+                    return Result.Ok((a, b));
+                }
+                if (a > 100) {
+                    break outer;
+                }
+            }
+        }
+        return Result.Err("none");
+    }
+    Result.Err("stopped")
+}
+
+fn main() -> int {
+    let (i, j) = find([[1, 2, 3], [4, -1, 5], [6, 7, 8]], 7);
+    print(i);
+    print(j);
+    let (a, b) = find([[1, 2], [3, 4]], 9);
+    print(a + b);
+    print(first_pair([3, 7, 1]).unwrap_or((0, 0)).0);
+    print(first_pair([200]).is_err());
+    var n = 0;
+    scan: for x in "ab:cd" {
+        for y in [1, 2] {
+            if (x == ':') {
+                break scan;
+            }
+            n = n + y;
+        }
+    }
+    print(n);
+    var c = 0;
+    lp: while (c < 10) {
+        c = c + 1;
+        let _ = if (c == 3) { break lp } else { c };
+    }
+    print(c);
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "2\n1\n-2\n3\ntrue\n6\n3\n");
+}

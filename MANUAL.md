@@ -834,6 +834,19 @@ return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así q
 Y dentro de un bucle, **`break` y `continue`** son expresión igual (M300): `Result.Err(e) => break,`
 en el brazo de un `match`, `let w = if (v < 0) { continue } else { v };`.
 
+**Bucles etiquetados** (M308): para salir de (o reanudar) un bucle EXTERIOR desde uno interior,
+etiquétalo — `nombre:` delante del `while`/`for` — y nombra la etiqueta en el `break`/`continue`.
+Sin la bandera que raycode arrastraba para salir de dos bucles:
+
+```rust
+rows: for row in grid {
+    for cell in row {
+        if (cell < 0) { continue rows; }     // siguiente fila
+        if (cell == target) { break rows; }  // fuera de los dos bucles
+    }
+}
+```
+
 Y azúcar `if let` para un solo caso:
 
 ```rust

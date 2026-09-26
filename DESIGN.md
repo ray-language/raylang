@@ -14831,3 +14831,28 @@ local en el móvil (con `listen_local`, M297). Y `_deliver_json` viaja en los sh
 (M225): lo documentado es cómo detectar un shell viejo y que regenerar el bundle preserva firma,
 keystore e icono. Implementar `ray://app` en los shells móviles queda propuesto en §97.
 
+## 290. M308 — Bucles etiquetados (sep 2026)
+
+Origen: IDEAS §97 #4 — raycode conservaba una bandera para salir de dos bucles anidados en su
+bucle SSE. Sintaxis: `etiqueta: while (…) {…}` / `etiqueta: for … {…}` en posición de sentencia
+(una etiqueta no es una expresión: `x: 1;` sigue siendo el error de siempre; el parser mira tres
+tokens —`IDENT ':' while|for`— y solo entonces la consume), y `break etiqueta` /
+`continue etiqueta`, también como expresión (M300). Un `while` etiquetado sigue el camino
+normal de la forma-con-bloque: al final de un bloque es su cola, como uno sin etiqueta — el
+primer intento lo empujaba siempre como sentencia y `ray fmt` le colgaba un `;` fantasma.
+
+Decisiones: (1) la etiqueta vive en los nodos (`ExprKind::While { label }`, `StmtKind::For {
+label }`, `Break { label }`), no en una sentencia envolvente: cada recorrido del AST que destruye
+el nodo deja de compilar hasta que lo trata, y ningún walker (lowering, análisis del nativo)
+puede olvidarse por silencio. (2) El checker guarda las etiquetas de los bucles abiertos de la
+función (`loop_labels`, que una closure vacía como hace con `loop_depth`) y valida el destino;
+la divergencia de `while (true)` (M301) cuenta un `break etiqueta` desde un bucle interior como
+salida del exterior (`loop_breaks_in` desciende a los bucles anidados solo buscando esa
+etiqueta). (3) VM: `LoopCtx` lleva la etiqueta y `break` parchea el salto en el bucle destino —
+la pila de operandos sigue limpia (espina de sentencias) y los locales viven en el register file,
+así que saltar por encima de un `for` interior no deja nada colgado. (4) Intérprete:
+`Flow::Break(Option<String>)`; un bucle que no reconoce la etiqueta la propaga. (5) Nativo:
+etiquetas de Rust, `'ray_outer:` delante del `loop`/`for`/`while` que implementa cada forma del
+`for` (ocho formas, una por optimización). (6) Los cuatro espejos selfhost (parser, checker,
+intérprete, compilador) y `parse_dump` con la etiqueta en el volcado de paridad.
+

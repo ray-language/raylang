@@ -149,8 +149,8 @@ pub enum Flow {
     FReturn(Value),
     FError(RuntimeError),
     // M191: `break` / `continue` hacia el bucle más interno (nunca llegan al borde de una llamada).
-    FBreak,
-    FContinue,
+    FBreak(string),  // M308: la etiqueta del bucle destino ("" = el más interno)
+    FContinue(string),
 }
 
 // El estado del intérprete: tabla de funciones por nombre, definiciones de structs (campos en orden) y
@@ -1453,8 +1453,8 @@ fn call_body(
         Result.Err(flow) => match (flow) {
             Flow.FReturn(v) => Result.Ok(v),
             Flow.FError(e) => Result.Err(Flow.FError(e)),
-            Flow.FBreak => panic("the checker keeps break inside a loop"),
-            Flow.FContinue => panic("the checker keeps continue inside a loop"),
+            Flow.FBreak(_) => panic("the checker keeps break inside a loop"),
+            Flow.FContinue(_) => panic("the checker keeps continue inside a loop"),
         },
     }
 }
@@ -1504,8 +1504,8 @@ fn exec_stmt(c: Interp, s: Stmt) -> Result<Value, Flow> {
                 Option.None => Result.Err(Flow.FReturn(Value.VUnit)),
             }
         },
-        SKind.SBreak => Result.Err(Flow.FBreak),
-        SKind.SContinue => Result.Err(Flow.FContinue),
+        SKind.SBreak(l) => Result.Err(Flow.FBreak(l)),
+        SKind.SContinue(l) => Result.Err(Flow.FContinue(l)),
         SKind.SExpr(e) => {
             eval_expr(c, e)?;
             Result.Ok(Value.VUnit)
@@ -1543,17 +1543,25 @@ fn exec_block(c: Interp, b: Block) -> Result<Value, Flow> {
 
 // Un bucle `while`: re-evalúa la condición; el valor del cuerpo se descarta, pero un `return`/error
 // dentro se propaga.
-fn eval_while(c: Interp, cond: Expr, body: Block) -> Result<Value, Flow> {
+fn eval_while(c: Interp, cond: Expr, body: Block, label: string) -> Result<Value, Flow> {
     var go = eval_bool(c, cond)?;
     while (go) {
         // M191: `break` corta el bucle, `continue` pasa a la siguiente vuelta; lo demás se propaga.
+        // M308: uno ETIQUETADO que no apunte a este bucle se propaga al de fuera.
         match (exec_block(c, body)) {
             Result.Ok(v) => { },
             Result.Err(flow) => match (flow) {
-                Flow.FBreak => {
+                Flow.FBreak(l) => {
+                    if (l != "" && l != label) {
+                        return Result.Err(Flow.FBreak(l));
+                    }
                     go = false;
                 },
-                Flow.FContinue => { },
+                Flow.FContinue(l) => {
+                    if (l != "" && l != label) {
+                        return Result.Err(Flow.FContinue(l));
+                    }
+                },
                 Flow.FReturn(v) => {
                     return Result.Err(Flow.FReturn(v));
                 },
@@ -1604,7 +1612,7 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
                 }
             }
         },
-        EKind.EWhile(cond, body) => eval_while(c, cond, body),
+        EKind.EWhile(cond, body, label) => eval_while(c, cond, body, label),
         EKind.EBlock(b) => exec_block(c, b),
         EKind.EIndex(arr_e, idx_e) => eval_index(c, arr_e, idx_e),
         EKind.EField(obj, fname) => eval_field_or_enum(c, obj, fname),
@@ -1865,8 +1873,8 @@ pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
                 Result.Err(flow) => match (flow) {
                     Flow.FReturn(v) => Result.Ok(v),
                     Flow.FError(e) => Result.Err(e),
-                    Flow.FBreak => panic("the checker keeps break inside a loop"),
-                    Flow.FContinue => panic("the checker keeps continue inside a loop"),
+                    Flow.FBreak(_) => panic("the checker keeps break inside a loop"),
+                    Flow.FContinue(_) => panic("the checker keeps continue inside a loop"),
                 },
             }
         },

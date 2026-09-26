@@ -855,8 +855,10 @@ impl Parser {
             // M191: `break;` / `continue;` — sentencias sin valor; su validez la decide el checker.
             if self.check(&TokenKind::Break) || self.check(&TokenKind::Continue) {
                 let kw = self.advance();
-                let kind = if kw.kind == TokenKind::Break { StmtKind::Break } else { StmtKind::Continue };
-                let what = if kind == StmtKind::Break { "break" } else { "continue" };
+                let what = if kw.kind == TokenKind::Break { "break" } else { "continue" };
+                // M308: etiqueta opcional (`break outer;`).
+                let label = self.loop_label_ref();
+                let kind = if kw.kind == TokenKind::Break { StmtKind::Break { label } } else { StmtKind::Continue { label } };
                 // M300: como COLA de un bloque (`{ continue }`) no necesita `;` (igual que `return e`, M220).
                 if !self.check(&TokenKind::RBrace) {
                     self.expect(&TokenKind::Semicolon, &format!("';' after '{}'", what))?;
@@ -867,6 +869,25 @@ impl Parser {
             if self.check(&TokenKind::For) {
                 statements.push(self.for_stmt()?);
                 continue;
+            }
+            // M308 (IDEAS §97 #4): bucle ETIQUETADO en posición de sentencia — `outer: while (c) {…}`
+            // / `outer: for x in xs {…}` — para `break outer;` / `continue outer;` desde un bucle
+            // interior. Solo aquí: una etiqueta no es una expresión.
+            let mut pending_label: Option<String> = None;
+            if self.at_loop_label() {
+                let (label, _, _) = self.expect_ident("a loop label")?;
+                self.expect(&TokenKind::Colon, "':' after the loop label")?;
+                if self.check(&TokenKind::For) {
+                    let mut st = self.for_stmt()?;
+                    if let StmtKind::For { label: l, .. } = &mut st.kind {
+                        *l = Some(label);
+                    }
+                    statements.push(st);
+                    continue;
+                }
+                // Un `while` etiquetado sigue el camino normal de la forma-con-bloque (sentencia o
+                // cola del bloque, como uno sin etiqueta); la etiqueta se cuelga al volver.
+                pending_label = Some(label);
             }
             // M153 (SPEC §5): una expresión que COMIENZA con if/while/match/'{' en posición
             // de sentencia se parsea SOLO como esa forma-con-bloque — sin bucle postfijo ni
@@ -879,7 +900,10 @@ impl Parser {
                 TokenKind::If | TokenKind::While | TokenKind::Match | TokenKind::LBrace
             );
             let expr = if in_statement_position {
-                let e = self.block_form_expr()?;
+                let mut e = self.block_form_expr()?;
+                if let (Some(label), ExprKind::While { label: l, .. }) = (pending_label.take(), &mut e.kind) {
+                    *l = Some(label);
+                }
                 // Error dirigido: los únicos postfijos plausibles que la regla mata. El
                 // resto de tokens no-iniciadores caen en el error genérico de la sentencia
                 // siguiente.
@@ -1094,7 +1118,7 @@ impl Parser {
         };
         let body = self.block()?;
         Ok(Stmt {
-            kind: StmtKind::For { pat, iter, body },
+            kind: StmtKind::For { pat, iter, body, label: None },
             line: kw.line,
             col: kw.col,
         })
@@ -1498,7 +1522,8 @@ impl Parser {
             // ya limita a la espina de sentencias del bucle. Sin valor (no lo tienen).
             TokenKind::Break | TokenKind::Continue => {
                 let kw = self.advance();
-                let kind = if kw.kind == TokenKind::Break { StmtKind::Break } else { StmtKind::Continue };
+                let label = self.loop_label_ref();
+                let kind = if kw.kind == TokenKind::Break { StmtKind::Break { label } } else { StmtKind::Continue { label } };
                 self.return_expr_sites.insert((kw.line, kw.col));
                 let stmt = Stmt { kind, line: kw.line, col: kw.col };
                 return Ok(Expr {
@@ -1708,7 +1733,7 @@ impl Parser {
         self.expect(&TokenKind::RParen, "')' after the condition")?;
         let body = self.block()?;
         Ok(Expr {
-            kind: ExprKind::While { cond: Box::new(cond), body },
+            kind: ExprKind::While { cond: Box::new(cond), body, label: None },
             line: kw.line,
             col: kw.col,
         })
@@ -1888,6 +1913,24 @@ impl Parser {
 
     fn peek(&self) -> &Token {
         &self.tokens[self.pos]
+    }
+
+    /// M308: la etiqueta opcional tras `break`/`continue` (`break outer`): un identificador que
+    /// no sea el inicio de otra cosa. `None` ante `;` `}` `,` `)` `]` (o cualquier no-identificador).
+    fn loop_label_ref(&mut self) -> Option<String> {
+        if let TokenKind::Ident(name) = self.peek_kind().clone() {
+            self.advance();
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    /// M308: ¿la posición actual es una etiqueta de bucle `nombre: while`/`nombre: for`?
+    fn at_loop_label(&self) -> bool {
+        matches!(self.peek_kind(), TokenKind::Ident(_))
+            && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Colon))
+            && matches!(self.tokens.get(self.pos + 2).map(|t| &t.kind), Some(TokenKind::While) | Some(TokenKind::For))
     }
 
     fn peek_kind(&self) -> &TokenKind {
@@ -2086,8 +2129,8 @@ mod tests {
         let body = &prog.functions[0].body;
         let StmtKind::Expr(w) = &body.statements[0].kind else { panic!("while como sentencia") };
         let ExprKind::While { body: lb, .. } = &w.kind else { panic!("while") };
-        assert!(matches!(lb.statements[0].kind, StmtKind::Break));
-        assert!(matches!(lb.statements[1].kind, StmtKind::Continue));
+        assert!(matches!(lb.statements[0].kind, StmtKind::Break { .. }));
+        assert!(matches!(lb.statements[1].kind, StmtKind::Continue { .. }));
         // M300: sin `;` solo vale como COLA del bloque (`{ break }`, como `return e`); seguido de
         // otra sentencia sigue siendo error de sintaxis.
         let tokens = crate::lexer::lex("fn main() { while (true) { break print(1); } }").expect("lex ok");
@@ -2096,7 +2139,24 @@ mod tests {
         let prog = parse_prog("fn main() { while (true) { break } }");
         let w = prog.functions[0].body.tail.as_ref().expect("el while es la cola de main");
         let ExprKind::While { body: lb, .. } = &w.kind else { panic!("while") };
-        assert!(matches!(lb.statements[0].kind, StmtKind::Break) && lb.tail.is_none());
+        assert!(matches!(lb.statements[0].kind, StmtKind::Break { .. }) && lb.tail.is_none());
+    }
+
+    #[test]
+    fn loop_labels_parse_only_before_loops() {
+        // M308: `outer: while`/`outer: for` en posición de sentencia; `break outer;` y `continue outer`
+        // (también como expresión). `x: 1;` no es una etiqueta (error de siempre).
+        let prog = parse_prog("fn main() { outer: while (true) { inner: for i in 0..3 { break outer; continue inner; } } }");
+        // Como un `while` sin etiqueta: al final del bloque es su COLA.
+        let w = prog.functions[0].body.tail.as_ref().expect("el while etiquetado es la cola de main");
+        let ExprKind::While { body: wb, label, .. } = &w.kind else { panic!("while") };
+        assert_eq!(label.as_deref(), Some("outer"));
+        let StmtKind::For { body: fb, label: fl, .. } = &wb.statements[0].kind else { panic!("for etiquetado") };
+        assert_eq!(fl.as_deref(), Some("inner"));
+        assert!(matches!(&fb.statements[0].kind, StmtKind::Break { label: Some(l) } if l == "outer"));
+        assert!(matches!(&fb.statements[1].kind, StmtKind::Continue { label: Some(l) } if l == "inner"));
+        let tokens = crate::lexer::lex("fn main() { x: 1; }").expect("lex ok");
+        assert!(parse(tokens).is_err(), "una etiqueta solo precede a un bucle");
     }
 
     #[test]
@@ -2320,7 +2380,7 @@ mod tests {
                     .unwrap_or_else(|| "_".to_string());
                 format!("(if {} {} {})", sx(cond), sblock(then_branch), els)
             }
-            ExprKind::While { cond, body } => format!("(while {} {})", sx(cond), sblock(body)),
+            ExprKind::While { cond, body, .. } => format!("(while {} {})", sx(cond), sblock(body)),
             ExprKind::Block(b) => sblock(b),
             ExprKind::Match { scrutinee, arms } => {
                 let a: Vec<String> = arms.iter().map(|arm| format!("{} => {}", spat(&arm.pattern), sx(&arm.body))).collect();
@@ -2386,8 +2446,8 @@ mod tests {
                 Some(v) => format!("return {}", sx(v)),
                 None => "return".to_string(),
             },
-            StmtKind::Break => "break".to_string(),
-            StmtKind::Continue => "continue".to_string(),
+            StmtKind::Break { .. } => "break".to_string(),
+            StmtKind::Continue { .. } => "continue".to_string(),
             StmtKind::Expr(e) => sx(e),
         }
     }

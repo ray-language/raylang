@@ -31,6 +31,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **Bucles etiquetados** (M308, IDEAS §97 #4). `outer: for row in grid { for x in row { if (x == 0)
+  { break outer; } } }` — `break outer` / `continue outer` (también como expresión) salen de o
+  reanudan un bucle exterior de la misma función; `outer: while` igual. Una etiqueta desconocida es
+  error de tipos y `ray fmt` las conserva. El último hallazgo de lenguaje del barrido.
+
 - **Constantes con tuplas, `fs.sync_data` y la verdad sobre el móvil** (M307, IDEAS §97 #7, #35,
   #28/#37). Una `const` puede ser una tupla, un arreglo de tuplas o referir a constantes declaradas
   antes (`const TABLE: [(int, string)] = [(ID_A, "a.png")]`). `fs.sync_data(h)` es el fdatasync

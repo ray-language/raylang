@@ -73,7 +73,7 @@ fn call_targets(src: &str) -> Vec<String> {
                 walk_expr(left, acc);
                 walk_expr(right, acc);
             }
-            ExprKind::While { cond, body } => {
+            ExprKind::While { cond, body, .. } => {
                 walk_expr(cond, acc);
                 walk_block(body, acc);
             }
@@ -1048,6 +1048,21 @@ fn constants_accept_tuples_and_earlier_constants() {
     err_contains("const X: [int] = [Y];\nconst Y: int = 1;\nfn main() -> int { 0 }", "must be a literal");
     err_contains("const X: int = len(\"a\");\nfn main() -> int { 0 }", "must be a literal");
     err_contains("const T: (int, string) = (1, 2);\nfn main() -> int { 0 }", "constant 'T' is declared as (int, string) but its value is (int, int)");
+}
+
+/// M308 (IDEAS §97 #4): `break etiqueta`/`continue etiqueta` apuntan a un bucle etiquetado de la
+/// misma función; una etiqueta desconocida o de fuera de una closure es error; un `break etiqueta`
+/// desde un bucle interior cuenta como salida del exterior para la divergencia (M301).
+#[test]
+fn loop_labels_are_checked_and_count_for_divergence() {
+    let ok = "fn f(xs: [[int]]) -> int { var n = 0; rows: for r in xs { for x in r { if (x < 0) { continue rows; } if (x == 0) { break rows; } n = n + x; } } n }\nfn g() -> int { outer: while (true) { while (true) { break; } return 1; } }\nfn main() -> int { f([]) + g() }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { while (true) { break nope; } 0 }", "unknown loop label 'nope' for 'break'");
+    err_contains("fn main() -> int { a: while (true) { let f = fn() { break a; }; f(); } 0 }", "'break' outside a loop");
+    err_contains(
+        "fn f() -> int { outer: while (true) { while (true) { break outer; } } }\nfn main() -> int { f() }",
+        "declares return type int, but its body produces unit",
+    );
 }
 
 /// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no

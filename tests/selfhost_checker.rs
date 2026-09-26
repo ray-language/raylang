@@ -96,6 +96,13 @@ fn programas_valid_vals() {
     compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { Option.None }; let p = if (true) { Option.None } else { Option.Some(2) }; let xs = if (true) { [] } else { [1] }; match (o) { Option.Some(v) => v + xs.len(), Option.None => 0 } }", "sc_if_infers_other_branch.ray");
     compare("fn main() -> int { let o = if (true) { Option.None } else { Option.None }; 0 }", "sc_if_both_none.ray");
     compare("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "sc_if_mismatch.ray");
+    // M308: etiquetas de bucle — válida, desconocida, fuera de la función (closure) y la divergencia
+    // de `while (true)` con un `break etiqueta` desde el bucle interior.
+    compare("fn main() -> int { var i = 0; outer: while (i < 3) { i = i + 1; while (true) { break outer; } } i }", "sc_label_ok.ray");
+    compare("fn main() -> int { while (true) { break nope; } 0 }", "sc_label_unknown.ray");
+    compare("fn main() -> int { a: while (true) { let f = fn() { break a; }; f(); } 0 }", "sc_label_closure.ray");
+    compare("fn f() -> int { outer: while (true) { while (true) { break outer; } } }\nfn main() -> int { f() }", "sc_label_not_diverging.ray");
+    compare("fn f() -> int { outer: while (true) { while (true) { break; } return 1; } }\nfn main() -> int { f() }", "sc_label_inner_break_diverges.ray");
     compare("fn main() -> int { var i = 0; while (i < 10) { i = i + 1; } i }", "sc_while.ray");
     compare("fn main() -> int { if (1 < 2) { 1 } else { 2 } }", "sc_if.ray");
     compare("fn double(x: int) -> int { x * 2 } fn main() -> int { double(21) }", "sc_call.ray");

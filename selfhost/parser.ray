@@ -1154,7 +1154,10 @@ fn break_stmt(p: Parser) -> Result<Stmt, ParseError> {
     let kw = advance(p);
     let is_break = tok_name(kw.kind) == "break";
     let what = if (is_break) { "break" } else { "continue" };
-    expect(p, ";", "';' after '" + what + "'")?;
+    // M300: como cola de un bloque no necesita `;` (espejo del parser Rust).
+    if (!check(p, "}")) {
+        expect(p, ";", "';' after '" + what + "'")?;
+    }
     let kind = if (is_break) { SKind.SBreak } else { SKind.SContinue };
     Result.Ok(Stmt { kind: kind, line: kw.line, col: kw.col })
 }
@@ -1403,6 +1406,19 @@ fn primary(p: Parser) -> Result<Expr, ParseError> {
     }
     if (check(p, "match")) {
         return match_expr(p);
+    }
+    // M300: `break`/`continue` como expresión → bloque `{ break; }` (espejo del parser Rust).
+    if (check(p, "break") || check(p, "continue")) {
+        let kw = advance(p);
+        let kind = if (tok_name(kw.kind) == "break") { SKind.SBreak } else { SKind.SContinue };
+        let stmt = Stmt { kind: kind, line: kw.line, col: kw.col };
+        return Result.Ok(
+            Expr {
+                kind: EKind.EBlock(Block { stmts: [stmt], tail: Option.None, line: kw.line, col: kw.col }),
+                line: kw.line,
+                col: kw.col
+            }
+        );
     }
     // M220: `return [e]` como expresión → bloque `{ return e; }` (espejo del parser Rust).
     if (check(p, "return")) {

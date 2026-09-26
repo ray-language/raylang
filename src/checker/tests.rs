@@ -991,6 +991,16 @@ fn return_as_expression_diverges_in_arms_and_else() {
     );
 }
 
+/// M300 (IDEAS §97 #2): `break`/`continue` como expresión divergen igual que con llaves, y fuera
+/// de la espina de sentencias del bucle siguen siendo el error de M191.
+#[test]
+fn break_and_continue_as_expressions_diverge_in_arms() {
+    let ok = "fn f(xs: [Result<int, string>]) -> int { var t = 0; for r in xs { let v = match (r) { Result.Ok(v) => v, Result.Err(_) => break }; let w = if (v < 0) { continue } else { v }; t = t + w; } t }\nfn main() -> int { f([]) }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { while (true) { print(1 + break); } 0 }", "'break' must be a statement of the loop body");
+    err_contains("fn main() -> int { let x = match (Option.Some(1)) { Option.Some(v) => v, Option.None => continue }; x }", "'continue' outside a loop");
+}
+
 /// M221 (ray-sublime #14): `@derive(Clone)` genera `clone(self) -> Self` en structs y enums no
 /// genéricos; en genéricos sigue siendo error, como los demás derives.
 #[test]

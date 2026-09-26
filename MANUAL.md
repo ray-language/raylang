@@ -822,6 +822,8 @@ match (evento) {
 Un brazo puede **salir de la función** con `return` como expresión (M220): `Option.None =>
 return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así que no fija el tipo del
 `match` (lo fija el otro brazo). Lo mismo en un `else` (`let v = if (ok) { x } else { return 99 };`).
+Y dentro de un bucle, **`break` y `continue`** son expresión igual (M300): `Result.Err(e) => break,`
+en el brazo de un `match`, `let w = if (v < 0) { continue } else { v };`.
 
 Y azúcar `if let` para un solo caso:
 

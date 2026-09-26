@@ -490,6 +490,8 @@ fn function_minima() {
     compare("fn main() -> int { 0 }", "sp_min.ray");
     // M191: break/continue como sentencias (dump `(break)`/`(continue)`).
     compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; if (i == 2) { continue; } break; } i }", "sp_break.ray");
+    // M300: break/continue como EXPRESIÓN (el mismo azúcar de bloque que `return e`, M220).
+    compare("fn main() -> int { var i = 0; while (i < 3) { i = i + 1; let v = match (Option.Some(i)) { Option.Some(x) => x, Option.None => break }; let w = if (v == 1) { continue } else { v }; i = i + w; } i }", "sp_break_expr.ray");
     // M188: `from` como nombre de parámetro → el mismo mensaje de palabra reservada.
     compare("fn slice(bits: [int], from: int) -> [int] { bits }", "sp_from_param.ray");
     compare("fn nada() { }", "sp_unit.ray");

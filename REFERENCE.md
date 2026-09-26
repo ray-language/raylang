@@ -45,6 +45,8 @@ Reservadas (no pueden usarse como identificadores):
 > `return [e]` es también **expresión** (M220): en un brazo de `match`, en un `else` o como valor
 > de `let`, `Option.None => return code,` equivale a `{ return code; }` — **diverge** y cede el tipo
 > al resto; como cola de un bloque no necesita `;` (`else { return 99 }`). `ray fmt` lo conserva.
+> Lo mismo **`break` y `continue`** (M300): `Result.Err(e) => break,` en un brazo dentro de un
+> bucle, `if (c) { continue } else { v }`; misma restricción a la espina de sentencias que con llaves.
 
 ## 2. Símbolos y operadores
 

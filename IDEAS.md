@@ -3736,7 +3736,7 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 
 | # | Hallazgo | Clase | Estado |
 |---|---|---|---|
-| 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | PROPUESTO — tres apps lo pidieron; parser + checker (divergencia) + fmt + selfhost |
+| 2 | `break`/`continue` como expresiones (`=> break,` en un brazo), simetría con `return e` (1.11) | lenguaje | ✅ **M300**: el mismo azúcar de bloque que `return e` (M220) en los dos parsers; `{ break }` como cola sin `;`; fmt lo conserva; tres motores |
 | 3 | `while (true)` sin `break` como divergente (evita el `Result.Err("unreachable")` muerto) | checker | PROPUESTO — análisis de divergencia: bucle infinito sin `break` = `!` |
 | 4 | `break` etiquetado | lenguaje | PROPUESTO (impacto medio: sintaxis nueva) |
 | 5 | `==`/`assert_eq` sobre tuplas | checker/runtime | PROPUESTO — `is_comparable` + `values_equal` + nativo `PartialEq` |

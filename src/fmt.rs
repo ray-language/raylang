@@ -1033,16 +1033,19 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
 }
 
 /// M220: `return [e]` en posición de expresión — el parser lo dejó como bloque `{ return e; }` y
-/// anotó el sitio; se reemite como `return e` (no como bloque).
+/// anotó el sitio; se reemite como `return e` (no como bloque). M300: ídem `break`/`continue`.
 fn fmt_return_expr(cur: &mut Cur, e: &Expr) -> Option<String> {
     let ExprKind::Block(b) = &e.kind else { return None };
     if !cur.return_exprs.contains(&(e.line, e.col)) || b.statements.len() != 1 || b.tail.is_some() {
         return None;
     }
-    let StmtKind::Return { value } = &b.statements[0].kind else { return None };
-    Some(match value {
-        Some(v) => format!("return {}", fmt_expr(cur, v, 0)),
-        None => "return".to_string(),
+    Some(match &b.statements[0].kind {
+        StmtKind::Return { value: Some(v) } => format!("return {}", fmt_expr(cur, v, 0)),
+        StmtKind::Return { value: None } => "return".to_string(),
+        // M300: el mismo azúcar para `break`/`continue` en posición de expresión.
+        StmtKind::Break => "break".to_string(),
+        StmtKind::Continue => "continue".to_string(),
+        _ => return None,
     })
 }
 
@@ -2106,6 +2109,21 @@ mod tests {
         assert!(out.contains("        Option.None => return 0 - 1,\n"), "{out}");
         assert!(out.contains("else { return 99; }") || out.contains("else {\n        return 99;\n    }"), "{out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M300 (IDEAS §97 #2): `break`/`continue` en posición de expresión se conservan como se
+    /// escribieron (no se reescriben como `{ break; }`).
+    #[test]
+    fn keeps_break_and_continue_as_expressions() {
+        let src = "fn f(xs: [Result<int, string>]) -> int {\n    var total = 0;\n    for r in xs {\n        let v = match (r) {\n            Result.Ok(v) => v,\n            Result.Err(_) => break,\n        };\n        if (v < 0) { continue; }\n        total = total + v;\n    }\n    total\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("            Result.Err(_) => break,\n"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        let src2 = "fn main() {\n    var i = 0;\n    while (i < 5) {\n        i = i + 1;\n        let _ = if (i == 2) { continue } else { i };\n    }\n}\n";
+        // Como cola de un bloque queda canónico con `;` (igual que `return e`, M220).
+        let out2 = fmt(src2);
+        assert!(out2.contains("if (i == 2) {\n            continue;\n        } else {"), "{out2}");
+        assert_eq!(fmt(&out2), out2, "idempotente");
     }
 
     /// M298 (findings 1.27.11 #9): un `if` de valor como OPERANDO de una concatenación larga o como

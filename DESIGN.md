@@ -14687,3 +14687,18 @@ ahora distingue lo que sí falla (un literal dentro de un patrón de variante). 
 referencia — por eso las apps llenas de `match` de cinco líneas para un default: tabla en
 REFERENCE, sección en el MANUAL, línea en `llms.txt` que además dice cuáles NO existen (#30).
 
+## 284. M300 — `break` y `continue` como expresión (sep 2026)
+
+Origen: IDEAS §97 #2, pedido por tres apps del barrido (raybot/raysync, raycode, raygate):
+`match (r) { Result.Err(e) => break, … }` era «expected an expression, found Break» y obligaba a
+`=> { break; },`. La decisión es la de M220 para `return`, sin añadir nada al sistema de tipos:
+en posición de expresión, `break`/`continue` son azúcar del bloque `{ break; }`, anotado en el
+mismo `return_expr_sites` para que `ray fmt` lo reemita como se escribió. Todo lo demás ya
+existía: el análisis de divergencia trataba `break`/`continue` como `return` (M191), así que el
+brazo cede el tipo al otro; y la restricción a la espina de sentencias del bucle (`break_ok`) se
+aplica tal cual, porque el bloque desazucarado pasa por el mismo `check_expr` — `1 + break`
+sigue siendo el error de M191 y `=> continue` fuera de un bucle, «outside a loop». Como cola de
+un bloque (`if (c) { continue } else { v }`) la sentencia no necesita `;`, como `return e`. El
+parser autoalojado aplica el mismo azúcar; el corpus de paridad incluye el caso; tres motores en
+`tests/findings_batch_cli.rs` (la suite de los hallazgos de lenguaje de §97).
+

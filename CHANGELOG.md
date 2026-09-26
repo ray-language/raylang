@@ -31,6 +31,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     ponía un suelo de 64 KiB); y `played_ms` ya no falla en una salida abierta justo después de
     cerrar otra (el alimentador viejo borraba la entrada de la nueva al heredar su fd).
 
+- **`break` y `continue` como expresión** (M300, IDEAS §97 #2; lo pidieron tres apps).
+  `Result.Err(e) => break,` en un brazo de `match` dentro de un bucle, o
+  `let w = if (v < 0) { continue } else { v };`, valen sin llaves — el mismo azúcar de bloque que
+  `return e` (1.11): divergen, ceden el tipo al resto y siguen limitados a la espina de
+  sentencias del bucle. Como cola de un bloque no necesitan `;`. `ray fmt` los conserva.
+
 - **El lote barato del barrido: diagnóstico y documentación** (M299, IDEAS §97 #12, #17, #19,
   #20, #27, #29). Un campo ausente en el literal de un struct de módulo sugiere el constructor
   público que lo devuelve (`missing field 'icon' in the literal of 'std::ui::MenuItem' (use the

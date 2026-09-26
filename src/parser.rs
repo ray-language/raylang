@@ -857,7 +857,10 @@ impl Parser {
                 let kw = self.advance();
                 let kind = if kw.kind == TokenKind::Break { StmtKind::Break } else { StmtKind::Continue };
                 let what = if kind == StmtKind::Break { "break" } else { "continue" };
-                self.expect(&TokenKind::Semicolon, &format!("';' after '{}'", what))?;
+                // M300: como COLA de un bloque (`{ continue }`) no necesita `;` (igual que `return e`, M220).
+                if !self.check(&TokenKind::RBrace) {
+                    self.expect(&TokenKind::Semicolon, &format!("';' after '{}'", what))?;
+                }
                 statements.push(Stmt { kind, line: kw.line, col: kw.col });
                 continue;
             }
@@ -1490,6 +1493,20 @@ impl Parser {
                     col: kw.col,
                 });
             }
+            // M300 (IDEAS §97 #2): `break` / `continue` como EXPRESIÓN (`Result.Err(e) => break,`),
+            // el mismo azúcar que `return`: el bloque `{ break; }`, que diverge y que el checker
+            // ya limita a la espina de sentencias del bucle. Sin valor (no lo tienen).
+            TokenKind::Break | TokenKind::Continue => {
+                let kw = self.advance();
+                let kind = if kw.kind == TokenKind::Break { StmtKind::Break } else { StmtKind::Continue };
+                self.return_expr_sites.insert((kw.line, kw.col));
+                let stmt = Stmt { kind, line: kw.line, col: kw.col };
+                return Ok(Expr {
+                    kind: ExprKind::Block(Block { statements: vec![stmt], tail: None, line: kw.line, col: kw.col, end_line: kw.line }),
+                    line: kw.line,
+                    col: kw.col,
+                });
+            }
             _ => {}
         }
 
@@ -2071,9 +2088,15 @@ mod tests {
         let ExprKind::While { body: lb, .. } = &w.kind else { panic!("while") };
         assert!(matches!(lb.statements[0].kind, StmtKind::Break));
         assert!(matches!(lb.statements[1].kind, StmtKind::Continue));
-        let tokens = crate::lexer::lex("fn main() { while (true) { break } }").expect("lex ok");
+        // M300: sin `;` solo vale como COLA del bloque (`{ break }`, como `return e`); seguido de
+        // otra sentencia sigue siendo error de sintaxis.
+        let tokens = crate::lexer::lex("fn main() { while (true) { break print(1); } }").expect("lex ok");
         let e = parse(tokens).expect_err("break sin ;");
         assert_eq!(e.msg, "expected ';' after 'break'");
+        let prog = parse_prog("fn main() { while (true) { break } }");
+        let w = prog.functions[0].body.tail.as_ref().expect("el while es la cola de main");
+        let ExprKind::While { body: lb, .. } = &w.kind else { panic!("while") };
+        assert!(matches!(lb.statements[0].kind, StmtKind::Break) && lb.tail.is_none());
     }
 
     #[test]

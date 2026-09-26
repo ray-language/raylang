@@ -274,7 +274,11 @@ iterable  = expresion [ '..' expresion ] ;
   de `let`/asignación/`return` —la **espina de sentencias**—, pero **no** dentro de una
   expresión que no sea forma-con-bloque (argumento de llamada, operando, elemento de literal,
   índice): ahí es error de tipos (la expresión envolvente quedaría a medio evaluar). Ambas
-  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto).
+  **divergen** (§7: una rama que termina en `break`/`continue` cede su tipo al resto). Como
+  `return`, también son **expresión** (M300): `Result.Err(e) => break,` en un brazo de `match`
+  o `if (c) { continue } else { v }` equivalen a `{ break; }` / `{ continue; }` — el mismo azúcar
+  del parser, con la misma restricción a la espina de sentencias; como cola de un bloque no
+  necesitan `;`.
 - **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
   que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
   ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente

@@ -9,15 +9,13 @@ name: release
 
 # M309: los binarios de release se identifican como la versión limpia (`1.27.12`), nunca
 # `+dev.<sha>` (build.rs; el checkout de Actions no trae tags para `git describe`).
-env:
-  RAYLANG_RELEASE_BUILD: "1"
-
 on:
   push:
     tags: ["v[0-9]*"]
 
 env:
   CARGO_TERM_COLOR: always
+  RAYLANG_RELEASE_BUILD: "1"
 
 jobs:
   # Crea (o reutiliza, si ya existe) la Release del tag, con notas autogeneradas. Un solo job para no

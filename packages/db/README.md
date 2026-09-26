@@ -17,7 +17,9 @@ db = "path:../ruta/a/packages/db"
 
 ### `db/mysql` (M53.1)
 
-Cliente del protocolo wire de MySQL (handshake v10 + `COM_QUERY` en protocolo de texto):
+Cliente del protocolo wire de MySQL (handshake v10 + `COM_QUERY` en protocolo de texto). Desde
+0.1.2 el búfer de lectura es `bytes` y se compacta: una conexión de larga vida (un pool) ya no
+retiene lo que leyó.
 
 ```raylang
 import db/mysql;

@@ -527,33 +527,67 @@ pub fn call_full(
     deadline_ms: int,
     traceparent: string
 ) -> Result<Json, string> {
+    call_wire(c, method, params, deadline_ms, traceparent).0
+}
+
+// La llamada, clasificando el fallo: `.1` es true cuando la CONEXIÓN falló por el cable (no se
+// pudo escribir, el peer cerró, o la lectura falló sin ser un timeout) — el único caso en que el
+// pool repite la llamada sobre una conexión nueva (findings #74). Un timeout, un id inesperado
+// o un error del handler NO son «cable»: la petición pudo ejecutarse y no debe repetirse.
+fn call_wire(
+    c: Client,
+    method: string,
+    params: Json,
+    deadline_ms: int,
+    traceparent: string
+) -> (Result<Json, string>, bool) {
     c.next_id = c.next_id + 1;
     let id = c.next_id;
     if (deadline_ms > 0) {
         net.set_read_timeout(c.rd.conn, deadline_ms);
     }
-    let _ = net.socket_write_bytes(
+    match (net.socket_write_bytes(
         c.rd.conn,
         encode_request(id, method, params, deadline_ms, traceparent)
-    )?;
+    )) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            let r: Result<Json, string> = Result.Err(e);
+            return (r, true);
+        },
+    }
     let response = read_frame(c.rd, default_limits().max_frame_bytes);
     if (deadline_ms > 0) {
         net.set_read_timeout(c.rd.conn, 0);
     }
-    match (response?) {
-        Option.None => Result.Err("the server closed the connection"),
-        Option.Some(fr) => {
-            let par = decode_response(fr)?;
+    match (response) {
+        Result.Err(e) => {
+            let r: Result<Json, string> = Result.Err(e);
+            (r, e != "read timeout")
+        },
+        Result.Ok(Option.None) => {
+            let r: Result<Json, string> = Result.Err("the server closed the connection");
+            (r, true)
+        },
+        Result.Ok(Option.Some(fr)) => {
+            let par = match (decode_response(fr)) {
+                Result.Ok(p) => p,
+                Result.Err(e) => {
+                    let r: Result<Json, string> = Result.Err(e);
+                    return (r, false);
+                },
+            };
             if (par.0 != id) {
-                return Result.Err(
+                let r: Result<Json, string> = Result.Err(
                     "response with unexpected id ("
                         + to_string(par.0)
                         + " != "
                         + to_string(id)
                         + "); reconnect"
                 );
+                return (r, false);
             }
-            par.1
+            (par.1, false)
         },
     }
 }
@@ -623,7 +657,8 @@ pub fn pool_call_deadline(
     pool_call_full(p, method, params, deadline_ms, "")
 }
 
-/// The full form: deadline (`0` = none) and W3C `traceparent` (`""` = none).
+/// The full form: deadline (`0` = none) and W3C `traceparent` (`""` = none). Retries once on a
+/// wire failure of a reused connection (see `PoolCallOpts.retry`).
 pub fn pool_call_full(
     p: Pool,
     method: string,
@@ -631,31 +666,141 @@ pub fn pool_call_full(
     deadline_ms: int,
     traceparent: string
 ) -> Result<Json, string> {
-    let c = match (recv(p.slots)) {
-        Option.None => {
-            return Result.Err("the pool is closed");
-        },
-        Option.Some(slot) => match (slot) {
-            Slot.Ready(client) => client,
-            Slot.Empty => match (connect(p.host, p.port)) {
-                Result.Ok(client) => client,
-                Result.Err(e) => {
-                    // Devuelve el hueco: otra llamada reintentará el marcado.
-                    release(p, Slot.Empty);
-                    return Result.Err(e);
-                },
-            },
-        },
-    };
-    match (call_full(c, method, params, deadline_ms, traceparent)) {
+    pool_call_with(
+        p,
+        method,
+        params,
+        PoolCallOpts { deadline_ms: deadline_ms, traceparent: traceparent, retry: true }
+    )
+}
+
+/// Options of a pooled call. `retry`: when a REUSED connection fails on the wire (the peer had
+/// closed it — a restarted server — or the write/read failed), replace it and repeat the call
+/// once on a fresh connection. On by default: without it, after a server restart every pooled
+/// connection fails one real call before healing. Set it to `false` for methods that are not
+/// idempotent (the request may have been executed before the connection broke). A timeout,
+/// an unexpected id or a handler error never retries.
+pub struct PoolCallOpts {
+    deadline_ms: int,
+    traceparent: string,
+    retry: bool,
+}
+
+/// The default options: no deadline, no trace, retry on.
+pub fn pool_opts() -> PoolCallOpts {
+    PoolCallOpts { deadline_ms: 0, traceparent: "", retry: true }
+}
+
+/// `pool_call` with explicit options.
+pub fn pool_call_with(
+    p: Pool,
+    method: string,
+    params: Json,
+    opts: PoolCallOpts
+) -> Result<Json, string> {
+    let (c, reused) = checkout(p)?;
+    let (r, wire) = call_wire(c, method, params, opts.deadline_ms, opts.traceparent);
+    match (r) {
         Result.Ok(v) => {
             release(p, Slot.Ready(c));
             Result.Ok(v)
         },
         Result.Err(e) => {
             // Timeout, id inesperado o cierre del peer: la conexión puede estar DESINCRONIZADA
-            // (la respuesta tardía sigue en vuelo) → se descarta entera y el hueco vuelve vacío.
+            // (la respuesta tardía sigue en vuelo) → se descarta entera.
             disconnect(c);
+            if (!(wire && reused && opts.retry)) {
+                release(p, Slot.Empty);
+                return Result.Err(e);
+            }
+            // findings #74: la conexión venía del pool y falló por el cable (un servidor
+            // reiniciado): se marca una nueva en el mismo hueco y se repite UNA vez.
+            let c2 = match (connect(p.host, p.port)) {
+                Result.Ok(client) => client,
+                Result.Err(e2) => {
+                    release(p, Slot.Empty);
+                    return Result.Err(e2);
+                },
+            };
+            match (call_wire(c2, method, params, opts.deadline_ms, opts.traceparent).0) {
+                Result.Ok(v) => {
+                    release(p, Slot.Ready(c2));
+                    Result.Ok(v)
+                },
+                Result.Err(e2) => {
+                    disconnect(c2);
+                    release(p, Slot.Empty);
+                    Result.Err(e2)
+                },
+            }
+        },
+    }
+}
+
+// Saca un hueco del pool, prefiriendo una conexión YA MARCADA (findings #73: el canal es FIFO y
+// una conexión devuelta va al final, así que las primeras `size` llamadas marcaban `size`
+// conexiones aunque llegaran de una en una). Se inspeccionan los huecos disponibles sin aparcar;
+// los `Empty` sobrantes vuelven al canal; sin ningún `Ready` se usa un `Empty` (marcado nuevo)
+// o, si no hay nada libre, se aparca en `recv` (backpressure) y se toma lo que vuelva.
+// Devuelve la conexión y si venía marcada (reutilizada).
+fn checkout(p: Pool) -> Result<(Client, bool), string> {
+    var ready: Option<Client> = Option.None;
+    var empties = 0;
+    var open = true;
+    var i = 0;
+    while (i < p.size && open) {
+        match (try_recv(p.slots)) {
+            Received.Got(slot) => match (slot) {
+                Slot.Ready(client) => {
+                    ready = Option.Some(client);
+                    open = false;
+                },
+                Slot.Empty => {
+                    empties = empties + 1;
+                },
+            },
+            Received.Empty => {
+                open = false;
+            },
+            Received.Closed => {
+                return Result.Err("the pool is closed");
+            },
+        }
+        i = i + 1;
+    }
+    match (ready) {
+        Option.Some(client) => {
+            // Todos los `Empty` retirados vuelven.
+            while (empties > 0) {
+                release(p, Slot.Empty);
+                empties = empties - 1;
+            }
+            return Result.Ok((client, true));
+        },
+        Option.None => { },
+    }
+    if (empties > 0) {
+        // Uno se usa para marcar; el resto vuelve.
+        while (empties > 1) {
+            release(p, Slot.Empty);
+            empties = empties - 1;
+        }
+        return dial(p);
+    }
+    match (recv(p.slots)) {
+        Option.None => Result.Err("the pool is closed"),
+        Option.Some(slot) => match (slot) {
+            Slot.Ready(client) => Result.Ok((client, true)),
+            Slot.Empty => dial(p),
+        },
+    }
+}
+
+// Marca una conexión nueva para un hueco `Empty` ya retirado; si falla, devuelve el hueco.
+fn dial(p: Pool) -> Result<(Client, bool), string> {
+    match (connect(p.host, p.port)) {
+        Result.Ok(client) => Result.Ok((client, false)),
+        Result.Err(e) => {
             release(p, Slot.Empty);
             Result.Err(e)
         },

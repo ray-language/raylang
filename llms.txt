@@ -138,6 +138,11 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
+- `sort_by(xs, less)`: the comparator returns `bool` ("a goes before b"), NOT a three-way int.
+- Builtins as values (1.27.14): `xs.map(to_string)` works wherever a function type is expected
+  (a `let` with a function-type annotation, a function parameter); `let g = to_string` alone
+  needs the annotation.
+- Arrays: `xs.slice(from, to)` (clamped copy, 1.27.14): `args().slice(1, args().len())`.
 - Bitwise `&`/`|`/`^` bind LOOSER than `==` (C-style): write `(a & b) == c`.
 - Core builtins (`print`, `to_string`, `panic`…) cannot be redefined. A top-level function of
   the root module MAY redefine a prelude function (`get`, `sort`, `index_of`, `map`…) and the

@@ -410,7 +410,15 @@ print(xs.position(99));        // Some(0)
 print(xs.pop());               // Some(4) — y xs queda [99, 2, 3]
 let ys = xs + [7, 8];          // concatenación (copia nueva)
 let z = xs.sort();             // copia ordenada (T: Ord)
+let rest = xs.slice(1, xs.len());          // copia de [1, len): sin el primero (M315)
+let desc = xs.sort_by(fn(a: int, b: int) -> bool { a > b });  // el comparador devuelve bool: "a va antes"
+let strs = xs.map(to_string);              // un builtin como valor, donde se espera una función (M315)
 ```
+
+El comparador de `sort_by` es **`bool`** («`a` va antes que `b`»), no un entero de tres valores como
+en C o JavaScript. Y un builtin (`to_string`, `char_code`…) se puede pasar como función allí donde
+el tipo esperado es una función; `let g = to_string` a secas no sabe qué firma darle (anota
+`let g: fn(int) -> string = to_string`).
 
 ### Tuplas
 

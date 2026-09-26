@@ -4,6 +4,27 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El tercer barrido de `ray-apps`: raymart bajo carga y raygate** (M313–M315,
+  `RAYLANG-FINDINGS.md` #67–#75; lo pendiente, en IDEAS §99).
+  - **Nativo — genéricos sobre canales de enums** (#71): `fn fill<T>(n: int) -> Channel<Slot<T>>`,
+    `struct Pool<T> { slots: Channel<Slot<T>> }` y valores genéricos que cruzan un `spawn`
+    compilan (antes E0425/E0283/E0392 en el Rust generado; la VM salía 0): la conversión Send de
+    un tipo que menciona `T` va por un trait que rustc monomorfiza, el `T` que solo aparece en
+    el retorno se emite en turbofish desde el tipo esperado, y un struct cuyo `T` solo vive en un
+    canal lleva un `PhantomData`.
+  - **`db` 0.1.2** (#72): `db/mysql` guarda el búfer de lectura como `bytes` y lo compacta — una
+    conexión reutilizada (un pool) crecía sin límite (1,09 GB tras 3000 SELECT de 20 KB; ahora 22 MB).
+  - **`rpc` 0.1.3** (#73, #74): el pool prefiere una conexión ya marcada a marcar otra (antes las
+    primeras `size` llamadas abrían `size` conexiones), y una conexión reutilizada que falla por
+    el cable (servidor reiniciado) se reemplaza y la llamada se repite una vez;
+    `pool_call_with(p, m, params, opts)` con `PoolCallOpts { deadline_ms, traceparent, retry }`
+    (`retry: false` para métodos no idempotentes).
+  - **Lenguaje** (#70): un builtin se pasa como valor donde se espera un tipo función
+    (`xs.map(to_string)`, `let f: fn(int) -> string = to_string`); `xs.slice(from, to)` en el
+    prelude; docs del comparador `bool` de `sort_by`.
+
 ## 1.27.13 — 2026-09-26
 
 - **El segundo barrido de `ray-apps`: móvil, distribuido y bases de datos** (M309,

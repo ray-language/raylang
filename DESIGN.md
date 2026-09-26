@@ -15013,3 +15013,72 @@ errores de ejecución son un `panic_any(__RayErr)` sin posición, decisión de H
 diferencia visible del informe, y queda documentada. Los flags (`--native`, `--release`) no son
 ni suite ni filtro para `split_test_args`, y el watch los reenvía en la corrida selectiva.
 
+## 295. M313 — Nativo: genéricos sobre canales de enums (sep 2026)
+
+El hallazgo #71 (raymart): un pool genérico `struct Pool<T> { slots: Channel<Slot<T>> }` con
+`enum Slot<T> { Ready(T), Empty }` pasaba `ray test` y no compilaba en nativo. Tres causas, tres
+piezas:
+
+**Conversión Send por trait.** Los conversores `__to_send_N`/`__from_send_N` (H21-N5a) son por
+tipo concreto: dentro de `fn fill<T>` emitían `Rc<Slot<T>>` con un `T` fuera de ámbito (E0425).
+Ahora hay un trait `__RaySendConv { __to_send(self) -> __RaySend; __from_send(__RaySend) -> Self }`
+con impls para primitivos, `Rc<str>`/`Rc<[u8]>`, arrays, mapas, tuplas (2–8, generadas sin
+`macro_rules!`: el fuente no lleva `$`), `Option`/`Result`, canales y tareas, y un **impl
+genérico por struct/enum del programa** (`impl<T: …> __RaySendConv for Rc<Slot<T>>`) construido con
+los mismos `to_send_expr`/`from_send_expr`; un tipo que no puede cruzar (campos función, `dyn`)
+recibe un impl que panica, como los stubs. Todo parámetro de tipo lleva el bound (`GENERIC_BOUND`
+= `Clone + RayShow + 'static + __RaySendConv`) y una conversión cuyo tipo menciona un `T` va por
+el trait, que rustc monomorfiza; los tipos concretos siguen por los conversores numerados.
+
+**Turbofish por tipo esperado.** `let c: Channel<Slot<int>> = fill(1)`: el `T` de `fill` solo
+aparece en el retorno y el canal es type-erased en Rust (`__RayChan<__RaySend>`), así que rustc
+no lo infiere (E0283). El transpilador lleva ahora un `expected_ty` (anotación de `let`, campo de
+un literal de struct no genérico, `return`, argumento de llamada) y `generic_turbofish` unifica
+la firma con los argumentos y, si queda algún parámetro libre, con el esperado → `fill::<i64>(…)`
+(los genéricos `__F` de params marcados van como `_`). `unify` aprendió `Channel`/`Task`.
+
+**PhantomData.** `Pool<T>` no usa `T` en Rust (E0392) cuando `T` solo vive dentro de un canal:
+esos structs (`phantom_structs`, calculado con `ty_mentions_tparam` sobre los tipos
+normalizados) llevan `__ray_ph: PhantomData<fn() -> (T,)>` (Send + Sync + Clone + PartialEq sean
+cuales sean los `T`), y cada construcción (literal, `__from_send`, impl del trait) lo rellena.
+
+Lo que NO cambia: un `Rc<dyn Fn>` sigue sin cruzar hilos, y una tupla anotada `(Pool<int>, int)
+= (new_pool(1), 3)` la rechaza ya el checker («could not infer the type parameter»), como antes.
+
+## 296. M314 — `db/mysql` compacta y `rpc.pool` reutiliza y reintenta (sep 2026)
+
+**#72.** `mysql.Conn.buf` era `[int]` (8 bytes por octeto) y solo avanzaba `pos`: con una
+conexión por operación no se notaba; con un pool cada conexión acumulaba todo lo leído en su
+vida y lo copiaba entero al cruzar el canal. Medido con un MySQL 8.4 en docker, 3000 `SELECT` de
+20 KB por UNA conexión: 1,09 GB de RSS con el driver viejo, 22 MB en la VM (3,7 MB en nativo) con
+el nuevo. `buf` es ahora `bytes` (compartido, `+` amortizado, como postgres/mongo/redis) y `take`
+compacta: al vaciarse vuelve a `b""`, y con más de 64 KiB consumidos se recorta.
+
+**#73.** El pool es un canal FIFO: una conexión devuelta iba al final y las primeras `size`
+llamadas marcaban `size` conexiones. `checkout` inspecciona los huecos libres con `try_recv`
+(sin aparcar), se queda con el primer `Ready`, devuelve los `Empty` sobrantes y solo marca una
+conexión nueva si no había ninguna lista; sin nada libre, aparca en `recv` como antes.
+
+**#74.** Tras reiniciar el servidor, cada conexión del pool fallaba una llamada real antes de
+sanar. `call_wire` clasifica el fallo: **cable** (no se pudo escribir, el peer cerró, lectura
+fallida que no es `read timeout`) frente a timeout / id inesperado / error del handler. Solo un
+fallo de cable de una conexión **reutilizada** se repite, una vez, sobre una conexión nueva en
+el mismo hueco; `PoolCallOpts.retry = false` lo desactiva para métodos no idempotentes (la
+petición pudo ejecutarse antes de romperse la conexión). El test reinicia el servidor en el mismo
+puerto y comprueba las tres ramas (sin reintento falla, con reintento sana, la sana se prefiere).
+
+## 297. M315 — Builtins como valor y `slice` (sep 2026)
+
+**Builtins como valor** (#70). `xs.map(to_string)` fallaba con «name 'to_string' not declared»:
+un builtin no es una función con firma fija (`to_string` acepta cualquier tipo mostrable), así
+que no puede ser un valor sin más. La solución es bidireccional: cuando el tipo **esperado** es
+`fn(A, …) -> R` con los params ya concretos, el checker aplica la regla de tipado del builtin a
+esos params, obtiene el retorno y registra el sitio (`builtin_value_sites`); `lower_builtin_values`
+lo reescribe a un closure `fn($bv0: A) -> R { builtin($bv0) }` (tras UFCS, para no caer en las
+tablas por posición; `renumber_fn_exprs` le da su id). En `check_generic_call` el argumento
+`fn(T) -> U` con `T` ya inferido y `U` libre también entra por aquí (así `map` fija `U`). Sin tipo
+esperado, el error dice cómo anotarlo. Una variable local homónima gana al builtin.
+
+**`slice`** en el prelude, con el *clamp* de `substring`/`sub_bytes`; y la doc destaca que el
+comparador de `sort_by` devuelve `bool`.
+

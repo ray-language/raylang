@@ -3801,3 +3801,19 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 65 | HEAD y release con el mismo número | ✅ M309: `+dev.<sha>` y `[package] raylang` |
 | 66 | `ray test --native` | ✅ M312: un binario por suite (`main` de despacho por nombre), una prueba por proceso; `--release`; combinable con `--watch` |
 
+## 99. El tercer barrido de `ray-apps` (raymart y raygate) (sep 2026)
+
+Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y raygate como proxy).
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| 67 | Más distancia HEAD ↔ release 1.27.11 | ✅ lo publicado en 1.27.12/1.27.13 (`last_index_of`, `break` en brazo, `const` de arrays de tuplas) + `+dev.<sha>` (M309) |
+| 68 | Pool de conexiones entre fibras en `db`/`net` (actor: N fibras dueñas + canal de operaciones) | PROPUESTO — arco; el patrón de `rpc.pool` (canal de slots) ya es genérico en nativo desde M313 (#71); falta llevarlo a `db`/`net` con transacciones |
+| 69 | Pool keep-alive por host en `net/http` (raygate como proxy agota puertos) | PROPUESTO — mismo arco que #68 |
+| 70 | `to_string` como valor; `slice` de arrays; comparador `bool` de `sort_by` | ✅ M315: builtins como valor donde se espera una función; `xs.slice(from, to)`; docs |
+| 71 | Nativo: genéricos sobre `Channel<Enum<T>>` (E0425/E0283/E0392) | ✅ M313: conversión Send por trait, turbofish por tipo esperado, PhantomData |
+| 72 | db/mysql: el búfer de lectura crece sin límite | ✅ M314 (db 0.1.2): `bytes` + compactación (1,09 GB → 22 MB en 3000 SELECT de 20 KB) |
+| 73 | `rpc.pool` marca `size` conexiones antes de reutilizar la primera | ✅ M314 (rpc 0.1.3): el checkout prefiere una conexión `Ready` |
+| 74 | `rpc.pool` no reintenta tras una conexión rota | ✅ M314 (rpc 0.1.3): reintento único por fallo de cable de una conexión reutilizada; `PoolCallOpts.retry = false` para métodos no idempotentes |
+| 75 | Nativo: despertar una fibra de otro hilo cuesta ~30 µs (spin-then-park, `yield`, atómicos) | PROPUESTO — arco de rendimiento del scheduler; medir antes de decidir (PERFORMANCE.md) |
+

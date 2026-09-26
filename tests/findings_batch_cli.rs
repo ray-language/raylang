@@ -36,6 +36,20 @@ fn three_engines(dir: &PathBuf, want: &str) {
     }
 }
 
+/// Como `three_engines`, para programas con concurrencia (el intérprete no la ejecuta).
+fn vm_and_native(dir: &PathBuf, want: &str) {
+    let (out, err, code) = ray(dir, &["run", "prog.ray"]);
+    assert_eq!(code, 0, "vm: {err}");
+    assert_eq!(out, want, "vm");
+    if has_rustc() {
+        let bin = dir.join("prog_bin");
+        let (_o, err, code) = ray(dir, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        let out = Command::new(&bin).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "nativo");
+    }
+}
+
 /// #2 (M300): `break`/`continue` como expresión en un brazo de `match` y en un `if`-valor.
 #[test]
 fn break_and_continue_as_expressions_run_on_all_engines() {
@@ -447,6 +461,94 @@ fn output_dir_self_import_and_required_raylang() {
     let (out, _e, code) = ray(&q, &["run"]);
     assert_eq!(code, 0);
     assert_eq!(out, "1\n");
+}
+
+/// #70 (M315): `xs.map(to_string)` (un builtin como valor), `xs.slice(from, to)` y el comparador
+/// `bool` de `sort_by`, con la misma salida en los tres motores.
+#[test]
+fn builtins_as_values_and_slice_run_on_all_engines() {
+    let d = tmp("m315_builtin_values");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn apply(f: fn(char) -> int, c: char) -> int { f(c) }
+fn main() -> int {
+    let xs = [3, 1, 2];
+    let strs = xs.map(to_string);
+    print(strs.fold("", fn(acc: string, s: string) -> string { acc + s + "|" }));
+    let f: fn(int) -> string = to_string;
+    print(f(41) + "!");
+    print(apply(char_code, 'A'));
+    print(xs.slice(1, 3));
+    print(xs.slice(-5, 2));
+    print(xs.slice(2, 1).len());
+    print(xs.sort_by(fn(a: int, b: int) -> bool { a > b }));
+    print([1.5, 2.5].map(to_string).len());
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "3|1|2|\n41!\n65\n[1, 2]\n[3, 1]\n0\n[3, 2, 1]\n2\n");
+}
+
+/// #71 (M313): código GENÉRICO sobre `Channel<Enum<T>>` en nativo — una función genérica que crea
+/// el canal (el `T` solo aparece en el retorno: turbofish por tipo esperado), un struct genérico cuyo
+/// `T` solo vive dentro del canal (PhantomData) y valores genéricos que cruzan un `spawn` (conversión
+/// Send por trait). Antes: E0425/E0283/E0392 en el Rust generado; la VM salía 0.
+#[test]
+fn generic_channels_of_enums_run_natively() {
+    let d = tmp("m313_generic_channels");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"enum Slot<T> { Ready(T), Empty }
+struct Pool<T> { slots: Channel<Slot<T>>, size: int }
+struct Conn { id: int, name: string }
+
+fn new_pool<T>(size: int) -> Pool<T> {
+    let c: Channel<Slot<T>> = Channel.bounded(size);
+    for _ in 0..size { let e: Slot<T> = Slot.Empty; send(c, e); }
+    Pool { slots: c, size: size }
+}
+
+fn take<T>(p: Pool<T>, make: fn(int) -> T) -> T {
+    match (recv(p.slots)) {
+        Option.Some(Slot.Ready(v)) => v,
+        Option.Some(Slot.Empty) => make(p.size),
+        Option.None => make(0),
+    }
+}
+
+fn give<T>(p: Pool<T>, v: T) { send(p.slots, Slot.Ready(v)); }
+
+fn fill<T>(size: int) -> Channel<Slot<T>> {
+    let c: Channel<Slot<T>> = Channel.bounded(size);
+    for _ in 0..size { let e: Slot<T> = Slot.Empty; send(c, e); }
+    c
+}
+
+fn main() -> int {
+    let p: Pool<Conn> = new_pool(2);
+    let t = spawn(fn() -> int {
+        let c = take(p, fn(n: int) -> Conn { Conn { id: n, name: "c" + n.to_string() } });
+        print(c.name);
+        give(p, Conn { id: 9, name: "back" });
+        c.id
+    });
+    let got = join(t);
+    print(take(p, fn(n: int) -> Conn { Conn { id: n, name: "fresh" } }).name);
+    print(take(p, fn(n: int) -> Conn { Conn { id: n, name: "fresh" } }).name);
+    let ip: Pool<int> = new_pool(1);
+    print(take(ip, fn(n: int) -> int { n }) + 3);
+    give(ip, 41);
+    print(take(ip, fn(n: int) -> int { n }));
+    let direct: Channel<Slot<string>> = fill(1);
+    match (recv(direct)) { Option.Some(Slot.Empty) => print("empty"), _ => print("?") }
+    got - 2
+}
+"#,
+    )
+    .unwrap();
+    vm_and_native(&d, "c2\nfresh\nback\n4\n41\nempty\n");
 }
 
 /// #66 (M312): `ray test --native` compila cada suite a un binario (un `main` de despacho por

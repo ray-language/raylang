@@ -15175,3 +15175,11 @@ preserva `xcshareddata/` y `xcuserdata/` (los esquemas compartidos guardan varia
 como la URL del frontend de desarrollo); el README de iOS va con el nombre de la app y en
 inglés, y `ui.app_url`/`ui.reply` documentan `RAY_DEV_FRONTEND_URL` y la ventana `0` de los
 shells.
+
+## 299. M317 — `token_cookie` pública (sep 2026)
+
+`RAYLANG-FINDINGS.md` #94: la doc de `local_token_via` (M316) remitía a `token_cookie` para
+sembrar la cookie `ray_local` desde un bucle de accept propio, pero la función era privada y
+ray-remote escribía la línea `Set-Cookie` a mano. Se publica con su doc (`net` 0.3.9): la única
+fuente de la forma de la cookie es el paquete, y quien la siembre desde fuera de `serve` no
+puede desincronizarse de ella.

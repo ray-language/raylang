@@ -1,0 +1,90 @@
+// M319 (findings #75): el coste de despertar una fibra desde OTRO hilo. Un actor responde
+// `Ask(x, reply)` por un canal nuevo por petición (el patrón pedir/responder de todos los
+// actores); `fibers` peticionarios hacen `iters` idas y vueltas cada uno.
+//   ray build --native --release benchmarks/actor_ask.ray -o /tmp/actor_ask
+//   /tmp/actor_ask rt 1 200000        # ida y vuelta, un peticionario
+//   RAYLANG_THREADS=1 /tmp/actor_ask rt 1 200000
+//   /tmp/actor_ask rt 64 20000        # 64 peticionarios a la vez
+//   /tmp/actor_ask oneway 1 200000    # envío de un solo sentido (sin respuesta)
+import std/time;
+
+enum Msg {
+    Ask(int, Channel<int>),
+    Tell(int),
+    Stop,
+}
+
+fn actor(inbox: Channel<Msg>) -> int {
+    var sum = 0;
+    while (true) {
+        match (recv(inbox)) {
+            Option.Some(m) => match (m) {
+                Msg.Ask(x, reply) => {
+                    sum = sum + x;
+                    send(reply, x + 1);
+                },
+                Msg.Tell(x) => {
+                    sum = sum + x;
+                },
+                Msg.Stop => {
+                    return sum;
+                },
+            },
+            Option.None => {
+                return sum;
+            },
+        }
+    }
+    sum
+}
+
+fn main() -> int {
+    let mode = if (args().len() > 0) { args()[0] } else { "rt" };
+    let fibers = if (args().len() > 1) { parse_int(args()[1]).unwrap_or(1) } else { 1 };
+    let iters = if (args().len() > 2) { parse_int(args()[2]).unwrap_or(100000) } else { 100000 };
+    let inbox: Channel<Msg> = Channel.bounded(1024);
+    let done: Channel<int> = Channel.bounded(1024);
+    let t_actor = spawn(fn() -> int { actor(inbox) });
+    let t0 = time.monotonic();
+    for _ in 0..fibers {
+        spawn(fn() {
+            var acc = 0;
+            for i in 0..iters {
+                if (mode == "oneway") {
+                    send(inbox, Msg.Tell(i));
+                } else {
+                    let reply: Channel<int> = Channel.bounded(1);
+                    send(inbox, Msg.Ask(i, reply));
+                    acc = acc + recv(reply).unwrap_or(0);
+                }
+            }
+            send(done, acc);
+        });
+    }
+    var total = 0;
+    for _ in 0..fibers {
+        total = total + recv(done).unwrap_or(0);
+    }
+    send(inbox, Msg.Stop);
+    let sum = join(t_actor);
+    let ms = time.monotonic() - t0;
+    let ops = fibers * iters;
+    let per_op_us = (ms * 1000) / ops;
+    let per_sec = if (ms > 0) { ops * 1000 / ms } else { 0 };
+    print(
+        mode
+            + " fibers="
+            + to_string(fibers)
+            + " ops="
+            + to_string(ops)
+            + " ms="
+            + to_string(ms)
+            + " us/op="
+            + to_string(per_op_us)
+            + " ops/s="
+            + to_string(per_sec)
+            + " check="
+            + to_string(sum > 0 && total >= 0)
+    );
+    0
+}

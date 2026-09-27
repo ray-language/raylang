@@ -1914,3 +1914,38 @@ recursivo: sin cambio (no llevan prólogo). `--fast` lo quita. Si algún día el
 importa en un benchmark de cabecera, la vía es un contador estático por worker con la fibra
 guardando el suyo (0,04 s en el experimento), no quitar la cota.
 
+
+## 8. M319 (sep 2026): despertar fibras entre hilos en el scheduler nativo
+
+`RAYLANG-FINDINGS.md` #75 (raygate): el patrón pedir/responder entre un actor y sus clientes
+(fibras en workers distintos) pagaba ~30 µs por ida y vuelta en Docker (1,4 µs con
+`RAYLANG_THREADS=1`). El canal es barato; lo caro es dormir un worker en su condvar y despertarlo
+por futex. `benchmarks/actor_ask.ray` mide el patrón: un actor que responde `Ask(x, reply)` por
+un `Channel.bounded(1)` nuevo por petición; `fibers` peticionarios; y un envío de un solo
+sentido (`oneway`). Mac M4 (11 cores), binario `--release`, mediana de 5 rondas intercaladas
+(MAD < 4 %):
+
+| carga | antes (`RAYLANG_SPIN_US=0`) | **M319** (spin-then-park cediendo, 10 µs) | `RAYLANG_THREADS=1` |
+|---|---|---|---|
+| ida y vuelta, 1 peticionario | 158 k/s (6,3 µs) | **824 k/s (1,2 µs), 5,2×** | 3,4 M/s |
+| ida y vuelta, 8 peticionarios | 465 k/s | 375 k/s (−19 %) | 4,3 M/s |
+| ida y vuelta, 64 peticionarios | 663 k/s | 625 k/s (−6 %, dentro del ruido) | 4,2 M/s |
+| un sentido, 1 emisor | 8,3 M/s | 8,1 M/s | 23 M/s |
+| un sentido, 8 emisores | 756 k/s | **1,06 M/s (+41 %)** | 21,8 M/s |
+
+Lecciones (crónica en DESIGN §301):
+
+- **Girar en seco no sirve**: 5,7× en el caso de latencia pero −36 % en el envío masivo (el
+  girador roba CPU a quien trabaja); un presupuesto adaptativo no lo arregla. **Ceder el hilo
+  entre miradas** conserva el 5,2× y convierte el envío masivo en +41 %.
+- El caso de 8 peticionarios pierde un 19 %: con despertares rápidos los ocho compiten a la vez
+  por el mutex del ÚNICO canal caliente (el buzón del actor) — propiedad de la carga (un canal
+  compartido por muchos emisores), no del planificador; con 64 peticionarios la diferencia
+  entra en el ruido.
+- La columna `RAYLANG_THREADS=1` es el techo del modelo: en un solo hilo no hay despertares
+  entre hilos y el mismo actor sirve 3–5 M idas y vueltas/s. Un programa dominado por actores
+  (poco cómputo por mensaje) rinde más con menos workers; el número de hilos sigue siendo un
+  mando del usuario, no una heurística del runtime.
+- La cancelación dejó de costar un op del reactor por park (el pulso de 10 ms): no mueve estas
+  cifras en macOS (la tubería es barata), pero es un syscall menos por espera y la cancelación
+  pasa de ≤10 ms a inmediata.

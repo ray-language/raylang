@@ -3815,5 +3815,7 @@ Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y r
 | 72 | db/mysql: el búfer de lectura crece sin límite | ✅ M314 (db 0.1.2): `bytes` + compactación (1,09 GB → 22 MB en 3000 SELECT de 20 KB) |
 | 73 | `rpc.pool` marca `size` conexiones antes de reutilizar la primera | ✅ M314 (rpc 0.1.3): el checkout prefiere una conexión `Ready` |
 | 74 | `rpc.pool` no reintenta tras una conexión rota | ✅ M314 (rpc 0.1.3): reintento único por fallo de cable de una conexión reutilizada; `PoolCallOpts.retry = false` para métodos no idempotentes |
-| 75 | Nativo: despertar una fibra de otro hilo cuesta ~30 µs (spin-then-park, `yield`, atómicos) | PROPUESTO — arco de rendimiento del scheduler; medir antes de decidir (PERFORMANCE.md) |
+| 75 | Nativo: despertar una fibra desde otro hilo cuesta ~30 µs (pedir/responder entre actores) | ✅ M319: spin-then-park cediendo el hilo (10 µs) en los workers + cancelación que despierta a la cancelada (sin pulso de 10 ms por espera): pedir/responder 5,2× (medido en `benchmarks/actor_ask.ray`); `yield()` y atómicos quedan como filas propias |
+| 75b | `yield()` como builtin (esperar sin bloquear el hilo) | PROPUESTO — con fibras, `recv`/`select` ya aparcan sin bloquear el hilo; solo tendría sentido para sondeos con `try_recv`, que hoy se resuelven con `select_timeout` |
+| 75c | Contadores atómicos compartidos (`std/sync`: `Atomic`, celda de solo lectura publicada por un actor) para decisiones de solo lectura sin viaje al actor | PROPUESTO — rompe la aislación de heaps (M38) por diseño: exige una superficie explícita y acotada; decidir con un caso medido (raygate: breaker/rate limit por petición) |
 

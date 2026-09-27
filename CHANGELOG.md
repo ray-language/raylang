@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Nativo: despertar fibras entre hilos** (M319, `RAYLANG-FINDINGS.md` #75). Los workers del
+  scheduler M:N hacen spin-then-park cediendo el hilo (10 µs, `RAYLANG_SPIN_US`) antes de dormir:
+  el patrón pedir/responder entre fibras de workers distintos pasa de ~6 µs a ~1,1 µs por ida y
+  vuelta (5,2×); y la cancelación de una tarea despierta a la cancelada de inmediato en vez de
+  que cada espera se despierte cada 10 ms por si acaso (una espera ya no cuesta nada al reactor).
+  `benchmarks/actor_ask.ray` mide el patrón.
 - **Pools de conexiones entre fibras** (M318, `RAYLANG-FINDINGS.md` #68/#69; `net` 0.4.0, `db` 0.2.0).
   - **`net/pool`**: el pool genérico (canal de huecos `Slot<T>`, Ready-first, aparca al agotarse,
     `run` con descarte ante fallo de cable y reintento único sobre una conexión fresca cuando la

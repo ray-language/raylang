@@ -480,3 +480,15 @@ Windows; en ARM64 `ray build` cae al hilo-por-tarea con el motivo en el aviso. V
 cross-compilando desde una VM ARM64 y ejecutando bajo la emulación x64 de Windows 11 (salida
 byte-idéntica a la VM en el servidor TCP que se habla a sí mismo y en los canales); el runner
 x86_64 de CI corre `tests/native_fibers_cli.rs`.
+
+## 13. M319 (sep 2026) — spin-then-park y cancelación sin pulso
+
+Findings #75: el despertar por futex entre workers dominaba el patrón pedir/responder. Dos
+cambios en `fibers.rs` + el runtime emitido (crónica y medidas en DESIGN §301 y PERFORMANCE.md):
+
+- **Worker**: antes de dormir en su condvar mira la cola durante `RAYLANG_SPIN_US` (10 µs por
+  defecto) cediendo el hilo entre miradas (`yield_now`), con un contador atómico `pending` por
+  cola para no tomar el lock. Girar en seco se descartó: −36 % con los cores saturados.
+- **Esperas de lista**: `Park::WaitOn` ya no arma el pulso de 10 ms; la tarea cancelada la
+  despierta su cancelador (`parked` en el ctx de la fibra, compartido con `__RayTask`). Queda
+  `Park::WaitOnTimeout`/`block_on_timeout` para `select_timeout`.

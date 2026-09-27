@@ -20,6 +20,7 @@ from std/inflate import gunzip_limit;
 import std/net;
 import std/time;
 import net/trace;
+import net/pool;
 
 /// An HTTP/1.1 response: status code, headers, and body.
 /// Header names are stored lowercased for case-insensitive lookup; the body is raw bytes
@@ -1303,4 +1304,99 @@ pub fn stream_close(s: Stream) {
         close(s.h);
     }
     s.open = false;
+}
+
+// ── Pool keep-alive por host (M318, findings #69) ──────────────────────────────────────────
+// `request*` abre y cierra un socket por llamada y `Conn` es de un solo usuario: un proxy
+// (raygate) que reenvía cada petición con una conexión nueva agota los puertos efímeros. El pool
+// guarda `Conn`s persistentes en el canal de `net/pool`; cada una recuerda su host, así que un
+// pool sirve a varios upstreams (una `Conn` de otro host se cierra y se remarca para el pedido).
+
+/// A pool of up to `size` persistent HTTP/1.1 connections (keep-alive) shared by every fiber
+/// of the program. Each connection remembers its server: a pool serves several hosts, but a
+/// slot holding another host's connection is closed and re-dialed for the request — keep one
+/// pool per upstream when you have many.
+pub struct Pool {
+    slots: pool.Pool<Conn>,
+}
+
+/// Creates a pool of up to `size` keep-alive connections (nothing is dialed until the first
+/// request).
+pub fn pool(size: int) -> Pool {
+    Pool { slots: pool.new(size) }
+}
+
+/// `GET url` through the pool.
+pub fn pool_fetch(p: Pool, url: string) -> Result<Response, string> {
+    pool_request(p, "GET", url, "", Map.new())
+}
+
+/// `request_with` through the pool: a keep-alive connection to the URL's server is reused
+/// when the pool has one, dialed otherwise. 30 s total read timeout.
+pub fn pool_request(
+    p: Pool,
+    method: string,
+    url: string,
+    body: string,
+    headers: Map<string, string>
+) -> Result<Response, string> {
+    pool_request_bytes(p, method, url, body.to_bytes(), headers, 30000)
+}
+
+/// The base form: raw bytes body and an explicit read timeout in ms (`<= 0` = none). A reused
+/// connection found dead (the server closed it while idle, before any response byte) is
+/// reconnected and the request retried once, as `conn_request_bytes` does; any other failure
+/// discards the connection.
+pub fn pool_request_bytes(
+    p: Pool,
+    method: string,
+    url: string,
+    body: bytes,
+    headers: Map<string, string>,
+    timeout_millis: int
+) -> Result<Response, string> {
+    let u = parse_url(url)?;
+    let base = if (u.tls) { "https://" } else { "http://" } + u.host + ":" + to_string(u.port);
+    let slot = pool.acquire(p.slots)?;
+    let conn: Conn = match (slot) {
+        pool.Slot.Ready(c) => {
+            if (c.host == u.host && c.port == u.port && c.tls == u.tls) {
+                c
+            } else {
+                conn_close(c);
+                match (connect(base)) {
+                    Result.Ok(c2) => c2,
+                    Result.Err(e) => {
+                        pool.release_empty(p.slots);
+                        return Result.Err(e);
+                    },
+                }
+            }
+        },
+        pool.Slot.Empty => match (connect(base)) {
+            Result.Ok(c2) => c2,
+            Result.Err(e) => {
+                pool.release_empty(p.slots);
+                return Result.Err(e);
+            },
+        },
+    };
+    match (conn_request_bytes(conn, method, u.path, body, headers, timeout_millis)) {
+        Result.Ok(r) => {
+            // Una respuesta `Connection: close` ya cerró el socket; la Conn vuelve y reabre
+            // perezosamente en el siguiente uso.
+            pool.release(p.slots, conn);
+            Result.Ok(r)
+        },
+        Result.Err(e) => {
+            conn_close(conn);
+            pool.release_empty(p.slots);
+            Result.Err(e)
+        },
+    }
+}
+
+/// Closes the pool's idle connections and the pool itself.
+pub fn pool_close(p: Pool) {
+    pool.shutdown(p.slots, fn(c: Conn) { conn_close(c) });
 }

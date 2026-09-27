@@ -3808,8 +3808,8 @@ Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y r
 | # | Hallazgo | Estado |
 |---|---|---|
 | 67 | Más distancia HEAD ↔ release 1.27.11 | ✅ lo publicado en 1.27.12/1.27.13 (`last_index_of`, `break` en brazo, `const` de arrays de tuplas) + `+dev.<sha>` (M309) |
-| 68 | Pool de conexiones entre fibras en `db`/`net` (actor: N fibras dueñas + canal de operaciones) | PROPUESTO — arco; el patrón de `rpc.pool` (canal de slots) ya es genérico en nativo desde M313 (#71); falta llevarlo a `db`/`net` con transacciones |
-| 69 | Pool keep-alive por host en `net/http` (raygate como proxy agota puertos) | PROPUESTO — mismo arco que #68 |
+| 68 | Pool de conexiones entre fibras en `db`/`net` (actor: N fibras dueñas + canal de operaciones) | ✅ M318: `net/pool` genérico + `pool*` en db/postgres, db/mysql, db/mongo y net/redis (reintento único, `pool_with`/`pool_tx`) |
+| 69 | Pool keep-alive por host en `net/http` (raygate como proxy agota puertos) | ✅ M318: `http.pool(size)` keep-alive por host (`pool_fetch`/`pool_request*`) |
 | 70 | `to_string` como valor; `slice` de arrays; comparador `bool` de `sort_by` | ✅ M315: builtins como valor donde se espera una función; `xs.slice(from, to)`; docs |
 | 71 | Nativo: genéricos sobre `Channel<Enum<T>>` (E0425/E0283/E0392) | ✅ M313: conversión Send por trait, turbofish por tipo esperado, PhantomData |
 | 72 | db/mysql: el búfer de lectura crece sin límite | ✅ M314 (db 0.1.2): `bytes` + compactación (1,09 GB → 22 MB en 3000 SELECT de 20 KB) |

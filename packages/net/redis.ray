@@ -17,6 +17,7 @@
 // en el intérprete corren bloqueantes (un hilo), así que el cliente funciona en los tres motores
 // contra un servidor real.
 import std/net;
+import net/pool;
 
 // Una respuesta de Redis (RESP2).
 /// A Redis reply (RESP2): simple/bulk string, integer, nil, array, or server error.
@@ -267,4 +268,37 @@ fn join_replies(items: [Reply]) -> string {
         i = i + 1;
     }
     s
+}
+
+// ── Pool (M318, findings #68) ──────────────────────────────────────────────────────────────
+
+/// A pool of up to `size` Redis connections shared by every fiber of the program (see
+/// `net/pool`): dialed lazily, reused first, replaced after a wire failure.
+pub struct Pool {
+    host: string,
+    port: int,
+    slots: pool.Pool<Conn>,
+}
+
+/// Creates a pool of up to `size` connections to `host:port` (nothing is dialed until the
+/// first command).
+pub fn pool(host: string, port: int, size: int) -> Pool {
+    Pool { host: host, port: port, slots: pool.new(size) }
+}
+
+/// `command` through the pool. Retries once on a fresh connection when a REUSED connection
+/// fails on the wire (a restarted server); use `pool_command_with(p, args, false)` for
+/// commands that must not run twice.
+pub fn pool_command(p: Pool, args: [string]) -> Result<Reply, string> {
+    pool_command_with(p, args, true)
+}
+
+/// `pool_command` with an explicit retry policy.
+pub fn pool_command_with(p: Pool, args: [string], retry: bool) -> Result<Reply, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { connect(p.host, p.port) }, fn(c: Conn) { close_conn(c) }, fn(c: Conn) -> Result<Reply, string> { command(c, args) }, retry)
+}
+
+/// Closes the pool's idle connections and the pool itself.
+pub fn pool_close(p: Pool) {
+    pool.shutdown(p.slots, fn(c: Conn) { close_conn(c) });
 }

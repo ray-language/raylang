@@ -1,0 +1,232 @@
+// net/pool — M318 (findings #68/#69): el pool de conexiones GENÉRICO que `rpc.pool` (M203) ya
+// implementaba para su cliente, extraído para que `db/*`, `net/redis` y `net/http` no lo
+// reescriban por adaptador (raymart lo tenía copiado cuatro veces).
+//
+// El diseño ES un canal acotado: la cola de huecos del pool. Adquirir = `recv` (si el pool está
+// agotado la fibra APARCA → backpressure natural, sin busy-wait); devolver = `send`. Los huecos
+// nacen vacíos y se marcan perezosamente; un hueco `Ready` se prefiere a uno `Empty` (M314: un
+// pool de 64 no abre 64 conexiones para 20 peticiones que llegan de una en una). Las fibras no
+// comparten heap (M38): el canal es el ÚNICO conducto, y por él viajan las conexiones mismas.
+//
+// `run` es la operación completa con la política de M314 (rpc): un fallo de CABLE descarta la
+// conexión (el hueco vuelve vacío) y, si la conexión venía del pool (`reused`) y `retry` está
+// activo, repite la operación UNA vez sobre una conexión fresca — tras reiniciar el servidor, el
+// pool sana sin que cada hueco falle una llamada real delante del usuario. Un "read timeout"
+// también descarta (la conexión queda desincronizada) pero nunca reintenta.
+import std/net;
+
+/// A pool slot: a live connection ready to use, or an empty slot the next `acquire` will
+/// (re)dial. Public only because it travels through the pool's channel.
+pub enum Slot<T> {
+    Ready(T),
+    Empty,
+}
+
+/// A generic connection pool: up to `size` connections in flight, one per slot. Nothing is
+/// dialed by the pool itself — `acquire` hands out a ready connection or an empty slot the
+/// caller dials — so the same machinery serves every protocol (`db/*`, `net/redis`,
+/// `net/http`, `rpc`). When every slot is in use the caller's fiber parks until one comes back.
+pub struct Pool<T> {
+    size: int,
+    slots: Channel<Slot<T>>,
+}
+
+/// Creates a pool with `size` empty slots (minimum 1).
+pub fn new<T>(size: int) -> Pool<T> {
+    let n = if (size < 1) { 1 } else { size };
+    let slots: Channel<Slot<T>> = Channel.bounded(n);
+    var i = 0;
+    while (i < n) {
+        let e: Slot<T> = Slot.Empty;
+        send(slots, e);
+        i = i + 1;
+    }
+    Pool { size: n, slots: slots }
+}
+
+/// The pool's size (its number of slots).
+pub fn size<T>(p: Pool<T>) -> int {
+    p.size
+}
+
+/// Takes a slot out of the pool, preferring a `Ready` connection over an `Empty` slot: scans
+/// the idle slots without blocking and only parks when every slot is in use. `Empty` means
+/// "dial your own connection and `release` it (or `release_empty` if dialing fails)".
+/// Err when the pool is closed.
+pub fn acquire<T>(p: Pool<T>) -> Result<Slot<T>, string> {
+    var empties = 0;
+    var ready: Option<T> = Option.None;
+    var open = true;
+    var i = 0;
+    while (open && i < p.size) {
+        match (try_recv(p.slots)) {
+            Received.Got(slot) => match (slot) {
+                Slot.Ready(c) => {
+                    ready = Option.Some(c);
+                    open = false;
+                },
+                Slot.Empty => {
+                    empties = empties + 1;
+                },
+            },
+            Received.Empty => {
+                open = false;
+            },
+            Received.Closed => {
+                return Result.Err("the pool is closed");
+            },
+        }
+        i = i + 1;
+    }
+    match (ready) {
+        Option.Some(c) => {
+            // Todos los `Empty` retirados vuelven.
+            while (empties > 0) {
+                release_empty(p);
+                empties = empties - 1;
+            }
+            return Result.Ok(Slot.Ready(c));
+        },
+        Option.None => { },
+    }
+    if (empties > 0) {
+        // Uno se entrega para marcar; el resto vuelve.
+        while (empties > 1) {
+            release_empty(p);
+            empties = empties - 1;
+        }
+        let e: Slot<T> = Slot.Empty;
+        return Result.Ok(e);
+    }
+    match (recv(p.slots)) {
+        Option.None => Result.Err("the pool is closed"),
+        Option.Some(slot) => Result.Ok(slot),
+    }
+}
+
+/// Returns a live connection to the pool.
+pub fn release<T>(p: Pool<T>, conn: T) {
+    put(p, Slot.Ready(conn));
+}
+
+/// Returns a slot empty (the connection was discarded, or dialing failed).
+pub fn release_empty<T>(p: Pool<T>) {
+    let e: Slot<T> = Slot.Empty;
+    put(p, e);
+}
+
+// Devuelve un hueco. Si `close` cerró el canal con operaciones aún en vuelo, el send fallaría:
+// se amortigua con try_call (el hueco simplemente se pierde; quien lo devolvía ya cerró o
+// descartó su conexión según corresponda — una `Ready` perdida aquí es un descriptor fugado,
+// así que `close` solo cierra el canal DESPUÉS de drenar los huecos ociosos).
+fn put<T>(p: Pool<T>, slot: Slot<T>) {
+    let _ = try_call(fn() -> int {
+        send(p.slots, slot);
+        0
+    });
+}
+
+/// Closes the pool: drains the idle slots (closing their live connections with `drop`) and
+/// closes the queue — later `acquire`s fail with "the pool is closed". Operations still in
+/// flight finish normally. (Named `shutdown` because `close` is the channel builtin.)
+pub fn shutdown<T>(p: Pool<T>, drop: fn(T)) {
+    var i = 0;
+    var draining = true;
+    while (i < p.size && draining) {
+        match (try_recv(p.slots)) {
+            Received.Got(slot) => match (slot) {
+                Slot.Ready(c) => drop(c),
+                Slot.Empty => { },
+            },
+            Received.Empty => {
+                draining = false;
+            },
+            Received.Closed => {
+                draining = false;
+            },
+        }
+        i = i + 1;
+    }
+    close(p.slots);
+}
+
+/// Whether an error came from the WIRE (the peer closed, the socket failed, a read timed out)
+/// rather than from the protocol or the server (a SQL error, a bad reply): only wire errors
+/// discard a pooled connection. Drivers phrase their socket errors so this recognises them.
+pub fn is_wire_error(e: string) -> bool {
+    e == "read timeout"
+        || e.contains("(os error")
+        || e.contains("closed the connection")
+        || e.contains("connection closed")
+        || e.contains("persistent connection closed")
+        || e.contains("broken pipe")
+        || e.contains("connection reset")
+}
+
+/// The pooled operation: acquires a connection (`dial` fills an empty slot), runs `op` on it and
+/// returns it to the pool. On a wire error the connection is discarded (`drop`) and, if it was a
+/// REUSED one and `retry` is on, `op` is repeated once on a fresh connection — a restarted server
+/// heals without one failed call per slot. A "read timeout" discards but never retries; any
+/// other error (the server's own) keeps the connection. Set `retry` to `false` for operations
+/// that are not idempotent.
+pub fn run<T, R>(
+    p: Pool<T>,
+    dial: fn() -> Result<T, string>,
+    drop: fn(T),
+    op: fn(T) -> Result<R, string>,
+    retry: bool
+) -> Result<R, string> {
+    let slot = acquire(p)?;
+    var reused = false;
+    let conn: T = match (slot) {
+        Slot.Ready(c) => {
+            reused = true;
+            c
+        },
+        Slot.Empty => match (dial()) {
+            Result.Ok(c) => c,
+            Result.Err(e) => {
+                release_empty(p);
+                return Result.Err(e);
+            },
+        },
+    };
+    match (op(conn)) {
+        Result.Ok(v) => {
+            release(p, conn);
+            Result.Ok(v)
+        },
+        Result.Err(e) => {
+            if (!is_wire_error(e)) {
+                release(p, conn);
+                return Result.Err(e);
+            }
+            drop(conn);
+            if (!(reused && retry && e != "read timeout")) {
+                release_empty(p);
+                return Result.Err(e);
+            }
+            match (dial()) {
+                Result.Err(e2) => {
+                    release_empty(p);
+                    Result.Err(e2)
+                },
+                Result.Ok(c2) => match (op(c2)) {
+                    Result.Ok(v) => {
+                        release(p, c2);
+                        Result.Ok(v)
+                    },
+                    Result.Err(e2) => {
+                        if (is_wire_error(e2)) {
+                            drop(c2);
+                            release_empty(p);
+                        } else {
+                            release(p, c2);
+                        }
+                        Result.Err(e2)
+                    },
+                },
+            }
+        },
+    }
+}

@@ -16,6 +16,8 @@
 // `disconnect`. Las transacciones son SQL corriente: `exec(c, "BEGIN", [])` / `"COMMIT"` / `"ROLLBACK"`.
 from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 import std/net;
+import std/crypto;
+import net/pool;
 
 /// Una conexión abierta y autenticada, con su búfer de lectura (un mensaje puede partirse entre
 /// lecturas del socket, o venir varios juntos).
@@ -418,4 +420,137 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
 pub fn disconnect(c: Conn) {
     let _ = send(c, 88, []);  // 'X' Terminate
     close(c.handle);
+}
+
+// ── Pool (M318, findings #68) ──────────────────────────────────────────────────────────────
+// Las fibras no comparten heap: una conexión guardada en un valor capturado NO se reutiliza entre
+// peticiones, y abrir una por operación agota los puertos efímeros y paga SCRAM cada vez. El pool
+// de `net/pool` (canal de huecos) viaja por el canal, así que sí se comparte.
+
+/// The connection parameters a pool dials with (`pool`/`pool_tls`).
+pub struct PoolConfig {
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool,
+}
+
+/// A pool of up to `size` PostgreSQL connections shared by every fiber of the program (see
+/// `net/pool`): connections are dialed lazily, reused first, and replaced after a wire failure.
+pub struct Pool {
+    cfg: PoolConfig,
+    slots: pool.Pool<Conn>,
+}
+
+/// Creates a pool of up to `size` connections (nothing is dialed until the first operation).
+pub fn pool(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: false
+        },
+        slots: pool.new(size)
+    }
+}
+
+/// Like `pool`, dialing over TLS (`connect_tls`).
+pub fn pool_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: true
+        },
+        slots: pool.new(size)
+    }
+}
+
+fn pool_dial(p: Pool) -> Result<Conn, string> {
+    let c = p.cfg;
+    if (c.tls) {
+        connect_tls(c.host, c.port, c.user, c.password, c.database, client_nonce())
+    } else {
+        connect(c.host, c.port, c.user, c.password, c.database, client_nonce())
+    }
+}
+
+// M318: el nonce SCRAM del cliente para cada conexión que el pool marca (hex de 18 octetos del
+// CSPRNG: solo caracteres imprimibles sin coma, como exige el protocolo).
+fn client_nonce() -> string {
+    let b = crypto.random_bytes(18);
+    let hex = "0123456789abcdef";
+    var out = "";
+    var i = 0;
+    while (i < b.len()) {
+        out = out + hex.substring(
+            b[i] >> 4,
+            (b[i] >> 4) + 1
+        ) + hex.substring(b[i] & 15, (b[i] & 15) + 1);
+        i = i + 1;
+    }
+    out
+}
+
+/// `query` through the pool. Retries once on a fresh connection when a REUSED connection fails
+/// on the wire (a restarted server); a SQL error never retries and keeps the connection.
+pub fn pool_query(p: Pool, sql: string, params: [string]) -> Result<[[string]], string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[[string]], string> { query(c, sql, params) }, true)
+}
+
+/// `exec` through the pool. Never retries (the statement may have run before the connection
+/// broke): a wire failure discards the connection and returns the error.
+pub fn pool_exec(p: Pool, sql: string, params: [string]) -> Result<int, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<int, string> { exec(c, sql, params) }, false)
+}
+
+/// Runs `f` with ONE pooled connection for its whole duration (several statements that must
+/// share a session), then returns it. No retry.
+pub fn pool_with<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, f, false)
+}
+
+/// A transaction on one pooled connection: `BEGIN`, then `f`; `COMMIT` if `f` succeeds,
+/// `ROLLBACK` (best effort) if it fails. The connection goes back to the pool either way.
+pub fn pool_tx<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
+    pool_with(p, fn(c: Conn) -> Result<R, string> {
+        let _ = exec(c, "BEGIN", [])?;
+        match (f(c)) {
+            Result.Ok(v) => {
+                let _ = exec(c, "COMMIT", [])?;
+                Result.Ok(v)
+            },
+            Result.Err(e) => {
+                let _ = exec(c, "ROLLBACK", []);
+                Result.Err(e)
+            },
+        }
+    })
+}
+
+/// Closes the pool's idle connections and the pool itself.
+pub fn pool_close(p: Pool) {
+    pool.shutdown(p.slots, fn(c: Conn) { disconnect(c) });
 }

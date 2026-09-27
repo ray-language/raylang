@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Pools de conexiones entre fibras** (M318, `RAYLANG-FINDINGS.md` #68/#69; `net` 0.4.0, `db` 0.2.0).
+  - **`net/pool`**: el pool genérico (canal de huecos `Slot<T>`, Ready-first, aparca al agotarse,
+    `run` con descarte ante fallo de cable y reintento único sobre una conexión fresca cuando la
+    reutilizada falla) — lo que `rpc.pool` hacía para su cliente, para cualquier conexión.
+  - **`db/postgres`, `db/mysql`, `db/mongo`**: `pool`/`pool_tls`, `pool_query`/`pool_find`
+    (reintento único), `pool_exec`/`pool_insert`/`pool_run_command` (sin reintento), `pool_with`
+    (una conexión para todo el closure), `pool_tx` (BEGIN/COMMIT/ROLLBACK), `pool_close`. El pool
+    genera el `nonce` SCRAM de cada conexión.
+  - **`net/redis`**: `pool`, `pool_command`/`pool_command_with(p, args, retry)`, `pool_close`.
+  - **`net/http`**: `pool(size)` keep-alive por host — `pool_fetch`/`pool_request`/
+    `pool_request_bytes`/`pool_close`; cada `Conn` recuerda su servidor.
 - **`net` 0.3.9** (M317, `RAYLANG-FINDINGS.md` #94): `webserver.token_cookie(token)` es pública —
   la doc de `local_token_via` remitía a ella y ray-remote la escribía a mano.
 

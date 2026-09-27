@@ -16,7 +16,7 @@ fn setup(name: &str, driver: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ray_hstream_{name}"));
     let net = dir.join("net");
     std::fs::create_dir_all(&net).expect("crea dir");
-    for lib in ["http.ray", "trace.ray", "sse.ray"] {
+    for lib in ["http.ray", "pool.ray", "trace.ray", "sse.ray"] {
         let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
         std::fs::copy(&src, net.join(lib)).unwrap_or_else(|_| panic!("copia {lib}"));
     }

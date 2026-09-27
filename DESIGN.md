@@ -15183,3 +15183,59 @@ sembrar la cookie `ray_local` desde un bucle de accept propio, pero la función 
 ray-remote escribía la línea `Set-Cookie` a mano. Se publica con su doc (`net` 0.3.9): la única
 fuente de la forma de la cookie es el paquete, y quien la siembre desde fuera de `serve` no
 puede desincronizarse de ella.
+
+## 300. M318 — Pools de conexiones entre fibras (`net/pool`, `db/*`, `net/redis`, `net/http`) (sep 2026)
+
+`RAYLANG-FINDINGS.md` #68/#69 (raymart y raygate bajo carga): como las fibras no comparten heap
+(M38), un adaptador no puede guardar una conexión en un valor capturado y reutilizarla entre
+peticiones, así que abría una por operación — ~470 conexiones nuevas/s por par de hosts antes
+de agotar los puertos efímeros, más el handshake (SCRAM) cada vez. raymart lo resolvió copiando
+el patrón de `rpc.pool` (M203/M314) en sus cuatro adaptadores: el catálogo pasó de ~870 a
+~29 000 lecturas/s. Este arco lo lleva a los paquetes.
+
+**El pool es un canal.** `net/pool` extrae la maquinaria de `rpc.pool` como `Pool<T>`: un
+`Channel<Slot<T>>` acotado por el que viajan las conexiones mismas — el canal es el único
+conducto que las fibras comparten, y adquirir es `recv` (aparca cuando el pool está agotado:
+backpressure sin busy-wait). Es genérico gracias a M313 (#71): antes un `Channel<Enum<T>>` no
+compilaba en nativo. Dos decisiones de diseño:
+
+- **`acquire` no marca.** Devuelve `Ready(conn)` o `Empty` y es el llamador quien marca (cada
+  protocolo tiene su `connect`); así el pool no guarda funciones — un struct con campos-función
+  no puede cruzar a `spawn` en nativo (#59) — y un mismo módulo sirve a postgres, mysql, mongo,
+  redis y http. `run(p, dial, drop, op, retry)` es la operación completa con la política de M314:
+  Ready-first; un fallo de CABLE (`is_wire_error`: «(os error», «closed the connection»,
+  «connection closed», «read timeout»…) descarta la conexión y, si venía del pool y `retry`,
+  repite `op` UNA vez sobre una fresca (tras reiniciar el servidor, el pool sana sin que cada
+  hueco falle una llamada real); un «read timeout» descarta sin reintentar (la conexión queda
+  desincronizada, pero la operación pudo ejecutarse); un error del servidor conserva la conexión.
+  Las funciones `dial`/`drop`/`op` se crean DENTRO de la fibra que llama (los envoltorios de
+  cada driver las construyen en cada llamada), así que nada de esto cruza hilos.
+- **Reintento por operación, no por pool.** `pool_query`/`pool_find`/`pool_command` reintentan
+  (lecturas idempotentes); `pool_exec`/`pool_insert`/`pool_run_command` no (la sentencia pudo
+  ejecutarse antes de romperse la conexión); `pool_with` entrega UNA conexión para todo el
+  closure (sesión, transacción) sin reintento, y `pool_tx` envuelve BEGIN/COMMIT/ROLLBACK. Para
+  redis, `pool_command_with(p, args, false)` para lo que no deba repetirse.
+
+**SCRAM y el nonce.** `postgres.connect`/`mongo.connect` reciben el nonce del cliente; el pool
+lo genera por conexión (hex de 18 octetos del CSPRNG) — el usuario del pool no tiene que saber
+de SCRAM.
+
+**`http.pool` (#69).** Un pool de `Conn`s persistentes (M90.2). Cada `Conn` recuerda su servidor:
+un pool sirve a varios hosts, pero un hueco con una conexión de OTRO host se cierra y se
+remarca para la petición (con muchos upstreams, un pool por upstream). `conn_request_bytes` ya
+reconecta y reintenta una vez si la conexión reutilizada estaba muerta antes de entregar octeto
+alguno; cualquier otro fallo descarta la conexión. Una respuesta `Connection: close` deja la
+`Conn` cerrada y vuelve al pool: reabre perezosamente en el siguiente uso.
+
+**Lo que no cambia.** `rpc.pool` sigue con su implementación propia (idéntica en política); podrá
+apoyarse en `net/pool` cuando `rpc` dependa de `net` por otra razón. La clasificación de fallo de
+cable se hace por texto del error: los drivers redactan sus errores de socket para que
+`is_wire_error` los reconozca, y un mensaje del servidor que contenga esas frases (improbable)
+descartaría una conexión sana — el coste es una reconexión, no un error.
+
+**Verificación.** `tests/pool_cli.rs`: la semántica del pool con conexiones enteras en VM y
+nativo (Ready-first, reintento, conservación ante error del servidor, aparcar al agotarse,
+`shutdown`); `http.pool` contra un `net/webserver` real (ocho peticiones secuenciales = un
+puerto remoto; nueve concurrentes ≤ 3 conexiones); `redis.pool` contra un servidor RESP de
+prueba que cierra cada conexión tras la primera respuesta (cinco comandos, cinco conexiones,
+cero errores visibles).

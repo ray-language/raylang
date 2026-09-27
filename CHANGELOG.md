@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.16 — 2026-09-27
 
 - **Nativo: despertar fibras entre hilos** (M319, `RAYLANG-FINDINGS.md` #75). Los workers del
   scheduler M:N hacen spin-then-park cediendo el hilo (10 µs, `RAYLANG_SPIN_US`) antes de dormir:

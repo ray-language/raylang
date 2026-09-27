@@ -278,7 +278,13 @@ fn local_guard(req: Request, limits: Limits) -> Result<bool, Response> {
     Result.Ok(via_query)
 }
 
-fn token_cookie(token: string) -> string {
+// M317 (findings #94): pública — la doc de `local_token_via` remitía a ella y ray-remote la
+// escribía a mano.
+/// The `Set-Cookie` line that seeds the local token (`ray_local=<token>; Path=/; HttpOnly;
+/// SameSite=Strict`), as `serve` sends it when the token arrived in `?ray_token=`. For servers
+/// with their own accept loop: `r.with_cookie(token_cookie(token))` when `local_token_via`
+/// reports `via_query`.
+pub fn token_cookie(token: string) -> string {
     "ray_local=" + token + "; Path=/; HttpOnly; SameSite=Strict"
 }
 

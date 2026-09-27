@@ -4,6 +4,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`net` 0.3.9** (M317, `RAYLANG-FINDINGS.md` #94): `webserver.token_cookie(token)` es pública —
+  la doc de `local_token_via` remitía a ella y ray-remote la escribía a mano.
+
 ## 1.27.15 — 2026-09-26
 
 - **El cuarto barrido de `ray-apps`: la revisión de 1.27.13/1.27.14** (M316,

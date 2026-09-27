@@ -27,7 +27,9 @@ fn raw_handler(req: webserver.Request) -> webserver.Response {
     if (webserver.cross_site_blocked(req) || !ok) {
         return webserver.text(403, "nope");
     }
-    webserver.ok("raw " + req.path + (if (via_query) { " via-query" } else { "" }))
+    // M317 (findings #94): `token_cookie` es pública — siembra la cookie desde un bucle propio.
+    let r = webserver.ok("raw " + req.path + (if (via_query) { " via-query" } else { "" }));
+    if (via_query) { r.with_cookie(webserver.token_cookie("s3cr3t")) } else { r }
 }
 
 fn main() -> int {
@@ -149,6 +151,7 @@ fn a_raw_handler_checks_the_local_token_with_the_public_function() {
     let via = ask(port, &format!("GET /a?ray_token=s3cr3t HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"));
     assert_eq!(status(&via), 200);
     assert!(via.contains("raw /a via-query"), "{via}");
+    assert!(via.contains("Set-Cookie: ray_local=s3cr3t; Path=/; HttpOnly; SameSite=Strict"), "token_cookie: {via}");
     let hdr = ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: s3cr3t\r\nConnection: close\r\n\r\n"));
     assert!(hdr.contains("raw /a\r\n") || hdr.ends_with("raw /a"), "sin via-query por cabecera: {hdr}");
     assert_eq!(status(&ask(port, &format!("GET /a HTTP/1.1\r\nHost: {host}\r\nX-Ray-Token: wrong\r\nConnection: close\r\n\r\n"))), 403);

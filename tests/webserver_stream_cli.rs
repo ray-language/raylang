@@ -72,7 +72,7 @@ fn start_server(name: &str) -> Server {
     let net = dir.join("net");
     std::fs::create_dir_all(&net).expect("crea net/");
     std::fs::create_dir_all(dir.join("public")).expect("crea public/");
-    for lib in ["webserver.ray", "trace.ray", "http.ray", "log.ray", "time.ray"] {
+    for lib in ["webserver.ray", "trace.ray", "http.ray", "pool.ray", "log.ray", "time.ray"] {
         let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
         let _ = std::fs::copy(&src, net.join(lib));
     }
@@ -140,7 +140,7 @@ fn start_raw_server(name: &str) -> Server {
     let net = dir.join("net");
     std::fs::create_dir_all(&net).expect("crea net/");
     std::fs::create_dir_all(dir.join("public")).expect("crea public/");
-    for lib in ["webserver.ray", "trace.ray", "http.ray", "log.ray", "time.ray"] {
+    for lib in ["webserver.ray", "trace.ray", "http.ray", "pool.ray", "log.ray", "time.ray"] {
         let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
         let _ = std::fs::copy(&src, net.join(lib));
     }
@@ -451,7 +451,7 @@ fn serve_raw_handlers_with_state_natively() {
     let _ = std::fs::remove_dir_all(&dir);
     let net = dir.join("net");
     std::fs::create_dir_all(&net).unwrap();
-    for lib in ["webserver.ray", "trace.ray", "http.ray", "log.ray", "time.ray"] {
+    for lib in ["webserver.ray", "trace.ray", "http.ray", "pool.ray", "log.ray", "time.ray"] {
         let src = format!("{}/packages/net/{lib}", env!("CARGO_MANIFEST_DIR"));
         let _ = std::fs::copy(&src, net.join(lib));
     }

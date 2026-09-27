@@ -19,6 +19,7 @@
 // que cierra el socket).
 import std/net;
 import std/crypto;
+import net/pool;
 import std/bigint;
 import std/math;
 
@@ -1081,4 +1082,112 @@ pub fn disconnect(c: Conn) {
     c.seq = 0;
     let _ = write_packet(c, [1]);  // COM_QUIT (el servidor no responde)
     close(c.sock);
+}
+
+// ── Pool (M318, findings #68) — ver db/postgres ────────────────────────────────────────────
+
+/// The connection parameters a pool dials with (`pool`/`pool_tls`).
+pub struct PoolConfig {
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool,
+}
+
+/// A pool of up to `size` MySQL connections shared by every fiber of the program (see
+/// `net/pool`): dialed lazily, reused first, replaced after a wire failure.
+pub struct Pool {
+    cfg: PoolConfig,
+    slots: pool.Pool<Conn>,
+}
+
+/// Creates a pool of up to `size` connections (nothing is dialed until the first operation).
+pub fn pool(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: false
+        },
+        slots: pool.new(size)
+    }
+}
+
+/// Like `pool`, dialing over TLS (`connect_tls`).
+pub fn pool_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: true
+        },
+        slots: pool.new(size)
+    }
+}
+
+fn pool_dial(p: Pool) -> Result<Conn, string> {
+    let c = p.cfg;
+    connect_opts(c.host, c.port, c.user, c.password, c.database, c.tls)
+}
+
+/// `query` through the pool. Retries once on a fresh connection when a REUSED connection fails
+/// on the wire (a restarted server); a SQL error never retries and keeps the connection.
+pub fn pool_query(p: Pool, sql: string, params: [string]) -> Result<[[string]], string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[[string]], string> { query(c, sql, params) }, true)
+}
+
+/// `exec` through the pool. Never retries (the statement may have run before the connection
+/// broke): a wire failure discards the connection and returns the error.
+pub fn pool_exec(p: Pool, sql: string, params: [string]) -> Result<int, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<int, string> { exec(c, sql, params) }, false)
+}
+
+/// Runs `f` with ONE pooled connection for its whole duration, then returns it. No retry.
+pub fn pool_with<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, f, false)
+}
+
+/// A transaction on one pooled connection: `BEGIN`, then `f`; `COMMIT` if `f` succeeds,
+/// `ROLLBACK` (best effort) if it fails.
+pub fn pool_tx<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
+    pool_with(p, fn(c: Conn) -> Result<R, string> {
+        let _ = exec(c, "BEGIN", [])?;
+        match (f(c)) {
+            Result.Ok(v) => {
+                let _ = exec(c, "COMMIT", [])?;
+                Result.Ok(v)
+            },
+            Result.Err(e) => {
+                let _ = exec(c, "ROLLBACK", []);
+                Result.Err(e)
+            },
+        }
+    })
+}
+
+/// Closes the pool's idle connections and the pool itself.
+pub fn pool_close(p: Pool) {
+    pool.shutdown(p.slots, fn(c: Conn) { disconnect(c) });
 }

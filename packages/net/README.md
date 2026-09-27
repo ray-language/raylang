@@ -62,7 +62,9 @@ fn main() -> int {
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
   `std/inflate` (gunzip). M90.2: conexiones persistentes (keep-alive) con `connect`/`conn_request`/
   `conn_close` — reusa el socket entre peticiones al mismo servidor (delimitación por
-  Content-Length/chunked, reconexión y reintento transparente). M108: **streaming** —
+  Content-Length/chunked, reconexión y reintento transparente). M318: `pool(size)` +
+  `pool_fetch`/`pool_request`/`pool_request_bytes` + `pool_close` — un pool de `Conn`s keep-alive
+  compartido por todas las fibras (un proxy que abre una conexión por petición agota los puertos). M108: **streaming** —
   `stream`/`stream_with` devuelven status y cabeceras en cuanto llegan y `stream_read` entrega el
   cuerpo a trozos según llegan (des-chunkeado incremental; plazo de OCIO por lectura, no total;
   `Ok(None)` = fin limpio, truncado = `Err`). Para respuestas que se generan en vivo (tokens de un
@@ -93,7 +95,14 @@ fn main() -> int {
   automático, fragmentación reensamblada, límite de payload validado antes de leer).
 - **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`. `connect`/
   `connect_tls` devuelven un `WsConn` con estado (M58.1).
-- **`net/redis`** — cliente Redis (protocolo RESP). Hoja.
+- **`net/redis`** — cliente Redis (protocolo RESP). Hoja. M318: `pool(host, port, size)` + `pool_command`
+  (reintento único sobre una conexión fresca si la reutilizada falla por el cable; `pool_command_with(p,
+  args, false)` para comandos que no deben repetirse) + `pool_close`.
+- **`net/pool`** — el pool de conexiones **genérico** (M318, findings #68/#69): un canal de huecos
+  `Slot<T>` que las fibras comparten aunque no compartan heap. `new<T>(size)`, `acquire` (Ready-first,
+  aparca si está agotado), `release`/`release_empty`, `run(p, dial, drop, op, retry)` (descarta la
+  conexión ante un fallo de cable y repite `op` una vez sobre una fresca si venía del pool),
+  `shutdown`. Es la base de `http.pool`, `redis.pool` y de los pools de `db/*`. Hoja.
 - **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.

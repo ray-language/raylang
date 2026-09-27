@@ -394,7 +394,11 @@ Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 WebSocket, streaming, static files with ETag/Range), `web` (an Express-style app framework
 over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
 the recommended base for servers and for desktop/mobile app backends with `std/ui`),
-`rpc` and `db`. Signatures live in REFERENCE.md/reference.md.
+`rpc` and `db`. Signatures live in REFERENCE.md/reference.md. Connections are NOT shared
+between fibers (isolated heaps): to reuse them across requests use the pools — `net/pool`
+(generic), `http.pool(size)`, `redis.pool(host, port, size)`, `postgres.pool(...)`,
+`mysql.pool(...)`, `mongo.pool(...)` (`pool_query`/`pool_exec`/`pool_tx`/`pool_with`) and
+`rpc.pool` — never one connection per request under load (ephemeral ports run out).
 
 If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
 diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` (a bare module name like "std/kv"

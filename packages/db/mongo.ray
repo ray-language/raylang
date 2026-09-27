@@ -16,6 +16,8 @@
 import db/bson;
 from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 import std/net;
+import std/crypto;
+import net/pool;
 
 /// An open, authenticated connection. Carries the read buffer (a reply may arrive split across
 /// socket reads), the request-id counter, and the database name (stamped as `$db` on commands).
@@ -498,4 +500,119 @@ pub fn delete(c: Conn, coll: string, filter: [bson.Field]) -> Result<int, string
 /// Closes the connection (no farewell message in the protocol; just the socket).
 pub fn disconnect(c: Conn) {
     close(c.handle);
+}
+
+// ── Pool (M318, findings #68) — ver db/postgres ────────────────────────────────────────────
+
+/// The connection parameters a pool dials with (`pool`/`pool_tls`).
+pub struct PoolConfig {
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool,
+}
+
+/// A pool of up to `size` MongoDB connections shared by every fiber of the program (see
+/// `net/pool`): dialed lazily, reused first, replaced after a wire failure.
+pub struct Pool {
+    cfg: PoolConfig,
+    slots: pool.Pool<Conn>,
+}
+
+/// Creates a pool of up to `size` connections (nothing is dialed until the first operation).
+pub fn pool(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: false
+        },
+        slots: pool.new(size)
+    }
+}
+
+/// Like `pool`, dialing over TLS (`connect_tls`).
+pub fn pool_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    size: int
+) -> Pool {
+    Pool {
+        cfg: PoolConfig {
+            host: host,
+            port: port,
+            user: user,
+            password: password,
+            database: database,
+            tls: true
+        },
+        slots: pool.new(size)
+    }
+}
+
+fn pool_dial(p: Pool) -> Result<Conn, string> {
+    let c = p.cfg;
+    if (c.tls) {
+        connect_tls(c.host, c.port, c.user, c.password, c.database, client_nonce())
+    } else {
+        connect(c.host, c.port, c.user, c.password, c.database, client_nonce())
+    }
+}
+
+// M318: el nonce SCRAM del cliente para cada conexión que el pool marca (hex de 18 octetos del
+// CSPRNG: solo caracteres imprimibles sin coma, como exige el protocolo).
+fn client_nonce() -> string {
+    let b = crypto.random_bytes(18);
+    let hex = "0123456789abcdef";
+    var out = "";
+    var i = 0;
+    while (i < b.len()) {
+        out = out + hex.substring(
+            b[i] >> 4,
+            (b[i] >> 4) + 1
+        ) + hex.substring(b[i] & 15, (b[i] & 15) + 1);
+        i = i + 1;
+    }
+    out
+}
+
+/// `find` through the pool (retries once on a fresh connection when a reused one fails on the wire).
+pub fn pool_find(p: Pool, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[[bson.Field]], string> { find(c, coll, filter) }, true)
+}
+
+/// `insert` through the pool. Never retries (the write may have happened before the break).
+pub fn pool_insert(p: Pool, coll: string, docs: [[bson.Field]]) -> Result<int, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<int, string> { insert(c, coll, docs) }, false)
+}
+
+/// `run_command` through the pool. Never retries.
+pub fn pool_run_command(p: Pool, doc: [bson.Field]) -> Result<[bson.Field], string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[bson.Field], string> { run_command(c, doc) }, false)
+}
+
+/// Runs `f` with ONE pooled connection for its whole duration (e.g. `update`/`delete`, or
+/// several operations on one session), then returns it. No retry.
+pub fn pool_with<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
+    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, f, false)
+}
+
+/// Closes the pool's idle connections and the pool itself.
+pub fn pool_close(p: Pool) {
+    pool.shutdown(p.slots, fn(c: Conn) { disconnect(c) });
 }

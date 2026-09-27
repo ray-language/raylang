@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Pools, segunda pasada** (M320, `RAYLANG-FINDINGS.md` #95/#96; `net` 0.4.1, `db` 0.2.1).
+  - `db/postgres`: un FATAL de clase 57P (reinicio, `pg_terminate_backend`) se devuelve como
+    «the server closed the connection (FATAL 57P01: …)»: el pool descarta la conexión y reintenta
+    en vez de fallar una vez por conexión caliente (#95).
+  - `net/pool.run_tx(p, dial, drop, begin, op)`: repite `begin` (y `op`) sobre una conexión fresca
+    si `begin` falló por el cable sobre una reutilizada; `pool_tx` de postgres y mysql lo usa (el
+    `BEGIN` se reintenta, el cuerpo nunca); `pool_with_retry(p, f)` en los tres drivers para
+    bloques idempotentes; `pool_with` documenta que un fallo de cable dentro descarta la conexión (#96).
+
 ## 1.27.16 — 2026-09-27
 
 - **Nativo: despertar fibras entre hilos** (M319, `RAYLANG-FINDINGS.md` #75). Los workers del

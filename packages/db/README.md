@@ -50,8 +50,10 @@ fn main() -> int {
 - **Pool** (M318, findings #68): `pool(host, port, user, password, database, size) -> Pool` (o
   `pool_tls`) · `pool_query(p, sql, params)` (reintenta una vez sobre una conexión fresca si la
   reutilizada falla por el cable — un servidor reiniciado sana solo) · `pool_exec` (sin reintento)
-  · `pool_with(p, f)` (una conexión para todo `f`) · `pool_tx(p, f)` (BEGIN/COMMIT/ROLLBACK) ·
-  `pool_close(p)`. El pool viaja por un canal (`net/pool`), así que se comparte entre las fibras
+  · `pool_with(p, f)` (una conexión para todo `f`; un fallo de cable dentro la descarta) ·
+  `pool_with_retry(p, f)` (bloques idempotentes: repite una vez sobre una conexión fresca) ·
+  `pool_tx(p, f)` (BEGIN/COMMIT/ROLLBACK; si el `BEGIN` falla por el cable sobre una conexión
+  reutilizada, la transacción arranca de nuevo en una fresca — M320, findings #96) · `pool_close(p)`. El pool viaja por un canal (`net/pool`), así que se comparte entre las fibras
   de un servidor aunque no compartan heap: abrir una conexión por petición agota los puertos
   efímeros (~470 conexiones/s por par de hosts) y paga el handshake cada vez.
 - **Auth**: `mysql_native_password` (completa) y `caching_sha2_password` (el plugin por defecto
@@ -100,8 +102,11 @@ fn main() -> int {
   `query(c, sql, params) -> Result<[[string]], string>` · `exec(c, sql, params) -> Result<int, string>`
   (filas afectadas) · `disconnect(c)` · **Pool** (M318): `pool`/`pool_tls(host, port, user, password,
   database, size)`, `pool_query` (reintento único si la conexión reutilizada falla por el cable),
-  `pool_exec`, `pool_with(p, f)`, `pool_tx(p, f)`, `pool_close` — el pool genera el `nonce` SCRAM
-  de cada conexión. Las **transacciones** son SQL corriente (`exec(c, "BEGIN", [])`
+  `pool_exec`, `pool_with(p, f)`, `pool_with_retry(p, f)`, `pool_tx(p, f)` (reintenta el `BEGIN` sobre
+  una conexión fresca si falló por el cable), `pool_close` — el pool genera el `nonce` SCRAM de cada
+  conexión. M320 (findings #95): un FATAL de clase 57P (reinicio del servidor, `pg_terminate_backend`)
+  se devuelve como «the server closed the connection (FATAL 57P01: …)», que el pool trata como fallo
+  de cable: descarta la conexión y reintenta las lecturas. Las **transacciones** son SQL corriente (`exec(c, "BEGIN", [])`
   / `"COMMIT"` / `"ROLLBACK"`).
 - **Parámetros** en formato texto (v1); usa `$1`, `$2`, … en el SQL. `nonce` = nonce del cliente
   (aleatorio en producción). El cliente de una-consulta de `net/postgres` (protocolo simple) se
@@ -202,7 +207,8 @@ mongo.disconnect(c);
 **Pool** (M318): `pool`/`pool_tls(host, port, user, password, database, size)` · `pool_find(p, coll,
 filter)` (reintento único si la conexión reutilizada falla por el cable) · `pool_insert` /
 `pool_run_command` (sin reintento) · `pool_with(p, f)` (una conexión para todo `f`: `update`,
-`delete`, varias operaciones de una sesión) · `pool_close(p)`.
+`delete`, varias operaciones de una sesión) · `pool_with_retry(p, f)` (bloques idempotentes) ·
+`pool_close(p)`.
 
 ```raylang
 ```

@@ -3818,4 +3818,7 @@ Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y r
 | 75 | Nativo: despertar una fibra desde otro hilo cuesta ~30 µs (pedir/responder entre actores) | ✅ M319: spin-then-park cediendo el hilo (10 µs) en los workers + cancelación que despierta a la cancelada (sin pulso de 10 ms por espera): pedir/responder 5,2× (medido en `benchmarks/actor_ask.ray`); `yield()` y atómicos quedan como filas propias |
 | 75b | `yield()` como builtin (esperar sin bloquear el hilo) | PROPUESTO — con fibras, `recv`/`select` ya aparcan sin bloquear el hilo; solo tendría sentido para sondeos con `try_recv`, que hoy se resuelven con `select_timeout` |
 | 75c | Contadores atómicos compartidos (`std/sync`: `Atomic`, celda de solo lectura publicada por un actor) para decisiones de solo lectura sin viaje al actor | PROPUESTO — rompe la aislación de heaps (M38) por diseño: exige una superficie explícita y acotada; decidir con un caso medido (raygate: breaker/rate limit por petición) |
+| 94 | La doc de `local_token_via` remitía a un `token_cookie` privado | ✅ M317 (net 0.3.9): pública |
+| 95 | `net/pool` no reconoce el FATAL 57P01 de PostgreSQL (reinicio, `pg_terminate_backend`) como cierre | ✅ M320 (db 0.2.1): la clase 57P se redacta como «closed the connection» y el pool la descarta |
+| 96 | `pool_tx`/`pool_with` no reintentan ni cuando el `BEGIN` falla en una conexión caducada | ✅ M320: `pool.run_tx` reintenta el preámbulo; `pool_tx` lo usa; `pool_with_retry` para bloques idempotentes; doc de `pool_with` |
 

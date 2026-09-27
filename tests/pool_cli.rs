@@ -96,13 +96,29 @@ fn main() -> int {
     let held = join(t1) + join(t2);
     let third = join(t3);
     print(to_string(c1 + c2 == held) + " " + to_string(third == c1 || third == c2));
+    // M320 (findings #96): run_tx — un `begin` que falla por el cable sobre la conexión
+    // REUTILIZADA se repite (con `op`) sobre una fresca; el cuerpo nunca se repite.
+    var begins = 0;
+    let begin = fn(c: int) -> Result<int, string> {
+        begins = begins + 1;
+        if (begins == 1) { Result.Err("postgres: the server closed the connection (FATAL 57P01: terminating connection due to administrator command)") } else { Result.Ok(0) }
+    };
+    var ops = 0;
+    let body = fn(c: int) -> Result<int, string> { ops = ops + 1; Result.Ok(c) };
+    let tx = pool.run_tx(p, dial_fixed, drop_print, begin, body);
+    print("tx " + to_string(tx.unwrap_or(-1)) + " begins=" + to_string(begins) + " ops=" + to_string(ops));
+    // Un error del servidor en el cuerpo devuelve la conexión al pool (sin drop).
+    match (pool.run_tx(p, dial_fixed, drop_print, fn(c: int) -> Result<int, string> { Result.Ok(0) }, fn(c: int) -> Result<int, string> { Result.Err("ERROR: duplicate key") })) {
+        Result.Ok(_) => print("?"),
+        Result.Err(e) => print(e),
+    }
     pool.shutdown(p, drop);
     match (pool.acquire(p)) { Result.Ok(_) => print("?"), Result.Err(e) => print(e) }
     0
 }
 "#,
     );
-    let want = "10 11\ndrop 10\n20\nERROR: relation x does not exist\n20\ndrop 20\nno retry: read timeout\ntrue true\ndrop 30\ndrop 30\nthe pool is closed\n";
+    let want = "10 11\ndrop 10\n20\nERROR: relation x does not exist\n20\ndrop 20\nno retry: read timeout\ntrue true\ndrop 30\ntx 30 begins=2 ops=1\nERROR: duplicate key\ndrop 30\ndrop 30\nthe pool is closed\n";
     let (out, err, code) = ray(&d, &["run", "src/main.ray"]);
     assert_eq!(code, 0, "vm: {err}");
     assert_eq!(out, want, "vm");

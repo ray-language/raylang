@@ -56,13 +56,26 @@ fn launch(mode: &str) -> (Child, u16) {
         .args(["run", "main.ray", mode])
         .current_dir(&dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("lanza");
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
-    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("puerto: {line:?}"));
+    // M320: si el servidor muere antes de imprimir el puerto (un rojo esporádico en CI con
+    // `puerto: ""`), el motivo está en su stderr — se recoge para que el panic lo diga.
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| {
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        let _ = child.wait();
+        panic!("puerto: {line:?}\nstderr del servidor:\n{err}")
+    });
+    // El stderr se drena aparte (como el stdout): un pipe lleno bloquearía al servidor.
+    if let Some(e) = child.stderr.take() {
+        std::thread::spawn(move || { let mut sink = Vec::new(); let _ = BufReader::new(e).read_to_end(&mut sink); });
+    }
     // El servidor sigue imprimiendo («listening on port N»): si se suelta el lector, el pipe se
     // cierra y el siguiente print mata el proceso (EPIPE) → conexión reseteada. Se drena aparte.
     std::thread::spawn(move || { let mut sink = String::new(); while reader.read_line(&mut sink).map(|n| n > 0).unwrap_or(false) { sink.clear(); } });

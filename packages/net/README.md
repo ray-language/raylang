@@ -102,7 +102,8 @@ fn main() -> int {
   `Slot<T>` que las fibras comparten aunque no compartan heap. `new<T>(size)`, `acquire` (Ready-first,
   aparca si está agotado), `release`/`release_empty`, `run(p, dial, drop, op, retry)` (descarta la
   conexión ante un fallo de cable y repite `op` una vez sobre una fresca si venía del pool),
-  `shutdown`. Es la base de `http.pool`, `redis.pool` y de los pools de `db/*`. Hoja.
+  `run_tx(p, dial, drop, begin, op)` (M320: repite solo el preámbulo `begin` — un `BEGIN` — si
+  falló por el cable sobre una conexión reutilizada), `shutdown`. Es la base de `http.pool`, `redis.pool` y de los pools de `db/*`. Hoja.
 - **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.

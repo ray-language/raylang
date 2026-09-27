@@ -167,8 +167,8 @@ pub fn is_wire_error(e: string) -> bool {
 /// returns it to the pool. On a wire error the connection is discarded (`drop`) and, if it was a
 /// REUSED one and `retry` is on, `op` is repeated once on a fresh connection — a restarted server
 /// heals without one failed call per slot. A "read timeout" discards but never retries; any
-/// other error (the server's own) keeps the connection. Set `retry` to `false` for operations
-/// that are not idempotent.
+/// other error (the server's own) keeps the connection and goes back to the pool with it. Set
+/// `retry` to `false` for operations that are not idempotent.
 pub fn run<T, R>(
     p: Pool<T>,
     dial: fn() -> Result<T, string>,
@@ -227,6 +227,84 @@ pub fn run<T, R>(
                     },
                 },
             }
+        },
+    }
+}
+
+/// M320 (findings #96): a pooled operation with a PREAMBLE that is always safe to repeat —
+/// `begin` (e.g. `BEGIN`) — followed by `op`, which never retries. If `begin` fails on the wire
+/// on a REUSED connection (the server closed it while idle), the connection is discarded and
+/// `begin` + `op` run once on a fresh one; `op`'s own failures follow `run`'s rules with
+/// `retry = false` (wire error → discarded; server error → kept). This is what a transaction
+/// helper needs: retry the `BEGIN`, never the body.
+pub fn run_tx<T, R>(
+    p: Pool<T>,
+    dial: fn() -> Result<T, string>,
+    drop: fn(T),
+    begin: fn(T) -> Result<int, string>,
+    op: fn(T) -> Result<R, string>
+) -> Result<R, string> {
+    let slot = acquire(p)?;
+    var reused = false;
+    var conn: T = match (slot) {
+        Slot.Ready(c) => {
+            reused = true;
+            c
+        },
+        Slot.Empty => match (dial()) {
+            Result.Ok(c) => c,
+            Result.Err(e) => {
+                release_empty(p);
+                return Result.Err(e);
+            },
+        },
+    };
+    match (begin(conn)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            if (!is_wire_error(e)) {
+                release(p, conn);
+                return Result.Err(e);
+            }
+            drop(conn);
+            if (!(reused && e != "read timeout")) {
+                release_empty(p);
+                return Result.Err(e);
+            }
+            conn = match (dial()) {
+                Result.Ok(c) => c,
+                Result.Err(e2) => {
+                    release_empty(p);
+                    return Result.Err(e2);
+                },
+            };
+            match (begin(conn)) {
+                Result.Ok(_) => { },
+                Result.Err(e2) => {
+                    if (is_wire_error(e2)) {
+                        drop(conn);
+                        release_empty(p);
+                    } else {
+                        release(p, conn);
+                    }
+                    return Result.Err(e2);
+                },
+            }
+        },
+    }
+    match (op(conn)) {
+        Result.Ok(v) => {
+            release(p, conn);
+            Result.Ok(v)
+        },
+        Result.Err(e) => {
+            if (is_wire_error(e)) {
+                drop(conn);
+                release_empty(p);
+            } else {
+                release(p, conn);
+            }
+            Result.Err(e)
         },
     }
 }

@@ -15278,3 +15278,20 @@ un temporizador (`block_on_timeout`), porque su plazo debe vencer sin actividad.
 **Lo que queda propuesto** (IDEAS §99 75b/75c): `yield()` como builtin —con fibras, `recv` y
 `select` ya aparcan sin bloquear el hilo— y atómicos compartidos, que rompen la aislación de
 heaps por diseño y merecen su propia decisión con un caso medido.
+
+## 302. M320 — Pools, segunda pasada: sesiones terminadas y el `BEGIN` que sí se repite (sep 2026)
+
+`RAYLANG-FINDINGS.md` #95/#96, la primera revisión de M318 en raymart. (1) PostgreSQL, al
+reiniciarse o al `pg_terminate_backend`, manda a cada sesión un FATAL de clase 57P antes de
+cerrar; el driver lo devolvía como un error más del servidor y `is_wire_error` no lo reconocía:
+el pool conservaba la conexión muerta y cada conexión caliente fallaba una vez (el mismo síntoma
+de #74). El driver lee ahora el SQLSTATE (`C`) y redacta la clase 57P como «the server closed
+the connection (FATAL 57P01: …)» — la clasificación de M318 es por texto, así que el driver
+habla el idioma del pool en vez de que el pool aprenda el de cada servidor. (2) `pool_tx`
+nunca reintentaba, ni cuando el `BEGIN` fallaba en una conexión que el servidor cerró ociosa —
+y ahí reintentar es seguro: nada se ha ejecutado. `net/pool.run_tx(p, dial, drop, begin, op)`
+formaliza el preámbulo idempotente: `begin` se repite sobre una conexión fresca si falló por el
+cable sobre una reutilizada; `op` (el cuerpo con su COMMIT/ROLLBACK) nunca. `pool_with_retry`
+cubre los bloques idempotentes que raymart resolvía llamando a `pool.run` con el `dial`
+reconstruido desde `Pool.cfg`, y la doc de `pool_with` dice ahora qué pasa con la conexión
+cuando `f` falla (cable → descartada; otro error → vuelve al pool).

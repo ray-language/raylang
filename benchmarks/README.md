@@ -36,6 +36,10 @@ El script compila en modo release automáticamente y requiere
 intensa, mide el coste de llamada/despacho) y `strings.ray` (string-heavy, mide el
 coste de mover/construir strings).
 
+`actor_ask.ray` (M319) no es del arnés VM/intérprete: es el microbenchmark del **scheduler nativo**
+(pedir/responder entre fibras de workers distintos); se compila con `ray build --native --release` y
+se corre a mano (ver su cabecera). Sus cifras están en PERFORMANCE.md.
+
 ### Sin hyperfine
 
 `measure.py` es una alternativa que **solo necesita python3** (mejor-de-N, sin deps externas):

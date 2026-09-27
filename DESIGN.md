@@ -15239,3 +15239,42 @@ nativo (Ready-first, reintento, conservación ante error del servidor, aparcar a
 puerto remoto; nueve concurrentes ≤ 3 conexiones); `redis.pool` contra un servidor RESP de
 prueba que cierra cada conexión tras la primera respuesta (cinco comandos, cinco conexiones,
 cero errores visibles).
+
+## 301. M319 — Despertar fibras entre hilos: spin-then-park y cancelación sin pulso (sep 2026)
+
+`RAYLANG-FINDINGS.md` #75 (raygate): un actor que responde `Ask(x, reply)` costaba ~30 µs por
+ida y vuelta entre hilos (1,4 µs con `RAYLANG_THREADS=1`), y en un gateway donde cada petición
+consulta al actor de control eso pesaba más que todo el trabajo de proxy. El canal es barato; lo
+caro es aparcar un hilo del planificador y despertar a otro por futex. Medido aquí (M4, 11
+cores, `benchmarks/actor_ask.ray`): 6,0 µs por ida y vuelta contra 0,37 µs en un hilo.
+
+**Por qué no migrar la fibra al hilo del emisor.** Sería el remedio clásico (el receptor corre
+donde ya está el emisor, sin despertar a nadie), pero las fibras están FIJADAS a su worker por
+corrección, no por preferencia: con opt3+LTO, LLVM cachea direcciones de thread-locals a través
+del cambio de contexto de corosensei, y una fibra que migrara escribiría en los TLS del hilo
+antiguo (cazado en release, ver el doc de `fibers.rs`). Robar trabajo sigue prohibido.
+
+**Spin-then-park, cediendo.** Lo que sí se puede es no dormir tan pronto: un worker que se
+queda sin trabajo mira su cola durante 10 µs antes de dormir en la condvar. La primera versión
+giraba en seco (`spin_loop`) y ganaba 5,7× en pedir/responder, pero perdía un 36 % en envíos
+masivos: con los cores saturados el girador roba CPU a quien trabaja. Un presupuesto adaptativo
+(duplicar al cazar, reducir a la mitad al fallar) no lo arregló: se hundía al suelo en el
+arranque ocioso y, aun con suelo, dañaba el envío masivo. La versión que se queda cede el hilo
+al SO entre miradas (`yield_now`): conserva el 5,2× y, en el envío masivo, MEJORA un 32 % (el
+worker que cede deja correr al actor). Coste en un servidor ocioso: 10 µs de cesiones cada vez
+que un worker se vacía; nada. `RAYLANG_SPIN_US` lo ajusta (0 = apagado).
+
+**Cancelación sin pulso.** Cada espera de lista (F3) armaba un temporizador de 10 ms en el
+reactor —un op en el buzón y un byte por la tubería POR PARK— solo para que una tarea cancelada
+notara su cancelación en ≤10 ms. Ahora es el cancelador quien despierta: cada tarea guarda (en
+su ctx, compartido con su `__RayTask`) la lista en la que está aparcada, y `cancel_task` pone el
+flag y hace `wake_all` sobre ella. El protocolo anti carrera: la fibra anota la lista, lee la
+generación (`prepare`), rechequea el flag y solo entonces suelta el lock y aparca; el cancelador
+pone el flag (SeqCst) y luego despierta. O la fibra ve el flag antes de aparcar, o su registro ve
+la generación cambiada, o ya está en la lista y el `wake_all` la saca. La cancelación pasa de
+«≤10 ms» a inmediata, y una espera sin plazo no toca el reactor. Solo `select_timeout` conserva
+un temporizador (`block_on_timeout`), porque su plazo debe vencer sin actividad.
+
+**Lo que queda propuesto** (IDEAS §99 75b/75c): `yield()` como builtin —con fibras, `recv` y
+`select` ya aparcan sin bloquear el hilo— y atómicos compartidos, que rompen la aislación de
+heaps por diseño y merecen su propia decisión con un caso medido.

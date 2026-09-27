@@ -60,6 +60,9 @@ enum Park {
     /// u64 es la generación vista al decidir esperar: si al registrar ya cambió, hubo un despertar
     /// entre soltar el lock de la condición y suspender → re-encolar (anti despertar-perdido).
     WaitOn(WaitList, u64),
+    /// M319: espera de lista con PLAZO (select_timeout): al vencer, la fibra despierta aunque
+    /// no haya actividad. Es el único uso que queda del temporizador de espera del reactor.
+    WaitOnTimeout(WaitList, u64, Instant),
     /// Cede el turno y vuelve al final de la cola de listas.
     Yield,
 }
@@ -182,10 +185,12 @@ impl JoinHandle {
 /// entre el prepare y el registro, hubo un `wake_all` en la ventana y la fibra se re-encola en vez
 /// de dormirse (el llamador rechequea su condición en bucle, como con una condvar).
 ///
-/// CANCELACIÓN (H21-N3): cada espera lleva un PULSO de 10 ms (temporizador del reactor): la fibra
-/// despierta, el llamador rechequea condición y cancelación, y re-espera. Es la MISMA cadencia que
-/// el `wait_timeout(10ms)` del modelo de hilos — una tarea cancelada nota su cancelación en ≤10 ms
-/// — pero con la fibra APARCADA de verdad entre pulsos (cero CPU), no cediendo en bucle.
+/// CANCELACIÓN (H21-N3, rehecha en M319): la fibra cancelada la despierta su CANCELADOR — el
+/// binario emitido guarda, por tarea, la lista en la que está aparcada (`parked`), y `cancel_task`
+/// hace `wake_all` sobre ella tras poner el flag; el llamador rechequea condición y cancelación al
+/// despertar. Antes cada espera armaba un pulso de 10 ms en el reactor (un op + un byte por la
+/// tubería en cada park) solo para notar la cancelación; ahora la nota de inmediato y una espera
+/// no cuesta nada al reactor. Solo `block_on_timeout` (select_timeout) arma un temporizador.
 #[derive(Clone)]
 pub struct WaitList(Arc<WlInner>);
 
@@ -211,8 +216,8 @@ impl WaitList {
     }
 
     /// Despierta a TODOS los esperadores (y avanza la generación, cerrando la ventana del
-    /// despertar perdido). Los pulsos de cancelación pendientes de los despertados quedan
-    /// huérfanos y se descartan solos al vencer (no encuentran su id).
+    /// despertar perdido). Un temporizador de espera con plazo ya vencido no encuentra su id y se
+    /// descarta solo.
     pub fn wake_all(&self) {
         self.0.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let woken: Vec<(u64, Task)> = std::mem::take(&mut *self.0.waiters.lock().unwrap());
@@ -239,6 +244,12 @@ pub fn block_on(wl: &WaitList, seen: u64) {
     suspend(Park::WaitOn(wl.clone(), seen));
 }
 
+/// Como `block_on`, con plazo: despierta al próximo `wake_all` o cuando pasen `ms` milisegundos,
+/// lo que llegue antes (M319: lo usa `select_timeout`, que re-escanea y rechequea su deadline).
+pub fn block_on_timeout(wl: &WaitList, seen: u64, ms: i64) {
+    suspend(Park::WaitOnTimeout(wl.clone(), seen, Instant::now() + Duration::from_millis(ms.max(0) as u64)));
+}
+
 /// Operaciones que los workers encargan al reactor (via buzón + tubería de despertar).
 enum Op {
     Wait(i32, Dir, Option<Instant>, Task),
@@ -252,6 +263,8 @@ enum Op {
 struct WorkerQueue {
     q: Mutex<VecDeque<Task>>,
     cv: Condvar,
+    /// M319: tareas encoladas y aún no sacadas — el spin-then-park del worker mira esto sin tomar el lock.
+    pending: std::sync::atomic::AtomicUsize,
 }
 
 struct Scheduler {
@@ -299,6 +312,7 @@ impl Scheduler {
     fn enqueue(&self, t: Task) {
         let wq = &self.queues[t.home];
         wq.q.lock().unwrap().push_back(t);
+        wq.pending.fetch_add(1, std::sync::atomic::Ordering::Release);
         wq.cv.notify_one();
     }
 
@@ -365,7 +379,7 @@ fn sched() -> &'static Scheduler {
             .filter(|&n| n >= 1)
             .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
-            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new() }).collect(),
+            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
@@ -384,6 +398,9 @@ fn sched() -> &'static Scheduler {
         s
     })
 }
+
+/// Ventana del spin-then-park del worker, en microsegundos (M319, medido).
+const DEFAULT_SPIN_US: u64 = 10;
 
 /// Ids de espera de lista (F3), globales y monótonos: casan el pulso de cancelación con su fibra.
 static NEXT_WAIT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -693,11 +710,27 @@ fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
 
 fn worker_loop(s: &'static Scheduler, me: usize) {
     let wq = &s.queues[me];
+    // M319 (findings #75): spin-then-park. Un worker sin trabajo mira su cola durante `spin_us`
+    // microsegundos CEDIENDO el hilo al SO entre miradas (`yield_now`) antes de dormir en la
+    // condvar: el despertar por futex de un hilo dormido cuesta 6-30 µs (medido), y en el patrón
+    // pedir/responder entre fibras de workers distintos la respuesta llega en ese margen. Ceder
+    // (y no girar en seco) es lo que lo hace inocuo con los cores saturados: un girador puro
+    // robaba CPU a quien trabajaba (−36 % en envíos masivos); cediendo, el mismo caso mejora
+    // (medido en `benchmarks/actor_ask.ray`, PERFORMANCE.md §M319). `RAYLANG_SPIN_US=0` lo apaga.
+    let spin_us: u64 = std::env::var("RAYLANG_SPIN_US").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_SPIN_US);
     loop {
         let mut task = {
+            // Spin-then-park (ver arriba).
+            if spin_us > 0 && wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                let until = Instant::now() + Duration::from_micros(spin_us);
+                while wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 && Instant::now() < until {
+                    std::thread::yield_now();
+                }
+            }
             let mut q = wq.q.lock().unwrap();
             loop {
                 if let Some(t) = q.pop_front() {
+                    wq.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
                     break t;
                 }
                 q = wq.cv.wait(q).unwrap();
@@ -728,6 +761,10 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
                 // la lista: si cambió desde el prepare del esperador, un wake_all ganó la carrera
                 // → re-encolar ya (el llamador rechequea su condición). Si no, queda registrado y
                 // se arma su pulso de cancelación (10 ms, cadencia del modelo de hilos).
+                // M319: sin pulso de cancelación — la CANCELACIÓN despierta a la fibra cancelada
+                // por su lista (el binario emitido recuerda en qué lista aparca cada tarea), así
+                // que una espera sin plazo no manda nada al reactor (antes: un op + un byte por la
+                // tubería en cada park). Solo la espera CON plazo arma su temporizador.
                 Park::WaitOn(wl, seen) => {
                     let mut waiters = wl.0.waiters.lock().unwrap();
                     if wl.0.generation.load(std::sync::atomic::Ordering::SeqCst) != seen {
@@ -736,8 +773,18 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
                     } else {
                         let id = NEXT_WAIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         waiters.push((id, task));
+                    }
+                }
+                Park::WaitOnTimeout(wl, seen, at) => {
+                    let mut waiters = wl.0.waiters.lock().unwrap();
+                    if wl.0.generation.load(std::sync::atomic::Ordering::SeqCst) != seen {
                         drop(waiters);
-                        s.to_reactor(Op::WaitPoll(Instant::now() + Duration::from_millis(10), wl.clone(), id));
+                        s.enqueue(task);
+                    } else {
+                        let id = NEXT_WAIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        waiters.push((id, task));
+                        drop(waiters);
+                        s.to_reactor(Op::WaitPoll(at, wl.clone(), id));
                     }
                 }
                 Park::Yield => s.enqueue(task),

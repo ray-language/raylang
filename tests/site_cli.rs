@@ -41,7 +41,7 @@ fn generates_the_site_and_both_engines_match() {
 
     // La landing: hero, instalación, muestra de código (tipeo + fallback) y enlace a la SPEC.
     let landing = std::fs::read_to_string(vm.join("index.html")).unwrap();
-    assert!(landing.contains("producción real"), "hero\n{landing}");
+    assert!(landing.contains("despliega como binario"), "hero\n{landing}");
     assert!(landing.contains("install.sh | sh"), "snippet de instalación\n{landing}");
     assert!(landing.contains("install.ps1 | iex"), "snippet de instalación en Windows (M165)\n{landing}");
     // Instalación explícita: pasos numerados con botón de copiar (el $ queda fuera del <code>).
@@ -113,7 +113,7 @@ fn generates_the_site_and_both_engines_match() {
     assert!(landing.contains("hreflang=\"en\" href=\"https://raylang.dev/en/index.html\""), "alternate hreflang");
     let landing_en = std::fs::read_to_string(vm.join("en/index.html")).unwrap();
     assert!(landing_en.contains("<html lang=\"en\">"), "idioma del documento EN\n{landing_en}");
-    assert!(landing_en.contains("real-world production"), "hero EN\n{landing_en}");
+    assert!(landing_en.contains("ship it as a binary"), "hero EN\n{landing_en}");
     assert!(landing_en.contains("Install the toolchain"), "paso 1 EN");
     assert!(landing_en.contains("href=\"../index.html\" hreflang=\"es\""), "selector ES en la nav EN");
     assert!(landing_en.contains("../assets/mascot.svg") && landing_en.contains("../assets/fonts/"), "assets relativos desde en/");

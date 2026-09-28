@@ -143,7 +143,13 @@ fn main() -> int {
     let _ = fs.mkdir(out + "/en");
     write_or_die(
         out + "/index.html",
-        landing.render("raylang — un lenguaje para producción real", "index", chart, "es", "")
+        landing.render(
+            "raylang — escribe como script, despliega como binario",
+            "index",
+            chart,
+            "es",
+            ""
+        )
     );
     write_or_die(
         out + "/spec.html",
@@ -169,7 +175,7 @@ fn main() -> int {
     write_or_die(
         out + "/en/index.html",
         landing.render(
-            "raylang — a language for real-world production",
+            "raylang — write it like a script, ship it as a binary",
             "index",
             chart,
             "en",

@@ -4,6 +4,41 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Móvil, tercera pasada** (M323, `RAYLANG-FINDINGS.md` #38, #97, #98):
+  - `ui.reply(0, …)` y `ui.eval_js(0, …)` funcionan por fin en el **binario nativo** de los
+    shells iOS/Android: el arreglo M309 vivía en el runtime, pero el envoltorio emitido por el
+    transpilador (y el builtin de la VM) rechazaban la ventana `0` contra el registro del
+    programa antes de llegar a él («ui: not an open window»). Ya no hace falta responder a
+    «la única ventana» como rodeo.
+  - El shell declara sus capacidades (`ray_ui_shell_capabilities`; `RayBridge.capabilities` en
+    Android): `ui.open("ray://app/…")` sobre un shell generado con raylang < 1.27.17 falla con
+    un mensaje que dice regenerarlo, en vez de cargar una URL muerta en silencio.
+  - Docs alineadas con `llms.txt`: `ray doc ui.mount_dir`/`mount_embed`/`UiEvent` (los shells
+    móviles, el alias de Android, el evento `lifecycle`, `window == 0`), REFERENCE y
+    `ray bundle --help` (`[app.plist]` también en iOS).
+  - `ray_fmt` (MCP) acepta `path` a un `.ray` como el resto de herramientas (devuelve el
+    canónico, no toca el archivo); un directorio se rechaza con el remedio.
+  - `ray fmt`: un comentario `// …` escrito antes del último elemento de un arreglo
+    (`[0, 10, // c` + `25]`) vuelve a ese elemento al repartir la lista, en vez de pegarse al
+    primero de la línea o de caer tras el `];` (también en una `const`); idempotente.
+  - **`ui.mount_embed_at(prefix, embed_prefix)`** (README de ray808 #11): monta el CONTENIDO de
+    un directorio embebido en `prefix`, recortando la clave — `mount_embed_at("", "frontend/dist")`
+    deja `index.html` en `ray://app/index.html`, que es lo que espera `app://index.html`.
+    `mount_embed` conserva la clave entera (`assets/app.css` → `ray://app/assets/app.css`), como
+    siempre; la plantilla de `ray new --frontend` abría `app://index.html` con un `mount_embed`
+    que dejaba la página en `ray://app/frontend/dist/index.html` (404 en toda build sin `ray
+    dev`): ahora usa `mount_embed_at`.
+  - Shell Android: el shim `window.ray` se instala como script de inicio de documento
+    (`WebViewCompat.addDocumentStartJavaScript`, androidx.webkit), antes de cualquier `<script>`
+    de la página — una página servida por `ray://app` ejecutaba el suyo antes de `onPageStarted`
+    y veía `window.ray` indefinido (README de ray808 #12). Sin soporte en el WebView, fallback a
+    `onPageStarted` como antes. Regenera el bundle.
+  - Quitar la última dependencia (`ray remove`, o borrar `[dependencies]` y `ray fetch`/`ray
+    update`/cualquier resolución) retira el `ray.lock` y el `.ray-deps/` huérfanos (README de
+    ray808 #13).
+
 ## 1.27.17 — 2026-09-28
 
 - **`ray://app` en los shells iOS y Android** (M322, `RAYLANG-FINDINGS.md` #39). `ui.open` con

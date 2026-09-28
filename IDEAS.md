@@ -3771,7 +3771,7 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 
 | # | Hallazgo | Estado |
 |---|---|---|
-| 38 | `ui.reply` nunca resuelve en iOS/Android (`window = 0`) | ✅ M309: `0` = la ventana del shell |
+| 38 | `ui.reply` nunca resuelve en iOS/Android (`window = 0`) | ✅ M309 en el runtime (`0` = la ventana del shell)… pero **seguía fallando en el binario nativo** (1.27.13–1.27.16): el envoltorio emitido `__ray_ui_reply`/`__ray_ui_eval_js` (y el builtin de la VM) rechazaba el 0 contra el registro del programa antes de llegar al runtime. ✅ **M323**: el 0 pasa al runtime en los tres motores; el driver C de `native_lib_cli` lo cubre |
 | 39 | Los shells móviles no atienden `ray://app` | ✅ **M322**: ABI C `ray_ui_scheme_open/status/headers/read/close` en el runtime (el mismo resolver que escritorio), `WKURLSchemeHandler` en iOS, `shouldInterceptRequest` + alias `https://app.ray.invalid` en Android (Chromium no admite `fetch()` a un esquema propio); regenerar el bundle |
 | 40 | Android sin directorio de datos | ✅ M309: el shell fija `HOME`/`TMPDIR` |
 | 41 | Android: `<input type="file">` | ✅ M309: `onShowFileChooser` |
@@ -3822,4 +3822,10 @@ Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y r
 | 94 | La doc de `local_token_via` remitía a un `token_cookie` privado | ✅ M317 (net 0.3.9): pública |
 | 95 | `net/pool` no reconoce el FATAL 57P01 de PostgreSQL (reinicio, `pg_terminate_backend`) como cierre | ✅ M320 (db 0.2.1): la clase 57P se redacta como «closed the connection» y el pool la descarta |
 | 96 | `pool_tx`/`pool_with` no reintentan ni cuando el `BEGIN` falla en una conexión caducada | ✅ M320: `pool.run_tx` reintenta el preámbulo; `pool_tx` lo usa; `pool_with_retry` para bloques idempotentes; doc de `pool_with` |
+| 97 | Móvil en 1.27.17: `ray://app` solo constaba en `llms.txt`; `ray_doc ui.mount_dir/mount_embed/UiEvent` y REFERENCE decían lo contrario, `[app.plist]` solo para macOS, y no había forma de saber con qué raylang se generó un shell | ✅ **M323**: docs alineadas (`std/ui` ///, REFERENCE+en, `ray bundle --help`); el shell declara `ray_ui_shell_capabilities(1)` (JNI `RayBridge.capabilities` en Android) y `ui.open("ray://app/…")` en un shell sin esa capacidad falla con «generated with raylang < 1.27.17 … regenerate it with `ray bundle`» |
+| 98 | `ray_fmt` (MCP) rechazaba `path` aunque su esquema lo anunciaba | ✅ **M323**: `path` a un `.ray` devuelve el canónico sin tocar el archivo; un directorio se rechaza con el remedio (test en `mcp_cli`) |
+| 99 | `ray fmt` saca de la lista el comentario escrito antes del último elemento de un arreglo (README de ray808 #10; seguía en 1.27.17) | ✅ **M323**: el trailing de una línea con varios elementos va al último de ellos, y las `const` pasan su rango de líneas a `retry_wrapped` (el emisor de nivel superior ya no consume su trailing antes de formatear el valor) |
+| 100 | `mount_embed("", "frontend/dist")` conserva la clave: la plantilla de `ray new --frontend` abría `app://index.html` y era 404 fuera de `ray dev` (README de ray808 #11) | ✅ **M323**: `ui.mount_embed_at(prefix, embed_prefix)` recorta la clave; la plantilla y el MANUAL lo usan; `mount_embed` no cambia (ray-sublime depende de la clave entera) |
+| 101 | Android inyecta `window.ray` en `onPageStarted`, tarde para una página servida por `ray://app` (README de ray808 #12) | ✅ **M323**: `WebViewCompat.addDocumentStartJavaScript` (androidx.webkit 1.12.1) con fallback a `onPageStarted` |
+| 102 | Quitar la última dependencia deja `ray.lock` y `.ray-deps/` huérfanos (README de ray808 #13) | ✅ **M323**: `deps::clear_stale` en `ensure`, `ray fetch`/`update` y `ray remove` |
 

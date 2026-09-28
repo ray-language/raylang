@@ -248,8 +248,9 @@ build = "npm --prefix frontend run build"
 dist = "frontend/dist"
 "#;
 
-/// M263: el `src/main.ray` de una app con frontend Vite: monta el build embebido bajo
-/// `ray://app/`, abre la ventana en `app://index.html` (dev server bajo `ray dev`, build
+/// M263: el `src/main.ray` de una app con frontend Vite: monta el build embebido EN LA RAÍZ de
+/// `ray://app/` (`mount_embed_at`, M323: `mount_embed` conservaba la clave `frontend/dist/…` y
+/// `app://index.html` daba 404 fuera de `ray dev`), abre la ventana en `app://index.html` (dev server bajo `ray dev`, build
 /// embebido en producción) y responde a `window.ray.request`.
 const FRONTEND_MAIN_RAY: &str = r#"import std/ui;
 
@@ -258,7 +259,7 @@ const FRONTEND_MAIN_RAY: &str = r#"import std/ui;
 // served from ray://app/ — `app://` picks the right one (`ui.app_url`).
 fn main() -> int {
     // Under `ray dev` the build may not exist yet (the dev server serves the page): only warn.
-    match (ui.mount_embed("", "frontend/dist")) {
+    match (ui.mount_embed_at("", "frontend/dist")) {
         Result.Err(e) => eprint("frontend build not mounted (fine under `ray dev`): " + e),
         Result.Ok(_) => {},
     }
@@ -1947,7 +1948,7 @@ Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
-the flags override them. [app.plist] keys go verbatim into the macOS Info.plist; \
+the flags override them. [app.plist] keys go verbatim into the macOS and iOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
 
 fn cmd_bundle(args: &[String]) {
@@ -4028,6 +4029,11 @@ fn cmd_remove(args: &[String]) {
                 eprintln!("error re-resolving dependencies: {e}");
                 process::exit(65);
             }
+            if m2.dependencies.is_empty() {
+                // M323 (ray808 #13): era la última — sin dependencias no hay lock ni caché.
+                println!("no dependencies left: ray.lock and .ray-deps removed");
+                return;
+            }
             let cache = m.root.join(".ray-deps").join(name);
             if cache.is_dir() && !crate::deps::locked_names(&m.root).iter().any(|n| n == name) {
                 let _ = fs::remove_dir_all(&cache);
@@ -4616,7 +4622,8 @@ fn cmd_update(_args: &[String]) {
         process::exit(64);
     };
     if m.dependencies.is_empty() {
-        println!("'{}' declares no dependencies", m.name);
+        let stale = if crate::deps::clear_stale(&m.root) { " (stale ray.lock/.ray-deps removed)" } else { "" };
+        println!("'{}' declares no dependencies{stale}", m.name);
         return;
     }
     match crate::deps::update(&m) {
@@ -4678,7 +4685,8 @@ fn cmd_fetch(_args: &[String]) {
         process::exit(64);
     };
     if m.dependencies.is_empty() {
-        println!("'{}' declares no dependencies", m.name);
+        let stale = if crate::deps::clear_stale(&m.root) { " (stale ray.lock/.ray-deps removed)" } else { "" };
+        println!("'{}' declares no dependencies{stale}", m.name);
         return;
     }
     // `asegurar` resuelve el grafo COMPLETO (directas + transitivas) y devuelve cuántas descargó.

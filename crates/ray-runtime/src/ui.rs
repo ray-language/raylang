@@ -1352,6 +1352,11 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     // hilo principal es del shell (UIApplicationMain), no nuestro.
     #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
     if shell::active() {
+        // M323 (findings #97): un shell generado con raylang < 1.27.17 cargaría `ray://app/…`
+        // como una URL cualquiera y fallaría en silencio — mejor decirlo aquí, con el remedio.
+        if url.starts_with("ray://") && !shell::has_capability(shell::CAP_SCHEME) {
+            return Err("ui: this app shell was generated with raylang < 1.27.17 and does not serve ray://app: regenerate it with `ray bundle --ios` / `--android`".to_string());
+        }
         shell::open(title, url);
         windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false, intercept_close: false });
         return Ok(());
@@ -5815,6 +5820,20 @@ mod shell {
         HANDLERS.get().is_some()
     }
 
+    /// M323: lo que el shell sabe hacer, declarado ANTES de `ray_start` (un shell generado con
+    /// un raylang anterior no llama a esto: capacidades 0). Bit 1 = sirve `ray://app/…`.
+    pub const CAP_SCHEME: i32 = 1;
+    static CAPS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_shell_capabilities(caps: i32) {
+        CAPS.store(caps, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(super) fn has_capability(cap: i32) -> bool {
+        CAPS.load(std::sync::atomic::Ordering::SeqCst) & cap != 0
+    }
+
     pub(super) fn open(title: &str, url: &str) {
         if let Some((open, _)) = HANDLERS.get() {
             let t = CString::new(title.replace('\0', "")).unwrap();
@@ -6337,6 +6356,10 @@ pub fn android_scheme_read(env: *mut std::ffi::c_void, h: i64) -> *mut std::ffi:
 #[cfg(target_os = "android")]
 pub fn android_scheme_close(h: i64) {
     shell::scheme_close(h)
+}
+#[cfg(target_os = "android")]
+pub fn android_capabilities(caps: i32) {
+    shell::ray_ui_shell_capabilities(caps)
 }
 
 /// M156 (C1): UTF-8 → Modified UTF-8 de la JVM, NUL-terminado — `NewStringUTF` exige MUTF-8

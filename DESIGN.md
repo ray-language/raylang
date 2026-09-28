@@ -15377,3 +15377,88 @@ contra el `.a`), `android_lib_cli --ignored` comprueba los símbolos JNI en el `
 plantillas Java se compilaron con `javac -Xlint:all` contra `android.jar` (cazó un salto de línea
 real dentro de un literal). Un shell generado con un raylang anterior sigue cargando solo por
 HTTP: regenerar el bundle preserva firma, keystore e icono (M307).
+
+## 305. M323 — Móvil, tercera pasada: la ventana 0 en el nativo, capacidades del shell y `ray_fmt` con `path` (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #38, #97 y #98 (revisión de 1.27.17 desde ray808).
+
+**[38] Por qué M309 no bastó.** M309 enseñó al runtime que `0` es «la ventana del shell móvil»
+(`shell_window_alias`). Pero ray808 seguía viendo «ui: not an open window» en el simulador, y
+la razón estaba una capa más arriba: el envoltorio que el transpilador emite para cada builtin
+de UI (`__ray_ui_reply`, `__ray_ui_eval_js`) comprueba el handle contra el REGISTRO DEL
+PROGRAMA (`__ray_reg().open`) antes de llamar al runtime, y la ventana 0 nunca está ahí — el
+alias jamás se alcanzaba en el binario nativo, que es el único que corre en un teléfono. El
+builtin de la VM hacía lo mismo. Ahora el 0 pasa al runtime en los tres motores, que lo
+resuelve (shell) o lo rechaza (escritorio: no hay ventana 0, el mensaje es el mismo). La lección
+es de método: el test de M309 vivía en el runtime; el driver C de `native_lib_cli` —el shell
+en miniatura— ahora empuja un `message` con window 0 en formato petición y espera el
+`window.ray._deliver(7,"pong hola")` de vuelta, que atraviesa exactamente la capa que fallaba.
+(De paso: en C, `"\x017"` es UN escape hexadecimal; el driver parte los literales.)
+
+**[97] Un shell viejo no debe fallar en silencio.** Con `ray://app` en los shells (M322) aparece
+un caso nuevo: un `.a`/`.so` recién compilado dentro de un shell generado con un raylang
+anterior carga `ray://app/…` como una URL cualquiera y la página nunca llega. No hay marcador de
+versión en el shell (#37 lo pedía), así que el shell DECLARA lo que sabe hacer:
+`ray_ui_shell_capabilities(caps)` antes de `ray_start` (bit 1 = sirve el esquema;
+`RayBridge.capabilities(int)` en Android, JNI emitido como el resto). Un shell antiguo no llama
+a nada y queda en 0, y `ui.open("ray://app/…")` devuelve «this app shell was generated with
+raylang < 1.27.17 and does not serve ray://app: regenerate it with `ray bundle --ios` /
+`--android`». Declarar capacidades, en vez de una versión, es lo que permite añadir la
+siguiente sin tocar la ABI. Y la documentación que un lector de `ray doc` ve —`ui.mount_dir`,
+`mount_embed`, `UiEvent` (el evento `lifecycle`, `window == 0`), REFERENCE, `ray bundle --help`
+(`[app.plist]` también en iOS)— dice ahora lo mismo que `llms.txt`.
+
+**[98] `ray_fmt` con `path`.** El esquema de la herramienta MCP anunciaba `path` desde M150 y el
+despachador solo leía `code`. Ahora `path` a un `.ray` devuelve el canónico sin tocar el archivo
+(como `ray fmt <archivo>`); un directorio se rechaza con el remedio, porque `ray fmt` no recorre
+directorios y sin `--write` imprime un solo archivo. El caso real vive en `tests/mcp_cli.rs`
+(lanza el binario); en los tests unitarios de `mcp.rs` `run_self` lanzaría el propio harness de
+tests, así que allí solo se cubren los dos rechazos.
+
+**[ray808 README #10] `ray fmt` y el comentario del último elemento.** Dos causas: (1)
+`fmt_wrapped_list` pegaba el trailing de una línea al PRIMER elemento que terminaba en ella
+(`[1, 2, // c` → el comentario iba con `1`); ahora se deja para el último de esa línea. (2) Una
+`const` llamaba a `retry_wrapped` sin su rango de líneas —no había señal de «comentario interior»—
+y además el emisor de nivel superior consumía el trailing de la primera línea ANTES de formatear
+el valor, por lo que acababa tras el `];`. La `const` pasa ahora su rango, como una sentencia, y
+su trailing se recoge después (plana: el de su línea; repartida: el que quede en la primera o el
+de la última). Un comentario tras el `[` de apertura de una const que cabe en una línea sigue
+aplanándose con el comentario tras el `;` (no es de ningún elemento).
+
+**Verificación del #38, con cifras.** El mismo driver contra la toolchain anterior (worktree en
+`HEAD~1`, sin el símbolo de capacidades) falla con `reply failed: ui: not an open window`; con
+este arco, `SHELL EVAL window.ray._deliver(7,"pong hola")`. El README de ray808 daba el #38 por
+resuelto en 1.27.17 con una mini app en el simulador; el driver dice lo contrario para el
+camino `--lib`, que es el que usa el shell — conviene que ray808 lo re-verifique con su propia
+app y un shell regenerado con esta versión.
+
+**[ray808 #11] `mount_embed` y la plantilla que nunca funcionó sin `ray dev`.** La plantilla
+de M263 monta con `mount_embed("", "frontend/dist")` y abre `app://index.html`; pero
+`mount_embed` conserva la clave del embed (documentado desde M226: `mount_embed("", "assets")`
+deja `assets/app.css` en `ray://app/assets/app.css`, y ray-sublime abre
+`ray://app/assets/index.html`), así que la página quedaba en `ray://app/frontend/dist/index.html`
+y `app://index.html` era 404 en toda build que no fuera `ray dev` — el test de M263 solo
+comprobaba la resolución de `app_url`, no el servicio. Cambiar `mount_embed` a recortar rompería
+lo documentado y a ray-sublime; se añade `mount_embed_at(prefix, embed_prefix)`, que monta el
+CONTENIDO de `embed_prefix` en `prefix` (en vivo: `mount_dir(prefix, root/embed_prefix)`; horneado:
+cada clave sin su prefijo), y la plantilla y el MANUAL pasan a usarla.
+
+**[ray808 #12] El shim Android llegaba tarde.** El shell inyectaba `window.ray` en
+`onPageStarted` con `evaluateJavascript`; con un servidor HTTP la página tardaba lo bastante en
+llegar como para no notarlo, pero servida desde memoria por `ray://app` su primer `<script>`
+corría antes y `window.ray.send` era `undefined`. WKWebView tiene user scripts «at document
+start»; el equivalente Android es `WebViewCompat.addDocumentStartJavaScript` (androidx.webkit),
+que es lo que instala ahora el shell, con `onPageStarted` como fallback si el WebView del
+dispositivo no ofrece `DOCUMENT_START_SCRIPT`. Es la primera dependencia Gradle del shell
+(`androidx.webkit:webkit:1.12.1`); `gradle.properties` ya tenía `android.useAndroidX=true`.
+
+**[ray808 #13] El lock huérfano.** Quitar la última dependencia dejaba `ray.lock` y
+`.ray-deps/` como estaban: `ray fetch`/`ray update` salían por «declares no dependencies» sin
+mirar el lock y `ray remove` de lo que el lock aún listaba se negaba porque «no está declarada».
+`deps::clear_stale` retira ambos cuando el manifiesto no declara nada, desde `ensure` (todo
+camino que resuelve), `ray fetch`/`update` (y lo dicen) y `ray remove` de la última.
+
+**Lo que este arco NO verifica.** La prueba en simulador/emulador con ray808 la hace el
+proyecto ray808 (otro agente); aquí queda el driver C, `bundle_ios_cli`/`android_lib_cli`
+(`--ignored`) recompilados con los shells nuevos, `javac -Xlint:all` sobre las plantillas Java y
+un `gradle assembleDebug` del proyecto Android generado (la dependencia androidx resuelta).

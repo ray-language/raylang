@@ -94,8 +94,21 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.util.Collections;
 
 public class MainActivity extends Activity {
+    // M152: el puente IPC — el MISMO contrato que el user script de WKWebView (window.ray.send /
+    // request / _deliver / _deliver_json).
+    static final String RAY_SHIM =
+        "(function(){var p={},n=0;function e(t){return typeof t==='string'?t:JSON.stringify(t)}"
+            + "function q(s){RayAndroid.send(String(s).replace(/\\u0000/g,''))}"
+            + "window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;"
+            + "return new Promise(function(r){p[i]=r;q('\\u0001q\\u0001'+i+'\\u0001'+e(t))})},"
+            + "_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},"
+            + "_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})()";
+
     // M309 (findings #41): el <input type="file"> de la página abre el selector del sistema.
     private static final int RAY_FILE_CHOOSER = 7001;
     private ValueCallback<Uri[]> rayFileCallback = null;
@@ -130,6 +143,15 @@ public class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new RayJs(), "RayAndroid");
+        // M323 (ray808 #12): el shim va como script de INICIO DE DOCUMENTO, antes de cualquier
+        // <script> de la página — una página servida por ray://app ejecuta el suyo antes de que
+        // llegue onPageStarted. Si el WebView del dispositivo no lo soporta, onPageStarted como antes.
+        boolean shimAtStart = false;
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton("*"));
+            shimAtStart = true;
+        }
+        final boolean shimInjected = shimAtStart;
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -150,15 +172,9 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView v, String url, Bitmap favicon) {
-                // M152: el MISMO contrato que el user script de WKWebView — window.ray.send.
-                v.evaluateJavascript(
-                    "(function(){var p={},n=0;function e(t){return typeof t==='string'?t:JSON.stringify(t)}"
-                        + "function q(s){RayAndroid.send(String(s).replace(/\\u0000/g,''))}"
-                        + "window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;"
-                        + "return new Promise(function(r){p[i]=r;q('\\u0001q\\u0001'+i+'\\u0001'+e(t))})},"
-                        + "_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},"
-                        + "_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})()",
-                    null);
+                if (!shimInjected) {
+                    v.evaluateJavascript(RAY_SHIM, null); // WebView sin DOCUMENT_START_SCRIPT
+                }
             }
         });
         setContentView(web);
@@ -227,9 +243,12 @@ public final class RayBridge {
     static void startOnce() {
         if (!started) {
             started = true;
+            capabilities(1); // M323: este shell sirve ray://app (RayScheme)
             start(); // registra los handlers y lanza el programa raylang en su hilo
         }
     }
+
+    public static native void capabilities(int caps);
 
     public static native int start();
 
@@ -458,6 +477,11 @@ android {{
         targetCompatibility JavaVersion.VERSION_17
     }}
 }}
+
+dependencies {{
+    // M323: WebViewCompat.addDocumentStartJavaScript (el shim window.ray antes de la página).
+    implementation 'androidx.webkit:webkit:1.12.1'
+}}
 "#
     )
 }
@@ -579,6 +603,10 @@ mod tests {
             .contains("public static native void pushEvent(String kind, long window, String tag)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("window.ray={send:function(t){q(e(t))}"));
         assert!(MAIN_ACTIVITY_JAVA.contains("request:function(t)"), "M157: request in the shim");
+        // M323 (ray808 #12): el shim como script de inicio de documento, con fallback a onPageStarted.
+        assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
+        assert!(app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
         assert!(android_manifest(false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
@@ -604,6 +632,8 @@ mod tests {
             assert!(RAY_BRIDGE_JAVA.contains(native), "{native}");
         }
         assert!(RAY_BRIDGE_JAVA.contains("String target = RayScheme.alias(url);"));
+        assert!(RAY_BRIDGE_JAVA.contains("capabilities(1); // M323"));
+        assert!(RAY_BRIDGE_JAVA.contains("public static native void capabilities(int caps)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("return RayScheme.intercept(req);"));
         assert!(RAY_SCHEME_JAVA.contains("static final String ALIAS_HOST = \"app.ray.invalid\";"));

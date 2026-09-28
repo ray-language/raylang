@@ -315,7 +315,8 @@ tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h
 titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.focus(h)`,
 `ui.eval_js(h, js)`, requests from the page via `ui.next_event()` + `ui.reply(h, id, s)` /
 `ui.reply_json`; serve the frontend from the process with `ui.mount_embed("", "assets")`
-(+ `mount_dir`, `mount_bytes`) and open `ray://app/index.html` — no local HTTP server, on all
+(+ `mount_dir`, `mount_bytes`; `mount_embed` keeps the embed key whole, `mount_embed_at("",
+"frontend/dist")` strips it so the Vite build sits at the root) and open `ray://app/index.html` — no local HTTP server, on all
 five shells (macOS/WebKitGTK/WebView2 and, since 1.27.17, iOS/Android: Android loads it through
 the alias `https://app.ray.invalid/…` so `fetch()` works; a shell generated with an older raylang
 only loads `http://127.0.0.1:<port>` from the embedded server — use `web.listen_local`/

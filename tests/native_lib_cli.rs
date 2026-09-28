@@ -27,6 +27,17 @@ fn main() {
                 Result.Ok(e) => print("event: " + e.kind + " tag=" + e.tag),
                 Result.Err(e) => print("err: " + e),
             }
+            // M323 (findings #38): la página del shell pregunta con window 0; reply(0, …) contesta.
+            match (ui.next_event()) {
+                Result.Ok(e) => match (ui.as_request(e)) {
+                    Option.Some(req) => match (ui.reply(e.window, req.0, "pong " + req.1)) {
+                        Result.Ok(_) => print("replied to window " + to_string(e.window)),
+                        Result.Err(err) => print("reply failed: " + err),
+                    },
+                    Option.None => print("not a request: " + e.tag),
+                },
+                Result.Err(e) => print("err: " + e),
+            }
         },
     }
     print("program done");
@@ -48,6 +59,7 @@ extern int ray_ui_scheme_status(long long h);
 extern const char* ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char* buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
+extern void ray_ui_shell_capabilities(int caps);
 
 /* Lee el cuerpo entero con un buffer pequeño (varios trozos por archivo). */
 static void read_body(long long h, char* out, int cap) {
@@ -90,9 +102,12 @@ static void on_eval(const char* js) {
 
 int main(void) {
     ray_ui_set_handlers(on_open, on_eval);
+    ray_ui_shell_capabilities(1); /* M323: sin esto, abrir ray://app/… es un error explícito */
     if (ray_start() != 0) return 1;
     usleep(500 * 1000);
     ray_ui_push_event("lifecycle", 0, "background");
+    usleep(300 * 1000);
+    ray_ui_push_event("message", 0, "\x01q\x01" "7" "\x01hola"); /* literales partidos: "\x017" seria un solo escape */
     usleep(800 * 1000);
     return 0;
 }
@@ -123,7 +138,7 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
     // Los exports sobreviven al fat-LTO (la duda clásica de un staticlib con no_mangle).
     let nm = Command::new("nm").arg("-gU").arg(&lib).output().expect("nm");
     let syms = String::from_utf8_lossy(&nm.stdout);
-    for sym in ["_ray_start", "_ray_ui_set_handlers", "_ray_ui_push_event", "_ray_ui_scheme_open", "_ray_ui_scheme_read"] {
+    for sym in ["_ray_start", "_ray_ui_set_handlers", "_ray_ui_push_event", "_ray_ui_scheme_open", "_ray_ui_scheme_read", "_ray_ui_shell_capabilities"] {
         assert!(syms.contains(sym), "export {sym} presente en el .a");
     }
 
@@ -153,6 +168,8 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
         "SHELL EVAL console.log('hi')",
         "window: 1",
         "event: lifecycle tag=background",
+        "SHELL EVAL window.ray._deliver(7,\"pong hola\")",
+        "replied to window 0",
         "program done",
     ];
     let mut at = 0;

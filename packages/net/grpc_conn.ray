@@ -1,0 +1,369 @@
+// net/grpc_conn — M321 (findings #63): un cliente gRPC unario sobre una CONEXIÓN persistente —
+// HTTP/2 en claro con conocimiento previo (h2c, `connect`) o TLS con ALPN `h2` (`connect_tls`).
+// Subido desde `libs/grpc` de raymart. (`net/grpc_client.grpc_call` es la llamada de un solo
+// disparo sobre TLS, anterior; este módulo reutiliza la conexión entre llamadas.)
+//
+//   let c = grpc_conn.connect("payments", 9090)?;
+//   let r = grpc_conn.call(c, "/raymart.payment.v1.Payments/GetIntent", msg, md, 2000)?;
+//   if (r.status == grpc_status.OK) { ... r.message ... } else { ... r.status_message ... }
+//   grpc_conn.disconnect(c);
+//
+// Una conexión lleva cualquier número de llamadas secuenciales, cada una en un stream impar
+// nuevo. `Err` queda para los fallos de transporte (conectar, E/S, protocolo); una llamada que
+// el servidor respondió con un grpc-status distinto de cero es un `Ok(Reply)` con ese estado —
+// `into_result` la convierte en `Result<bytes, Status>`. Un plazo (`deadline_ms` > 0) viaja como
+// `grpc-timeout` y acota cada lectura: al vencer, el stream se cancela (RST_STREAM CANCEL) y la
+// respuesta lleva DEADLINE_EXCEEDED; la conexión sigue siendo usable.
+from net/http2 import preface, settings_empty;
+from net/hpack import HEntry;
+from std/protobuf import grpc_frame;
+import std/net;
+import std/time;
+import net/grpc_h2 as h2;
+import net/grpc_status as status;
+from net/grpc_status import Status;
+
+/// The answer of a call: the response message (empty unless status is OK), the grpc-status,
+/// the decoded grpc-message and the response headers + trailers (lower-case names).
+pub struct Reply {
+    message: bytes,
+    status: int,
+    status_message: string,
+    metadata: Map<string, string>,
+}
+
+/// A client connection. Not shareable between fibers: open one per fiber (or pool them with
+/// `net/pool`).
+pub struct Conn {
+    link: h2.Link,
+    host: string,
+    port: int,
+    tls: bool,
+    next_id: int,
+    broken: bool,
+    max_message: int,
+}
+
+/// Connects in cleartext (h2c, 5 s connect timeout) and sends the HTTP/2 preface and SETTINGS.
+pub fn connect(host: string, port: int) -> Result<Conn, string> {
+    let handle = net.tcp_connect_timeout(host, port, 5000)?;
+    net.set_nodelay(handle, true);
+    open_conn(handle, host, port, false)
+}
+
+/// Connects over TLS with ALPN `h2` (the certificate is verified against `host`) and sends the
+/// HTTP/2 preface and SETTINGS.
+pub fn connect_tls(host: string, port: int) -> Result<Conn, string> {
+    let handle = net.tls_connect_h2(host, port)?;
+    open_conn(handle, host, port, true)
+}
+
+fn open_conn(handle: int, host: string, port: int, tls: bool) -> Result<Conn, string> {
+    let l = h2.new_link(handle);
+    match (h2.write(l, preface() + settings_empty())) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err(e);
+        },
+    }
+    Result.Ok(
+        Conn {
+            link: l,
+            host: host,
+            port: port,
+            tls: tls,
+            next_id: 1,
+            broken: false,
+            max_message: 4194304
+        }
+    )
+}
+
+/// Closes the connection (GOAWAY, then the socket).
+pub fn disconnect(c: Conn) {
+    if (!c.broken) {
+        let _ = h2.send_goaway(c.link, 0, h2.NO_ERROR);
+    }
+    c.broken = true;
+    close(c.link.h);
+}
+
+/// True while the connection can carry calls.
+pub fn usable(c: Conn) -> bool {
+    !c.broken
+}
+
+// El estado de respuesta del stream en vuelo.
+struct Pending {
+    frames: [h2.Frame],
+}
+
+struct Acc {
+    http_status: int,
+    grpc_status: int,
+    has_status: bool,
+    grpc_message: string,
+    metadata: Map<string, string>,
+    parts: [bytes],
+    size: int,
+    done: bool,
+}
+
+fn fail_conn(c: Conn, e: string) -> Result<Reply, string> {
+    c.broken = true;
+    close(c.link.h);
+    Result.Err(e)
+}
+
+fn reply_of(code: int, message: string, metadata: Map<string, string>) -> Reply {
+    Reply { message: b"", status: code, status_message: message, metadata: metadata }
+}
+
+/// Performs a unary call on `path` ("/package.Service/Method") with the serialized request
+/// `message`. `metadata` goes out as request headers (names are lower-cased; pseudo-headers
+/// and reserved names are skipped). `deadline_ms` > 0 bounds the whole call.
+pub fn call(
+    c: Conn,
+    path: string,
+    message: bytes,
+    metadata: Map<string, string>,
+    deadline_ms: int
+) -> Result<Reply, string> {
+    if (c.broken) {
+        return Result.Err("connection is closed");
+    }
+    let l = c.link;
+    if (l.goaway) {
+        return fail_conn(c, "the server sent GOAWAY");
+    }
+    let id = c.next_id;
+    c.next_id = c.next_id + 2;
+    let started = time.monotonic();
+    h2.set_deadline(l, if (deadline_ms > 0) { started + deadline_ms } else { 0 });
+
+    var hs: [HEntry] = [
+        h2.hdr(":method", "POST"),
+        h2.hdr(":scheme", if (c.tls) { "https" } else { "http" }),
+        h2.hdr(":path", path),
+        h2.hdr(":authority", "${c.host}:${c.port}"),
+        h2.hdr("content-type", "application/grpc"),
+        h2.hdr("te", "trailers"),
+        h2.hdr("user-agent", "grpc-raylang/1")
+    ];
+    if (deadline_ms > 0) {
+        hs.push(h2.hdr("grpc-timeout", "${deadline_ms}m"));
+    }
+    for k in metadata.keys() {
+        let name = k.to_lower();
+        if (!name.starts_with(":")
+            && name != "content-type"
+            && name != "te"
+            && name != "grpc-timeout"
+            && name != "user-agent") {
+            hs.push(h2.hdr(name, metadata.get_or(k, "")));
+        }
+    }
+    let empty: Map<string, string> = Map.new();
+    let pending = Pending { frames: [] };
+    h2.open_stream(l, id);
+    let sent = send_request(l, id, hs, message, pending);
+    match (sent) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            if (e == "deadline exceeded") {
+                return cancel(c, id, empty);
+            }
+            return fail_conn(c, e);
+        },
+    }
+
+    let acc = Acc {
+        http_status: 0,
+        grpc_status: 0,
+        has_status: false,
+        grpc_message: "",
+        metadata: empty,
+        parts: [],
+        size: 0,
+        done: false
+    };
+    var i = 0;
+    while (!acc.done) {
+        let next: Result<h2.Frame, string> = if (i < pending.frames.len()) {
+            i = i + 1;
+            Result.Ok(pending.frames[i - 1])
+        } else {
+            h2.read_frame(l)
+        };
+        let fr = match (next) {
+            Result.Ok(f) => f,
+            Result.Err(e) => {
+                if (e == "deadline exceeded") {
+                    return cancel(c, id, acc.metadata);
+                }
+                return fail_conn(c, e);
+            },
+        };
+        match (on_frame(c, id, acc, fr)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => return fail_conn(c, e),
+        }
+    }
+    h2.close_stream(l, id);
+    h2.set_deadline(l, 0);
+
+    if (acc.http_status != 200) {
+        let code = status.from_http(acc.http_status);
+        return Result.Ok(reply_of(code, "HTTP status ${acc.http_status}", acc.metadata));
+    }
+    if (!acc.has_status) {
+        return Result.Ok(reply_of(status.INTERNAL, "response without grpc-status", acc.metadata));
+    }
+    if (acc.grpc_status != status.OK) {
+        return Result.Ok(reply_of(acc.grpc_status, acc.grpc_message, acc.metadata));
+    }
+    let body = h2.concat(acc.parts);
+    if (body.len() == 0) {
+        return Result.Ok(reply_of(status.INTERNAL, "OK response without a message", acc.metadata));
+    }
+    if (body.len() < 5 || body[0] != 0) {
+        return Result.Ok(
+            reply_of(status.INTERNAL, "malformed or compressed response message", acc.metadata)
+        );
+    }
+    let len = body[1] << 24 | body[2] << 16 | body[3] << 8 | body[4];
+    if (len != body.len() - 5) {
+        return Result.Ok(
+            reply_of(status.INTERNAL, "response is not exactly one message", acc.metadata)
+        );
+    }
+    Result.Ok(
+        Reply {
+            message: body.sub_bytes(5, body.len()),
+            status: status.OK,
+            status_message: acc.grpc_message,
+            metadata: acc.metadata
+        }
+    )
+}
+
+fn send_request(
+    l: h2.Link,
+    id: int,
+    hs: [HEntry],
+    message: bytes,
+    pending: Pending
+) -> Result<bool, string> {
+    h2.send_headers(l, id, hs, false)?;
+    h2.send_data(l, id, grpc_frame(message), true, fn(fr: h2.Frame) -> Result<int, string> {
+        pending.frames.push(fr);
+        // Una respuesta temprana (p. ej. RESOURCE_EXHAUSTED) o un reset acaban la subida.
+        let ends = fr.ftype == h2.RST_STREAM
+            || (fr.ftype == h2.HEADERS && (fr.flags & h2.END_STREAM) != 0);
+        if (fr.stream_id == id && ends) {
+            h2.close_stream(l, id);
+        }
+        Result.Ok(0)
+    })
+}
+
+// Venció el plazo: cancela el stream y responde DEADLINE_EXCEEDED. Los frames tardíos del
+// stream los drenan las llamadas siguientes (los HEADERS pasan igualmente por el HPACK).
+fn cancel(c: Conn, id: int, md: Map<string, string>) -> Result<Reply, string> {
+    let l = c.link;
+    h2.close_stream(l, id);
+    h2.set_deadline(l, 0);
+    match (h2.send_reset(l, id, h2.CANCEL)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => return fail_conn(c, e),
+    }
+    Result.Ok(reply_of(status.DEADLINE_EXCEEDED, "deadline exceeded", md))
+}
+
+fn on_frame(c: Conn, id: int, acc: Acc, fr: h2.Frame) -> Result<int, string> {
+    let l = c.link;
+    if (h2.control(l, fr)?) {
+        if (l.goaway && id > l.goaway_last_stream) {
+            return Result.Err("the server sent GOAWAY");
+        }
+        return Result.Ok(0);
+    }
+    let mine = fr.stream_id == id;
+    let end = (fr.flags & h2.END_STREAM) != 0;
+    if (fr.ftype == h2.HEADERS) {
+        let hs = h2.decode_headers(l, fr.payload)?;
+        if (!mine) {
+            return Result.Ok(0);
+        }
+        for e in hs {
+            if (e.name == ":status") {
+                acc.http_status = parse_int(e.value).unwrap_or(0);
+            } else if (e.name == "grpc-status") {
+                acc.has_status = true;
+                acc.grpc_status = parse_int(e.value).unwrap_or(status.UNKNOWN);
+            } else if (e.name == "grpc-message") {
+                acc.grpc_message = status.percent_decode(e.value);
+            } else if (!e.name.starts_with(":")) {
+                acc.metadata.insert(e.name, e.value);
+            }
+        }
+        if (end) {
+            acc.done = true;
+        }
+    } else if (fr.ftype == h2.DATA) {
+        h2.release(l, fr, mine && !end)?;
+        if (mine) {
+            acc.size = acc.size + fr.payload.len();
+            if (acc.size > c.max_message + 5) {
+                return Result.Err("response message larger than ${c.max_message} octets");
+            }
+            acc.parts.push(fr.payload);
+            if (end) {
+                acc.done = true;
+            }
+        }
+    } else if (fr.ftype == h2.RST_STREAM && mine) {
+        let code = if (fr.payload.len() >= 4) { fr.payload[3] } else { 0 };
+        if (acc.has_status) {
+            // Un reset tras los trailers (p. ej. NO_ERROR con la respuesta ya completa).
+            acc.done = true;
+        } else {
+            h2.close_stream(l, id);
+            return Result.Err("the server reset the stream (code ${code})");
+        }
+    }
+    Result.Ok(0)
+}
+
+/// One-shot call: connect (h2c), call, disconnect.
+pub fn call_once(
+    host: string,
+    port: int,
+    path: string,
+    message: bytes,
+    metadata: Map<string, string>,
+    deadline_ms: int
+) -> Result<Reply, string> {
+    let c = connect(host, port)?;
+    let r = call(c, path, message, metadata, deadline_ms);
+    disconnect(c);
+    r
+}
+
+/// Maps a reply to the handler-style result: the message when OK, else its `Status`.
+pub fn into_result(r: Reply) -> Result<bytes, Status> {
+    if (r.status == status.OK) {
+        Result.Ok(r.message)
+    } else {
+        Result.Err(status.new(r.status, r.status_message))
+    }
+}
+
+/// Flattens a call outcome: transport errors become UNAVAILABLE statuses.
+pub fn outcome(r: Result<Reply, string>) -> Result<bytes, Status> {
+    match (r) {
+        Result.Ok(reply) => into_result(reply),
+        Result.Err(e) => Result.Err(status.new(status.UNAVAILABLE, e)),
+    }
+}

@@ -15295,3 +15295,43 @@ cable sobre una reutilizada; `op` (el cuerpo con su COMMIT/ROLLBACK) nunca. `poo
 cubre los bloques idempotentes que raymart resolvía llamando a `pool.run` con el `dial`
 reconstruido desde `Pool.cfg`, y la doc de `pool_with` dice ahora qué pasa con la conexión
 cuando `f` falla (cable → descartada; otro error → vuelve al pool).
+
+## 303. M321 — El servidor gRPC sube a `net` (sep 2026)
+
+`RAYLANG-FINDINGS.md` #63: `net` tenía cliente gRPC (`grpc_client.grpc_call`, un disparo sobre
+TLS) pero no servidor, y raymart escribió el suyo en `libs/grpc` — servidor y cliente unarios
+sobre h2c, con control de flujo, `grpc-timeout`, metadata, estados con `grpc-message`
+percent-encoded y 4 MiB de tope, verificado con `grpcurl` y con clientes Go/Java. Este arco lo
+sube tal cual, porque ya es la referencia y porque la única razón de no tenerlo en `net` era
+que nadie lo había escrito antes.
+
+**Qué se adopta y con qué nombres.** Cuatro módulos, uno por responsabilidad, con los nombres
+de la familia `grpc_*` de `net`: `grpc_h2` (el `Link` HTTP/2 que comparten servidor y cliente:
+frames con CONTINUATION fusionado y padding quitado, SETTINGS/PING/WINDOW_UPDATE/GOAWAY,
+HPACK por dirección, ventanas de envío — sobre el framing de `net/http2` y `net/hpack`),
+`grpc_status` (códigos, `Status`, percent-encoding), `grpc_server` y `grpc_conn` (el cliente
+sobre conexión persistente). El código es el de raymart con los imports cambiados; el aliasing
+de módulos (`import net/grpc_h2 as h2`) lo deja byte-a-byte reconocible para migrar los
+servicios (`grpc/server` → `net/grpc_server`, etc.). `grpc_client` no cambia: sigue siendo la
+llamada de un disparo sobre TLS; `grpc_conn.connect_tls` cubre el mismo caso con reutilización
+de conexión (el handle TLS con ALPN h2 entra en el mismo `Link` que un socket en claro).
+
+**Dos decisiones heredadas que merecen constar.** (1) El `Router` se construye DENTRO de cada
+fibra de conexión (`serve_router(l, build)`): un valor con funciones no cruza fibras en el
+binario nativo (#59), así que el servidor no puede guardar el router y pasarlo; lo reconstruye
+por conexión, que es barato y encaja con la aislación de heaps (el estado compartido de verdad
+vive en un actor). (2) `Err` del cliente es solo transporte; un estado gRPC no-OK es `Ok(Reply)`
+con `status` y `status_message` — es lo que hace que un cliente pueda distinguir «el servidor
+dijo NOT_FOUND» de «la conexión se cayó» sin parsear mensajes, y `into_result`/`outcome`
+aplanan cuando esa distinción no importa.
+
+**Lo que queda fuera (IDEAS §99 63b).** El generador de codecs desde `.proto`: los codecs de
+raymart (`paymentpb.ray`) están escritos a mano sobre `std/protobuf`, y un `ray proto` que emita
+structs + `encode`/`decode` para proto3 es un arco propio (parser de `.proto`, repeated, enums,
+submensajes, `oneof` diferido). Streaming (server/client/bidi) también fuera: el servidor
+responde INTERNAL a más de un mensaje por petición, explícitamente.
+
+**Verificación.** `tests/grpc_server_cli.rs`: servidor y cliente en un mismo programa sobre el
+paquete real (eco con metadata, estado con `grpc-message` percent-encoded que vuelve intacto,
+UNIMPLEMENTED sin ruta, RESOURCE_EXHAUSTED con `max_message` de 64, DEADLINE_EXCEEDED con un
+handler lento y la conexión usable después, `call_once`), en VM y nativo.

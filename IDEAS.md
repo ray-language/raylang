@@ -3796,7 +3796,8 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | 60 | Nativo: E0308 con un param función en un mapa | ✅ M309 |
 | 61 | Un paquete no se importa a sí mismo en sus tests | ✅ M309 |
 | 62 | Dependencias no transitivas sin pista | ✅ M309: el error sugiere `ray add pkg` |
-| 63 | Servidor gRPC en `net` | PROPUESTO — `net/grpc_server` (+ generador de codecs desde `.proto`); raymart tiene la referencia (h2c, deadlines, metadata, interop grpcurl) |
+| 63 | Servidor gRPC en `net` | ✅ M321 (net 0.5.0): `net/grpc_server` (unario h2c, Router, flow control, deadlines, metadata, 4 MiB), `net/grpc_conn` (cliente persistente h2c/TLS), `net/grpc_status`, `net/grpc_h2` — subidos desde `libs/grpc` de raymart. PENDIENTE: generador de codecs desde `.proto` para `std/protobuf` (63b) |
+| 63b | Generador de codecs `.proto` → raylang (`std/protobuf`) | PROPUESTO — hoy los codecs (`paymentpb.ray`) se escriben a mano; un `ray proto <archivo.proto> -o dir` que emita structs + `encode`/`decode` para proto3 (varint, string, bytes, submensajes, repeated, enums) |
 | 64 | `signals()` entrega SIGWINCH | ✅ M309: `serve_graceful` filtra; `shutdown_signals()`; docs |
 | 65 | HEAD y release con el mismo número | ✅ M309: `+dev.<sha>` y `[package] raylang` |
 | 66 | `ray test --native` | ✅ M312: un binario por suite (`main` de despacho por nombre), una prueba por proceso; `--release`; combinable con `--watch` |

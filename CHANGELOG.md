@@ -20,6 +20,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     `ray bundle --help` (`[app.plist]` también en iOS).
   - `ray_fmt` (MCP) acepta `path` a un `.ray` como el resto de herramientas (devuelve el
     canónico, no toca el archivo); un directorio se rechaza con el remedio.
+  - `ray fmt`: un comentario `// …` escrito antes del último elemento de un arreglo
+    (`[0, 10, // c` + `25]`) vuelve a ese elemento al repartir la lista, en vez de pegarse al
+    primero de la línea o de caer tras el `];` (también en una `const`); idempotente.
 
 ## 1.27.17 — 2026-09-28
 

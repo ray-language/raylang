@@ -446,7 +446,11 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
         // que lo baja al interior del bloque en línea propia. Además de leerse mal, eso MUEVE la
         // línea del comentario — y hay marcas que dependen de su línea, como el `// es-ok` de la
         // política de nombres, que exime la línea en la que está.
-        let trail = cur.trailing_on(*line);
+        // M323 (ray808 #10): una `const` se exceptúa — el trailing de su primera línea puede ser el
+        // de un elemento de su valor repartido (`= [0, 10, // c`), y lo consume `fmt_const`; lo que
+        // deje (const plana, o un comentario tras el `[` de apertura) se recoge después.
+        let is_const = matches!(top, Top::Const(_));
+        let trail = if is_const { String::new() } else { cur.trailing_on(*line) };
         let text = match top {
             Top::Import(it) => fmt_import(it),
             Top::FromImport(it) => fmt_from_import(it),
@@ -464,6 +468,14 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             Top::Impl(it) => fmt_impl(cur, it),
             Top::Fn(it) => fmt_function(cur, it),
             Top::Extern(lib, blocking) => fmt_extern_block(lib, *blocking, &p.externs),
+        };
+        let trail = if is_const {
+            // Plana: el de su única línea; repartida: el que quedara en la primera línea, o el de
+            // la última (tras el `;`, como una sentencia).
+            let t = cur.trailing_on(*line);
+            if t.is_empty() && let Top::Const(it) = top { cur.trailing_on(last_line_of(&it.value)) } else { t }
+        } else {
+            trail
         };
         // Va siempre en la PRIMERA línea de lo emitido (también cuando el ítem se ENVUELVE, M104):
         // así al re-formatear sigue siendo el trailing de `it.line` y el formateador es idempotente
@@ -536,8 +548,11 @@ fn fmt_from_import(it: &FromImport) -> String {
 fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
     let pref = if it.is_pub { "pub " } else { "" };
     // M309 (findings #43): como una sentencia — si no cabe en el ancho, el arreglo se reparte
-    // (un `const VOICES: [string] = [… 16 strings …]` quedaba en 122 columnas).
-    retry_wrapped(cur, 0, None, |c| format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_value(c, &it.value, 0)))
+    // (un `const VOICES: [string] = [… 16 strings …]` quedaba en 122 columnas). M323 (ray808
+    // #10): con su rango de líneas, como una sentencia, para que un comentario trailing interior
+    // (`[0, 10, // c` + `25]`) fuerce el reparto y vuelva a su elemento en vez de caer tras el `;`.
+    let last = last_line_of(&it.value).max(it.line);
+    retry_wrapped(cur, 0, Some((it.line, last)), |c| format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_value(c, &it.value, 0)))
 }
 
 /// Los pares (librería, blocking) de los bloques `extern` en orden de primera aparición, con la
@@ -1549,10 +1564,16 @@ fn fmt_wrapped_list(cur: &mut Cur, head: &str, open: &str, items: &[ListItem], c
             s.push(',');
         }
         // M189: el comentario trailing de la línea en que termina el elemento vuelve a su elemento.
-        let end = match item {
+        // M323 (ray808 #10): si el SIGUIENTE elemento termina en esa misma línea (`[1, 2, // c`), el
+        // comentario es del último de ellos, no del primero — se deja para él.
+        let end_of = |it: &ListItem| match it {
             ListItem::Value(v) | ListItem::Named(_, v) | ListItem::Pair(_, v) => last_line_of(v),
         };
-        s.push_str(&cur.trailing_on(end));
+        let end = end_of(item);
+        let shared = items.get(i + 1).is_some_and(|next| end_of(next) == end);
+        if !shared {
+            s.push_str(&cur.trailing_on(end));
+        }
         s.push('\n');
     }
     cur.base -= 1;
@@ -2389,6 +2410,23 @@ mod tests {
         assert!(out.contains("\n                )\n"), "el cierre en linea propia: {out}");
         assert!(out.contains("    print(\n"), "se reparte de fuera adentro: {out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// M323 (ray808 #10): un comentario trailing antes del ÚLTIMO elemento de un arreglo (varios
+    /// elementos en esa línea) vuelve a ese elemento, también en una `const`; y es idempotente.
+    #[test]
+    fn a_trailing_comment_before_the_last_element_stays_with_it() {
+        let src = "const A: [int] = [0, 10, // the last one\n    25];\n\nfn main() {\n    let b = [1, 2, // last\n        3];\n    print(A.len() + b.len());\n}\n";
+        let want = "const A: [int] = [\n    0,\n    10,  // the last one\n    25\n];\n\nfn main() {\n    let b = [\n        1,\n        2,  // last\n        3\n    ];\n    print(A.len() + b.len());\n}\n";
+        let out = format_source(src).unwrap();
+        assert_eq!(out, want);
+        assert_eq!(format_source(&out).unwrap(), want, "idempotente");
+        // Una const plana con su comentario, como antes; y un comentario tras el `[` de apertura de
+        // una que cabe en una línea no es de ningún elemento: se aplana y el comentario sigue al `;`.
+        let flat = "const B: [int] = [1, 2];  // pair\n";
+        assert_eq!(format_source(flat).unwrap(), flat);
+        let open = "const C: [int] = [  // opening\n    1,\n    2\n];\n";
+        assert_eq!(format_source(open).unwrap(), "const C: [int] = [1, 2];  // opening\n");
     }
 
     #[test]

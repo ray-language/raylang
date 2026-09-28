@@ -15415,7 +15415,23 @@ directorios y sin `--write` imprime un solo archivo. El caso real vive en `tests
 (lanza el binario); en los tests unitarios de `mcp.rs` `run_self` lanzaría el propio harness de
 tests, así que allí solo se cubren los dos rechazos.
 
+**[ray808 README #10] `ray fmt` y el comentario del último elemento.** Dos causas: (1)
+`fmt_wrapped_list` pegaba el trailing de una línea al PRIMER elemento que terminaba en ella
+(`[1, 2, // c` → el comentario iba con `1`); ahora se deja para el último de esa línea. (2) Una
+`const` llamaba a `retry_wrapped` sin su rango de líneas —no había señal de «comentario interior»—
+y además el emisor de nivel superior consumía el trailing de la primera línea ANTES de formatear
+el valor, por lo que acababa tras el `];`. La `const` pasa ahora su rango, como una sentencia, y
+su trailing se recoge después (plana: el de su línea; repartida: el que quede en la primera o el
+de la última). Un comentario tras el `[` de apertura de una const que cabe en una línea sigue
+aplanándose con el comentario tras el `;` (no es de ningún elemento).
+
+**Verificación del #38, con cifras.** El mismo driver contra la toolchain anterior (worktree en
+`HEAD~1`, sin el símbolo de capacidades) falla con `reply failed: ui: not an open window`; con
+este arco, `SHELL EVAL window.ray._deliver(7,"pong hola")`. El README de ray808 daba el #38 por
+resuelto en 1.27.17 con una mini app en el simulador; el driver dice lo contrario para el
+camino `--lib`, que es el que usa el shell — conviene que ray808 lo re-verifique con su propia
+app y un shell regenerado con esta versión.
+
 **Lo que este arco NO verifica.** La prueba en simulador/emulador con ray808 la hace el
 proyecto ray808 (otro agente); aquí queda el driver C, `bundle_ios_cli`/`android_lib_cli`
 (`--ignored`) recompilados con los shells nuevos y `javac -Xlint:all` sobre las plantillas Java.
-

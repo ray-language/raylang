@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.18 — 2026-09-28
 
 - **Móvil, tercera pasada** (M323, `RAYLANG-FINDINGS.md` #38, #97, #98):
   - `ui.reply(0, …)` y `ui.eval_js(0, …)` funcionan por fin en el **binario nativo** de los

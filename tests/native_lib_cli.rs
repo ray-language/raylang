@@ -9,9 +9,15 @@ fn have(tool: &str) -> bool {
     Command::new(tool).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// El programa: monta un directorio bajo `ray://app/files/` (M322: el shell móvil lo sirve por
+/// la ABI C del esquema) y abre su ventana; `ASSETS` lo sustituye el test por la ruta absoluta.
 const PROG: &str = r#"import std/ui;
 
 fn main() {
+    match (ui.mount_dir("files", "ASSETS")) {
+        Result.Err(e) => print("mount failed: " + e),
+        Result.Ok(_) => {},
+    }
     match (ui.open("Shell App", "http://127.0.0.1:9999/", 375, 667)) {
         Result.Err(e) => print("open failed: " + e),
         Result.Ok(h) => {
@@ -29,15 +35,52 @@ fn main() {
 
 const DRIVER: &str = r#"
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 extern void ray_ui_set_handlers(void (*open)(const char*, const char*),
                                 void (*eval)(const char*));
 extern void ray_ui_push_event(const char* kind, long long window, const char* tag);
 extern int ray_start(void);
+extern long long ray_ui_scheme_open(const char* url, const char* method, const char* range,
+                                    const char* if_none_match);
+extern int ray_ui_scheme_status(long long h);
+extern const char* ray_ui_scheme_headers(long long h);
+extern long long ray_ui_scheme_read(long long h, unsigned char* buf, long long cap);
+extern void ray_ui_scheme_close(long long h);
 
+/* Lee el cuerpo entero con un buffer pequeño (varios trozos por archivo). */
+static void read_body(long long h, char* out, int cap) {
+    unsigned char buf[4];
+    int total = 0;
+    long long n;
+    while ((n = ray_ui_scheme_read(h, buf, sizeof buf)) > 0 && total + n < cap) {
+        memcpy(out + total, buf, (size_t)n);
+        total += (int)n;
+    }
+    out[total] = 0;
+}
+
+/* M322: lo que hace el WKURLSchemeHandler / shouldInterceptRequest del shell, en C. El
+   montaje ya existe cuando llega open (el programa montó antes de abrir la ventana). */
 static void on_open(const char* title, const char* url) {
+    char body[64];
     printf("SHELL OPEN title=%s url=%s\n", title, url);
+    long long h = ray_ui_scheme_open("ray://app/files/hello.txt", "GET", NULL, NULL);
+    const char* hd = ray_ui_scheme_headers(h);
+    read_body(h, body, sizeof body);
+    printf("SCHEME status=%d type=%s body=%s\n", ray_ui_scheme_status(h),
+           strstr(hd, "Content-Type: text/plain") ? "text" : "other", body);
+    ray_ui_scheme_close(h);
+    h = ray_ui_scheme_open("ray://app/files/hello.txt", "GET", "bytes=6-", NULL);
+    read_body(h, body, sizeof body);
+    printf("SCHEME range=%d body=%s\n", ray_ui_scheme_status(h), body);
+    ray_ui_scheme_close(h);
+    h = ray_ui_scheme_open("ray://app/files/nope.txt", "GET", NULL, NULL);
+    printf("SCHEME missing=%d\n", ray_ui_scheme_status(h));
+    ray_ui_scheme_close(h);
+    printf("SCHEME foreign=%lld closed=%d\n", ray_ui_scheme_open("http://x/", "GET", NULL, NULL),
+           ray_ui_scheme_status(h));
     fflush(stdout);
 }
 static void on_eval(const char* js) {
@@ -64,7 +107,9 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
     let base = std::env::temp_dir().join("ray_native_lib");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    std::fs::write(base.join("prog.ray"), PROG).unwrap();
+    std::fs::create_dir_all(base.join("assets")).unwrap();
+    std::fs::write(base.join("assets/hello.txt"), "hello shell").unwrap();
+    std::fs::write(base.join("prog.ray"), PROG.replace("ASSETS", base.join("assets").to_str().unwrap())).unwrap();
     std::fs::write(base.join("driver.c"), DRIVER).unwrap();
 
     let lib = base.join("libprog.a");
@@ -78,7 +123,7 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
     // Los exports sobreviven al fat-LTO (la duda clásica de un staticlib con no_mangle).
     let nm = Command::new("nm").arg("-gU").arg(&lib).output().expect("nm");
     let syms = String::from_utf8_lossy(&nm.stdout);
-    for sym in ["_ray_start", "_ray_ui_set_handlers", "_ray_ui_push_event"] {
+    for sym in ["_ray_start", "_ray_ui_set_handlers", "_ray_ui_push_event", "_ray_ui_scheme_open", "_ray_ui_scheme_read"] {
         assert!(syms.contains(sym), "export {sym} presente en el .a");
     }
 
@@ -101,6 +146,10 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
     // su ventana → recibe el evento que empujó el shell → termina (sin matar al proceso).
     let want = [
         "SHELL OPEN title=Shell App url=http://127.0.0.1:9999/",
+        "SCHEME status=200 type=text body=hello shell",
+        "SCHEME range=206 body=shell",
+        "SCHEME missing=404",
+        "SCHEME foreign=0 closed=0",
         "SHELL EVAL console.log('hi')",
         "window: 1",
         "event: lifecycle tag=background",

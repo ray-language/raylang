@@ -90,6 +90,8 @@ import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -129,6 +131,23 @@ public class MainActivity extends Activity {
         });
         web.addJavascriptInterface(new RayJs(), "RayAndroid");
         web.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                // M322: ray://app/… (y su alias https) se sirve desde el programa.
+                return RayScheme.intercept(req);
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                // Un enlace ray://app/… navega por el alias https (origen y fetch() válidos).
+                String u = req.getUrl().toString();
+                if (u.startsWith("ray://app")) {
+                    v.loadUrl(RayScheme.alias(u));
+                    return true;
+                }
+                return false;
+            }
+
             @Override
             public void onPageStarted(WebView v, String url, Bitmap favicon) {
                 // M152: el MISMO contrato que el user script de WKWebView — window.ray.send.
@@ -216,12 +235,24 @@ public final class RayBridge {
 
     public static native void pushEvent(String kind, long window, String tag);
 
+    // M322: el esquema ray://app/… (ver RayScheme).
+    public static native long schemeOpen(String url, String method, String range, String ifNoneMatch);
+
+    public static native int schemeStatus(long handle);
+
+    public static native String schemeHeaders(long handle);
+
+    public static native byte[] schemeRead(long handle);
+
+    public static native void schemeClose(long handle);
+
     // Llamados desde NATIVO (el hilo del programa): siempre postear al main thread.
     public static void onOpen(String title, String url) {
-        lastUrl = url;
+        String target = RayScheme.alias(url); // M322: ray://app/… carga por su alias https
+        lastUrl = target;
         MAIN.post(() -> {
             if (webView != null) {
-                webView.loadUrl(url);
+                webView.loadUrl(target);
             }
         });
     }
@@ -232,6 +263,141 @@ public final class RayBridge {
                 webView.evaluateJavascript(js, null);
             }
         });
+    }
+}
+"#;
+
+/// M322: `ray://app/…` servido desde el programa. Chromium (el WebView) no permite `fetch()`/XHR
+/// hacia un esquema propio ni le da un origen con localStorage, así que la página se carga por
+/// el ALIAS `https://app.ray.invalid/…` (`.invalid` jamás resuelve: si el intercept faltara, no
+/// hay sitio real detrás) y `shouldInterceptRequest` atiende las dos formas con el mismo
+/// resolver que los shells de escritorio (montajes, Range, MIME). `If-None-Match` no se reenvía:
+/// `WebResourceResponse` no admite un 304, así que cada petición se sirve completa.
+const RAY_SCHEME_JAVA: &str = r#"package org.raylang.shell;
+
+import android.net.Uri;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
+final class RayScheme {
+    static final String ALIAS_HOST = "app.ray.invalid";
+    static final String ALIAS = "https://" + ALIAS_HOST;
+
+    /** ray://app/x → https://app.ray.invalid/x; cualquier otra URL se devuelve tal cual. */
+    static String alias(String url) {
+        return url.startsWith("ray://app") ? ALIAS + url.substring("ray://app".length()) : url;
+    }
+
+    static WebResourceResponse intercept(WebResourceRequest req) {
+        Uri u = req.getUrl();
+        String scheme = u.getScheme();
+        String host = u.getHost();
+        boolean own = ("ray".equals(scheme) && "app".equals(host))
+            || ("https".equals(scheme) && ALIAS_HOST.equals(host));
+        if (!own) {
+            return null;
+        }
+        String path = u.getEncodedPath();
+        String url = "ray://app" + (path == null ? "" : path);
+        String method = req.getMethod();
+        Map<String, String> in = req.getRequestHeaders();
+        String range = in == null ? null : in.get("Range");
+        long handle = RayBridge.schemeOpen(url, method == null ? "GET" : method, range, null);
+        if (handle == 0) {
+            return null;
+        }
+        int status = RayBridge.schemeStatus(handle);
+        String mime = "application/octet-stream";
+        String encoding = null;
+        Map<String, String> headers = new HashMap<>();
+        String raw = RayBridge.schemeHeaders(handle);
+        if (raw != null) {
+            for (String line : raw.split("\n")) {
+                int i = line.indexOf(": ");
+                if (i < 0) {
+                    continue;
+                }
+                String k = line.substring(0, i);
+                String val = line.substring(i + 2);
+                if (k.equalsIgnoreCase("Content-Type")) {
+                    int semi = val.indexOf(';');
+                    mime = (semi < 0 ? val : val.substring(0, semi)).trim();
+                    int cs = val.toLowerCase().indexOf("charset=");
+                    if (cs >= 0) {
+                        encoding = val.substring(cs + "charset=".length()).trim();
+                    }
+                } else {
+                    headers.put(k, val);
+                }
+            }
+        }
+        WebResourceResponse r = new WebResourceResponse(mime, encoding, new Body(handle));
+        r.setStatusCodeAndReasonPhrase(status, reason(status));
+        r.setResponseHeaders(headers);
+        return r;
+    }
+
+    static String reason(int status) {
+        switch (status) {
+            case 200: return "OK";
+            case 206: return "Partial Content";
+            case 403: return "Forbidden";
+            case 404: return "Not Found";
+            case 405: return "Method Not Allowed";
+            case 416: return "Range Not Satisfiable";
+            default: return "Status " + status;
+        }
+    }
+
+    /** El cuerpo, trozo a trozo desde el programa; cerrar libera el handle (también a medias). */
+    static final class Body extends InputStream {
+        private long handle;
+        private byte[] chunk = null;
+        private int pos = 0;
+
+        Body(long handle) {
+            this.handle = handle;
+        }
+
+        @Override
+        public int read() {
+            byte[] one = new byte[1];
+            int n = read(one, 0, 1);
+            return n <= 0 ? -1 : (one[0] & 0xff);
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) {
+            if (len == 0) {
+                return 0;
+            }
+            if (chunk == null || pos >= chunk.length) {
+                if (handle == 0) {
+                    return -1;
+                }
+                chunk = RayBridge.schemeRead(handle);
+                pos = 0;
+                if (chunk == null || chunk.length == 0) {
+                    close();
+                    return -1;
+                }
+            }
+            int n = Math.min(len, chunk.length - pos);
+            System.arraycopy(chunk, pos, b, off, n);
+            pos += n;
+            return n;
+        }
+
+        @Override
+        public void close() {
+            if (handle != 0) {
+                RayBridge.schemeClose(handle);
+                handle = 0;
+            }
+        }
     }
 }
 "#;
@@ -321,6 +487,11 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
 - stdout/stderr del programa van a **logcat** con tag `ray`: `adb logcat -s ray`.
 - El puente IPC (M152) funciona igual que en escritorio/iOS: `window.ray.send(text)` llega
   como evento `"message"` (window 0). Los eventos `lifecycle` llegan en onPause/onResume.
+- `ray://app/…` (M322): `ui.open` con una URL `ray://app/…` la sirve desde el programa
+  (`ui.mount_embed`/`mount_dir`/`mount_bytes`), sin puerto. El WebView la carga por el alias
+  `https://app.ray.invalid/…` (Chromium no admite `fetch()` hacia un esquema propio); las
+  rutas relativas y `fetch("/api/x")` de la página funcionan igual, y un enlace absoluto
+  `ray://app/…` se reescribe al alias al navegar.
 - `std/fs`/`std/kv`: escribe en el directorio privado de la app (el cwd no es tuyo); las
   rutas externas están restringidas (scoped storage) — también para `fs.watch`.
 - Firma: el debug keystore de Gradle basta para instalar. **Release** (M160): crea un
@@ -389,6 +560,7 @@ pub fn write_project(
     let devtools_line = if devtools { "WebView.setWebContentsDebuggingEnabled(true); // ray bundle --devtools" } else { "" };
     write("app/src/main/java/org/raylang/shell/MainActivity.java", &MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
     write("app/src/main/java/org/raylang/shell/RayBridge.java", RAY_BRIDGE_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
     write("README.md", README)?;
     Ok(())
 }
@@ -416,6 +588,29 @@ mod tests {
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
         assert!(gradle.contains("abiFilters 'arm64-v8a'"), "{gradle}");
         assert!(!gradle.contains("externalNativeBuild"), "todo lo nativo va dentro del .so");
+    }
+
+    /// M322: el shell intercepta `ray://app/…` y su alias https con los natives del esquema, y
+    /// `onOpen` navega por el alias (fetch()/origen válidos en Chromium).
+    #[test]
+    fn the_shell_serves_the_ray_scheme_from_the_program() {
+        for native in [
+            "public static native long schemeOpen(String url, String method, String range, String ifNoneMatch)",
+            "public static native int schemeStatus(long handle)",
+            "public static native String schemeHeaders(long handle)",
+            "public static native byte[] schemeRead(long handle)",
+            "public static native void schemeClose(long handle)",
+        ] {
+            assert!(RAY_BRIDGE_JAVA.contains(native), "{native}");
+        }
+        assert!(RAY_BRIDGE_JAVA.contains("String target = RayScheme.alias(url);"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req)"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("return RayScheme.intercept(req);"));
+        assert!(RAY_SCHEME_JAVA.contains("static final String ALIAS_HOST = \"app.ray.invalid\";"));
+        assert!(RAY_SCHEME_JAVA.contains("(\"ray\".equals(scheme) && \"app\".equals(host))"));
+        // If-None-Match nunca viaja: WebResourceResponse no admite 304.
+        assert!(RAY_SCHEME_JAVA.contains("RayBridge.schemeOpen(url, method == null ? \"GET\" : method, range, null)"));
+        assert!(!android_manifest(false).contains("app.ray.invalid"), "the alias needs no manifest entry");
     }
 
     #[test]

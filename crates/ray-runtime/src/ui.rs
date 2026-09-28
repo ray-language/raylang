@@ -5829,6 +5829,187 @@ mod shell {
             eval(j.as_ptr());
         }
     }
+
+    // ── M322 (IDEAS §99 #39): el esquema `ray://app/…` en los shells móviles. El shell
+    // (WKURLSchemeHandler en iOS, `shouldInterceptRequest` en Android) ABRE aquí la petición,
+    // lee el cuerpo por trozos y cierra: la resolución es la misma `scheme::serve` (pura) que
+    // usan los backends de escritorio, así que montajes, Range, ETag y MIME son idénticos.
+    // Handles opacos (> 0) en una tabla propia; 0 = «no es una URL ray://app» (el shell la deja
+    // seguir su camino normal). Ningún puntero de la tabla sale del proceso salvo el de las
+    // cabeceras, válido hasta `close`. ──
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    struct SchemeTask {
+        status: u16,
+        /// `Nombre: valor\n…`, NUL-terminado; su buffer no se mueve aunque el mapa crezca.
+        headers: CString,
+        len: u64,
+        body: super::scheme::Body,
+        offset: u64,
+    }
+
+    fn scheme_tasks() -> &'static Mutex<(i64, HashMap<i64, SchemeTask>)> {
+        static T: OnceLock<Mutex<(i64, HashMap<i64, SchemeTask>)>> = OnceLock::new();
+        T.get_or_init(|| Mutex::new((0, HashMap::new())))
+    }
+
+    /// Resuelve la petición y la deja abierta; `0` si la URL no es `ray://app/…`.
+    pub(super) fn scheme_open(url: &str, method: &str, range: Option<&str>, if_none_match: Option<&str>) -> i64 {
+        if super::scheme::path_of(url).is_none() {
+            return 0;
+        }
+        let resp = super::scheme::serve(url, method, range, if_none_match);
+        let mut text = String::new();
+        for (k, v) in &resp.headers {
+            text.push_str(k);
+            text.push_str(": ");
+            text.push_str(v);
+            text.push('\n');
+        }
+        let headers = CString::new(text.replace('\0', "")).unwrap();
+        let len = resp.body_len();
+        let mut t = scheme_tasks().lock().unwrap();
+        t.0 += 1;
+        let id = t.0;
+        t.1.insert(id, SchemeTask { status: resp.status, headers, len, body: resp.body, offset: 0 });
+        id
+    }
+
+    pub(super) fn scheme_status(h: i64) -> i32 {
+        scheme_tasks().lock().unwrap().1.get(&h).map(|t| t.status as i32).unwrap_or(0)
+    }
+
+    pub(super) fn scheme_length(h: i64) -> i64 {
+        scheme_tasks().lock().unwrap().1.get(&h).map(|t| t.len as i64).unwrap_or(-1)
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))] // el JNI la usa; iOS lee el puntero C
+    pub(super) fn scheme_headers_text(h: i64) -> Option<String> {
+        scheme_tasks().lock().unwrap().1.get(&h).map(|t| t.headers.to_string_lossy().into_owned())
+    }
+
+    /// El siguiente trozo del cuerpo (como mucho `cap` bytes; vacío al final). El archivo se
+    /// lee FUERA del candado: otra petición no espera a este disco.
+    pub(super) fn scheme_read(h: i64, cap: usize) -> Result<Vec<u8>, ()> {
+        enum Src {
+            Mem(std::sync::Arc<[u8]>, u64, u64),
+            Disk(std::path::PathBuf, u64, u64),
+        }
+        let (src, offset) = {
+            let t = scheme_tasks().lock().unwrap();
+            let task = t.1.get(&h).ok_or(())?;
+            let src = match &task.body {
+                super::scheme::Body::Empty => return Ok(Vec::new()),
+                super::scheme::Body::Bytes(b, s, n) => Src::Mem(b.clone(), *s, *n),
+                super::scheme::Body::File { path, start, len } => Src::Disk(path.clone(), *start, *len),
+            };
+            (src, task.offset)
+        };
+        let chunk = match src {
+            Src::Mem(b, start, len) => {
+                let remaining = len.saturating_sub(offset);
+                let n = remaining.min(cap as u64) as usize;
+                let from = (start + offset) as usize;
+                b[from..from + n].to_vec()
+            }
+            Src::Disk(path, start, len) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let remaining = len.saturating_sub(offset);
+                let want = remaining.min(cap as u64) as usize;
+                if want == 0 {
+                    Vec::new()
+                } else {
+                    let mut f = std::fs::File::open(&path).map_err(|_| ())?;
+                    f.seek(SeekFrom::Start(start + offset)).map_err(|_| ())?;
+                    let mut buf = vec![0u8; want];
+                    let mut got = 0;
+                    while got < want {
+                        let n = f.read(&mut buf[got..]).map_err(|_| ())?;
+                        if n == 0 {
+                            break;
+                        }
+                        got += n;
+                    }
+                    buf.truncate(got);
+                    buf
+                }
+            }
+        };
+        if let Some(task) = scheme_tasks().lock().unwrap().1.get_mut(&h) {
+            task.offset += chunk.len() as u64;
+        }
+        Ok(chunk)
+    }
+
+    pub(super) fn scheme_close(h: i64) {
+        scheme_tasks().lock().unwrap().1.remove(&h);
+    }
+
+    fn c_opt(p: *const c_char) -> Option<String> {
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: el contrato del export — NUL-terminated, vivo durante la llamada; se copia.
+            Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+        }
+    }
+
+    /// Abre una petición `ray://app/…` (método, `Range` e `If-None-Match` opcionales, NULL si no
+    /// vienen). Devuelve un handle > 0, o 0 si la URL no es del esquema.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_open(
+        url: *const c_char,
+        method: *const c_char,
+        range: *const c_char,
+        if_none_match: *const c_char,
+    ) -> i64 {
+        let Some(url) = c_opt(url) else { return 0 };
+        let method = c_opt(method).unwrap_or_else(|| "GET".to_string());
+        scheme_open(&url, &method, c_opt(range).as_deref(), c_opt(if_none_match).as_deref())
+    }
+
+    /// El estado HTTP de la respuesta (0 si el handle no existe).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_status(h: i64) -> i32 {
+        scheme_status(h)
+    }
+
+    /// Las cabeceras como `Nombre: valor\n…` (NUL-terminado, válido hasta `close`); NULL si el
+    /// handle no existe.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_headers(h: i64) -> *const c_char {
+        scheme_tasks().lock().unwrap().1.get(&h).map(|t| t.headers.as_ptr()).unwrap_or(std::ptr::null())
+    }
+
+    /// La longitud total del cuerpo (-1 si el handle no existe).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_length(h: i64) -> i64 {
+        scheme_length(h)
+    }
+
+    /// Copia el siguiente trozo del cuerpo en `buf` (hasta `cap` bytes): los bytes copiados, 0 al
+    /// final, -1 si el handle no existe o el archivo falló.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_read(h: i64, buf: *mut u8, cap: i64) -> i64 {
+        if buf.is_null() || cap <= 0 {
+            return -1;
+        }
+        match scheme_read(h, cap as usize) {
+            Ok(chunk) => {
+                // SAFETY: el shell garantiza `cap` bytes escribibles en `buf`; chunk.len() <= cap.
+                unsafe { std::ptr::copy_nonoverlapping(chunk.as_ptr(), buf, chunk.len()) };
+                chunk.len() as i64
+            }
+            Err(()) => -1,
+        }
+    }
+
+    /// Libera la petición (también a medio leer: el shell paró la carga).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_scheme_close(h: i64) {
+        scheme_close(h)
+    }
 }
 
 // ── M156: el puente JNI del shell ANDROID. La app Gradle generada (`ray bundle --android`)
@@ -5860,6 +6041,8 @@ mod android {
     const ENV_NEW_STRING_UTF: usize = 167; // jstring NewStringUTF(JNIEnv*, const char*)
     const ENV_GET_STRING_UTF_CHARS: usize = 169; // const char* GetStringUTFChars(JNIEnv*, jstring, jboolean*)
     const ENV_RELEASE_STRING_UTF_CHARS: usize = 170; // void ReleaseStringUTFChars(JNIEnv*, jstring, const char*)
+    const ENV_NEW_BYTE_ARRAY: usize = 176; // jbyteArray NewByteArray(JNIEnv*, jsize)
+    const ENV_SET_BYTE_ARRAY_REGION: usize = 208; // void SetByteArrayRegion(JNIEnv*, jbyteArray, jsize, jsize, const jbyte*)
     const ENV_EXCEPTION_CHECK: usize = 228; // jboolean ExceptionCheck(JNIEnv*)
     const VM_GET_ENV: usize = 6; // jint GetEnv(JavaVM*, void**, jint)
     const VM_ATTACH_DAEMON: usize = 7; // jint AttachCurrentThreadAsDaemon(JavaVM*, JNIEnv**, void*)
@@ -5920,6 +6103,49 @@ mod android {
         let kind = jstring_to_string(env, kind);
         let tag = jstring_to_string(env, tag);
         super::push_event(&kind, window, &tag);
+    }
+
+    // M322: `RayBridge.scheme*` — la cara JNI de `shell::scheme_*` (ray://app/… servido desde
+    // el programa; ver `RayScheme.java` en el shell generado). Los jstrings de entrada pueden
+    // ser null (Range / If-None-Match ausentes); la salida es un jstring (cabeceras) o un
+    // jbyteArray (el siguiente trozo del cuerpo; null al final o si el handle no existe).
+    pub fn scheme_open(env: JniEnv, url: JObject, method: JObject, range: JObject, inm: JObject) -> i64 {
+        let url = jstring_to_string(env, url);
+        let method = if method.is_null() { "GET".to_string() } else { jstring_to_string(env, method) };
+        let range = if range.is_null() { None } else { Some(jstring_to_string(env, range)) };
+        let inm = if inm.is_null() { None } else { Some(jstring_to_string(env, inm)) };
+        super::shell::scheme_open(&url, &method, range.as_deref(), inm.as_deref())
+    }
+
+    pub fn scheme_headers(env: JniEnv, h: i64) -> JObject {
+        let Some(text) = super::shell::scheme_headers_text(h) else { return std::ptr::null_mut() };
+        // SAFETY: vtable según jni.h; NewStringUTF exige MUTF-8 NUL-terminado.
+        unsafe {
+            let new_string: unsafe extern "C" fn(JniEnv, *const c_char) -> JObject =
+                std::mem::transmute(env_slot(env, ENV_NEW_STRING_UTF));
+            let bytes = super::utf8_to_mutf8(&text);
+            new_string(env, bytes.as_ptr() as *const c_char)
+        }
+    }
+
+    pub fn scheme_read(env: JniEnv, h: i64) -> JObject {
+        let chunk = match super::shell::scheme_read(h, super::scheme::CHUNK) {
+            Ok(c) if !c.is_empty() => c,
+            _ => return std::ptr::null_mut(),
+        };
+        // SAFETY: vtable según jni.h; el array nuevo tiene exactamente chunk.len() bytes.
+        unsafe {
+            let new_array: unsafe extern "C" fn(JniEnv, i32) -> JObject =
+                std::mem::transmute(env_slot(env, ENV_NEW_BYTE_ARRAY));
+            let set_region: unsafe extern "C" fn(JniEnv, JObject, i32, i32, *const u8) =
+                std::mem::transmute(env_slot(env, ENV_SET_BYTE_ARRAY_REGION));
+            let arr = new_array(env, chunk.len() as i32);
+            if arr.is_null() {
+                return arr; // OutOfMemoryError pendiente: Java la verá al volver
+            }
+            set_region(env, arr, 0, chunk.len() as i32, chunk.as_ptr());
+            arr
+        }
     }
 
     // Los handlers del shell: llegan DESDE el hilo del programa raylang → attach como daemon
@@ -6084,6 +6310,33 @@ pub fn android_init(env: *mut std::ffi::c_void, class: *mut std::ffi::c_void) {
 #[cfg(target_os = "android")]
 pub fn android_push_event(env: *mut std::ffi::c_void, kind: *mut std::ffi::c_void, window: i64, tag: *mut std::ffi::c_void) {
     android::push_event(env as android::JniEnv, kind, window, tag);
+}
+// M322: el esquema `ray://app/…` para el shell Android (los símbolos JNI emitidos delegan aquí).
+#[cfg(target_os = "android")]
+pub fn android_scheme_open(
+    env: *mut std::ffi::c_void,
+    url: *mut std::ffi::c_void,
+    method: *mut std::ffi::c_void,
+    range: *mut std::ffi::c_void,
+    if_none_match: *mut std::ffi::c_void,
+) -> i64 {
+    android::scheme_open(env as android::JniEnv, url, method, range, if_none_match)
+}
+#[cfg(target_os = "android")]
+pub fn android_scheme_status(h: i64) -> i32 {
+    shell::scheme_status(h)
+}
+#[cfg(target_os = "android")]
+pub fn android_scheme_headers(env: *mut std::ffi::c_void, h: i64) -> *mut std::ffi::c_void {
+    android::scheme_headers(env as android::JniEnv, h)
+}
+#[cfg(target_os = "android")]
+pub fn android_scheme_read(env: *mut std::ffi::c_void, h: i64) -> *mut std::ffi::c_void {
+    android::scheme_read(env as android::JniEnv, h)
+}
+#[cfg(target_os = "android")]
+pub fn android_scheme_close(h: i64) {
+    shell::scheme_close(h)
 }
 
 /// M156 (C1): UTF-8 → Modified UTF-8 de la JVM, NUL-terminado — `NewStringUTF` exige MUTF-8

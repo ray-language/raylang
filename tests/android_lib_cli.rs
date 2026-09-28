@@ -87,6 +87,9 @@ fn the_android_cdylib_exports_the_jni_symbols_aligned_to_16k() {
         "JNI_OnLoad",
         "Java_org_raylang_shell_RayBridge_start",
         "Java_org_raylang_shell_RayBridge_pushEvent",
+        "Java_org_raylang_shell_RayBridge_schemeOpen",
+        "Java_org_raylang_shell_RayBridge_schemeRead",
+        "Java_org_raylang_shell_RayBridge_schemeClose",
         "ray_ui_set_handlers",
         "ray_ui_push_event",
     ] {

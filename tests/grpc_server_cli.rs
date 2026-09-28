@@ -39,6 +39,7 @@ fn has_rustc() -> bool {
 const MAIN: &str = r#"import net/grpc_server;
 import net/grpc_conn;
 import net/grpc_status;
+import net/grpc_h2;
 from net/grpc_status import Status;
 import std/time;
 
@@ -120,6 +121,8 @@ fn main() -> int {
         Result.Ok(r) => print("again " + from_utf8(r.message).unwrap_or("?") + " usable=" + to_string(grpc_conn.usable(c))),
         Result.Err(e) => print("again ERR " + e),
     }
+    // El Link HTTP/2 ya no tiene abierto el stream 1 (cerrado con los trailers).
+    print("h2 stream1=" + to_string(grpc_h2.stream_open(c.link, 1)));
     grpc_conn.disconnect(c);
     // 7. call_once + into_result.
     match (grpc_conn.call_once("127.0.0.1", port, "/echo.Echo/Say", "uno".to_bytes(), none, 2000)) {
@@ -136,7 +139,7 @@ fn main() -> int {
 }
 "#;
 
-const WANT: &str = "say 0 [t1] hola\nfail NOT_FOUND no está: 100% ñ\nnope UNIMPLEMENTED\nbig RESOURCE_EXHAUSTED\nslow DEADLINE_EXCEEDED\nagain [t1] otra usable=true\nonce [-] uno\nserver 0\n";
+const WANT: &str = "say 0 [t1] hola\nfail NOT_FOUND no está: 100% ñ\nnope UNIMPLEMENTED\nbig RESOURCE_EXHAUSTED\nslow DEADLINE_EXCEEDED\nagain [t1] otra usable=true\nh2 stream1=false\nonce [-] uno\nserver 0\n";
 
 #[test]
 fn unary_server_and_persistent_client_round_trip_on_the_vm() {

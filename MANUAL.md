@@ -1433,13 +1433,18 @@ Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (ke
 APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
 por ray.toml (el README generado trae el paso a paso).
 
-**Lo que cambia en el móvil respecto al escritorio** (M307, IDEAS §97 #28/#37). (1) `ray://app`
-y `ui.mount_embed`/`mount_dir` son de los shells de ESCRITORIO (macOS, WebKitGTK, WebView2): los
-shells de iOS y Android cargan la URL que les pasa `ui.open` por HTTP desde el servidor embebido
-(`http://127.0.0.1:<puerto>`; en Android el cleartext está permitido solo para 127.0.0.1). Una app
-escritorio+móvil conserva por tanto el servidor local para el móvil — con `web.listen_local` /
-`webserver.local_limits(token)` (M297), que es lo que cierra ese puerto a otras apps del
-dispositivo — y puede usar `ray://app` en escritorio. (2) El puente `window.ray.request` con
+**Lo que cambia en el móvil respecto al escritorio** (M307/M322, IDEAS §97 #28/#37, §99 #39).
+(1) `ray://app` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan en los CINCO shells: el
+de iOS registra un `WKURLSchemeHandler` (el mismo resolver que macOS: montajes, `Range`,
+ETag/304, MIME, cuerpo por trozos) y el de Android sirve la petición en `shouldInterceptRequest`.
+Como Chromium no admite `fetch()` hacia un esquema propio ni le da un origen con localStorage,
+el WebView de Android carga `ray://app/…` por el alias `https://app.ray.invalid/…`: las rutas
+relativas y `fetch("/api/x")` de la página funcionan igual, un enlace absoluto `ray://app/…` se
+reescribe al navegar, y `.invalid` nunca resuelve (no hay sitio real detrás). Un shell generado
+con raylang ≤ 1.27.16 sigue cargando solo por HTTP (`http://127.0.0.1:<puerto>`; en Android el
+cleartext está permitido solo para 127.0.0.1): regenera el bundle. Si la app conserva un
+servidor local en el móvil, ciérralo con `web.listen_local` / `webserver.local_limits(token)`
+(M297), que es lo que cierra ese puerto a otras apps del dispositivo. (2) El puente `window.ray.request` con
 respuesta JSON (`ui.reply_json`) necesita el shim `_deliver_json` del shell, que generan
 `ray bundle --ios/--android` desde raylang **1.12.1** (M225; la forma `ui.reply` con string, desde
 1.5.0): un shell generado antes no lo trae y el síntoma es una promesa que nunca resuelve.

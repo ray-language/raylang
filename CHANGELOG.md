@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray://app` en los shells iOS y Android** (M322, `RAYLANG-FINDINGS.md` #39). `ui.open` con
+  una URL `ray://app/…` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan ahora también en
+  el móvil, sin servidor local ni puerto: el shell iOS registra un `WKURLSchemeHandler` y el de
+  Android intercepta la petición en `shouldInterceptRequest`, ambos sobre la nueva ABI C del
+  runtime (`ray_ui_scheme_open/status/headers/read/close`: el mismo resolver que los shells de
+  escritorio — montajes, `Range`, ETag, MIME, cuerpo por trozos). En Android la página se carga
+  por el alias `https://app.ray.invalid/…` (Chromium no admite `fetch()` hacia un esquema
+  propio); las rutas relativas y un enlace absoluto `ray://app/…` funcionan igual. Regenera el
+  bundle (`ray bundle --ios/--android`; firma, keystore e icono se preservan). El driver C de
+  `native_lib_cli` ejercita la ABI; `bundle_ios_cli`/`android_lib_cli` (`--ignored`) compilan el
+  shell ObjC y el cdylib con sus símbolos JNI.
 - **Servidor gRPC en `net`** (M321, `RAYLANG-FINDINGS.md` #63; `net` 0.5.0). Subido desde
   `libs/grpc` de raymart (interop verificada con `grpcurl` y clientes Go/Java):
   - `net/grpc_server`: servidor gRPC unario sobre h2c (`bind`, `serve`/`serve_until`,

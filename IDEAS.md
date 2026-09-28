@@ -3756,7 +3756,7 @@ ya estaban resueltos) salieron primero. El resto, por arcos:
 | 25 | `fs.symlink` | stdlib | ✅ **M304**: `symlink(target, link)` (primitivo `__symlink`, tres motores; Windows elige archivo/directorio por el destino) |
 | 26 | `last_index_of` en string y bytes | stdlib | ✅ **M304** (en raylang, sobre `chars()`/`b[i]`) |
 | 27 | `llms.txt`: los patrones anidados SÍ existen desde 1.27.6 | doc | ✅ **M299** (sigue vetado el literal dentro de un patrón de variante, que es lo que de verdad falla) |
-| 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | ✅ **M307** documentado (MANUAL, llms): `ray://app`/`mount_embed` son de escritorio, el móvil carga por HTTP local (→ `listen_local`); `_deliver_json` desde 1.12.1, regenerar el bundle. Implementar `ray://app` en WKWebView/WebViewAssetLoader sigue PROPUESTO |
+| 28/37 | `ray://app` y `ui.reply_json` en los shells iOS/Android: confirmar y documentar | doc/móvil | ✅ **M307** documentado (MANUAL, llms): `ray://app`/`mount_embed` son de escritorio, el móvil carga por HTTP local (→ `listen_local`); `_deliver_json` desde 1.12.1, regenerar el bundle. `ray://app` en los shells móviles: ✅ **M322** (§99 #39) |
 | 29 | Documentar los combinadores existentes de `Option`/`Result` en `llms.txt` y REFERENCE | doc | ✅ **M299**: tabla en REFERENCE §8 (+en), sección «Los métodos de `Option` y `Result`» en el MANUAL, línea en `llms.txt` (que además dice cuáles NO existen → #30) |
 | 30 | `Result.map/and_then/map_err`, `Option.and_then/unwrap_or_else` | prelude | ✅ **M304** (+ `Result.unwrap_or_else`; `Option.map` ya existía) |
 | 31 | `bytes.index_of_from(needle, start)` | stdlib | ✅ **M304** (sin copiar; O(n·m) simple sobre `b[i]`) |
@@ -3772,7 +3772,7 @@ Origen: `ray-apps/RAYLANG-FINDINGS.md` #38–#66 (25–26 sep 2026). Estado tras
 | # | Hallazgo | Estado |
 |---|---|---|
 | 38 | `ui.reply` nunca resuelve en iOS/Android (`window = 0`) | ✅ M309: `0` = la ventana del shell |
-| 39 | Los shells móviles no atienden `ray://app` | documentado (M307/M309); implementar el esquema (WKURLSchemeHandler / `shouldInterceptRequest`) sigue PROPUESTO |
+| 39 | Los shells móviles no atienden `ray://app` | ✅ **M322**: ABI C `ray_ui_scheme_open/status/headers/read/close` en el runtime (el mismo resolver que escritorio), `WKURLSchemeHandler` en iOS, `shouldInterceptRequest` + alias `https://app.ray.invalid` en Android (Chromium no admite `fetch()` a un esquema propio); regenerar el bundle |
 | 40 | Android sin directorio de datos | ✅ M309: el shell fija `HOME`/`TMPDIR` |
 | 41 | Android: `<input type="file">` | ✅ M309: `onShowFileChooser` |
 | 42 | `ray add` en el sitio equivocado | ✅ M309 |

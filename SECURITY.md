@@ -127,7 +127,9 @@ Lo que raylang ofrece, en orden de preferencia:
 
 1. **Sin puerto: `ray://app/…`** (M226). La ventana carga la interfaz por un esquema servido dentro
    del proceso; no hay socket que atacar. Es el camino por defecto para escritorio y móvil, y el
-   que usan las apps de referencia (ray-sublime).
+   que usan las apps de referencia (ray-sublime). Desde M322 también en los shells de iOS y
+   Android (en Android por el alias `https://app.ray.invalid/…`, un nombre que nunca resuelve
+   fuera del proceso).
 2. **Con backend HTTP local: `web.listen_local(build, listener, token)`** o, en crudo,
    `webserver.local_limits(token)`. Activa las dos defensas: el **token local** de 128 bits del
    CSPRNG (`webserver.local_token()`), que la ventana recibe en la URL (`?ray_token=`) y conserva

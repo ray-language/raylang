@@ -68,6 +68,96 @@ extern void ray_ui_set_handlers(void (*open)(const char *, const char *),
                                 void (*eval)(const char *));
 extern void ray_ui_push_event(const char *kind, long long window, const char *tag);
 extern int ray_start(void);
+extern long long ray_ui_scheme_open(const char *url, const char *method, const char *range,
+                                    const char *if_none_match);
+extern int ray_ui_scheme_status(long long h);
+extern const char *ray_ui_scheme_headers(long long h);
+extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
+extern void ray_ui_scheme_close(long long h);
+
+// M322 — `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
+// shell de macOS: montajes, Range, ETag/304, MIME). El cuerpo se lee por trozos en una cola
+// global y se entrega en el hilo principal; una tarea parada por WebKit queda en `_stopped`
+// (consultado SOLO en el hilo principal, donde también llega stop) — entregar a una tarea parada
+// lanza una excepción.
+@interface RaySchemeHandler : NSObject <WKURLSchemeHandler>
+@end
+
+@implementation RaySchemeHandler {
+    NSMutableSet *_stopped;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        _stopped = [NSMutableSet set];
+    }
+    return self;
+}
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    NSURLRequest *req = task.request;
+    NSString *range = [req valueForHTTPHeaderField:@"Range"];
+    NSString *inm = [req valueForHTTPHeaderField:@"If-None-Match"];
+    long long h = ray_ui_scheme_open(req.URL.absoluteString.UTF8String,
+                                     (req.HTTPMethod ?: @"GET").UTF8String,
+                                     range.UTF8String, inm.UTF8String);
+    if (h == 0) {
+        [task didFailWithError:[NSError errorWithDomain:NSURLErrorDomain
+                                                   code:NSURLErrorUnsupportedURL
+                                               userInfo:nil]];
+        return;
+    }
+    NSMutableDictionary *headers = [NSMutableDictionary dictionary];
+    const char *raw = ray_ui_scheme_headers(h);
+    NSString *text = raw ? [NSString stringWithUTF8String:raw] : @"";
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        NSRange sep = [line rangeOfString:@": "];
+        if (sep.location != NSNotFound) {
+            headers[[line substringToIndex:sep.location]] = [line substringFromIndex:sep.location + 2];
+        }
+    }
+    NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:req.URL
+                                                          statusCode:ray_ui_scheme_status(h)
+                                                         HTTPVersion:@"HTTP/1.1"
+                                                        headerFields:headers];
+    [task didReceiveResponse:resp];
+    NSValue *key = [NSValue valueWithPointer:(__bridge void *)task];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      const long long cap = 256 * 1024;
+      unsigned char *buf = malloc(cap);
+      __block BOOL stopped = NO;
+      for (;;) {
+          long long n = ray_ui_scheme_read(h, buf, cap);
+          if (n <= 0) {
+              break;
+          }
+          NSData *data = [NSData dataWithBytes:buf length:(NSUInteger)n];
+          dispatch_sync(dispatch_get_main_queue(), ^{
+            stopped = [self->_stopped containsObject:key];
+            if (!stopped) {
+                [task didReceiveData:data];
+            }
+          });
+          if (stopped) {
+              break;
+          }
+      }
+      free(buf);
+      ray_ui_scheme_close(h);
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (![self->_stopped containsObject:key]) {
+            [task didFinish];
+        }
+        [self->_stopped removeObject:key];
+      });
+    });
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+    [_stopped addObject:[NSValue valueWithPointer:(__bridge void *)task]];
+}
+
+@end
 
 // M152 — el puente IPC: window.ray.send(text) llega aquí y se empuja como evento "message"
 // (window 0: el shell no conoce el handle del programa; documentado). Clase DEDICADA — el
@@ -128,6 +218,7 @@ static void ray_eval(const char *js) {
     // M152: el puente se (re)instala EN CADA conexión de escena — el webview muere y renace
     // con ella (sceneDidDisconnect lo anula), así que esto va fuera del dispatch_once.
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+    [cfg setURLSchemeHandler:[RaySchemeHandler new] forURLScheme:@"ray"]; // M322: ray://app/…
     [cfg.userContentController addScriptMessageHandler:[RayMsgHandler new] name:@"ray"];
     [cfg.userContentController
         addUserScript:[[WKUserScript alloc] initWithSource:rayJsShim
@@ -352,9 +443,11 @@ fn readme(name: &str) -> String {
   `DEVELOPMENT_TEAM = ABCDE12345` to `App.xcconfig`. Picking the team in Xcode (Signing &
   Capabilities) writes it to `project.pbxproj`; the next `ray bundle --ios` rescues it from there
   into the xcconfig, but the source of truth is the xcconfig or `ray.toml`.
-- The raylang program runs INSIDE the app (staticlib): its embedded webserver serves the UI and
-  `ui.open(title, url)` loads the URL in the webview. Lifecycle events arrive through
-  `ui.next_event()` as kind="lifecycle", tag="background"/"foreground".
+- The raylang program runs INSIDE the app (staticlib) and `ui.open(title, url)` loads the URL
+  in the webview: either `ray://app/…` served from the process (`ui.mount_embed`/`mount_dir`/
+  `mount_bytes`, no port, same as the desktop shells) or `http://127.0.0.1:<port>` from its
+  embedded webserver. Lifecycle events arrive through `ui.next_event()` as kind="lifecycle",
+  tag="background"/"foreground".
 "#)
 }
 
@@ -449,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn the_message_handler_only_listens_to_the_main_frame() {
         // M159: la guarda de frames — un iframe no alcanza el puente ni a mano.
         assert!(SCENE_DELEGATE_M.contains("if (!message.frameInfo.isMainFrame)"), "isMainFrame guard");
@@ -456,6 +550,22 @@ mod tests {
         let guard = SCENE_DELEGATE_M.find("isMainFrame").unwrap();
         let body = SCENE_DELEGATE_M.find("message.body").unwrap();
         assert!(guard < body, "the frame guard precedes the body read");
+    }
+
+    /// M322: el shell registra el WKURLSchemeHandler de `ray` ANTES de crear el webview y
+    /// resuelve contra la ABI C del runtime (open/status/headers/read/close).
+    #[test]
+    fn the_shell_serves_the_ray_scheme_from_the_program() {
+        assert!(SCENE_DELEGATE_M.contains("setURLSchemeHandler:[RaySchemeHandler new] forURLScheme:@\"ray\"]"));
+        let register = SCENE_DELEGATE_M.find("setURLSchemeHandler:").unwrap();
+        let create = SCENE_DELEGATE_M.find("[[WKWebView alloc] initWithFrame:").unwrap();
+        assert!(register < create, "the scheme handler is registered before the webview exists");
+        for sym in ["ray_ui_scheme_open", "ray_ui_scheme_status", "ray_ui_scheme_headers", "ray_ui_scheme_read", "ray_ui_scheme_close"] {
+            assert!(SCENE_DELEGATE_M.contains(sym), "{sym} in the shell");
+        }
+        // Una tarea parada por WebKit no recibe más datos ni didFinish.
+        assert!(SCENE_DELEGATE_M.contains("stopURLSchemeTask:"));
+        assert!(SCENE_DELEGATE_M.contains("if (![self->_stopped containsObject:key]) {\n            [task didFinish];"));
     }
 
     #[test]

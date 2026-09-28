@@ -15335,3 +15335,45 @@ responde INTERNAL a más de un mensaje por petición, explícitamente.
 paquete real (eco con metadata, estado con `grpc-message` percent-encoded que vuelve intacto,
 UNIMPLEMENTED sin ruta, RESOURCE_EXHAUSTED con `max_message` de 64, DEADLINE_EXCEEDED con un
 handler lento y la conexión usable después, `call_once`), en VM y nativo.
+
+## 304. M322 — `ray://app` llega a los shells móviles (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #39 (IDEAS §99). M307 confirmó que los shells de iOS y Android
+cargaban solo por HTTP (`loadRequest`/`loadUrl` de lo que entrega `ui.open`) y dejó propuesto el
+esquema. Este arco lo implementa, y la decisión central es NO reimplementar nada: el resolver de
+`ray://app/…` (`ui::scheme::serve`, puro desde M226: montajes, `Range`, ETag/304, MIME, cuerpo
+por trozos) ya se compila en todo target; lo que faltaba era una puerta por la que el shell —que
+posee el webview y el hilo principal— le pase la petición y lea la respuesta.
+
+**La ABI C.** Cinco exports en el módulo `shell` (el mismo de `ray_ui_set_handlers`):
+`ray_ui_scheme_open(url, method, range, if_none_match) → handle` (0 si la URL no es del esquema:
+el shell la deja seguir su camino normal), `_status`, `_headers` (`Nombre: valor\n…`, puntero
+válido hasta `close`), `_length`, `_read(h, buf, cap)` (el siguiente trozo; 0 al final) y
+`_close` (también a medias: el shell paró la carga). Handles opacos en una tabla propia; el
+archivo se lee fuera del candado. Es un contrato de streaming a propósito —un vídeo montado no
+pasa entero por memoria— y es el mismo que el backend de macOS sigue en Rust.
+
+**iOS.** `RaySchemeHandler` (`WKURLSchemeHandler`) registrado en la configuración antes de crear
+el webview; `start` abre, construye la `NSHTTPURLResponse` con las cabeceras y lee el cuerpo en
+una cola global entregando cada trozo en el hilo principal; `stop` marca la tarea en un set
+consultado solo en el hilo principal (entregar a una tarea parada lanza una excepción; la misma
+guarda que el backend mac). Semántica idéntica a macOS: mismo WebKit, mismo origen `ray://app`.
+
+**Android y el alias.** Chromium no permite `fetch()`/XHR hacia un esquema propio («URL scheme
+"ray" is not supported») ni le da un origen con localStorage: es la razón de ser de
+`WebViewAssetLoader`. Así que el shell carga `ray://app/…` por el alias
+`https://app.ray.invalid/…` (`onOpen` reescribe; `shouldOverrideUrlLoading` reescribe un enlace
+absoluto) y `shouldInterceptRequest` atiende las dos formas con los natives `RayBridge.scheme*`
+(JNI emitido en el cdylib, M156 C3; `NewByteArray`/`SetByteArrayRegion` se suman al vtable
+transcrito). `.invalid` (RFC 2606) jamás resuelve: si el intercept faltara no habría un sitio
+real detrás, a diferencia de un dominio comprado. `If-None-Match` no se reenvía porque
+`WebResourceResponse` no admite un 3xx: cada petición se sirve completa. El cuerpo es un
+`InputStream` que tira de `schemeRead` y libera el handle al cerrarse.
+
+**Verificación.** El driver C de `native_lib_cli` hace en `on_open` lo que hará el shell (200 +
+MIME + cuerpo leído con un buffer de 4 bytes, `Range` 206, 404, URL ajena → 0, handle cerrado →
+0); `bundle_ios_cli --ignored` compila el proyecto Xcode para el simulador (el ObjC del handler
+contra el `.a`), `android_lib_cli --ignored` comprueba los símbolos JNI en el `.so`, y las
+plantillas Java se compilaron con `javac -Xlint:all` contra `android.jar` (cazó un salto de línea
+real dentro de un literal). Un shell generado con un raylang anterior sigue cargando solo por
+HTTP: regenerar el bundle preserva firma, keystore e icono (M307).

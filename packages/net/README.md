@@ -81,7 +81,27 @@ fn main() -> int {
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
   dinámica. Determinista. Hoja.
 - **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
-- **`net/grpc_client`** — cliente gRPC sobre `net/http2` + `net/hpack` + `std/protobuf`.
+- **`net/grpc_client`** — cliente gRPC de un solo disparo sobre TLS (`grpc_call`), sobre `net/http2` +
+  `net/hpack` + `std/protobuf`.
+- **`net/grpc_server`** — **servidor gRPC unario** sobre HTTP/2 en claro con conocimiento previo (h2c:
+  lo que hablan `grpcurl -plaintext` y los clientes Go/Java sin TLS), M321 (findings #63, subido desde
+  `libs/grpc` de raymart): `bind(host, port)` (puerto 0 = efímero, `l.port`), `serve(l, handler)` /
+  `serve_until(l, stop, opts, handler)` / `serve_router[_until](l, …, build)` con un `Router`
+  (`route(path, f)`, `fallback(f)`, `dispatch`) construido DENTRO de cada fibra de conexión; el handler
+  recibe un `Call { path, message, metadata, deadline }` y devuelve `Result<bytes, Status>`. Control de
+  flujo, `grpc-timeout` → `deadline` (y DEADLINE_EXCEEDED al vencer), metadata, `grpc-message`
+  percent-encoded, tope de 4 MiB (`Options.max_message`, RESOURCE_EXHAUSTED), UNIMPLEMENTED para rutas
+  sin handler, `serve_conn` para bucles de accept propios. Sobre `net/grpc_h2`.
+- **`net/grpc_conn`** — cliente gRPC unario sobre una **conexión persistente**: `connect(host, port)`
+  (h2c) o `connect_tls(host, port)` (ALPN `h2`), `call(c, path, message, metadata, deadline_ms) ->
+  Result<Reply, string>` (`Err` = transporte; un estado no-OK es `Ok(Reply)` con `status` y
+  `status_message`; `into_result`/`outcome` lo vuelven `Result<bytes, Status>`), `call_once`,
+  `usable`, `disconnect`. Un plazo vencido cancela el stream (RST_STREAM) y la conexión sigue usable.
+- **`net/grpc_status`** — los códigos gRPC (`OK`…`UNAUTHENTICATED`), `Status { code, message }`,
+  `new`/`fail`, `code_name`, `from_http` y el percent-encoding de `grpc-message`. Hoja.
+- **`net/grpc_h2`** — el núcleo de conexión HTTP/2 que comparten servidor y cliente (`Link`: frames
+  con CONTINUATION fusionado y padding quitado, SETTINGS/PING/WINDOW_UPDATE/GOAWAY, HPACK por
+  dirección, ventanas de envío). Sobre `net/http2` + `net/hpack`.
 
 ### Transporte y servicios (dependen de sockets)
 

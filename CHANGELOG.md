@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Servidor gRPC en `net`** (M321, `RAYLANG-FINDINGS.md` #63; `net` 0.5.0). Subido desde
+  `libs/grpc` de raymart (interop verificada con `grpcurl` y clientes Go/Java):
+  - `net/grpc_server`: servidor gRPC unario sobre h2c (`bind`, `serve`/`serve_until`,
+    `serve_router[_until]` con `Router`, `serve_conn`), control de flujo, `grpc-timeout` →
+    deadline, metadata, `grpc-message` percent-encoded, tope de 4 MiB, UNIMPLEMENTED /
+    RESOURCE_EXHAUSTED / DEADLINE_EXCEEDED.
+  - `net/grpc_conn`: cliente sobre conexión persistente, h2c (`connect`) o TLS con ALPN `h2`
+    (`connect_tls`); `call`, `call_once`, `into_result`, `outcome`; un plazo vencido cancela el
+    stream y la conexión sigue usable.
+  - `net/grpc_status` (códigos, `Status`, percent-encoding) y `net/grpc_h2` (el núcleo de
+    conexión HTTP/2 compartido). `net/grpc_client.grpc_call` sigue igual.
 - **Pools, segunda pasada** (M320, `RAYLANG-FINDINGS.md` #95/#96; `net` 0.4.1, `db` 0.2.1).
   - `db/postgres`: un FATAL de clase 57P (reinicio, `pg_terminate_backend`) se devuelve como
     «the server closed the connection (FATAL 57P01: …)»: el pool descarta la conexión y reintenta

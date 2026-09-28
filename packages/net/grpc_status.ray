@@ -1,0 +1,191 @@
+// net/grpc_status — M321 (findings #63): los códigos de estado gRPC, el valor `Status` con el
+// que fallan los handlers y el percent-encoding de `grpc-message`. Subido desde `libs/grpc` de
+// raymart (interop verificada con grpcurl y con clientes Go/Java).
+// (https://grpc.github.io/grpc/core/md_doc_statuscodes.html)
+
+/// The call succeeded.
+pub const OK: int = 0;
+
+/// The call was cancelled, typically by the caller.
+pub const CANCELLED: int = 1;
+
+/// An unknown error (e.g. a status from another address space with no mapping).
+pub const UNKNOWN: int = 2;
+
+/// The client sent an invalid argument.
+pub const INVALID_ARGUMENT: int = 3;
+
+/// The deadline expired before the call completed.
+pub const DEADLINE_EXCEEDED: int = 4;
+
+/// The requested entity was not found.
+pub const NOT_FOUND: int = 5;
+
+/// The entity the client tried to create already exists.
+pub const ALREADY_EXISTS: int = 6;
+
+/// The caller has no permission to execute the operation.
+pub const PERMISSION_DENIED: int = 7;
+
+/// A resource (quota, message size...) has been exhausted.
+pub const RESOURCE_EXHAUSTED: int = 8;
+
+/// The system is not in the state required by the operation.
+pub const FAILED_PRECONDITION: int = 9;
+
+/// The operation was aborted (concurrency conflict).
+pub const ABORTED: int = 10;
+
+/// The operation was attempted past the valid range.
+pub const OUT_OF_RANGE: int = 11;
+
+/// The method is not implemented or not supported.
+pub const UNIMPLEMENTED: int = 12;
+
+/// An internal invariant was broken.
+pub const INTERNAL: int = 13;
+
+/// The service is currently unavailable (transient; retry with backoff).
+pub const UNAVAILABLE: int = 14;
+
+/// Unrecoverable data loss or corruption.
+pub const DATA_LOSS: int = 15;
+
+/// The request has no valid authentication credentials.
+pub const UNAUTHENTICATED: int = 16;
+
+/// A gRPC status: the `grpc-status` code and the human-readable `grpc-message`.
+pub struct Status {
+    code: int,
+    message: string,
+}
+
+/// Builds a `Status`.
+pub fn new(code: int, message: string) -> Status {
+    Status { code: code, message: message }
+}
+
+/// Shorthand for a failed handler result: `Result.Err(Status { code, message })`.
+pub fn fail(code: int, message: string) -> Result<bytes, Status> {
+    Result.Err(Status { code: code, message: message })
+}
+
+/// The canonical upper-case name of a status code ("NOT_FOUND"), "CODE_<n>" when unknown.
+pub fn code_name(code: int) -> string {
+    let names = [
+        "OK",
+        "CANCELLED",
+        "UNKNOWN",
+        "INVALID_ARGUMENT",
+        "DEADLINE_EXCEEDED",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "PERMISSION_DENIED",
+        "RESOURCE_EXHAUSTED",
+        "FAILED_PRECONDITION",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "UNIMPLEMENTED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DATA_LOSS",
+        "UNAUTHENTICATED"
+    ];
+    if (code >= 0 && code < names.len()) {
+        names[code]
+    } else {
+        "CODE_${code}"
+    }
+}
+
+/// Maps a non-200 HTTP status of a gRPC response to a gRPC code (the table of the gRPC
+/// "HTTP to gRPC status code mapping" document).
+pub fn from_http(status: int) -> int {
+    if (status == 400) {
+        return INTERNAL;
+    }
+    if (status == 401) {
+        return UNAUTHENTICATED;
+    }
+    if (status == 403) {
+        return PERMISSION_DENIED;
+    }
+    if (status == 404) {
+        return UNIMPLEMENTED;
+    }
+    if (status == 429 || status == 502 || status == 503 || status == 504) {
+        return UNAVAILABLE;
+    }
+    UNKNOWN
+}
+
+const HEX: string = "0123456789ABCDEF";
+
+/// Percent-encodes a `grpc-message` value: every UTF-8 octet outside the printable ASCII
+/// range 0x20..0x7E, and `%` itself, becomes `%XX` (upper-case hex), as the gRPC HTTP/2
+/// protocol requires.
+pub fn percent_encode(s: string) -> string {
+    let b = s.to_bytes();
+    var needs = false;
+    for i in 0..b.len() {
+        if (b[i] < 32 || b[i] > 126 || b[i] == 37) {
+            needs = true;
+            break;
+        }
+    }
+    if (!needs) {
+        return s;
+    }
+    var out: [int] = [];
+    for i in 0..b.len() {
+        let c = b[i];
+        if (c < 32 || c > 126 || c == 37) {
+            out.push(37);
+            out.push(char_code(HEX[c >> 4]));
+            out.push(char_code(HEX[c & 15]));
+        } else {
+            out.push(c);
+        }
+    }
+    // Solo queda ASCII: la conversión no puede fallar.
+    from_utf8(bytes_of(out)).unwrap_or(s)
+}
+
+fn hex_value(c: int) -> int {
+    if (c >= 48 && c <= 57) {
+        return c - 48;
+    }
+    if (c >= 65 && c <= 70) {
+        return c - 55;
+    }
+    if (c >= 97 && c <= 102) {
+        return c - 87;
+    }
+    0 - 1
+}
+
+/// Decodes a percent-encoded `grpc-message`. Malformed escapes are kept verbatim and invalid
+/// UTF-8 after decoding falls back to the raw value (the spec asks receivers to be lenient).
+pub fn percent_decode(s: string) -> string {
+    let b = s.to_bytes();
+    if (b.index_of(b"%").is_none()) {
+        return s;
+    }
+    var out: [int] = [];
+    var i = 0;
+    while (i < b.len()) {
+        let c = b[i];
+        if (c == 37 && i + 2 < b.len()) {
+            let hi = hex_value(b[i + 1]);
+            let lo = hex_value(b[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push(hi * 16 + lo);
+                i = i + 3;
+                continue;
+            }
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    from_utf8(bytes_of(out)).unwrap_or(s)
+}

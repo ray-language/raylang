@@ -391,7 +391,10 @@ removes the next patch's anchor silently — verify with grep that each patch la
 
 Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 `[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,
-WebSocket, streaming, static files with ETag/Range), `web` (an Express-style app framework
+WebSocket, streaming, static files with ETag/Range; gRPC: `net/grpc_server` unary server
+over h2c with a `Router`, `net/grpc_conn` persistent client h2c/TLS, `net/grpc_status`;
+messages are protobuf bytes from `std/protobuf` — codecs are hand-written, no `.proto`
+generator yet), `web` (an Express-style app framework
 over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
 the recommended base for servers and for desktop/mobile app backends with `std/ui`),
 `rpc` and `db`. Signatures live in REFERENCE.md/reference.md. Connections are NOT shared

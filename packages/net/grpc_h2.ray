@@ -1,0 +1,493 @@
+// net/grpc_h2 — M321 (findings #63): el núcleo de conexión HTTP/2 que comparten el servidor y el
+// cliente gRPC: lectura de frames sobre un búfer (PADDED/PRIORITY quitados, CONTINUATION
+// fusionados), los frames de conexión (SETTINGS, PING, WINDOW_UPDATE, GOAWAY), el estado HPACK
+// por dirección y el control de flujo de envío. La codificación de frames y HPACK vienen de
+// `net/http2` y `net/hpack`. Subido desde `libs/grpc` de raymart.
+from net/http2 import encode_frame, window_update_frame, ping_ack, settings_ack;
+from net/hpack import new_hpack, encode, decode, header, HEntry, Hpack;
+import std/net;
+import std/time;
+
+/// DATA frame type.
+pub const DATA: int = 0;
+
+/// HEADERS frame type.
+pub const HEADERS: int = 1;
+
+/// PRIORITY frame type.
+pub const PRIORITY: int = 2;
+
+/// RST_STREAM frame type.
+pub const RST_STREAM: int = 3;
+
+/// SETTINGS frame type.
+pub const SETTINGS: int = 4;
+
+/// PUSH_PROMISE frame type.
+pub const PUSH_PROMISE: int = 5;
+
+/// PING frame type.
+pub const PING: int = 6;
+
+/// GOAWAY frame type.
+pub const GOAWAY: int = 7;
+
+/// WINDOW_UPDATE frame type.
+pub const WINDOW_UPDATE: int = 8;
+
+/// CONTINUATION frame type.
+pub const CONTINUATION: int = 9;
+
+/// END_STREAM flag (DATA, HEADERS).
+pub const END_STREAM: int = 1;
+
+/// ACK flag (SETTINGS, PING).
+pub const ACK: int = 1;
+
+/// END_HEADERS flag (HEADERS, CONTINUATION).
+pub const END_HEADERS: int = 4;
+
+/// PADDED flag (DATA, HEADERS).
+pub const PADDED: int = 8;
+
+/// PRIORITY flag (HEADERS).
+pub const PRIORITY_FLAG: int = 32;
+
+/// RST_STREAM / GOAWAY error code NO_ERROR.
+pub const NO_ERROR: int = 0;
+
+/// RST_STREAM error code PROTOCOL_ERROR.
+pub const PROTOCOL_ERROR: int = 1;
+
+/// RST_STREAM error code CANCEL.
+pub const CANCEL: int = 8;
+
+/// The default SETTINGS_MAX_FRAME_SIZE (and the one this side advertises).
+pub const DEFAULT_MAX_FRAME: int = 16384;
+
+/// The default initial flow-control window of a connection and of every stream.
+pub const DEFAULT_WINDOW: int = 65535;
+
+/// Frames larger than this are refused outright, whatever the peer claims.
+const HARD_MAX_FRAME: int = 1048576;
+
+/// A frame as the gRPC layers see it: padding and priority fields already stripped,
+/// CONTINUATION frames folded into their HEADERS. `flow` is the length that counts against
+/// flow control (the whole DATA payload including padding).
+pub struct Frame {
+    ftype: int,
+    flags: int,
+    stream_id: int,
+    payload: bytes,
+    flow: int,
+}
+
+/// One HTTP/2 connection: the socket, the unparsed input, HPACK state per direction and the
+/// send-side flow-control windows. Used by a single fiber.
+pub struct Link {
+    h: int,
+    buf: bytes,
+    enc: Hpack,
+    dec: Hpack,
+    send_window: int,
+    stream_windows: Map<int, int>,
+    peer_initial_window: int,
+    peer_max_frame: int,
+    goaway: bool,
+    goaway_last_stream: int,
+    deadline: int,
+}
+
+/// Wraps an open socket handle (plain TCP or a TLS session with ALPN `h2`).
+pub fn new_link(h: int) -> Link {
+    let windows: Map<int, int> = Map.new();
+    Link {
+        h: h,
+        buf: b"",
+        enc: new_hpack(),
+        dec: new_hpack(),
+        send_window: DEFAULT_WINDOW,
+        stream_windows: windows,
+        peer_initial_window: DEFAULT_WINDOW,
+        peer_max_frame: DEFAULT_MAX_FRAME,
+        goaway: false,
+        goaway_last_stream: 0,
+        deadline: 0
+    }
+}
+
+/// Writes raw octets to the connection.
+pub fn write(l: Link, data: bytes) -> Result<int, string> {
+    net.socket_write_bytes(l.h, data)
+}
+
+/// Sets (or clears, with 0) the absolute monotonic deadline that bounds every read.
+pub fn set_deadline(l: Link, deadline: int) {
+    l.deadline = deadline;
+    if (deadline <= 0) {
+        net.set_read_timeout(l.h, 0);
+    }
+}
+
+/// True when the link has a deadline and it has passed.
+pub fn expired(l: Link) -> bool {
+    l.deadline > 0 && time.monotonic() >= l.deadline
+}
+
+// Una lectura del socket añadida al búfer. Err ante EOF («connection closed»), plazo vencido
+// («deadline exceeded») y errores de E/S.
+fn fill(l: Link) -> Result<int, string> {
+    if (l.deadline > 0) {
+        let left = l.deadline - time.monotonic();
+        if (left <= 0) {
+            return Result.Err("deadline exceeded");
+        }
+        net.set_read_timeout(l.h, left);
+    }
+    match (net.socket_read_bytes(l.h)) {
+        Result.Ok(chunk) => {
+            if (chunk.len() == 0) {
+                return Result.Err("connection closed");
+            }
+            l.buf = l.buf + chunk;
+            Result.Ok(chunk.len())
+        },
+        Result.Err(e) => {
+            if (e == "read timeout" && l.deadline > 0) {
+                return Result.Err("deadline exceeded");
+            }
+            Result.Err(e)
+        },
+    }
+}
+
+/// Reads exactly `n` octets (used for the client connection preface).
+pub fn read_exact(l: Link, n: int) -> Result<bytes, string> {
+    while (l.buf.len() < n) {
+        fill(l)?;
+    }
+    let out = l.buf.sub_bytes(0, n);
+    l.buf = l.buf.sub_bytes(n, l.buf.len());
+    Result.Ok(out)
+}
+
+// Lee un frame crudo (cabecera + carga) del búfer, rellenándolo si hace falta.
+fn read_raw(l: Link) -> Result<Frame, string> {
+    while (l.buf.len() < 9) {
+        fill(l)?;
+    }
+    let b = l.buf;
+    let len = b[0] << 16 | b[1] << 8 | b[2];
+    if (len > HARD_MAX_FRAME) {
+        return Result.Err("frame of ${len} octets exceeds the limit");
+    }
+    while (l.buf.len() < 9 + len) {
+        fill(l)?;
+    }
+    let d = l.buf;
+    let fr = Frame {
+        ftype: d[3],
+        flags: d[4],
+        stream_id: (d[5] & 127) << 24 | d[6] << 16 | d[7] << 8 | d[8],
+        payload: d.sub_bytes(9, 9 + len),
+        flow: len
+    };
+    l.buf = d.sub_bytes(9 + len, d.len());
+    Result.Ok(fr)
+}
+
+// Quita el relleno (y, en HEADERS, el bloque de prioridad) de la carga de un frame.
+fn strip(fr: Frame) -> Result<bytes, string> {
+    var p = fr.payload;
+    var pad = 0;
+    if ((fr.flags & PADDED) != 0) {
+        if (p.len() < 1) {
+            return Result.Err("padded frame without a pad length");
+        }
+        pad = p[0];
+        p = p.sub_bytes(1, p.len());
+    }
+    if (fr.ftype == HEADERS && (fr.flags & PRIORITY_FLAG) != 0) {
+        if (p.len() < 5) {
+            return Result.Err("HEADERS priority block truncated");
+        }
+        p = p.sub_bytes(5, p.len());
+    }
+    if (pad > p.len()) {
+        return Result.Err("padding longer than the frame");
+    }
+    Result.Ok(p.sub_bytes(0, p.len() - pad))
+}
+
+/// Reads the next frame. DATA and HEADERS come without padding; a HEADERS split across
+/// CONTINUATION frames comes back as one HEADERS with END_HEADERS set.
+pub fn read_frame(l: Link) -> Result<Frame, string> {
+    let fr = read_raw(l)?;
+    if (fr.ftype != DATA && fr.ftype != HEADERS) {
+        return Result.Ok(fr);
+    }
+    let payload = strip(fr)?;
+    if (fr.ftype == DATA) {
+        return Result.Ok(
+            Frame {
+                ftype: DATA,
+                flags: fr.flags,
+                stream_id: fr.stream_id,
+                payload: payload,
+                flow: fr.flow
+            }
+        );
+    }
+    var block = payload;
+    var flags = fr.flags;
+    while ((flags & END_HEADERS) == 0) {
+        let c = read_raw(l)?;
+        if (c.ftype != CONTINUATION || c.stream_id != fr.stream_id) {
+            return Result.Err("expected CONTINUATION for stream ${fr.stream_id}");
+        }
+        block = block + c.payload;
+        flags = flags | (c.flags & END_HEADERS);
+    }
+    Result.Ok(
+        Frame {
+            ftype: HEADERS,
+            flags: flags & (END_STREAM | END_HEADERS),
+            stream_id: fr.stream_id,
+            payload: block,
+            flow: 0
+        }
+    )
+}
+
+// Un entero de 32 bits big-endian en `i`.
+fn read_u32(b: bytes, i: int) -> int {
+    b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]
+}
+
+fn apply_settings(l: Link, p: bytes) -> Result<int, string> {
+    if (p.len() % 6 != 0) {
+        return Result.Err("SETTINGS payload is not a multiple of 6");
+    }
+    var i = 0;
+    while (i < p.len()) {
+        let id = p[i] << 8 | p[i + 1];
+        let value = read_u32(p, i + 2);
+        if (id == 4) {
+            // INITIAL_WINDOW_SIZE: desplaza la ventana de cada stream abierto por la diferencia.
+            let delta = value - l.peer_initial_window;
+            l.peer_initial_window = value;
+            for sid in l.stream_windows.keys() {
+                l.stream_windows.insert(sid, l.stream_windows.get_or(sid, 0) + delta);
+            }
+        } else if (id == 5) {
+            if (value < DEFAULT_MAX_FRAME || value > 16777215) {
+                return Result.Err("invalid SETTINGS_MAX_FRAME_SIZE ${value}");
+            }
+            l.peer_max_frame = value;
+        }
+        i = i + 6;
+    }
+    Result.Ok(0)
+}
+
+/// Handles the connection-level frames (SETTINGS, PING, WINDOW_UPDATE, GOAWAY, PRIORITY and
+/// unknown types) and answers them when due. Ok(true) = consumed; Ok(false) = a stream frame
+/// (HEADERS, DATA, RST_STREAM) the caller must process.
+pub fn control(l: Link, fr: Frame) -> Result<bool, string> {
+    if (fr.ftype == DATA || fr.ftype == HEADERS || fr.ftype == RST_STREAM) {
+        return Result.Ok(false);
+    }
+    if (fr.ftype == SETTINGS) {
+        if ((fr.flags & ACK) == 0) {
+            apply_settings(l, fr.payload)?;
+            write(l, settings_ack())?;
+        }
+    } else if (fr.ftype == PING) {
+        if ((fr.flags & ACK) == 0) {
+            write(l, ping_ack(fr.payload))?;
+        }
+    } else if (fr.ftype == WINDOW_UPDATE) {
+        if (fr.payload.len() != 4) {
+            return Result.Err("WINDOW_UPDATE payload is not 4 octets");
+        }
+        let inc = read_u32(fr.payload, 0) & 2147483647;
+        if (fr.stream_id == 0) {
+            l.send_window = l.send_window + inc;
+        } else if (l.stream_windows.contains_key(fr.stream_id)) {
+            l.stream_windows.insert(fr.stream_id, l.stream_windows.get_or(fr.stream_id, 0) + inc);
+        }
+    } else if (fr.ftype == GOAWAY) {
+        l.goaway = true;
+        if (fr.payload.len() >= 4) {
+            l.goaway_last_stream = read_u32(fr.payload, 0) & 2147483647;
+        }
+    } else if (fr.ftype == PUSH_PROMISE) {
+        return Result.Err("unexpected PUSH_PROMISE");
+    } else if (fr.ftype == CONTINUATION) {
+        return Result.Err("CONTINUATION without HEADERS");
+    }
+    // PRIORITY y los tipos desconocidos se ignoran (RFC 7540 §4.1, §5.5).
+    Result.Ok(true)
+}
+
+/// Registers a stream for send-side flow control.
+pub fn open_stream(l: Link, id: int) {
+    l.stream_windows.insert(id, l.peer_initial_window);
+}
+
+/// Forgets a stream's send window.
+pub fn close_stream(l: Link, id: int) {
+    l.stream_windows.remove(id);
+}
+
+/// True while the stream is registered (not reset nor finished).
+pub fn stream_open(l: Link, id: int) -> bool {
+    l.stream_windows.contains_key(id)
+}
+
+/// Returns the receive window a DATA frame consumed: always on the connection and, when
+/// `stream_too`, on the stream.
+pub fn release(l: Link, fr: Frame, stream_too: bool) -> Result<int, string> {
+    if (fr.flow <= 0) {
+        return Result.Ok(0);
+    }
+    var out = window_update_frame(0, fr.flow);
+    if (stream_too) {
+        out = out + window_update_frame(fr.stream_id, fr.flow);
+    }
+    write(l, out)
+}
+
+/// Decodes a header block into a list, keeping the HPACK decoder in sync.
+pub fn decode_headers(l: Link, block: bytes) -> Result<[HEntry], string> {
+    match (decode(l.dec, block)) {
+        Result.Ok(hs) => Result.Ok(hs),
+        Result.Err(e) => Result.Err("HPACK: " + e),
+    }
+}
+
+/// Encodes and sends a header list, split into HEADERS + CONTINUATION when it exceeds the
+/// peer's maximum frame size.
+pub fn send_headers(l: Link, id: int, hs: [HEntry], end_stream: bool) -> Result<int, string> {
+    let block = encode(l.enc, hs);
+    let max = l.peer_max_frame;
+    let end_flag = if (end_stream) { END_STREAM } else { 0 };
+    if (block.len() <= max) {
+        return write(l, encode_frame(HEADERS, END_HEADERS | end_flag, id, block));
+    }
+    var out = encode_frame(HEADERS, end_flag, id, block.sub_bytes(0, max));
+    var off = max;
+    while (off < block.len()) {
+        let end = if (off + max < block.len()) { off + max } else { block.len() };
+        let last = if (end == block.len()) { END_HEADERS } else { 0 };
+        out = out + encode_frame(CONTINUATION, last, id, block.sub_bytes(off, end));
+        off = end;
+    }
+    write(l, out)
+}
+
+/// Sends RST_STREAM with an error code.
+pub fn send_reset(l: Link, id: int, code: int) -> Result<int, string> {
+    let p = bytes_of([code >> 24 & 255, code >> 16 & 255, code >> 8 & 255, code & 255]);
+    write(l, encode_frame(RST_STREAM, 0, id, p))
+}
+
+/// Sends GOAWAY with the last processed stream id and an error code.
+pub fn send_goaway(l: Link, last_stream: int, code: int) -> Result<int, string> {
+    let p = bytes_of(
+        [
+            last_stream >> 24 & 127,
+            last_stream >> 16 & 255,
+            last_stream >> 8 & 255,
+            last_stream & 255,
+            code >> 24 & 255,
+            code >> 16 & 255,
+            code >> 8 & 255,
+            code & 255
+        ]
+    );
+    write(l, encode_frame(GOAWAY, 0, 0, p))
+}
+
+fn min(a: int, b: int) -> int {
+    if (a < b) { a } else { b }
+}
+
+/// Sends `payload` on stream `id` as DATA frames no larger than the peer's maximum frame
+/// size, respecting the connection and stream send windows. While a window is exhausted it
+/// keeps reading: connection frames are handled here and every other frame goes to
+/// `on_frame` (which must not send DATA itself). Stops quietly with Ok(false) if the stream
+/// gets closed meanwhile (e.g. the peer reset it); Ok(true) when everything was sent.
+pub fn send_data(
+    l: Link,
+    id: int,
+    payload: bytes,
+    end_stream: bool,
+    on_frame: fn(Frame) -> Result<int, string>
+) -> Result<bool, string> {
+    let total = payload.len();
+    if (total == 0) {
+        let end_flag = if (end_stream) { END_STREAM } else { 0 };
+        write(l, encode_frame(DATA, end_flag, id, b""))?;
+        return Result.Ok(true);
+    }
+    var off = 0;
+    while (off < total) {
+        if (!stream_open(l, id)) {
+            return Result.Ok(false);
+        }
+        let window = min(l.send_window, l.stream_windows.get_or(id, 0));
+        if (window <= 0) {
+            let fr = read_frame(l)?;
+            if (!control(l, fr)?) {
+                on_frame(fr)?;
+            }
+            continue;
+        }
+        let n = min(min(total - off, window), l.peer_max_frame);
+        let last = off + n == total;
+        let end_flag = if (last && end_stream) { END_STREAM } else { 0 };
+        write(l, encode_frame(DATA, end_flag, id, payload.sub_bytes(off, off + n)))?;
+        l.send_window = l.send_window - n;
+        l.stream_windows.insert(id, l.stream_windows.get_or(id, 0) - n);
+        off = off + n;
+    }
+    Result.Ok(true)
+}
+
+/// Concatenates byte chunks pairwise (O(n log n) copies instead of O(n^2)).
+pub fn concat(parts: [bytes]) -> bytes {
+    if (parts.len() == 0) {
+        return b"";
+    }
+    var level = parts;
+    while (level.len() > 1) {
+        var next: [bytes] = [];
+        var i = 0;
+        while (i < level.len()) {
+            if (i + 1 < level.len()) {
+                next.push(level[i] + level[i + 1]);
+            } else {
+                next.push(level[i]);
+            }
+            i = i + 2;
+        }
+        level = next;
+    }
+    level[0]
+}
+
+/// The value of the first header named `name`, "" when absent.
+pub fn find(hs: [HEntry], name: string) -> string {
+    for e in hs {
+        if (e.name == name) {
+            return e.value;
+        }
+    }
+    ""
+}
+
+/// Shorthand for a header entry.
+pub fn hdr(name: string, value: string) -> HEntry {
+    header(name, value)
+}

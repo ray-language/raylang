@@ -753,6 +753,19 @@ fn ray_remove_removes_dep_lock_and_cache() {
     let (_o, err, code) = ray_idx(&app, &index, &["remove", "util"]);
     assert_eq!(code, 65, "remove de one dep nonexistent fails");
     assert!(err.contains("is not declared"), "{err}");
+
+    // M323 (ray808 #13): quitar la ÚLTIMA dependencia retira el lock y la caché enteros.
+    let (out, err, code) = ray_idx(&app, &index, &["remove", "geo"]);
+    assert_eq!(code, 0, "remove de la última\n{err}");
+    assert!(out.contains("no dependencies left: ray.lock and .ray-deps removed"), "{out}");
+    assert!(!app.join("ray.lock").exists(), "sin lock huérfano");
+    assert!(!app.join(".ray-deps").exists(), "sin caché huérfana");
+    // Y borrar `[dependencies]` a mano deja un lock viejo que `ray fetch` retira (y lo dice).
+    std::fs::write(app.join("ray.lock"), "[geo]\nurl = \"x\"\nref = \"v1.0.0\"\ncommit = \"c\"\nhash = \"h\"\n").unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["fetch"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("declares no dependencies (stale ray.lock/.ray-deps removed)"), "{out}");
+    assert!(!app.join("ray.lock").exists(), "lock viejo retirado por fetch");
 }
 
 #[test]

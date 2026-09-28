@@ -23,6 +23,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   - `ray fmt`: un comentario `// …` escrito antes del último elemento de un arreglo
     (`[0, 10, // c` + `25]`) vuelve a ese elemento al repartir la lista, en vez de pegarse al
     primero de la línea o de caer tras el `];` (también en una `const`); idempotente.
+  - **`ui.mount_embed_at(prefix, embed_prefix)`** (README de ray808 #11): monta el CONTENIDO de
+    un directorio embebido en `prefix`, recortando la clave — `mount_embed_at("", "frontend/dist")`
+    deja `index.html` en `ray://app/index.html`, que es lo que espera `app://index.html`.
+    `mount_embed` conserva la clave entera (`assets/app.css` → `ray://app/assets/app.css`), como
+    siempre; la plantilla de `ray new --frontend` abría `app://index.html` con un `mount_embed`
+    que dejaba la página en `ray://app/frontend/dist/index.html` (404 en toda build sin `ray
+    dev`): ahora usa `mount_embed_at`.
+  - Shell Android: el shim `window.ray` se instala como script de inicio de documento
+    (`WebViewCompat.addDocumentStartJavaScript`, androidx.webkit), antes de cualquier `<script>`
+    de la página — una página servida por `ray://app` ejecutaba el suyo antes de `onPageStarted`
+    y veía `window.ray` indefinido (README de ray808 #12). Sin soporte en el WebView, fallback a
+    `onPageStarted` como antes. Regenera el bundle.
+  - Quitar la última dependencia (`ray remove`, o borrar `[dependencies]` y `ray fetch`/`ray
+    update`/cualquier resolución) retira el `ray.lock` y el `.ray-deps/` huérfanos (README de
+    ray808 #13).
 
 ## 1.27.17 — 2026-09-28
 

@@ -1776,7 +1776,7 @@ abre la ventana sobre Vite, con su hot module replacement — editas un componen
 actualiza sin recargar; editas un `.ray` y se reinicia solo el programa (el dev server sigue
 vivo). Al salir de `ray dev` el dev server muere con él, con todo su árbol de procesos. Fuera de
 `ray dev` (`ray run`, `ray build --native`, `ray bundle`) la misma URL `app://index.html` es
-`ray://app/index.html`: el build embebido, que montas con `ui.mount_embed("", "frontend/dist")`.
+`ray://app/index.html`: el build embebido, que montas con `ui.mount_embed_at("", "frontend/dist")`.
 `ray build --native` y `ray bundle` corren el `build` antes y embeben `dist` como un
 `[native] embed` más, así que el binario y el `.app` son autocontenidos. `ui.app_url(url)` hace
 la misma resolución a mano (una `http://` de tu webserver también cambia de origen al del dev

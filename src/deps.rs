@@ -396,7 +396,24 @@ pub fn update(manifest: &Manifest) -> Result<usize, String> {
     ensure_impl(manifest, true)
 }
 
+/// M323 (ray808 #13): un proyecto SIN dependencias no tiene nada que bloquear — un `ray.lock` y un
+/// `.ray-deps/` que sobrevivieron a quitar la última dependencia se retiran (el lock listaba paquetes
+/// que el manifiesto ya no declara y `ray remove` se negaba porque «no está declarada»). `true` si
+/// se retiró algo.
+pub fn clear_stale(root: &Path) -> bool {
+    let lock = root.join("ray.lock");
+    let cache = root.join(".ray-deps");
+    let had = lock.is_file() || cache.is_dir();
+    let _ = std::fs::remove_file(&lock);
+    let _ = std::fs::remove_dir_all(&cache);
+    had
+}
+
 fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
+    if manifest.dependencies.is_empty() {
+        clear_stale(&manifest.root);
+        return Ok(0);
+    }
     let cache = manifest.root.join(".ray-deps");
     let locked = read_lock(&manifest.root)?;
     let mut index = LazyIndex::new(manifest);

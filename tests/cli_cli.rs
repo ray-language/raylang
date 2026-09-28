@@ -65,7 +65,7 @@ fn new_with_frontend_writes_the_vite_contract() {
     assert!(manifest.contains("--strictPort --port 5173"), "puerto fijo para que `url` sea cierta\n{manifest}");
     let main = std::fs::read_to_string(proj.join("src/main.ray")).unwrap();
     assert!(main.contains("\"app://index.html\""), "{main}");
-    assert!(main.contains("mount_embed(\"\", \"frontend/dist\")"), "{main}");
+    assert!(main.contains("mount_embed_at(\"\", \"frontend/dist\")"), "{main}");
     let gitignore = std::fs::read_to_string(proj.join(".gitignore")).unwrap();
     assert!(gitignore.contains("frontend/node_modules/") && gitignore.contains("frontend/dist/"), "{gitignore}");
     assert!(out.contains("npm create vite@latest frontend -- --template react-ts"), "{out}");

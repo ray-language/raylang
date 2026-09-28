@@ -15432,6 +15432,33 @@ resuelto en 1.27.17 con una mini app en el simulador; el driver dice lo contrari
 camino `--lib`, que es el que usa el shell — conviene que ray808 lo re-verifique con su propia
 app y un shell regenerado con esta versión.
 
+**[ray808 #11] `mount_embed` y la plantilla que nunca funcionó sin `ray dev`.** La plantilla
+de M263 monta con `mount_embed("", "frontend/dist")` y abre `app://index.html`; pero
+`mount_embed` conserva la clave del embed (documentado desde M226: `mount_embed("", "assets")`
+deja `assets/app.css` en `ray://app/assets/app.css`, y ray-sublime abre
+`ray://app/assets/index.html`), así que la página quedaba en `ray://app/frontend/dist/index.html`
+y `app://index.html` era 404 en toda build que no fuera `ray dev` — el test de M263 solo
+comprobaba la resolución de `app_url`, no el servicio. Cambiar `mount_embed` a recortar rompería
+lo documentado y a ray-sublime; se añade `mount_embed_at(prefix, embed_prefix)`, que monta el
+CONTENIDO de `embed_prefix` en `prefix` (en vivo: `mount_dir(prefix, root/embed_prefix)`; horneado:
+cada clave sin su prefijo), y la plantilla y el MANUAL pasan a usarla.
+
+**[ray808 #12] El shim Android llegaba tarde.** El shell inyectaba `window.ray` en
+`onPageStarted` con `evaluateJavascript`; con un servidor HTTP la página tardaba lo bastante en
+llegar como para no notarlo, pero servida desde memoria por `ray://app` su primer `<script>`
+corría antes y `window.ray.send` era `undefined`. WKWebView tiene user scripts «at document
+start»; el equivalente Android es `WebViewCompat.addDocumentStartJavaScript` (androidx.webkit),
+que es lo que instala ahora el shell, con `onPageStarted` como fallback si el WebView del
+dispositivo no ofrece `DOCUMENT_START_SCRIPT`. Es la primera dependencia Gradle del shell
+(`androidx.webkit:webkit:1.12.1`); `gradle.properties` ya tenía `android.useAndroidX=true`.
+
+**[ray808 #13] El lock huérfano.** Quitar la última dependencia dejaba `ray.lock` y
+`.ray-deps/` como estaban: `ray fetch`/`ray update` salían por «declares no dependencies» sin
+mirar el lock y `ray remove` de lo que el lock aún listaba se negaba porque «no está declarada».
+`deps::clear_stale` retira ambos cuando el manifiesto no declara nada, desde `ensure` (todo
+camino que resuelve), `ray fetch`/`update` (y lo dicen) y `ray remove` de la última.
+
 **Lo que este arco NO verifica.** La prueba en simulador/emulador con ray808 la hace el
 proyecto ray808 (otro agente); aquí queda el driver C, `bundle_ios_cli`/`android_lib_cli`
-(`--ignored`) recompilados con los shells nuevos y `javac -Xlint:all` sobre las plantillas Java.
+(`--ignored`) recompilados con los shells nuevos, `javac -Xlint:all` sobre las plantillas Java y
+un `gradle assembleDebug` del proyecto Android generado (la dependencia androidx resuelta).

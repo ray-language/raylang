@@ -6,6 +6,9 @@
 //   RAYLANG_THREADS=1 /tmp/actor_ask rt 1 200000
 //   /tmp/actor_ask rt 64 20000        # 64 peticionarios a la vez
 //   /tmp/actor_ask oneway 1 200000    # envío de un solo sentido (sin respuesta)
+//   /tmp/actor_ask ttl 64 20000       # IDEAS 75c: caché local de 20 ms (pregunta al vencer)
+//   /tmp/actor_ask peek 64 20000      # IDEAS 75c: lectura de una celda compartida (proxy:
+//                                     #   try_recv + send sobre un canal de capacidad 1)
 import std/time;
 
 enum Msg {
@@ -44,14 +47,42 @@ fn main() -> int {
     let iters = if (args().len() > 2) { parse_int(args()[2]).unwrap_or(100000) } else { 100000 };
     let inbox: Channel<Msg> = Channel.bounded(1024);
     let done: Channel<int> = Channel.bounded(1024);
+    // La "celda" publicada (proxy de `peek`): un canal de capacidad 1 con el último valor.
+    let cell: Channel<int> = Channel.bounded(1);
+    send(cell, 1);
     let t_actor = spawn(fn() -> int { actor(inbox) });
     let t0 = time.monotonic();
     for _ in 0..fibers {
         spawn(fn() {
             var acc = 0;
+            var cached = 0;
+            var cached_until = 0;
             for i in 0..iters {
                 if (mode == "oneway") {
                     send(inbox, Msg.Tell(i));
+                } else if (mode == "ttl") {
+                    // Caché local: pregunta al actor solo cuando la foto tiene más de 20 ms.
+                    let now = time.monotonic();
+                    if (now >= cached_until) {
+                        let reply: Channel<int> = Channel.bounded(1);
+                        send(inbox, Msg.Ask(i, reply));
+                        cached = recv(reply).unwrap_or(0);
+                        cached_until = now + 20;
+                    }
+                    acc = acc + cached;
+                } else if (mode == "peek") {
+                    // Lectura de la celda: tomar el valor y reponerlo (dos operaciones bajo el
+                    // mutex del canal; cota superior de lo que costaría un `peek`).
+                    match (try_recv(cell)) {
+                        Received.Got(v) => {
+                            acc = acc + v;
+                            let _ = try_send(cell, v);
+                        },
+                        Received.Empty => {
+                            acc = acc + 1;
+                        },
+                        Received.Closed => { },
+                    }
                 } else {
                     let reply: Channel<int> = Channel.bounded(1);
                     send(inbox, Msg.Ask(i, reply));

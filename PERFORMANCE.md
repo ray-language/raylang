@@ -1949,3 +1949,22 @@ Lecciones (crónica en DESIGN §301):
 - La cancelación dejó de costar un op del reactor por park (el pulso de 10 ms): no mueve estas
   cifras en macOS (la tubería es barata), pero es un syscall menos por espera y la cancelación
   pasa de ≤10 ms a inmediata.
+
+**Linux** (28 sep 2026; Ubuntu 24.04 aarch64 en VM de 4 cores, `ray` 1.27.16 de la release,
+mismo protocolo). Es donde corre raygate y donde el despertar por futex era caro de verdad: la
+cifra sin M319 reproduce la del hallazgo (~30–40 µs en Docker).
+
+| carga | sin M319 (`RAYLANG_SPIN_US=0`) | **M319** | `RAYLANG_THREADS=1` |
+|---|---|---|---|
+| ida y vuelta, 1 peticionario | 42,7 µs | **3,5 µs (12×)** | 1,0 µs |
+| ida y vuelta, 8 peticionarios | 11,4 µs | **1,04 µs (11×)** | 0,84 µs |
+| ida y vuelta, 64 peticionarios | 1,43 µs | 1,30 µs | 0,84 µs |
+| un sentido, 8 emisores | 0,64 µs | 0,63 µs | 0,32 µs |
+
+**IDEAS 75c, medido y decidido.** Las dos alternativas a preguntar al actor por petición, en el
+mismo benchmark (modos `ttl` y `peek`): una caché local con TTL de 20 ms cuesta ~0,01 µs por
+decisión; una celda compartida (proxy: `try_recv` + `try_send` sobre un canal de capacidad 1,
+cota superior de un `peek`) 0,16 µs en Linux y 0,04–0,12 µs en macOS con 64 fibras. Frente a
+los 1–3,5 µs que cuesta preguntar tras M319, una celda ahorraría un 3–10 % del trabajo por
+petición de raygate (~29 µs) — lo mismo que da la caché TTL sin superficie nueva. No se
+implementa; la fila de IDEAS conserva el criterio para reabrirla.

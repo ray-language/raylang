@@ -4,6 +4,23 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Móvil, tercera pasada** (M323, `RAYLANG-FINDINGS.md` #38, #97, #98):
+  - `ui.reply(0, …)` y `ui.eval_js(0, …)` funcionan por fin en el **binario nativo** de los
+    shells iOS/Android: el arreglo M309 vivía en el runtime, pero el envoltorio emitido por el
+    transpilador (y el builtin de la VM) rechazaban la ventana `0` contra el registro del
+    programa antes de llegar a él («ui: not an open window»). Ya no hace falta responder a
+    «la única ventana» como rodeo.
+  - El shell declara sus capacidades (`ray_ui_shell_capabilities`; `RayBridge.capabilities` en
+    Android): `ui.open("ray://app/…")` sobre un shell generado con raylang < 1.27.17 falla con
+    un mensaje que dice regenerarlo, en vez de cargar una URL muerta en silencio.
+  - Docs alineadas con `llms.txt`: `ray doc ui.mount_dir`/`mount_embed`/`UiEvent` (los shells
+    móviles, el alias de Android, el evento `lifecycle`, `window == 0`), REFERENCE y
+    `ray bundle --help` (`[app.plist]` también en iOS).
+  - `ray_fmt` (MCP) acepta `path` a un `.ray` como el resto de herramientas (devuelve el
+    canónico, no toca el archivo); un directorio se rechaza con el remedio.
+
 ## 1.27.17 — 2026-09-28
 
 - **`ray://app` en los shells iOS y Android** (M322, `RAYLANG-FINDINGS.md` #39). `ui.open` con

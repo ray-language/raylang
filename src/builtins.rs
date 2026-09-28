@@ -1363,8 +1363,11 @@ pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64
 /// M146: ejecuta JS en la página de la ventana `h`, fire-and-forget.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_eval_js(h: i64, js: &str) -> Result<(), String> {
+    // M323 (findings #38): `0` = la ventana del shell móvil (no está en el registro del host);
+    // el runtime la resuelve o la rechaza. Mismo trato que el envoltorio nativo emitido.
     let win = match registry().lock().unwrap().open.get(&h) {
         Some(OpenHandle::Window(w)) => w.0,
+        _ if h == 0 => 0,
         _ => return Err("ui: not an open window".to_string()),
     };
     ray_runtime::ui::eval_js(win, js)
@@ -1549,6 +1552,7 @@ const ONIG_UNAVAILABLE: &str = "regex: onig needs a toolchain built with the `re
 pub fn ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Result<(), String> {
     let win = match registry().lock().unwrap().open.get(&h) {
         Some(OpenHandle::Window(w)) => w.0,
+        _ if h == 0 => 0, // M323: la ventana del shell móvil (ver ui_eval_js)
         _ => return Err("ui: not an open window".to_string()),
     };
     ray_runtime::ui::reply(win, id, value, as_json)

@@ -15377,3 +15377,45 @@ contra el `.a`), `android_lib_cli --ignored` comprueba los símbolos JNI en el `
 plantillas Java se compilaron con `javac -Xlint:all` contra `android.jar` (cazó un salto de línea
 real dentro de un literal). Un shell generado con un raylang anterior sigue cargando solo por
 HTTP: regenerar el bundle preserva firma, keystore e icono (M307).
+
+## 305. M323 — Móvil, tercera pasada: la ventana 0 en el nativo, capacidades del shell y `ray_fmt` con `path` (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #38, #97 y #98 (revisión de 1.27.17 desde ray808).
+
+**[38] Por qué M309 no bastó.** M309 enseñó al runtime que `0` es «la ventana del shell móvil»
+(`shell_window_alias`). Pero ray808 seguía viendo «ui: not an open window» en el simulador, y
+la razón estaba una capa más arriba: el envoltorio que el transpilador emite para cada builtin
+de UI (`__ray_ui_reply`, `__ray_ui_eval_js`) comprueba el handle contra el REGISTRO DEL
+PROGRAMA (`__ray_reg().open`) antes de llamar al runtime, y la ventana 0 nunca está ahí — el
+alias jamás se alcanzaba en el binario nativo, que es el único que corre en un teléfono. El
+builtin de la VM hacía lo mismo. Ahora el 0 pasa al runtime en los tres motores, que lo
+resuelve (shell) o lo rechaza (escritorio: no hay ventana 0, el mensaje es el mismo). La lección
+es de método: el test de M309 vivía en el runtime; el driver C de `native_lib_cli` —el shell
+en miniatura— ahora empuja un `message` con window 0 en formato petición y espera el
+`window.ray._deliver(7,"pong hola")` de vuelta, que atraviesa exactamente la capa que fallaba.
+(De paso: en C, `"\x017"` es UN escape hexadecimal; el driver parte los literales.)
+
+**[97] Un shell viejo no debe fallar en silencio.** Con `ray://app` en los shells (M322) aparece
+un caso nuevo: un `.a`/`.so` recién compilado dentro de un shell generado con un raylang
+anterior carga `ray://app/…` como una URL cualquiera y la página nunca llega. No hay marcador de
+versión en el shell (#37 lo pedía), así que el shell DECLARA lo que sabe hacer:
+`ray_ui_shell_capabilities(caps)` antes de `ray_start` (bit 1 = sirve el esquema;
+`RayBridge.capabilities(int)` en Android, JNI emitido como el resto). Un shell antiguo no llama
+a nada y queda en 0, y `ui.open("ray://app/…")` devuelve «this app shell was generated with
+raylang < 1.27.17 and does not serve ray://app: regenerate it with `ray bundle --ios` /
+`--android`». Declarar capacidades, en vez de una versión, es lo que permite añadir la
+siguiente sin tocar la ABI. Y la documentación que un lector de `ray doc` ve —`ui.mount_dir`,
+`mount_embed`, `UiEvent` (el evento `lifecycle`, `window == 0`), REFERENCE, `ray bundle --help`
+(`[app.plist]` también en iOS)— dice ahora lo mismo que `llms.txt`.
+
+**[98] `ray_fmt` con `path`.** El esquema de la herramienta MCP anunciaba `path` desde M150 y el
+despachador solo leía `code`. Ahora `path` a un `.ray` devuelve el canónico sin tocar el archivo
+(como `ray fmt <archivo>`); un directorio se rechaza con el remedio, porque `ray fmt` no recorre
+directorios y sin `--write` imprime un solo archivo. El caso real vive en `tests/mcp_cli.rs`
+(lanza el binario); en los tests unitarios de `mcp.rs` `run_self` lanzaría el propio harness de
+tests, así que allí solo se cubren los dos rechazos.
+
+**Lo que este arco NO verifica.** La prueba en simulador/emulador con ray808 la hace el
+proyecto ray808 (otro agente); aquí queda el driver C, `bundle_ios_cli`/`android_lib_cli`
+(`--ignored`) recompilados con los shells nuevos y `javac -Xlint:all` sobre las plantillas Java.
+

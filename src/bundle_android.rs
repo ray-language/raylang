@@ -227,9 +227,12 @@ public final class RayBridge {
     static void startOnce() {
         if (!started) {
             started = true;
+            capabilities(1); // M323: este shell sirve ray://app (RayScheme)
             start(); // registra los handlers y lanza el programa raylang en su hilo
         }
     }
+
+    public static native void capabilities(int caps);
 
     public static native int start();
 
@@ -604,6 +607,8 @@ mod tests {
             assert!(RAY_BRIDGE_JAVA.contains(native), "{native}");
         }
         assert!(RAY_BRIDGE_JAVA.contains("String target = RayScheme.alias(url);"));
+        assert!(RAY_BRIDGE_JAVA.contains("capabilities(1); // M323"));
+        assert!(RAY_BRIDGE_JAVA.contains("public static native void capabilities(int caps)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("return RayScheme.intercept(req);"));
         assert!(RAY_SCHEME_JAVA.contains("static final String ALIAS_HOST = \"app.ray.invalid\";"));

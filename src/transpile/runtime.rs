@@ -915,13 +915,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
+            // M323 (findings #38): `h == 0` es «la ventana del shell móvil» — no está en el registro
+            // del programa; el runtime la resuelve (`shell_window_alias`) o la rechaza en escritorio.
             "fn __ray_ui_eval_js(h: i64, js: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let known = h == 0 || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::eval_js(h, js) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M225: reply/reply_json — el literal JS lo escapa ray_runtime en una pasada.
             "fn __ray_ui_reply(h: i64, id: i64, value: &str, as_json: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let known = h == 0 || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::reply(h, id, value, as_json) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M235: escritorio (abrir/revelar) y portapapeles.

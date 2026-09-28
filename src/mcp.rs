@@ -270,7 +270,7 @@ fn tools_list() -> Json {
         ),
         tool(
             "ray_fmt",
-            "Format a raylang program canonically. Returns the formatted source.",
+            "Format a raylang program canonically: pass 'code' (a snippet) or 'path' (a .ray file on disk). Returns the formatted source (the file is not modified).",
             code_schema("A raylang source file to format."),
         ),
         tool(
@@ -327,7 +327,15 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
             Some(p) => run_self_at(&["test"], p, None),
             None => run_self(&["test"], code()?, None),
         },
-        "ray_fmt" => run_self(&["fmt"], code()?, None),
+        // M323 (findings #98): `path` también aquí — un `.ray` real del proyecto. Un directorio
+        // no sirve: `ray fmt` no recorre directorios y sin `--write` imprime UN archivo.
+        "ray_fmt" => match path {
+            Some(p) if std::path::Path::new(p).is_dir() => {
+                Err(format!("ray_fmt needs a .ray file (got the directory '{p}'): pass the file's path, or 'code'"))
+            }
+            Some(p) => run_self_at(&["fmt"], p, None),
+            None => run_self(&["fmt"], code()?, None),
+        },
         "ray_doc" => {
             let symbol = args.get("symbol").and_then(|s| s.as_str()).ok_or("missing required argument 'symbol'")?;
             Ok(doc_text_at(symbol, args.get("path").and_then(|p| p.as_str())))
@@ -1144,6 +1152,20 @@ mod tests {
         let t = doc_text_at("util.LIMIT", Some(&p));
         assert!(t.contains("const LIMIT: int = 3"), "{t}");
         assert!(doc_text_at("nope", Some(&p)).contains("is not a builtin"));
+    }
+
+    /// M323 (findings #98): `ray_fmt` con `path` — el caso del archivo real vive en
+    /// tests/mcp_cli.rs (lanza el binario); aquí, los dos rechazos que no lanzan nada.
+    #[test]
+    fn ray_fmt_rejects_a_directory_and_a_missing_argument() {
+        let base = std::env::temp_dir().join("ray_mcp_fmt_dir");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = Json::Obj(vec![("path".into(), Json::Str(base.to_string_lossy().into_owned()))]);
+        let err = call_tool("ray_fmt", &dir).unwrap_err();
+        assert!(err.contains("needs a .ray file"), "{err}");
+        let none = call_tool("ray_fmt", &Json::Obj(vec![])).unwrap_err();
+        assert!(none.contains("missing argument"), "{none}");
     }
 
     #[test]

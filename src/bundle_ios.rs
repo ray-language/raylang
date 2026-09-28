@@ -74,6 +74,7 @@ extern int ray_ui_scheme_status(long long h);
 extern const char *ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
+extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve ray://app
 
 // M322 — `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
 // shell de macOS: montajes, Range, ETag/304, MIME). El cuerpo se lee por trozos en una cola
@@ -237,6 +238,7 @@ static void ray_eval(const char *js) {
     static dispatch_once_t rayOnce;
     dispatch_once(&rayOnce, ^{
       ray_ui_set_handlers(ray_open, ray_eval);
+      ray_ui_shell_capabilities(1);
       ray_start();
     });
 }
@@ -565,6 +567,7 @@ mod tests {
         }
         // Una tarea parada por WebKit no recibe más datos ni didFinish.
         assert!(SCENE_DELEGATE_M.contains("stopURLSchemeTask:"));
+        assert!(SCENE_DELEGATE_M.contains("ray_ui_shell_capabilities(1);\n      ray_start();"), "capabilities before ray_start");
         assert!(SCENE_DELEGATE_M.contains("if (![self->_stopped containsObject:key]) {\n            [task didFinish];"));
     }
 

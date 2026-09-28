@@ -1947,7 +1947,7 @@ Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
-the flags override them. [app.plist] keys go verbatim into the macOS Info.plist; \
+the flags override them. [app.plist] keys go verbatim into the macOS and iOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
 
 fn cmd_bundle(args: &[String]) {

@@ -46,7 +46,13 @@ fn main() -> int {
 "#;
 
 fn launch(mode: &str) -> (Child, u16) {
-    let dir = std::env::temp_dir().join(format!("ray_local_guard_{}_{mode}", std::process::id()));
+    // M320: un directorio ÚNICO por lanzamiento. Dos tests usan el mismo modo (`plain`) y corren
+    // en paralelo: con el nombre por pid + modo compartían carpeta y el `remove_dir_all` del
+    // segundo borraba el `main.ray` del primero en plena ejecución («could not read module
+    // 'main'» esporádico en CI).
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ray_local_guard_{}_{mode}_{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let root = env!("CARGO_MANIFEST_DIR");

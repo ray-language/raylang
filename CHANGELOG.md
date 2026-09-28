@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.17 — 2026-09-28
 
 - **`ray://app` en los shells iOS y Android** (M322, `RAYLANG-FINDINGS.md` #39). `ui.open` con
   una URL `ray://app/…` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan ahora también en

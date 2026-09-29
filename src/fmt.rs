@@ -354,7 +354,13 @@ impl Cur {
         // última lo pega la sentencia repartida (tras su `;`), así que ninguno de los dos cuenta.
         // M316 (findings #88): en una sentencia multilínea, el de la PRIMERA línea también es interior
         // (`[1, // c` + `2]`): la forma plana ya no lo consume (pega el de la última línea).
-        self.items[self.i..].iter().take_while(|c| c.line < last).any(|c| c.trailing && (c.line > first || last > first))
+        // M324 (ray808 #10): un comentario en LÍNEA PROPIA dentro de la sentencia (`[1, 2,` +
+        // `// c` + `3]`) también cuenta — la forma plana lo dejaría atrás (caería tras el `;`); la
+        // repartida lo vuelca encima de su elemento.
+        self.items[self.i..]
+            .iter()
+            .take_while(|c| c.line < last)
+            .any(|c| if c.trailing { c.line > first || last > first } else { c.line > first })
     }
 
     /// Vuelca **todos** los comentarios restantes (fin de archivo), cada uno en su línea con sangría `pad`.
@@ -1209,7 +1215,7 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
             } else if let Some((recv, links)) = chain_links(e) {
                 fmt_chain_wrapped(cur, recv, &links)
             } else if let Some((head, open, items, close)) = delimited_list(cur, e) {
-                fmt_wrapped_list(cur, &head, open, &items, close)
+                fmt_wrapped_list(cur, &head, open, e.line, &items, close)
             } else {
                 // No repartible después de todo (`could_wrap_list` ya lo filtró, así que no debería
                 // pasar). Se emite plano: degradar a la línea larga es correcto — que el formateador
@@ -1535,14 +1541,26 @@ fn is_compact_if(e: &Expr) -> bool {
 /// siguen `struct`/`enum`/`match` y los bloques. Las dos formas que cierran PEGADO (M104 `from …
 /// import`, M105 la cadena de métodos) son justo las que no tienen delimitador propio: allí el `;` es
 /// un terminador y el `)` pertenece a la llamada que envuelve.
-fn fmt_wrapped_list(cur: &mut Cur, head: &str, open: &str, items: &[ListItem], close: &str) -> String {
+fn fmt_wrapped_list(cur: &mut Cur, head: &str, open: &str, open_line: usize, items: &[ListItem], close: &str) -> String {
     let outer = INDENT.repeat(cur.base);
     let inner = INDENT.repeat(cur.base + 1);
+    let start_of = |it: &ListItem| match it {
+        ListItem::Value(v) | ListItem::Named(_, v) => v.line,
+        ListItem::Pair(k, _) => k.line,
+    };
     let mut s = String::from(head);
     s.push_str(open);
+    // M324 (ray808 #10): un comentario tras la apertura (`[  // c`) con el primer elemento en la
+    // línea siguiente anota la lista: se queda pegado a la apertura. Si el primer elemento comparte
+    // línea, el comentario es suyo (lo pega el bucle).
+    if items.first().is_some_and(|it| start_of(it) > open_line) {
+        s.push_str(&cur.trailing_on(open_line));
+    }
     s.push('\n');
     cur.base += 1; // los elementos (y lo que se reparta DENTRO de ellos) viven un nivel más adentro
     for (i, item) in items.iter().enumerate() {
+        // M324 (ray808 #10): los comentarios en línea propia ENCIMA del elemento van encima de él.
+        s.push_str(&cur.flush_before(start_of(item), &inner));
         s.push_str(&inner);
         match item {
             ListItem::Value(v) => s.push_str(&fmt_expr(cur, v, 0)),
@@ -1742,7 +1760,7 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
                 if fields.len() > 1 && fs.iter().any(|f| f.contains('\n')) {
                     cur.i = save;
                     let items: Vec<ListItem> = fields.iter().map(|(n, v)| ListItem::Named(n.as_str(), v)).collect();
-                    return fmt_wrapped_list(cur, &format!("{} ", name), "{", &items, "}");
+                    return fmt_wrapped_list(cur, &format!("{} ", name), "{", e.line, &items, "}");
                 }
                 format!("{} {{ {} }}", name, fs.join(", "))
             }
@@ -2425,8 +2443,26 @@ mod tests {
         // una que cabe en una línea no es de ningún elemento: se aplana y el comentario sigue al `;`.
         let flat = "const B: [int] = [1, 2];  // pair\n";
         assert_eq!(format_source(flat).unwrap(), flat);
+        // M324: …y con el primer elemento en la línea siguiente, el comentario anota la lista y se
+        // queda pegado a la apertura (la lista sigue repartida, como estaba).
         let open = "const C: [int] = [  // opening\n    1,\n    2\n];\n";
-        assert_eq!(format_source(open).unwrap(), "const C: [int] = [1, 2];  // opening\n");
+        assert_eq!(format_source(open).unwrap(), open);
+        assert_eq!(format_source("const C: [int] = [1,  // one\n    2];\n").unwrap(), "const C: [int] = [\n    1,  // one\n    2\n];\n");
+    }
+
+    /// M324 (ray808 #10, segunda pasada): un comentario en LÍNEA PROPIA dentro de un literal que
+    /// cabría en una línea se quedaba fuera (tras el `;`); ahora la lista se reparte y el
+    /// comentario va encima de su elemento — también en argumentos y campos de struct.
+    #[test]
+    fn an_own_line_comment_inside_a_list_stays_above_its_element() {
+        let src = "struct P { x: int, y: int }\nfn main() {\n    let c = [1, 2,\n        // last\n        3];\n    let p = P {\n        // first\n        x: 1,\n        y: 2 };\n    print(c.len() + p.x);\n}\n";
+        let want = "struct P {\n    x: int,\n    y: int,\n}\n\nfn main() {\n    let c = [\n        1,\n        2,\n        // last\n        3\n    ];\n    let p = P {\n        // first\n        x: 1,\n        y: 2\n    };\n    print(c.len() + p.x);\n}\n";
+        let out = format_source(src).unwrap();
+        assert_eq!(out, want);
+        assert_eq!(format_source(&out).unwrap(), want, "idempotente");
+        // Sin comentarios dentro, una lista que cabe sigue plana.
+        let flat = "fn main() {\n    let c = [1, 2, 3];\n    print(c.len());\n}\n";
+        assert_eq!(format_source(flat).unwrap(), flat);
     }
 
     #[test]

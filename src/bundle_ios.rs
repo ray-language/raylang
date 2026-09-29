@@ -37,11 +37,13 @@ const APP_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 /// Con `UIScene`, el AppDelegate queda en el arranque del proceso; la ventana, el webview y
 /// `ray_start` viven en el SceneDelegate (el ciclo real es didFinishLaunching → connect).
 const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
+/*RAY_AUDIO_IMPORT*/
 
 @implementation AppDelegate
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    /*RAY_AUDIO_SESSION*/
     return YES;
 }
 
@@ -311,6 +313,10 @@ pub fn info_plist(extra: &[(String, crate::manifest::PlistValue)]) -> String {
             crate::manifest::PlistValue::Str(s) => format!("<string>{}</string>", esc(s)),
             crate::manifest::PlistValue::Bool(true) => "<true/>".to_string(),
             crate::manifest::PlistValue::Bool(false) => "<false/>".to_string(),
+            crate::manifest::PlistValue::Array(xs) => {
+                let items: String = xs.iter().map(|x| format!("<string>{}</string>", esc(x))).collect();
+                format!("<array>{items}</array>")
+            }
         };
         keys.push_str(&format!("  <key>{}</key>{value}\n", esc(k)));
     }
@@ -349,9 +355,18 @@ impl Signing {
     }
 }
 
+/// Las opciones del shell generado (M324): icono en el catálogo (ray808 #15) y audio en
+/// segundo plano (ray808 #18); `devtools` = M231.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShellOptions {
+    pub devtools: bool,
+    pub icon: bool,
+    pub background_audio: bool,
+}
+
 /// El xcconfig: TODO lo afinable vive aquí (el pbxproj solo lo referencia). La elección del
 /// `.a` por SDK es la pieza clave: dispositivo y simulador son ambos arm64.
-fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing) -> String {
+fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts: ShellOptions) -> String {
     let mut sign = String::new();
     if let Some(style) = &signing.style {
         sign.push_str(&format!("CODE_SIGN_STYLE = {style}\n"));
@@ -359,6 +374,12 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing) -> St
     if let Some(team) = &signing.team {
         sign.push_str(&format!("DEVELOPMENT_TEAM = {team}\n"));
     }
+    // M324 (ray808 #15): el icono del catálogo lo compila Xcode solo si el ajuste lo nombra.
+    if opts.icon {
+        sign.push_str("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n");
+    }
+    // M324 (ray808 #18): std/audio en iOS es AudioQueue (AudioToolbox); la sesión de fondo, AVFoundation.
+    let avf = if opts.background_audio { " -framework AVFoundation" } else { "" };
     format!(
         "// Generado por `ray bundle --ios` — ajusta aquí, no en el pbxproj.\n\
          PRODUCT_NAME = {name}\n\
@@ -377,15 +398,27 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing) -> St
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -lobjc\n\
+         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox{avf} -lobjc\n\
          {sign}"
     )
 }
 
-/// El pbxproj sintético: UN target de app, dos fases (Sources/Frameworks), configs Debug y
-/// Release colgando del xcconfig. UUIDs de 24 hex FIJOS (únicos dentro del archivo — es todo
-/// lo que Xcode exige); objectVersion 56 (aceptado por Xcode 14+).
-fn pbxproj(name: &str) -> String {
+/// El pbxproj sintético: UN target de app, tres fases (Sources/Frameworks/Resources), configs
+/// Debug y Release colgando del xcconfig. UUIDs de 24 hex FIJOS (únicos dentro del archivo — es
+/// todo lo que Xcode exige); objectVersion 56 (aceptado por Xcode 14+). M324 (ray808 #15): con
+/// icono, `Assets.xcassets` entra en el grupo Shell y en la fase Resources — antes el catálogo se
+/// escribía pero nada lo compilaba y la app salía con el icono genérico.
+fn pbxproj(name: &str, icon: bool) -> String {
+    let (res_file, res_build, res_child, res_files) = if icon {
+        (
+            "\t\t0000000000000000000000F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = \"<group>\"; };\n",
+            "\t\t0000000000000000000000B4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F9 /* Assets.xcassets */; };\n",
+            ", 0000000000000000000000F9",
+            "0000000000000000000000B4",
+        )
+    } else {
+        ("", "", "", "")
+    };
     format!(
         r##"// !$*UTF8*$!
 {{
@@ -397,7 +430,7 @@ fn pbxproj(name: &str) -> String {
 		0000000000000000000000B1 /* main.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F1 /* main.m */; }};
 		0000000000000000000000B2 /* AppDelegate.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F3 /* AppDelegate.m */; }};
 		0000000000000000000000B3 /* SceneDelegate.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* SceneDelegate.m */; }};
-		0000000000000000000000F1 /* main.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; }};
+{res_build}{res_file}		0000000000000000000000F1 /* main.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; }};
 		0000000000000000000000F2 /* AppDelegate.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; }};
 		0000000000000000000000F3 /* AppDelegate.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; }};
 		0000000000000000000000F4 /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};
@@ -407,10 +440,11 @@ fn pbxproj(name: &str) -> String {
 		0000000000000000000000F6 /* {name}.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "{name}.app"; sourceTree = BUILT_PRODUCTS_DIR; }};
 		0000000000000000000000E1 /* Frameworks */ = {{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }};
 		0000000000000000000000E2 /* Sources */ = {{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B1, 0000000000000000000000B2, 0000000000000000000000B3); runOnlyForDeploymentPostprocessing = 0; }};
-		0000000000000000000000A1 /* Shell */ = {{isa = PBXGroup; children = (0000000000000000000000F1, 0000000000000000000000F2, 0000000000000000000000F3, 0000000000000000000000F7, 0000000000000000000000F8, 0000000000000000000000F4); path = Shell; sourceTree = "<group>"; }};
+		0000000000000000000000E3 /* Resources */ = {{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({res_files}); runOnlyForDeploymentPostprocessing = 0; }};
+		0000000000000000000000A1 /* Shell */ = {{isa = PBXGroup; children = (0000000000000000000000F1, 0000000000000000000000F2, 0000000000000000000000F3, 0000000000000000000000F7, 0000000000000000000000F8, 0000000000000000000000F4{res_child}); path = Shell; sourceTree = "<group>"; }};
 		0000000000000000000000A2 /* Products */ = {{isa = PBXGroup; children = (0000000000000000000000F6); name = Products; sourceTree = "<group>"; }};
 		0000000000000000000000A3 = {{isa = PBXGroup; children = (0000000000000000000000A1, 0000000000000000000000F5, 0000000000000000000000A2); sourceTree = "<group>"; }};
-		0000000000000000000000D1 /* {name} */ = {{isa = PBXNativeTarget; buildConfigurationList = 0000000000000000000000C3; buildPhases = (0000000000000000000000E2, 0000000000000000000000E1); buildRules = (); dependencies = (); name = "{name}"; productName = "{name}"; productReference = 0000000000000000000000F6; productType = "com.apple.product-type.application"; }};
+		0000000000000000000000D1 /* {name} */ = {{isa = PBXNativeTarget; buildConfigurationList = 0000000000000000000000C3; buildPhases = (0000000000000000000000E2, 0000000000000000000000E1, 0000000000000000000000E3); buildRules = (); dependencies = (); name = "{name}"; productName = "{name}"; productReference = 0000000000000000000000F6; productType = "com.apple.product-type.application"; }};
 		0000000000000000000000D2 /* Project */ = {{isa = PBXProject; attributes = {{ LastUpgradeCheck = 1500; }}; buildConfigurationList = 0000000000000000000000C4; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = 0000000000000000000000A3; productRefGroup = 0000000000000000000000A2; projectDirPath = ""; projectRoot = ""; targets = (0000000000000000000000D1); }};
 		0000000000000000000000C1 /* Debug */ = {{isa = XCBuildConfiguration; baseConfigurationReference = 0000000000000000000000F5; buildSettings = {{ ONLY_ACTIVE_ARCH = YES; DEBUG_INFORMATION_FORMAT = dwarf; }}; name = Debug; }};
 		0000000000000000000000C2 /* Release */ = {{isa = XCBuildConfiguration; baseConfigurationReference = 0000000000000000000000F5; buildSettings = {{ }}; name = Release; }};
@@ -450,6 +484,13 @@ fn readme(name: &str) -> String {
   `mount_bytes`, no port, same as the desktop shells) or `http://127.0.0.1:<port>` from its
   embedded webserver. Lifecycle events arrive through `ui.next_event()` as kind="lifecycle",
   tag="background"/"foreground".
+- `[app] icon` in `ray.toml` becomes `Shell/Assets.xcassets/AppIcon.appiconset`, wired into the
+  Resources phase and `ASSETCATALOG_COMPILER_APPICON_NAME` (regenerate after changing it).
+- `std/audio` plays through AudioQueue (AudioToolbox) on iOS too. With `[ios] background_audio =
+  true` the shell activates an `AVAudioSession` of category `playback` at launch and the
+  Info.plist declares `UIBackgroundModes = ["audio"]`: the program keeps running and sounding
+  when the app goes to the background (and with the silent switch on). Without it, iOS suspends
+  the process a few seconds after `lifecycle`/`background`.
 "#)
 }
 
@@ -463,7 +504,8 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_ios_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), devtools, &[]).unwrap();
+            let opts = super::ShellOptions { devtools, ..Default::default() };
+            super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), opts, &[]).unwrap();
             let src = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
             assert_eq!(src.contains("rayWebView.inspectable = YES"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -478,9 +520,10 @@ pub fn write_project(
     bundle_id: &str,
     version: &str,
     signing: &Signing,
-    devtools: bool,
+    opts: ShellOptions,
     plist_extra: &[(String, crate::manifest::PlistValue)],
 ) -> Result<(), String> {
+    let ShellOptions { devtools, icon, background_audio } = opts;
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -490,7 +533,24 @@ pub fn write_project(
     };
     write("Shell/main.m", MAIN_M)?;
     write("Shell/AppDelegate.h", APP_DELEGATE_H)?;
-    write("Shell/AppDelegate.m", APP_DELEGATE_M)?;
+    // M324 (ray808 #18): con `[ios] background_audio`, la sesión de audio `playback` se activa al
+    // arrancar — sin ella iOS corta el audio al pasar a segundo plano (categoría ambient por
+    // defecto) y con el interruptor de silencio. El modo de fondo va en el Info.plist (el llamador
+    // añade `UIBackgroundModes`).
+    let (audio_import, audio_session) = if background_audio {
+        (
+            "#import <AVFoundation/AVFoundation.h>",
+            "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] background_audio\n    \
+             [session setCategory:AVAudioSessionCategoryPlayback error:nil];\n    \
+             [session setActive:YES error:nil];",
+        )
+    } else {
+        ("", "")
+    };
+    write(
+        "Shell/AppDelegate.m",
+        &APP_DELEGATE_M.replace("/*RAY_AUDIO_IMPORT*/\n", &format!("{audio_import}\n")).replace("/*RAY_AUDIO_SESSION*/", audio_session),
+    )?;
     write("Shell/SceneDelegate.h", SCENE_DELEGATE_H)?;
     // M231: `--devtools` → `inspectable` (iOS 16.4+): el Web Inspector de Safari (menú Develop del
     // Mac) inspecciona la app en el dispositivo o el simulador. Nunca en un build sin el flag.
@@ -501,8 +561,8 @@ pub fn write_project(
     };
     write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
     write("Shell/Info.plist", &info_plist(plist_extra))?;
-    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing))?;
-    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name))?;
+    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, opts))?;
+    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon))?;
     write("README.md", &readme(name))?;
     Ok(())
 }
@@ -544,7 +604,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn the_message_handler_only_listens_to_the_main_frame() {
         // M159: la guarda de frames — un iframe no alcanza el puente ni a mano.
         assert!(SCENE_DELEGATE_M.contains("if (!message.frameInfo.isMainFrame)"), "isMainFrame guard");
@@ -571,16 +630,55 @@ mod tests {
         assert!(SCENE_DELEGATE_M.contains("if (![self->_stopped containsObject:key]) {\n            [task didFinish];"));
     }
 
+    /// M324 (ray808 #15): con icono, el catálogo entra en el pbxproj (grupo + fase Resources) y el
+    /// xcconfig nombra el AppIcon; sin icono, ni rastro (un catálogo referenciado y ausente rompe el build).
+    #[test]
+    fn the_icon_is_wired_into_the_project_only_when_present() {
+        let with = pbxproj("Demo", true);
+        assert!(with.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B4)"), "{with}");
+        assert!(with.contains("path = Assets.xcassets; sourceTree"), "{with}");
+        assert!(with.contains("0000000000000000000000F4, 0000000000000000000000F9); path = Shell"), "{with}");
+        assert!(with.contains("buildPhases = (0000000000000000000000E2, 0000000000000000000000E1, 0000000000000000000000E3)"), "{with}");
+        let without = pbxproj("Demo", false);
+        assert!(!without.contains("Assets.xcassets"), "{without}");
+        assert!(without.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ()"), "{without}");
+        let opts = ShellOptions { icon: true, ..Default::default() };
+        assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
+        assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default()).contains("ASSETCATALOG"));
+    }
+
+    /// M324 (ray808 #18): `[ios] background_audio` activa la sesión `playback` en el AppDelegate y
+    /// enlaza AVFoundation; AudioToolbox (std/audio) se enlaza siempre. El plist admite arrays.
+    #[test]
+    fn background_audio_configures_the_session_and_the_frameworks() {
+        let base = std::env::temp_dir().join(format!("ray_ios_audio_{}", std::process::id()));
+        for (bg, want) in [(true, true), (false, false)] {
+            let _ = std::fs::remove_dir_all(&base);
+            let opts = ShellOptions { background_audio: bg, ..Default::default() };
+            write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+            let src = std::fs::read_to_string(base.join("Shell/AppDelegate.m")).unwrap();
+            assert_eq!(src.contains("[session setCategory:AVAudioSessionCategoryPlayback error:nil];"), want, "bg={bg}");
+            assert_eq!(src.contains("#import <AVFoundation/AVFoundation.h>"), want, "bg={bg}");
+            assert!(!src.contains("/*RAY_AUDIO"), "sin marcadores: {src}");
+            let cfg = std::fs::read_to_string(base.join("App.xcconfig")).unwrap();
+            assert_eq!(cfg.contains("-framework AVFoundation"), want, "bg={bg}");
+            assert!(cfg.contains("-framework AudioToolbox"), "std/audio siempre enlazable");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+        let p = info_plist(&[("UIBackgroundModes".to_string(), crate::manifest::PlistValue::Array(vec!["audio".to_string()]))]);
+        assert!(p.contains("<key>UIBackgroundModes</key><array><string>audio</string></array>"), "{p}");
+    }
+
     #[test]
     fn the_xcconfig_carries_the_resolved_signing() {
         let s = Signing { team: Some("ABC123".into()), style: Some("Automatic".into()) };
-        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s);
+        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s, ShellOptions::default());
         assert!(text.contains("DEVELOPMENT_TEAM = ABC123"), "{text}");
         assert!(text.contains("CODE_SIGN_STYLE = Automatic"), "{text}");
         // Y el round-trip: lo que el bundle escribe, la siguiente regeneración lo preserva.
         let back = Signing::from_xcconfig(&text);
         assert_eq!(back.team.as_deref(), Some("ABC123"));
-        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default());
+        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default());
         assert!(!bare.contains("DEVELOPMENT_TEAM"), "{bare}");
     }
 }

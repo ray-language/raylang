@@ -84,7 +84,9 @@ fn main() -> int {
 ```
 
 `print` es un **builtin** (imprime cualquier valor imprimible + un salto de línea). Un archivo suelto se
-ejecuta con `ray run archivo.ray`; los argumentos tras el archivo llegan al programa vía `args()`:
+ejecuta con `ray run archivo.ray`; los argumentos tras el archivo llegan al programa vía `args()`
+(solo ellos: ni `ray` ni el archivo). `ray help` lista los subcomandos y `ray <subcomando> --help`
+imprime el uso de uno:
 
 ```sh
 ray run saluda.ray Ada Grace     # args() == ["Ada", "Grace"]
@@ -1398,7 +1400,7 @@ los assets de `[native] embed` dentro) y lo deja en el formato del SO:
 ```sh
 ray bundle                            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
                                       #   nombre/icono/id: [app] name/icon/id del ray.toml (o --name/--icon/--id)
-                                      #   [app.plist] → claves extra del Info.plist; el permiso de red local
+                                      #   [app.plist] → claves extra del Info.plist (cadena, bool o array de cadenas); el permiso de red local
                                       #   (NSLocalNetworkUsageDescription) se añade solo si el programa usa la red
                                       # Linux: MiApp/ con el binario + MiApp.desktop
                                       # Windows: MiApp con MiApp.exe (icono y versión embebidos,
@@ -1418,14 +1420,41 @@ reescribe; desde M309 el bundle rescata ese `DEVELOPMENT_TEAM` del pbxproj anter
 xcconfig, pero la fuente de verdad es el xcconfig o el `ray.toml`. Y tras cambiar solo el
 programa o el frontend no hace falta regenerar: `ray build --native --lib --release --target
 aarch64-apple-ios -o <App>-ios/libs/libray_app.a` deja el proyecto Xcode intacto. `--ios` excluye `process` (fork/exec denegado en
-iOS) y `audio` (backend sin validar ahí).
+iOS). Con `--ios-target sim` (o `device`) el `.a` del otro lado se conserva del proyecto
+anterior, y desde M324 el bundle comprueba con `nm` que ese `.a` exporta lo que el shell
+recién generado llama: si viene de un raylang anterior, avisa con el `ray build --native --lib`
+exacto para recompilarlo (antes Xcode fallaba con «Undefined symbol»). El icono de `[app] icon`
+va al catálogo `Shell/Assets.xcassets` y desde M324 el pbxproj lo compila (fase Resources +
+`ASSETCATALOG_COMPILER_APPICON_NAME`): la app sale con su icono, no con el genérico.
+
+**Sonido y segundo plano en el teléfono** (M324). `std/audio` suena en iOS por AudioQueue (el
+mismo backend que en macOS; el shell enlaza `AudioToolbox`). Por defecto iOS corta el audio y
+suspende el proceso al pasar la app a segundo plano; para que un reproductor o una caja de
+ritmos escrita con `std/audio` siga sonando, declara en el `ray.toml`:
+
+```toml
+[ios]
+background_audio = true       # AVAudioSession «playback» al arrancar + UIBackgroundModes = ["audio"]
+                              # (también suena con el interruptor de silencio)
+
+[android]
+background_audio = true       # foreground service de reproducción mientras la app está en segundo plano
+                              # (notificación «Playing in the background»; se retira al volver)
+```
+
+En iOS el programa (sus fibras, su `audio.write`) sigue corriendo mientras haya audio
+reproduciéndose; en Android el servicio evita que el sistema mate el proceso. Los timers de
+JavaScript del webview sí se congelan en segundo plano en ambos: el secuenciador debe vivir en
+el programa raylang (`std/audio` con `open_latency`/`write`/`played_ms`), no en la página.
+`[app.plist]` admite además arrays de cadenas (`UIBackgroundModes = ["audio", "fetch"]`) si
+necesitas otros modos.
 
 Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — shell Java con
 WebView que carga el programa como `.so` (los símbolos JNI viajan dentro del cdylib; el puente
 `ray_start`/handlers es el mismo de iOS). `gradle assembleDebug` produce el APK; `adb install`
 + lanzar; el stdout del programa va a **logcat** con tag `ray`. El puente IPC (`window.ray.send`)
 y los eventos `lifecycle` funcionan igual que en las otras plataformas, y `std/audio` suena
-por AAudio (a diferencia de iOS, `--android` no lo excluye); `--android-abi
+por AAudio (`[android] background_audio = true` lo mantiene en segundo plano, arriba); `--android-abi
 arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64). Con `--icon
 icon.png` (M160) la app gana su icono de launcher (los `mipmap-*` multi-densidad, vía sips;
 Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (keytool) y un

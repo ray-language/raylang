@@ -18,11 +18,13 @@
 use std::path::{Path, PathBuf};
 
 /// El manifiesto parseado de un proyecto.
-/// Un valor de `[app.plist]` (M209): cadena o booleano.
+/// Un valor de `[app.plist]` (M209): cadena, booleano o, desde M324 (ray808 #18), un array de
+/// cadenas (`UIBackgroundModes = ["audio"]`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlistValue {
     Str(String),
     Bool(bool),
+    Array(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +119,14 @@ pub struct Manifest {
     /// cada regeneración borraba el team elegido en Xcode. `None` = sin firma declarada (el
     /// bundle además PRESERVA la firma de un xcconfig existente).
     pub ios_development_team: Option<String>,
+    /// M324 (ray808 #18): `[ios] background_audio = true` — el shell activa la sesión de audio
+    /// `playback` al arrancar y el Info.plist declara `UIBackgroundModes = ["audio"]`: el programa
+    /// (y su `std/audio`) sigue sonando con la app en segundo plano y con el interruptor de silencio.
+    pub ios_background_audio: bool,
+    /// M324 (ray808 #18): `[android] background_audio = true` — al pasar a segundo plano el shell
+    /// arranca un *foreground service* de reproducción (notificación mientras dura) para que el
+    /// sistema no mate el proceso; lo para al volver.
+    pub android_background_audio: bool,
 }
 
 impl Manifest {
@@ -200,6 +210,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut dev_listen = None;
     let mut frontend: Option<Frontend> = None;
     let mut ios_development_team = None;
+    let mut ios_background_audio = false;
+    let mut android_background_audio = false;
     let mut app_copyright = None;
     let mut app_name = None;
     let mut app_icon = None;
@@ -241,6 +253,11 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         // La mayoría de valores son cadenas `"..."`; `[fmt] indent_size` admite un entero sin comillas.
         let as_string = || unquote_string(value_raw)
             .ok_or_else(|| err(num, "the value must be in double quotes"));
+        let as_bool = || match value_raw {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(err(num, "the value must be true or false")),
+        };
         match section.as_str() {
             "package" => match key {
                 "name" => name = Some(as_string()?),
@@ -319,25 +336,29 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "entitlements" => app_entitlements = Some(as_string()?),
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
-            "android" => {
-                // M156: `application_id = "com.tuorg.app"` — el id del APK generado; otras
-                // claves de [android] se ignoran por ahora (extensibilidad).
-                if key == "application_id" {
-                    android_application_id = Some(as_string()?);
-                }
-            }
-            "ios" => {
-                // M151: `development_team = "ABCDE12345"` — el team de firma para `ray bundle
-                // --ios`; otras claves de [ios] se ignoran por ahora (extensibilidad).
-                if key == "development_team" {
-                    ios_development_team = Some(as_string()?);
-                }
-            }
-            // M209: `[app.plist]` — cada clave va al Info.plist tal cual (cadena o bool).
+            "android" => match key {
+                // M156: `application_id = "com.tuorg.app"` — el id del APK generado.
+                "application_id" => android_application_id = Some(as_string()?),
+                // M324 (ray808 #18): foreground service de reproducción en segundo plano.
+                "background_audio" => android_background_audio = as_bool()?,
+                _ => {} // otras claves de [android] se ignoran por ahora (extensibilidad)
+            },
+            "ios" => match key {
+                // M151: `development_team = "ABCDE12345"` — el team de firma para `ray bundle --ios`.
+                "development_team" => ios_development_team = Some(as_string()?),
+                // M324 (ray808 #18): sesión `playback` + UIBackgroundModes audio en el shell.
+                "background_audio" => ios_background_audio = as_bool()?,
+                _ => {} // otras claves de [ios] se ignoran por ahora (extensibilidad)
+            },
+            // M209: `[app.plist]` — cada clave va al Info.plist tal cual (cadena, bool o, M324,
+            // array de cadenas).
             "app.plist" => {
                 let value = match value_raw {
                     "true" => PlistValue::Bool(true),
                     "false" => PlistValue::Bool(false),
+                    v if v.starts_with('[') => PlistValue::Array(
+                        parse_string_array(v).ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"audio\"]"))?,
+                    ),
                     _ => PlistValue::Str(as_string()?),
                 };
                 app_plist.push((key.to_string(), value));
@@ -364,6 +385,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         dev_listen,
         frontend,
         ios_development_team,
+        ios_background_audio,
+        android_background_audio,
         android_application_id,
         app_copyright,
         app_name,
@@ -545,7 +568,7 @@ mod tests {
         assert!(bare.app_name.is_none() && bare.app_icon.is_none() && bare.app_id.is_none());
         // M209: [app.plist] — claves extra del Info.plist, cadena o bool, en orden.
         let m = parse_src(
-            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app.plist]\nNSLocalNetworkUsageDescription = \"Talks to devices nearby\"\nLSUIElement = true\n",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app.plist]\nNSLocalNetworkUsageDescription = \"Talks to devices nearby\"\nLSUIElement = true\nUIBackgroundModes = [\"audio\", \"fetch\"]\n\n[ios]\nbackground_audio = true\n\n[android]\nbackground_audio = false\n",
         )
         .unwrap();
         assert_eq!(
@@ -553,9 +576,14 @@ mod tests {
             vec![
                 ("NSLocalNetworkUsageDescription".to_string(), PlistValue::Str("Talks to devices nearby".to_string())),
                 ("LSUIElement".to_string(), PlistValue::Bool(true)),
+                // M324 (ray808 #18): arrays de cadenas.
+                ("UIBackgroundModes".to_string(), PlistValue::Array(vec!["audio".to_string(), "fetch".to_string()])),
             ]
         );
-        assert!(bare.app_plist.is_empty());
+        assert!(m.ios_background_audio && !m.android_background_audio);
+        assert!(bare.app_plist.is_empty() && !bare.ios_background_audio && !bare.android_background_audio);
+        let bad = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground_audio = \"yes\"\n");
+        assert!(bad.unwrap_err().contains("must be true or false"));
     }
 
     #[test]

@@ -142,7 +142,8 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Builtins as values (1.27.14): `xs.map(to_string)` works wherever a function type is expected
   (a `let` with a function-type annotation, a function parameter); `let g = to_string` alone
   needs the annotation.
-- Arrays: `xs.slice(from, to)` (clamped copy, 1.27.14): `args().slice(1, args().len())`.
+- Arrays: `xs.slice(from, to)` (clamped copy, 1.27.14): `xs.slice(1, xs.len())` = all but the first.
+- `args()` is ONLY the program's arguments: neither `ray` nor the file (`ray run f.ray a b` → `["a", "b"]`; in a native binary, `./f a b` → the same). Do not skip its first element.
 - Bitwise `&`/`|`/`^` bind LOOSER than `==` (C-style): write `(a & b) == c`.
 - Core builtins (`print`, `to_string`, `panic`…) cannot be redefined. A top-level function of
   the root module MAY redefine a prelude function (`get`, `sort`, `index_of`, `map`…) and the
@@ -321,7 +322,12 @@ five shells (macOS/WebKitGTK/WebView2 and, since 1.27.17, iOS/Android: Android l
 the alias `https://app.ray.invalid/…` so `fetch()` works; a shell generated with an older raylang
 only loads `http://127.0.0.1:<port>` from the embedded server — use `web.listen_local`/
 `local_limits` there — and `ui.reply_json` needs a shell ≥ 1.12.1: regenerate with
-`ray bundle --ios/--android`); menus:
+`ray bundle --ios/--android`); sound on the phone: `std/audio` plays on iOS too (AudioQueue,
+1.27.19) and `ray bundle --ios` no longer excludes it; to keep playing in the background put
+`[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes) and/or
+`[android] background_audio = true` (foreground service) in ray.toml — the webview's JS timers
+freeze in the background, so a sequencer belongs in the raylang program, not in the page;
+`[app.plist]` values may be strings, booleans or string arrays; menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;

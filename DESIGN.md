@@ -15557,3 +15557,22 @@ true`, `lifecycle foreground`, `Assets.car`/`CFBundleIcons`/`UIBackgroundModes` 
 aviso de [14] con una `libs/libray_app.a` falsa. NO verificado: que el audio siga de verdad al
 pasar a segundo plano (pide dispositivo o gesto de Home; ray808 lo medirá), ni el servicio
 Android en emulador.
+
+## 307. M325 — La regresión Android de 1.27.19 (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #99, el mismo día de la release. M324 hizo que `MainActivity`
+llamara a `RayPlaybackService.start/stop` tras la constante `RAY_BACKGROUND_AUDIO`, pero escribía
+la clase solo con `[android] background_audio = true`: Java resuelve el símbolo aunque la rama sea
+muerta, y **ningún proyecto Android sin el flag compilaba**. La verificación de M324 pasó `javac`
+únicamente con el flag encendido — el caso que estaba estrenando — y no el caso por defecto. La
+lección va al método: una plantilla con una opción se compila con la opción en sus DOS valores.
+Ahora la clase se escribe siempre (el `<service>` del manifiesto y los permisos siguen bajo el
+flag) y `javac` corre con `false` y `true`, más un `gradle assembleDebug` del proyecto sin flag.
+
+Lo segundo del hallazgo era de diseño: pedir `POST_NOTIFICATIONS` al arrancar abre un diálogo
+que pausa la actividad, y el programa veía `lifecycle` `foreground` y enseguida `background` sin
+que el usuario saliera. En Android 13+ un foreground service sin ese permiso corre igual —
+solo no muestra su notificación — así que la petición sobra: fuera. Quien quiera la
+notificación la concede en Ajustes; el manifiesto sigue declarando el permiso para que aparezca
+allí. (Cualquier diálogo del sistema seguirá produciendo ese par de eventos: es la semántica de
+`onPause`/`onResume`, no un fallo del shell.)

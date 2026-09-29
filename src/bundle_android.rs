@@ -96,7 +96,6 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -126,7 +125,6 @@ public class MainActivity extends Activity {
     // M324 (ray808 #18): `[android] background_audio` — foreground service mientras la app está
     // en segundo plano, para que el sistema no mate el proceso (y con él std/audio).
     static final boolean RAY_BACKGROUND_AUDIO = /*RAY_BACKGROUND_AUDIO*/false;
-    private static final int RAY_NOTIFICATIONS = 7002;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -193,10 +191,6 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(web);
-        if (RAY_BACKGROUND_AUDIO && Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, RAY_NOTIFICATIONS);
-        }
         RayBridge.attach(web);
         if (RayBridge.lastUrl != null) {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
@@ -242,6 +236,11 @@ public class MainActivity extends Activity {
 /// M324 (ray808 #18): el foreground service de reproducción. Vive SOLO mientras la app está en
 /// segundo plano (MainActivity lo arranca en onPause y lo para en onResume): la notificación
 /// «playing» es el precio que Android pide por no matar el proceso. Tocarla vuelve a la app.
+/// M325 (findings #99): la clase se escribe SIEMPRE (MainActivity la referencia tras la constante
+/// `RAY_BACKGROUND_AUDIO`; sin ella el proyecto no compilaba) y el permiso POST_NOTIFICATIONS no
+/// se pide al arrancar: el diálogo pausaba la actividad y el programa veía un `lifecycle`
+/// `background` fantasma. Sin el permiso (Android 13+) el servicio corre igual, solo que sin
+/// notificación visible; el usuario puede concederlo en Ajustes.
 const RAY_PLAYBACK_SERVICE_JAVA: &str = r#"package org.raylang.shell;
 
 import android.app.Notification;
@@ -677,9 +676,9 @@ pub fn write_project(
     let bg = if background_audio { "true" } else { "false" };
     let main = MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line).replace("/*RAY_BACKGROUND_AUDIO*/false", bg);
     write("app/src/main/java/org/raylang/shell/MainActivity.java", &main)?;
-    if background_audio {
-        write("app/src/main/java/org/raylang/shell/RayPlaybackService.java", RAY_PLAYBACK_SERVICE_JAVA)?;
-    }
+    // M325 (findings #99): siempre — MainActivity la referencia (tras la constante) y sin la clase
+    // `gradle assembleDebug` fallaba con «cannot find symbol: variable RayPlaybackService».
+    write("app/src/main/java/org/raylang/shell/RayPlaybackService.java", RAY_PLAYBACK_SERVICE_JAVA)?;
     write("app/src/main/java/org/raylang/shell/RayBridge.java", RAY_BRIDGE_JAVA)?;
     write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
     write("README.md", README)?;
@@ -768,7 +767,9 @@ mod tests {
             let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
             assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
-            assert_eq!(base.join("app/src/main/java/org/raylang/shell/RayPlaybackService.java").is_file(), want, "bg={bg}");
+            // M325 (findings #99): la clase existe SIEMPRE (MainActivity la referencia).
+            assert!(base.join("app/src/main/java/org/raylang/shell/RayPlaybackService.java").is_file(), "bg={bg}");
+            assert!(!main.contains("requestPermissions"), "sin diálogo de permisos al arrancar (findings #99)");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -1131,6 +1131,18 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
             bounds: [Bound { param: "T", trait_name: "Eq" }, Bound { param: "T", trait_name: "Show" }]
         }
     );
+    // M326 (findings #105): assert_eq_msg<T: Eq + Show>(a: T, b: T, msg: string).
+    inject_fn(
+        c,
+        prog,
+        "assert_eq_msg",
+        FnSig {
+            params: [t, t, Type.TString],
+            ret: Type.TUnit,
+            type_params: ["T"],
+            bounds: [Bound { param: "T", trait_name: "Eq" }, Bound { param: "T", trait_name: "Show" }]
+        }
+    );
     inject_fn(
         c,
         prog,

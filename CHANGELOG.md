@@ -4,6 +4,29 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Cuarto barrido de `RAYLANG-FINDINGS.md`** (M326, hallazgos #100–#105, que reabrían #7, #11,
+  #17, #21, #35 y #13):
+  - **Constantes de módulo** (#100, app 1942): `pub const X: [int] = [B, 3]` en un módulo no raíz
+    compila; el loader cualifica las referencias dentro del valor de una `const` como hace en los
+    cuerpos de función (antes solo funcionaba en `main.ray`).
+  - **`ray doc <archivo>`** (#101, raypass) lista las `pub const` en una sección «Constantes» con
+    su valor literal, como ya hacían `ray doc <símbolo>` y el MCP.
+  - **`web.listen`** (#102, raydevbox): la documentación y el README decían «el builder corre por
+    conexión»; corre **por petición** (`net/webserver.serve_with` crea el handler en la tarea de
+    cada petición, keep-alive incluido). Doc corregida y `net/pool` como respuesta canónica;
+    `web` 0.4.6.
+  - **`audio.open_latency`** (#103, 1942 y rallyx) encola de verdad ~la latencia pedida: el
+    presupuesto se reparte entre el socket del programa (½), el anillo del backend (¼) y los
+    buffers del dispositivo (¼). Antes cada etapa recibía la latencia entera y `open_latency(…,
+    200)` encolaba ~600 ms; ahora ~250 ms a 22 050 Hz mono y ~170–210 ms a 44 100 Hz estéreo
+    (VM y nativo). A tasas bajas mandan los suelos por etapa (~2 KiB).
+  - **`fs.sync_data`** (#104, raykv y rayq) es barato en macOS por fin: la std de Rust implementa
+    `sync_data` con `F_FULLFSYNC` en Apple, igual que `sync`, así que M307 no abarataba nada
+    (208 vs 210 ops/s); ahora llama a `fsync(2)` a secas: ~11 000–14 000 ops/s (VM y nativo).
+  - **`assert_eq_msg(a, b, msg)`** (#105, msg): `assert_eq failed: <msg>: <a> != <b>`.
+
 ## 1.27.20 — 2026-09-29
 
 - **Regresión de 1.27.19 en `ray bundle --android`** (M325, `RAYLANG-FINDINGS.md` #99): un

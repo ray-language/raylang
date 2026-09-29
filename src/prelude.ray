@@ -1225,6 +1225,16 @@ fn assert_eq<T: Eq + Show>(a: T, b: T) {
     }
 }
 
+// M326 (findings #105): la variante con mensaje — `assert_eq_msg(mode, 384, "permission bits")`
+// dice QUÉ se comparaba cuando los valores solos no lo cuentan (`420 != 384`).
+/// Like `assert_eq`, with a message that names what is being compared:
+/// `assert_eq failed: <msg>: <a> != <b>`.
+fn assert_eq_msg<T: Eq + Show>(a: T, b: T, msg: string) {
+    if (!a.eq(b)) {
+        panic("assert_eq failed: " + msg + ": " + a.show() + " != " + b.show());
+    }
+}
+
 // --- map/filter/fold EAGER sobre arreglos (M7.3) ---
 // Estas funciones libres son la cara ERGONÓMICA de la operación: `xs.map(f)` (con `xs: [T]`) devuelve
 // directamente un `[U]` indexable, sin `.iter()`/`.collect()`. M62.1: son BUCLES DIRECTOS otra vez —

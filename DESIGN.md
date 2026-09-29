@@ -15576,3 +15576,59 @@ solo no muestra su notificación — así que la petición sobra: fuera. Quien q
 notificación la concede en Ajustes; el manifiesto sigue declarando el permiso para que aparezca
 allí. (Cualquier diálogo del sistema seguirá produciendo ese par de eventos: es la semántica de
 `onPause`/`onResume`, no un fallo del shell.)
+
+## 308. M326 — Cuarto barrido de `RAYLANG-FINDINGS.md`: lo que se dio por resuelto sin estarlo (sep 2026)
+
+Origen: hallazgos #100–#105 (29 sep 2026), cada uno «ver #N» a un hallazgo antiguo marcado ✅
+en IDEAS. El patrón común, y la lección del arco: cuatro arcos anteriores verificaron el caso
+que estaban estrenando y no el que la app había reportado.
+
+**[100 ← 7] La `const` de módulo.** M307 admitió referencias a otras constantes y lo probó en
+`main.ray`. En un módulo no raíz el loader namespaca las constantes (`tables::B`) y reescribe las
+referencias de los cuerpos de función — pero nunca recorrió el VALOR de las constantes, así que
+`[B, 3]` llegaba al checker con `B` a secas y el mapa solo tenía `tables::B`. Una línea en
+`resolve_module` (el valor de cada `const` pasa por `resolve_expr`) y el nombre inyectado en los
+tres motores ya es el global. Test en `cli_cli` sobre un proyecto de dos módulos.
+
+**[101 ← 11] `ray doc` y sus dos modos.** M305 puso las constantes en el modo símbolo (`ray doc
+mod.CONST`, el MCP) y no en el Markdown de `ray doc <archivo>`, que es lo que raypass usaba.
+Sección «Constantes» con la misma `const_signature` (ahora en `raydoc`, el MCP la importa).
+
+**[102 ← 17] Por conexión o por petición.** M299 escribió en la doc de `web.listen` y en el
+README que el builder corre «una vez por conexión». El código de `net/webserver.serve_with` dice
+lo contrario en su propio comentario: cada petición corre en una tarea nueva (aislamiento
+panic→500) y el handler nace dentro; construir por conexión exigiría `catch_unwind` en el
+nativo, y quedó diferido. raydevbox lo midió: 7 peticiones, 7 `BUILD`. Se corrige la doc para que
+diga lo que pasa y remita a `net/pool` o a la fibra dueña; el handler por conexión sigue como
+propuesto, no como promesa.
+
+**[103 ← 21] El presupuesto de latencia sin repartir.** M298 acotó el socket entre programa y
+alimentador a la latencia pedida y midió que «ya no había suelo de 64 KiB»: cierto, pero el
+backend de CoreAudio guardaba OTRA latencia entera en su anillo más tres buffers de ¼, y ALSA/
+WASAPI pedían ½ al dispositivo. Total ≈ 2,75–3× (sonda: 200 → 600 ms). Ahora la latencia es el
+total y se reparte: socket ½, anillo ¼, buffers ¼ (CoreAudio), con suelos de ~2 KiB por etapa
+que mandan a tasas bajas (22 050 Hz mono con 30 ms pedidos → ~120–140 ms; es el coste por
+syscall, documentado). Medido tras el cambio: 200 → 250 ms, 1000 → 1000–1010 ms, 44 100 Hz
+estéreo 200 → 170–210 ms, en VM y nativo.
+
+**[104 ← 35] `sync_data` que no era más barato.** M307 llamó a `File::sync_data` asumiendo
+`fdatasync`. En Apple la std de Rust lo implementa con `F_FULLFSYNC`, exactamente igual que
+`sync_all`; la doc prometía «mucho más barato» y la sonda daba 208 frente a 210 ops/s. Ahora en
+Apple se llama a `fsync(2)` a secas (entrega al disco sin vuelco de la caché de la unidad, que
+es lo que la doc describe), en `builtins` y en el espejo del transpilador: ~12 000–14 000 ops/s.
+El contrato no cambia: un corte de luz puede perder lo último; `sync` en los checkpoints.
+
+**[105 ← 13] `assert_eq_msg`.** Cinco líneas de prelude más su inyección en el selfhost:
+`assert_eq failed: permission bits: 420 != 384`.
+
+**Lo que queda propuesto.** #106 (hot reload del programa en el teléfono) es un arco propio.
+#107 (despertar entre hilos) trae un dato nuevo de este arco: la sonda nativa da ~3,3 µs por ida
+y vuelta a un actor en macOS, `RAYLANG_THREADS=1` no lo cambia, y **la VM hace lo mismo en
+1,8 µs**. El scheduler nativo paga un despertar por tubería aunque emisor y receptor compartan
+worker; es rendimiento medible (territorio de M319), no un bug, y va como propuesto con la
+sonda como punto de partida.
+
+**Verificación.** Unitarios (raydoc, mcp), `cli_cli` (constantes de módulo, `assert_eq_msg`),
+las tres sondas (audio, fs, actor) en VM y nativo, `javac` no aplica. Y una regla para el método:
+cuando un hallazgo dice «en la app X», la verificación reproduce el caso de la app, no el
+ejemplo mínimo del arco.

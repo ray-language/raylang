@@ -40,11 +40,13 @@ fn main() -> int {
 - **Despliegue**: `listen` (keep-alive + límites por defecto + panic-del-handler→500, herencia de
   `webserver.serve`), `listen_tls(cert, key)` (HTTPS, M56.3), `listen_graceful(drain_ms)` (apagado
   ordenado con SIGTERM/SIGINT, M88.1b) y `listen_limits(webserver.Limits)`.
-  ⚠️ El **builder corre por CONEXIÓN**: `listen(build_app, …)` llama a `build_app()` en la fibra de
-  cada conexión (y la usa para todas sus peticiones keep-alive). No abras recursos dentro del
-  builder —una conexión SQLite, un archivo, un cliente— o tendrás una fuga por conexión (raydevbox:
-  200 peticiones = 201 ficheros abiertos). El estado compartido va en una fibra dueña a la que los
-  handlers hablan por canal (MANUAL §15, patrón actor), o se abre en el handler y se cierra al salir.
+  ⚠️ El **builder corre por PETICIÓN**: `listen(build_app, …)` llama a `build_app()` en la tarea de
+  cada petición (también las keep-alive de una misma conexión: el aislamiento panic→500 corre cada
+  una en una tarea nueva). No abras recursos dentro del builder —una conexión SQLite, un archivo,
+  un cliente— o tendrás una fuga por petición (raydevbox: 200 peticiones = 201 ficheros abiertos).
+  El estado compartido va en una fibra dueña a la que los handlers hablan por canal (MANUAL §15,
+  patrón actor) o en un `net/pool` (`pool_with`/`pool_tx`), o se abre en el handler y se cierra al
+  salir.
 
 ## Instalación
 

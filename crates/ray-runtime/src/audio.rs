@@ -142,11 +142,16 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
         }
         let (fd_r, fd_w) = (fds[0], fds[1]);
-        // M298 (#21): la cola entre el programa y el alimentador se acota a la latencia pedida —
-        // es lo que hace que `open_latency` dimensione DE VERDAD lo encolado (antes el pipe del SO
+        // M298 (#21): la cola entre el programa y el alimentador se acota (antes el pipe del SO
         // ponía un suelo de 64 KiB). Los dos buffers, en los dos extremos: en BSD manda el de
         // recepción del par; en Linux, el de envío del emisor.
-        let budget = (bytes_per_sec * latency_ms / 1000).max(MIN_QUEUE_BYTES) as i32;
+        // M326 (findings #103): la latencia pedida es el TOTAL encolado, y hay tres etapas — este
+        // socket, el anillo del backend y los buffers del dispositivo. M298 daba la latencia entera
+        // al socket y el backend guardaba otro tanto (CoreAudio: anillo 1× + 3 buffers de ¼), así
+        // que `open_latency(…, 200)` encolaba ~600 ms. Reparto: socket ½, backend ½ (anillo ¼ +
+        // buffers ¼ en CoreAudio; ALSA/WASAPI ya pedían ½ al dispositivo). Nunca menos de dos
+        // chunks del alimentador, para que el flujo no se corte por el propio reparto.
+        let budget = (bytes_per_sec * latency_ms / 2000).max(MIN_QUEUE_BYTES).max(chunk as i64 * 2) as i32;
         unsafe {
             let v = &budget as *const i32 as *const core::ffi::c_void;
             for fd in [fd_r, fd_w] {
@@ -547,12 +552,15 @@ mod coreaudio {
             bits_per_channel: 16,
             reserved: 0,
         };
-        // M158: el anillo guarda ~la latencia pedida (default 200 ms); cada buffer, ~1/4.
+        // M158: el anillo y los buffers se dimensionan con la latencia pedida (default 200 ms).
+        // M326 (findings #103): el backend recibe la MITAD del presupuesto — el anillo ¼ y los tres
+        // buffers de AudioQueue ¼ entre los tres (~1/12 cada uno) — porque el socket del programa
+        // ya guarda la otra mitad (ver `open`). Suelos: 4 KiB de anillo y 1 KiB por buffer.
         let frame_bytes = bytes_per_frame as usize;
         let bytes_per_sec = (rate * channels * 2) as usize;
         let cap =
-            (bytes_per_sec * latency_ms as usize / 1000).max(4096) / frame_bytes * frame_bytes;
-        let buf_size = ((cap / 4).max(1024) / frame_bytes * frame_bytes) as u32;
+            (bytes_per_sec * latency_ms as usize / 4000).max(4096) / frame_bytes * frame_bytes;
+        let buf_size = ((bytes_per_sec * latency_ms as usize / 12000).max(1024) / frame_bytes * frame_bytes) as u32;
         // ~8 ms de silencio de keepalive (el cebado son 3 → ~24 ms de retraso inicial, no 150).
         let keepalive_bytes = (bytes_per_sec / 125).max(frame_bytes) / frame_bytes * frame_bytes;
         let shared = Arc::new(Shared {

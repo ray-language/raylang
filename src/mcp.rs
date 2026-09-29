@@ -469,18 +469,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
 /// `const NOMBRE: tipo = valor` (M305): el valor solo si es un literal (lo habitual en una
 /// constante pública); si no, la firma sin valor.
 fn const_signature(c: &crate::ast::ConstDef) -> String {
-    use crate::ast::ExprKind;
-    let value = match &c.value.kind {
-        ExprKind::Int(v, _) => Some(v.to_string()),
-        ExprKind::Float(f) => Some(f.to_string()),
-        ExprKind::Bool(b) => Some(b.to_string()),
-        ExprKind::Str(t) => Some(format!("{t:?}")),
-        _ => None,
-    };
-    match value {
-        Some(v) => format!("const {}: {} = {v}", c.name, c.ty),
-        None => format!("const {}: {}", c.name, c.ty),
-    }
+    crate::raydoc::const_signature(c) // M326: una sola firma para raydoc y el MCP
 }
 
 /// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).

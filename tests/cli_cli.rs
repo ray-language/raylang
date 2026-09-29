@@ -4055,3 +4055,33 @@ fn every_subcommand_answers_help_without_acting() {
     assert_eq!(code, 0);
     assert!(out.contains("--help"), "{out}");
 }
+
+/// M326 (findings #100): el valor de una `const` de un módulo NO raíz puede referenciar otra
+/// `const` del mismo módulo (`[B, 3]`): el loader la cualifica como en los cuerpos de función.
+#[test]
+fn module_constants_may_reference_sibling_constants() {
+    let dir = tmp("module_consts");
+    std::fs::write(dir.join("ray.toml"), "[package]\nname = \"mc\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/tables.ray"), "pub const B: int = 2;\npub const X: [int] = [B, 3];\nconst PRIVATE: int = 7;\npub const PAIRS: [(int, int)] = [(PRIVATE, B)];\n").unwrap();
+    std::fs::write(dir.join("src/main.ray"), "import tables;\n\nfn main() {\n    print(tables.X);\n    print(tables.PAIRS);\n}\n").unwrap();
+    let (out, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "[2, 3]\n[(7, 2)]\n");
+    // Una `const` no declarada sigue siendo el error de siempre.
+    std::fs::write(dir.join("src/tables.ray"), "pub const X: [int] = [B, 3];\n").unwrap();
+    std::fs::write(dir.join("src/main.ray"), "import tables;\n\nfn main() {\n    print(tables.X);\n}\n").unwrap();
+    let (_o, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("must be a literal"), "{err}");
+}
+
+/// M326 (findings #105): `assert_eq_msg` dice QUÉ se comparaba.
+#[test]
+fn assert_eq_msg_names_what_is_compared() {
+    let dir = tmp("assert_eq_msg");
+    std::fs::write(dir.join("p.ray"), "fn main() {\n    assert_eq_msg(1 + 1, 2, \"sum\");\n    assert_eq_msg(420, 384, \"permission bits\");\n}\n").unwrap();
+    let (_o, err, code) = ray(&dir, &["run", "p.ray"]);
+    assert_eq!(code, 70, "{err}");
+    assert!(err.contains("assert_eq failed: permission bits: 420 != 384"), "{err}");
+}

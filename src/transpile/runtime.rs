@@ -739,11 +739,16 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
-            // M307: fdatasync (espejo de builtins::sync_data_handle).
+            // M307: fdatasync (espejo de builtins::sync_data_handle). M326 (findings #104): en Apple,
+            // fsync(2) a secas — la std usa F_FULLFSYNC también en sync_data (espejo de builtins::fsync_data).
+            "#[cfg(target_vendor = \"apple\")]\n",
+            "fn __ray_fsync_data(f: &std::fs::File) -> std::io::Result<()> { use std::os::unix::io::AsRawFd; unsafe extern \"C\" { fn fsync(fd: i32) -> i32; } if unsafe { fsync(f.as_raw_fd()) } != 0 { return Err(std::io::Error::last_os_error()); } Ok(()) }\n",
+            "#[cfg(not(target_vendor = \"apple\"))]\n",
+            "fn __ray_fsync_data(f: &std::fs::File) -> std::io::Result<()> { f.sync_data() }\n",
             "fn __ray_sync_data(h: i64) -> Result<i64, Rc<str>> {\n",
             "    let mut reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get_mut(&h) {\n",
-            "        Some(__RayHandle::Writer(f)) => f.sync_data().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Writer(f)) => __ray_fsync_data(f).map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",

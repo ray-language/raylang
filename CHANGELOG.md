@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.20 — 2026-09-29
 
 - **Regresión de 1.27.19 en `ray bundle --android`** (M325, `RAYLANG-FINDINGS.md` #99): un
   proyecto sin `[android] background_audio` no compilaba («cannot find symbol: variable

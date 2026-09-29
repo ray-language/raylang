@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Regresión de 1.27.19 en `ray bundle --android`** (M325, `RAYLANG-FINDINGS.md` #99): un
+  proyecto sin `[android] background_audio` no compilaba («cannot find symbol: variable
+  RayPlaybackService»): `MainActivity` referenciaba la clase pero solo se generaba con el flag.
+  Ahora se genera siempre (el flag solo la activa). Y el permiso `POST_NOTIFICATIONS` ya no se
+  pide al arrancar: su diálogo pausaba la actividad y el programa recibía un `lifecycle`
+  `background` fantasma; sin el permiso el servicio corre igual, solo sin notificación visible.
+
 ## 1.27.19 — 2026-09-28
 
 - **Móvil, cuarta pasada** (M324, README de ray808 #10, #13–#18):

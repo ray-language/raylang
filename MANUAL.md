@@ -1439,7 +1439,9 @@ background_audio = true       # AVAudioSession «playback» al arrancar + UIBack
 
 [android]
 background_audio = true       # foreground service de reproducción mientras la app está en segundo plano
-                              # (notificación «Playing in the background»; se retira al volver)
+                              # (notificación «Playing in the background»; se retira al volver; en Android 13+
+                              # el permiso de notificaciones no se pide al arrancar: sin él el servicio corre
+                              # igual, solo sin notificación visible — concédelo en Ajustes si la quieres)
 ```
 
 En iOS el programa (sus fibras, su `audio.write`) sigue corriendo mientras haya audio

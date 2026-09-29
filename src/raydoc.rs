@@ -69,6 +69,16 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
         }
     }
 
+    // --- Constantes (M326, findings #101: el modo símbolo ya las daba desde M305; el Markdown no) ---
+    let consts: Vec<&ConstDef> = program.consts.iter().filter(|c| include(c.is_pub)).collect();
+    if !consts.is_empty() {
+        out.push_str("## Constantes\n\n");
+        for c in consts {
+            out.push_str(&format!("### `{}`\n\n", const_signature(c)));
+            emit_doc(&mut out, &lines, c.line);
+        }
+    }
+
     // --- Funciones ---
     let funcs: Vec<&Function> = program.functions.iter().filter(|f| include(f.is_pub)).collect();
     if !funcs.is_empty() {
@@ -80,6 +90,22 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+/// La firma de una constante (M305): `const NAME: T = valor` cuando el valor es un literal simple
+/// (entero, flotante, bool o cadena); si no, la firma sin valor. Compartida por raydoc y el MCP.
+pub fn const_signature(c: &ConstDef) -> String {
+    let value = match &c.value.kind {
+        ExprKind::Int(v, _) => Some(v.to_string()),
+        ExprKind::Float(f) => Some(f.to_string()),
+        ExprKind::Bool(b) => Some(b.to_string()),
+        ExprKind::Str(t) => Some(format!("{t:?}")),
+        _ => None,
+    };
+    match value {
+        Some(v) => format!("const {}: {} = {v}", c.name, c.ty),
+        None => format!("const {}: {}", c.name, c.ty),
+    }
 }
 
 /// Añade el comentario de documentación de un ítem (las líneas `///` justo encima de `linea`, 1-basada)
@@ -222,6 +248,12 @@ fn privada() -> int { 0 }
         assert!(md.contains("Suma dos."));
         // Con ítems pub, los privados no aparecen.
         assert!(!md.contains("privada"));
+        // M326 (findings #101): las constantes públicas también, con su valor literal.
+        let md3 = generate("/// Retries.\npub const MAX_RETRIES: int = 3;\npub const NAMES: [string] = [\"a\"];\nconst HIDDEN: int = 1;\npub fn f() -> int { MAX_RETRIES }\n", "cfg.ray").unwrap();
+        assert!(md3.contains("## Constantes\n\n### `const MAX_RETRIES: int = 3`\n\nRetries.\n\n### `const NAMES: [string]`"), "{md3}");
+        assert!(!md3.contains("HIDDEN"), "{md3}");
+        let pos_c = md3.find("## Constantes").unwrap();
+        assert!(pos_c < md3.find("## Funciones").unwrap(), "las constantes van antes que las funciones");
     }
 
     #[test]

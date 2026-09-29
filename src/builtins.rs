@@ -1157,12 +1157,35 @@ pub fn write_bytes_handle(h: i64, data: &[u8]) -> Result<usize, String> {
     }
 }
 
+/// M326 (findings #104): en Apple la std de Rust implementa `File::sync_data` con `F_FULLFSYNC`,
+/// igual que `sync_all` — así que M307 no abarataba nada (medido: 208 vs 210 ops/s). `fsync(2)` a
+/// secas entrega los datos al disco sin forzar el vuelco de la caché de la unidad: lo que la doc de
+/// `fs.sync_data` promete. En el resto de plataformas, el `sync_data` de la std (fdatasync).
+pub fn fsync_data(f: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe extern "C" {
+            fn fsync(fd: i32) -> i32;
+        }
+        // SAFETY: fd válido mientras `f` viva; fsync no toca memoria nuestra.
+        if unsafe { fsync(f.as_raw_fd()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        f.sync_data()
+    }
+}
+
 /// M307: `fdatasync` — los DATOS a disco sin el vuelco completo (`sync_data` del std: en Linux
 /// fdatasync; en macOS fsync sin F_FULLFSYNC, que es lo que hace `sync_all` costar 4–5 ms en APFS).
 pub fn sync_data_handle(h: i64) -> Result<(), String> {
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
-        Some(OpenHandle::Writer(f)) => f.sync_data().map_err(|e| e.to_string()),
+        Some(OpenHandle::Writer(f)) => fsync_data(f).map_err(|e| e.to_string()),
         Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
         Some(_) => Err("the handle is not a file open for writing".to_string()),
         None => Err(format!("invalid file handle: {}", h)),

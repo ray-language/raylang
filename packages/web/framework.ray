@@ -1010,16 +1010,20 @@ fn finish(app: App, req: webserver.Request, resp: webserver.Response) -> webserv
 }
 
 // --- Arranque (M93.3: UNA sola familia, sobre el patrón builder) ---
-// `listen(build_app, host, port)`: el builder es una función TOP-LEVEL que construye la App. La
-// fibra de cada conexión la llama UNA vez (vía `webserver.serve_with`) y atiende con esa App
-// todas sus peticiones keep-alive. Así ningún valor-función cruza hilos (actores de heap
-// aislado): el mismo fuente corre en la VM y compila con `ray build --native`. Consecuencia: el
-// estado del builder es POR CONEXIÓN; el estado compartido va por canales a una fibra dueña.
+// `listen(build_app, host, port)`: el builder es una función TOP-LEVEL que construye la App. Cada
+// PETICIÓN la llama (vía `webserver.serve_with`: el aislamiento panic→500 corre cada petición en
+// su propia tarea, también las keep-alive de una misma conexión). Así ningún valor-función cruza
+// hilos (actores de heap aislado): el mismo fuente corre en la VM y compila con `ray build
+// --native`. Consecuencia: el estado del builder es POR PETICIÓN; el estado compartido va por
+// canales a una fibra dueña (o a `net/pool`). M326 (findings #102): la doc decía «por conexión».
 /// Starts the server: `listen(build_app, "0.0.0.0", 8080)` with a TOP-LEVEL `fn build_app() ->
-/// App`. Each connection's fiber builds its own App once and serves all its keep-alive requests
-/// with it — no function value crosses a thread boundary, so the same source runs on the VM and
-/// compiles with `ray build --native` (M93.3). Keep-alive, safety limits and panic→500 are
-/// inherited from `net/webserver`. Blocks forever (`Err` only if the socket cannot bind).
+/// App`. EVERY REQUEST builds its own App by calling `build_app()` inside its own task (the
+/// panic→500 isolation runs each request — keep-alive ones included — in a fresh task), so no
+/// function value crosses a thread boundary and the same source runs on the VM and compiles with
+/// `ray build --native` (M93.3). Keep the builder cheap and side-effect free: open connections
+/// and clients in an owner fiber (channels) or a `net/pool`, never inside it. Keep-alive, safety
+/// limits and panic→500 are inherited from `net/webserver`. Blocks forever (`Err` only if the
+/// socket cannot bind).
 pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string> {
     webserver.serve_with(host, port, fn() -> fn(webserver.Request) -> webserver.Response {
         let app: App = build();

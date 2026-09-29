@@ -672,6 +672,7 @@ Para abortar de verdad (bug, invariante rota — no para entrada del usuario):
 panic("estado imposible");         // aborta con mensaje y posición
 assert(x > 0);                     // aborta si es falso
 assert_eq(resultado, esperado);    // aborta mostrando ambos (T: Eq + Show)
+assert_eq_msg(modo, 384, "permission bits"); // M326: «assert_eq failed: permission bits: 420 != 384»
 ```
 
 Y para **terminar el proceso a propósito** (no es un error): `exit(code)` sale con ese código
@@ -1354,7 +1355,10 @@ let _ = close(h);
 Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
 ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
 chunk del alimentador y la cola entre tu programa y el dispositivo: `write` aparca cuando hay
-~esa latencia encolada, también a tasas bajas (22050 Hz mono con 30 ms ≈ 140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
+~esa latencia encolada EN TOTAL (desde M326 el presupuesto se reparte entre las etapas: la cola
+del programa ½, el anillo del backend ¼ y los buffers del dispositivo ¼; antes cada etapa
+recibía la latencia entera y 200 ms pedidos eran ~600 encolados). A tasas bajas mandan los
+suelos de ~2 KiB por etapa (22050 Hz mono con 30 ms ≈ 120–140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
 devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
 escrito, que es lo que hace falta para pintar el compás exacto.
 
@@ -1931,7 +1935,9 @@ match (fs.open("video.bin", "r")) {
 ```
 
 Para **escribir** binario sobre un handle está `fs.write_bytes(h, data)` (el gemelo de
-`fs.write`), y `fs.sync(h)` fuerza lo escrito a **almacenamiento estable** (fsync). La
+`fs.write`), y `fs.sync(h)` fuerza lo escrito a **almacenamiento estable** (fsync; en macOS/APFS
+es `F_FULLFSYNC`, 4–5 ms por llamada — `fs.sync_data(h)` entrega solo los datos sin vaciar la
+caché de la unidad, ~50× más barato allí desde M326, para un log o AOF por registro). La
 distinción importa: un `write`/`append` llega al *page cache* del SO — sobrevive a un crash
 del **proceso**, pero no a un corte de luz. Un log de escritura anticipada (WAL/AOF) durable
 es el patrón de las tres piezas juntas:
@@ -2501,6 +2507,8 @@ fn build_app() -> App {
 
 fn main() -> int {
     match (listen(build_app, "127.0.0.1", 8080)) {   // keep-alive + límites + panic→500 heredados
+                                                     // build_app() corre POR PETICIÓN (M326): sin
+                                                     // recursos dentro — fibra dueña o net/pool
         Result.Ok(_) => 0,
         Result.Err(e) => { eprint(e); 1 },
     }

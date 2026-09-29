@@ -121,7 +121,7 @@ Labeled loops (M308): `outer: for row in grid { for x in row { if (x == 0) { bre
 — `break outer` / `continue outer` from any inner loop of the same function (`outer: while` too). `?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
 otherwise: `'?' on Result<int, string> requires the function to return Result<_, string>,
 but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
-`assert_eq(a, b)` (no custom-message variant — use `panic`).
+`assert_eq(a, b)`; `assert_eq_msg(a, b, msg)` (1.27.21) prefixes the message: `assert_eq failed: <msg>: <a> != <b>`.
 
 ## Semantics you must respect
 

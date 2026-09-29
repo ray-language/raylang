@@ -1126,6 +1126,12 @@ impl<'a> Resolver<'a> {
         // Nota: `m.program.functions` y `m.program.impls` se recorren por separado, pero
         // ambos comparten el mismo mapa de resolución (`self.own`/`self.imports`).
         let (src, module) = (m.source.clone(), m.name.clone());
+        // M326 (findings #100): el VALOR de una `const` también referencia nombres propios del
+        // módulo (`pub const X: [int] = [B, 3]`) — se reescribe como un cuerpo más (`B` → `mod::B`);
+        // sin esto el checker buscaba `B` donde solo existe `mod::B` y fallaba fuera del módulo raíz.
+        for c in &mut m.program.consts {
+            self.resolve_expr(&mut c.value, &src, &module)?;
+        }
         for f in &mut m.program.functions {
             self.resolve_fn(f, &src, &module)?;
         }

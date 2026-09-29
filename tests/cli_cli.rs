@@ -4031,3 +4031,27 @@ fn recursion_depth_is_configurable_and_reported() {
     assert_eq!(code, 0);
     assert_eq!(out.trim(), "200");
 }
+
+/// M324 (ray808 #17): `ray <cmd> --help` es ayuda en TODOS los subcomandos. Antes `ray dev --help`
+/// arrancaba el modo dev, `ray new --help` creaba un proyecto llamado `--help` y `ray upgrade
+/// --help` intentaba descargar `v--help`.
+#[test]
+fn every_subcommand_answers_help_without_acting() {
+    let dir = tmp("help_everywhere");
+    for cmd in ["new", "run", "profile", "dev", "check", "build", "test", "add", "remove", "update", "search", "fetch", "upgrade"] {
+        let (out, err, code) = ray(&dir, &[cmd, "--help"]);
+        assert_eq!(code, 0, "{cmd} --help\n{err}");
+        assert!(out.starts_with(&format!("usage: ray {cmd}")), "{cmd}: {out}");
+        assert!(out.lines().count() >= 2, "{cmd}: la descripción va debajo: {out}");
+        let (out_h, _e, code_h) = ray(&dir, &[cmd, "-h"]);
+        assert_eq!(code_h, 0);
+        assert_eq!(out_h, out, "{cmd}: -h == --help");
+    }
+    assert!(!dir.join("--help").exists(), "`ray new --help` no crea un proyecto");
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "ningún subcomando dejó rastro");
+    // Un `--help` que NO va primero sigue siendo del programa (`ray run prog.ray --help`).
+    std::fs::write(dir.join("p.ray"), "fn main() {\n    print(args());\n}\n").unwrap();
+    let (out, _e, code) = ray(&dir, &["run", "p.ray", "--help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("--help"), "{out}");
+}

@@ -42,12 +42,22 @@ android.useAndroidX=true
 /// acotado por la network security config. `configChanges`: la rotación no recrea la Activity.
 /// M160: `android:icon` SOLO cuando los PNG multi-densidad se generaron de verdad — el
 /// atributo con los mipmaps ausentes rompe el build en aapt (generar-primero-decidir-después).
-fn android_manifest(icon: bool) -> String {
+fn android_manifest(icon: bool, background_audio: bool) -> String {
     let icon_attr = if icon { "\n      android:icon=\"@mipmap/ic_launcher\"" } else { "" };
+    // M324 (ray808 #18): el foreground service de reproducción y sus permisos (FOREGROUND_SERVICE
+    // desde API 28, su tipo mediaPlayback desde API 34, la notificación desde API 33).
+    let (audio_perms, audio_service) = if background_audio {
+        (
+            "\n  <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />\n  <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK\" />\n  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />",
+            "\n    <service\n        android:name=\".RayPlaybackService\"\n        android:exported=\"false\"\n        android:foregroundServiceType=\"mediaPlayback\" />",
+        )
+    } else {
+        ("", "")
+    };
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.INTERNET" />{audio_perms}
   <application
       android:label="@string/app_name"{icon_attr}
       android:networkSecurityConfig="@xml/network_security_config"
@@ -60,7 +70,7 @@ fn android_manifest(icon: bool) -> String {
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
-    </activity>
+    </activity>{audio_service}
   </application>
 </manifest>
 "#
@@ -86,6 +96,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -112,6 +123,10 @@ public class MainActivity extends Activity {
     // M309 (findings #41): el <input type="file"> de la página abre el selector del sistema.
     private static final int RAY_FILE_CHOOSER = 7001;
     private ValueCallback<Uri[]> rayFileCallback = null;
+    // M324 (ray808 #18): `[android] background_audio` — foreground service mientras la app está
+    // en segundo plano, para que el sistema no mate el proceso (y con él std/audio).
+    static final boolean RAY_BACKGROUND_AUDIO = /*RAY_BACKGROUND_AUDIO*/false;
+    private static final int RAY_NOTIFICATIONS = 7002;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -178,6 +193,10 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(web);
+        if (RAY_BACKGROUND_AUDIO && Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, RAY_NOTIFICATIONS);
+        }
         RayBridge.attach(web);
         if (RayBridge.lastUrl != null) {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
@@ -200,12 +219,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.start(this); }
         RayBridge.pushEvent("lifecycle", 0, "background");
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.stop(this); }
         RayBridge.pushEvent("lifecycle", 0, "foreground");
     }
 
@@ -214,6 +235,75 @@ public class MainActivity extends Activity {
         public void send(String text) {
             RayBridge.pushEvent("message", 0, text == null ? "" : text);
         }
+    }
+}
+"#;
+
+/// M324 (ray808 #18): el foreground service de reproducción. Vive SOLO mientras la app está en
+/// segundo plano (MainActivity lo arranca en onPause y lo para en onResume): la notificación
+/// «playing» es el precio que Android pide por no matar el proceso. Tocarla vuelve a la app.
+const RAY_PLAYBACK_SERVICE_JAVA: &str = r#"package org.raylang.shell;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
+import android.os.IBinder;
+
+public class RayPlaybackService extends Service {
+    static final String CHANNEL = "ray_playback";
+    static final int NOTIFICATION_ID = 1;
+
+    static void start(Context c) {
+        Intent i = new Intent(c, RayPlaybackService.class);
+        if (Build.VERSION.SDK_INT >= 26) { c.startForegroundService(i); } else { c.startService(i); }
+    }
+
+    static void stop(Context c) {
+        c.stopService(new Intent(c, RayPlaybackService.class));
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        CharSequence label = getApplicationInfo().loadLabel(getPackageManager());
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL, label, NotificationManager.IMPORTANCE_LOW));
+            b = new Notification.Builder(this, CHANNEL);
+        } else {
+            b = new Notification.Builder(this);
+        }
+        Intent open = new Intent(this, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        Notification n = b.setContentTitle(label)
+            .setContentText("Playing in the background")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE))
+            .setOngoing(true)
+            .build();
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        } else {
+            startForeground(NOTIFICATION_ID, n);
+        }
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        stopForeground(Service.STOP_FOREGROUND_REMOVE);
+        super.onDestroy();
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
     }
 }
 "#;
@@ -549,7 +639,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false).unwrap();
             let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -566,6 +656,7 @@ pub fn write_project(
     abis: &str,
     icon: bool,
     devtools: bool,
+    background_audio: bool,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -577,12 +668,18 @@ pub fn write_project(
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
     write("app/build.gradle", &app_build_gradle(app_id, version, abis))?;
-    write("app/src/main/AndroidManifest.xml", &android_manifest(icon))?;
+    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
     // M231: `--devtools` → depuración remota desde chrome://inspect (Chrome del escritorio).
     let devtools_line = if devtools { "WebView.setWebContentsDebuggingEnabled(true); // ray bundle --devtools" } else { "" };
-    write("app/src/main/java/org/raylang/shell/MainActivity.java", &MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
+    // M324 (ray808 #18): el flag de audio en segundo plano va como constante de la clase.
+    let bg = if background_audio { "true" } else { "false" };
+    let main = MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line).replace("/*RAY_BACKGROUND_AUDIO*/false", bg);
+    write("app/src/main/java/org/raylang/shell/MainActivity.java", &main)?;
+    if background_audio {
+        write("app/src/main/java/org/raylang/shell/RayPlaybackService.java", RAY_PLAYBACK_SERVICE_JAVA)?;
+    }
     write("app/src/main/java/org/raylang/shell/RayBridge.java", RAY_BRIDGE_JAVA)?;
     write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
     write("README.md", README)?;
@@ -607,10 +704,10 @@ mod tests {
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
         assert!(app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
-        assert!(android_manifest(false)
+        assert!(android_manifest(false, false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
-        assert!(!android_manifest(false).contains("usesCleartextTraffic"));
+        assert!(!android_manifest(false, false).contains("usesCleartextTraffic"));
         let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
@@ -640,14 +737,40 @@ mod tests {
         assert!(RAY_SCHEME_JAVA.contains("(\"ray\".equals(scheme) && \"app\".equals(host))"));
         // If-None-Match nunca viaja: WebResourceResponse no admite 304.
         assert!(RAY_SCHEME_JAVA.contains("RayBridge.schemeOpen(url, method == null ? \"GET\" : method, range, null)"));
-        assert!(!android_manifest(false).contains("app.ray.invalid"), "the alias needs no manifest entry");
+        assert!(!android_manifest(false, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
     }
 
     #[test]
     fn the_manifest_only_declares_the_icon_when_the_mipmaps_exist() {
         // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
-        assert!(android_manifest(true).contains("android:icon=\"@mipmap/ic_launcher\""));
-        assert!(!android_manifest(false).contains("android:icon"));
+        assert!(android_manifest(true, false).contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(!android_manifest(false, false).contains("android:icon"));
+    }
+
+    /// M324 (ray808 #18): `[android] background_audio` declara el servicio de reproducción con sus
+    /// permisos, escribe la clase y enciende el flag de MainActivity; sin él, nada de eso existe.
+    #[test]
+    fn background_audio_adds_the_foreground_service_only_when_asked() {
+        let with = android_manifest(false, true);
+        assert!(with.contains("android:name=\".RayPlaybackService\""), "{with}");
+        assert!(with.contains("android:foregroundServiceType=\"mediaPlayback\""), "{with}");
+        for perm in ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK", "POST_NOTIFICATIONS"] {
+            assert!(with.contains(&format!("android.permission.{perm}")), "{perm}");
+        }
+        let without = android_manifest(false, false);
+        assert!(!without.contains("RayPlaybackService") && !without.contains("FOREGROUND_SERVICE"), "{without}");
+        assert!(MAIN_ACTIVITY_JAVA.contains("if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.start(this); }"));
+        assert!(RAY_PLAYBACK_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK"));
+        let base = std::env::temp_dir().join(format!("ray_android_audio_{}", std::process::id()));
+        for (bg, want) in [(true, true), (false, false)] {
+            let _ = std::fs::remove_dir_all(&base);
+            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg).unwrap();
+            let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
+            assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
+            assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
+            assert_eq!(base.join("app/src/main/java/org/raylang/shell/RayPlaybackService.java").is_file(), want, "bg={bg}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

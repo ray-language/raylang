@@ -51,6 +51,17 @@ fn run() {
 
     // Dispatch por subcomando (M39a). Un primer argumento que no case cae al modo legado
     // (interfaz por flags), para no romper scripts ni la suite de tests.
+    // M324 (ray808 #17): `ray <cmd> --help` es AYUDA en todos los subcomandos. Antes, los que no
+    // parseaban el flag lo tomaban por su argumento: `ray dev --help` arrancaba el modo dev,
+    // `ray new --help` creaba un proyecto llamado `--help` y `ray upgrade --help` descargaba
+    // `v--help`. Los subcomandos con ayuda propia (bundle, serve, doc, fmt, …) siguen con la suya.
+    if let [cmd, flag, ..] = rest
+        && matches!(flag.as_str(), "--help" | "-h")
+        && let Some(text) = subcommand_help(cmd)
+    {
+        println!("{text}");
+        return;
+    }
     match rest.first().map(String::as_str) {
         Some("new") => cmd_new(&rest[1..]),
         Some("run") => cmd_run(&rest[1..]),
@@ -95,20 +106,43 @@ fn run() {
 }
 
 fn print_help() {
-    print!(
+    print!("{}", help_text());
+}
+
+/// M324 (ray808 #17): la ayuda de UN subcomando, sacada de la línea que lo describe en `help_text`
+/// (`usage: ray <cmd> <args>` + la descripción) — una sola fuente de verdad para `ray help` y
+/// `ray <cmd> --help`. Solo para los subcomandos SIN ayuda propia; `None` para el resto.
+fn subcommand_help(cmd: &str) -> Option<String> {
+    const GENERIC: &[&str] = &[
+        "new", "run", "profile", "dev", "check", "build", "test", "add", "remove", "update", "search", "fetch", "upgrade",
+    ];
+    if !GENERIC.contains(&cmd) {
+        return None;
+    }
+    let help = help_text();
+    let line = help.lines().find(|l| l.strip_prefix("  ").is_some_and(|r| r.starts_with(cmd) && r[cmd.len()..].starts_with(' ')))?;
+    let line = line.trim_start();
+    // `nombre <args>   descripción`: la primera secuencia de 2+ espacios separa ambas partes.
+    let split = line.find("  ").unwrap_or(line.len());
+    let (usage, desc) = (line[..split].trim_end(), line[split..].trim_start());
+    Some(format!("usage: ray {usage}\n  {desc}"))
+}
+
+fn help_text() -> String {
+    format!(
         "\
 raylang {v} — programming language
 
 Usage: ray <subcommand> [options]
 
 Project:
-  new <name>        create a new project (ray.toml + src/main.ray)
+  new <name>        create a new project (ray.toml + src/main.ray) [--frontend <vite-template>]
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
+  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -139,7 +173,7 @@ Tooling:
   help              this help
 ",
         v = env!("RAYLANG_VERSION_FULL")
-    );
+    )
 }
 
 /// `ray registry <sub>` (M99): los comandos del **publicador** de paquetes — los que escriben en el
@@ -2080,7 +2114,9 @@ fn cmd_bundle(args: &[String]) {
     // stores) va excluido SIEMPRE; `audio` solo en iOS (CoreAudio de iOS sin validar) —
     // Android tiene backend AAudio desde M158.
     if ios || android {
-        let forced: &[&str] = if ios { &["process", "audio"] } else { &["process"] };
+        // M324 (ray808 #18): `audio` ya no se excluye en iOS — std/audio tiene backend AudioQueue
+        // ahí también (el mismo de macOS).
+        let forced: &[&str] = &["process"];
         for sub in forced {
             if !exclude.iter().any(|d| d == sub) {
                 exclude.push(sub.to_string());
@@ -2194,7 +2230,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools)
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -2343,6 +2379,16 @@ fn cmd_bundle(args: &[String]) {
         };
         place(build_dev, &dev_a, &kept_dev, proj.join("libs/libray_app.a"));
         place(build_sim, &sim_a, &kept_sim, proj.join("libs-sim/libray_app.a"));
+        // M324 (ray808 #14): la librería preservada puede ser de un raylang anterior al shell que se
+        // acaba de generar — el enlace en Xcode fallaría con «Undefined symbol» sin decir por qué.
+        for (kept, rel, target) in [
+            (kept_dev.is_some(), "libs/libray_app.a", "aarch64-apple-ios"),
+            (kept_sim.is_some(), "libs-sim/libray_app.a", "aarch64-apple-ios-sim"),
+        ] {
+            if kept && let Some(missing) = preserved_lib_missing_symbol(&proj.join(rel)) {
+                eprintln!("[bundle] warning: the preserved {rel} was built by an older raylang and lacks `{missing}`, which the regenerated shell calls; rebuild it: `ray build --native --lib --release --target {target} -o {}/{rel}` (or run `ray bundle --ios` for both targets)", proj.display());
+            }
+        }
         // M309 (findings #51): `[app.plist]` también en iOS, y `NSLocalNetworkUsageDescription`
         // (iOS 14+ lo exige para la red local) cuando el programa habla con la red o es un build
         // con devtools (un dev server en la LAN). Sin la clave, iOS deniega en silencio.
@@ -2354,12 +2400,18 @@ fn cmd_bundle(args: &[String]) {
                 crate::manifest::PlistValue::Str(format!("{name} connects to devices on your local network.")),
             ));
         }
-        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, devtools, &ios_plist) {
+        // M324 (ray808 #18): `[ios] background_audio` → el modo de fondo `audio` en el plist (el
+        // AppDelegate activa la sesión); una clave del usuario manda.
+        let background_audio = manifest.as_ref().is_some_and(|m| m.ios_background_audio);
+        if background_audio && !ios_plist.iter().any(|(k, _)| k == "UIBackgroundModes") {
+            ios_plist.push(("UIBackgroundModes".to_string(), crate::manifest::PlistValue::Array(vec!["audio".to_string()])));
+        }
+        // M324 (ray808 #15): el icono se genera ANTES del proyecto, que solo lo cablea si existe.
+        let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i)));
+        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio };
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
-        }
-        if let Some(icon) = icon.as_deref() {
-            write_ios_appicon(&proj, Path::new(icon));
         }
         let _ = fs::remove_dir_all(&work);
         println!("ok: iOS project '{}'", proj.display());
@@ -2578,6 +2630,10 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
             crate::manifest::PlistValue::Str(s) => format!("<string>{}</string>", plist_escape(s)),
             crate::manifest::PlistValue::Bool(true) => "<true/>".to_string(),
             crate::manifest::PlistValue::Bool(false) => "<false/>".to_string(),
+            crate::manifest::PlistValue::Array(xs) => {
+                let items: String = xs.iter().map(|x| format!("<string>{}</string>", plist_escape(x))).collect();
+                format!("<array>{items}</array>")
+            }
         };
         extra_keys.push_str(&format!("\x20 <key>{}</key>{value}\n", plist_escape(k)));
     }
@@ -2650,7 +2706,21 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
 
 /// §80b: el AppIcon del proyecto iOS — un appiconset de TAMAÑO ÚNICO (1024, "single size":
 /// Xcode 14+ genera el resto), vía sips. Best-effort: sin icono válido, la app compila igual.
-fn write_ios_appicon(proj: &Path, icon: &Path) {
+/// M324 (ray808 #14): ¿le falta a la librería preservada algún símbolo que el shell generado llama?
+/// Devuelve el primero ausente; `None` si están todos o si `nm` no está (no se puede saber → callar).
+fn preserved_lib_missing_symbol(lib: &Path) -> Option<&'static str> {
+    // Los símbolos del runtime que el shell iOS referencia, del más reciente al más antiguo.
+    const SHELL_SYMBOLS: &[&str] = &["ray_ui_shell_capabilities", "ray_ui_scheme_open", "ray_ui_push_event", "ray_ui_set_handlers", "ray_start"];
+    let out = process::Command::new("nm").arg("-gU").arg(lib).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    SHELL_SYMBOLS.iter().copied().find(|sym| !text.contains(&format!(" T _{sym}")))
+}
+
+/// `true` si el catálogo quedó escrito (y el proyecto puede cablearlo).
+fn write_ios_appicon(proj: &Path, icon: &Path) -> bool {
     let set = proj.join("Shell/Assets.xcassets/AppIcon.appiconset");
     let ok = fs::create_dir_all(&set).is_ok()
         && process::Command::new("sips")
@@ -2673,9 +2743,10 @@ fn write_ios_appicon(proj: &Path, icon: &Path) {
         .is_ok();
     if !ok {
         eprintln!("bundle: warning: could not build the app icon; continuing without it");
+        let _ = fs::remove_dir_all(proj.join("Shell/Assets.xcassets"));
     }
-    // Nota: sin cablear el asset catalog en el pbxproj v1 (exigiría fase Resources +
-    // ASSETCATALOG_COMPILER_APPICON_NAME); el catálogo queda listo para arrastrar en Xcode.
+    // M324 (ray808 #15): el pbxproj lo cablea (fase Resources + ASSETCATALOG_COMPILER_APPICON_NAME).
+    ok
 }
 
 /// M160: los `ic_launcher.png` multi-densidad del proyecto Android, vía sips (precedente
@@ -4013,6 +4084,12 @@ fn cmd_remove(args: &[String]) {
         }
     };
     let Some(updated) = crate::manifest::remove_dependency(&src, name) else {
+        // M324 (ray808 #13): `[dependencies]` borrado a mano y el lock/caché viejos aún ahí —
+        // `ray remove <lo-que-listaba-el-lock>` es la forma natural de pedir que se retiren.
+        if m.dependencies.is_empty() && crate::deps::clear_stale_if_locked(&m.root) {
+            println!("'{name}' is not declared in ray.toml ('{}' declares no dependencies): stale ray.lock/.ray-deps removed", m.name);
+            return;
+        }
         eprintln!("dependency '{name}' is not declared in ray.toml");
         process::exit(65);
     };
@@ -4979,6 +5056,12 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
         {
             eprintln!("error resolving dependencies: {e}");
             process::exit(65);
+        }
+        // M324 (ray808 #13): sin dependencias, un `ray.lock` huérfano (la última se quitó a mano
+        // del ray.toml) y la caché que dejó se retiran también desde check/run/build/test, no solo
+        // desde fetch/update. Solo con lock: un `.ray-deps/` a mano sin lock es vendoring local.
+        if m.dependencies.is_empty() && crate::deps::clear_stale_if_locked(&m.root) {
+            eprintln!("'{}' declares no dependencies: stale ray.lock/.ray-deps removed", m.name);
         }
     }
     if let Some(p) = explicit {

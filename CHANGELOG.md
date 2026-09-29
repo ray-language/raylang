@@ -4,6 +4,38 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Móvil, cuarta pasada** (M324, README de ray808 #10, #13–#18):
+  - **`std/audio` suena en iOS**: el backend AudioQueue de macOS sirve también para
+    `aarch64-apple-ios*` (`audio.open(44100, 1)` → `Ok` en el simulador); `ray bundle --ios`
+    ya no excluye `audio` y el shell enlaza `AudioToolbox`.
+  - **Audio en segundo plano**: `[ios] background_audio = true` activa la `AVAudioSession`
+    `playback` al arrancar y declara `UIBackgroundModes = ["audio"]` (el programa sigue
+    corriendo y sonando al pasar a segundo plano y con el interruptor de silencio);
+    `[android] background_audio = true` arranca un *foreground service* de reproducción mientras
+    la app está en segundo plano (notificación «Playing in the background», para en `onResume`).
+  - **`[app.plist]` admite arrays de cadenas** (`UIBackgroundModes = ["audio", "fetch"]`), en
+    macOS e iOS.
+  - **`ray bundle --ios` cablea el icono** (#15): `Assets.xcassets` entra en la fase Resources del
+    pbxproj y el xcconfig fija `ASSETCATALOG_COMPILER_APPICON_NAME`; antes el catálogo se escribía
+    pero Xcode no lo compilaba y el iPhone mostraba el icono genérico.
+  - **Librería preservada comprobada** (#14): con `--ios-target sim|device`, el `.a` del otro
+    lado que se conserva se examina con `nm` y, si le falta un símbolo que el shell nuevo llama
+    (`ray_ui_shell_capabilities`…), el bundle avisa con el comando exacto para recompilarla.
+  - **`ray fmt`** (#10, segunda pasada): un comentario en línea propia dentro de una lista que
+    cabría en una línea ya no cae tras el `;` — la lista se reparte y el comentario va encima
+    de su elemento; el comentario tras la apertura (`[  // c`) se queda con ella.
+  - **Lock huérfano** (#13, segunda pasada): `ray check`/`run`/`build`/`test` y
+    `ray remove <lo-que-listaba-el-lock>` también retiran un `ray.lock` (y la caché que dejó) que
+    sobrevivió a borrar `[dependencies]` a mano (antes solo `fetch`/`update`); un `.ray-deps/` sin
+    lock no se toca.
+  - **`ray <subcomando> --help`** (#17) imprime el uso en TODOS los subcomandos; antes `ray dev
+    --help` arrancaba el modo dev, `ray new --help` creaba un proyecto llamado `--help` y
+    `ray upgrade --help` descargaba `v--help`.
+  - **`llms.txt`** (#16): `args()` no incluye el programa; el ejemplo de `slice` ya no invita a
+    saltarse el primer argumento.
+
 ## 1.27.18 — 2026-09-28
 
 - **Móvil, tercera pasada** (M323, `RAYLANG-FINDINGS.md` #38, #97, #98):

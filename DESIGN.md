@@ -15462,3 +15462,98 @@ camino que resuelve), `ray fetch`/`update` (y lo dicen) y `ray remove` de la úl
 proyecto ray808 (otro agente); aquí queda el driver C, `bundle_ios_cli`/`android_lib_cli`
 (`--ignored`) recompilados con los shells nuevos, `javac -Xlint:all` sobre las plantillas Java y
 un `gradle assembleDebug` del proyecto Android generado (la dependencia androidx resuelta).
+
+## 306. M324 — Móvil, cuarta pasada: sonido en iOS y en segundo plano, icono y librería preservada, `--help` en todo (sep 2026)
+
+Origen: README de ray808 (dogfood de la app móvil; 28 sep 2026), hallazgos #14–#18 y las
+variantes de #10 y #13 que M323 no cubría. La revisión llegó tras publicar 1.27.18, y la nota de
+ray808 «10 y 13 siguen igual» no era la misma reproducción: el caso inline de #10 y `ray fetch`
+de #13 sí estaban resueltos; lo que quedaba eran el comentario en **línea propia** y las vías
+`ray check`/`ray remove`.
+
+**[18] Por qué el sonido se paraba al cambiar de app — y qué parte era nuestra.** Tres
+carencias, todas del shell y del runtime, ninguna de la página:
+
+1. `std/audio` no tenía backend en iOS. El de macOS es AudioQueue (AudioToolbox), que **es API
+   de iOS también**: el módulo ya tenía `cfg(any(macos, ios))` en sus tipos auxiliares (M145 lo
+   anticipó) pero la selección del backend y el `mod coreaudio` decían solo `macos`. Bastó
+   ampliar el `cfg`; el matiz es el enlace: un `staticlib` no arrastra sus `#[link]`, así que el
+   xcconfig generado añade `-framework AudioToolbox` siempre (barato, presente en todo iOS). Y
+   `ray bundle --ios` dejaba de excluir `audio` a la fuerza: la exclusión era la consecuencia de
+   no tener backend, no una decisión de producto. Verificado en el simulador: `audio.open(44100,
+   1)` → `Ok(1)` dentro del shell.
+2. iOS suspende el proceso al pasar a segundo plano salvo que haya una sesión de audio activa
+   de categoría `playback` y el modo de fondo `audio` declarado. La primera es código ObjC en
+   el `AppDelegate` (se regenera con cada bundle, así que el parche a mano de ray808 se perdía);
+   la segunda es un array en el Info.plist, y `[app.plist]` solo admitía cadena y bool. De ahí
+   **`[ios] background_audio = true`** (sesión + `UIBackgroundModes`, y `-framework
+   AVFoundation`) y **`PlistValue::Array`** (`["audio", "fetch"]` → `<array>`), que sirve
+   también al `.app` de macOS. Con la sesión activa y audio sonando, las fibras del programa
+   siguen corriendo: no hace falta nada en el runtime.
+3. Android no suspende, pero mata: un *foreground service* es lo que pide para no hacerlo.
+   **`[android] background_audio = true`** genera `RayPlaybackService` (tipo `mediaPlayback`,
+   notificación «Playing in the background» que vuelve a la app al tocarla) y MainActivity lo
+   arranca en `onPause` y lo para en `onResume`: la notificación existe solo mientras la app está
+   detrás. Permisos `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` (API 34) y
+   `POST_NOTIFICATIONS` (API 33, pedido al arrancar). `javac -Xlint:all` contra android-35 +
+   androidx.webkit; sin emulador en este arco (el `rayavd` lo usa ray808).
+
+Lo que sigue siendo de la página: WKWebView y el WebView de Android congelan los timers de
+JavaScript en segundo plano. Un secuenciador que quiera seguir tiene que vivir en el programa
+raylang (`std/audio` con `open_latency`/`write`/`played_ms`), no en Web Audio — es la opción 2
+del README de ray808, y ahora tiene los cuatro requisitos (a)–(d) que pedía.
+
+**[15] El icono que Xcode no compilaba.** `write_ios_appicon` escribía el catálogo pero el
+pbxproj mínimo de M155 no tenía fase Resources ni `ASSETCATALOG_COMPILER_APPICON_NAME`. Ahora
+el catálogo se genera ANTES del proyecto y `ShellOptions { icon }` decide si el pbxproj lo
+referencia (grupo + `PBXResourcesBuildPhase`) y el xcconfig lo nombra — solo con icono: un
+catálogo referenciado y ausente rompe el build. Verificado: `Assets.car` y `CFBundleIcons` en
+la app del simulador.
+
+**[14] La librería preservada de otra época.** `--ios-target sim` conserva `libs/libray_app.a`
+del proyecto anterior (M155b) — correcto para iterar, pero si el shell recién generado llama a
+un símbolo nuevo (`ray_ui_shell_capabilities`, M323) el enlace en Xcode falla con «Undefined
+symbol» sin decir por qué. El bundle pasa `nm -gU` por el `.a` preservado y, si le falta alguno
+de los cinco símbolos que el shell referencia, avisa con el `ray build --native --lib … -o
+libs/libray_app.a` exacto. Avisar y no recompilar: quien pidió `sim` no quiere el build de
+dispositivo; sin `nm` (sin Xcode CLT) no se puede saber y se calla.
+
+**[17] `--help` como argumento.** Trece subcomandos no parseaban `--help` y lo tomaban por su
+argumento: `ray dev --help` arrancaba el modo dev (y su servidor), `ray new --help` **creaba un
+proyecto llamado `--help`**, `ray upgrade --help` pedía `v--help` a GitHub. El arreglo es uno:
+`ray <cmd> --help|-h` como PRIMER argumento imprime `usage: ray <cmd> <args>` + la descripción,
+sacadas de la propia tabla de `ray help` (`subcommand_help`: una sola fuente de verdad). Solo
+primer argumento: `ray run prog.ray --help` sigue siendo del programa. Los subcomandos con
+ayuda propia (bundle, serve, doc, fmt, keygen, release, toolchain, registry) no cambian.
+
+**[10 bis] El comentario en línea propia.** M323 arregló el trailing (`[1, 2, // c` + `3]`).
+Quedaba `[1, 2,` + `// c` + `3]` con la lista cabiendo en una línea: la forma plana no lo
+consumía y caía tras el `;`. Ahora `has_inner_trailing` cuenta también los de línea propia
+interiores (la señal de «reparte para recogerlos») y `fmt_wrapped_list` vuelca los comentarios
+de encima de cada elemento con `flush_before` — también en argumentos y campos de struct. Y un
+efecto colateral resuelto en el mismo sitio: el comentario tras la apertura (`[  // c` + `1,` +
+`2]`) ya no aplana la lista, se queda pegado al `[` (la forma que el usuario escribió).
+
+**[13 bis] El lock huérfano por más vías.** M323 lo retiraba desde `ensure`, pero `cmd_build`
+ni llamaba a `ensure` sin dependencias, y `ray remove <x>` se negaba antes de mirar. Ahora
+check/run/build/test lo retiran (y lo dicen en stderr) y `ray remove <lo-que-listaba-el-lock>`
+con `[dependencies]` vacío retira y sale 0; sin nada huérfano, el error de siempre. Con una
+guarda que `fetch`/`update` no necesitan: solo si HAY `ray.lock`. El lock lo escribe únicamente
+el resolutor, así que su presencia sin dependencias prueba que la caché es suya; un `.ray-deps/`
+poblado a mano sin lock es vendoring local (la suite `cli_cli` lo hace) y `ray run` no debe
+borrarlo — la primera versión de este arco lo hacía y el test de cápsulas lo delató.
+
+**[16] `args()` en `llms.txt`.** El ejemplo `args().slice(1, args().len())` sugería que `args()`
+incluye el programa; no lo incluye (ni en la VM ni en el binario nativo). Ejemplo neutro y regla
+explícita.
+
+**Lo que este arco verifica y lo que no.** Unitarios (fmt, manifest, plantillas iOS/Android),
+`registry_cli` (lock huérfano por `check` y `remove`), `cli_cli` (`--help` en los 13 sin dejar
+rastro), `javac -Xlint:all` de las plantillas Java con `background_audio`, la staticlib
+`aarch64-apple-ios-sim` con `audio` (referencia `AudioQueueNewOutput`, exporta
+`ray_ui_shell_capabilities`), y una mini app en el simulador iPhone 16 Pro generada con `ray
+bundle --ios --ios-target sim` (icono + `background_audio`): `audio ok 1`, `mount true`, `open
+true`, `lifecycle foreground`, `Assets.car`/`CFBundleIcons`/`UIBackgroundModes` en la app, y el
+aviso de [14] con una `libs/libray_app.a` falsa. NO verificado: que el audio siga de verdad al
+pasar a segundo plano (pide dispositivo o gesto de Home; ray808 lo medirá), ni el servicio
+Android en emulador.

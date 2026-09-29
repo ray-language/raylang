@@ -409,6 +409,14 @@ pub fn clear_stale(root: &Path) -> bool {
     had
 }
 
+/// M324 (ray808 #13, segunda pasada): como `clear_stale`, pero SOLO si hay un `ray.lock` — la prueba
+/// de que la caché la dejó el resolutor. Un `.ray-deps/` poblado a mano sin lock ni manifiesto es
+/// vendoring local (los tests lo usan) y las vías que no gestionan dependencias (check/run/build/
+/// test, `ray remove` de algo no declarado) no deben tocarlo.
+pub fn clear_stale_if_locked(root: &Path) -> bool {
+    root.join("ray.lock").is_file() && clear_stale(root)
+}
+
 fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     if manifest.dependencies.is_empty() {
         clear_stale(&manifest.root);

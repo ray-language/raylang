@@ -766,6 +766,25 @@ fn ray_remove_removes_dep_lock_and_cache() {
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("declares no dependencies (stale ray.lock/.ray-deps removed)"), "{out}");
     assert!(!app.join("ray.lock").exists(), "lock viejo retirado por fetch");
+    // M324 (ray808 #13, segunda pasada): también `ray check` (la vía de run/build/test)…
+    let stale = "[geo]\nurl = \"x\"\nref = \"v1.0.0\"\ncommit = \"c\"\nhash = \"h\"\n";
+    std::fs::write(app.join("src/main.ray"), "fn main() {\n    print(1);\n}\n").unwrap(); // ya sin geo
+    std::fs::write(app.join("ray.lock"), stale).unwrap();
+    std::fs::create_dir_all(app.join(".ray-deps/geo")).unwrap();
+    let (_o, err, code) = ray_idx(&app, &index, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("declares no dependencies: stale ray.lock/.ray-deps removed"), "{err}");
+    assert!(!app.join("ray.lock").exists() && !app.join(".ray-deps").exists(), "check retira lock y caché");
+    // …y `ray remove <lo que listaba el lock>`, que antes se negaba («is not declared») y dejaba todo.
+    std::fs::write(app.join("ray.lock"), stale).unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["remove", "geo"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("is not declared in ray.toml") && out.contains("stale ray.lock/.ray-deps removed"), "{out}");
+    assert!(!app.join("ray.lock").exists(), "remove retira el lock huérfano");
+    // Sin nada huérfano, quitar lo no declarado sigue siendo el error de siempre.
+    let (_o, err, code) = ray_idx(&app, &index, &["remove", "geo"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("is not declared"), "{err}");
 }
 
 #[test]

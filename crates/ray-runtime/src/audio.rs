@@ -11,7 +11,8 @@
 //! arrastra `alsa-sys`, que exige los headers de ALSA EN BUILD — rompería `cargo build` en
 //! cualquier Linux pelado y en CI; ninguna dependencia del proyecto impone eso — rusqlite
 //! vendorea, rustls/notify son puros):
-//!   - macOS: AudioQueue (AudioToolbox.framework, SIEMPRE presente — se enlaza al build).
+//!   - macOS e iOS (M324): AudioQueue (AudioToolbox.framework, SIEMPRE presente — se enlaza al
+//!     build; en iOS el shell generado por `ray bundle --ios` añade `-framework AudioToolbox`).
 //!   - Linux: ALSA por `dlopen("libasound.so.2")` EN RUNTIME (sin headers; sin la lib → `Err`).
 //!   - `RAY_AUDIO_SINK=null`: un sumidero que consume a ritmo de tiempo real SIN hardware — la
 //!     vía de los tests (CI no tiene tarjeta de sonido) y de los benchmarks.
@@ -343,7 +344,7 @@ fn make_sink(
             played,
         }));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         coreaudio::open(rate, channels, latency_ms, played)
     }
@@ -361,10 +362,10 @@ fn make_sink(
     {
         wasapi::open(rate, channels, latency_ms, played)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
     {
         let _ = (rate, channels, latency_ms, played);
-        Err("audio: no backend for this platform (macOS/Linux/Android/Windows; RAY_AUDIO_SINK=null works anywhere)".to_string())
+        Err("audio: no backend for this platform (macOS/iOS/Linux/Android/Windows; RAY_AUDIO_SINK=null works anywhere)".to_string())
     }
 }
 
@@ -388,8 +389,10 @@ impl Sink for NullSink {
     fn finish(&mut self) {}
 }
 
-// ── macOS: AudioQueue (AudioToolbox.framework, enlazado — siempre presente) ─────
-#[cfg(target_os = "macos")]
+// ── macOS e iOS: AudioQueue (AudioToolbox.framework, enlazado — siempre presente) ─────
+// M324 (ray808 #18): el mismo backend sirve en iOS — AudioQueue es API de ambos; el shell
+// generado enlaza el framework (un staticlib no arrastra sus `#[link]`).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod coreaudio {
     use super::Sink;
     use std::collections::VecDeque;

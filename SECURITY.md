@@ -356,8 +356,9 @@ documentada:
   pipe propio pidiendo solo el contador de octetos.
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
   pipe + `read`/`close`/`fcntl` variádico del hilo alimentador e `ioctl(FIONREAD)` del drain; en
-  macOS las llamadas a **AudioQueue** (AudioToolbox.framework, enlazado — structs replicadas del
-  header, el callback solo toca estado propio sincronizado); en Linux **ALSA por `dlopen`** en
+  macOS **e iOS** (M324: el mismo `mod coreaudio` bajo `cfg(any(macos, ios))`; el shell iOS
+  enlaza el framework) las llamadas a **AudioQueue** (AudioToolbox.framework, enlazado — structs
+  replicadas del header, el callback solo toca estado propio sincronizado); en Linux **ALSA por `dlopen`** en
   runtime (`transmute` de cada símbolo a la firma del header de ALSA, API estable; M158 añade
   **AAudio por `dlopen`** en Android con el mismo patrón — `libaaudio.so`, API 26+; sin la
   librería → `Err`, jamás un crash). La decisión sin-crates es deliberada: `cpal` habría exigido

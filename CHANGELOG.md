@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.19 — 2026-09-28
 
 - **Móvil, cuarta pasada** (M324, README de ray808 #10, #13–#18):
   - **`std/audio` suena en iOS**: el backend AudioQueue de macOS sirve también para

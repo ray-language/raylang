@@ -3401,6 +3401,7 @@ impl<'a> Vm<'a> {
                 }
                 // M210/M224/M230: la ventana con opciones (11 argumentos; se sacan en orden inverso).
                 OpCode::UiOpenWith => {
+                    let background = self.pop(); // M327
                     let parent = self.pop();
                     let always_on_top = self.pop();
                     let kind = self.pop();
@@ -3425,10 +3426,10 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees three bools");
                     };
                     // M260: tipo, siempre encima y ventana dueña.
-                    let (HeapValue::Str(kind), HeapValue::Bool(always_on_top), HeapValue::Int(parent)) = (kind, always_on_top, parent) else {
-                        unreachable!("the checker guarantees (string, bool, int)");
+                    let (HeapValue::Str(kind), HeapValue::Bool(always_on_top), HeapValue::Int(parent), HeapValue::Str(background)) = (kind, always_on_top, parent, background) else {
+                        unreachable!("the checker guarantees (string, bool, int, string)");
                     };
-                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent) {
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent, &background) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3514,6 +3515,20 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::ui_clipboard(&op, &text) {
                         Ok(s) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(s.into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::UiSetBackground => {
+                    let HeapValue::Str(color) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::ui_set_background(handle, &color) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

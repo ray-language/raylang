@@ -739,6 +739,58 @@ pub fn set_titlebar_color(id: i64, color: &str) -> Result<(), String> {
     }
 }
 
+/// M327: el fondo efectivo de una ventana nueva: `background`, o `titlebar_color` como respaldo
+/// (la app quiere el mismo color en la barra y bajo la página), o ninguno (el del sistema).
+fn effective_background(opts: &WindowOptions) -> Option<(u8, u8, u8)> {
+    parse_rgb(&opts.background).or_else(|| parse_rgb(&opts.titlebar_color))
+}
+
+/// M327 (ray-sublime): cambia el color de fondo que el webview muestra hasta que la página pinta,
+/// en una ventana ABIERTA (`#rrggbb`), o lo devuelve al del sistema con `""`. Mismo efecto que
+/// `WindowOptions.background`; el fondo de la VENTANA (lo que ve la barra transparente de macOS) no
+/// se toca aquí: eso es `set_titlebar_color`. Headless valida y deja traza.
+pub fn set_background(id: i64, color: &str) -> Result<(), String> {
+    let rgb = if color.is_empty() {
+        None
+    } else {
+        Some(parse_rgb(color).ok_or_else(|| format!("ui: unsupported background color '{color}' (expected #rrggbb)"))?)
+    };
+    let map = windows().lock().unwrap();
+    match map.get(&id) {
+        None => Err("ui: not an open window".to_string()),
+        Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
+        Some(WinState { win: Win::Headless, .. }) => {
+            if ui_trace() {
+                eprintln!("[ui] background {id} {}", if color.is_empty() { "system" } else { color });
+            }
+            Ok(())
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Some(WinState { win: Win::Shell, .. }) => Ok(()),
+        #[cfg(target_os = "macos")]
+        Some(WinState { win: Win::Mac { window, webview, .. }, .. }) => {
+            let (w, v) = (*window, *webview);
+            drop(map);
+            mac::set_background_async(w, v, rgb);
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { webview, alive, .. }, .. }) => {
+            let (v, alive) = (*webview, alive.clone());
+            drop(map);
+            gtk::set_background_async(v, alive, rgb);
+            Ok(())
+        }
+        #[cfg(windows)]
+        Some(WinState { win: Win::Windows { hwnd, alive }, .. }) => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::set_background_async(h, alive, rgb);
+            Ok(())
+        }
+    }
+}
+
 /// M234: puerto del hub de live-reload de `ray dev` (0 = ninguno). Lo fija la toolchain
 /// (`ray run` cuando corre bajo `ray dev`), nunca el entorno del proceso ni un binario nativo:
 /// la misma frontera que las devtools (M231).
@@ -820,6 +872,13 @@ pub struct WindowOptions {
     /// ventana con apariencia clara/oscura por luminancia; Windows 11: `DWMWA_CAPTION_COLOR`;
     /// Linux lo ignora). Vacío = la barra del sistema.
     pub titlebar_color: String,
+    /// M327 (ray-sublime): color `#rrggbb` que la ventana muestra HASTA que la página pinta — el
+    /// flash blanco/gris del arranque (WebKit tarda 150–250 ms en parsear una app grande). Vacío
+    /// = `titlebar_color` si lo hay (es el mismo color que la app quiere en los dos sitios); si
+    /// tampoco, el del sistema. macOS: `underPageBackgroundColor` del webview (12+) y el fondo de
+    /// la ventana; Linux: `webkit_web_view_set_background_color`; Windows: el
+    /// `DefaultBackgroundColor` de WebView2 y el borrado de fondo del HWND (WM_ERASEBKGND).
+    pub background: String,
     /// M230: botón de minimizar (macOS: `NSWindowStyleMaskMiniaturizable`; Windows: `WS_MINIMIZEBOX`;
     /// GTK3 no lo controla por ventana y lo ignora). `false` para paneles secundarios (About).
     pub minimizable: bool,
@@ -850,6 +909,7 @@ impl WindowOptions {
             center: true,
             autosave: String::new(),
             titlebar_color: String::new(),
+            background: String::new(),
             minimizable: true,
             kind: "document".to_string(),
             always_on_top: false,
@@ -1260,6 +1320,18 @@ pub mod scheme {
             assert_eq!(serve("ray://app/t/hello.txt?x=1#f", "HEAD", None, None).status, 200);
             assert!(matches!(serve("ray://app/t/hello.txt", "HEAD", None, None).body, Body::Empty));
             assert!(mount_bytes("../x", vec![]).is_err());
+            // M327 (ray-sublime): un archivo en memoria MANDA sobre un directorio montado en la
+            // misma ruta (la app puede sobrescribir o añadir archivos bajo un árbol montado).
+            let dir = std::env::temp_dir().join(format!("ray_scheme_prec_{}", std::process::id()));
+            std::fs::create_dir_all(dir.join("boot")).unwrap();
+            std::fs::write(dir.join("boot/x.js"), b"from disk").unwrap();
+            std::fs::write(dir.join("boot/y.js"), b"only on disk").unwrap();
+            mount_dir("", dir.to_str().unwrap()).unwrap();
+            mount_bytes("boot/x.js", b"from memory".to_vec()).unwrap();
+            let r = serve("ray://app/boot/x.js", "GET", None, None);
+            assert!(matches!(&r.body, Body::Bytes(b, 0, 11) if &b[..] == b"from memory"), "memory wins: {:?}", r.status);
+            assert_eq!(serve("ray://app/boot/y.js", "GET", None, None).status, 200, "the directory still serves the rest");
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         #[test]
@@ -1312,6 +1384,9 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     }
     if !opts.titlebar_color.is_empty() && parse_rgb(&opts.titlebar_color).is_none() {
         return Err(format!("ui: unsupported titlebar color '{}' (expected #rrggbb)", opts.titlebar_color));
+    }
+    if !opts.background.is_empty() && parse_rgb(&opts.background).is_none() {
+        return Err(format!("ui: unsupported background color '{}' (expected #rrggbb)", opts.background));
     }
     // M260: tipo de ventana y ventana dueña.
     if !matches!(opts.kind.as_str(), "document" | "panel" | "borderless") {
@@ -3843,6 +3918,11 @@ mod mac {
                     let set_name: MsgBoolId = std::mem::transmute(msg_send());
                     set_name(window, sel(b"setFrameAutosaveName:\0"), nsstring(&opts.autosave));
                 }
+                // M327: el fondo bajo la página ANTES de mostrar la ventana — el primer fotograma
+                // ya sale del color del tema. El fondo de la ventana solo si la barra no lo puso.
+                if let Some(rgb) = super::effective_background(&opts) {
+                    apply_background(window, webview, Some(rgb), opts.titlebar_color.is_empty());
+                }
                 set_id(window, sel(b"makeKeyAndOrderFront:\0"), std::ptr::null_mut());
                 // Un binario sin bundle abre DETRÁS de las demás apps si no se activa.
                 let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
@@ -3956,6 +4036,61 @@ mod mac {
     /// M239: `set_titlebar_color` sobre una ventana abierta (en el hilo principal).
     pub(super) fn set_titlebar_async(window: usize, rgb: Option<(u8, u8, u8)>) {
         on_main(move || unsafe { apply_titlebar(window as Id, rgb) });
+    }
+
+    /// M327: el color bajo la página. `underPageBackgroundColor` (macOS 12+; se comprueba con
+    /// respondsToSelector) es lo que WebKit pinta hasta que el documento tiene fondo, y
+    /// `drawsBackground = NO` (KVC, el mismo interruptor que usan wry/tauri) evita el blanco
+    /// propio del webview. `window_too` pinta además el fondo de la NSWindow (lo que asoma bajo
+    /// una barra transparente), solo cuando `titlebar_color` no lo fijó ya.
+    unsafe fn apply_background(window: Id, webview: Id, rgb: Option<(u8, u8, u8)>, window_too: bool) {
+        unsafe {
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let set_value: MsgVoidIdId = std::mem::transmute(msg_send());
+            let responds: MsgBoolSel = std::mem::transmute(msg_send());
+            let id_bool: MsgIdBool = std::mem::transmute(msg_send());
+            let class_item: MsgId = std::mem::transmute(msg_send());
+            let has_under = responds(webview, sel(b"respondsToSelector:\0"), sel(b"setUnderPageBackgroundColor:\0")) != 0;
+            match rgb {
+                Some(rgb) => {
+                    let color_with: MsgIdColor = std::mem::transmute(msg_send());
+                    let color = color_with(
+                        cls(b"NSColor\0"),
+                        sel(b"colorWithSRGBRed:green:blue:alpha:\0"),
+                        rgb.0 as f64 / 255.0,
+                        rgb.1 as f64 / 255.0,
+                        rgb.2 as f64 / 255.0,
+                        1.0,
+                    );
+                    if window_too {
+                        set_id(window, sel(b"setBackgroundColor:\0"), color);
+                    }
+                    if has_under {
+                        set_id(webview, sel(b"setUnderPageBackgroundColor:\0"), color);
+                    }
+                    let no = id_bool(cls(b"NSNumber\0"), sel(b"numberWithBool:\0"), 0);
+                    set_value(webview, sel(b"setValue:forKey:\0"), no, nsstring("drawsBackground"));
+                }
+                None => {
+                    if has_under {
+                        set_id(webview, sel(b"setUnderPageBackgroundColor:\0"), std::ptr::null_mut());
+                    }
+                    let yes = id_bool(cls(b"NSNumber\0"), sel(b"numberWithBool:\0"), 1);
+                    set_value(webview, sel(b"setValue:forKey:\0"), yes, nsstring("drawsBackground"));
+                    if window_too {
+                        let default = class_item(cls(b"NSColor\0"), sel(b"windowBackgroundColor\0"));
+                        if !default.is_null() {
+                            set_id(window, sel(b"setBackgroundColor:\0"), default);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// M327: `set_background` sobre una ventana abierta (en el hilo principal); solo el webview.
+    pub(super) fn set_background_async(window: usize, webview: usize, rgb: Option<(u8, u8, u8)>) {
+        on_main(move || unsafe { apply_background(window as Id, webview as Id, rgb, false) });
     }
 
     const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
@@ -4147,6 +4282,15 @@ mod gtk {
         i32,
     ) -> u64;
     type FnWebViewNew = unsafe extern "C" fn() -> Widget;
+    /// M327: `webkit_web_view_set_background_color(view, *GdkRGBA)` (WebKitGTK 2.8+; opcional).
+    type FnSetBgColor = unsafe extern "C" fn(Widget, *const GdkRgba);
+    #[repr(C)]
+    struct GdkRgba {
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    }
     type FnLoadUri = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
     // M152 — user content manager + lectura del payload (JSC). user_script_new:
     // (source, injected_frames, injection_time, allow_list, block_list).
@@ -4266,6 +4410,8 @@ mod gtk {
         idle_add: FnIdleAdd,
         signal_connect: FnSignalConnect,
         webview_new: FnWebViewNew,
+        /// M327: el fondo del webview hasta que la página pinta (2.8+; sin él, blanco como siempre).
+        webview_set_background_color: Option<FnSetBgColor>,
         load_uri: FnLoadUri,
         /// 2.40+ (aridad 8) o, si no está, el clásico (aridad 5): exactamente uno queda `Some`.
         evaluate_js: Option<FnEvalJs>,
@@ -4449,6 +4595,10 @@ mod gtk {
                 webview_new_with_ucm: {
                     let p = dlsym(webkit, c"webkit_web_view_new_with_user_content_manager".as_ptr());
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnWebViewNewWithUcm>(p))
+                },
+                webview_set_background_color: {
+                    let p = dlsym(webkit, c"webkit_web_view_set_background_color".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetBgColor>(p))
                 },
                 ucm_register: {
                     let p = dlsym(webkit, c"webkit_user_content_manager_register_script_message_handler".as_ptr());
@@ -4665,6 +4815,29 @@ mod gtk {
             // SAFETY: init_app ya corrió en este mismo hilo.
             unsafe { (api.main)() };
         }
+    }
+
+    /// M327: el color GDK de un `#rrggbb` (sin color: blanco opaco, el fondo por defecto de WebKit).
+    fn gdk_rgba(rgb: Option<(u8, u8, u8)>) -> GdkRgba {
+        match rgb {
+            Some((r, g, b)) => GdkRgba { red: r as f64 / 255.0, green: g as f64 / 255.0, blue: b as f64 / 255.0, alpha: 1.0 },
+            None => GdkRgba { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 },
+        }
+    }
+
+    /// M327: `set_background` sobre una ventana abierta (en el hilo gtk; anti use-after-destroy).
+    pub(super) fn set_background_async(webview: usize, alive: Arc<AtomicBool>, rgb: Option<(u8, u8, u8)>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Ok(api) = api().as_ref()
+                && let Some(f) = api.webview_set_background_color
+            {
+                // SAFETY: la bandera de vida garantiza que el webview sigue siendo nuestro.
+                unsafe { f(webview as Widget, &gdk_rgba(rgb)) };
+            }
+        });
     }
 
     /// Despacha `f` al hilo del loop de GTK (g_idle_add por closure; la fuente se auto-remueve).
@@ -5473,6 +5646,10 @@ mod gtk {
                 };
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
+                }
+                // M327: el fondo del webview hasta que la página pinte (WebKitGTK 2.8+).
+                if let (Some(rgb), Some(f)) = (super::effective_background(&opts), api.webview_set_background_color) {
+                    f(webview, &gdk_rgba(Some(rgb)));
                 }
                 // M231: el inspector de WebKitGTK (menú contextual "Inspect Element") solo en dev.
                 if super::devtools_enabled()
@@ -6538,6 +6715,25 @@ mod win {
         min_track: (i32, i32),
         /// M260: estilo y rectángulo previos a `fullscreen(true)`, para restaurarlos.
         fullscreen_saved: Option<(isize, RECT)>,
+        /// M327: el color (COLORREF) con que se borra el fondo del HWND hasta que WebView2 pinta;
+        /// `None` = el pincel de la clase (blanco).
+        background: Option<u32>,
+    }
+
+    /// M327: COLORREF (0x00BBGGRR) de un `#rrggbb`.
+    fn colorref((r, g, b): (u8, u8, u8)) -> u32 {
+        (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+    }
+
+    /// M327: el fondo por defecto de WebView2 (lo que muestra hasta que la página pinta), vía
+    /// `ICoreWebView2Controller2` (runtime 1.0.774+; si el runtime es más viejo, se ignora).
+    fn apply_webview_background(controller: &ICoreWebView2Controller, rgb: Option<(u8, u8, u8)>) {
+        use windows::core::Interface;
+        if let Ok(c2) = controller.cast::<ICoreWebView2Controller2>() {
+            let (r, g, b) = rgb.unwrap_or((255, 255, 255));
+            // SAFETY: interfaz viva en el hilo 1; el color se copia.
+            let _ = unsafe { c2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 255, R: r, G: g, B: b }) };
+        }
     }
 
     unsafe extern "system" fn dispatcher_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -6617,6 +6813,28 @@ mod win {
                     // SAFETY: como arriba.
                     let ctx = unsafe { &*ctx_ptr };
                     super::push_event("focused", ctx.id, "");
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            // M327: el fondo del HWND del color del tema mientras WebView2 arranca (~100 ms en
+            // blanco, si no); sin color, el borrado por defecto.
+            WM_ERASEBKGND => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba; el HDC viene en wparam durante este mensaje.
+                    let color = unsafe { (*ctx_ptr).background };
+                    if let Some(c) = color {
+                        use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HDC};
+                        unsafe {
+                            let hdc = HDC(wparam.0 as *mut _);
+                            let mut rc = RECT::default();
+                            let _ = GetClientRect(hwnd, &mut rc);
+                            let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(c));
+                            FillRect(hdc, &rc, brush);
+                            let _ = DeleteObject(brush.into());
+                        }
+                        return LRESULT(1);
+                    }
                 }
                 // SAFETY: reenvío estándar.
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -7381,11 +7599,17 @@ mod win {
                     apply_titlebar(hwnd, Some(rgb));
                 }
                 let (menu_tags, accels) = build_menubar(hwnd);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None });
+                // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
+                // WebView2 lo usa como fondo por defecto.
+                let background = super::effective_background(&opts);
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref) });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
                     Ok((controller, webview)) => {
+                        if background.is_some() {
+                            apply_webview_background(&controller, background);
+                        }
                         let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
                         if !ctx_ptr.is_null() {
                             (*ctx_ptr).controller = Some(controller);
@@ -7622,6 +7846,25 @@ mod win {
         unsafe {
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &colorref as *const u32 as *const std::ffi::c_void, 4);
         }
+    }
+
+    /// M327: `set_background` sobre una ventana abierta (en el hilo 1): WebView2 y el borrado del HWND.
+    pub(super) fn set_background_async(hwnd: usize, alive: Arc<AtomicBool>, rgb: Option<(u8, u8, u8)>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            // SAFETY: la bandera de vida garantiza que el hwnd (y su WinCtx) siguen siendo nuestros.
+            unsafe {
+                let ctx_ptr = GetWindowLongPtrW(HWND(hwnd as *mut _), GWLP_USERDATA) as *mut WinCtx;
+                if !ctx_ptr.is_null() {
+                    (*ctx_ptr).background = rgb.map(colorref);
+                    if let Some(c) = &(*ctx_ptr).controller {
+                        apply_webview_background(c, rgb);
+                    }
+                }
+            }
+        });
     }
 
     /// M239: `set_titlebar_color` sobre una ventana abierta (en el hilo 1).

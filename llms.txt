@@ -313,7 +313,9 @@ backreferences, `\\G`, atomic groups; `regex.group_str(m, text, i)`.
 Desktop apps (`import std/ui;`, a native window with the system webview; headless in
 tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h))`
 (`WindowOptions` also has `min_width min_height resizable center autosave
-titlebar_color minimizable`), `ui.set_titlebar_color(h, "#rrggbb")` later, `ui.focus(h)`,
+titlebar_color background minimizable`; `background` (1.27.22) is what the window shows until
+the page paints — no white flash; empty = `titlebar_color`), `ui.set_titlebar_color(h, "#rrggbb")`
+and `ui.set_background(h, "#rrggbb")` later, `ui.focus(h)`,
 `ui.eval_js(h, js)`, requests from the page via `ui.next_event()` + `ui.reply(h, id, s)` /
 `ui.reply_json`; serve the frontend from the process with `ui.mount_embed("", "assets")`
 (+ `mount_dir`, `mount_bytes`; `mount_embed` keeps the embed key whole, `mount_embed_at("",

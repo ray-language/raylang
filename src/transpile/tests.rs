@@ -89,6 +89,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ui_window",
     // M239: barra de título en caliente.
     "__ui_set_titlebar",
+    // M327: fondo bajo la página en caliente.
+    "__ui_set_background",
     // M235: escritorio y portapapeles; `platform` es un literal del target.
     "__ui_desktop", "__ui_clipboard", "platform", "arch",
     // M236: menús con posición y estado por tag.

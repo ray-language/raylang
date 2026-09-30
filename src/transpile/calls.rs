@@ -2674,6 +2674,8 @@ impl Transpiler {
                 self.emit_expr(out, eff[12])?; // M260: always_on_top
                 out.push_str(", ");
                 self.emit_expr(out, eff[13])?; // M260: parent (handle = id en el nativo)
+                out.push_str(", &*");
+                self.emit_expr(out, eff[14])?; // M327: background
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {
@@ -2721,6 +2723,14 @@ impl Transpiler {
             "ui_desktop" | "ui_clipboard" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str(if method == "ui_desktop" { "__ray_ui_desktop(&*" } else { "__ray_ui_clipboard(&*" });
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "ui_set_background" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_set_background(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &*");
                 self.emit_expr(out, eff[1])?;

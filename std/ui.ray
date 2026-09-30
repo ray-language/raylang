@@ -83,6 +83,11 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `titlebar_color` (M224): a `#rrggbb` color that paints the system title bar like the app's
 /// theme (macOS: transparent title bar over the window background, dark or light title text by
 /// luminance; Windows 11: the caption color; Linux ignores it; "" = system default).
+/// `background` (M327): the `#rrggbb` color the window shows UNTIL the page paints — no white
+/// or grey flash while WebKit parses a large app (macOS: the webview's under-page color and the
+/// window background; Linux: WebKitGTK's background color; Windows: WebView2's default
+/// background and the window's erase color). "" = `titlebar_color` when set (the same theme
+/// color in both places), otherwise the system's. `ui.set_background(h, color)` changes it later.
 /// `minimizable` (M230): `false` disables the minimize button (macOS yellow light, Windows
 /// `WS_MINIMIZEBOX`) for secondary panels such as an About window; GTK ignores it.
 /// `kind` (M260): `"document"` (the default window), `"panel"` (a floating utility palette that
@@ -101,6 +106,7 @@ pub struct WindowOptions {
     center: bool,
     autosave: string,
     titlebar_color: string,
+    background: string,
     minimizable: bool,
     kind: string,
     always_on_top: bool,
@@ -119,6 +125,7 @@ pub fn options(width: int, height: int) -> WindowOptions {
         center: true,
         autosave: "",
         titlebar_color: "",
+        background: "",
         minimizable: true,
         kind: "document",
         always_on_top: false,
@@ -144,7 +151,8 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.minimizable,
         o.kind,
         o.always_on_top,
-        o.parent
+        o.parent,
+        o.background
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -687,6 +695,16 @@ pub fn set_titlebar_color(h: int, color: string) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Changes the background an OPEN window shows until (and behind) the page (M327): `"#rrggbb"`
+/// like `WindowOptions.background` at creation, `""` back to the system default. Follows a
+/// theme change without reopening; pair it with `set_titlebar_color` on macOS, where the title
+/// bar shows the WINDOW background (this call only touches the webview's). `Err` for a
+/// malformed color or a closed window.
+pub fn set_background(h: int, color: string) -> Result<int, string> {
+    let r = __ui_set_background(h, color);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Opens `path` (a file or directory) with the application the desktop associates to it
 /// (M235): `open` on macOS, the default handler on Windows, `xdg-open` on freedesktop. No shell
 /// is involved (the path is an argument). Err when the path does not exist or the launcher
@@ -734,7 +752,10 @@ pub fn mount_dir(prefix: string, dir: string) -> Result<int, string> {
 }
 
 /// Mounts `data` as the in-memory file `ray://app/<path>` (M226): generated content, or assets
-/// (see `mount_embed`). Replaces a previous file at the same path.
+/// (see `mount_embed`). Replaces a previous file at the same path. In-memory files WIN over a
+/// directory mounted on the same path (`mount_dir("", dir)` plus `mount_bytes("boot/x.js", …)`
+/// serves the bytes at `ray://app/boot/x.js`, whatever the directory holds), so a program can
+/// override or add single files under a mounted tree.
 pub fn mount_bytes(path: string, data: bytes) -> Result<int, string> {
     let r = __ui_mount_bytes(path, data);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`WindowOptions.background` y `ui.set_background(h, color)`** (M327, ray-sublime): el color
+  que la ventana muestra HASTA que la página pinta — adiós al flash blanco o gris de 180–250 ms
+  mientras WebKit parsea una app grande. macOS: `underPageBackgroundColor` del webview y el fondo
+  de la ventana (con `drawsBackground = NO`); Linux: `webkit_web_view_set_background_color`;
+  Windows: `DefaultBackgroundColor` de WebView2 y el borrado de fondo del HWND. Sin `background`,
+  `titlebar_color` hace de fondo (es el mismo color que la app quiere en los dos sitios), así que
+  las apps que ya tiñen la barra lo ganan sin cambios. Un color que no sea `#rrggbb` es `Err`.
+- **`mount_bytes` documentado frente a un directorio montado**: el archivo en memoria manda sobre
+  el directorio en la misma ruta (así estaba; ahora lo dice `ray doc ui.mount_bytes` y lo guarda
+  un test).
+
 ## 1.27.21 — 2026-09-29
 
 - **Cuarto barrido de `RAYLANG-FINDINGS.md`** (M326, hallazgos #100–#105, que reabrían #7, #11,

@@ -323,6 +323,10 @@ documentada:
   `GetConsoleScreenBufferInfo` y `PeekConsoleInputW` sobre estructuras `repr(C)` propias con el
   layout de wincon.h, `ReadConsoleW`/`ReadFile`/`PeekNamedPipe` sobre buffers propios cuyo tamaño
   viaja en la llamada, y `atexit` del CRT para restaurar los modos.
+- **`src/vm/stop.rs`** — la parada cooperativa de la VM (M330 D1): un *self-pipe* propio
+  (`pipe`/`fcntl` no bloqueante + `FD_CLOEXEC` al crearlo; `write` de un octeto y `read` hasta EAGAIN
+  sobre esos fds, buffers propios que la llamada no retiene), el mismo patrón que el canal de
+  señales. Sin `libc`; sin fd en Windows/wasm.
 - **`src/dev_host.rs`** — la capa de SO de ese supervisor (M172): en unix `dup2`/`pre_exec` para
   pasar el socket al hijo sin rechazar conexiones entre reinicios, `kill(pid, SIGTERM)` al hijo
   propio y el handler de muerte del padre (`signal` + `kill` + `_exit`, async-signal-safe); en

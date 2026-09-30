@@ -15743,3 +15743,51 @@ las suites `native_depth_cli` (la recursión profunda de `main` sigue cortando p
 no por la página de guarda), `native_fibers_cli`, `native_lib_cli`, `native_corpus`,
 `native_differential`, `cli_cli` y `ui_cli`. Y en Linux (VM, 4 cores): 39 µs → 3,1–3,5 µs, y
 1,0 µs con `RAYLANG_THREADS=1` (PERFORMANCE §9).
+
+## 312. M330 — Hot reload del programa en el teléfono, D1: la parada cooperativa (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #50 y #106 (ray808). El requisito lo fijó el usuario: el hot
+reload del programa en el teléfono tiene que ser **fiel al dispositivo** (archivos, llavero, red
+local, audio y permisos del teléfono), porque un ciclo de minutos por cambio es lo que empuja a
+los equipos a abandonar un stack multiplataforma. Eso descartó la ventana remota (el programa en
+el Mac y el teléfono como webview) y decidió el arco: **la VM dentro de la app de desarrollo**.
+El diseño completo está en `docs/diseno-hot-reload-movil.md`; su resumen es que el shell
+iOS/Android generado no cambia — solo enlaza otra librería: la toolchain entera compilada para el
+teléfono, cuyo `ray_start` recibe fuente por la red y la corre en la VM.
+
+**Lo que la VM no sabía hacer.** Terminar un programa desde fuera y correr otro en el mismo
+proceso. `ray dev` de escritorio reinicia el proceso; una app iOS no puede relanzarse sola. Toda
+la fontanería estaba, repartida: la bandera atómica consultada en cada conmutación y el self-pipe
+que despierta al poller (el canal de señales, M88.1), la señal de apagado global `outcome` que
+detiene a todos los workers (M38.3b), el `fuel` decrementado por instrucción (M42.1) y
+`close_all_handles` (M129, el aislamiento de `ray test`). D1 las junta.
+
+**La parada** (`src/vm/stop.rs`): `request_stop` sube una bandera y escribe en un self-pipe cuyo
+extremo de lectura entra siempre al poller de `io_wait` — una fibra aparcada en `accept`, en
+`sleep` o en un `select_timeout` despierta al instante. `poll_next` fija `outcome = Err(STOP)`
+en la siguiente conmutación; un bucle que nunca conmuta la ve en sus **saltos hacia atrás**
+(`Jump` atrás e `IncJump`): una cuenta atrás por worker lee la bandera cada 4096 vueltas.
+`run_program` devuelve un error distinguido (`RuntimeError::is_stop`), no un crash, y una parada
+pedida sin programa en marcha se descarta al arrancar el siguiente.
+
+**Lo que se midió y se descartó.** La primera versión comprobaba la bandera en el despacho por
+instrucción, cada 64 K instrucciones por una máscara sobre el `fuel`: un bucle de 200 M de
+vueltas pasó de 6,6 a 6,9 s (+4 %). La segunda consumía el `fuel` por trozos con la recarga fuera
+de línea (`#[cold]`), dejando el bucle caliente con su mismo decremento y comparación: 7,0–7,2 s,
+peor aún — el bucle de despacho de la VM es una función enorme y cualquier cambio en ese punto
+altera su código generado. Con el campo nuevo pero el bucle intacto volvía a 6,5 s: el coste era
+el código, no la disposición. De ahí la comprobación en los saltos: 6,64–6,70 s frente a
+6,68–6,89 s del binario de 1.27.24, dentro del ruido. Y una lección de test: `while (true) { i = i + 1; }`
+no ejecuta ningún `Jump` — el cierre fusionado `IncJump` (V9) es el salto atrás; sin
+instrumentarlo, los dos tests de bucle denso colgaban.
+
+**El reset** (`builtins::runtime_reset`): `close_all_handles` (sockets, listeners, TLS, SQLite,
+pipes, watches, archivos y salidas de audio), `ui::reset_for_restart` (cierra ventanas de
+escritorio; olvida las filas del shell móvil sin avisarle — el webview sigue en pantalla y el
+`ui.open` del programa nuevo lo recarga, sin parpadeo — y vacía la cola de eventos) y vuelta al
+dominio de handles principal. Fibras, canales y tareas caen con la VM.
+
+**Verificación.** `tests/vm_stop.rs`, en su propio proceso porque la bandera es global: bucle
+denso, fibra dormida, fibra aparcada en `accept` sin plazo, tarea girando en otro worker, un
+segundo programa tras parada + reset, y una parada sin programa en marcha. Todas paran en menos
+de un cuarto de segundo desde la petición.

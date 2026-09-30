@@ -2046,6 +2046,19 @@ pub fn close_all_handles() {
     read_expired().lock().unwrap().clear();
 }
 
+/// D1 (hot reload móvil): deja el runtime del proceso como recién arrancado, para correr OTRO
+/// programa en el mismo proceso tras una parada (`vm::stop::request_stop`) o un fin normal:
+/// cierra todos los handles (sockets, listeners, TLS, SQLite, pipes, watches, archivos y las
+/// salidas de audio — su alimentador ve el EOF, drena y se retira), resetea la UI
+/// (`ui::reset_for_restart`) y vuelve al dominio de handles principal. Las fibras, canales y
+/// tareas ya cayeron con la VM. No toca el contador de ids (los handles no se reusan).
+pub fn runtime_reset() {
+    close_all_handles();
+    #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+    ray_runtime::ui::reset_for_restart();
+    set_current_domain(0);
+}
+
 // M89.2: ¿este binario trae cripto/TLS (ring/rustls)? Los motores y el CLI lo consultan para
 // dar un error CLARO (nunca un hash vacío ni una verificación que "pasa" en silencio).
 pub fn net_tls_available() -> bool {

@@ -6536,7 +6536,7 @@ mod android {
         }
     }
 
-    fn jstring_to_string(env: JniEnv, s: JObject) -> String {
+    pub(super) fn jstring_to_string(env: JniEnv, s: JObject) -> String {
         if s.is_null() {
             return String::new();
         }
@@ -6650,6 +6650,12 @@ pub fn android_scheme_close(h: i64) {
 #[cfg(target_os = "android")]
 pub fn android_capabilities(caps: i32) {
     shell::ray_ui_shell_capabilities(caps)
+}
+/// M330 D5: un `jstring` de JNI → `String` (para el `devLink` del shell de desarrollo, que vive
+/// en el cdylib generado y no puede leer strings de la JVM por su cuenta).
+#[cfg(target_os = "android")]
+pub fn android_jstring(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+    android::jstring_to_string(env as android::JniEnv, s)
 }
 
 /// M156 (C1): UTF-8 → Modified UTF-8 de la JVM, NUL-terminado — `NewStringUTF` exige MUTF-8

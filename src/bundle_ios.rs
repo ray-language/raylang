@@ -77,6 +77,7 @@ extern const char *ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
 extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve ray://app
+/*RAY_DEV_EXTERN*/
 
 // M322 — `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
 // shell de macOS: montajes, Range, ETag/304, MIME). El cuerpo se lee por trozos en una cola
@@ -243,7 +244,9 @@ static void ray_eval(const char *js) {
       ray_ui_shell_capabilities(1);
       ray_start();
     });
+    /*RAY_DEV_LINK_CONNECT*/
 }
+/*RAY_DEV_LINK_METHOD*/
 
 - (void)sceneDidDisconnect:(UIScene *)scene {
     rayWebView = nil; // la vista muere con la escena; el programa sigue
@@ -357,11 +360,15 @@ impl Signing {
 
 /// Las opciones del shell generado (M324): icono en el catálogo (ray808 #15) y audio en
 /// segundo plano (ray808 #18); `devtools` = M231.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShellOptions {
     pub devtools: bool,
     pub icon: bool,
     pub background_audio: bool,
+    /// M330 D5: el shell de DESARROLLO registra este esquema URL (su bundle id) y entrega a la
+    /// librería de desarrollo (`ray_dev_link`) toda URL con él — el QR de `ray dev --device`
+    /// escaneado con la cámara del sistema abre exactamente esta app.
+    pub url_scheme: Option<String>,
 }
 
 /// El xcconfig: TODO lo afinable vive aquí (el pbxproj solo lo referencia). La elección del
@@ -523,7 +530,7 @@ pub fn write_project(
     opts: ShellOptions,
     plist_extra: &[(String, crate::manifest::PlistValue)],
 ) -> Result<(), String> {
-    let ShellOptions { devtools, icon, background_audio } = opts;
+    let ShellOptions { devtools, icon, background_audio, ref url_scheme } = opts;
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -559,8 +566,29 @@ pub fn write_project(
     } else {
         ""
     };
-    write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line))?;
-    write("Shell/Info.plist", &info_plist(plist_extra))?;
+    {
+        let (dev_extern, dev_connect, dev_method) = match url_scheme {
+            Some(_) => (
+                "extern void ray_dev_link(const char *url); // M330 D5: enlace por el esquema URL del shell de desarrollo",
+                "for (UIOpenURLContext *ctx in connectionOptions.URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); } // M330 D5",
+                "// M330 D5: la app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {\n    for (UIOpenURLContext *ctx in URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); }\n}",
+            ),
+            None => ("", "", ""),
+        };
+        write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line).replace("/*RAY_DEV_EXTERN*/", dev_extern).replace("/*RAY_DEV_LINK_CONNECT*/", dev_connect).replace("/*RAY_DEV_LINK_METHOD*/", dev_method))?;
+    }
+    // M330 D5: el shell de desarrollo registra su esquema URL (CFBundleURLTypes).
+    let plist = match url_scheme {
+        Some(scheme) => info_plist(plist_extra).replacen(
+            "</dict>\n</plist>",
+            &format!(
+                "  <key>CFBundleURLTypes</key>\n  <array>\n    <dict>\n      <key>CFBundleURLName</key><string>{scheme}</string>\n      <key>CFBundleURLSchemes</key><array><string>{scheme}</string></array>\n    </dict>\n  </array>\n</dict>\n</plist>"
+            ),
+            1,
+        ),
+        None => info_plist(plist_extra),
+    };
+    write("Shell/Info.plist", &plist)?;
     write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, opts))?;
     write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon))?;
     write("README.md", &readme(name))?;
@@ -680,5 +708,28 @@ mod tests {
         assert_eq!(back.team.as_deref(), Some("ABC123"));
         let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default());
         assert!(!bare.contains("DEVELOPMENT_TEAM"), "{bare}");
+    }
+
+    /// M330 D5: el shell de desarrollo registra su bundle id como esquema URL y entrega a la
+    /// librería (`ray_dev_link`) las URLs que llegan al conectar la escena o con la app abierta.
+    #[test]
+    fn the_dev_shell_registers_its_url_scheme_and_hands_links_to_the_library() {
+        let base = std::env::temp_dir().join(format!("ray-ios-devlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let opts = ShellOptions { devtools: true, url_scheme: Some("org.example.app.dev".to_string()), ..Default::default() };
+        write_project(&base, "App", "org.example.app.dev", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+        let plist = std::fs::read_to_string(base.join("Shell/Info.plist")).unwrap();
+        assert!(plist.contains("<key>CFBundleURLSchemes</key><array><string>org.example.app.dev</string></array>"));
+        let scene = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
+        assert!(scene.contains("extern void ray_dev_link(const char *url);"));
+        assert!(scene.contains("connectionOptions.URLContexts"));
+        assert!(scene.contains("openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts"));
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), ShellOptions::default(), &[]).unwrap();
+        let plist = std::fs::read_to_string(base.join("Shell/Info.plist")).unwrap();
+        assert!(!plist.contains("CFBundleURLTypes"));
+        let scene = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
+        assert!(!scene.contains("ray_dev_link"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

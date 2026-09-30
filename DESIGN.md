@@ -15917,3 +15917,37 @@ archivo y el dispositivo lo reporta como `1 changed, 0 removed`. Unidad: delta (
 cuando nada cambió; borrados y cambiados exactos; codificación ida y vuelta), aplicación del
 delta sin barrido, hashes en disco, y una dependencia `path` fuera de la raíz que viaja con
 solo sus fuentes. Y el mismo flujo en el simulador de iOS con el shell de desarrollo.
+
+## 317. M330 D5 — El QR y el esquema por app (sep 2026)
+
+El usuario preguntó qué había sido del QR del diseño original, y la respuesta honesta era que
+lo había recortado en D3 sin consultarlo: leerlo desde la app exigía cámara, AVFoundation o
+CameraX y permisos. Al replantearlo salió una versión sin nada de eso: **escanear con la
+cámara del sistema** y que el sistema abra el shell por su esquema URL. La segunda pregunta
+del usuario decidió el diseño: con varias apps en desarrollo instaladas, ¿a cuál va el QR? Un
+esquema genérico `ray-dev://` lo deja al azar en iOS y a un selector en Android. La salida es
+que **el esquema sea el id del propio shell de desarrollo** (`org.raylang.myapp.dev://…`),
+único por construcción y derivable en el Mac con la misma regla que ya usa `ray bundle`; cada
+proyecto tiene su shell, su esquema y su QR.
+
+**Lo que cambia en los shells, y solo en los de desarrollo.** iOS registra el esquema en
+`CFBundleURLTypes` y entrega la URL en la conexión de escena (arranque en frío) o en
+`scene:openURLContexts:` (app abierta); Android, un `intent-filter` `BROWSABLE` y la URL de
+`getIntent()`/`onNewIntent`. Ambos llaman a `ray_dev_link(url)` — en Android por un
+`RayBridge.devLink` nativo que define el cdylib de desarrollo, con un helper público nuevo de
+`ray-runtime` para leer el `jstring`. El shell de la app real no lleva ni el esquema ni la
+referencia al símbolo: los tests de los dos generadores lo aseveran en ambos sentidos.
+
+**Quién recoge el enlace.** `pending_link` es un buzón; la página de emparejamiento lo mira
+cada 100 ms y gana a lo tecleado, y con un enlace ya vivo el bucle del dispositivo lee con
+plazo de 1 s y, al ver uno nuevo, cierra y re-enlaza: escanear otra vez con la app abierta es
+la forma de cambiar de sesión sin tocar nada. El `HELLO` lleva el esquema usado y el
+anfitrión avisa si no es el suyo. El QR lo codifica `qrcode` (Rust puro, sin features; entra
+al inventario de SECURITY.md) y solo se imprime cuando stderr es un terminal.
+
+**Verificación.** Unidad: URL con esquema de app, QR cuadrado, buzón de enlace consumido una
+vez, plist y `SceneDelegate.m` con y sin esquema, manifiesto y `MainActivity`/`RayBridge`
+con y sin esquema, el fuente del cdylib con `devLink`. En el simulador: app en frío sin
+enlace guardado → página de emparejamiento → `simctl openurl` con el enlace → `running`; y
+un segundo `openurl` con la app enlazada → re-enlace. En el emulador, lo mismo con `am start
+-a VIEW -d`.

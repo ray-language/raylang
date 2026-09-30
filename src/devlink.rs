@@ -101,18 +101,69 @@ fn get_str(buf: &[u8], pos: &mut usize) -> Option<String> {
 
 // ── La URL del enlace ───────────────────────────────────────────────────────
 
-/// `ray-dev://host:port/token` → (host:port, token).
+/// El esquema genérico del enlace (cliente de escritorio, tecleo manual).
+pub const GENERIC_SCHEME: &str = "ray-dev";
+
+/// `<esquema>://host:port/token` → (host:port, token). El esquema es `ray-dev` o, D5, el id
+/// del shell de desarrollo (`org.raylang.app.dev`): así un QR abre exactamente esa app.
 pub fn parse_url(url: &str) -> Result<(String, String), String> {
-    let rest = url
-        .strip_prefix("ray-dev://")
-        .ok_or_else(|| format!("not a ray-dev:// URL: {url}"))?;
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("not a device link URL: {url}"))?;
+    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+')) {
+        return Err(format!("not a device link URL: {url}"));
+    }
     let (addr, token) = rest
         .split_once('/')
         .ok_or_else(|| format!("the URL has no token: {url}"))?;
     if addr.is_empty() || token.is_empty() {
-        return Err(format!("malformed ray-dev URL: {url}"));
+        return Err(format!("malformed device link URL: {url}"));
     }
     Ok((addr.to_string(), token.to_string()))
+}
+
+/// El esquema de una URL de enlace (`ray-dev`, o el id del shell).
+pub fn url_scheme(url: &str) -> &str {
+    url.split_once("://").map(|(s, _)| s).unwrap_or("")
+}
+
+/// D5: el enlace como código QR para la terminal (bloques Unicode, dos módulos por línea).
+/// `None` si no cupo (no ocurre con una URL de enlace; el tope del QR son ~2 KB).
+pub fn qr_text(url: &str) -> Option<String> {
+    use qrcode::render::unicode;
+    let code = qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::L).ok()?;
+    Some(code.render::<unicode::Dense1x2>().dark_color(unicode::Dense1x2::Light).light_color(unicode::Dense1x2::Dark).quiet_zone(true).build())
+}
+
+/// D5: el enlace que el shell recibe por su esquema URL (un QR escaneado con la cámara del
+/// sistema). Lo deja aquí y el bucle del dispositivo lo recoge: en la página de emparejamiento
+/// al instante, y con un enlace vivo al siguiente tick (cierra la conexión y vuelve a enlazar).
+fn pending_link() -> &'static Mutex<Option<String>> {
+    static P: std::sync::OnceLock<Mutex<Option<String>>> = std::sync::OnceLock::new();
+    P.get_or_init(|| Mutex::new(None))
+}
+
+/// Ofrece un enlace nuevo (D5). Se ignora si no parece una URL de enlace.
+pub fn offer_link(url: &str) {
+    if parse_url(url).is_ok() {
+        *pending_link().lock().unwrap_or_else(|e| e.into_inner()) = Some(url.to_string());
+    }
+}
+
+fn take_pending_link() -> Option<String> {
+    pending_link().lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// D5: la entrada C del shell de desarrollo para un enlace recibido por su esquema URL.
+///
+/// # Safety
+/// `url` debe ser un C-string NUL-terminated válido durante la llamada (NULL se ignora).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ray_dev_link(url: *const std::ffi::c_char) {
+    if url.is_null() {
+        return;
+    }
+    // SAFETY: contrato del shell — C-string válido durante la llamada; se copia antes de volver.
+    let url = unsafe { std::ffi::CStr::from_ptr(url) }.to_string_lossy().into_owned();
+    offer_link(&url);
 }
 
 /// La IP de LAN del anfitrión: la ruta por defecto, sin enviar nada (un UDP `connect` no manda
@@ -412,8 +463,11 @@ struct Device {
 pub struct Host {
     devices: Arc<Mutex<Vec<Device>>>,
     latest: Arc<Mutex<Option<Files>>>,
-    /// La URL que el dispositivo necesita (`ray-dev://ip:puerto/token`).
+    /// La URL que el dispositivo necesita (`<esquema>://ip:puerto/token`; el esquema es el id
+    /// del shell de desarrollo si se conoce, o `ray-dev`).
     pub url: String,
+    /// El esquema del enlace (ver `url`).
+    pub scheme: String,
     /// El puerto local (para el cliente de prueba en la misma máquina).
     pub port: u16,
 }
@@ -422,13 +476,13 @@ impl Host {
     /// Escucha en un puerto alto aleatorio de todas las interfaces (el teléfono llega por la
     /// LAN) y arranca el hilo de aceptación.
     pub fn start() -> Result<Host, String> {
-        Host::start_with_state(None)
+        Host::start_with_state(None, GENERIC_SCHEME)
     }
 
     /// Como [`Host::start`], pero **recuerda puerto y token** en `state` (D3): el teléfono se
     /// empareja UNA vez por proyecto y `ray dev --device` vuelve a escuchar en el mismo sitio
     /// la próxima sesión (si el puerto está ocupado, toma otro y lo dice; el token se conserva).
-    pub fn start_with_state(state: Option<&Path>) -> Result<Host, String> {
+    pub fn start_with_state(state: Option<&Path>, scheme: &str) -> Result<Host, String> {
         let saved = state.and_then(|p| std::fs::read_to_string(p).ok()).map(|t| {
             let grab = |k: &str| t.lines().find_map(|l| l.strip_prefix(k).map(|v| v.trim().to_string()));
             (grab("port=").and_then(|p| p.parse::<u16>().ok()), grab("token="))
@@ -448,13 +502,15 @@ impl Host {
         if let Some(p) = state {
             let _ = std::fs::write(p, format!("# ray dev --device: this project's link (do not share)\nport={port}\ntoken={token}\n"));
         }
-        let url = format!("ray-dev://{}:{port}/{token}", lan_ip());
+        let url = format!("{scheme}://{}:{port}/{token}", lan_ip());
         let host = Host {
             devices: Arc::new(Mutex::new(Vec::new())),
             latest: Arc::new(Mutex::new(None)),
             url,
+            scheme: scheme.to_string(),
             port,
         };
+        let own_scheme = scheme.to_string();
         let devices = host.devices.clone();
         let latest = host.latest.clone();
         std::thread::spawn(move || {
@@ -462,7 +518,8 @@ impl Host {
                 let devices = devices.clone();
                 let latest = latest.clone();
                 let token = token.clone();
-                std::thread::spawn(move || serve_device(stream, &token, devices, latest));
+                let own_scheme = own_scheme.clone();
+                std::thread::spawn(move || serve_device(stream, &token, &own_scheme, devices, latest));
             }
         });
         Ok(host)
@@ -487,6 +544,11 @@ impl Host {
             eprintln!("[dev] {dropped} device(s) disconnected");
         }
         (devices.len(), sent_files)
+    }
+
+    /// La misma URL con el esquema genérico (para `ray dev-client` y el tecleo manual).
+    pub fn generic_url(&self) -> String {
+        format!("{GENERIC_SCHEME}://{}", self.url.split_once("://").map(|(_, r)| r).unwrap_or(""))
     }
 
     /// Nº de dispositivos conectados ahora mismo.
@@ -514,15 +576,20 @@ fn send_update(d: &mut Device, files: &[(String, Vec<u8>)]) -> std::io::Result<u
     Ok(n)
 }
 
-fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Device>>>, latest: Arc<Mutex<Option<Files>>>) {
+fn serve_device(mut stream: TcpStream, token: &str, own_scheme: &str, devices: Arc<Mutex<Vec<Device>>>, latest: Arc<Mutex<Option<Files>>>) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let Ok((KIND_HELLO, body)) = read_frame(&mut stream) else { return };
     let mut pos = 0;
     let (Some(got), Some(name), Some(version)) = (get_str(&body, &mut pos), get_str(&body, &mut pos), get_str(&body, &mut pos)) else { return };
+    // D5: el esquema con el que enlazó (cuarto campo; un dispositivo viejo no lo manda).
+    let used_scheme = get_str(&body, &mut pos).unwrap_or_default();
     if got != token {
         eprintln!("[dev] a device presented a wrong token; ignored");
         return;
+    }
+    if !used_scheme.is_empty() && used_scheme != GENERIC_SCHEME && used_scheme != own_scheme {
+        eprintln!("[dev] warning: {name} linked with the scheme '{used_scheme}' but this project's development shell is '{own_scheme}' — is it the right app?");
     }
     let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     eprintln!("[dev] device connected: {name} ({peer}, raylang {version})");
@@ -591,14 +658,15 @@ fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Devic
 /// conseguirlo y al perder el enlace), recibe snapshots en `dir/project` y ejecuta el programa
 /// en la VM, reiniciándolo con cada snapshot. No retorna salvo error irrecuperable.
 pub fn run_device(url: &str, dir: &Path, device_name: &str) -> Result<(), String> {
-    run_device_until(url, dir, device_name, None)
+    run_device_until(url, dir, device_name, None).map(|_| ())
 }
 
 /// Como [`run_device`], pero se rinde (`Err`) si el anfitrión lleva `unreachable_after` sin
 /// responder (D3: la librería de desarrollo vuelve a la página de emparejamiento — la URL
 /// guardada puede haber caducado). `None` = reintentar para siempre (el cliente de escritorio).
-pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_after: Option<Duration>) -> Result<(), String> {
+pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_after: Option<Duration>) -> Result<Option<String>, String> {
     let (addr, token) = parse_url(url)?;
+    let scheme = url_scheme(url).to_string();
     let project = dir.join("project");
     std::fs::create_dir_all(&project).map_err(|e| format!("{}: {e}", project.display()))?;
     let mut runner = Runner::default();
@@ -610,6 +678,9 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
         ) {
             Ok(s) => s,
             Err(e) => {
+                if let Some(new_link) = take_pending_link() {
+                    return Ok(Some(new_link));
+                }
                 let since = *unreachable_since.get_or_insert_with(std::time::Instant::now);
                 if let Some(limit) = unreachable_after
                     && since.elapsed() > limit
@@ -628,6 +699,7 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
         put_str(&mut hello, &token);
         put_str(&mut hello, device_name);
         put_str(&mut hello, env!("CARGO_PKG_VERSION"));
+        put_str(&mut hello, &scheme);
         if write_frame(&mut stream, KIND_HELLO, &hello).is_err() {
             continue;
         }
@@ -636,6 +708,8 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
             continue;
         }
         eprintln!("[dev-client] linked to {addr}");
+        // D5: lectura con plazo para atender un enlace nuevo (QR escaneado con la app ya enlazada).
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
         let status_stream = Arc::new(Mutex::new(stream.try_clone().map_err(|e| e.to_string())?));
         runner.status = Some(status_stream.clone());
         // D4: la consola remota — cada print/eprint del programa viaja también al anfitrión.
@@ -674,6 +748,14 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
                     runner.start(&project);
                 }
                 Ok(_) => {}
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                    if let Some(new_link) = take_pending_link() {
+                        crate::set_output_mirror(None);
+                        runner.status = None;
+                        eprintln!("[dev-client] new link received; relinking");
+                        return Ok(Some(new_link));
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -863,7 +945,8 @@ fn shell_loop(explicit: Option<String>, dir: &Path, name: &str) {
         };
         let _ = std::fs::write(&saved, &link);
         match run_device_until(&link, dir, name, Some(Duration::from_secs(20))) {
-            Ok(()) => return,
+            Ok(None) => return,
+            Ok(Some(new_link)) => url = Some(new_link),
             Err(e) => {
                 eprintln!("[dev-client] {e}");
                 url = Some(pair(Some(&link), name));
@@ -885,13 +968,13 @@ button{margin-top:14px;width:100%;padding:14px;font-size:17px;border:0;border-ra
 #msg{margin-top:16px;color:#f87171;min-height:1.4em}
 </style></head><body>
 <h1>raylang dev — /*NAME*/</h1>
-<p>Run <code>ray dev --device</code> on your Mac and enter the link it prints.</p>
+<p>Run <code>ray dev --device</code> on your Mac and scan its QR with the camera, or enter the link it prints.</p>
 <input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autofocus autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
 <button id="go">Link</button>
 <div id="msg">/*MSG*/</div>
 <script>
 const u=document.getElementById('u');
-document.getElementById('go').onclick=()=>{const v=u.value.trim();if(!v.startsWith('ray-dev://')){document.getElementById('msg').textContent='The link starts with ray-dev://';return;}document.getElementById('msg').textContent='Linking…';window.ray.send(v);};
+document.getElementById('go').onclick=()=>{const v=u.value.trim();if(!v.includes('://')){document.getElementById('msg').textContent='Paste the link that ray dev --device prints (or scan its QR with the camera).';return;}document.getElementById('msg').textContent='Linking…';window.ray.send(v);};
 u.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('go').click();});
 </script></body></html>"#;
 
@@ -924,13 +1007,17 @@ pub fn pair(prefill: Option<&str>, name: &str) -> String {
             eprintln!("[dev-client] cannot show the pairing page: {e}");
         }
         loop {
-            match ui::next_event_blocking(0) {
-                Some((kind, _, tag)) if kind == "message" && tag.starts_with("ray-dev://") => {
+            // D5: un enlace por el esquema URL (QR escaneado) gana a la página.
+            if let Some(link) = take_pending_link() {
+                ui::reset_for_restart();
+                return link;
+            }
+            match ui::next_event_blocking(100) {
+                Some((kind, _, tag)) if kind == "message" && parse_url(&tag).is_ok() => {
                     ui::reset_for_restart();
                     return tag;
                 }
-                Some(_) => {}
-                None => std::thread::sleep(Duration::from_millis(100)),
+                _ => {}
             }
         }
     }
@@ -952,8 +1039,25 @@ mod tests {
         let (addr, token) = parse_url("ray-dev://192.168.1.20:41234/abcd").unwrap();
         assert_eq!(addr, "192.168.1.20:41234");
         assert_eq!(token, "abcd");
-        assert!(parse_url("http://x/y").is_err());
+        // D5: el esquema puede ser el id del shell de desarrollo.
+        let (addr2, token2) = parse_url("org.raylang.app.dev://192.168.1.20:41234/abcd").unwrap();
+        assert_eq!((addr2, token2), (addr, token));
+        assert_eq!(url_scheme("org.raylang.app.dev://h:1/t"), "org.raylang.app.dev");
         assert!(parse_url("ray-dev://host:1/").is_err());
+        assert!(parse_url("no scheme").is_err());
+        assert!(parse_url("bad scheme://h:1/t").is_err());
+    }
+
+    #[test]
+    fn the_qr_renders_and_a_scanned_link_is_offered_once() {
+        let qr = qr_text("org.raylang.app.dev://192.168.1.20:41234/0123456789abcdef0123456789abcdef").unwrap();
+        assert!(qr.lines().count() > 10, "a QR is several lines tall");
+        assert!(qr.lines().all(|l| l.chars().count() == qr.lines().next().unwrap().chars().count()), "square");
+        offer_link("not a link");
+        assert!(take_pending_link().is_none());
+        offer_link("org.raylang.app.dev://h:1/t");
+        assert_eq!(take_pending_link().as_deref(), Some("org.raylang.app.dev://h:1/t"));
+        assert!(take_pending_link().is_none(), "consumed");
     }
 
     #[test]

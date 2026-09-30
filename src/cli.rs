@@ -1471,8 +1471,10 @@ fn cmd_dev_device(args: &[String]) {
         .unwrap_or_default();
     let _ = DEV_EMBED_DIRS.set(embed_dirs);
     // D3: puerto y token se recuerdan por proyecto (`.ray-dev`, oculto y fuera del snapshot):
-    // el teléfono se empareja una vez.
-    let host = match crate::devlink::Host::start_with_state(Some(&root.join(".ray-dev"))) {
+    // el teléfono se empareja una vez. D5: el esquema del enlace es el id del shell de desarrollo
+    // (`<app id>.dev`, la misma regla que `ray bundle --dev`) — el QR abre exactamente esa app.
+    let scheme = format!("{}.dev", dev_app_id(&root));
+    let host = match crate::devlink::Host::start_with_state(Some(&root.join(".ray-dev")), &scheme) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("[dev] {e}");
@@ -1480,7 +1482,12 @@ fn cmd_dev_device(args: &[String]) {
         }
     };
     eprintln!("[dev] device link: {}", host.url);
-    eprintln!("[dev] on this machine: ray dev-client {} <dir>", host.url);
+    if std::io::IsTerminal::is_terminal(&std::io::stderr())
+        && let Some(qr) = crate::devlink::qr_text(&host.url)
+    {
+        eprintln!("[dev] scan it with the phone's camera (the development shell opens):\n{qr}");
+    }
+    eprintln!("[dev] on this machine: ray dev-client {} <dir>", host.generic_url());
     eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml, .ray-deps + embedded assets); Ctrl-C to exit", root.display());
     let publish = |host: &crate::devlink::Host, what: &str| {
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -1520,6 +1527,21 @@ fn cmd_dev_device(args: &[String]) {
         hashes = current_hashes;
         publish(&host, &format!("change in {change}"));
     }
+}
+
+/// M330 D5: el id de la app del proyecto en `root` — `[app] id` del ray.toml, o el derivado del
+/// nombre de la app/paquete con la misma regla que `ray bundle` (`org.raylang.<slug>`).
+fn dev_app_id(root: &Path) -> String {
+    let manifest = Manifest::load(root).ok().flatten();
+    if let Some(id) = manifest.as_ref().and_then(|m| m.app_id.clone()) {
+        return id;
+    }
+    let name = manifest
+        .as_ref()
+        .and_then(|m| m.app_name.clone().or_else(|| Some(m.name.clone())))
+        .unwrap_or_else(|| root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "app".to_string()));
+    let slug: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    format!("org.raylang.{}", slug.trim_matches('-'))
 }
 
 /// M330 D2: `ray dev-client <ray-dev://…> <dir>` — el lado dispositivo del enlace, en
@@ -2364,7 +2386,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio))
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None })
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -2553,7 +2575,8 @@ fn cmd_bundle(args: &[String]) {
         }
         // M324 (ray808 #15): el icono se genera ANTES del proyecto, que solo lo cablea si existe.
         let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i)));
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio };
+        // M330 D5: el shell de desarrollo registra su bundle id como esquema URL (el QR del enlace).
+        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, url_scheme: dev.then(|| bundle_id.clone()) };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
@@ -3529,6 +3552,11 @@ pub(crate) fn dev_lib_rust_source(android: bool) -> String {
             "#[unsafe(no_mangle)]\n",
             "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_capabilities(_env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, caps: i32) {\n",
             "    ray_runtime::ui::android_capabilities(caps)\n",
+            "}\n",
+            // M330 D5: el enlace recibido por el esquema URL del shell de desarrollo (el QR).
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_devLink(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, url: *mut std::ffi::c_void) {\n",
+            "    raylang::devlink::offer_link(&ray_runtime::ui::android_jstring(env, url));\n",
             "}\n",
         ));
     }
@@ -5850,10 +5878,11 @@ mod tests {
             "Java_org_raylang_shell_RayBridge_schemeRead",
             "Java_org_raylang_shell_RayBridge_schemeClose",
             "Java_org_raylang_shell_RayBridge_capabilities",
+            "Java_org_raylang_shell_RayBridge_devLink",
         ] {
             assert!(android.contains(&format!("fn {sym}(")), "Android dev lib lacks {sym}");
         }
-        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 10);
+        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 11);
         let ios = super::dev_lib_rust_source(false);
         assert!(ios.contains("fn ray_start("));
         assert!(!ios.contains("JNI_OnLoad"));

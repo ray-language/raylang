@@ -78,7 +78,7 @@ fn a_change_on_the_host_restarts_the_program_on_the_linked_device() {
     let host_err = tail(host.stderr.take().unwrap());
     let host_out = tail(host.stdout.take().unwrap());
     let _host = Guard(host);
-    assert!(wait_for(&host_err, "device link: ray-dev://", 30), "no link URL:\n{}", host_err.lock().unwrap());
+    assert!(wait_for(&host_err, "device link: ", 30), "no link URL:\n{}", host_err.lock().unwrap());
     let url = {
         let text = host_err.lock().unwrap();
         let line = text.lines().find(|l| l.contains("device link: ")).unwrap();

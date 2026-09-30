@@ -42,8 +42,18 @@ android.useAndroidX=true
 /// acotado por la network security config. `configChanges`: la rotación no recrea la Activity.
 /// M160: `android:icon` SOLO cuando los PNG multi-densidad se generaron de verdad — el
 /// atributo con los mipmaps ausentes rompe el build en aapt (generar-primero-decidir-después).
-fn android_manifest(icon: bool, background_audio: bool) -> String {
+fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>) -> String {
     let icon_attr = if icon { "\n      android:icon=\"@mipmap/ic_launcher\"" } else { "" };
+    // M330 D5: el shell de desarrollo abre las URLs de su propio esquema (el QR del enlace);
+    // `singleTask` para que un enlace con la app abierta llegue a `onNewIntent` de la actividad
+    // viva (con `standard` se apilaría una segunda actividad con otro WebView).
+    let launch_mode = if url_scheme.is_some() { "\n        android:launchMode=\"singleTask\"" } else { "" };
+    let url_filter = match url_scheme {
+        Some(scheme) => format!(
+            "\n      <intent-filter>\n        <action android:name=\"android.intent.action.VIEW\" />\n        <category android:name=\"android.intent.category.DEFAULT\" />\n        <category android:name=\"android.intent.category.BROWSABLE\" />\n        <data android:scheme=\"{scheme}\" />\n      </intent-filter>"
+        ),
+        None => String::new(),
+    };
     // M324 (ray808 #18): el foreground service de reproducción y sus permisos (FOREGROUND_SERVICE
     // desde API 28, su tipo mediaPlayback desde API 34, la notificación desde API 33).
     let (audio_perms, audio_service) = if background_audio {
@@ -64,12 +74,12 @@ fn android_manifest(icon: bool, background_audio: bool) -> String {
       android:theme="@android:style/Theme.Material.Light.NoActionBar">
     <activity
         android:name=".MainActivity"
-        android:exported="true"
+        android:exported="true"{launch_mode}
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
-      </intent-filter>
+      </intent-filter>{url_filter}
     </activity>{audio_service}
   </application>
 </manifest>
@@ -196,7 +206,9 @@ public class MainActivity extends Activity {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
         }
         RayBridge.startOnce();
+        /*RAY_DEV_LINK_ONCREATE*/
     }
+    /*RAY_DEV_LINK_METHOD*/
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -342,6 +354,7 @@ public final class RayBridge {
     public static native int start();
 
     public static native void pushEvent(String kind, long window, String tag);
+    /*RAY_DEV_NATIVE*/
 
     // M322: el esquema ray://app/… (ver RayScheme).
     public static native long schemeOpen(String url, String method, String range, String ifNoneMatch);
@@ -638,7 +651,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false, None).unwrap();
             let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -656,6 +669,7 @@ pub fn write_project(
     icon: bool,
     devtools: bool,
     background_audio: bool,
+    url_scheme: Option<&str>,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -667,19 +681,34 @@ pub fn write_project(
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
     write("app/build.gradle", &app_build_gradle(app_id, version, abis))?;
-    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio))?;
+    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
     // M231: `--devtools` → depuración remota desde chrome://inspect (Chrome del escritorio).
     let devtools_line = if devtools { "WebView.setWebContentsDebuggingEnabled(true); // ray bundle --devtools" } else { "" };
     // M324 (ray808 #18): el flag de audio en segundo plano va como constante de la clase.
     let bg = if background_audio { "true" } else { "false" };
-    let main = MAIN_ACTIVITY_JAVA.replace("/*RAY_DEVTOOLS*/", devtools_line).replace("/*RAY_BACKGROUND_AUDIO*/false", bg);
+    // M330 D5: el shell de desarrollo entrega a la librería las URLs de su esquema (el QR).
+    let (dev_oncreate, dev_method, dev_native) = match url_scheme {
+        Some(scheme) => (
+            format!("rayDevLink(getIntent()); // M330 D5: enlace recibido al arrancar ({scheme}://…)"),
+            format!(
+                "// M330 D5: la app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n    @Override\n    protected void onNewIntent(Intent intent) {{\n        super.onNewIntent(intent);\n        rayDevLink(intent);\n    }}\n\n    private static void rayDevLink(Intent intent) {{\n        android.net.Uri data = intent != null ? intent.getData() : null;\n        if (data != null && \"{scheme}\".equals(data.getScheme())) {{\n            RayBridge.devLink(data.toString());\n        }}\n    }}"
+            ),
+            "public static native void devLink(String url); // M330 D5: solo la librería de desarrollo lo define".to_string(),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
+    let main = MAIN_ACTIVITY_JAVA
+        .replace("/*RAY_DEVTOOLS*/", devtools_line)
+        .replace("/*RAY_BACKGROUND_AUDIO*/false", bg)
+        .replace("/*RAY_DEV_LINK_ONCREATE*/", &dev_oncreate)
+        .replace("/*RAY_DEV_LINK_METHOD*/", &dev_method);
     write("app/src/main/java/org/raylang/shell/MainActivity.java", &main)?;
     // M325 (findings #99): siempre — MainActivity la referencia (tras la constante) y sin la clase
     // `gradle assembleDebug` fallaba con «cannot find symbol: variable RayPlaybackService».
     write("app/src/main/java/org/raylang/shell/RayPlaybackService.java", RAY_PLAYBACK_SERVICE_JAVA)?;
-    write("app/src/main/java/org/raylang/shell/RayBridge.java", RAY_BRIDGE_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayBridge.java", &RAY_BRIDGE_JAVA.replace("/*RAY_DEV_NATIVE*/", &dev_native))?;
     write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
     write("README.md", README)?;
     Ok(())
@@ -703,10 +732,10 @@ mod tests {
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
         assert!(app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
-        assert!(android_manifest(false, false)
+        assert!(android_manifest(false, false, None)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
-        assert!(!android_manifest(false, false).contains("usesCleartextTraffic"));
+        assert!(!android_manifest(false, false, None).contains("usesCleartextTraffic"));
         let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
@@ -736,34 +765,34 @@ mod tests {
         assert!(RAY_SCHEME_JAVA.contains("(\"ray\".equals(scheme) && \"app\".equals(host))"));
         // If-None-Match nunca viaja: WebResourceResponse no admite 304.
         assert!(RAY_SCHEME_JAVA.contains("RayBridge.schemeOpen(url, method == null ? \"GET\" : method, range, null)"));
-        assert!(!android_manifest(false, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
+        assert!(!android_manifest(false, false, None).contains("app.ray.invalid"), "the alias needs no manifest entry");
     }
 
     #[test]
     fn the_manifest_only_declares_the_icon_when_the_mipmaps_exist() {
         // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
-        assert!(android_manifest(true, false).contains("android:icon=\"@mipmap/ic_launcher\""));
-        assert!(!android_manifest(false, false).contains("android:icon"));
+        assert!(android_manifest(true, false, None).contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(!android_manifest(false, false, None).contains("android:icon"));
     }
 
     /// M324 (ray808 #18): `[android] background_audio` declara el servicio de reproducción con sus
     /// permisos, escribe la clase y enciende el flag de MainActivity; sin él, nada de eso existe.
     #[test]
     fn background_audio_adds_the_foreground_service_only_when_asked() {
-        let with = android_manifest(false, true);
+        let with = android_manifest(false, true, None);
         assert!(with.contains("android:name=\".RayPlaybackService\""), "{with}");
         assert!(with.contains("android:foregroundServiceType=\"mediaPlayback\""), "{with}");
         for perm in ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK", "POST_NOTIFICATIONS"] {
             assert!(with.contains(&format!("android.permission.{perm}")), "{perm}");
         }
-        let without = android_manifest(false, false);
+        let without = android_manifest(false, false, None);
         assert!(!without.contains("RayPlaybackService") && !without.contains("FOREGROUND_SERVICE"), "{without}");
         assert!(MAIN_ACTIVITY_JAVA.contains("if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.start(this); }"));
         assert!(RAY_PLAYBACK_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK"));
         let base = std::env::temp_dir().join(format!("ray_android_audio_{}", std::process::id()));
         for (bg, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg, None).unwrap();
             let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
             assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
@@ -788,5 +817,31 @@ mod tests {
         // Y el README enseña el flujo completo.
         assert!(README.contains("keytool -genkeypair"), "release flow in README");
         assert!(README.contains("assembleRelease"));
+    }
+
+    /// M330 D5: el shell de desarrollo abre las URLs de su esquema (el QR del enlace) y las
+    /// entrega a la librería; el shell normal no lleva nada de eso.
+    #[test]
+    fn the_dev_shell_registers_its_url_scheme_and_hands_links_to_the_library() {
+        let with = android_manifest(false, false, Some("org.example.app.dev"));
+        assert!(with.contains("<data android:scheme=\"org.example.app.dev\" />"));
+        assert!(with.contains("android.intent.category.BROWSABLE"));
+        assert!(with.contains("android:launchMode=\"singleTask\""));
+        assert!(!android_manifest(false, false, None).contains("launchMode"));
+        assert!(!android_manifest(false, false, None).contains("android.intent.action.VIEW"));
+        let base = std::env::temp_dir().join(format!("ray-android-devlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        write_project(&base, "App", "org.example.app.dev", "1.0.0", "'arm64-v8a'", false, true, false, Some("org.example.app.dev")).unwrap();
+        let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
+        assert!(main.contains("rayDevLink(getIntent());"));
+        assert!(main.contains("protected void onNewIntent(Intent intent)"));
+        assert!(main.contains("\"org.example.app.dev\".equals(data.getScheme())"));
+        let bridge = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayBridge.java")).unwrap();
+        assert!(bridge.contains("public static native void devLink(String url);"));
+        write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None).unwrap();
+        let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
+        assert!(!main.contains("rayDevLink"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

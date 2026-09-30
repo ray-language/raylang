@@ -1481,7 +1481,11 @@ que después compila `ray bundle` (VM y nativo son byte-idénticos por contrato)
 
 ```
 ray dev --device
-[dev] device link: ray-dev://192.168.1.20:52731/3f9c…
+[dev] device link: org.raylang.myapp.dev://192.168.1.20:52731/3f9c…
+[dev] scan it with the phone's camera (the development shell opens):
+█████████████████████████████████
+████ ▄▄▄▄▄ █▀ █▄▀ ▄▀▄ █ ▄▄▄▄▄ ████
+…
 [dev] on this machine: ray dev-client ray-dev://192.168.1.20:52731/3f9c… <dir>
 [dev] start: snapshot of 4 files (12 KB) sent to 0 device(s)
 [dev] device connected: iPhone (192.168.1.31, raylang 1.27.24)
@@ -1510,14 +1514,19 @@ release. En escritorio, `ray dev-client <url> <dir>` es el mismo lado dispositiv
 Xcode de siempre, con nombre `<app>-dev` y bundle id `<id>.dev` para que conviva con la app
 real, pero enlazando la **librería de desarrollo** (la toolchain entera —loader, checker, VM y
 runtime— compilada para iOS; su `ray_start` arranca el enlace) en vez del programa. El shell
-no cambia: son los mismos símbolos. Instálala una vez desde Xcode; al abrirse muestra una
-**página de emparejamiento** donde se teclea la URL que imprimió `ray dev --device`; la
-recuerda (`Application Support/ray-dev/link.url`) y desde entonces cada guardado en el Mac
-reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
+no cambia: son los mismos símbolos. Instálala una vez desde Xcode. **Para emparejarla, escanea
+con la cámara del teléfono el QR** que imprime `ray dev --device`: el enlace lleva como
+esquema el id del shell de desarrollo (`org.raylang.myapp.dev://…`), que el shell registra
+como suyo, así que el sistema abre exactamente esa app —con varias apps en desarrollo
+instaladas, cada QR va a la suya, sin selector—. Si la app ya estaba abierta y enlazada, un
+QR nuevo la re-enlaza en el acto. Como respaldo, al abrirse sin enlace muestra una **página de
+emparejamiento** donde se teclea la URL. La recuerda (`Application Support/ray-dev/link.url`)
+y desde entonces cada guardado en el Mac reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
 otro puerto), vuelve a la página con la URL anterior rellenada. Va con `--devtools` implícito
 (inspeccionable desde el menú Develop de Safari). **En Android** es lo mismo con `ray bundle
---android --dev`: el proyecto Gradle de siempre, application id `<id>.dev`, y el `.so` de
-desarrollo define él mismo los símbolos JNI del shell. La librería de desarrollo se compila
+--android --dev`: el proyecto Gradle de siempre, application id `<id>.dev`, el `.so` de
+desarrollo define él mismo los símbolos JNI del shell, y el QR se escanea con la cámara o
+Google Lens (el shell registra el esquema con un `intent-filter`). La librería de desarrollo se compila
 desde el árbol de fuentes de la toolchain si `ray` se construyó ahí (unos minutos en frío por
 target, cacheado después); una instalación sin fuentes descarga el asset prebuilt de su
 versión (`ray-dev-lib-<target>.tar.gz` de la release, a `~/.ray/dev-lib/<versión>/`), y

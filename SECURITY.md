@@ -213,6 +213,7 @@ en el propio Rust del proyecto, sin crates.
 | `rustls` + `webpki-roots` + `rustls-pki-types` | TLS y verificación de certificados | feature `net-tls` |
 | `rusqlite` (`bundled`) | SQLite embebido: sin dependencia del sistema, versión determinista | feature `sqlite` |
 | `notify` | watch de filesystem por eventos de kernel (FSEvents en macOS, inotify en Linux, kqueue en BSD): la recursividad sobre árboles resuelta — kqueue crudo exige un fd por archivo. Los eventos corren en hilos del crate y se puentean por un self-pipe | feature `watch` |
+| `qrcode` | M330 D5: el QR del enlace de `ray dev --device` en la terminal (bloques Unicode). Rust puro, sin dependencias ni `unsafe`, sin features (ni `image` ni `svg`); solo codifica — nunca lee nada del exterior | toolchain (`ray dev --device`) |
 | `unicode-normalization` (unicode-rs) | M131: NFC/NFD/NFKC/NFKD de `std/text` — las tablas de UnicodeData.txt generadas por el proyecto unicode-rs (lo usan rustc y servo), sin dependencias transitivas. Puro cómputo sobre strings; sin I/O ni unsafe | feature `unicode` (vía `ray-runtime/unicode`, activa por defecto; detectada por uso en el nativo) |
 | `x509-parser` (rusticata) | M124: el resumen del certificado del peer (`net.tls_peer_cert` — subject/issuer/validez/SAN desde el DER que rustls ya tiene en mano). Parsear nombres X.500 + GeneralizedTime + GeneralNames es exactamente la clase de código seguridad-adyacente que no se escribe artesanal. Solo LEE certificados ya validados por rustls; no participa en la verificación | feature `net-tls` (vía `ray-runtime/x509`) |
 | `libloading` | carga de librerías nativas del FFI — reemplazó a `dlopen`/`dlsym` a mano (arregla Windows y da los errores reales del cargador) | feature `ffi` |
@@ -327,10 +328,11 @@ documentada:
   (`pipe`/`fcntl` no bloqueante + `FD_CLOEXEC` al crearlo; `write` de un octeto y `read` hasta EAGAIN
   sobre esos fds, buffers propios que la llamada no retiene), el mismo patrón que el canal de
   señales. Sin `libc`; sin fd en Windows/wasm.
-- **`src/devlink.rs`** — la entrada C de la librería de desarrollo (M330 D2, `ray_dev_start`):
-  `CStr::from_ptr` sobre los dos C-strings del contrato del shell (NUL-terminated, copiados durante
-  la llamada; NULL devuelve 1) y `signal(SIGPIPE, SIG_IGN)` como el `ray_start` emitido (un cdylib no
-  pasa por el shim de main de Rust). El enlace en sí es `std::net` puro: sin `unsafe`.
+- **`src/devlink.rs`** — las entradas C de la librería de desarrollo (M330 D2/D5, `ray_dev_start` y
+  `ray_dev_link`): `CStr::from_ptr` sobre los C-strings del contrato del shell (NUL-terminated,
+  copiados durante la llamada; NULL devuelve 1 o se ignora) y `signal(SIGPIPE, SIG_IGN)` como el
+  `ray_start` emitido (un cdylib no pasa por el shim de main de Rust). El enlace en sí es `std::net`
+  puro: sin `unsafe`.
 - **`src/dev_host.rs`** — la capa de SO de ese supervisor (M172): en unix `dup2`/`pre_exec` para
   pasar el socket al hijo sin rechazar conexiones entre reinicios, `kill(pid, SIGTERM)` al hijo
   propio y el handler de muerte del padre (`signal` + `kill` + `_exit`, async-signal-safe); en

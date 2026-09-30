@@ -64,6 +64,7 @@ diferencial), lo que se prueba en caliente es lo que después se compila.
 | D3 ✅ (iOS) | `ray bundle --ios --dev`: librería de desarrollo, página de emparejamiento, `.ray-dev` por proyecto, bundle id `.dev` | Parcial: `tests/devlink_pair.rs` (emparejamiento headless); el humo real en el iPhone |
 | D3b ✅ | Android (`--android --dev`, cdylib con los símbolos JNI), `ray dev-lib` y el asset prebuilt por release | Parcial: unidad del fuente generado; humo en el emulador |
 | D4 ✅ | Consola remota, snapshot diferencial por dispositivo, dependencias `path` fuera de la raíz | Sí: `tests/devlink_cli.rs` (print en el anfitrión, delta de un archivo) + unidad |
+| D5 ✅ | QR en la terminal y esquema URL por app en los dos shells (escanear con la cámara del sistema) | Parcial: unidad (URL, QR, plist/manifest/shell) + `simctl openurl` / `am start -d` |
 
 Decisiones tomadas: librería de desarrollo prebuilt como asset de release; si el reinicio
 cooperativo no converge en unos segundos, la librería hace `exit(0)` y el usuario toca el icono
@@ -177,4 +178,25 @@ pedida sin programa en marcha.
   ya viajaban con el resto de fuentes.
 - **Versión.** Si el dispositivo corre otra versión de raylang, el anfitrión lo avisa al
   conectar: quien compila el programa es la toolchain del dispositivo.
+
+## D5 por dentro: el QR y el esquema por app
+
+- **Varias apps en desarrollo.** Un esquema genérico `ray-dev://` no sirve: iOS abriría una
+  cualquiera y Android mostraría un selector. El esquema del enlace es **el id del shell de
+  desarrollo** (`org.raylang.myapp.dev://…`), único por construcción; `ray dev --device` lo
+  deriva del proyecto con la misma regla que `ray bundle` (`[app] id` o `org.raylang.<slug>`,
+  más `.dev`) y el shell lo registra como suyo (`CFBundleURLTypes` en iOS, `intent-filter`
+  con `BROWSABLE` en Android). El `HELLO` lleva el esquema usado y el anfitrión avisa si no
+  es el suyo (un enlace ajeno tecleado a mano).
+- **Sin cámara en la app.** Se escanea con la app Cámara de iOS o con Google Lens; el sistema
+  abre el shell con la URL. iOS la entrega en `connectionOptions.URLContexts` (arranque en
+  frío) o en `scene:openURLContexts:` (app abierta); Android en `getIntent()` al crear la
+  actividad o en `onNewIntent`. El shell llama a `ray_dev_link(url)` (`RayBridge.devLink` por
+  JNI en Android, definido en el cdylib de desarrollo), que deja el enlace en `pending_link`.
+- **Quién lo recoge.** La página de emparejamiento lo consulta cada 100 ms; con un enlace ya
+  vivo, el bucle del dispositivo lee con plazo de 1 s y, al ver uno nuevo, cierra la conexión y
+  vuelve a enlazar (`run_device_until` devuelve `Ok(Some(url))`). Todo esto solo existe en el
+  shell de desarrollo: el shell de la app real no registra esquema ni referencia el símbolo.
+- **El QR** lo codifica el crate `qrcode` (Rust puro, sin features) y se imprime solo si stderr
+  es un terminal, como bloques Unicode de dos módulos por línea, con zona de silencio.
 

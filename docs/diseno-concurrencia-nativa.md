@@ -451,7 +451,9 @@ esperador ocioso) y pasan a una **lista de esperas** (`WaitList` en `ray_runtime
 - El runtime emitido unifica los sitios (send/recv/close/wait/select/scope) sobre una tríada
   `__RaySync<T>` = (Mutex, Condvar, WaitList) con helpers `__ray_cv_wait`/`__ray_notify`: las
   cadenas de los sitios son IDÉNTICAS en ambos modos; solo cambian los helpers y el alias. El
-  hilo `main` sigue esperando por la condvar (ambas vías se notifican).
+  hilo `main` esperaba por la condvar (ambas vías se notifican); desde **M329** (findings #107) el
+  programa corre como FIBRA (pila reservada de 8 MiB) en los binarios normales y el hilo 1 solo
+  espera su fin — la condvar queda para los modos `--lib` y con `std/ui`, que conservan el hilo.
 
 Medido (6 fibras esperando canales ociosos durante 3 s):
 

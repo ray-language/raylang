@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`main` corre como fibra en el binario nativo** (M329, `RAYLANG-FINDINGS.md` #107): el
+  programa era el único hilo del SO del modelo M:N — cada `recv`/`join`/`select` de `main` lo
+  dormía en una condvar y cada respuesta de un actor costaba una syscall de despertar (~3,2 µs
+  la ida y vuelta, 1,8 en la VM, y `RAYLANG_THREADS=1` no cambiaba nada). Ahora `main` es una
+  fibra con 8 MiB de pila reservada (virtual): 1,1–1,4 µs entre workers y 0,27–0,34 µs con
+  `RAYLANG_THREADS=1`. Los modos `--lib` (shells) y con `std/ui` conservan el hilo por contrato.
+
 ## 1.27.23 — 2026-09-30
 
 - **`kind = "full_content"`: la página bajo la barra de título** (M328, pedido con la captura

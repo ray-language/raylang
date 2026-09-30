@@ -416,8 +416,18 @@ thread_local! {
 
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
+    spawn_with_stack(fiber_stack_size(), f)
+}
+
+/// M329 (findings #107): como `spawn`, con una RESERVA de pila explícita en bytes — para el `main`
+/// del binario transpilado, que corre como fibra con los 8 MiB que tenía como hilo (reserva
+/// virtual: solo cuestan las páginas tocadas). Antes `main` era el único hilo del SO del modelo:
+/// cada `recv` lo dormía en una condvar y cada respuesta de un actor era una syscall de despertar
+/// (~3 µs por ida y vuelta, y `RAYLANG_THREADS=1` no cambiaba nada); como fibra paga lo mismo
+/// que cualquier otra (~1 µs entre workers, ~0,2 µs en el mismo).
+pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -> JoinHandle {
     let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new(), wl: WaitList::new() });
-    let stack = DefaultStack::new(fiber_stack_size()).expect("could not map a fiber stack");
+    let stack = DefaultStack::new(stack_bytes.max(32 * 1024)).expect("could not map a fiber stack");
     let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
         // Prólogo: deja el yielder a mano para la cesión profunda (park desde N marcos más abajo).
         CURRENT.with(|c| c.set(y as *const Yielder<bool, Park> as *const ()));

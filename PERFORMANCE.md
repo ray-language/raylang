@@ -1968,3 +1968,44 @@ cota superior de un `peek`) 0,16 µs en Linux y 0,04–0,12 µs en macOS con 64 
 los 1–3,5 µs que cuesta preguntar tras M319, una celda ahorraría un 3–10 % del trabajo por
 petición de raygate (~29 µs) — lo mismo que da la caché TTL sin superficie nueva. No se
 implementa; la fila de IDEAS conserva el criterio para reabrirla.
+
+## 9. M329 (sep 2026): `main` como fibra en el binario nativo (findings #107)
+
+Origen: `RAYLANG-FINDINGS.md` #107 (reabre #75): una ida y vuelta a un actor costaba ~3,3 µs
+en macOS y ~16 µs en Linux/Docker con 1.27.20, `RAYLANG_THREADS=1` no cambiaba nada, y la VM
+hacía lo mismo en 1,8 µs. El microbenchmark preguntaba **desde `main`**.
+
+**Diagnóstico.** Dos sondas (100 000 idas y vueltas, macOS, M4) separan el caso:
+
+| par | nativo (N workers) | nativo `RAYLANG_THREADS=1` | VM |
+|---|---|---|---|
+| `main` ↔ actor (1.27.23) | 3,2 µs | 3,2 µs | 1,7 µs |
+| fibra ↔ fibra (1.27.23) | 0,9–1,2 µs | **0,21 µs** | 1,07 µs |
+
+El scheduler no era el problema: entre fibras el nativo ya iguala o bate a la VM. `main` era el
+único HILO del SO del modelo (el runtime emitido lo decía: «el hilo main sigue en la condvar»):
+cada `recv` lo dormía en `Condvar::wait_timeout` y cada `send` del actor hacía
+`pthread_cond_broadcast` → `__psynch_cvbroad`, una syscall por respuesta. El perfil con `sample`
+lo muestra tal cual: 86 % de las muestras de `main` en `__psynch_cvwait` y el worker del actor
+en `__psynch_cvbroad`; en la sonda fibra↔fibra no aparece ninguna syscall y el tiempo se va al
+worker que espera cediendo con `sched_yield` (spin-then-park de M319).
+
+**Cambio.** El transpilador emite el programa como una fibra del scheduler
+(`fibers::spawn_with_stack(8 MiB, …)`, reserva virtual: solo cuestan las páginas tocadas) y el
+hilo 1 solo espera su fin. Los modos `--lib` (el shell posee el hilo) y con `std/ui` (AppKit
+exige el hilo 1 y el programa corre en un hilo con pila explícita) no cambian.
+
+| par | antes | **M329** | `RAYLANG_THREADS=1` |
+|---|---|---|---|
+| `main` ↔ actor, dev | 3,2 µs | **1,1–1,4 µs** | **0,34 µs** |
+| `main` ↔ actor, release | 3,1 µs | **1,1–1,4 µs** | **0,27 µs** |
+| `benchmarks/actor_ask.ray rt 1` | 824 k/s (M319) | 844 k/s | 3,5 M/s |
+
+**Lo que se probó y se descartó.** Un spin PURO (`spin_loop`, ~200 iteraciones) antes del bucle
+de `sched_yield` del worker: +11 % en ida y vuelta con 1 peticionario, +16 % con 8, −2 % con 64
+(ruido), +9 % en envío de un sentido con 1 emisor… y **−28 % con 8 emisores** (963 k/s →
+690 k/s): con los cores saturados el girador roba CPU a quien trabaja, la misma lección de M319.
+No entra. El tramo entre workers se queda en ~1 µs; el suelo real es el del mismo worker (0,2 µs).
+
+**Pendiente de medir en Linux/Docker**, donde ray-apps vio 16 µs: la causa es la misma (condvar
+del hilo `main`), así que el salto esperado es al rango fibra↔fibra de M319 en Linux (1,2 µs).

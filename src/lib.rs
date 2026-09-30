@@ -74,6 +74,7 @@ pub fn host_print(s: &str) {
         let mut out = std::io::stdout().lock();
         let r = out.write_all(s.as_bytes()).and_then(|()| out.write_all(b"\n"));
         host_write_failed(r);
+        mirror_output(false, s);
     }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stdout(s);
@@ -86,9 +87,40 @@ pub fn host_eprint(s: &str) {
         let mut err = std::io::stderr().lock();
         let r = err.write_all(s.as_bytes()).and_then(|()| err.write_all(b"\n"));
         host_write_failed(r);
+        mirror_output(true, s);
     }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stderr(s);
+}
+
+/// M330 D4: un **espejo** opcional de `print`/`eprint` (la consola remota del hot reload
+/// móvil: la librería de desarrollo reenvía cada línea a la terminal de `ray dev --device`).
+/// Sin espejo, el coste por print es una lectura atómica relajada.
+#[cfg(not(target_arch = "wasm32"))]
+type OutputMirror = Box<dyn Fn(bool, &str) + Send + Sync>;
+#[cfg(not(target_arch = "wasm32"))]
+static OUTPUT_MIRROR_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(target_arch = "wasm32"))]
+fn output_mirror() -> &'static std::sync::Mutex<Option<OutputMirror>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<Option<OutputMirror>>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(None))
+}
+/// Instala (o quita, con `None`) el espejo de salida: recibe `(es_stderr, línea)` tras cada
+/// `print`/`eprint`, después de escribirse en stdout/stderr como siempre.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_output_mirror(mirror: Option<OutputMirror>) {
+    let on = mirror.is_some();
+    *output_mirror().lock().unwrap_or_else(|e| e.into_inner()) = mirror;
+    OUTPUT_MIRROR_ON.store(on, std::sync::atomic::Ordering::Release);
+}
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn mirror_output(stderr: bool, s: &str) {
+    if OUTPUT_MIRROR_ON.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(m) = output_mirror().lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    {
+        m(stderr, s);
+    }
 }
 
 /// Maneja el fallo de escritura de `print`/`eprint` (que no tienen canal de error). Un **pipe

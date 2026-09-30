@@ -71,11 +71,12 @@ fn a_change_on_the_host_restarts_the_program_on_the_linked_device() {
         .args(["dev", "--device"])
         .current_dir(&project)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("ray dev --device");
     let host_err = tail(host.stderr.take().unwrap());
+    let host_out = tail(host.stdout.take().unwrap());
     let _host = Guard(host);
     assert!(wait_for(&host_err, "device link: ray-dev://", 30), "no link URL:\n{}", host_err.lock().unwrap());
     let url = {
@@ -104,6 +105,8 @@ fn a_change_on_the_host_restarts_the_program_on_the_linked_device() {
 
     assert!(wait_for(&client_out, "hello v1", 30), "v1 never ran on the device:\nstdout:\n{}\nstderr:\n{}\nhost:\n{}", client_out.lock().unwrap(), client_err.lock().unwrap(), host_err.lock().unwrap());
     assert!(wait_for(&host_err, "running", 10), "the host did not hear the device's status:\n{}", host_err.lock().unwrap());
+    // D4: la consola remota — el `print` del dispositivo llega al stdout del anfitrión tal cual.
+    assert!(wait_for(&host_out, "hello v1", 10), "the device's print did not reach the host:\n{}", host_out.lock().unwrap());
     // El snapshot vive en la sandbox del dispositivo, no se corre desde el proyecto del Mac.
     assert!(sandbox.join("project/src/main.ray").is_file());
 
@@ -112,6 +115,10 @@ fn a_change_on_the_host_restarts_the_program_on_the_linked_device() {
     write_main(&project, "hello v2");
     assert!(wait_for(&client_out, "hello v2", 30), "v2 never ran on the device:\nstdout:\n{}\nstderr:\n{}\nhost:\n{}", client_out.lock().unwrap(), client_err.lock().unwrap(), host_err.lock().unwrap());
     assert!(wait_for(&host_err, "stopped", 10), "the host did not hear v1 stop:\n{}", host_err.lock().unwrap());
+    // D4: al dispositivo solo viajó el archivo cambiado (delta), no el snapshot entero.
+    assert!(wait_for(&host_err, "1 file(s) sent to 1 device(s)", 5), "expected a one-file delta:\n{}", host_err.lock().unwrap());
+    assert!(wait_for(&host_err, "1 changed, 0 removed", 5), "the device did not report the delta:\n{}", host_err.lock().unwrap());
+    assert!(wait_for(&host_out, "hello v2", 10), "v2's print did not reach the host:\n{}", host_out.lock().unwrap());
 
     // Un cambio que no compila NO llega al dispositivo: v2 sigue corriendo.
     std::thread::sleep(Duration::from_millis(300));

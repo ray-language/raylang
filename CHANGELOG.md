@@ -10,7 +10,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   #50/#106; `docs/diseno-hot-reload-movil.md`). `ray dev --device` no corre el programa en el
   Mac: vigila el proyecto, comprueba que compila y envía el snapshot del fuente a los
   dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en su VM sin
-  reinstalar — fiel al dispositivo (archivos, llavero, red, audio y permisos del teléfono).
+  reinstalar — fiel al dispositivo (archivos, llavero, red, audio y permisos del teléfono). Los
+  `print`/`eprint` del teléfono llegan a la terminal del Mac; a cada dispositivo viaja solo el
+  delta; las dependencias `path = …` fuera de la raíz viajan también.
   `ray dev-client <url> <dir>` es el lado dispositivo en escritorio. **`ray bundle --ios --dev`**
   genera el shell de desarrollo para el iPhone (`<app>-dev`, bundle id `<id>.dev`): la misma
   app enlazando la librería de desarrollo (toolchain + VM) en vez del programa; se instala una

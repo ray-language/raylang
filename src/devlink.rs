@@ -8,14 +8,14 @@
 //! VM. Fuente, no bytecode: el dispositivo lleva la toolchain entera.
 //!
 //! **Protocolo**: TCP en la LAN, marcos `[u32 BE len][u8 kind][payload]`. Del dispositivo al
-//! anfitrión: `HELLO` (token, nombre del dispositivo, versión), `STATUS` (un octeto de estado +
-//! texto). Del anfitrión al dispositivo: `SNAPSHOT` (entradas `[u32 len][ruta][u64 len][bytes]`,
-//! rutas relativas con `/`). Un `SNAPSHOT` siempre reinicia el programa. Sin dependencias: todo
-//! con `std::net`. El token viaja en la URL `ray-dev://host:puerto/token` que imprime `ray dev
-//! --device`; una conexión con otro token se cierra sin más.
-//!
-//! Lo que NO cubre esta fase: diferencial de snapshot (se manda entero), consola remota (los
-//! `print` del dispositivo van a su stdout/logcat), QR y emparejamiento en pantalla (D3).
+//! anfitrión: `HELLO` (token, nombre del dispositivo, versión), `HASHES` (D4: lo que ya tiene —
+//! `[u32 len][ruta][u64 hash]`*), `STATUS` (un octeto de estado + texto) y `LOG` (D4: un octeto
+//! de flujo + una línea de `print`/`eprint`, la consola remota). Del anfitrión al dispositivo:
+//! `SNAPSHOT` (entradas `[u32 len][ruta][u64 len][bytes]`, rutas relativas con `/`; reemplaza
+//! todo) y `DELTA` (D4: `[u32 n]{[u32 len][ruta]}*` rutas borradas + las entradas cambiadas o
+//! nuevas — el anfitrión lleva por dispositivo lo que ya tiene). Ambos reinician el programa.
+//! Sin dependencias: todo con `std::net`. El token viaja en la URL `ray-dev://host:puerto/token`
+//! que imprime `ray dev --device`; una conexión con otro token se cierra sin más.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -26,7 +26,25 @@ use std::time::Duration;
 /// Tipos de marco.
 const KIND_HELLO: u8 = 1;
 const KIND_STATUS: u8 = 2;
+const KIND_LOG: u8 = 3;
+const KIND_HASHES: u8 = 4;
 const KIND_SNAPSHOT: u8 = 10;
+const KIND_DELTA: u8 = 11;
+
+/// Los archivos de un snapshot: (ruta relativa con `/`, bytes).
+pub type Files = Vec<(String, Vec<u8>)>;
+/// Un delta (D4): rutas borradas + entradas cambiadas o nuevas.
+type Delta = (Vec<String>, Files);
+
+/// D4: hash de contenido (FNV-1a 64) — solo para decidir qué viaja; nunca es de seguridad.
+fn content_hash(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in data {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
 
 /// Estados que reporta el dispositivo en `STATUS`.
 pub const STATE_RUNNING: u8 = 1;
@@ -121,12 +139,29 @@ fn random_token() -> String {
 /// Los archivos que viajan al dispositivo: `ray.toml`/`ray.lock`, todo `.ray`/`.ray.html` fuera
 /// de artefactos y ocultos, los assets de `[native] embed` y `[frontend] dist`, y la caché
 /// `.ray-deps/` entera (sin su `.index` ni los `.git`). Rutas relativas a la raíz con `/`.
-pub fn collect_snapshot(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub fn collect_snapshot(root: &Path) -> Result<Files, String> {
     let manifest = crate::manifest::Manifest::load(root).ok().flatten();
     let mut extra_dirs: Vec<PathBuf> = Vec::new();
+    // D4: las dependencias `path = …` FUERA de la raíz viajan bajo `.ray-path-deps/<dir>/` (solo
+    // fuentes y manifiestos); el dispositivo añade ese directorio como raíz de dependencias, y el
+    // loader las resuelve por el nombre del directorio, como hace con el padre de cada ruta.
+    let mut path_deps: Vec<(String, PathBuf)> = Vec::new();
     if let Some(m) = &manifest {
         for d in crate::cli::embed_dirs_of(m) {
             extra_dirs.push(root.join(d));
+        }
+        for (_name, spec) in &m.dependencies {
+            if let Some(p) = crate::deps::path_of_path_dep(spec) {
+                let pdir = m.root.join(p);
+                let pdir = pdir.canonicalize().unwrap_or(pdir);
+                let inside = root.canonicalize().map(|r| pdir.starts_with(&r)).unwrap_or(false);
+                if pdir.is_dir()
+                    && !inside
+                    && let Some(base) = pdir.file_name().map(|b| b.to_string_lossy().into_owned())
+                {
+                    path_deps.push((base, pdir));
+                }
+            }
         }
     }
     let mut out = Vec::new();
@@ -176,7 +211,135 @@ pub fn collect_snapshot(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
             }
         }
     }
+    for (base, pdir) in path_deps {
+        let mut pending = vec![pdir.clone()];
+        while let Some(dir) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let mut entries: Vec<_> = entries.flatten().collect();
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if !(name.starts_with('.') || name == "target" || name == "node_modules") {
+                        pending.push(path);
+                    }
+                    continue;
+                }
+                if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+                    if name.ends_with(".ray") && !name.ends_with(".ray.html") && path.with_extension("ray.html").exists() {
+                        continue;
+                    }
+                    let inner = path.strip_prefix(&pdir).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                    push(format!(".ray-path-deps/{base}/{inner}"), &path, &mut out)?;
+                }
+            }
+        }
+    }
     Ok(out)
+}
+
+/// D4: el delta entre lo que el dispositivo tiene (`have`: ruta → hash) y el snapshot actual:
+/// (rutas a borrar, entradas a escribir). `None` si no hay nada que mandar.
+fn delta(have: &std::collections::HashMap<String, u64>, files: &[(String, Vec<u8>)]) -> Option<Delta> {
+    let mut present = std::collections::HashSet::new();
+    let mut changed = Vec::new();
+    for (rel, data) in files {
+        present.insert(rel.as_str());
+        if have.get(rel) != Some(&content_hash(data)) {
+            changed.push((rel.clone(), data.clone()));
+        }
+    }
+    let removed: Vec<String> = have.keys().filter(|k| !present.contains(k.as_str())).cloned().collect();
+    if changed.is_empty() && removed.is_empty() {
+        None
+    } else {
+        Some((removed, changed))
+    }
+}
+
+fn encode_delta(removed: &[String], changed: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(removed.len() as u32).to_be_bytes());
+    for r in removed {
+        put_str(&mut out, r);
+    }
+    out.extend_from_slice(&encode_snapshot(changed));
+    out
+}
+
+fn decode_delta(buf: &[u8]) -> Option<Delta> {
+    let mut pos = 0;
+    let n = u32::from_be_bytes(buf.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let mut removed = Vec::with_capacity(n);
+    for _ in 0..n {
+        removed.push(get_str(buf, &mut pos)?);
+    }
+    let changed = decode_snapshot(buf.get(pos..)?)?;
+    Some((removed, changed))
+}
+
+fn encode_hashes(have: &std::collections::HashMap<String, u64>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (rel, h) in have {
+        put_str(&mut out, rel);
+        out.extend_from_slice(&h.to_be_bytes());
+    }
+    out
+}
+
+fn decode_hashes(buf: &[u8]) -> Option<std::collections::HashMap<String, u64>> {
+    let mut pos = 0;
+    let mut out = std::collections::HashMap::new();
+    while pos < buf.len() {
+        let rel = get_str(buf, &mut pos)?;
+        let h = u64::from_be_bytes(buf.get(pos..pos + 8)?.try_into().ok()?);
+        pos += 8;
+        out.insert(rel, h);
+    }
+    Some(out)
+}
+
+/// D4: lo que el dispositivo tiene en disco bajo `dir` (ruta relativa → hash), para pedir solo
+/// el delta al reconectar.
+fn hashes_on_disk(dir: &Path) -> std::collections::HashMap<String, u64> {
+    let mut out = std::collections::HashMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(d) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                pending.push(p);
+            } else if let Ok(data) = std::fs::read(&p) {
+                let rel = p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                out.insert(rel, content_hash(&data));
+            }
+        }
+    }
+    out
+}
+
+/// D4: aplica un delta (borra y escribe; sin barrido — el anfitrión sabe qué había).
+fn apply_delta(dir: &Path, removed: &[String], changed: &[(String, Vec<u8>)]) -> Result<(), String> {
+    for rel in removed {
+        if rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
+            return Err(format!("refusing a delta path outside the project: {rel}"));
+        }
+        let _ = std::fs::remove_file(dir.join(rel));
+    }
+    for (rel, data) in changed {
+        if rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
+            return Err(format!("refusing a delta path outside the project: {rel}"));
+        }
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn encode_snapshot(files: &[(String, Vec<u8>)]) -> Vec<u8> {
@@ -189,7 +352,7 @@ fn encode_snapshot(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn decode_snapshot(buf: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+fn decode_snapshot(buf: &[u8]) -> Option<Files> {
     let mut pos = 0;
     let mut out = Vec::new();
     while pos < buf.len() {
@@ -236,17 +399,19 @@ fn apply_snapshot(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String>
 
 // ── El anfitrión: `ray dev --device` ────────────────────────────────────────
 
-/// Un dispositivo conectado (su socket de escritura) y cómo se presentó.
+/// Un dispositivo conectado (su socket de escritura), cómo se presentó y lo que ya tiene (D4:
+/// ruta → hash, para mandarle solo el delta).
 struct Device {
     name: String,
     stream: TcpStream,
+    have: std::collections::HashMap<String, u64>,
 }
 
 /// El anfitrión del enlace: acepta dispositivos, les manda el snapshot actual al conectar y
 /// difunde cada snapshot nuevo. Los `STATUS` de cada dispositivo se imprimen en la terminal.
 pub struct Host {
     devices: Arc<Mutex<Vec<Device>>>,
-    latest: Arc<Mutex<Option<Vec<u8>>>>,
+    latest: Arc<Mutex<Option<Files>>>,
     /// La URL que el dispositivo necesita (`ray-dev://ip:puerto/token`).
     pub url: String,
     /// El puerto local (para el cliente de prueba en la misma máquina).
@@ -303,19 +468,25 @@ impl Host {
         Ok(host)
     }
 
-    /// Fija el snapshot vigente y lo manda a todos los dispositivos conectados. Devuelve
-    /// cuántos lo recibieron.
-    pub fn publish(&self, files: &[(String, Vec<u8>)]) -> usize {
-        let payload = encode_snapshot(files);
-        *self.latest.lock().unwrap() = Some(payload.clone());
+    /// Fija el snapshot vigente y lo manda a todos los dispositivos conectados — a cada uno
+    /// solo su delta (D4). Devuelve (dispositivos que lo recibieron, archivos enviados en total).
+    pub fn publish(&self, files: &[(String, Vec<u8>)]) -> (usize, usize) {
+        *self.latest.lock().unwrap() = Some(files.to_vec());
         let mut devices = self.devices.lock().unwrap();
         let before = devices.len();
-        devices.retain_mut(|d| write_frame(&mut d.stream, KIND_SNAPSHOT, &payload).is_ok());
+        let mut sent_files = 0usize;
+        devices.retain_mut(|d| match send_update(d, files) {
+            Ok(n) => {
+                sent_files += n;
+                true
+            }
+            Err(_) => false,
+        });
         let dropped = before - devices.len();
         if dropped > 0 {
             eprintln!("[dev] {dropped} device(s) disconnected");
         }
-        devices.len()
+        (devices.len(), sent_files)
     }
 
     /// Nº de dispositivos conectados ahora mismo.
@@ -324,7 +495,26 @@ impl Host {
     }
 }
 
-fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Device>>>, latest: Arc<Mutex<Option<Vec<u8>>>>) {
+/// Manda a `d` lo que le falta del snapshot `files`: el snapshot entero si aún no tiene nada,
+/// el delta si sí; nada si ya está al día. Actualiza lo que sabemos que tiene. Devuelve
+/// cuántos archivos viajaron.
+fn send_update(d: &mut Device, files: &[(String, Vec<u8>)]) -> std::io::Result<usize> {
+    let n = if d.have.is_empty() {
+        write_frame(&mut d.stream, KIND_SNAPSHOT, &encode_snapshot(files))?;
+        files.len()
+    } else if let Some((removed, changed)) = delta(&d.have, files) {
+        write_frame(&mut d.stream, KIND_DELTA, &encode_delta(&removed, &changed))?;
+        changed.len()
+    } else {
+        // Al día: reinicia igual (un snapshot vacío como delta) — el usuario guardó a propósito.
+        write_frame(&mut d.stream, KIND_DELTA, &encode_delta(&[], &[]))?;
+        0
+    };
+    d.have = files.iter().map(|(rel, data)| (rel.clone(), content_hash(data))).collect();
+    Ok(n)
+}
+
+fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Device>>>, latest: Arc<Mutex<Option<Files>>>) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let Ok((KIND_HELLO, body)) = read_frame(&mut stream) else { return };
@@ -334,17 +524,26 @@ fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Devic
         eprintln!("[dev] a device presented a wrong token; ignored");
         return;
     }
-    let _ = stream.set_read_timeout(None);
     let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     eprintln!("[dev] device connected: {name} ({peer}, raylang {version})");
-    let Ok(writer) = stream.try_clone() else { return };
-    let mut writer = writer;
-    if let Some(snapshot) = latest.lock().unwrap().as_ref()
-        && write_frame(&mut writer, KIND_SNAPSHOT, snapshot).is_err()
-    {
-        return;
+    if version != env!("CARGO_PKG_VERSION") {
+        eprintln!("[dev] warning: the device runs raylang {version} and this host {}; the program is compiled by the device's toolchain", env!("CARGO_PKG_VERSION"));
     }
-    devices.lock().unwrap().push(Device { name: name.clone(), stream: writer });
+    // D4: lo que el dispositivo ya tiene, para mandarle solo el delta.
+    let have = match read_frame(&mut stream) {
+        Ok((KIND_HASHES, body)) => decode_hashes(&body).unwrap_or_default(),
+        _ => std::collections::HashMap::new(),
+    };
+    let _ = stream.set_read_timeout(None);
+    let Ok(writer) = stream.try_clone() else { return };
+    let mut device = Device { name: name.clone(), stream: writer, have };
+    if let Some(files) = latest.lock().unwrap().as_ref() {
+        match send_update(&mut device, files) {
+            Ok(n) => eprintln!("[dev] {name}: sent {n} file(s) to catch up"),
+            Err(_) => return,
+        }
+    }
+    devices.lock().unwrap().push(device);
     // Lector: los STATUS del dispositivo, hasta que cierre.
     loop {
         match read_frame(&mut stream) {
@@ -363,6 +562,19 @@ fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Devic
                     eprintln!("[dev] {name}: {label}");
                 } else {
                     eprintln!("[dev] {name}: {label} — {text}");
+                }
+            }
+            // D4: la consola remota — la línea tal cual, en el mismo flujo que en el dispositivo.
+            Ok((KIND_LOG, body)) if !body.is_empty() => {
+                use std::io::Write;
+                let line = String::from_utf8_lossy(&body[1..]);
+                if body[0] == 1 {
+                    let mut e = std::io::stderr().lock();
+                    let _ = writeln!(e, "{line}");
+                } else {
+                    let mut o = std::io::stdout().lock();
+                    let _ = writeln!(o, "{line}");
+                    let _ = o.flush();
                 }
             }
             Ok(_) => {}
@@ -419,9 +631,19 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
         if write_frame(&mut stream, KIND_HELLO, &hello).is_err() {
             continue;
         }
+        // D4: lo que ya hay en disco — el anfitrión manda solo el delta.
+        if write_frame(&mut stream, KIND_HASHES, &encode_hashes(&hashes_on_disk(&project))).is_err() {
+            continue;
+        }
         eprintln!("[dev-client] linked to {addr}");
-        let status_stream = stream.try_clone().map_err(|e| e.to_string())?;
-        runner.status = Some(Arc::new(Mutex::new(status_stream)));
+        let status_stream = Arc::new(Mutex::new(stream.try_clone().map_err(|e| e.to_string())?));
+        runner.status = Some(status_stream.clone());
+        // D4: la consola remota — cada print/eprint del programa viaja también al anfitrión.
+        crate::set_output_mirror(Some(Box::new(move |stderr, line| {
+            let mut payload = vec![if stderr { 1 } else { 0 }];
+            payload.extend_from_slice(line.as_bytes());
+            let _ = write_frame(&mut status_stream.lock().unwrap_or_else(|e| e.into_inner()), KIND_LOG, &payload);
+        })));
         loop {
             match read_frame(&mut stream) {
                 Ok((KIND_SNAPSHOT, body)) => {
@@ -438,10 +660,24 @@ pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_af
                     runner.report(STATE_SNAPSHOT, &format!("{n} files"));
                     runner.start(&project);
                 }
+                Ok((KIND_DELTA, body)) => {
+                    let Some((removed, changed)) = decode_delta(&body) else {
+                        eprintln!("[dev-client] malformed delta; ignored");
+                        continue;
+                    };
+                    runner.stop();
+                    if let Err(e) = apply_delta(&project, &removed, &changed) {
+                        runner.report(STATE_COMPILE_ERROR, &e);
+                        continue;
+                    }
+                    runner.report(STATE_SNAPSHOT, &format!("{} changed, {} removed", changed.len(), removed.len()));
+                    runner.start(&project);
+                }
                 Ok(_) => {}
                 Err(_) => break,
             }
         }
+        crate::set_output_mirror(None);
         eprintln!("[dev-client] link lost; the program keeps running until the host is back");
         runner.status = None;
         std::thread::sleep(Duration::from_secs(1));
@@ -543,7 +779,12 @@ fn load_and_compile(project: &Path) -> Result<crate::bytecode::CompiledProgram, 
     if !entry.is_file() {
         return Err(format!("entry not found in the snapshot: {}", entry.display()));
     }
-    let roots = crate::deps::dependency_roots_for(project);
+    let mut roots = crate::deps::dependency_roots_for(project);
+    // D4: las dependencias `path = …` que el anfitrión empaquetó fuera de la raíz.
+    let path_deps = project.join(".ray-path-deps");
+    if path_deps.is_dir() {
+        roots.push(path_deps);
+    }
     let mut loaded = crate::loader::load_with_deps(&entry, &roots).map_err(|e| e.message)?;
     crate::checker::check(&mut loaded.program).map_err(|e| format!("type error at {}:{}: {}", e.line, e.col, e.msg))?;
     crate::compiler::compile_program(&loaded.program).map_err(|e| e.to_string())
@@ -721,6 +962,56 @@ mod tests {
         let back = decode_snapshot(&encode_snapshot(&files)).unwrap();
         assert_eq!(back, files);
         assert!(decode_snapshot(&[0, 0, 0, 9]).is_none());
+    }
+
+    #[test]
+    fn a_delta_carries_only_what_changed_and_round_trips() {
+        let v1 = vec![("a.ray".to_string(), b"1".to_vec()), ("b.ray".to_string(), b"2".to_vec()), ("c.ray".to_string(), b"3".to_vec())];
+        let have: std::collections::HashMap<String, u64> = v1.iter().map(|(r, d)| (r.clone(), content_hash(d))).collect();
+        assert!(delta(&have, &v1).is_none(), "nothing changed → nothing to send");
+        let v2 = vec![("a.ray".to_string(), b"1".to_vec()), ("b.ray".to_string(), b"22".to_vec()), ("d.ray".to_string(), b"4".to_vec())];
+        let (removed, changed) = delta(&have, &v2).unwrap();
+        assert_eq!(removed, vec!["c.ray".to_string()]);
+        assert_eq!(changed, vec![("b.ray".to_string(), b"22".to_vec()), ("d.ray".to_string(), b"4".to_vec())]);
+        let back = decode_delta(&encode_delta(&removed, &changed)).unwrap();
+        assert_eq!(back, (removed, changed));
+        let hashes_back = decode_hashes(&encode_hashes(&have)).unwrap();
+        assert_eq!(hashes_back, have);
+    }
+
+    #[test]
+    fn applying_a_delta_removes_and_writes_without_pruning() {
+        let dir = std::env::temp_dir().join(format!("ray-devdelta-{}-{}", std::process::id(), crate::builtins::random_int(1 << 30)));
+        std::fs::create_dir_all(&dir).unwrap();
+        apply_snapshot(&dir, &[("src/a.ray".into(), b"1".to_vec()), ("src/b.ray".into(), b"2".to_vec())]).unwrap();
+        apply_delta(&dir, &["src/b.ray".to_string()], &[("src/c.ray".into(), b"3".to_vec())]).unwrap();
+        assert!(dir.join("src/a.ray").is_file(), "untouched files stay");
+        assert!(!dir.join("src/b.ray").exists());
+        assert_eq!(std::fs::read(dir.join("src/c.ray")).unwrap(), b"3");
+        let on_disk = hashes_on_disk(&dir);
+        assert_eq!(on_disk.len(), 2);
+        assert_eq!(on_disk["src/c.ray"], content_hash(b"3"));
+        assert!(apply_delta(&dir, &["../x".to_string()], &[]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_dependency_outside_the_root_travels_under_ray_path_deps() {
+        let base = std::env::temp_dir().join(format!("ray-devpath-{}-{}", std::process::id(), crate::builtins::random_int(1 << 30)));
+        let root = base.join("app");
+        let dep = base.join("geo");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(dep.join("target")).unwrap();
+        std::fs::write(root.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"path:../geo\"\n").unwrap();
+        std::fs::write(root.join("src/main.ray"), "fn main() {}").unwrap();
+        std::fs::write(dep.join("mod.ray"), "pub fn area() -> int { 1 }").unwrap();
+        std::fs::write(dep.join("ray.toml"), "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n").unwrap();
+        std::fs::write(dep.join("target/x.ray"), "").unwrap();
+        std::fs::write(dep.join("notes.txt"), "").unwrap();
+        let mut names: Vec<String> = collect_snapshot(&root).unwrap().into_iter().map(|(n, _)| n).collect();
+        names.sort();
+        assert_eq!(names, vec![".ray-path-deps/geo/mod.ray", ".ray-path-deps/geo/ray.toml", "ray.toml", "src/main.ray"]);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

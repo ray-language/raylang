@@ -1491,8 +1491,8 @@ fn cmd_dev_device(args: &[String]) {
         match crate::devlink::collect_snapshot(&root) {
             Ok(files) => {
                 let bytes: usize = files.iter().map(|(_, d)| d.len()).sum();
-                let n = host.publish(&files);
-                eprintln!("[dev] {what}: snapshot of {} files ({} KB) sent to {n} device(s)", files.len(), bytes / 1024);
+                let (n, sent) = host.publish(&files);
+                eprintln!("[dev] {what}: snapshot of {} files ({} KB) — {sent} file(s) sent to {n} device(s)", files.len(), bytes / 1024);
             }
             Err(e) => eprintln!("[dev] {what}: {e}"),
         }

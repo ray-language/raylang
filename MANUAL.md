@@ -1486,10 +1486,18 @@ ray dev --device
 [dev] start: snapshot of 4 files (12 KB) sent to 0 device(s)
 [dev] device connected: iPhone (192.168.1.31, raylang 1.27.24)
 [dev] iPhone: running
-[dev] change in src/main.ray: snapshot of 4 files (12 KB) sent to 1 device(s)
+hello from the phone
+[dev] change in src/main.ray: snapshot of 4 files (12 KB) — 1 file(s) sent to 1 device(s)
 [dev] iPhone: stopped
+[dev] iPhone: 1 changed, 0 removed
 [dev] iPhone: running
 ```
+
+Los `print`/`eprint` del programa **llegan a esta terminal** (además de a la consola del
+dispositivo): stdout y stderr, tal cual. A cada dispositivo viaja solo lo que le falta (el
+anfitrión sabe qué tiene cada uno; al reconectar, el dispositivo dice lo que hay en su
+sandbox y recibe el delta). Las dependencias `path = …` fuera de la raíz viajan también (solo
+sus fuentes y manifiestos) y resuelven igual en el dispositivo.
 
 Un cambio que no compila no se envía (el diagnóstico sale aquí; el dispositivo sigue con el
 programa anterior). La URL lleva un token y el enlace es solo LAN; puerto y token se recuerdan

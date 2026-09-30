@@ -15893,3 +15893,27 @@ en la toolchain, «no Linux» ya no significa «Darwin/BSD» — Android es Linu
 la libc de bionic), el bundle Android del proyecto demo (`--android --dev --android-abi arm64`)
 compilado con Gradle, y el humo en el emulador con el emparejamiento hecho por `adb shell
 input` sobre la página (el campo lleva `autofocus`).
+
+## 316. M330 D4 — Consola remota, delta y dependencias por ruta (sep 2026)
+
+Con el arco funcionando en el iPhone y en el emulador, D4 quita las tres fricciones que
+quedaban del uso real. **La consola**: los `print` del programa se veían solo en logcat o en la
+consola de Xcode; ahora `lib::set_output_mirror` da a `host_print`/`host_eprint` un espejo
+opcional (una lectura atómica relajada por print cuando no hay ninguno) y la librería de
+desarrollo reenvía cada línea como marco `LOG` al anfitrión, que la escribe tal cual en su
+stdout o stderr — la terminal de `ray dev --device` se comporta como la de `ray dev` con un
+hijo local. **El delta**: el snapshot entero por guardado era simple pero desperdiciaba el
+enlace con `.ray-deps` dentro; tras `HELLO` el dispositivo declara lo que ya tiene (`HASHES`,
+FNV-1a 64 por archivo, lo que hay en su sandbox) y el anfitrión, que guarda ese mapa por
+dispositivo, manda solo `DELTA` (borrados + cambiados); un guardado sin cambios reales manda
+un delta vacío, que reinicia igual porque el usuario guardó a propósito. **Las dependencias
+`path = …` fuera de la raíz** no viajaban: el loader las resuelve por el padre de la ruta y el
+nombre del directorio, así que empaquetarlas bajo `.ray-path-deps/<dir>/` y añadir ese
+directorio como raíz en el dispositivo las hace resolver igual, sin tocar el manifiesto.
+
+**Verificación.** `tests/devlink_cli.rs` amplía el enlace de extremo a extremo: el `print` del
+dispositivo aparece en el stdout del anfitrión, el segundo guardado viaja como delta de un
+archivo y el dispositivo lo reporta como `1 changed, 0 removed`. Unidad: delta (nada que mandar
+cuando nada cambió; borrados y cambiados exactos; codificación ida y vuelta), aplicación del
+delta sin barrido, hashes en disco, y una dependencia `path` fuera de la raíz que viaja con
+solo sus fuentes. Y el mismo flujo en el simulador de iOS con el shell de desarrollo.

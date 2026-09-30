@@ -63,7 +63,7 @@ diferencial), lo que se prueba en caliente es lo que después se compila.
 | D2 ✅ | `src/devlink.rs`: protocolo de snapshot por TCP, `ray dev --device`, `ray dev-client`, entrada C `ray_dev_start` | Sí: `tests/devlink_cli.rs` (anfitrión + cliente headless, cambio, cambio que no compila) |
 | D3 ✅ (iOS) | `ray bundle --ios --dev`: librería de desarrollo, página de emparejamiento, `.ray-dev` por proyecto, bundle id `.dev` | Parcial: `tests/devlink_pair.rs` (emparejamiento headless); el humo real en el iPhone |
 | D3b ✅ | Android (`--android --dev`, cdylib con los símbolos JNI), `ray dev-lib` y el asset prebuilt por release | Parcial: unidad del fuente generado; humo en el emulador |
-| D4 | Consola remota, reconexión, snapshot diferencial, pulido de DX | Sí |
+| D4 ✅ | Consola remota, snapshot diferencial por dispositivo, dependencias `path` fuera de la raíz | Sí: `tests/devlink_cli.rs` (print en el anfitrión, delta de un archivo) + unidad |
 
 Decisiones tomadas: librería de desarrollo prebuilt como asset de release; si el reinicio
 cooperativo no converge en unos segundos, la librería hace `exit(0)` y el usuario toca el icono
@@ -155,4 +155,26 @@ pedida sin programa en marcha.
   `ray-dev-lib-<target>.tar.gz` de la release de su versión a `~/.ray/dev-lib/<versión>/`
   (`curl` + `tar`, como `ray upgrade`). El job `dev-lib` de `release.yml` construye los cuatro
   targets móviles con `ray dev-lib` desde el mismo checkout.
+
+## D4 por dentro: consola, delta y dependencias por ruta
+
+- **Consola remota.** `lib::set_output_mirror` instala un espejo de `print`/`eprint` (una
+  lectura atómica relajada por print cuando no hay espejo; la línea sigue yendo a
+  stdout/stderr del dispositivo — logcat o la consola de Xcode). La librería de desarrollo lo
+  instala al enlazar y lo quita al perder el enlace; cada línea viaja como `LOG` (un octeto de
+  flujo + texto) y el anfitrión la escribe tal cual en su stdout o stderr, como haría `ray dev`
+  con un hijo local.
+- **Delta por dispositivo.** Tras `HELLO` el dispositivo manda `HASHES` (lo que tiene en su
+  sandbox: ruta → FNV-1a 64). El anfitrión guarda por dispositivo ese mapa y en cada
+  publicación le manda `SNAPSHOT` entero si no tiene nada, o `DELTA` (rutas borradas + entradas
+  cambiadas o nuevas); un guardado sin cambios reales manda un delta vacío, que reinicia igual
+  (el usuario guardó a propósito). El mapa se actualiza tras cada envío. Sin barrido en el
+  delta: el anfitrión sabe qué había.
+- **Dependencias `path = …` fuera de la raíz.** El loader las resuelve por el padre de cada
+  ruta y el nombre del directorio; el anfitrión las empaqueta bajo `.ray-path-deps/<dir>/`
+  (solo `.ray`, `.ray.html` y `ray.toml`, sin `target`/`node_modules`/ocultos) y el
+  dispositivo añade ese directorio como raíz de dependencias. Las que están DENTRO de la raíz
+  ya viajaban con el resto de fuentes.
+- **Versión.** Si el dispositivo corre otra versión de raylang, el anfitrión lo avisa al
+  conectar: quien compila el programa es la toolchain del dispositivo.
 

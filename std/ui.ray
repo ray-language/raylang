@@ -92,8 +92,14 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `WS_MINIMIZEBOX`) for secondary panels such as an About window; GTK ignores it.
 /// `kind` (M260): `"document"` (the default window), `"panel"` (a floating utility palette that
 /// stays above the app's windows — macOS `NSPanel`, Windows tool window, GTK utility hint; a
-/// command palette, a find panel) or `"borderless"` (no frame, no title bar — you draw everything;
-/// the window is movable by dragging its background on macOS). `always_on_top` (M260) keeps the
+/// command palette, a find panel), `"borderless"` (no frame, no title bar — you draw everything;
+/// the window is movable by dragging its background on macOS) or `"full_content"` (M328: the page
+/// extends UNDER the title bar, Chrome/VS Code style — macOS: transparent bar, hidden title, the
+/// traffic lights float over the page; Linux/Windows: like `document` for now). The page reserves
+/// that strip with `window.ray.titlebar_height` (px; 0 when there is none) and marks what should
+/// drag the window with `data-ray-drag` on an element (children `button`/`a`/`input`/
+/// `select`/`textarea` or `data-ray-no-drag` stay clickable; double-click zooms) — macOS and
+/// Windows honour it, also for `borderless` windows. `always_on_top` (M260) keeps the
 /// window above every other window. `parent` (M260) is the handle of the OWNING window (0 =
 /// none): the new one stays above it and follows it — the closest thing to a sheet on every OS.
 /// Build it with `ui.options(width, height)` and tweak the fields you need.

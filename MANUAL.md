@@ -1717,10 +1717,16 @@ o.suggested = "untitled.ray";
 let target = ui.save_file_with(o)?;            // Option<string>
 ```
 
-Hay **tres tipos de ventana** (M260) y todos aceptan el mismo webview: `kind = "document"` es la
+Hay **cuatro tipos de ventana** (M260, M328) y todos aceptan el mismo webview: `kind = "document"` es la
 de siempre; `"panel"` es una paleta de utilidad flotante sobre las ventanas de la app (paleta de
-comandos, panel de búsqueda) y `"borderless"` no tiene marco ni título (un splash, un HUD que
-dibujas tú). `always_on_top` la mantiene sobre todo lo demás y `parent` la hace hija de otra
+comandos, panel de búsqueda); `"borderless"` no tiene marco ni título (un splash, un HUD que
+dibujas tú); y `"full_content"` (M328) mete la página **bajo la barra de título**, como Chrome o
+VS Code: en macOS la barra se vuelve transparente y sin título, los semáforos flotan sobre la
+página y esta ocupa toda la altura — reserva esa franja con `window.ray.titlebar_height` (px) y
+marca con `data-ray-drag` el elemento que debe arrastrar la ventana (sus `button`/`a`/`input`
+siguen siendo clicables, o `data-ray-no-drag`; doble clic = zoom). En Linux y Windows
+`full_content` se comporta como `document` por ahora; `data-ray-drag` también sirve en Windows y
+macOS para las ventanas `borderless`. `always_on_top` la mantiene sobre todo lo demás y `parent` la hace hija de otra
 ventana: queda encima de su dueña y la sigue, que es lo más parecido a un *sheet* en los tres
 sistemas. Y sobre una ventana abierta: `set_fullscreen`, `set_always_on_top`, `set_size`,
 `set_position`, `center`, `minimize` y `maximize`.

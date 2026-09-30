@@ -96,25 +96,21 @@ pub fn host_eprint(s: &str) {
 /// M330 D4: un **espejo** opcional de `print`/`eprint` (la consola remota del hot reload
 /// móvil: la librería de desarrollo reenvía cada línea a la terminal de `ray dev --device`).
 /// Sin espejo, el coste por print es una lectura atómica relajada.
-#[cfg(not(target_arch = "wasm32"))]
 type OutputMirror = Box<dyn Fn(bool, &str) + Send + Sync>;
-#[cfg(not(target_arch = "wasm32"))]
 static OUTPUT_MIRROR_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-#[cfg(not(target_arch = "wasm32"))]
 fn output_mirror() -> &'static std::sync::Mutex<Option<OutputMirror>> {
     static M: std::sync::OnceLock<std::sync::Mutex<Option<OutputMirror>>> = std::sync::OnceLock::new();
     M.get_or_init(|| std::sync::Mutex::new(None))
 }
 /// Instala (o quita, con `None`) el espejo de salida: recibe `(es_stderr, línea)` tras cada
 /// `print`/`eprint`, después de escribirse en stdout/stderr como siempre.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn set_output_mirror(mirror: Option<OutputMirror>) {
     let on = mirror.is_some();
     *output_mirror().lock().unwrap_or_else(|e| e.into_inner()) = mirror;
     OUTPUT_MIRROR_ON.store(on, std::sync::atomic::Ordering::Release);
 }
-#[cfg(not(target_arch = "wasm32"))]
 #[inline]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // el playground no imprime por aquí
 fn mirror_output(stderr: bool, s: &str) {
     if OUTPUT_MIRROR_ON.load(std::sync::atomic::Ordering::Relaxed)
         && let Some(m) = output_mirror().lock().unwrap_or_else(|e| e.into_inner()).as_ref()

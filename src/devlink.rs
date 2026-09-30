@@ -128,9 +128,17 @@ pub fn url_scheme(url: &str) -> &str {
 /// D5: el enlace como código QR para la terminal (bloques Unicode, dos módulos por línea).
 /// `None` si no cupo (no ocurre con una URL de enlace; el tope del QR son ~2 KB).
 pub fn qr_text(url: &str) -> Option<String> {
-    use qrcode::render::unicode;
-    let code = qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::L).ok()?;
-    Some(code.render::<unicode::Dense1x2>().dark_color(unicode::Dense1x2::Light).light_color(unicode::Dense1x2::Dark).quiet_zone(true).build())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use qrcode::render::unicode;
+        let code = qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::L).ok()?;
+        Some(code.render::<unicode::Dense1x2>().dark_color(unicode::Dense1x2::Light).light_color(unicode::Dense1x2::Dark).quiet_zone(true).build())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = url; // el playground no tiene terminal ni enlace de dispositivos
+        None
+    }
 }
 
 /// D5: el enlace que el shell recibe por su esquema URL (un QR escaneado con la cámara del

@@ -67,6 +67,9 @@ fn run() {
         Some("run") => cmd_run(&rest[1..]),
         Some("profile") => cmd_profile(&rest[1..]),
         Some("dev") => cmd_dev(&rest[1..]),
+        // M330 D2: el cliente del enlace de desarrollo en escritorio (lo que la librería de
+        // desarrollo hace en el teléfono; para probar `ray dev --device` sin dispositivo).
+        Some("dev-client") => cmd_dev_client(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         // M217 (ray-sublime #10): `ray check` = `ray build` sin flags de nativo — la costumbre de otros lenguajes.
         Some("check") => {
@@ -139,7 +142,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray) [--frontend <vite-template>]
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
-  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it)
+  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it here)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
@@ -1026,6 +1029,13 @@ fn cmd_run(args: &[String]) {
 /// `serve_graceful` (M88.1b) drena sus conexiones antes de morir — y escala al kill duro a los 3 s. Un programa que termina solo (un CLI, un crash)
 /// queda a la espera y se relanza al siguiente cambio.
 fn cmd_dev(args: &[String]) {
+    // M330 D2: `ray dev --device` no corre el programa aquí — lo manda a los dispositivos
+    // enlazados (la librería de desarrollo en el teléfono) en cada cambio que compile.
+    let (device, args) = take_flag_bool(args, "--device");
+    if device {
+        return cmd_dev_device(&args);
+    }
+    let args: &[String] = &args;
     let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
     // La raíz vigilada: la del proyecto (manifiesto hacia arriba desde el cwd); sin manifiesto,
     // el directorio de la entrada explícita, o el cwd.
@@ -1434,6 +1444,95 @@ fn run_frontend_build(entry: &str) {
 
 /// El archivo de entrada que `ray dev` pasará al hijo (para el check-before-restart), despojando los
 /// mismos flags que `ray run` consume; `None` = el default del proyecto (`src/main.ray`).
+/// M330 D2: `ray dev --device` — el anfitrión del enlace de desarrollo (`src/devlink.rs`).
+/// Vigila el proyecto como `ray dev`, pero en vez de relanzar un hijo comprueba que compila y
+/// publica el snapshot del fuente a los dispositivos conectados; sus estados llegan a esta
+/// terminal. La URL impresa es lo que el dispositivo necesita (`ray dev-client <url> <dir>` en
+/// escritorio; el shell de desarrollo en el teléfono, D3).
+fn cmd_dev_device(args: &[String]) {
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = Manifest::find(&cwd)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .or_else(|| {
+            args.iter()
+                .find(|a| !a.starts_with("--"))
+                .and_then(|a| Path::new(a).parent().map(Path::to_path_buf))
+                .filter(|p| !p.as_os_str().is_empty())
+        })
+        .unwrap_or(cwd);
+    let entry = dev_entry(args);
+    let embed_dirs: Vec<PathBuf> = Manifest::load(&root)
+        .ok()
+        .flatten()
+        .map(|m| embed_dirs_of(&m).into_iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let _ = DEV_EMBED_DIRS.set(embed_dirs);
+    let host = match crate::devlink::Host::start() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("[dev] {e}");
+            process::exit(70);
+        }
+    };
+    eprintln!("[dev] device link: {}", host.url);
+    eprintln!("[dev] on this machine: ray dev-client {} <dir>", host.url);
+    eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml, .ray-deps + embedded assets); Ctrl-C to exit", root.display());
+    let publish = |host: &crate::devlink::Host, what: &str| {
+        if let Err(diag) = dev_check_compiles(&exe, &entry) {
+            eprintln!("[dev] {what}: does not compile — devices keep the previous program:");
+            eprint!("{diag}");
+            return;
+        }
+        match crate::devlink::collect_snapshot(&root) {
+            Ok(files) => {
+                let bytes: usize = files.iter().map(|(_, d)| d.len()).sum();
+                let n = host.publish(&files);
+                eprintln!("[dev] {what}: snapshot of {} files ({} KB) sent to {n} device(s)", files.len(), bytes / 1024);
+            }
+            Err(e) => eprintln!("[dev] {what}: {e}"),
+        }
+    };
+    publish(&host, "start");
+    let mut snapshot = scan_sources(&root);
+    let mut hashes = content_hashes(&snapshot);
+    let mut watcher = DevWatcher::new(&root);
+    loop {
+        let change = loop {
+            if let Some((_, label)) = watcher.wait_change(&root, &mut snapshot) {
+                break label;
+            }
+            if dev_stdin_quit() {
+                eprintln!("[dev] bye");
+                process::exit(0);
+            }
+        };
+        watcher.debounce(&root, &mut snapshot);
+        let current_hashes = content_hashes(&snapshot);
+        if current_hashes == hashes {
+            eprintln!("[dev] change in {change}: contents unchanged — ignoring");
+            continue;
+        }
+        hashes = current_hashes;
+        publish(&host, &format!("change in {change}"));
+    }
+}
+
+/// M330 D2: `ray dev-client <ray-dev://…> <dir>` — el lado dispositivo del enlace, en
+/// escritorio: lo mismo que hace la librería de desarrollo en el teléfono. Con
+/// `RAY_UI_BACKEND=headless` vale para CI.
+fn cmd_dev_client(args: &[String]) {
+    let [url, dir, ..] = args else {
+        eprintln!("usage: ray dev-client <ray-dev://host:port/token> <dir>");
+        process::exit(64);
+    };
+    let name = std::env::var("RAY_DEV_DEVICE_NAME").unwrap_or_else(|_| "desktop".to_string());
+    if let Err(e) = crate::devlink::run_device(url, Path::new(dir), &name) {
+        eprintln!("[dev-client] {e}");
+        process::exit(70);
+    }
+}
+
 fn dev_entry(args: &[String]) -> Option<String> {
     let (_det, a) = take_flag_bool(args, "--deterministic");
     let (_devtools, a) = take_flag_bool(&a, "--devtools");

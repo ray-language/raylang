@@ -59,8 +59,8 @@ diferencial), lo que se prueba en caliente es lo que después se compila.
 
 | Fase | Contenido | Verificable sin teléfono |
 |---|---|---|
-| D1 | Parada cooperativa de la VM + reset del runtime | Sí: `tests/vm_stop.rs` |
-| D2 | `ray_start` de desarrollo en la crate + protocolo de sync + `ray dev --device` | Sí: el mismo cliente compilado para macOS con `ui-shell` |
+| D1 ✅ | Parada cooperativa de la VM + reset del runtime | Sí: `tests/vm_stop.rs` |
+| D2 ✅ | `src/devlink.rs`: protocolo de snapshot por TCP, `ray dev --device`, `ray dev-client`, entrada C `ray_dev_start` | Sí: `tests/devlink_cli.rs` (anfitrión + cliente headless, cambio, cambio que no compila) |
 | D3 | `ray bundle --ios --dev` / `--android --dev`, QR, bundle id `.dev`, asset prebuilt | Parcial: generación de proyectos en CI; el humo real en el dispositivo |
 | D4 | Consola remota, reconexión, snapshot diferencial, pulido de DX | Sí |
 
@@ -100,3 +100,30 @@ Las pruebas (`tests/vm_stop.rs`, en su propio proceso porque la bandera es globa
 bucle que nunca conmuta, una fibra dormida, una fibra aparcada en `accept` sin plazo, una tarea
 girando en otro worker, correr otro programa en el mismo proceso tras parada + reset, y una parada
 pedida sin programa en marcha.
+
+## D2 por dentro: el enlace (`src/devlink.rs`)
+
+- **Marcos** `[u32 BE len][u8 kind][payload]` sobre TCP, `std::net` puro. Del dispositivo:
+  `HELLO` (token, nombre, versión de raylang) y `STATUS` (un octeto de estado + texto). Del
+  anfitrión: `SNAPSHOT` (entradas `[u32][ruta][u64][bytes]`, rutas relativas con `/`). Un
+  `SNAPSHOT` siempre reinicia. Sin JSON ni WebSocket: los dos extremos son nuestros.
+- **Anfitrión** (`ray dev --device`): escucha en `0.0.0.0:0` (puerto alto aleatorio; la IP de
+  LAN se obtiene con un `connect` UDP que no envía nada), imprime `ray-dev://ip:puerto/token`,
+  y reusa de `ray dev` el vigilante de kernel, el debounce, la confirmación por hash y el
+  check-before-restart (`ray build`). Publica el snapshot al conectar un dispositivo y en cada
+  cambio que compila; los `STATUS` de cada dispositivo salen en la terminal.
+- **Snapshot**: `ray.toml`/`ray.lock`, todo `.ray`/`.ray.html` fuera de `target`, `node_modules`
+  y ocultos (un `.ray` generado de un `.ray.html` hermano no viaja), los assets de `[native]
+  embed`/`[frontend] dist` y `.ray-deps/` entero sin sus `.git` ni `.index`. Tope 64 MB.
+- **Dispositivo** (`run_device`): conecta (reintento cada segundo; al perder el enlace el
+  programa sigue y se reconecta), escribe el snapshot en `<dir>/project` borrando lo que ya no
+  viene, y en un hilo propio: `Manifest` → entrada → `loader::load_with_deps` con las raíces de
+  `.ray-deps` del snapshot (nunca git ni índice) → `check` → `compile` → `vm::run_program`.
+  Antes de cada snapshot: `request_stop` (D1), espera al hilo hasta 5 s y `runtime_reset`; si
+  no para a tiempo, `exit(0)` (la decisión de diseño: el shell arranca limpio y reconecta).
+- **Entrada C** `ray_dev_start(url, dir)` para el shell móvil: como `ray_start`, retorna 0 con el
+  enlace corriendo en su hilo. Cómo recibe el shell la URL (QR/emparejamiento) es D3.
+- **Pendiente para D4**: snapshot diferencial, `print`/`eprint` del dispositivo hacia la
+  terminal del anfitrión (hoy van a su stdout/logcat), dependencias `path = …` fuera de la raíz
+  (no viajan en el snapshot).
+

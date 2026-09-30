@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Hot reload del programa en el teléfono, primeras fases** (M330, `RAYLANG-FINDINGS.md`
+  #50/#106; `docs/diseno-hot-reload-movil.md`). `ray dev --device` no corre el programa en el
+  Mac: vigila el proyecto, comprueba que compila y envía el snapshot del fuente a los
+  dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en su VM sin
+  reinstalar — fiel al dispositivo (archivos, llavero, red, audio y permisos del teléfono).
+  `ray dev-client <url> <dir>` es el lado dispositivo en escritorio; la librería de desarrollo
+  para el shell móvil (`ray_dev_start`) y `ray bundle --ios/--android --dev` llegan en la fase
+  siguiente. Por dentro, la VM gana una parada cooperativa desde fuera del programa y un reset
+  del runtime para correr otro programa en el mismo proceso (D1).
+
 ## 1.27.24 — 2026-09-30
 
 - **`main` corre como fibra en el binario nativo** (M329, `RAYLANG-FINDINGS.md` #107): el

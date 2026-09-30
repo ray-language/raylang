@@ -15791,3 +15791,38 @@ dominio de handles principal. Fibras, canales y tareas caen con la VM.
 denso, fibra dormida, fibra aparcada en `accept` sin plazo, tarea girando en otro worker, un
 segundo programa tras parada + reset, y una parada sin programa en marcha. Todas paran en menos
 de un cuarto de segundo desde la petición.
+
+## 313. M330 D2 — El enlace de desarrollo: `ray dev --device` (sep 2026)
+
+Con la parada cooperativa de D1, lo que faltaba era el transporte. La decisión de fondo ya
+estaba tomada en `docs/diseno-hot-reload-movil.md`: **fuente, no bytecode** — el dispositivo
+lleva la toolchain entera, así que basta con hacerle llegar los archivos. De ahí que el enlace
+sea deliberadamente simple: marcos binarios con longitud sobre TCP, `std::net` puro, tres tipos
+de mensaje (`HELLO`, `STATUS`, `SNAPSHOT`) y un snapshot completo cada vez. Sin JSON, sin
+WebSocket, sin dependencias: los dos extremos son nuestros y el diferencial es una optimización
+que puede esperar a D4.
+
+**Lo que se reutiliza.** `ray dev --device` es `ray dev` sin hijo: el mismo vigilante de kernel
+(`DevWatcher`), el mismo debounce y la misma confirmación por hash, y el mismo
+check-before-restart (`ray build` en milisegundos) — un cambio que no compila no se envía y el
+dispositivo sigue con el programa anterior, exactamente como `ray dev` no mata a un servidor que
+funciona por un error a medio escribir. El dispositivo carga con `loader::load_with_deps` y las
+raíces de `.ray-deps` que llegaron en el snapshot: nunca git ni índice, así que funciona offline.
+
+**El punto delicado es el reinicio en el dispositivo.** Antes de escribir el snapshot nuevo se
+pide la parada (D1) y se espera al hilo del programa; solo cuando ha terminado se hace el
+`runtime_reset` (cerrar handles con la VM viva sería una carrera) y se arranca el siguiente. Si
+no para en 5 s, la librería sale del proceso: es la decisión de diseño del arco (el shell
+vuelve a arrancar limpio y se reconecta), y vale más que un reinicio a medias.
+
+**La entrada del shell.** `ray_dev_start(url, dir)` es el gemelo de `ray_start`: retorna 0 con
+el enlace corriendo en su hilo, `SIGPIPE` ignorado como en el emitido. El shell de desarrollo
+que la llama, y cómo obtiene la URL (QR), son D3.
+
+**Verificación.** `tests/devlink_cli.rs` monta el enlace completo en escritorio: `ray dev
+--device` sobre un proyecto temporal, `ray dev-client` headless en su sandbox, un cambio en
+`main.ray` que llega y reinicia (el anfitrión oye `stopped` y `running`), y un cambio que no
+compila que no se publica. Unidad: URL, codificación del snapshot, escritura con barrido de
+sobrantes y rechazo de rutas que salgan del proyecto, y el filtro de qué viaja (fuentes,
+manifiesto, dependencias; nunca `target`, `node_modules`, `.git` ni el `.ray` derivado de un
+`.ray.html`).

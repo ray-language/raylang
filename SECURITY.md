@@ -327,6 +327,10 @@ documentada:
   (`pipe`/`fcntl` no bloqueante + `FD_CLOEXEC` al crearlo; `write` de un octeto y `read` hasta EAGAIN
   sobre esos fds, buffers propios que la llamada no retiene), el mismo patrón que el canal de
   señales. Sin `libc`; sin fd en Windows/wasm.
+- **`src/devlink.rs`** — la entrada C de la librería de desarrollo (M330 D2, `ray_dev_start`):
+  `CStr::from_ptr` sobre los dos C-strings del contrato del shell (NUL-terminated, copiados durante
+  la llamada; NULL devuelve 1) y `signal(SIGPIPE, SIG_IGN)` como el `ray_start` emitido (un cdylib no
+  pasa por el shim de main de Rust). El enlace en sí es `std::net` puro: sin `unsafe`.
 - **`src/dev_host.rs`** — la capa de SO de ese supervisor (M172): en unix `dup2`/`pre_exec` para
   pasar el socket al hijo sin rechazar conexiones entre reinicios, `kill(pid, SIGTERM)` al hijo
   propio y el handler de muerte del padre (`signal` + `kill` + `_exit`, async-signal-safe); en

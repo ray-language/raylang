@@ -2007,5 +2007,16 @@ de `sched_yield` del worker: +11 % en ida y vuelta con 1 peticionario, +16 % con
 690 k/s): con los cores saturados el girador roba CPU a quien trabaja, la misma lección de M319.
 No entra. El tramo entre workers se queda en ~1 µs; el suelo real es el del mismo worker (0,2 µs).
 
-**Pendiente de medir en Linux/Docker**, donde ray-apps vio 16 µs: la causa es la misma (condvar
-del hilo `main`), así que el salto esperado es al rango fibra↔fibra de M319 en Linux (1,2 µs).
+**Linux** (VM UTM, 4 cores, mismo binario `ray` de la rama; línea base = misma build con la
+emisión y `fibers.rs` de 1.27.23):
+
+| par | antes (1.27.23) | **M329** | `RAYLANG_THREADS=1` |
+|---|---|---|---|
+| `main` ↔ actor, release | **38,5–40 µs** | **3,1–3,5 µs (12×)** | 1,0 µs (39×) |
+| fibra ↔ fibra, release | — | 2,1–2,5 µs | 0,9 µs |
+| `actor_ask rt 1` / `rt 8` / `oneway 8` | — | 295 k/s / 946 k/s / 1,6 M/s | — |
+
+En Linux la condvar del hilo `main` costaba aún más que en macOS (futex + planificador de la
+VM: 39 µs, peor que los 16 de ray-apps en Docker); como fibra, `main` paga lo que cualquier
+fibra. El tramo entre workers en esa VM (2,1–2,5 µs) dobla el de macOS: es el `sched_yield` del
+spin-then-park bajo un hipervisor, no algo de M329.

@@ -15741,4 +15741,5 @@ corto tiene el mismo defecto a menor escala. El tramo entre workers se queda en 
 `RAYLANG_THREADS=1`), `benchmarks/actor_ask.ray` en sus cinco escenarios, perfil con `sample`, y
 las suites `native_depth_cli` (la recursión profunda de `main` sigue cortando por el contador,
 no por la página de guarda), `native_fibers_cli`, `native_lib_cli`, `native_corpus`,
-`native_differential`, `cli_cli` y `ui_cli`.
+`native_differential`, `cli_cli` y `ui_cli`. Y en Linux (VM, 4 cores): 39 µs → 3,1–3,5 µs, y
+1,0 µs con `RAYLANG_THREADS=1` (PERFORMANCE §9).

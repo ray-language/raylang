@@ -11,6 +11,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   dormía en una condvar y cada respuesta de un actor costaba una syscall de despertar (~3,2 µs
   la ida y vuelta, 1,8 en la VM, y `RAYLANG_THREADS=1` no cambiaba nada). Ahora `main` es una
   fibra con 8 MiB de pila reservada (virtual): 1,1–1,4 µs entre workers y 0,27–0,34 µs con
+  `RAYLANG_THREADS=1` en macOS; en Linux (VM, 4 cores) de 39 µs a 3,1–3,5 µs, y 1,0 µs con
   `RAYLANG_THREADS=1`. Los modos `--lib` (shells) y con `std/ui` conservan el hilo por contrato.
 
 ## 1.27.23 — 2026-09-30

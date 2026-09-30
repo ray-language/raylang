@@ -15704,8 +15704,8 @@ decisión que M224 tomó con `titlebar_color` en Linux.
 
 **Verificación.** `ui_cli` (los cuatro `kind` en headless, `hud` rechazado con la lista nueva),
 unitario del shim (zonas de arrastre, exclusiones, `titlebar_height`, forma de los mensajes de
-control). La medida visual en macOS (una página roja abierta como `document` y como
-`full_content`, captura y lectura de la columna central: en `document` una franja de barra sobre
-el rojo, en `full_content` el rojo hasta el borde superior) quedó preparada en
-`$CLAUDE_JOB_DIR/tmp/fc` y pendiente: la sesión estaba bloqueada cuando tocaba capturar. Linux y
-Windows compilan en CI (el arrastre de Windows no se ha probado en máquina).
+control), y la medida visual en macOS: una página roja abierta como `document` y como
+`full_content`, captura y lectura de la columna central. `document`: 798 px de rojo (@2x) con una
+franja gris `#1e1e1e` de ~28 pt encima (la barra). `full_content`: 796 px de rojo hasta el borde
+superior de la ventana y, en el recorte, los tres semáforos flotando sobre el rojo — el efecto de
+Chrome. Linux y Windows compilan en CI (el arrastre de Windows no se ha probado en máquina).

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.23 — 2026-09-30
 
 - **`kind = "full_content"`: la página bajo la barra de título** (M328, pedido con la captura
   de Chrome): en macOS la barra se vuelve transparente y sin título, los semáforos flotan sobre

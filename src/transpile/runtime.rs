@@ -912,10 +912,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
             // M210: la ventana con opciones.
-            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str, mi: bool, kind: &str, top: bool, parent: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str, mi: bool, kind: &str, top: bool, parent: i64, bg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    if parent != 0 && !matches!(__ray_reg().lock().unwrap().open.get(&parent), Some(__RayHandle::Window(_))) { return Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(\"ui: the parent is not an open window\")])); }\n",
             "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
-            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string(), minimizable: mi, kind: kind.to_string(), always_on_top: top, parent };\n",
+            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string(), background: bg.to_string(), minimizable: mi, kind: kind.to_string(), always_on_top: top, parent };\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window_with(id, title, url, &opts) {\n",
             "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
@@ -938,6 +938,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_ui_clipboard(op: &str, text: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = match op { \"write\" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()), \"read\" => ray_runtime::ui::clipboard_read(), other => Err(format!(\"ui: unknown clipboard op '{other}'\")) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            // M327: el fondo bajo la página en caliente (espejo de builtins::ui_set_background).
+            "fn __ray_ui_set_background(h: i64, color: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if known { ray_runtime::ui::set_background(h, color) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M239: color de la barra de título en caliente.
             "fn __ray_ui_set_titlebar(h: i64, color: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",

@@ -65,6 +65,7 @@ fn main() {
     o.resizable = false;
     o.autosave = "main";
     o.titlebar_color = "#1f2430";
+    o.background = "#21242f";
     o.minimizable = false;
     match (ui.open_with("Opts", "http://127.0.0.1:1/", o)) {
         Result.Ok(h) => { print("opened: " + to_string(h > 0)); print("focus: " + to_string(ui.focus(h).is_ok())); let _ = close(h); print("focus closed: " + to_string(ui.focus(h).is_err())); },
@@ -82,6 +83,12 @@ fn main() {
         Result.Ok(_) => print("ugly: a non-#rrggbb color accepted"),
         Result.Err(e) => print("color rejected: " + to_string(e.contains("unsupported titlebar color 'red'"))),
     }
+    var bg = ui.options(400, 300);
+    bg.background = "dark";
+    match (ui.open_with("Bg", "http://127.0.0.1:1/", bg)) {
+        Result.Ok(_) => print("bg: a non-#rrggbb background accepted"),
+        Result.Err(e) => print("background rejected: " + to_string(e.contains("unsupported background color 'dark'"))),
+    }
 }
 "##;
 
@@ -96,7 +103,7 @@ fn open_with_validates_its_options_on_both_engines() {
         }
         let (out, code) = run_headless(cmd.arg(&path));
         assert_eq!(code, 0, "{out}");
-        assert_eq!(out, "opened: true\nfocus: true\nfocus closed: true\nmin rejected: true\ncolor rejected: true\n", "interp={interp}\n{out}");
+        assert_eq!(out, "opened: true\nfocus: true\nfocus closed: true\nmin rejected: true\ncolor rejected: true\nbackground rejected: true\n", "interp={interp}\n{out}");
     }
 }
 
@@ -1509,4 +1516,50 @@ fn dev_frontend_url_is_honoured_only_with_devtools_and_when_reachable() {
     assert_eq!(run(true, "http://127.0.0.1:1"), "ray://app/index.html\n", "devtools + no responde → embebida");
     assert_eq!(run(false, &live), "ray://app/index.html\n", "sin devtools se ignora");
     drop(listener);
+}
+
+// ---------------------------------------------------------------------------
+// M327 — `ui.set_background` en caliente (ray-sublime: el flash blanco antes de la página):
+// valida el formato y el handle como `set_titlebar_color`; headless deja traza. Tres motores.
+// ---------------------------------------------------------------------------
+#[test]
+fn background_color_changes_on_an_open_window_on_all_three_engines() {
+    let base = tmp("background_setter");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    let h = ui.open(\"B\", \"ray://app/index.html\", 320, 200).unwrap();\n    match (ui.set_background(h, \"#21242f\")) { Result.Ok(_) => print(\"painted\"), Result.Err(e) => print(e) }\n    match (ui.set_background(h, \"\")) { Result.Ok(_) => print(\"system\"), Result.Err(e) => print(e) }\n    match (ui.set_background(h, \"dark\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    match (ui.set_background(99, \"#000000\")) { Result.Ok(_) => print(\"bad\"), Result.Err(e) => print(e) }\n    close(h);\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "painted\nsystem\nui: unsupported background color 'dark' (expected #rrggbb)\nui: not an open window\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] background 1 #21242f") && err.contains("[ui] background 1 system"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "native\n{}", String::from_utf8_lossy(&out.stderr));
+    }
 }

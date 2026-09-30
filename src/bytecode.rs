@@ -679,6 +679,8 @@ pub enum OpCode {
     UiWindow,
     /// M239: `__ui_set_titlebar(h, color)` (['ok'] / ['err', msg]).
     UiSetTitlebar,
+    /// M327: `__ui_set_background(h, color)` (['ok'] / ['err', msg]).
+    UiSetBackground,
     /// M235: `platform()` — el SO ("macos" | "linux" | "windows" | …).
     Platform,
     /// M235: `__ui_desktop(kind, path)` — abrir/revelar en el escritorio (['ok'] / ['err', msg]).

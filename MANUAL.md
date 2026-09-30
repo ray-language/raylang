@@ -1601,7 +1601,12 @@ da macOS, Linux y Windows lo ignoran). Para que la barra de título del sistema 
 tema, como en Sublime, `o.titlebar_color = "#1f2430"` (M224): en macOS la barra se vuelve
 transparente sobre el fondo de la ventana y el título sale claro u oscuro según la luminancia; en
 Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
-color, y un valor que no sea `#rrggbb` es `Err`. Un panel secundario como un About lleva
+color, y un valor que no sea `#rrggbb` es `Err`. Y para que la ventana no pase en blanco (o en
+gris, en apariencia oscura) los 150–250 ms que WebKit tarda en parsear una app grande,
+`o.background = "#21242f"` (M327): el color que el webview muestra hasta que la página pinta, en
+los tres backends; si no lo pones, `titlebar_color` hace de fondo — el mismo color en la barra y
+bajo la página —, y `ui.set_background(h, color)` lo cambia en caliente cuando cambia el tema
+(en macOS, junto a `set_titlebar_color`: la barra transparente enseña el fondo de la VENTANA). Un panel secundario como un About lleva
 `o.minimizable = false` (M230: el botón de minimizar nace deshabilitado; GTK lo ignora), y si el
 menú lo vuelve a pedir con la ventana ya abierta detrás de la principal, `ui.focus(h)` (M229) la
 trae al frente con foco: `eval_js(h, "window.focus()")` solo enfoca el documento, no la ventana.

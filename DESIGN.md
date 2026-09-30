@@ -15632,3 +15632,38 @@ sonda como punto de partida.
 las tres sondas (audio, fs, actor) en VM y nativo, `javac` no aplica. Y una regla para el método:
 cuando un hallazgo dice «en la app X», la verificación reproduce el caso de la app, no el
 ejemplo mínimo del arco.
+
+## 309. M327 — El color de la ventana antes de la página (sep 2026)
+
+Origen: ray-sublime, con vídeo a 120 fps: ventana en blanco (o gris del sistema en apariencia
+oscura) unos 180–250 ms, después la página. El intervalo es WebKit parseando 1,9 MB de
+JavaScript — juntar hojas y scripts no lo baja — y no es de la app: es el color del webview y de
+la ventana antes de cargar, que `WindowOptions` no permitía fijar (solo `titlebar_color`).
+
+**El diseño.** `WindowOptions.background` (`#rrggbb`) y `ui.set_background(h, color)`, con el
+mismo contrato que `titlebar_color`/`set_titlebar_color`. Y el detalle que evita tocar las apps:
+sin `background`, **`titlebar_color` hace de fondo**. Es lo que ray-sublime pedía como
+alternativa, y es correcto en general: quien tiñe la barra quiere ese color bajo la página. Un
+`background` distinto gana cuando se declara.
+
+**Por backend.** macOS: `underPageBackgroundColor` del WKWebView (macOS 12+, comprobado con
+`respondsToSelector`) es lo que WebKit pinta hasta que el documento tiene fondo, y
+`drawsBackground = NO` por KVC (el interruptor que usan wry y tauri) evita el blanco propio del
+webview; el fondo de la NSWindow se pinta solo si `titlebar_color` no lo puso ya, porque con la
+barra transparente ese fondo ES la barra. Linux: `webkit_web_view_set_background_color` (2.8+,
+opcional por dlsym; sin él, el blanco de siempre). Windows: `ICoreWebView2Controller2::
+put_DefaultBackgroundColor` (runtime 1.0.774+; `cast` falla limpio en uno más viejo) más el
+borrado del HWND en `WM_ERASEBKGND` con un pincel del color, porque WebView2 tarda ~100 ms en
+existir y ese hueco lo pinta la ventana. Los shells móviles lo aceptan y lo ignoran (v1).
+
+**Lo que también salió de la nota.** `mount_bytes` sobre un directorio montado: el archivo en
+memoria manda (`locate` mira primero `files`), y ni la doc lo decía ni un test lo guardaba.
+Ahora ambos. El experimento de ray-sublime que «no informaba de nada» no se pudo reproducir aquí
+con el servidor puro; la doc cierra la duda que sí era nuestra.
+
+**Verificación.** Unitarios (transpile, scheme), `ui_cli` (validación de la opción y `set_background`
+en los tres motores, con traza headless) y la comprobación visual en macOS: una página que
+bloquea 2,5 s en un `<script>` del `<head>`, abierta con `background = "#21242f"`; captura de
+pantalla a los 900 ms → el píxel del centro (y ±80 px) es `#22242f` (el pedido, a 1 unidad de la
+conversión de espacio de color), ni blanco ni gris; a los 4 s, el contenido de la página. Linux y
+Windows compilan en CI; el efecto visual ahí lo confirmarán las apps.

@@ -1366,7 +1366,7 @@ pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i6
 /// Los motores los pasan tal cual; el handle de la dueña se traduce aquí al id del runtime.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str, minimizable: bool, kind: &str, always_on_top: bool, parent: i64) -> Result<i64, String> {
+pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str, minimizable: bool, kind: &str, always_on_top: bool, parent: i64, background: &str) -> Result<i64, String> {
     let parent = if parent == 0 {
         0
     } else {
@@ -1375,11 +1375,11 @@ pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min
             _ => return Err("ui: the parent is not an open window".to_string()),
         }
     };
-    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent })
+    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), background: background.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent })
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str, _minimizable: bool, _kind: &str, _always_on_top: bool, _parent: i64) -> Result<i64, String> {
+pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str, _minimizable: bool, _kind: &str, _always_on_top: bool, _parent: i64, _background: &str) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -1487,6 +1487,20 @@ pub fn ui_set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), S
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_set_menu_item(_tag: &str, _enabled: bool, _checked: bool) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M327: `ui.set_background(h, color)` — el fondo bajo la página en caliente.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_set_background(h: i64, color: &str) -> Result<(), String> {
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::set_background(win, color)
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_set_background(_h: i64, _color: &str) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -4756,8 +4770,8 @@ static BUILTINS: &[Builtin] = &[
     // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave, titlebar_color,
     // minimizable) -> [string] (M210, M224, M230): la ventana con opciones; misma respuesta que __ui_open.
     Builtin { name: "__ui_open_with", opcode: OpCode::UiOpenWith, check: |a| {
-        arity(a, 14, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color, minimizable, kind, always_on_top, parent)")?;
-        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String, Type::Bool, Type::String, Type::Bool, Type::Int];
+        arity(a, 15, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color, minimizable, kind, always_on_top, parent, background)")?;
+        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String, Type::Bool, Type::String, Type::Bool, Type::Int, Type::String];
         for (i, t) in want.iter().enumerate() {
             if a[i] != *t { return Err((Some(i), format!("__ui_open_with expects {} as argument {}, not {}", t, i + 1, a[i]))); }
         }
@@ -4823,6 +4837,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__ui_set_menu_item expects a string (the tag), not {}", a[0]))); }
         if a[1] != Type::Bool { return Err((Some(1), format!("__ui_set_menu_item expects a bool (enabled), not {}", a[1]))); }
         if a[2] != Type::Bool { return Err((Some(2), format!("__ui_set_menu_item expects a bool (checked), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_set_background(h, color) -> [string] (M327): "#rrggbb" o "" (sistema) → ["ok"] / ["err", msg].
+    Builtin { name: "__ui_set_background", opcode: OpCode::UiSetBackground, check: |a| {
+        arity(a, 2, "__ui_set_background", " (handle, color)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_set_background expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_set_background expects a string (the color), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_set_titlebar(h, color) -> [string] (M239): "#rrggbb" o "" (sistema) → ["ok"] / ["err", msg].

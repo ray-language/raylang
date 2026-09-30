@@ -15857,3 +15857,39 @@ fuentes recibe un error claro).
 el inyector `RAY_UI_MSG`, y deja la cola de eventos vacía), el `.a` del simulador con los
 símbolos del shell, el proyecto generado compilado para el SDK del simulador con `xcodebuild`,
 y el humo real en el iPhone del usuario.
+
+## 315. M330 D3b — Android y la librería prebuilt (sep 2026)
+
+Android cerró con la misma regla que iOS: el shell no cambia, cambia la librería. La única
+diferencia real la había fijado M156: en un cdylib, los símbolos JNI que el shell resuelve por
+nombre tienen que estar definidos **en ese crate**, no re-exportados de un rlib. Así que el
+fuente generado de la librería de desarrollo lleva, en Android, los mismos nueve wrappers que
+emite el transpilador (`JNI_OnLoad`, `start`, `pushEvent`, los cinco de `ray://app` y
+`capabilities`), delegando en `ray_runtime::ui::android_*`; el proyecto Cargo declara
+`ray-runtime` como dependencia directa para poder nombrarlos, y un test unitario asevera que
+el fuente los define todos y que el de iOS no lleva ninguno. `HOME` ya lo pone el shell en el
+directorio de datos de la app (M309), luego la librería escribe en `$HOME/.ray-dev` sin más.
+
+**La librería prebuilt.** Hasta aquí `ray bundle --dev` compilaba la librería desde el árbol de
+fuentes horneado en `CARGO_MANIFEST_DIR`, que solo existe en la máquina donde se construyó
+`ray`. Ahora hay tres caminos, en orden: `RAY_DEV_LIB` (un archivo explícito), el árbol de
+fuentes si existe (cargo lo cachea), y el asset `ray-dev-lib-<target>.tar.gz` de la release de
+esta versión, descargado una vez a `~/.ray/dev-lib/<versión>/<target>/` con `curl` y `tar`
+como hace `ray upgrade`. El job `dev-lib` de `release.yml` construye los cuatro targets
+móviles (dos runners de macOS para iOS, dos de Ubuntu con el NDK del runner para Android)
+con `ray dev-lib --target … -o …`, la misma función que usa el bundle: la release pasa de 7 a
+11 assets.
+
+**Lo que cazó el emulador.** El primer `.so` de desarrollo no cargaba: `dlopen failed: cannot
+locate symbol "__error"`. La toolchain entera nunca se había compilado para Android (el binario
+nativo solo lleva `ray-runtime`, que ya tenía su brazo `__errno` de M156), y `src/ffi.rs`
+declaraba el errno de Darwin para «todo unix que no sea Linux». `llvm-nm -uD` sobre el `.so`
+dio la lista completa de símbolos sin resolver, y el mismo barrido de `cfg(not(linux))` por
+`src/` sacó dos constantes que no fallan al enlazar pero sí en ejecución: `SO_KEEPALIVE` (y su
+`SOL_SOCKET`) y `RLIMIT_NOFILE`, que en bionic llevan los valores de Linux. Regla que queda:
+en la toolchain, «no Linux» ya no significa «Darwin/BSD» — Android es Linux para la libc.
+
+**Verificación.** El test del fuente generado, `llvm-nm -uD` del `.so` (ningún símbolo fuera de
+la libc de bionic), el bundle Android del proyecto demo (`--android --dev --android-abi arm64`)
+compilado con Gradle, y el humo en el emulador con el emparejamiento hecho por `adb shell
+input` sobre la página (el campo lleva `autofocus`).

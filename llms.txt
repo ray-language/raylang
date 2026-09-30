@@ -390,7 +390,7 @@ up to 20 diagnostics per run.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change
-ray bundle --ios --dev      # the iOS DEVELOPMENT shell (<id>.dev): toolchain + VM inside; install once, pair with the `ray dev --device` link, reload on every save
+ray bundle --ios --dev      # the DEVELOPMENT shell (<id>.dev; also --android --dev): toolchain + VM inside; install once, pair with the `ray dev --device` link, reload on every save
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error

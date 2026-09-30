@@ -645,7 +645,7 @@ button{margin-top:14px;width:100%;padding:14px;font-size:17px;border:0;border-ra
 </style></head><body>
 <h1>raylang dev — /*NAME*/</h1>
 <p>Run <code>ray dev --device</code> on your Mac and enter the link it prints.</p>
-<input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
+<input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autofocus autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
 <button id="go">Link</button>
 <div id="msg">/*MSG*/</div>
 <script>

@@ -154,10 +154,10 @@ pub fn raise_fd_limit() {
             cur: u64,
             max: u64,
         }
-        // RLIMIT_NOFILE: 7 en Linux, 8 en macOS/BSD.
-        #[cfg(target_os = "linux")]
+        // RLIMIT_NOFILE: 7 en Linux y Android (bionic; M330 D3b), 8 en macOS/BSD.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         const RLIMIT_NOFILE: i32 = 7;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         const RLIMIT_NOFILE: i32 = 8;
         unsafe extern "C" {
             fn getrlimit(resource: i32, rlim: *mut RLimit) -> i32;

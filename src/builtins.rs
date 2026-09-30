@@ -3017,13 +3017,14 @@ fn set_keepalive_raw(s: &std::net::TcpStream, on: bool) {
     unsafe extern "C" {
         fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
     }
-    #[cfg(target_os = "linux")]
+    // M330 D3b: Android (bionic) lleva los valores de Linux — la toolchain ahora también corre ahí.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     const SOL_SOCKET: i32 = 1;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     const SO_KEEPALIVE: i32 = 9;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     const SOL_SOCKET: i32 = 0xffff;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     const SO_KEEPALIVE: i32 = 0x0008;
     let v: i32 = if on { 1 } else { 0 };
     // SAFETY: fd válido mientras `s` viva; el puntero apunta a un i32 local del tamaño declarado.

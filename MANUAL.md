@@ -1507,10 +1507,14 @@ no cambia: son los mismos símbolos. Instálala una vez desde Xcode; al abrirse 
 recuerda (`Application Support/ray-dev/link.url`) y desde entonces cada guardado en el Mac
 reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
 otro puerto), vuelve a la página con la URL anterior rellenada. Va con `--devtools` implícito
-(inspeccionable desde el menú Develop de Safari). Hoy la librería se compila desde el árbol
-de fuentes de la toolchain (unos minutos en frío por target, cacheado después); el asset
-prebuilt por release para instalaciones sin fuentes es una fase posterior, como el shell
-Android.
+(inspeccionable desde el menú Develop de Safari). **En Android** es lo mismo con `ray bundle
+--android --dev`: el proyecto Gradle de siempre, application id `<id>.dev`, y el `.so` de
+desarrollo define él mismo los símbolos JNI del shell. La librería de desarrollo se compila
+desde el árbol de fuentes de la toolchain si `ray` se construyó ahí (unos minutos en frío por
+target, cacheado después); una instalación sin fuentes descarga el asset prebuilt de su
+versión (`ray-dev-lib-<target>.tar.gz` de la release, a `~/.ray/dev-lib/<versión>/`), y
+`RAY_DEV_LIB=<archivo>` fuerza una concreta. `ray dev-lib --target <triple> -o <archivo>` la
+construye suelta (es lo que usa el workflow de release).
 
 **Lo que cambia en el móvil respecto al escritorio** (M307/M322, IDEAS §97 #28/#37, §99 #39).
 (1) `ray://app` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan en los CINCO shells: el

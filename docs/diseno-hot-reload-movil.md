@@ -62,7 +62,7 @@ diferencial), lo que se prueba en caliente es lo que después se compila.
 | D1 ✅ | Parada cooperativa de la VM + reset del runtime | Sí: `tests/vm_stop.rs` |
 | D2 ✅ | `src/devlink.rs`: protocolo de snapshot por TCP, `ray dev --device`, `ray dev-client`, entrada C `ray_dev_start` | Sí: `tests/devlink_cli.rs` (anfitrión + cliente headless, cambio, cambio que no compila) |
 | D3 ✅ (iOS) | `ray bundle --ios --dev`: librería de desarrollo, página de emparejamiento, `.ray-dev` por proyecto, bundle id `.dev` | Parcial: `tests/devlink_pair.rs` (emparejamiento headless); el humo real en el iPhone |
-| D3b | Android (`--android --dev`, cdylib con los símbolos JNI) y librería prebuilt por release | Parcial |
+| D3b ✅ | Android (`--android --dev`, cdylib con los símbolos JNI), `ray dev-lib` y el asset prebuilt por release | Parcial: unidad del fuente generado; humo en el emulador |
 | D4 | Consola remota, reconexión, snapshot diferencial, pulido de DX | Sí |
 
 Decisiones tomadas: librería de desarrollo prebuilt como asset de release; si el reinicio
@@ -145,8 +145,14 @@ pedida sin programa en marcha.
 - **Puerto y token por proyecto.** `ray dev --device` guarda `port=`/`token=` en `.ray-dev`
   (oculto: fuera del snapshot y de `scan_sources`) y vuelve a escuchar ahí; si el puerto está
   ocupado avisa y toma otro. Sin esto, cada sesión pedía emparejar de nuevo.
-- **Pendiente (D3b)**: Android (`--android --dev`: cdylib con los símbolos JNI que hoy emite
-  el transpilador, delegando en `ray_runtime::ui::android_*`), y la librería prebuilt por
-  release para instalaciones de `ray` sin el árbol de fuentes (hoy `CARGO_MANIFEST_DIR`
-  horneado; sin él, error claro).
+- **Android (D3b)**: el cdylib de desarrollo define él mismo los símbolos JNI que el shell
+  resuelve por nombre (`JNI_OnLoad`, `Java_org_raylang_shell_RayBridge_*`), delegando en
+  `ray_runtime::ui::android_*` exactamente como el transpilador (M156); por eso el proyecto
+  Cargo generado declara `ray-runtime` también como dependencia directa. El shell pone
+  `HOME` en el directorio de datos de la app, así `default_dir()` cae en `$HOME/.ray-dev`.
+- **La librería prebuilt (D3b)**: `build_dev_lib` prueba `RAY_DEV_LIB`, luego el árbol de
+  fuentes (`CARGO_MANIFEST_DIR` horneado al compilar `ray`), y si no existe descarga
+  `ray-dev-lib-<target>.tar.gz` de la release de su versión a `~/.ray/dev-lib/<versión>/`
+  (`curl` + `tar`, como `ray upgrade`). El job `dev-lib` de `release.yml` construye los cuatro
+  targets móviles con `ray dev-lib` desde el mismo checkout.
 

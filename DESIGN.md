@@ -15662,9 +15662,8 @@ Ahora ambos. El experimento de ray-sublime que «no informaba de nada» no se pu
 con el servidor puro; la doc cierra la duda que sí era nuestra.
 
 **Verificación.** Unitarios (transpile, scheme), `ui_cli` (validación de la opción y `set_background`
-en los tres motores, con traza headless). La comprobación visual (una página que bloquea 2,5 s en
-un `<script>` del `<head>`, abierta con `background = "#21242f"`, y el píxel del centro de la
-pantalla a los 900 ms) quedó preparada pero NO ejecutada aquí: `screencapture` exige el permiso
-de grabación de pantalla, que el proceso de la sesión no tiene. La hace el usuario (o ray-sublime
-con su vídeo a 120 fps). Linux y Windows compilan en CI; el efecto visual ahí lo confirmarán las
-apps.
+en los tres motores, con traza headless) y la comprobación visual en macOS: una página que
+bloquea 2,5 s en un `<script>` del `<head>`, abierta con `background = "#21242f"`; captura de
+pantalla a los 900 ms → el píxel del centro (y ±80 px) es `#22242f` (el pedido, a 1 unidad de la
+conversión de espacio de color), ni blanco ni gris; a los 4 s, el contenido de la página. Linux y
+Windows compilan en CI; el efecto visual ahí lo confirmarán las apps.

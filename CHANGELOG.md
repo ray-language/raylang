@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.24 — 2026-09-30
 
 - **`main` corre como fibra en el binario nativo** (M329, `RAYLANG-FINDINGS.md` #107): el
   programa era el único hilo del SO del modelo M:N — cada `recv`/`join`/`select` de `main` lo

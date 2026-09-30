@@ -15667,3 +15667,45 @@ bloquea 2,5 s en un `<script>` del `<head>`, abierta con `background = "#21242f"
 pantalla a los 900 ms → el píxel del centro (y ±80 px) es `#22242f` (el pedido, a 1 unidad de la
 conversión de espacio de color), ni blanco ni gris; a los 4 s, el contenido de la página. Linux y
 Windows compilan en CI; el efecto visual ahí lo confirmarán las apps.
+
+## 310. M328 — La página bajo la barra de título (sep 2026)
+
+Origen: el usuario, con una captura de Chrome — las pestañas viven en la barra de título, los
+semáforos flotan sobre ellas — preguntando si raylang lo permitía. No: la máscara de la
+ventana en macOS solo llevaba titled/closable/miniaturizable/resizable, y `titlebar_color` teñía
+la barra sin ceder su franja. `borderless` la quitaba entera, con semáforos y arrastre.
+
+**El diseño.** Un cuarto `kind`, **`full_content`**, encima de M260. En macOS: bit
+`NSWindowStyleMaskFullSizeContentView` en la máscara, `titlebarAppearsTransparent`,
+`titleVisibility = hidden`. La página recibe toda la altura y los controles del sistema quedan
+donde siempre, flotando. Dos cosas que la barra del sistema hacía y ahora tiene que hacer la
+página:
+
+1. **Saber cuánto reservar.** WKWebView no expone `env(titlebar-area-*)`, así que el shim de
+   cada ventana lleva la medida real (`frame − contentLayoutRect`, no un 28 fijo) en
+   `window.ray.titlebar_height`; 0 en las demás ventanas, y en Linux/Windows.
+2. **Arrastrar y hacer zoom.** WKWebView tampoco honra `-webkit-app-region: drag`. El shim escucha
+   `mousedown` (fase de captura) y, si el destino está dentro de un `data-ray-drag` y no de un
+   control (`button`/`a`/`input`/`select`/`textarea` o `data-ray-no-drag`), manda un mensaje de
+   CONTROL (`\u0001drag`, o `\u0001zoom` con doble clic) por el mismo canal que `window.ray.send`.
+   El backend lo intercepta antes de convertirlo en evento `message`: macOS llama a
+   `performWindowDragWithEvent:` con `[NSApp currentEvent]` (el truco de Tauri: el handler corre
+   en el hilo principal mientras el ratón sigue abajo, y AppKit toma el arrastre desde ahí) o
+   `performZoom:`; Windows sintetiza el clic no-cliente de la barra (`ReleaseCapture` +
+   `WM_NCLBUTTONDOWN`/`HTCAPTION`, lo de Electron) o maximiza/restaura; GTK lo descarta (su
+   `borderless` ya no arrastraba). Así `data-ray-drag` sirve también a las `borderless`, que
+   hasta ahora solo se movían por el fondo en macOS.
+
+**Por qué solo macOS para `full_content`.** En Windows el equivalente exige
+`DwmExtendFrameIntoClientArea` + `WM_NCCALCSIZE`/`WM_NCHITTEST` y redibujar los botones de la
+caption; en GTK, una `GtkHeaderBar` propia. Ambos son arcos por sí mismos y ninguna app lo ha
+pedido: `full_content` se acepta y se comporta como `document`, documentado. Es la misma
+decisión que M224 tomó con `titlebar_color` en Linux.
+
+**Verificación.** `ui_cli` (los cuatro `kind` en headless, `hud` rechazado con la lista nueva),
+unitario del shim (zonas de arrastre, exclusiones, `titlebar_height`, forma de los mensajes de
+control). La medida visual en macOS (una página roja abierta como `document` y como
+`full_content`, captura y lectura de la columna central: en `document` una franja de barra sobre
+el rojo, en `full_content` el rojo hasta el borde superior) quedó preparada en
+`$CLAUDE_JOB_DIR/tmp/fc` y pendiente: la sesión estaba bloqueada cuando tocaba capturar. Linux y
+Windows compilan en CI (el arrastre de Windows no se ha probado en máquina).

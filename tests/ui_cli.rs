@@ -1135,6 +1135,9 @@ fn main() {
     var b = ui.options(300, 300);
     b.kind = "borderless";
     match (ui.open_with("Splash", "http://127.0.0.1:1/", b)) { Result.Ok(h) => print("borderless " + to_string(h)), Result.Err(e) => print(e) }
+    var fc = ui.options(640, 480);
+    fc.kind = "full_content";
+    match (ui.open_with("Tabs", "http://127.0.0.1:1/", fc)) { Result.Ok(h) => print("full_content " + to_string(h)), Result.Err(e) => print(e) }
     var bad = ui.options(300, 300);
     bad.kind = "hud";
     match (ui.open_with("X", "http://127.0.0.1:1/", bad)) { Result.Ok(_) => print("bad"), Result.Err(e) => print(e) }
@@ -1156,7 +1159,7 @@ fn main() {
 "##,
     )
     .unwrap();
-    const WANT: &str = "panel 2\nborderless 3\nui: unsupported window kind 'hud' (document, panel, borderless)\nui: the parent is not an open window\nfullscreen on\nfullscreen off\non top\nresized\nui: unsupported window size 0x720\nmoved\ncentered\nminimized\nmaximized\nui: not an open window\n";
+    const WANT: &str = "panel 2\nborderless 3\nfull_content 4\nui: unsupported window kind 'hud' (document, panel, borderless, full_content)\nui: the parent is not an open window\nfullscreen on\nfullscreen off\non top\nresized\nui: unsupported window size 0x720\nmoved\ncentered\nminimized\nmaximized\nui: not an open window\n";
     for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
         let out = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(engine)

@@ -105,7 +105,13 @@ fn events() -> &'static Events {
 /// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
 /// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
-pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})();"#;
+pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}},titlebar_height:0};document.addEventListener("mousedown",function(ev){if(ev.button!==0)return;var t=ev.target;if(!(t&&t.closest))return;if(!t.closest("[data-ray-drag]"))return;if(t.closest("button,a,input,select,textarea,[data-ray-no-drag]"))return;ev.preventDefault();q(ev.detail>=2?"\u0001zoom":"\u0001drag")},true)})();"#;
+
+/// M328: los mensajes de CONTROL del shim (no llegan al programa): arrastrar la ventana desde una
+/// zona `data-ray-drag` de la página y hacer zoom con doble clic — lo que hace la barra de título
+/// del sistema, para las ventanas `full_content`/`borderless` donde la página la sustituye.
+pub(crate) const SHIM_DRAG: &str = "\u{1}drag";
+pub(crate) const SHIM_ZOOM: &str = "\u{1}zoom";
 
 /// M225: el literal JS de `s` (entre comillas dobles), escapado en UNA pasada — `\\`, `"`,
 /// `\n`, `\r`, NUL (el NSString nace de un C-string) y los separadores U+2028/U+2029 que JS
@@ -1298,6 +1304,20 @@ pub mod scheme {
             r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
         }
 
+        /// M328: el shim lleva las zonas de arrastre (`data-ray-drag`, con hijos interactivos
+        /// excluidos y doble clic = zoom) y `titlebar_height`; los mensajes de control tienen su
+        /// forma fija, que los tres backends filtran antes de emitir `message`.
+        #[test]
+        fn the_shim_carries_drag_regions_and_the_titlebar_height() {
+            let shim = super::super::RAY_JS_SHIM;
+            assert!(shim.contains("t.closest(\"[data-ray-drag]\")"), "{shim}");
+            assert!(shim.contains("button,a,input,select,textarea,[data-ray-no-drag]"), "{shim}");
+            assert!(shim.contains("titlebar_height:0"), "{shim}");
+            assert!(shim.contains("ev.detail>=2?\"\\u0001zoom\":\"\\u0001drag\""), "{shim}");
+            assert_eq!(super::super::SHIM_DRAG, "\u{1}drag");
+            assert_eq!(super::super::SHIM_ZOOM, "\u{1}zoom");
+        }
+
         #[test]
         fn memory_files_ranges_etag_and_errors() {
             mount_bytes("t/hello.txt", b"hello world".to_vec()).unwrap();
@@ -1389,8 +1409,10 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
         return Err(format!("ui: unsupported background color '{}' (expected #rrggbb)", opts.background));
     }
     // M260: tipo de ventana y ventana dueña.
-    if !matches!(opts.kind.as_str(), "document" | "panel" | "borderless") {
-        return Err(format!("ui: unsupported window kind '{}' (document, panel, borderless)", opts.kind));
+    // M328: `full_content` = el contenido bajo la barra de título (macOS; en Linux/Windows, como
+    // `document` hasta que una app lo pida).
+    if !matches!(opts.kind.as_str(), "document" | "panel" | "borderless" | "full_content") {
+        return Err(format!("ui: unsupported window kind '{}' (document, panel, borderless, full_content)", opts.kind));
     }
     if opts.parent != 0 && !matches!(windows().lock().unwrap().get(&opts.parent), Some(WinState { closed: false, .. })) {
         return Err("ui: the parent is not an open window".to_string());
@@ -2616,6 +2638,8 @@ mod mac {
     type MsgPopup = unsafe extern "C" fn(Id, Sel, Id, CGPoint, Id) -> u8;
     /// M224: `colorWithSRGBRed:green:blue:alpha:` (cuatro CGFloat).
     type MsgIdColor = unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id;
+    /// M328: `frame`/`contentLayoutRect` (NSRect por valor).
+    type MsgRect = unsafe extern "C" fn(Id, Sel) -> CGRect;
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
     // M148 (menús + diálogos):
     type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
@@ -3102,6 +3126,29 @@ mod mac {
                     let owned = std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned();
                     (owned, get_id(message, sel(b"webView\0")))
                 };
+                // M328: los mensajes de control del shim (arrastre/zoom desde una zona
+                // `data-ray-drag`) se atienden aquí, en el hilo principal, con el evento de ratón
+                // en curso — el mismo truco que Tauri; el programa no los ve.
+                if body == super::SHIM_DRAG || body == super::SHIM_ZOOM {
+                    // SAFETY: mensajes estándar en el hilo principal sobre objetos vivos.
+                    unsafe {
+                        let get: MsgId = std::mem::transmute(msg_send());
+                        let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                        let window = get(wv, sel(b"window\0"));
+                        if !window.is_null() {
+                            if body == super::SHIM_ZOOM {
+                                set_id(window, sel(b"performZoom:\0"), std::ptr::null_mut());
+                            } else {
+                                let app = get(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+                                let event = get(app, sel(b"currentEvent\0"));
+                                if !event.is_null() {
+                                    set_id(window, sel(b"performWindowDragWithEvent:\0"), event);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 let map = super::windows().lock().unwrap();
                 let found = map.iter().find_map(|(id, w)| match &w.win {
                     Win::Mac { webview, .. } if *webview == wv as usize => Some(*id),
@@ -3724,6 +3771,7 @@ mod mac {
             const STYLE_MINIATURIZABLE: u64 = 4;
             const STYLE_RESIZABLE: u64 = 8;
             const STYLE_UTILITY: u64 = 1 << 4;
+            const STYLE_FULL_SIZE_CONTENT: u64 = 1 << 15;
             const BACKING_BUFFERED: u64 = 2;
             // M210: sin `resizable`, la máscara no lleva el bit de redimensionado (ni el botón verde).
             // M230: sin `minimizable`, tampoco el de miniaturizar (el amarillo nace deshabilitado).
@@ -3732,6 +3780,9 @@ mod mac {
             // teclado).
             let is_panel = opts.kind == "panel";
             let is_borderless = opts.kind == "borderless";
+            // M328: `full_content` — la vista de contenido ocupa también la barra de título
+            // (NSWindowStyleMaskFullSizeContentView); los semáforos quedan flotando sobre la página.
+            let is_full_content = opts.kind == "full_content";
             let style = if is_borderless {
                 if opts.resizable { STYLE_RESIZABLE } else { 0 }
             } else {
@@ -3739,6 +3790,7 @@ mod mac {
                     | if opts.minimizable && !is_panel { STYLE_MINIATURIZABLE } else { 0 }
                     | if opts.resizable { STYLE_RESIZABLE } else { 0 }
                     | if is_panel { STYLE_UTILITY } else { 0 }
+                    | if is_full_content { STYLE_FULL_SIZE_CONTENT } else { 0 }
             };
             let parent = super::parent_native(opts.parent);
             let rect = CGRect { x: 0.0, y: 0.0, w: width as f64, h: height as f64 };
@@ -3789,6 +3841,19 @@ mod mac {
                 // ciclo de vida es nuestro: retención del registro + release explícito.
                 set_bool(window, sel(b"setReleasedWhenClosed:\0"), 0);
                 set_id(window, sel(b"setTitle:\0"), nsstring(&title));
+                // M328: barra transparente y sin título — la página pinta esa franja; la altura
+                // real de la barra (frame − contentLayoutRect) se le da al shim para que reserve
+                // el margen (`window.ray.titlebar_height`).
+                let mut titlebar_height = 0.0;
+                if is_full_content {
+                    let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
+                    set_i64(window, sel(b"setTitleVisibility:\0"), 1); // NSWindowTitleHidden
+                    let rect_of: MsgRect = std::mem::transmute(msg_send());
+                    let frame = rect_of(window, sel(b"frame\0"));
+                    let content = rect_of(window, sel(b"contentLayoutRect\0"));
+                    titlebar_height = (frame.h - content.h).max(0.0);
+                }
                 // M224: la barra de título del color del tema (como Sublime): la barra se vuelve
                 // transparente y deja ver el fondo de la ventana, que se pinta del color pedido;
                 // la apariencia (Aqua/DarkAqua) sale de la luminancia para que el título y los
@@ -3841,10 +3906,17 @@ mod mac {
                 );
                 let init_script: MsgInitUserScript = std::mem::transmute(msg_send());
                 // injectionTime 0 = WKUserScriptInjectionTimeAtDocumentStart; 1 = solo main frame.
+                // M328: el shim lleva la altura de la barra que la página tiene encima (0 salvo
+                // `full_content`), para que reserve ese margen con `window.ray.titlebar_height`.
+                let shim_src = if titlebar_height > 0.0 {
+                    format!("{}window.ray.titlebar_height={};", super::RAY_JS_SHIM, titlebar_height.round() as i64)
+                } else {
+                    super::RAY_JS_SHIM.to_string()
+                };
                 let script = init_script(
                     alloc(cls(b"WKUserScript\0"), sel(b"alloc\0")),
                     sel(b"initWithSource:injectionTime:forMainFrameOnly:\0"),
-                    nsstring(super::RAY_JS_SHIM),
+                    nsstring(&shim_src),
                     0,
                     1,
                 );
@@ -5538,6 +5610,11 @@ mod gtk {
             (api.g_free)(c as *mut c_void);
             s
         };
+        // M328: los mensajes de control del shim (arrastre/zoom) no llegan al programa; GTK no
+        // los implementa todavía (borderless sin arrastre, como antes).
+        if owned == super::SHIM_DRAG || owned == super::SHIM_ZOOM {
+            return;
+        }
         super::push_event("message", ctx.id, &owned);
     }
 
@@ -7483,7 +7560,30 @@ mod win {
                         let mut message = PWSTR::null();
                         if args.TryGetWebMessageAsString(&mut message).is_ok() {
                             let message = CoTaskMemPWSTR::from(message);
-                            super::push_event("message", id, &message.to_string());
+                            let text = message.to_string();
+                            // M328: arrastre/zoom desde una zona `data-ray-drag` de la página: el
+                            // clic no-cliente de la barra de título, sintetizado (el mismo truco de
+                            // Electron); no llegan al programa.
+                            if text == super::SHIM_DRAG || text == super::SHIM_ZOOM {
+                                let hwnd_of = super::windows().lock().unwrap().get(&id).and_then(|w| match &w.win {
+                                    Win::Windows { hwnd, .. } => Some(*hwnd),
+                                    _ => None,
+                                });
+                                if let Some(h) = hwnd_of {
+                                    let h = HWND(h as *mut _);
+                                    // SAFETY: mensajes estándar sobre nuestro hwnd en el hilo 1.
+                                    unsafe {
+                                        if text == super::SHIM_ZOOM {
+                                            let _ = ShowWindow(h, if IsZoomed(h).as_bool() { SW_RESTORE } else { SW_MAXIMIZE });
+                                        } else {
+                                            let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                                            let _ = SendMessageW(h, WM_NCLBUTTONDOWN, Some(WPARAM(HTCAPTION as usize)), Some(LPARAM(0)));
+                                        }
+                                    }
+                                }
+                                return Ok(());
+                            }
+                            super::push_event("message", id, &text);
                         }
                     }
                     Ok(())

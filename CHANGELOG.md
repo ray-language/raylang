@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`kind = "full_content"`: la página bajo la barra de título** (M328, pedido con la captura
+  de Chrome): en macOS la barra se vuelve transparente y sin título, los semáforos flotan sobre
+  la página y esta ocupa toda la altura (`NSWindowStyleMaskFullSizeContentView`). La página
+  reserva la franja con **`window.ray.titlebar_height`** (px; 0 si no hay barra encima) y marca
+  su asa con **`data-ray-drag`**: arrastra la ventana (hijos interactivos o `data-ray-no-drag`
+  siguen clicables) y el doble clic hace zoom, como la barra del sistema — macOS
+  (`performWindowDragWithEvent:`) y Windows (`WM_NCLBUTTONDOWN`), también para `borderless`.
+  Linux y Windows tratan `full_content` como `document` por ahora.
+
 ## 1.27.22 — 2026-09-29
 
 - **`WindowOptions.background` y `ui.set_background(h, color)`** (M327, ray-sublime): el color

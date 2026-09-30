@@ -257,9 +257,32 @@ impl Host {
     /// Escucha en un puerto alto aleatorio de todas las interfaces (el teléfono llega por la
     /// LAN) y arranca el hilo de aceptación.
     pub fn start() -> Result<Host, String> {
-        let listener = TcpListener::bind("0.0.0.0:0").map_err(|e| format!("could not open the device link: {e}"))?;
+        Host::start_with_state(None)
+    }
+
+    /// Como [`Host::start`], pero **recuerda puerto y token** en `state` (D3): el teléfono se
+    /// empareja UNA vez por proyecto y `ray dev --device` vuelve a escuchar en el mismo sitio
+    /// la próxima sesión (si el puerto está ocupado, toma otro y lo dice; el token se conserva).
+    pub fn start_with_state(state: Option<&Path>) -> Result<Host, String> {
+        let saved = state.and_then(|p| std::fs::read_to_string(p).ok()).map(|t| {
+            let grab = |k: &str| t.lines().find_map(|l| l.strip_prefix(k).map(|v| v.trim().to_string()));
+            (grab("port=").and_then(|p| p.parse::<u16>().ok()), grab("token="))
+        });
+        let (saved_port, saved_token) = saved.unwrap_or((None, None));
+        let listener = match saved_port.and_then(|p| TcpListener::bind(("0.0.0.0", p)).ok()) {
+            Some(l) => l,
+            None => {
+                if let Some(p) = saved_port {
+                    eprintln!("[dev] port {p} is busy; the device link moves to a new port (pair the phone again)");
+                }
+                TcpListener::bind("0.0.0.0:0").map_err(|e| format!("could not open the device link: {e}"))?
+            }
+        };
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let token = random_token();
+        let token = saved_token.filter(|t| !t.is_empty()).unwrap_or_else(random_token);
+        if let Some(p) = state {
+            let _ = std::fs::write(p, format!("# ray dev --device: this project's link (do not share)\nport={port}\ntoken={token}\n"));
+        }
         let url = format!("ray-dev://{}:{port}/{token}", lan_ip());
         let host = Host {
             devices: Arc::new(Mutex::new(Vec::new())),
@@ -356,19 +379,38 @@ fn serve_device(mut stream: TcpStream, token: &str, devices: Arc<Mutex<Vec<Devic
 /// conseguirlo y al perder el enlace), recibe snapshots en `dir/project` y ejecuta el programa
 /// en la VM, reiniciándolo con cada snapshot. No retorna salvo error irrecuperable.
 pub fn run_device(url: &str, dir: &Path, device_name: &str) -> Result<(), String> {
+    run_device_until(url, dir, device_name, None)
+}
+
+/// Como [`run_device`], pero se rinde (`Err`) si el anfitrión lleva `unreachable_after` sin
+/// responder (D3: la librería de desarrollo vuelve a la página de emparejamiento — la URL
+/// guardada puede haber caducado). `None` = reintentar para siempre (el cliente de escritorio).
+pub fn run_device_until(url: &str, dir: &Path, device_name: &str, unreachable_after: Option<Duration>) -> Result<(), String> {
     let (addr, token) = parse_url(url)?;
     let project = dir.join("project");
     std::fs::create_dir_all(&project).map_err(|e| format!("{}: {e}", project.display()))?;
     let mut runner = Runner::default();
+    let mut unreachable_since: Option<std::time::Instant> = None;
     loop {
-        let mut stream = match TcpStream::connect(&addr) {
+        let mut stream = match TcpStream::connect_timeout(
+            &addr.parse().map_err(|_| format!("bad address in the link URL: {addr}"))?,
+            Duration::from_secs(3),
+        ) {
             Ok(s) => s,
             Err(e) => {
+                let since = *unreachable_since.get_or_insert_with(std::time::Instant::now);
+                if let Some(limit) = unreachable_after
+                    && since.elapsed() > limit
+                {
+                    runner.stop();
+                    return Err(format!("the host at {addr} did not answer for {}s", limit.as_secs()));
+                }
                 eprintln!("[dev-client] cannot reach {addr}: {e}; retrying");
                 std::thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
+        unreachable_since = None;
         let _ = stream.set_nodelay(true);
         let mut hello = Vec::new();
         put_str(&mut hello, &token);
@@ -507,11 +549,13 @@ fn load_and_compile(project: &Path) -> Result<crate::bytecode::CompiledProgram, 
     crate::compiler::compile_program(&loaded.program).map_err(|e| e.to_string())
 }
 
-/// M330 D2: la entrada C-llamable de la **librería de desarrollo** (el shell móvil la llama
-/// en vez de `ray_start`): `url` es la `ray-dev://…` que imprime `ray dev --device`, `dir` un
-/// directorio escribible del sandbox de la app. Retorna 0 con el enlace corriendo en su hilo
-/// (1 = argumentos inválidos). Contrato de strings como el del shell: NUL-terminated, copiados
-/// durante la llamada.
+/// M330 D2/D3: la entrada C-llamable de la **librería de desarrollo**: `url` es la
+/// `ray-dev://…` que imprime `ray dev --device` (vacía = usar la guardada o pedirla en la página
+/// de emparejamiento), `dir` un directorio escribible del sandbox de la app (vacío = el de
+/// [`default_dir`]). Retorna 0 con el enlace corriendo en su hilo (1 = punteros nulos o no se
+/// pudo crear el hilo). Contrato de strings como el del shell: NUL-terminated, copiados durante
+/// la llamada. El `ray_start` de la librería de desarrollo generada por `ray bundle --dev` es
+/// exactamente `ray_dev_start("", "")`: el shell no cambia.
 ///
 /// # Safety
 /// `url` y `dir` deben ser punteros válidos a C-strings NUL-terminated (o NULL, que da 1).
@@ -527,6 +571,26 @@ pub unsafe extern "C" fn ray_dev_start(url: *const std::ffi::c_char, dir: *const
             std::ffi::CStr::from_ptr(dir).to_string_lossy().into_owned(),
         )
     };
+    start_from_shell(if url.is_empty() { None } else { Some(url) }, if dir.is_empty() { None } else { Some(PathBuf::from(dir)) })
+}
+
+/// El directorio de trabajo de la librería de desarrollo cuando el shell no da uno: el
+/// sandbox de la app (`$HOME` en iOS/Android es el contenedor de la app) bajo un nombre propio.
+pub fn default_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    if cfg!(target_os = "ios") {
+        home.join("Library").join("Application Support").join("ray-dev")
+    } else {
+        home.join(".ray-dev")
+    }
+}
+
+/// D3: arranca el enlace desde un shell (retorna 0 con el hilo lanzado, como `ray_start`):
+/// ignora `SIGPIPE`, y en su hilo enlaza con `url`, o con la URL guardada en `dir/link.url`, o
+/// pide una en la página de emparejamiento del webview; si el anfitrión deja de responder
+/// (una sesión nueva de `ray dev --device` en otro puerto), vuelve a la página con la URL
+/// anterior rellenada.
+pub fn start_from_shell(url: Option<String>, dir: Option<PathBuf>) -> i32 {
     #[cfg(unix)]
     unsafe {
         unsafe extern "C" {
@@ -534,14 +598,107 @@ pub unsafe extern "C" fn ray_dev_start(url: *const std::ffi::c_char, dir: *const
         }
         signal(13, 1); // SIGPIPE → SIG_IGN, como el ray_start emitido (un cdylib no pasa por el shim de main)
     }
+    let dir = dir.unwrap_or_else(default_dir);
     let name = if cfg!(target_os = "ios") { "iPhone" } else if cfg!(target_os = "android") { "Android" } else { "device" };
-    match std::thread::Builder::new().name("ray-dev-link".into()).spawn(move || {
-        if let Err(e) = run_device(&url, Path::new(&dir), name) {
-            eprintln!("[dev-client] {e}");
-        }
-    }) {
+    match std::thread::Builder::new().name("ray-dev-link".into()).spawn(move || shell_loop(url, &dir, name)) {
         Ok(_) => 0,
         Err(_) => 1,
+    }
+}
+
+fn shell_loop(explicit: Option<String>, dir: &Path, name: &str) {
+    let _ = std::fs::create_dir_all(dir);
+    let saved = dir.join("link.url");
+    // `RAY_DEV_URL` (D3): el enlace por entorno — `xcrun simctl launch` lo pasa con
+    // `SIMCTL_CHILD_RAY_DEV_URL` y `adb shell setprop`/`am start` en Android: automatiza el
+    // emparejamiento en simuladores y CI sin tocar la página.
+    let mut url = explicit
+        .or_else(|| std::env::var("RAY_DEV_URL").ok().filter(|s| !s.is_empty()))
+        .or_else(|| std::fs::read_to_string(&saved).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+    loop {
+        let link = match url.take() {
+            Some(u) => u,
+            None => pair(None, name),
+        };
+        let _ = std::fs::write(&saved, &link);
+        match run_device_until(&link, dir, name, Some(Duration::from_secs(20))) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("[dev-client] {e}");
+                url = Some(pair(Some(&link), name));
+            }
+        }
+    }
+}
+
+/// La página de emparejamiento, servida por `ray://app` con el mismo puente que usan los
+/// programas: la sirve la librería de desarrollo, así que el shell no necesita nada nuevo.
+const PAIR_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>raylang dev</title>
+<style>
+body{margin:0;padding:max(24px,env(safe-area-inset-top)) 24px 24px;font:17px -apple-system,system-ui,sans-serif;background:#111;color:#eee}
+h1{font-size:22px;margin:24px 0 8px}p{color:#aaa;margin:0 0 20px;line-height:1.4}
+input{width:100%;box-sizing:border-box;font:16px ui-monospace,monospace;padding:12px;border-radius:10px;border:1px solid #444;background:#1c1c1c;color:#fff}
+button{margin-top:14px;width:100%;padding:14px;font-size:17px;border:0;border-radius:10px;background:#3b82f6;color:#fff}
+#msg{margin-top:16px;color:#f87171;min-height:1.4em}
+</style></head><body>
+<h1>raylang dev — /*NAME*/</h1>
+<p>Run <code>ray dev --device</code> on your Mac and enter the link it prints.</p>
+<input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
+<button id="go">Link</button>
+<div id="msg">/*MSG*/</div>
+<script>
+const u=document.getElementById('u');
+document.getElementById('go').onclick=()=>{const v=u.value.trim();if(!v.startsWith('ray-dev://')){document.getElementById('msg').textContent='The link starts with ray-dev://';return;}document.getElementById('msg').textContent='Linking…';window.ray.send(v);};
+u.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('go').click();});
+</script></body></html>"#;
+
+/// Muestra la página de emparejamiento y espera la URL (un `window.ray.send` que empiece por
+/// `ray-dev://`). Deja la UI limpia al volver (la ventana del programa la abre el programa).
+/// Pública para su test (headless + `RAY_UI_MSG`); el shell entra por [`start_from_shell`].
+pub fn pair(prefill: Option<&str>, name: &str) -> String {
+    let msg = if prefill.is_some() { "The host stopped answering: is `ray dev --device` running? Check the link." } else { "" };
+    let html = PAIR_HTML.replace("/*NAME*/", name).replace("/*PREFILL*/", prefill.unwrap_or("")).replace("/*MSG*/", msg);
+    #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+    {
+        use ray_runtime::ui;
+        let _ = ui::scheme::mount_bytes("__raydev/pair.html", html.into_bytes());
+        let opts = ui::WindowOptions {
+            width: 420,
+            height: 640,
+            min_width: 0,
+            min_height: 0,
+            resizable: true,
+            center: true,
+            autosave: String::new(),
+            titlebar_color: String::new(),
+            background: "#111111".to_string(),
+            minimizable: true,
+            kind: "document".to_string(),
+            always_on_top: false,
+            parent: 0,
+        };
+        if let Err(e) = ui::open_window_with(1, "raylang dev", "ray://app/__raydev/pair.html", &opts) {
+            eprintln!("[dev-client] cannot show the pairing page: {e}");
+        }
+        loop {
+            match ui::next_event_blocking(0) {
+                Some((kind, _, tag)) if kind == "message" && tag.starts_with("ray-dev://") => {
+                    ui::reset_for_restart();
+                    return tag;
+                }
+                Some(_) => {}
+                None => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+    }
+    #[cfg(not(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32"))))]
+    {
+        let _ = html;
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
     }
 }
 

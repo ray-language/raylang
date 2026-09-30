@@ -238,7 +238,7 @@ fn cmd_new(args: &[String]) {
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
     );
     let mut main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
-    let mut gitignore = "# dependencies downloaded by the package manager (M39c)\n.ray-deps/\n".to_string();
+    let mut gitignore = "# dependencies downloaded by the package manager (M39c)\n.ray-deps/\n# the device link of `ray dev --device` (port + token; M330)\n.ray-dev\n".to_string();
     if frontend.is_some() {
         manifest.push_str(FRONTEND_MANIFEST_SECTION);
         main_ray = FRONTEND_MAIN_RAY.replace("{name}", name);
@@ -1468,7 +1468,9 @@ fn cmd_dev_device(args: &[String]) {
         .map(|m| embed_dirs_of(&m).into_iter().map(PathBuf::from).collect())
         .unwrap_or_default();
     let _ = DEV_EMBED_DIRS.set(embed_dirs);
-    let host = match crate::devlink::Host::start() {
+    // D3: puerto y token se recuerdan por proyecto (`.ray-dev`, oculto y fuera del snapshot):
+    // el teléfono se empareja una vez.
+    let host = match crate::devlink::Host::start_with_state(Some(&root.join(".ray-dev"))) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("[dev] {e}");
@@ -2073,13 +2075,16 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--devtools] \
+[--ios [--ios-target device|sim|both] [--dev]] [--android [--android-abi arm64|x86_64|all]] [--devtools] \
 [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
 Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
+  --dev (with --ios): the DEVELOPMENT shell — same app, bundle id `<id>.dev`, with the raylang toolchain + VM inside \
+instead of the compiled program; install it once, pair it with the link `ray dev --device` prints, and every saved \
+change reloads the program on the phone (files, keychain, network and audio are the phone's).\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
 the flags override them. [app.plist] keys go verbatim into the macOS and iOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
@@ -2109,6 +2114,7 @@ fn cmd_bundle(args: &[String]) {
     let mut android_abi_arg: Option<String> = None;
     // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
     let mut devtools = false;
+    let mut dev = false;
     let mut file: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
@@ -2151,6 +2157,13 @@ fn cmd_bundle(args: &[String]) {
             "--devtools" => {
                 devtools = true;
                 crate::transpile::set_native_devtools(true); // el binario de escritorio también
+                i += 1;
+            }
+            // M330 D3: el shell de DESARROLLO — la misma app, con la librería de desarrollo
+            // (toolchain + VM) en vez del programa compilado; se empareja con `ray dev --device`.
+            "--dev" => {
+                dev = true;
+                devtools = true; // inspeccionable desde Safari/Chrome: es un build de desarrollo
                 i += 1;
             }
             _ if a.starts_with('-') => {
@@ -2198,6 +2211,16 @@ fn cmd_bundle(args: &[String]) {
             .collect();
         format!("org.raylang.{}", slug.trim_matches('-'))
     });
+    // M330 D3: el shell de desarrollo convive con la app real — nombre y bundle id propios.
+    let (name, bundle_id) = if dev {
+        if !ios {
+            eprintln!("--dev needs --ios (the Android development shell arrives in a later phase)");
+            process::exit(64);
+        }
+        (format!("{name}-dev"), format!("{bundle_id}.dev"))
+    } else {
+        (name, bundle_id)
+    };
     let mut exclude: Vec<String> = without_arg
         .as_deref()
         .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).collect())
@@ -2394,11 +2417,19 @@ fn cmd_bundle(args: &[String]) {
         let sim_a = work.join("sim.a");
         if build_dev {
             eprintln!("[bundle] device (aarch64-apple-ios)…");
-            build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, false, fibers, &embed, true);
+            if dev {
+                build_dev_lib("aarch64-apple-ios", &dev_a);
+            } else {
+                build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, false, fibers, &embed, true);
+            }
         }
         if build_sim {
             eprintln!("[bundle] simulator (aarch64-apple-ios-sim)…");
-            build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, false, fibers, &embed, true);
+            if dev {
+                build_dev_lib("aarch64-apple-ios-sim", &sim_a);
+            } else {
+                build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, false, fibers, &embed, true);
+            }
         }
         let proj = out_dir.join(format!("{name}-ios"));
         // Con un solo lado construido, el `.a` del OTRO lado del proyecto anterior se
@@ -2514,6 +2545,9 @@ fn cmd_bundle(args: &[String]) {
         }
         let _ = fs::remove_dir_all(&work);
         println!("ok: iOS project '{}'", proj.display());
+        if dev {
+            println!("  development shell ({bundle_id}): install it once; it asks for the link that `ray dev --device` prints and reloads the program on every change");
+        }
         println!("  simulator: xcodebuild -project {name}.xcodeproj -target {name} -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO");
         match &signing.team {
             Some(team) => println!("  device:    signing team {team} already in App.xcconfig; open the project in Xcode and run"),
@@ -3367,6 +3401,78 @@ fn replace_output_binary(tmp_bin: &str, out_bin: &str) -> std::io::Result<()> {
     std::fs::rename(tmp_bin, out_bin).inspect_err(|_| {
         let _ = std::fs::remove_file(tmp_bin);
     })
+}
+
+/// M330 D3: construye la **librería de desarrollo** para `target` y la deja en `out`: la
+/// toolchain entera (loader, checker, VM, runtime; sin `interp` ni `ffi`) como staticlib
+/// (cdylib en Android) cuyo `ray_start` es `devlink::start_from_shell` — un reemplazo
+/// directo de la librería del programa, el shell no cambia. Se compila desde el árbol de
+/// fuentes de esta toolchain (`CARGO_MANIFEST_DIR` horneado al compilar `ray`); sin él, el
+/// asset prebuilt de la release es el camino (fase posterior).
+fn build_dev_lib(target: &str, out: &Path) {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(repo.join("Cargo.toml")).unwrap_or_default();
+    if !manifest.contains("name = \"raylang\"") {
+        eprintln!(
+            "bundle --dev: the raylang source tree is not available ({}); this build of `ray` cannot compile the development library yet (a prebuilt one per release is planned)",
+            repo.display()
+        );
+        process::exit(69);
+    }
+    let android = target.contains("android");
+    let crate_type = if android { "cdylib" } else { "staticlib" };
+    let proj = std::env::temp_dir().join(format!("ray_devlib_{}", process::id()));
+    let write = |rel: &str, content: &str| {
+        let p = proj.join(rel);
+        if let Some(parent) = p.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Err(e) = fs::write(&p, content) {
+            eprintln!("bundle --dev: could not write '{}': {e}", p.display());
+            process::exit(65);
+        }
+    };
+    let repo_toml = repo.to_string_lossy().replace('\\', "/");
+    write(
+        "Cargo.toml",
+        &format!(
+            "[package]\nname = \"ray_dev_lib\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+             [lib]\ncrate-type = [\"{crate_type}\"]\n\n\
+             [dependencies]\nraylang = {{ path = \"{repo_toml}\", default-features = false, features = [\"sqlite\", \"net-tls\", \"regex\", \"watch\", \"unicode\", \"audio\", \"ui\", \"bigint\", \"deflate\", \"keychain\"] }}\n\n\
+             [profile.release]\nopt-level = 3\ndebug = false\nstrip = true\n"
+        ),
+    );
+    write(
+        "src/lib.rs",
+        "//! La librería de desarrollo de raylang (ray bundle --dev): el shell la enlaza en vez del\n\
+         //! programa compilado; `ray_start` arranca el enlace con `ray dev --device`.\n\
+         #[unsafe(no_mangle)]\n\
+         pub extern \"C\" fn ray_start() -> i32 {\n\
+         \x20   raylang::devlink::start_from_shell(None, None)\n\
+         }\n",
+    );
+    let _ = fs::copy(repo.join("Cargo.lock"), proj.join("Cargo.lock"));
+    let target_dir = native_cache_dir();
+    let Some(mut cmd) = crate::toolchain::command("cargo") else {
+        eprintln!("bundle --dev: cargo not found");
+        process::exit(65);
+    };
+    cmd.args(["build", "--release", "--target", target]).current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
+    if target.contains("apple-ios") {
+        cmd.env("IPHONEOS_DEPLOYMENT_TARGET", crate::bundle_ios::IOS_DEPLOYMENT_TARGET);
+    }
+    let status = cmd.status();
+    let _ = fs::remove_dir_all(&proj);
+    if !status.map(|s| s.success()).unwrap_or(false) {
+        eprintln!("bundle --dev: the development library did not build for {target}");
+        process::exit(65);
+    }
+    let file = if android { "libray_dev_lib.so" } else { "libray_dev_lib.a" };
+    let built = target_dir.join(target).join("release").join(file);
+    if let Err(e) = fs::copy(&built, out) {
+        eprintln!("bundle --dev: could not place '{}': {e}", built.display());
+        process::exit(74);
+    }
 }
 
 fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {

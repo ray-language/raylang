@@ -1492,10 +1492,25 @@ ray dev --device
 ```
 
 Un cambio que no compila no se envía (el diagnóstico sale aquí; el dispositivo sigue con el
-programa anterior). La URL lleva un token y el enlace es solo LAN; la librería de desarrollo
-jamás entra en un build de release. En escritorio, `ray dev-client <url> <dir>` es el mismo
-lado dispositivo (con `RAY_UI_BACKEND=headless` sirve para CI). El shell de desarrollo para
-iOS/Android (`ray bundle --ios --dev`) es la siguiente fase del arco.
+programa anterior). La URL lleva un token y el enlace es solo LAN; puerto y token se recuerdan
+por proyecto en `.ray-dev` (oculto; no viaja en el snapshot ni conviene subirlo a git), así el
+teléfono se empareja **una sola vez**. La librería de desarrollo jamás entra en un build de
+release. En escritorio, `ray dev-client <url> <dir>` es el mismo lado dispositivo (con
+`RAY_UI_BACKEND=headless` sirve para CI).
+
+**El shell de desarrollo en el iPhone** (`ray bundle --ios --dev`): genera el mismo proyecto
+Xcode de siempre, con nombre `<app>-dev` y bundle id `<id>.dev` para que conviva con la app
+real, pero enlazando la **librería de desarrollo** (la toolchain entera —loader, checker, VM y
+runtime— compilada para iOS; su `ray_start` arranca el enlace) en vez del programa. El shell
+no cambia: son los mismos símbolos. Instálala una vez desde Xcode; al abrirse muestra una
+**página de emparejamiento** donde se teclea la URL que imprimió `ray dev --device`; la
+recuerda (`Application Support/ray-dev/link.url`) y desde entonces cada guardado en el Mac
+reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
+otro puerto), vuelve a la página con la URL anterior rellenada. Va con `--devtools` implícito
+(inspeccionable desde el menú Develop de Safari). Hoy la librería se compila desde el árbol
+de fuentes de la toolchain (unos minutos en frío por target, cacheado después); el asset
+prebuilt por release para instalaciones sin fuentes es una fase posterior, como el shell
+Android.
 
 **Lo que cambia en el móvil respecto al escritorio** (M307/M322, IDEAS §97 #28/#37, §99 #39).
 (1) `ray://app` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan en los CINCO shells: el

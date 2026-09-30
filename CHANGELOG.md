@@ -11,10 +11,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   Mac: vigila el proyecto, comprueba que compila y envía el snapshot del fuente a los
   dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en su VM sin
   reinstalar — fiel al dispositivo (archivos, llavero, red, audio y permisos del teléfono).
-  `ray dev-client <url> <dir>` es el lado dispositivo en escritorio; la librería de desarrollo
-  para el shell móvil (`ray_dev_start`) y `ray bundle --ios/--android --dev` llegan en la fase
-  siguiente. Por dentro, la VM gana una parada cooperativa desde fuera del programa y un reset
-  del runtime para correr otro programa en el mismo proceso (D1).
+  `ray dev-client <url> <dir>` es el lado dispositivo en escritorio. **`ray bundle --ios --dev`**
+  genera el shell de desarrollo para el iPhone (`<app>-dev`, bundle id `<id>.dev`): la misma
+  app enlazando la librería de desarrollo (toolchain + VM) en vez del programa; se instala una
+  vez, se empareja con la URL de `ray dev --device` en su página inicial (recordada; puerto y
+  token persisten por proyecto en `.ray-dev`) y recarga el programa con cada guardado. Android y
+  la librería prebuilt por release llegan en la fase siguiente. Por dentro, la VM gana una
+  parada cooperativa desde fuera del programa y un reset del runtime para correr otro programa
+  en el mismo proceso (D1).
 
 ## 1.27.24 — 2026-09-30
 

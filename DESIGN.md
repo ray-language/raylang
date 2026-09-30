@@ -15826,3 +15826,34 @@ compila que no se publica. Unidad: URL, codificación del snapshot, escritura co
 sobrantes y rechazo de rutas que salgan del proyecto, y el filtro de qué viaja (fuentes,
 manifiesto, dependencias; nunca `target`, `node_modules`, `.git` ni el `.ray` derivado de un
 `.ray.html`).
+
+## 314. M330 D3 — El shell de desarrollo en el iPhone (sep 2026)
+
+La apuesta del arco era que el shell móvil no tuviera que cambiar, y D3 la confirma: `ray
+bundle --ios --dev` genera el mismo proyecto Xcode (`bundle_ios::write_project` intacto) y solo
+cambia qué `.a` enlaza. La **librería de desarrollo** es la toolchain entera compilada para iOS
+como staticlib desde un proyecto Cargo generado de tres líneas — la dependencia `raylang` por
+ruta, sin `interp` ni `ffi`, y un `ray_start` que llama a `devlink::start_from_shell`. Los
+`ray_ui_*` del contrato del shell salen de `ray-runtime` por el rlib, y `nm -gU` sobre el `.a`
+lo verifica antes de fiarse: los once símbolos, ni uno más que `ray_dev_start`. Nombre
+`<app>-dev` y bundle id `<id>.dev`: la app real y la de desarrollo conviven en el teléfono.
+
+**El emparejamiento se hace con las piezas del propio runtime.** Nada de un ViewController
+nuevo: la librería monta una página en `ray://app` con `mount_bytes` y la abre como cualquier
+programa abriría una ventana; el shell la sirve por su `WKURLSchemeHandler` de M322 y el
+`window.ray.send` de la página llega como un evento `message` más. La URL se recuerda en la
+sandbox y, si el anfitrión calla 20 s, la página vuelve con la URL anterior rellenada. Del
+lado del Mac, `ray dev --device` guarda puerto y token por proyecto en `.ray-dev`: sin eso,
+cada sesión estrenaba puerto y token aleatorios y el teléfono tenía que emparejarse de nuevo —
+la clase de fricción que mata un flujo de desarrollo.
+
+**Lo que se dejó fuera a propósito.** El QR (leerlo exige la cámara y AVFoundation en el
+shell; teclear una URL corta una vez por proyecto no lo justifica todavía), Android (D3b: el
+cdylib debe definir él mismo los símbolos JNI, como hace el transpilador desde M156) y la
+librería prebuilt por release (hoy se compila desde `CARGO_MANIFEST_DIR`; una instalación sin
+fuentes recibe un error claro).
+
+**Verificación.** `tests/devlink_pair.rs` (la página devuelve la URL que manda, headless con
+el inyector `RAY_UI_MSG`, y deja la cola de eventos vacía), el `.a` del simulador con los
+símbolos del shell, el proyecto generado compilado para el SDK del simulador con `xcodebuild`,
+y el humo real en el iPhone del usuario.

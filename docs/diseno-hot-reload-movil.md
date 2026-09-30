@@ -61,7 +61,8 @@ diferencial), lo que se prueba en caliente es lo que después se compila.
 |---|---|---|
 | D1 ✅ | Parada cooperativa de la VM + reset del runtime | Sí: `tests/vm_stop.rs` |
 | D2 ✅ | `src/devlink.rs`: protocolo de snapshot por TCP, `ray dev --device`, `ray dev-client`, entrada C `ray_dev_start` | Sí: `tests/devlink_cli.rs` (anfitrión + cliente headless, cambio, cambio que no compila) |
-| D3 | `ray bundle --ios --dev` / `--android --dev`, QR, bundle id `.dev`, asset prebuilt | Parcial: generación de proyectos en CI; el humo real en el dispositivo |
+| D3 ✅ (iOS) | `ray bundle --ios --dev`: librería de desarrollo, página de emparejamiento, `.ray-dev` por proyecto, bundle id `.dev` | Parcial: `tests/devlink_pair.rs` (emparejamiento headless); el humo real en el iPhone |
+| D3b | Android (`--android --dev`, cdylib con los símbolos JNI) y librería prebuilt por release | Parcial |
 | D4 | Consola remota, reconexión, snapshot diferencial, pulido de DX | Sí |
 
 Decisiones tomadas: librería de desarrollo prebuilt como asset de release; si el reinicio
@@ -126,4 +127,26 @@ pedida sin programa en marcha.
 - **Pendiente para D4**: snapshot diferencial, `print`/`eprint` del dispositivo hacia la
   terminal del anfitrión (hoy van a su stdout/logcat), dependencias `path = …` fuera de la raíz
   (no viajan en el snapshot).
+
+## D3 por dentro: el shell de desarrollo (iOS)
+
+- **La librería de desarrollo es un reemplazo directo.** `build_dev_lib` genera un proyecto
+  Cargo mínimo (`crate-type = ["staticlib"]`, dependencia `raylang` por ruta al árbol de la
+  toolchain con las features del móvil: sin `interp` ni `ffi`) cuyo `ray_start` es
+  `devlink::start_from_shell(None, None)`. Los `ray_ui_*` que el shell referencia llegan de
+  `ray-runtime` a través del rlib, y `nm -gU` lo confirma: el `.a` exporta exactamente los
+  símbolos del contrato del shell más `ray_dev_start`. El proyecto Xcode es el de siempre
+  (`bundle_ios::write_project` sin cambios) con nombre `<app>-dev` y bundle id `<id>.dev`.
+- **Emparejamiento sin tocar el shell.** La librería monta su página en `ray://app/__raydev/
+  pair.html` (`ui::scheme::mount_bytes`) y la abre como una ventana más; la página manda la
+  URL con `window.ray.send`, que llega como un evento `message` por la cola de `ui`. La URL
+  se guarda en `Application Support/ray-dev/link.url`; a partir de ahí `run_device_until`
+  con un plazo de 20 s sin respuesta devuelve a la página con la URL rellenada.
+- **Puerto y token por proyecto.** `ray dev --device` guarda `port=`/`token=` en `.ray-dev`
+  (oculto: fuera del snapshot y de `scan_sources`) y vuelve a escuchar ahí; si el puerto está
+  ocupado avisa y toma otro. Sin esto, cada sesión pedía emparejar de nuevo.
+- **Pendiente (D3b)**: Android (`--android --dev`: cdylib con los símbolos JNI que hoy emite
+  el transpilador, delegando en `ray_runtime::ui::android_*`), y la librería prebuilt por
+  release para instalaciones de `ray` sin el árbol de fuentes (hoy `CARGO_MANIFEST_DIR`
+  horneado; sin él, error claro).
 

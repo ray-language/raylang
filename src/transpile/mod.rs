@@ -696,6 +696,20 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str("        #[cfg(any(unix, windows))]\n");
         out.push_str("        let _ = ray_runtime::ui::run_main_loop();\n");
         out.push_str("    }\n");
+    } else if fibers {
+        // M329 (findings #107): el programa corre como FIBRA del scheduler (pila reservada de 8 MiB,
+        // la misma que tenía como hilo; virtual). Antes `main` era un hilo del SO: cada `recv`
+        // lo dormía en una condvar y cada respuesta de un actor costaba una syscall de despertar
+        // (~3 µs la ida y vuelta, 1,8 en la VM). El hilo 1 solo espera a que la fibra termine;
+        // todo camino de `run_body` acaba en `process::exit`, así que el join es la red de
+        // seguridad. Los modos `--lib` y con `std/ui` conservan el hilo (contratos del shell y
+        // de AppKit, arriba).
+        out.push_str("    let __main_fiber = ray_runtime::fibers::spawn_with_stack(8 * 1024 * 1024, move || {\n");
+        out.push_str(&run_body);
+        out.push_str("    });\n");
+        out.push_str("    let _ = __main_fiber.join();\n");
+        out.push_str("    __ray_flush_prints();\n");
+        out.push_str("    std::process::exit(0)\n");
     } else {
         out.push_str(&run_body);
     }

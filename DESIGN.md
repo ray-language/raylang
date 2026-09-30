@@ -15709,3 +15709,37 @@ control), y la medida visual en macOS: una página roja abierta como `document` 
 franja gris `#1e1e1e` de ~28 pt encima (la barra). `full_content`: 796 px de rojo hasta el borde
 superior de la ventana y, en el recorte, los tres semáforos flotando sobre el rojo — el efecto de
 Chrome. Linux y Windows compilan en CI (el arrastre de Windows no se ha probado en máquina).
+
+## 311. M329 — `main` como fibra en el binario nativo (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #107, con un dato que no cuadraba: la VM despertaba a un actor en
+1,8 µs y el nativo en 3,3, y `RAYLANG_THREADS=1` no movía la aguja. Un scheduler M:N con
+spin-then-park (M319) no debería perder contra la VM.
+
+**No era el scheduler.** Dos sondas lo separaron en minutos: entre dos fibras, el nativo hace la
+ida y vuelta en 0,9–1,2 µs entre workers y en **0,21 µs** en el mismo (`RAYLANG_THREADS=1`),
+mejor que la VM. El coste solo aparece cuando una punta es `main`. Y `main`, en el binario
+transpilado, no era una fibra: el runtime emitido lo decía en un comentario («el hilo main sigue
+en la condvar») y el perfil con `sample` lo confirma — `main` dormido en `__psynch_cvwait` y el
+actor en `pthread_cond_broadcast` → `__psynch_cvbroad`, una syscall de despertar por respuesta.
+Por eso `RAYLANG_THREADS=1` no cambiaba nada: el hilo `main` no es un worker.
+
+**El cambio.** El programa corre como fibra del scheduler con la misma reserva de pila que tenía
+como hilo (8 MiB; `fibers::spawn_with_stack`, virtual) y el hilo 1 solo espera su fin. Cada
+`recv`/`join`/`select` de `main` aparca la fibra como cualquier otra. Los dos modos que
+conservan el hilo lo hacen por contrato: `--lib` (el shell posee el hilo y `ray_start` retorna
+con el programa lanzado) y `std/ui` (AppKit exige el hilo 1; el programa corre en un hilo con
+pila explícita y su propio comentario explica por qué no es fibra: el payload de pánico y
+`in_fiber()`). Aquí ese payload no se pierde: `run_body` va entero dentro de la fibra, con su
+`catch_unwind` y sus `process::exit`.
+
+**Lo que se descartó.** Un spin puro breve antes de ceder el hilo mejora la ida y vuelta un
+10–16 % y hunde el envío masivo un 28 % — M319 ya lo había medido con un girador largo, y uno
+corto tiene el mismo defecto a menor escala. El tramo entre workers se queda en ~1 µs.
+
+**Verificación.** Sondas `main`↔actor y fibra↔fibra (dev y release, con y sin
+`RAYLANG_THREADS=1`), `benchmarks/actor_ask.ray` en sus cinco escenarios, perfil con `sample`, y
+las suites `native_depth_cli` (la recursión profunda de `main` sigue cortando por el contador,
+no por la página de guarda), `native_fibers_cli`, `native_lib_cli`, `native_corpus`,
+`native_differential`, `cli_cli` y `ui_cli`. Y en Linux (VM, 4 cores): 39 µs → 3,1–3,5 µs, y
+1,0 µs con `RAYLANG_THREADS=1` (PERFORMANCE §9).

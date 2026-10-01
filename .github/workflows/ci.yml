@@ -57,7 +57,6 @@ jobs:
   gate:
     name: gate (¿árbol ya verificado?)
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
     permissions:
       contents: read
       actions: read
@@ -92,8 +91,13 @@ jobs:
   # estilo del proyecto no es el de rustfmt por defecto. El código RAYLANG sí se comprueba, pero desde
   # dentro de `cargo test`: `tests/fmt_policy.rs` asevera que todo `.ray` versionado es un punto fijo
   # de `ray fmt` — no hace falta un paso propio.)
-  test:
-    name: clippy · test · build
+  # M333 (dieta del CI, 3ª parte): el job único «clippy · test · build» tardaba ~20 min y era el
+  # 65 % del reloj de una PR. Ahora son dos jobs en paralelo — `lint` (clippy) y `tests` — con
+  # caché propia cada uno (clippy y `cargo test` no comparten artefactos: una sola clave dejaba a
+  # uno de los dos sin caché), y un agregador que CONSERVA el nombre «clippy · test · build» para
+  # que la comprobación requerida de main y el no-op de ci-docs.yml sigan valiendo sin tocar nada.
+  lint:
+    name: clippy
     runs-on: ubuntu-latest
     needs: gate
     if: needs.gate.outputs.skip != 'true'
@@ -112,9 +116,31 @@ jobs:
             # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
             # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
             ~/.ray/native-cache
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-lint-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Clippy
         run: cargo clippy --all-targets
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
+            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
+            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
+            ~/.ray/native-cache
+          key: cargo-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       # Los tests `build_native_*` se SALTAN en silencio si falta `rustc` (en local es honesto; en CI
       # sería un falso verde). Se verifica su presencia para que un toolchain roto falle ruidosamente aquí.
       - name: Verificar rustc (los tests nativos lo requieren)
@@ -124,26 +150,57 @@ jobs:
       # de ~9 min por eslabón, porque cada fallo abortaba la suite y escondía el resto.
       - name: Tests (incluye el fuzzer del front-end)
         run: cargo test --no-fail-fast
-      # ---- Pasos del nivel MAIN/NIGHTLY (IDEAS §82): en PRs se saltan — su rojo se detecta como
-      # ---- mucho un merge tarde, en main, y el PR baja de ~17 a ~la mitad. El humo del harness
-      # ---- diferencial (1 batch) sigue corriendo en PRs dentro de `cargo test`.
+
+  # El agregador: el nombre que exige la protección de main (y que ci-docs.yml replica como
+  # no-op). Verde solo si `lint` y `tests` lo están; omitido si el gate los omitió.
+  test:
+    name: clippy · test · build
+    runs-on: ubuntu-latest
+    needs: [gate, lint, tests]
+    if: needs.gate.outputs.skip != 'true'
+    steps:
+      - name: lint y tests en verde
+        run: echo "clippy y tests en verde"
+
+  # ---- Nivel MAIN/NIGHTLY (IDEAS §82): corre en cada push a main y en el nocturno, NUNCA en
+  # ---- PRs (su rojo se detecta como mucho un merge tarde) y SIN pasar por el gate — la PR no
+  # ---- corrió estos pasos, así que «árbol ya verificado» no los cubre (M333: con el gate de
+  # ---- M331b y estos pasos dentro del job de tests se habían quedado sin correr en ningún sitio).
+  main-guards:
+    name: corpus nativo · harness diferencial · builds de release
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
+            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
+            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
+            ~/.ray/native-cache
+          key: cargo-main-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Verificar rustc (los tests nativos lo requieren)
+        run: rustc --version
       # El corpus nativo corre en cada push a main (histórico: solo-nocturno tardaba 24 h en
       # avisar). Con la caché de `~/.ray/native-cache` y el target compartido tarda ~2-3 min.
       - name: Corpus nativo ≡ VM (ejemplos deterministas)
-        if: github.event_name != 'pull_request'
         run: cargo test --test native_corpus -- --ignored --nocapture
       # M120: el harness DIFERENCIAL — programas GENERADOS (interacciones de features que los
       # ejemplos idiomáticos no ejercitan), 3 motores byte a byte, bisección automática al divergir.
       - name: Harness diferencial de motores (generativo)
-        if: github.event_name != 'pull_request'
         run: cargo test --test native_differential -- --ignored --nocapture
       - name: Build de release
-        if: github.event_name != 'pull_request'
         run: cargo build --release
       # La release mínima excluye el intérprete (solo-VM). No se corren tests aquí: los oráculos
       # comparan intérprete↔VM y necesitan la feature `interp`; basta con verificar que compila.
       - name: Build solo-VM (sin intérprete)
-        if: github.event_name != 'pull_request'
         run: cargo build --release --no-default-features
   # Guarda del playground web (IDEAS §57 + §74): el target wasm no compila en ningún otro paso y
   # ya se rompió en silencio TRES veces (P0.1 metió aHash→getrandom incondicional; M98/M100

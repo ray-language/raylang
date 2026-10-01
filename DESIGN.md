@@ -16043,3 +16043,21 @@ motor: es de la página.
 **Verificación.** Las cuatro causas confirmadas por el usuario en el iPhone, una por iteración;
 test unitario de la rampa; `audio_cli` en verde. Entra en 1.27.26 (el bump va en esta PR, la
 regla de §319).
+
+## 321. M333 — El job de 20 minutos, partido en dos (oct 2026)
+
+Con la tubería de §318–§319, una funcionalidad tardaba 36 minutos de reloj y el 65 % era un
+solo job, «clippy · test · build». Clippy y `cargo test` no comparten artefactos (clippy
+comprueba, no genera código), así que son dos jobs paralelos, `lint` y `tests`, cada uno con su
+clave de caché — con una sola clave el primero en guardar ganaba y el otro corría siempre en
+frío. Un **agregador** conserva el nombre «clippy · test · build»: la comprobación requerida de
+main y el no-op de `ci-docs.yml` siguen valiendo sin tocar la protección del repo.
+
+**Lo que destapó el cambio.** Los pasos de nivel main (corpus nativo, harness diferencial y
+los dos builds de release) vivían dentro del job de tests con `if: != pull_request`, y desde el
+gate de §319 ese job se omite en main cuando la PR verificó el árbol — pero la PR no corre esos
+pasos, así que se habían quedado sin correr en ningún sitio, ni en el nocturno (el gate no
+corría con `schedule` y dejaba a sus dependientes omitidos). Ahora son un job propio,
+`main-guards`, fuera del gate, en cada push a main y en el nocturno; y el gate corre también en
+el nocturno con `skip=false`, de modo que la noche ejecuta el CI entero sobre main: la señal de
+«main sigue verde con el Rust estable de hoy» que §319 dejaba en el aire.

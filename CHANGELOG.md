@@ -6,13 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **Handbook: cuatro capítulos con su app de ejemplo** (`handbook/`, `examples/apps/`), en español e
+- **Handbook: siete capítulos con su app de ejemplo** (`handbook/`, `examples/apps/`), en español e
   inglés y con cada bloque de código comprobado por el CI contra su proyecto: **App móvil** (React +
   TypeScript, `std/kv`, iOS y Android, recarga en caliente en el teléfono), **App multiplataforma**
-  (la misma app en macOS, Linux y Windows, con SQLite, menús y diálogos nativos), **Sitio con
-  plantillas** (plantillas compiladas, formularios, Markdown, datos en archivos, binario
-  autocontenido) y **LLM y MCP** (un agente en raylang que habla con Claude por la API de mensajes
-  y usa `ray mcp` como servidor MCP). El código del handbook se colorea en el sitio con los colores
+  (la misma app en macOS, Linux y Windows, con SQLite, menús y diálogos nativos, y actualizaciones
+  firmadas), **Sitio con plantillas** (plantillas compiladas, formularios, Markdown, datos en
+  archivos), **API web** (Postgres con pool, token Bearer, apagado ordenado), **Sitio con frontend
+  React** (SPA embebida en el binario, notas en Redis), **LLM y MCP** (un agente en raylang que habla
+  con Claude y usa `ray mcp`) y **Distribuir** (firma, tiendas móviles y auto-actualización). Los
+  ejemplos usan los paquetes del registro con `ray add`. El código del handbook se colorea en el sitio con los colores
   de la landing, y los bloques de raylang se etiquetan `rust` en toda la documentación.
 - **El handbook en raylang.dev/handbook** (fase 1 del plan, `docs/plan-handbook.md`): guías para
   construir apps reales, en español e inglés, generadas por `site/site.ray` desde `handbook/*.md`

@@ -239,10 +239,10 @@ Windows signtool, Linux), `std/update` + `ray keygen`/`ray release`, códigos de
 | 1 | **Hecha en local** (rama `docs/handbook-multiplataforma`; la PR #449 se cerró: el arco va en local hasta la revisión). Infraestructura `handbook/` + `index.md`, `site/handbook.ray` y plantilla, coloreado del código (`site/highlight.ray`), guarda `tests/handbook.rs` (marcas `check: skip` / `check: project=`), `docs_i18n`/`docs_sync` sobre `handbook/`, workflow `handbook.yml`. Capítulo Empezar, ES + EN. | 2 |
 | 2 | **Hecha en local.** Capítulo App móvil (`notes-mobile`, react-ts + `std/kv`), ES + EN. Probado en el simulador de iOS y el emulador de Android, incluida la recarga en caliente; destapó M334 y M335 (arreglados en ramas locales `fix/android-insets` y `fix/dev-device-embed`, fusionadas en la rama de trabajo). | 3 |
 | 3 | **Hecha en local.** Capítulo App multiplataforma (`notes-everywhere`, SQLite, menús y diálogos nativos, diseño adaptable), ES + EN. Probado: `.app` de macOS, simulador de iOS, emulador de Android y diseño de escritorio. | 4 |
-| 4 | **Pendiente: necesita un Postgres local** (no hay servidor instalado y Docker está parado). Capítulo API web (`notes-api`, Postgres + pools), ES + EN. Absorbe `docs/web-framework.md`. | 5 |
-| 5 | **SSR hecho en local** (`notes-ssr`, plantillas compiladas, archivos, CSRF, binario autocontenido; probado con un servidor real). **Frontend embebido pendiente: necesita Redis** (`notes-web`). ES + EN. | 6-7 |
+| 4 | **Hecha en local.** Capítulo API web (`notes-api`: `web` + Postgres con pool compartido, token Bearer en tiempo constante, gzip, logs JSON, apagado ordenado). Probado contra un Postgres en Docker, con tests que se saltan sin base de datos. | 5 |
+| 5 | **Hecha en local.** Sitio con plantillas (`notes-ssr`, archivos) y sitio con frontend React (`notes-web`: SPA embebida, API JSON, notas en Redis con scripts Lua atómicos; probado con un Redis en Docker, `ray dev` con el proxy de Vite y el binario nativo). ES + EN. | 6-7 |
 | 6 | **Hecha en local.** Capítulo LLM y MCP (`agent-cli`: Messages API por HTTP con `claude-opus-5-5`, cliente MCP por stdio contra `ray mcp`, tests sin red). No se llamó a la API real (gastaría de la cuenta del usuario). | 8 |
-| 7 | **Capítulo 7 Distribuir**, ES + EN. | 9 |
+| 7 | **Hecha en local.** Capítulo Distribuir: empaquetado y firma por sistema, tiendas móviles (AAB firmado verificado) y actualizaciones de escritorio con `std/update`, ensayadas de punta a punta (0.1.0 → 0.2.0, y rechazo de un manifiesto alterado). La firma y notarización de Apple no se pudo probar: no hay identidad «Developer ID Application». | 9 |
 | 8 | Poda del MANUAL: §13 se queda con io/term/fs/process/time/crypto; ventanas, bundle, hot reload, Vite, update y firma se mueven al handbook y el MANUAL los enlaza. Barrido de M-números. `llms.txt` y `ray mcp` apuntan a los capítulos (`raylang://handbook/<cap>.md`). | 10 |
 | 9 | Capítulos 8 CLI y 9 Rendimiento. | 11 |
 
@@ -252,9 +252,9 @@ salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compil
 ### B.5b Orden real de los capítulos
 
 En el sitio el orden lo da `handbook/index.md`: Empezar, App móvil, App multiplataforma, Sitio con
-plantillas, LLM y MCP; después, cuando haya servicios para probarlos, API web y Sitio con frontend
-React, y luego Distribuir. Los nombres de archivo son el slug de la URL (`movil`, `multiplataforma`,
-`ssr`, `llm-mcp`). Los hallazgos de cada capítulo van a IDEAS §101.
+plantillas, API web, Sitio con frontend React, LLM y MCP, y Distribuir. Los nombres de archivo son
+el slug de la URL (`movil`, `multiplataforma`, `ssr`, `api`, `web-react`, `llm-mcp`, `distribuir`).
+Todos los ejemplos usan los paquetes del registro (`ray add`), nunca rutas al repositorio. Los hallazgos de cada capítulo van a IDEAS §101.
 
 ### B.6 Guardas de CI nuevas
 

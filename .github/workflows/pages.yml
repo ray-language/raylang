@@ -7,6 +7,19 @@ name: Pages
 on:
   push:
     branches: [main]
+    # Dieta del CI (M331): el sitio sale de la landing, SPEC, el libro, los docs, el bench y el
+    # playground (la VM en wasm, compilada desde `src/`); lo demás no lo cambia y no despliega.
+    paths-ignore:
+      - "tests/**"
+      - "tools/**"
+      - "examples/**"
+      - "packages/**"
+      - "crates/**"
+      - "editors/**"
+      - ".github/workflows/ci*.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/windows-*.yml"
+      - ".github/workflows/vscode-publish.yml"
   workflow_dispatch:
 
 permissions:

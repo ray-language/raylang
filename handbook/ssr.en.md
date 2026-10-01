@@ -11,6 +11,14 @@ tests. The raylang blocks are copied from it and CI checks that they still are.
 
 ## 1. The project
 
+```sh
+ray new notes-ssr && cd notes-ssr
+ray add web
+```
+
+`ray add web` downloads the framework (and `net`, which it depends on) and declares it in
+`ray.toml`. The `[native]` section is added by hand:
+
 ```toml
 [package]
 name = "notes-ssr"
@@ -21,13 +29,13 @@ version = "0.1.0"
 embed = ["static"]
 
 [dependencies]
-web = "path:../../../packages/web"   # in your project: `ray add web`
-net = "path:../../../packages/net"
+web = "^0.4.6"
 ```
 
 ```
 notes-ssr/
 ├── ray.toml
+├── ray.lock            # pinned versions of web and net
 ├── src/
 │   ├── main.ray          # the server: routes and handlers
 │   ├── pages.ray         # the pages as pure functions
@@ -37,8 +45,8 @@ notes-ssr/
 └── tests/pages_test.ray
 ```
 
-`web` is the application framework, in the style of Express, and runs on the HTTP server from
-`net`. The [framework guide](../docs/web-framework.md) (Spanish) has every detail.
+`web` is the application framework, in the style of Express, and runs on the HTTP server of the
+`net` package. The exact versions are pinned in `ray.lock`. The [framework guide](../docs/web-framework.md) (Spanish) has every detail.
 
 ## 2. The server
 

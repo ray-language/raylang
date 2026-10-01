@@ -9,8 +9,7 @@ name = "Notes"
 id = "dev.raylang.notes"
 
 [dependencies]
-# The database clients live in the `db` package (SQLite is compiled into the binary).
-db = "path:../../../packages/db"
+db = "^0.2.1"
 
 # The web frontend (Vite). `ray dev` runs `dev` and points app:// at `url`;
 # `ray build --native` / `ray bundle` run `build` and embed `dist`.

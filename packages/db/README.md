@@ -6,12 +6,20 @@ Clientes de bases de datos **escritos en raylang** sobre los sockets de `std/net
 
 ## Cómo usarlo
 
-Declara el paquete en tu `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
+Añádelo desde el índice de paquetes:
+
+```sh
+ray add db
+```
+
+Queda declarado en tu `ray.toml` (y fijado en `ray.lock`):
 
 ```toml
 [dependencies]
-db = "path:../ruta/a/packages/db"
+db = "^0.2.1"
 ```
+
+Dentro del monorepo de raylang, los ejemplos y tests pueden usar la ruta (`db = "path:../ruta/a/packages/db"`).
 
 ## Módulos
 

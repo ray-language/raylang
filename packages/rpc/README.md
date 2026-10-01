@@ -6,12 +6,15 @@ sobre `std/net` + `std/json`. Para interop externo *entrante* ya está el webser
 esto es para hablar servicio-a-servicio con id, deadline y trace en el sobre.
 
 Tier 2 del ecosistema (paquete adicional, como `net`/`db`; política de tiers en DESIGN §53). Se
-declara en `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
+añade desde el índice de paquetes con `ray add rpc`, que lo declara en tu `ray.toml` y lo fija en
+`ray.lock`:
 
 ```toml
 [dependencies]
-rpc = "path:../raylang/packages/rpc"
+rpc = "^0.1.3"
 ```
+
+Dentro del monorepo de raylang se puede usar la ruta (`rpc = "path:../raylang/packages/rpc"`).
 
 ## El protocolo
 

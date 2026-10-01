@@ -7,6 +7,4 @@ version = "0.1.0"
 embed = ["static"]
 
 [dependencies]
-# The application framework (Express-style) and the HTTP stack it runs on.
-web = "path:../../../packages/web"
-net = "path:../../../packages/net"
+web = "^0.4.6"

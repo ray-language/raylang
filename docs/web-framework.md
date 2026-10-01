@@ -11,11 +11,14 @@ en DESIGN.md (M56 §60, M93 §85).
 
 ## Arranque rápido
 
+```sh
+ray add web        # descarga web y net (del que depende) y los declara en ray.toml
+```
+
 ```toml
 # ray.toml
 [dependencies]
-web = "path:../raylang/packages/web"
-net = "path:../raylang/packages/net"   # web se apoya en net/webserver y net/log
+web = "^0.4.6"
 ```
 
 ```rust

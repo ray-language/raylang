@@ -27,14 +27,23 @@ habla con el programa por `window.ray.request`.
 
 ## 1. SQLite con el paquete `db`
 
-SQLite no viene en la biblioteca estándar: es parte del paquete `db`, que se declara en el
-`ray.toml`. El paquete compila SQLite dentro del binario, así que no hace falta ninguna librería
-del sistema en ninguna de las cinco plataformas.
+SQLite no viene en la biblioteca estándar: es parte del paquete `db`, publicado en el índice de
+paquetes de raylang. Se añade con un comando:
+
+```sh
+ray add db
+```
+
+`ray add` busca la última versión, la descarga a `.ray-deps/` y la declara en el `ray.toml`:
 
 ```toml
 [dependencies]
-db = "path:../../../packages/db"     # en tu proyecto: `ray add db`
+db = "^0.2.1"
 ```
+
+La versión exacta y su hash quedan fijados en `ray.lock`, que va al control de versiones. El
+paquete compila SQLite dentro del binario, así que no hace falta ninguna librería del sistema en
+ninguna de las cinco plataformas.
 
 Al abrir la base se crea el esquema si no existe. El modo WAL hace que una lectura nunca espere a
 una escritura, y que un corte a mitad de escritura no corrompa el archivo:

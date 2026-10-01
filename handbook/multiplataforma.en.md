@@ -26,14 +26,23 @@ talks to the program through `window.ray.request`.
 
 ## 1. SQLite with the `db` package
 
-SQLite is not in the standard library: it is part of the `db` package, declared in `ray.toml`.
-The package compiles SQLite into the binary, so no system library is needed on any of the five
-platforms.
+SQLite is not in the standard library: it is part of the `db` package, published in the raylang
+package index. One command adds it:
+
+```sh
+ray add db
+```
+
+`ray add` finds the latest version, downloads it into `.ray-deps/` and declares it in `ray.toml`:
 
 ```toml
 [dependencies]
-db = "path:../../../packages/db"     # in your project: `ray add db`
+db = "^0.2.1"
 ```
+
+The exact version and its hash are pinned in `ray.lock`, which goes into version control. The
+package compiles SQLite into the binary, so no system library is needed on any of the five
+platforms.
 
 Opening the database creates the schema if it does not exist. WAL mode means a read never waits
 for a write, and a crash in the middle of a write cannot corrupt the file:

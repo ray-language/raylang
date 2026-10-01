@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.25 — 2026-09-30
 
 - **Hot reload del programa en el teléfono, primeras fases** (M330, `RAYLANG-FINDINGS.md`
   #50/#106; `docs/diseno-hot-reload-movil.md`). `ray dev --device` no corre el programa en el

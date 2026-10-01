@@ -110,7 +110,7 @@ sentencia; en cualquier otra es identificador. Parser + selfhost + LSP (coloread
 `permessage-deflate` de WebSocket (RFC 7692) mantienen **un stream zlib durante toda la
 sesión**. Refactor a un estado explícito, sin tocar el runtime:
 
-```raylang
+```rust
 pub fn inflate_init() -> Inflater                     // ventana + estado del bloque en curso
 pub fn inflate_push(z: Inflater, chunk: bytes) -> Result<bytes, string>   // lo que se pueda producir
 pub fn inflate_end(z: Inflater) -> Result<bytes, string>                  // cola + verificación adler32

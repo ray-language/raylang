@@ -80,7 +80,7 @@ Handlers concurrentes no pueden compartir UN `Client` (la conexión es secuencia
 hasta `size` llamadas **en vuelo a la vez** — una conexión por hueco, que es también paralelismo
 real del lado servidor (una fibra por conexión):
 
-```raylang
+```rust
 let p = rpc.pool("127.0.0.1", 7070, 8);
 // desde CUALQUIER fibra, a la vez:
 let r = rpc.pool_call(p, "consulta", params);                 // aparca si el pool está agotado

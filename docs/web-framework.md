@@ -18,7 +18,7 @@ web = "path:../raylang/packages/web"
 net = "path:../raylang/packages/net"   # web se apoya en net/webserver y net/log
 ```
 
-```raylang
+```rust
 from web/framework import new_app, GET, listen, text, App, Ctx, Res;
 
 // La app se construye en una función TOP-LEVEL (patrón builder): la fibra de cada conexión la
@@ -44,7 +44,7 @@ fn main() -> int {
 
 ## Enrutado
 
-```raylang
+```rust
 app.GET("/users/:id", fn(c: Ctx, r: Res) {
     r.json("{\"id\": \"" + c.param("id") + "\"}");
 });
@@ -79,7 +79,7 @@ app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla 
 
 ### El contexto conecta la stdlib (M93.2c)
 
-```raylang
+```rust
 c.header_of("user-agent")      // cabecera ("" si falta; nombres en minúscula)
 c.cookie_of("sid")             // cookie de la petición (net/cookie por debajo)
 c.form()                       // cuerpo x-www-form-urlencoded → Map (std/url, decodificado)
@@ -96,7 +96,7 @@ Convención: los *lookups* devuelven `""` si falta (como `param`/`query`); lo fa
 
 Los handlers **mutan** `r` (semántica de referencia); los helpers que devuelven `Res` se encadenan:
 
-```raylang
+```rust
 r.text("plano");                          // text/plain
 r.json("{\"ok\": true}");                 // application/json (componlo con std/json)
 r.html(pagina.render(...));               // text/html (casa con los templates compilados)
@@ -108,7 +108,7 @@ r.redirect("/nueva");                     // 302 + Location (permanente: r.redir
 
 **Streaming y archivos (M272).** Tres salidas que antes obligaban a bajar a `net/webserver`:
 
-```raylang
+```rust
 // SSE / cuerpo generado: los trozos de un canal, en chunked; cierra el canal para terminar.
 let ch: Channel<bytes> = Channel.bounded(8);
 let _ = spawn(fn() { send(ch, b"data: hola\n\n"); close(ch); });
@@ -125,7 +125,7 @@ r.sendfile(c, "media/" + nombre_seguro);
 Un middleware devuelve un **`Step`** (M93.2a): `Step.Next` sigue la cadena, `Step.Done` la corta
 y se responde lo construido en `r`.
 
-```raylang
+```rust
 fn auth(c: Ctx, r: Res) -> Step {
     if (c.query("token") != "secreto") {
         r.status(401).text("no autorizado");
@@ -145,7 +145,7 @@ El "después" (cabeceras comunes, página de error propia, logging a medida) no 
 estilo `next()` de Express sino una **segunda cadena explícita** que corre tras el enrutado —
 siempre, también en 404 o con la cadena pre cortada:
 
-```raylang
+```rust
 app.after(fn(c: Ctx, r: Res) {
     r.header("X-Frame-Options", "DENY");
     if (r.code >= 500) { r.html(pagina_error()); }
@@ -157,7 +157,7 @@ viaja por referencia, lo que escribe un middleware lo ven el handler y los `afte
 
 ## Archivos estáticos
 
-```raylang
+```rust
 app.static_files("/assets/", "static");
 app.static_files_cached("/assets/", "static", 3600);   // + Cache-Control: public, max-age=3600
 ```
@@ -171,7 +171,7 @@ Los mounts se comprueban **antes que las rutas** y solo para GET/HEAD.
 
 ## 404 personalizado
 
-```raylang
+```rust
 app.not_found(fn(c: Ctx, r: Res) {
     r.json("{\"error\": \"no existe\", \"path\": \"" + c.path + "\"}");
 });
@@ -181,7 +181,7 @@ El código ya viene puesto a 404 (cámbialo con `r.status(...)` si quieres otro)
 
 ## Logging
 
-```raylang
+```rust
 app.log_requests();
 ```
 
@@ -192,7 +192,7 @@ niveles) usa `net/log` directamente en tus handlers o un middleware.
 
 ## CORS y respuestas JSON tipadas (M93.2d)
 
-```raylang
+```rust
 app.cors("*");                 // preflight OPTIONS (204) + Access-Control-Allow-Origin en todo
 
 struct User { id: int, name: string }
@@ -210,7 +210,7 @@ app.GET("/yo", fn(c: Ctx, r: Res) { r.json_of(User { id: 7, name: "Ada" }); });
 
 ### Escribir JSON (M93.5): la guía de decisión
 
-```raylang
+```rust
 // 1) El JSON espeja un struct → DERÍVALO (cero escritura, escapado garantizado):
 @derive(ToJson)
 struct User { id: int, name: string }
@@ -244,7 +244,7 @@ sin locks). La gracia está en `ray dev`: **la sesión sobrevive al hot reload**
 `RAY_DEV_RELOAD` el estado se carga del archivo al arrancar y se persiste tras cada escritura
 (formato binario RKV1, escritura atómica). En producción vive en memoria y **nunca toca disco**.
 
-```raylang
+```rust
 from web/framework import sessions, session_get, session_put, session_delete, Sessions;
 
 fn main() -> int {
@@ -281,7 +281,7 @@ strings; para estado no ligado a un usuario (config, contadores), usa `std/kv` d
 
 Una **única** familia de arranque (M93.3), siempre sobre el builder top-level:
 
-```raylang
+```rust
 listen(build_app, "0.0.0.0", 8080);                        // keep-alive + límites por defecto
 listen_tls(build_app, "0.0.0.0", 8443, cert_pem, key_pem); // HTTPS (M56.3, rustls)
 listen_graceful(build_app, "0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT → drena 5 s, sale 0

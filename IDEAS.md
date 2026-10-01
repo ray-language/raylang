@@ -1768,7 +1768,7 @@ sin oráculo de desarrollo.
 
 ### 53.3 La API
 
-```raylang
+```rust
 enum Exit { Code(int), Signal(int) }
 
 struct Output { exit: Exit, stdout: bytes, stderr: bytes, truncated: bool }
@@ -1927,7 +1927,7 @@ hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, b
 Superficie EXACTA. Dos entradas y nada más; `stream()` llega en v2. Cada línea esquiva un error
 documentado de otro lenguaje (tabla al final).
 
-```raylang
+```rust
 enum Exit { Code(int), Signal(int) }
 
 struct Output {

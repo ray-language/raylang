@@ -52,7 +52,7 @@ readiness por kqueue/epoll (`src/poll.rs`). No es una diferencia de constante, e
 **(b) Cada petición cruza DOS hilos de SO.** `handle_http` (`packages/net/webserver.ray:834-835`)
 hace, dentro del bucle de keep-alive:
 
-```raylang
+```rust
 let t = spawn(fn() -> Response { handler(req) });
 match (try_join(t)) { ... }
 ```
@@ -98,7 +98,7 @@ try_call(f: fn() -> T) -> Result<T, string>     // recuperación en la MISMA fib
 
 Y el cambio en `handle_http`:
 
-```raylang
+```rust
 match (try_call(fn() -> Response { handler(req) })) { ... }   // en vez de spawn + try_join
 ```
 

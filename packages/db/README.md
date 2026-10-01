@@ -21,7 +21,7 @@ Cliente del protocolo wire de MySQL (handshake v10 + `COM_QUERY` en protocolo de
 0.1.2 el búfer de lectura es `bytes` y se compacta: una conexión de larga vida (un pool) ya no
 retiene lo que leyó.
 
-```raylang
+```rust
 import db/mysql;
 
 fn main() -> int {
@@ -78,7 +78,7 @@ Cliente del protocolo wire v3 de PostgreSQL con **conexión persistente**, auten
 Sync) — que trae **parámetros** (`$1`, `$2`, … enlazados aparte del SQL → anti-inyección) y devuelve
 **todas** las filas:
 
-```raylang
+```rust
 import db/postgres;
 
 fn main() -> int {
@@ -125,7 +125,7 @@ en raylang puro), SQLite es una librería C: los primitivos `__sqlite_*` viven e
 statements y destructores de bind). SQLite va **compilado dentro del binario** (`bundled`): cero
 dependencias del sistema.
 
-```raylang
+```rust
 import db/sqlite;
 
 fn main() -> int {
@@ -162,7 +162,7 @@ MongoDB (M54, en curso). `enum Bson` recursivo (`Double`/`Str`/`Doc`/`Arr`/`Bin`
 `Null`/`Int`) + `encode(doc) -> bytes` y `decode(bytes) -> Result<[Field], string>` (errores como
 valores, con la posición del octeto) + `dump` (repr JSON-ish para depurar).
 
-```raylang
+```rust
 import db/bson;
 
 let doc = [bson.field("hello", bson.Bson.Str("world"))];
@@ -189,7 +189,7 @@ Cliente MongoDB en raylang puro sobre `db/bson`: framing **OP_MSG** (opCode 2013
 (reusa `net/scram`, el mismo mecanismo que PostgreSQL; verifica la firma del servidor), CRUD
 completo y `run_command(c, doc)` para cualquier otro comando.
 
-```raylang
+```rust
 import db/mongo;
 import db/bson;
 
@@ -210,7 +210,7 @@ filter)` (reintento único si la conexión reutilizada falla por el cable) · `p
 `delete`, varias operaciones de una sesión) · `pool_with_retry(p, f)` (bloques idempotentes) ·
 `pool_close(p)`.
 
-```raylang
+```rust
 ```
 
 - Los filtros y documentos son **BSON estructurado** (`[bson.Field]`), no strings → anti-inyección

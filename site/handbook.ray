@@ -138,11 +138,17 @@ fn rewrite_links(html: string) -> string {
     out
 }
 
+// Una marca de la guarda del handbook (`<!-- check: … -->`, ver tests/handbook.rs): metadato
+// para el CI, invisible en GitHub; el sitio la quita para que no salga como texto.
+fn is_check_mark(line: string) -> bool {
+    line.trim().starts_with("<!-- check:")
+}
+
 /// A handbook source rendered as the body of a site page.
 pub fn render(md: string) -> string {
     var kept: [string] = [];
     for line in md.split("\n") {
-        if (!is_language_line(line)) {
+        if (!is_language_line(line) && !is_check_mark(line)) {
             kept.push(line);
         }
     }

@@ -120,6 +120,8 @@ rustls-pki-types = { version = "1", features = ["std"], optional = true }
 # `bundled` compila SQLite dentro del binario → cero dependencia del sistema, versión determinista.
 # El wrapper de usuario vive en `packages/db/sqlite.ray` sobre los primitivos `__sqlite_*`.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# M330 D5: el QR del enlace de `ray dev --device` en la terminal (Rust puro, sin features).
+qrcode = { version = "0.14", default-features = false }
 # Endurecimiento FFI (jul 2026) — la CARGA de librerías pasa de dlopen/dlsym a mano a `libloading`
 # (puro Rust sobre las APIs de plataforma): arregla Windows (dlopen no existe en MSVC → el binario no
 # linkeaba) y da los mensajes de error reales del loader. La LLAMADA sigue con el catálogo de moldes

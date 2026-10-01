@@ -15743,3 +15743,211 @@ las suites `native_depth_cli` (la recursión profunda de `main` sigue cortando p
 no por la página de guarda), `native_fibers_cli`, `native_lib_cli`, `native_corpus`,
 `native_differential`, `cli_cli` y `ui_cli`. Y en Linux (VM, 4 cores): 39 µs → 3,1–3,5 µs, y
 1,0 µs con `RAYLANG_THREADS=1` (PERFORMANCE §9).
+
+## 312. M330 — Hot reload del programa en el teléfono, D1: la parada cooperativa (sep 2026)
+
+Origen: `RAYLANG-FINDINGS.md` #50 y #106 (ray808). El requisito lo fijó el usuario: el hot
+reload del programa en el teléfono tiene que ser **fiel al dispositivo** (archivos, llavero, red
+local, audio y permisos del teléfono), porque un ciclo de minutos por cambio es lo que empuja a
+los equipos a abandonar un stack multiplataforma. Eso descartó la ventana remota (el programa en
+el Mac y el teléfono como webview) y decidió el arco: **la VM dentro de la app de desarrollo**.
+El diseño completo está en `docs/diseno-hot-reload-movil.md`; su resumen es que el shell
+iOS/Android generado no cambia — solo enlaza otra librería: la toolchain entera compilada para el
+teléfono, cuyo `ray_start` recibe fuente por la red y la corre en la VM.
+
+**Lo que la VM no sabía hacer.** Terminar un programa desde fuera y correr otro en el mismo
+proceso. `ray dev` de escritorio reinicia el proceso; una app iOS no puede relanzarse sola. Toda
+la fontanería estaba, repartida: la bandera atómica consultada en cada conmutación y el self-pipe
+que despierta al poller (el canal de señales, M88.1), la señal de apagado global `outcome` que
+detiene a todos los workers (M38.3b), el `fuel` decrementado por instrucción (M42.1) y
+`close_all_handles` (M129, el aislamiento de `ray test`). D1 las junta.
+
+**La parada** (`src/vm/stop.rs`): `request_stop` sube una bandera y escribe en un self-pipe cuyo
+extremo de lectura entra siempre al poller de `io_wait` — una fibra aparcada en `accept`, en
+`sleep` o en un `select_timeout` despierta al instante. `poll_next` fija `outcome = Err(STOP)`
+en la siguiente conmutación; un bucle que nunca conmuta la ve en sus **saltos hacia atrás**
+(`Jump` atrás e `IncJump`): una cuenta atrás por worker lee la bandera cada 4096 vueltas.
+`run_program` devuelve un error distinguido (`RuntimeError::is_stop`), no un crash, y una parada
+pedida sin programa en marcha se descarta al arrancar el siguiente.
+
+**Lo que se midió y se descartó.** La primera versión comprobaba la bandera en el despacho por
+instrucción, cada 64 K instrucciones por una máscara sobre el `fuel`: un bucle de 200 M de
+vueltas pasó de 6,6 a 6,9 s (+4 %). La segunda consumía el `fuel` por trozos con la recarga fuera
+de línea (`#[cold]`), dejando el bucle caliente con su mismo decremento y comparación: 7,0–7,2 s,
+peor aún — el bucle de despacho de la VM es una función enorme y cualquier cambio en ese punto
+altera su código generado. Con el campo nuevo pero el bucle intacto volvía a 6,5 s: el coste era
+el código, no la disposición. De ahí la comprobación en los saltos: 6,64–6,70 s frente a
+6,68–6,89 s del binario de 1.27.24, dentro del ruido. Y una lección de test: `while (true) { i = i + 1; }`
+no ejecuta ningún `Jump` — el cierre fusionado `IncJump` (V9) es el salto atrás; sin
+instrumentarlo, los dos tests de bucle denso colgaban.
+
+**El reset** (`builtins::runtime_reset`): `close_all_handles` (sockets, listeners, TLS, SQLite,
+pipes, watches, archivos y salidas de audio), `ui::reset_for_restart` (cierra ventanas de
+escritorio; olvida las filas del shell móvil sin avisarle — el webview sigue en pantalla y el
+`ui.open` del programa nuevo lo recarga, sin parpadeo — y vacía la cola de eventos) y vuelta al
+dominio de handles principal. Fibras, canales y tareas caen con la VM.
+
+**Verificación.** `tests/vm_stop.rs`, en su propio proceso porque la bandera es global: bucle
+denso, fibra dormida, fibra aparcada en `accept` sin plazo, tarea girando en otro worker, un
+segundo programa tras parada + reset, y una parada sin programa en marcha. Todas paran en menos
+de un cuarto de segundo desde la petición.
+
+## 313. M330 D2 — El enlace de desarrollo: `ray dev --device` (sep 2026)
+
+Con la parada cooperativa de D1, lo que faltaba era el transporte. La decisión de fondo ya
+estaba tomada en `docs/diseno-hot-reload-movil.md`: **fuente, no bytecode** — el dispositivo
+lleva la toolchain entera, así que basta con hacerle llegar los archivos. De ahí que el enlace
+sea deliberadamente simple: marcos binarios con longitud sobre TCP, `std::net` puro, tres tipos
+de mensaje (`HELLO`, `STATUS`, `SNAPSHOT`) y un snapshot completo cada vez. Sin JSON, sin
+WebSocket, sin dependencias: los dos extremos son nuestros y el diferencial es una optimización
+que puede esperar a D4.
+
+**Lo que se reutiliza.** `ray dev --device` es `ray dev` sin hijo: el mismo vigilante de kernel
+(`DevWatcher`), el mismo debounce y la misma confirmación por hash, y el mismo
+check-before-restart (`ray build` en milisegundos) — un cambio que no compila no se envía y el
+dispositivo sigue con el programa anterior, exactamente como `ray dev` no mata a un servidor que
+funciona por un error a medio escribir. El dispositivo carga con `loader::load_with_deps` y las
+raíces de `.ray-deps` que llegaron en el snapshot: nunca git ni índice, así que funciona offline.
+
+**El punto delicado es el reinicio en el dispositivo.** Antes de escribir el snapshot nuevo se
+pide la parada (D1) y se espera al hilo del programa; solo cuando ha terminado se hace el
+`runtime_reset` (cerrar handles con la VM viva sería una carrera) y se arranca el siguiente. Si
+no para en 5 s, la librería sale del proceso: es la decisión de diseño del arco (el shell
+vuelve a arrancar limpio y se reconecta), y vale más que un reinicio a medias.
+
+**La entrada del shell.** `ray_dev_start(url, dir)` es el gemelo de `ray_start`: retorna 0 con
+el enlace corriendo en su hilo, `SIGPIPE` ignorado como en el emitido. El shell de desarrollo
+que la llama, y cómo obtiene la URL (QR), son D3.
+
+**Verificación.** `tests/devlink_cli.rs` monta el enlace completo en escritorio: `ray dev
+--device` sobre un proyecto temporal, `ray dev-client` headless en su sandbox, un cambio en
+`main.ray` que llega y reinicia (el anfitrión oye `stopped` y `running`), y un cambio que no
+compila que no se publica. Unidad: URL, codificación del snapshot, escritura con barrido de
+sobrantes y rechazo de rutas que salgan del proyecto, y el filtro de qué viaja (fuentes,
+manifiesto, dependencias; nunca `target`, `node_modules`, `.git` ni el `.ray` derivado de un
+`.ray.html`).
+
+## 314. M330 D3 — El shell de desarrollo en el iPhone (sep 2026)
+
+La apuesta del arco era que el shell móvil no tuviera que cambiar, y D3 la confirma: `ray
+bundle --ios --dev` genera el mismo proyecto Xcode (`bundle_ios::write_project` intacto) y solo
+cambia qué `.a` enlaza. La **librería de desarrollo** es la toolchain entera compilada para iOS
+como staticlib desde un proyecto Cargo generado de tres líneas — la dependencia `raylang` por
+ruta, sin `interp` ni `ffi`, y un `ray_start` que llama a `devlink::start_from_shell`. Los
+`ray_ui_*` del contrato del shell salen de `ray-runtime` por el rlib, y `nm -gU` sobre el `.a`
+lo verifica antes de fiarse: los once símbolos, ni uno más que `ray_dev_start`. Nombre
+`<app>-dev` y bundle id `<id>.dev`: la app real y la de desarrollo conviven en el teléfono.
+
+**El emparejamiento se hace con las piezas del propio runtime.** Nada de un ViewController
+nuevo: la librería monta una página en `ray://app` con `mount_bytes` y la abre como cualquier
+programa abriría una ventana; el shell la sirve por su `WKURLSchemeHandler` de M322 y el
+`window.ray.send` de la página llega como un evento `message` más. La URL se recuerda en la
+sandbox y, si el anfitrión calla 20 s, la página vuelve con la URL anterior rellenada. Del
+lado del Mac, `ray dev --device` guarda puerto y token por proyecto en `.ray-dev`: sin eso,
+cada sesión estrenaba puerto y token aleatorios y el teléfono tenía que emparejarse de nuevo —
+la clase de fricción que mata un flujo de desarrollo.
+
+**Lo que se dejó fuera a propósito.** El QR (leerlo exige la cámara y AVFoundation en el
+shell; teclear una URL corta una vez por proyecto no lo justifica todavía), Android (D3b: el
+cdylib debe definir él mismo los símbolos JNI, como hace el transpilador desde M156) y la
+librería prebuilt por release (hoy se compila desde `CARGO_MANIFEST_DIR`; una instalación sin
+fuentes recibe un error claro).
+
+**Verificación.** `tests/devlink_pair.rs` (la página devuelve la URL que manda, headless con
+el inyector `RAY_UI_MSG`, y deja la cola de eventos vacía), el `.a` del simulador con los
+símbolos del shell, el proyecto generado compilado para el SDK del simulador con `xcodebuild`,
+y el humo real en el iPhone del usuario.
+
+## 315. M330 D3b — Android y la librería prebuilt (sep 2026)
+
+Android cerró con la misma regla que iOS: el shell no cambia, cambia la librería. La única
+diferencia real la había fijado M156: en un cdylib, los símbolos JNI que el shell resuelve por
+nombre tienen que estar definidos **en ese crate**, no re-exportados de un rlib. Así que el
+fuente generado de la librería de desarrollo lleva, en Android, los mismos nueve wrappers que
+emite el transpilador (`JNI_OnLoad`, `start`, `pushEvent`, los cinco de `ray://app` y
+`capabilities`), delegando en `ray_runtime::ui::android_*`; el proyecto Cargo declara
+`ray-runtime` como dependencia directa para poder nombrarlos, y un test unitario asevera que
+el fuente los define todos y que el de iOS no lleva ninguno. `HOME` ya lo pone el shell en el
+directorio de datos de la app (M309), luego la librería escribe en `$HOME/.ray-dev` sin más.
+
+**La librería prebuilt.** Hasta aquí `ray bundle --dev` compilaba la librería desde el árbol de
+fuentes horneado en `CARGO_MANIFEST_DIR`, que solo existe en la máquina donde se construyó
+`ray`. Ahora hay tres caminos, en orden: `RAY_DEV_LIB` (un archivo explícito), el árbol de
+fuentes si existe (cargo lo cachea), y el asset `ray-dev-lib-<target>.tar.gz` de la release de
+esta versión, descargado una vez a `~/.ray/dev-lib/<versión>/<target>/` con `curl` y `tar`
+como hace `ray upgrade`. El job `dev-lib` de `release.yml` construye los cuatro targets
+móviles (dos runners de macOS para iOS, dos de Ubuntu con el NDK del runner para Android)
+con `ray dev-lib --target … -o …`, la misma función que usa el bundle: la release pasa de 7 a
+11 assets.
+
+**Lo que cazó el emulador.** El primer `.so` de desarrollo no cargaba: `dlopen failed: cannot
+locate symbol "__error"`. La toolchain entera nunca se había compilado para Android (el binario
+nativo solo lleva `ray-runtime`, que ya tenía su brazo `__errno` de M156), y `src/ffi.rs`
+declaraba el errno de Darwin para «todo unix que no sea Linux». `llvm-nm -uD` sobre el `.so`
+dio la lista completa de símbolos sin resolver, y el mismo barrido de `cfg(not(linux))` por
+`src/` sacó dos constantes que no fallan al enlazar pero sí en ejecución: `SO_KEEPALIVE` (y su
+`SOL_SOCKET`) y `RLIMIT_NOFILE`, que en bionic llevan los valores de Linux. Regla que queda:
+en la toolchain, «no Linux» ya no significa «Darwin/BSD» — Android es Linux para la libc.
+
+**Verificación.** El test del fuente generado, `llvm-nm -uD` del `.so` (ningún símbolo fuera de
+la libc de bionic), el bundle Android del proyecto demo (`--android --dev --android-abi arm64`)
+compilado con Gradle, y el humo en el emulador con el emparejamiento hecho por `adb shell
+input` sobre la página (el campo lleva `autofocus`).
+
+## 316. M330 D4 — Consola remota, delta y dependencias por ruta (sep 2026)
+
+Con el arco funcionando en el iPhone y en el emulador, D4 quita las tres fricciones que
+quedaban del uso real. **La consola**: los `print` del programa se veían solo en logcat o en la
+consola de Xcode; ahora `lib::set_output_mirror` da a `host_print`/`host_eprint` un espejo
+opcional (una lectura atómica relajada por print cuando no hay ninguno) y la librería de
+desarrollo reenvía cada línea como marco `LOG` al anfitrión, que la escribe tal cual en su
+stdout o stderr — la terminal de `ray dev --device` se comporta como la de `ray dev` con un
+hijo local. **El delta**: el snapshot entero por guardado era simple pero desperdiciaba el
+enlace con `.ray-deps` dentro; tras `HELLO` el dispositivo declara lo que ya tiene (`HASHES`,
+FNV-1a 64 por archivo, lo que hay en su sandbox) y el anfitrión, que guarda ese mapa por
+dispositivo, manda solo `DELTA` (borrados + cambiados); un guardado sin cambios reales manda
+un delta vacío, que reinicia igual porque el usuario guardó a propósito. **Las dependencias
+`path = …` fuera de la raíz** no viajaban: el loader las resuelve por el padre de la ruta y el
+nombre del directorio, así que empaquetarlas bajo `.ray-path-deps/<dir>/` y añadir ese
+directorio como raíz en el dispositivo las hace resolver igual, sin tocar el manifiesto.
+
+**Verificación.** `tests/devlink_cli.rs` amplía el enlace de extremo a extremo: el `print` del
+dispositivo aparece en el stdout del anfitrión, el segundo guardado viaja como delta de un
+archivo y el dispositivo lo reporta como `1 changed, 0 removed`. Unidad: delta (nada que mandar
+cuando nada cambió; borrados y cambiados exactos; codificación ida y vuelta), aplicación del
+delta sin barrido, hashes en disco, y una dependencia `path` fuera de la raíz que viaja con
+solo sus fuentes. Y el mismo flujo en el simulador de iOS con el shell de desarrollo.
+
+## 317. M330 D5 — El QR y el esquema por app (sep 2026)
+
+El usuario preguntó qué había sido del QR del diseño original, y la respuesta honesta era que
+lo había recortado en D3 sin consultarlo: leerlo desde la app exigía cámara, AVFoundation o
+CameraX y permisos. Al replantearlo salió una versión sin nada de eso: **escanear con la
+cámara del sistema** y que el sistema abra el shell por su esquema URL. La segunda pregunta
+del usuario decidió el diseño: con varias apps en desarrollo instaladas, ¿a cuál va el QR? Un
+esquema genérico `ray-dev://` lo deja al azar en iOS y a un selector en Android. La salida es
+que **el esquema sea el id del propio shell de desarrollo** (`org.raylang.myapp.dev://…`),
+único por construcción y derivable en el Mac con la misma regla que ya usa `ray bundle`; cada
+proyecto tiene su shell, su esquema y su QR.
+
+**Lo que cambia en los shells, y solo en los de desarrollo.** iOS registra el esquema en
+`CFBundleURLTypes` y entrega la URL en la conexión de escena (arranque en frío) o en
+`scene:openURLContexts:` (app abierta); Android, un `intent-filter` `BROWSABLE` y la URL de
+`getIntent()`/`onNewIntent`. Ambos llaman a `ray_dev_link(url)` — en Android por un
+`RayBridge.devLink` nativo que define el cdylib de desarrollo, con un helper público nuevo de
+`ray-runtime` para leer el `jstring`. El shell de la app real no lleva ni el esquema ni la
+referencia al símbolo: los tests de los dos generadores lo aseveran en ambos sentidos.
+
+**Quién recoge el enlace.** `pending_link` es un buzón; la página de emparejamiento lo mira
+cada 100 ms y gana a lo tecleado, y con un enlace ya vivo el bucle del dispositivo lee con
+plazo de 1 s y, al ver uno nuevo, cierra y re-enlaza: escanear otra vez con la app abierta es
+la forma de cambiar de sesión sin tocar nada. El `HELLO` lleva el esquema usado y el
+anfitrión avisa si no es el suyo. El QR lo codifica `qrcode` (Rust puro, sin features; entra
+al inventario de SECURITY.md) y solo se imprime cuando stderr es un terminal.
+
+**Verificación.** Unidad: URL con esquema de app, QR cuadrado, buzón de enlace consumido una
+vez, plist y `SceneDelegate.m` con y sin esquema, manifiesto y `MainActivity`/`RayBridge`
+con y sin esquema, el fuente del cdylib con `devLink`. En el simulador: app en frío sin
+enlace guardado → página de emparejamiento → `simctl openurl` con el enlace → `running`; y
+un segundo `openurl` con la app enlazada → re-enlace. En el emulador, lo mismo con `am start
+-a VIEW -d`.

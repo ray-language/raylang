@@ -4,6 +4,29 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Hot reload del programa en el teléfono, primeras fases** (M330, `RAYLANG-FINDINGS.md`
+  #50/#106; `docs/diseno-hot-reload-movil.md`). `ray dev --device` no corre el programa en el
+  Mac: vigila el proyecto, comprueba que compila y envía el snapshot del fuente a los
+  dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en su VM sin
+  reinstalar — fiel al dispositivo (archivos, llavero, red, audio y permisos del teléfono). Los
+  `print`/`eprint` del teléfono llegan a la terminal del Mac; a cada dispositivo viaja solo el
+  delta; las dependencias `path = …` fuera de la raíz viajan también.
+  `ray dev-client <url> <dir>` es el lado dispositivo en escritorio. **`ray bundle --ios --dev`**
+  genera el shell de desarrollo para el iPhone (`<app>-dev`, bundle id `<id>.dev`): la misma
+  app enlazando la librería de desarrollo (toolchain + VM) en vez del programa; se instala una
+  vez, se empareja escaneando con la cámara el QR que imprime `ray dev --device` (el enlace
+  lleva como esquema el id del shell, que lo registra: con varias apps en desarrollo cada QR
+  abre la suya) o tecleando la URL en su página inicial (recordada; puerto y token persisten
+  por proyecto en `.ray-dev`), y recarga el programa con cada guardado. `ray
+  bundle --android --dev` es lo mismo para Android (el `.so` de desarrollo define los símbolos
+  JNI del shell). La librería de desarrollo se compila desde el árbol de fuentes de la
+  toolchain o se descarga prebuilt de la release (`ray-dev-lib-<target>.tar.gz`, cuatro
+  targets móviles; `ray dev-lib` la construye suelta). Por dentro, la VM gana una
+  parada cooperativa desde fuera del programa y un reset del runtime para correr otro programa
+  en el mismo proceso (D1).
+
 ## 1.27.24 — 2026-09-30
 
 - **`main` corre como fibra en el binario nativo** (M329, `RAYLANG-FINDINGS.md` #107): el

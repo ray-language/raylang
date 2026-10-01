@@ -1808,6 +1808,42 @@ pub fn focus_window(id: i64) -> Result<(), String> {
     }
 }
 
+/// D1 (hot reload móvil): deja la UI como al arrancar el proceso, para que el SIGUIENTE
+/// programa (la librería de desarrollo reinicia en el mismo proceso) empiece limpio: cierra las
+/// ventanas de escritorio, olvida las filas del shell móvil y de mesa SIN avisar al shell (su
+/// webview sigue en pantalla y el `ui.open` del programa nuevo lo recarga — sin parpadeo), vacía
+/// la cola de eventos (un `closed` del programa viejo no debe llegarle al nuevo) y los menús de
+/// mesa. Los montajes (`mount_dir`/`mount_bytes`) se conservan: los declara el programa al
+/// arrancar y los re-declara igual.
+pub fn reset_for_restart() {
+    let ids: Vec<i64> = windows().lock().unwrap().keys().copied().collect();
+    for id in ids {
+        let is_shell_or_headless = {
+            let map = windows().lock().unwrap();
+            match map.get(&id) {
+                #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+                Some(WinState { win: Win::Shell, .. }) => true,
+                Some(WinState { win: Win::Headless, .. }) => true,
+                _ => false,
+            }
+        };
+        if is_shell_or_headless {
+            windows().lock().unwrap().remove(&id);
+        } else {
+            close_window(id);
+        }
+    }
+    {
+        let ev = events();
+        let mut q = ev.queue.lock().unwrap();
+        q.clear();
+        drain_pipe(ev.pipe_rd, usize::MAX);
+    }
+    headless_menu_tags().lock().unwrap().clear();
+    headless_menu_titles().lock().unwrap().clear();
+    headless_key_window().store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn close_window(id: i64) {
     mark_closed(id);
     let removed = windows().lock().unwrap().remove(&id);
@@ -6500,7 +6536,7 @@ mod android {
         }
     }
 
-    fn jstring_to_string(env: JniEnv, s: JObject) -> String {
+    pub(super) fn jstring_to_string(env: JniEnv, s: JObject) -> String {
         if s.is_null() {
             return String::new();
         }
@@ -6614,6 +6650,12 @@ pub fn android_scheme_close(h: i64) {
 #[cfg(target_os = "android")]
 pub fn android_capabilities(caps: i32) {
     shell::ray_ui_shell_capabilities(caps)
+}
+/// M330 D5: un `jstring` de JNI → `String` (para el `devLink` del shell de desarrollo, que vive
+/// en el cdylib generado y no puede leer strings de la JVM por su cuenta).
+#[cfg(target_os = "android")]
+pub fn android_jstring(env: *mut std::ffi::c_void, s: *mut std::ffi::c_void) -> String {
+    android::jstring_to_string(env as android::JniEnv, s)
 }
 
 /// M156 (C1): UTF-8 → Modified UTF-8 de la JVM, NUL-terminado — `NewStringUTF` exige MUTF-8

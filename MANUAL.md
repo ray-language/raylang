@@ -1468,6 +1468,71 @@ Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (ke
 APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
 por ray.toml (el README generado trae el paso a paso).
 
+### Hot reload del programa en el teléfono (`ray dev --device`)
+
+Recompilar la librería e instalar la app por cada cambio en un `.ray` es un ciclo de minutos.
+`ray dev --device` (M330, `docs/diseno-hot-reload-movil.md`) lo convierte en el de escritorio:
+no corre el programa en el Mac — vigila el proyecto, comprueba que compila y envía el
+**snapshot del fuente** (`.ray`, `ray.toml`, `.ray.html`, assets embebidos y `.ray-deps` ya
+resueltos) a los dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en
+su VM. Como es la misma VM y el mismo runtime corriendo **en el dispositivo**, archivos,
+llavero, red local, audio y permisos son los del teléfono, y lo que pruebas en caliente es lo
+que después compila `ray bundle` (VM y nativo son byte-idénticos por contrato).
+
+```
+ray dev --device
+[dev] device link: org.raylang.myapp.dev://192.168.1.20:52731/3f9c…
+[dev] scan it with the phone's camera (the development shell opens):
+█████████████████████████████████
+████ ▄▄▄▄▄ █▀ █▄▀ ▄▀▄ █ ▄▄▄▄▄ ████
+…
+[dev] on this machine: ray dev-client ray-dev://192.168.1.20:52731/3f9c… <dir>
+[dev] start: snapshot of 4 files (12 KB) sent to 0 device(s)
+[dev] device connected: iPhone (192.168.1.31, raylang 1.27.24)
+[dev] iPhone: running
+hello from the phone
+[dev] change in src/main.ray: snapshot of 4 files (12 KB) — 1 file(s) sent to 1 device(s)
+[dev] iPhone: stopped
+[dev] iPhone: 1 changed, 0 removed
+[dev] iPhone: running
+```
+
+Los `print`/`eprint` del programa **llegan a esta terminal** (además de a la consola del
+dispositivo): stdout y stderr, tal cual. A cada dispositivo viaja solo lo que le falta (el
+anfitrión sabe qué tiene cada uno; al reconectar, el dispositivo dice lo que hay en su
+sandbox y recibe el delta). Las dependencias `path = …` fuera de la raíz viajan también (solo
+sus fuentes y manifiestos) y resuelven igual en el dispositivo.
+
+Un cambio que no compila no se envía (el diagnóstico sale aquí; el dispositivo sigue con el
+programa anterior). La URL lleva un token y el enlace es solo LAN; puerto y token se recuerdan
+por proyecto en `.ray-dev` (oculto; no viaja en el snapshot ni conviene subirlo a git), así el
+teléfono se empareja **una sola vez**. La librería de desarrollo jamás entra en un build de
+release. En escritorio, `ray dev-client <url> <dir>` es el mismo lado dispositivo (con
+`RAY_UI_BACKEND=headless` sirve para CI).
+
+**El shell de desarrollo en el iPhone** (`ray bundle --ios --dev`): genera el mismo proyecto
+Xcode de siempre, con nombre `<app>-dev` y bundle id `<id>.dev` para que conviva con la app
+real, pero enlazando la **librería de desarrollo** (la toolchain entera —loader, checker, VM y
+runtime— compilada para iOS; su `ray_start` arranca el enlace) en vez del programa. El shell
+no cambia: son los mismos símbolos. Instálala una vez desde Xcode. **Para emparejarla, escanea
+con la cámara del teléfono el QR** que imprime `ray dev --device`: el enlace lleva como
+esquema el id del shell de desarrollo (`org.raylang.myapp.dev://…`), que el shell registra
+como suyo, así que el sistema abre exactamente esa app —con varias apps en desarrollo
+instaladas, cada QR va a la suya, sin selector—. Si la app ya estaba abierta y enlazada, un
+QR nuevo la re-enlaza en el acto. Como respaldo, al abrirse sin enlace muestra una **página de
+emparejamiento** donde se teclea la URL. La recuerda (`Application Support/ray-dev/link.url`)
+y desde entonces cada guardado en el Mac reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
+otro puerto), vuelve a la página con la URL anterior rellenada. Va con `--devtools` implícito
+(inspeccionable desde el menú Develop de Safari). **En Android** es lo mismo con `ray bundle
+--android --dev`: el proyecto Gradle de siempre, application id `<id>.dev`, el `.so` de
+desarrollo define él mismo los símbolos JNI del shell, y el QR se escanea con la cámara o
+Google Lens (el shell registra el esquema con un `intent-filter`). La librería de desarrollo se compila
+desde el árbol de fuentes de la toolchain si `ray` se construyó ahí (unos minutos en frío por
+target, cacheado después); una instalación sin fuentes descarga el asset prebuilt de su
+versión (`ray-dev-lib-<target>.tar.gz` de la release, a `~/.ray/dev-lib/<versión>/`), y
+`RAY_DEV_LIB=<archivo>` fuerza una concreta. `ray dev-lib --target <triple> -o <archivo>` la
+construye suelta (es lo que usa el workflow de release).
+
 **Lo que cambia en el móvil respecto al escritorio** (M307/M322, IDEAS §97 #28/#37, §99 #39).
 (1) `ray://app` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan en los CINCO shells: el
 de iOS registra un `WKURLSchemeHandler` (el mismo resolver que macOS: montajes, `Range`,

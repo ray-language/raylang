@@ -253,6 +253,14 @@ pub struct RuntimeError {
     pub trace: Vec<TraceFrame>,
 }
 
+impl RuntimeError {
+    /// D1 (hot reload móvil): ¿es la parada cooperativa pedida desde fuera (`vm::stop::request_stop`)?
+    /// No es un fallo del programa: quien embebe la VM lo distingue de un crash.
+    pub fn is_stop(&self) -> bool {
+        self.msg == crate::vm::stop::STOP_MSG
+    }
+}
+
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "runtime error at {}:{}: {}", self.line, self.col, self.msg)

@@ -366,6 +366,12 @@ impl<'a> Vm<'a> {
             if sh.outcome.is_some() {
                 return Ok(false); // otro worker apagó el programa
             }
+            // D1 (hot reload móvil): parada pedida desde fuera → fija el outcome (apaga a los demás
+            // workers) y este worker se detiene como si otro lo hubiera apagado.
+            if super::stop::requested() {
+                sh.outcome = Some(Err(runtime_error(line, col, super::stop::STOP_MSG)));
+                return Ok(false);
+            }
             // M88.1: entrega de señales pendientes en cada conmutación (bandera atómica barata).
             if crate::builtins::signals_pending() {
                 Self::deliver_signals(&mut sh);
@@ -721,6 +727,11 @@ impl<'a> Vm<'a> {
 
     pub(super) fn io_wait(shared: &mut Shared) {
         loop {
+            // D1 (hot reload móvil): con una parada pedida no hay nada que esperar — `poll_next`
+            // la ve en cuanto volvemos (también aquí en las plataformas sin fd, tras un cuanto).
+            if super::stop::requested() {
+                return;
+            }
             // 0) Expira los deadlines vencidos (E/S con plazo, sleeps y select_timeout) y despierta
             //    sus fibras. Si expiró alguna, ya hay una fibra lista → volver.
             let now = std::time::Instant::now();
@@ -755,6 +766,12 @@ impl<'a> Vm<'a> {
             // hay fd — `signal_fd < 0` — y la fuente se sondea por bandera, abajo).
             if shared.signal_chan.is_some() && shared.signal_fd >= 0 {
                 read_fds.push(shared.signal_fd);
+            }
+            // D1: el self-pipe de parada, siempre (con él, la espera "solo durmientes" también pasa
+            // por el poller con plazo — que lo honra al haber un fd — y despierta en cuanto se pide).
+            let stop_fd = super::stop::fd();
+            if stop_fd >= 0 {
+                read_fds.push(stop_fd);
             }
             let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
             // Solo durmientes (sin fds): el poller con listas vacías retorna al instante (no honra
@@ -814,6 +831,11 @@ impl<'a> Vm<'a> {
                     // al barrido de abajo.
                     if shared.signal_chan.is_some() && ready.contains(&shared.signal_fd) {
                         Self::deliver_signals(shared);
+                    }
+                    // D1: despertó el self-pipe de parada → drénalo y vuelve; `poll_next` decide.
+                    if stop_fd >= 0 && ready.contains(&stop_fd) {
+                        super::stop::drain();
+                        return;
                     }
                     // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
                     let mut woken: Vec<IoParked> = Vec::new();

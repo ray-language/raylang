@@ -30,6 +30,7 @@ use crate::runtime::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
 mod values;
 mod transfer;
 mod sched;
+pub mod stop;
 use values::*;
 use transfer::*;
 use sched::*;
@@ -108,6 +109,9 @@ fn program_uses_spawn(program: &CompiledProgram) -> bool {
 /// `const_int`, que solo lee un escalar; nunca se clona ni dropea un `Rc` de `Value` desde un worker →
 /// compartir esta referencia inmutable entre hilos es sano. El wrapper lo
 /// afirma con `unsafe impl`; sólo cruza el borde del `thread::spawn` (dentro del worker se usa como `&`).
+/// M330 D1: saltos hacia atrás entre consultas de la parada cooperativa (ver `Vm::backedges`).
+const STOP_CHECK_BACKEDGES: u32 = 4096;
+
 #[derive(Clone, Copy)]
 struct ProgRef<'a>(&'a CompiledProgram);
 // SAFETY: el programa es inmutable durante la ejecución y sus constantes sólo se leen (sin tocar refcounts
@@ -117,6 +121,8 @@ unsafe impl Sync for ProgRef<'_> {}
 
 /// Ejecuta un programa compilado (empezando por `main`) y devuelve su resultado.
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
+    stop::ensure();
+    stop::clear(); // una parada pedida ANTES de arrancar no es para este programa
     let mut vm = Vm::new(program);
     let result = vm.run();
     profile::report_if_enabled(); // M240 (también tras un error en tiempo de ejecución)
@@ -136,6 +142,8 @@ pub fn run_program_with_limit(
     fuel: Option<u64>,
     heap_cap: Option<usize>,
 ) -> Result<Value, RuntimeError> {
+    stop::ensure();
+    stop::clear();
     let mut vm = Vm::new(program);
     if let Some(f) = fuel {
         vm.fuel = f;
@@ -215,6 +223,12 @@ struct Vm<'a> {
     /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
     /// coste es un decremento + comparación por instrucción, sin ramas.
     fuel: u64,
+    /// M330 D1: cuenta atrás de **saltos hacia atrás** (bucles) hasta la próxima consulta de la parada
+    /// cooperativa (`stop::requested`). Se toca SOLO en el brazo de `Jump` cuando salta hacia atrás — el
+    /// despacho por instrucción queda intacto: tocarlo ahí (máscara sobre el fuel, o fuel por trozos
+    /// con recarga fuera de línea) costaba un 4–5 % en un bucle denso, medido. Un bucle que nunca
+    /// conmuta de fibra ve la parada cada `STOP_CHECK_BACKEDGES` iteraciones (microsegundos).
+    backedges: u32,
     /// M37.1: **instrumentación de pausas del GC**. Cuenta de recolecciones y la pausa máxima (ns) de una
     /// sola recolección stop-the-world. Sirve para MEDIR el objetivo de M37 (pausas acotadas, <1 ms) antes
     /// de decidir si el barrido/marcado incremental compensan. Coste: un `Instant` por recolección (raro).
@@ -250,6 +264,7 @@ impl<'a> Vm<'a> {
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             fuel: u64::MAX, // sin límite por defecto
+            backedges: STOP_CHECK_BACKEDGES,
             gc_count: 0,
             gc_max_pause_ns: 0,
             gc_total_pause_ns: 0,
@@ -267,6 +282,7 @@ impl<'a> Vm<'a> {
             cur: Fiber::default(), // sin fibra aún; `poll_next` cargará la primera de `ready`
             shared,
             fuel: u64::MAX,
+            backedges: STOP_CHECK_BACKEDGES,
             gc_count: 0,
             gc_max_pause_ns: 0,
             gc_total_pause_ns: 0,
@@ -335,6 +351,19 @@ impl<'a> Vm<'a> {
         // Todos los workers unidos: `outcome` debe estar fijado (main terminó o hubo un fatal). Si por algún
         // camino quedó vacío, el programa no produjo nada → unit.
         self.sched().outcome.take().unwrap_or(Ok(HeapValue::Unit))
+    }
+
+    /// M330 D1: contabiliza un salto hacia atrás (`Jump` atrás, `IncJump`); cada
+    /// `STOP_CHECK_BACKEDGES` vueltas consulta la parada cooperativa y devuelve `true` si se pidió.
+    #[inline(always)]
+    fn backedge(&mut self) -> bool {
+        self.backedges -= 1;
+        if self.backedges == 0 {
+            self.backedges = STOP_CHECK_BACKEDGES;
+            stop::requested()
+        } else {
+            false
+        }
     }
 
     /// M38.3b paso 3: el bucle de ejecución de fibras (antes el cuerpo de `run`). Ejecuta la fibra en
@@ -607,6 +636,12 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Jump(target) => {
+                    // M330 D1: un salto hacia atrás es una vuelta de bucle — cada
+                    // STOP_CHECK_BACKEDGES vueltas, la parada cooperativa (ver `backedges`).
+                    if *target < ip && self.backedge() {
+                        let (l, c) = pos!();
+                        return Err(runtime_error(l, c, stop::STOP_MSG));
+                    }
                     self.cur.frames[fi].ip = *target;
                 }
                 OpCode::JumpIfFalse(target) => {
@@ -809,6 +844,11 @@ impl<'a> Vm<'a> {
                 }
                 // V9 (ronda 5): el cierre completo del bucle — incrementa y salta a la guarda.
                 OpCode::IncJump(s, c, target) => {
+                    // M330 D1: el cierre fusionado de un bucle contado es SIEMPRE un salto atrás.
+                    if self.backedge() {
+                        let (l, c2) = pos!();
+                        return Err(runtime_error(l, c2, stop::STOP_MSG));
+                    }
                     // V11: fast-path por referencia + escritura directa + salto.
                     if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let r = a.checked_add(b).ok_or_else(|| {

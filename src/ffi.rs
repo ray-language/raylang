@@ -46,7 +46,15 @@ unsafe extern "C" {
     #[link_name = "__errno_location"]
     fn errno_ptr() -> *mut i32;
 }
-#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+// M330 D3b: bionic (Android) usa `__errno` — cazado al cargar la librería de desarrollo en el
+// emulador (`dlopen failed: cannot locate symbol "__error"`): este archivo entra a la toolchain
+// entera, que antes nunca se compilaba para Android (el nativo solo lleva ray-runtime).
+#[cfg(all(target_os = "android", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__errno"]
+    fn errno_ptr() -> *mut i32;
+}
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android")), not(target_arch = "wasm32")))]
 unsafe extern "C" {
     #[link_name = "__error"]
     fn errno_ptr() -> *mut i32;

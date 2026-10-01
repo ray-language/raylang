@@ -28,6 +28,7 @@ pub mod checker;
 pub mod cli;
 pub mod compiler;
 pub mod deps;
+pub mod devlink;
 pub mod dev_host;
 pub mod diagnostic;
 pub mod editorconfig;
@@ -73,6 +74,7 @@ pub fn host_print(s: &str) {
         let mut out = std::io::stdout().lock();
         let r = out.write_all(s.as_bytes()).and_then(|()| out.write_all(b"\n"));
         host_write_failed(r);
+        mirror_output(false, s);
     }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stdout(s);
@@ -85,9 +87,36 @@ pub fn host_eprint(s: &str) {
         let mut err = std::io::stderr().lock();
         let r = err.write_all(s.as_bytes()).and_then(|()| err.write_all(b"\n"));
         host_write_failed(r);
+        mirror_output(true, s);
     }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stderr(s);
+}
+
+/// M330 D4: un **espejo** opcional de `print`/`eprint` (la consola remota del hot reload
+/// móvil: la librería de desarrollo reenvía cada línea a la terminal de `ray dev --device`).
+/// Sin espejo, el coste por print es una lectura atómica relajada.
+type OutputMirror = Box<dyn Fn(bool, &str) + Send + Sync>;
+static OUTPUT_MIRROR_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn output_mirror() -> &'static std::sync::Mutex<Option<OutputMirror>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<Option<OutputMirror>>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(None))
+}
+/// Instala (o quita, con `None`) el espejo de salida: recibe `(es_stderr, línea)` tras cada
+/// `print`/`eprint`, después de escribirse en stdout/stderr como siempre.
+pub fn set_output_mirror(mirror: Option<OutputMirror>) {
+    let on = mirror.is_some();
+    *output_mirror().lock().unwrap_or_else(|e| e.into_inner()) = mirror;
+    OUTPUT_MIRROR_ON.store(on, std::sync::atomic::Ordering::Release);
+}
+#[inline]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // el playground no imprime por aquí
+fn mirror_output(stderr: bool, s: &str) {
+    if OUTPUT_MIRROR_ON.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(m) = output_mirror().lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    {
+        m(stderr, s);
+    }
 }
 
 /// Maneja el fallo de escritura de `print`/`eprint` (que no tienen canal de error). Un **pipe
@@ -153,10 +182,10 @@ pub fn raise_fd_limit() {
             cur: u64,
             max: u64,
         }
-        // RLIMIT_NOFILE: 7 en Linux, 8 en macOS/BSD.
-        #[cfg(target_os = "linux")]
+        // RLIMIT_NOFILE: 7 en Linux y Android (bionic; M330 D3b), 8 en macOS/BSD.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         const RLIMIT_NOFILE: i32 = 7;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         const RLIMIT_NOFILE: i32 = 8;
         unsafe extern "C" {
             fn getrlimit(resource: i32, rlim: *mut RLimit) -> i32;

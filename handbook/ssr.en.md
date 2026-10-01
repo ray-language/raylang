@@ -321,4 +321,4 @@ takes the certificate and the key.
 The same kind of server, without pages: a **web API** that answers JSON, with Postgres and
 connection pools. It is the next handbook chapter.
 
-<!-- sync: sha256:9d6ecf3a03a6 -->
+<!-- sync: sha256:6f65fea405f6 -->

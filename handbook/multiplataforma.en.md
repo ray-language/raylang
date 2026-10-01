@@ -316,4 +316,4 @@ published, it is in the manual (Spanish):
 The notes leave the device: a **web API** with the `web` framework, Postgres and connection pools.
 It is the next handbook chapter.
 
-<!-- sync: sha256:8fb097c116e2 -->
+<!-- sync: sha256:8f033bb88665 -->

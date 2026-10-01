@@ -12,6 +12,7 @@
 
 import std/fs;
 import std/markdown;
+import highlight;
 
 const REPO_BLOB: string = "https://github.com/ray-language/raylang/blob/main/";
 
@@ -152,7 +153,7 @@ pub fn render(md: string) -> string {
             kept.push(line);
         }
     }
-    rewrite_links(markdown.to_html(kept.join("\n")))
+    highlight.code_blocks(rewrite_links(markdown.to_html(kept.join("\n"))))
 }
 
 /// The sidebar: the cover plus every chapter, the current one marked.

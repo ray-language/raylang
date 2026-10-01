@@ -1,0 +1,301 @@
+// site/highlight.ray — el coloreado de los bloques de código del handbook.
+//
+// std/markdown deja cada bloque cercado como `<pre><code class="language-X">…</code></pre>` con
+// el texto escapado. Este módulo lo recorre y envuelve cada token en las MISMAS clases que usa la
+// landing a mano (`kw` palabra clave, `ty` tipo, `fn` llamada, `st` cadena, `nu` número, `cm`
+// comentario), así el código del handbook se ve como el del sitio. Los bloques `rust` son
+// raylang (la etiqueta es para que GitHub los coloree): llevan el léxico de raylang. TypeScript,
+// TOML y shell llevan uno sencillo con sus palabras clave y comentarios.
+
+const OPEN: string = "<pre><code class=\"language-";
+
+const CLOSE: string = "</code></pre>";
+
+const RAY_KEYWORDS: [string] = [
+    "fn",
+    "let",
+    "var",
+    "const",
+    "struct",
+    "enum",
+    "trait",
+    "impl",
+    "extern",
+    "type",
+    "if",
+    "else",
+    "while",
+    "for",
+    "in",
+    "match",
+    "return",
+    "break",
+    "continue",
+    "import",
+    "pub",
+    "from",
+    "true",
+    "false",
+    "dyn",
+    "as",
+    "self",
+    "Self"
+];
+
+const RAY_TYPES: [string] = [
+    "int",
+    "float",
+    "bool",
+    "string",
+    "char",
+    "bytes",
+    "ptr",
+    "u8",
+    "u32",
+    "u64",
+    "unit"
+];
+
+const TS_KEYWORDS: [string] = [
+    "const",
+    "let",
+    "var",
+    "function",
+    "return",
+    "if",
+    "else",
+    "export",
+    "import",
+    "from",
+    "type",
+    "async",
+    "await",
+    "new",
+    "class",
+    "interface",
+    "extends",
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "throw",
+    "try",
+    "catch",
+    "typeof",
+    "instanceof",
+    "of",
+    "in",
+    "for",
+    "while",
+    "default",
+    "as",
+    "void"
+];
+
+const TS_TYPES: [string] = ["string", "number", "boolean", "unknown", "any", "never", "Record"];
+
+fn escape(s: string) -> string {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+fn unescape(s: string) -> string {
+    s
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+fn span(class: string, text: string) -> string {
+    "<span class=\"" + class + "\">" + escape(text) + "</span>"
+}
+
+fn is_ident_start(c: char) -> bool {
+    let n = char_code(c);
+    (n >= 97 && n <= 122) || (n >= 65 && n <= 90) || c == '_'
+}
+
+fn is_ident_char(c: char) -> bool {
+    is_ident_start(c) || is_digit(c)
+}
+
+fn is_digit(c: char) -> bool {
+    let n = char_code(c);
+    n >= 48 && n <= 57
+}
+
+fn is_upper(c: char) -> bool {
+    let n = char_code(c);
+    n >= 65 && n <= 90
+}
+
+// El índice del final de la línea que empieza en `i` (sin incluir el salto).
+fn line_end(cs: [char], i: int) -> int {
+    var j = i;
+    while (j < cs.len() && cs[j] != '\n') {
+        j = j + 1;
+    }
+    j
+}
+
+// El índice tras la cadena que abre `quote` en `i` (con escapes `\`). Las de comilla invertida
+// pueden ocupar varias líneas; las demás terminan en el salto de línea si no se cierran.
+fn string_end(cs: [char], i: int, quote: char) -> int {
+    var j = i + 1;
+    while (j < cs.len()) {
+        let c = cs[j];
+        if (c == '\\') {
+            j = j + 2;
+            continue;
+        }
+        if (c == quote) {
+            return j + 1;
+        }
+        if (c == '\n' && quote != '`') {
+            return j;
+        }
+        j = j + 1;
+    }
+    cs.len()
+}
+
+// El siguiente carácter que no es espacio a partir de `i` ('\0' al final).
+fn next_visible(cs: [char], i: int) -> char {
+    var j = i;
+    while (j < cs.len() && (cs[j] == ' ' || cs[j] == '\t')) {
+        j = j + 1;
+    }
+    if (j < cs.len()) { cs[j] } else { '\0' }
+}
+
+fn text(cs: [char], from: int, to: int) -> string {
+    var parts: [string] = [];
+    var i = from;
+    while (i < to) {
+        parts.push(to_string(cs[i]));
+        i = i + 1;
+    }
+    parts.join("")
+}
+
+/// Colours the source of one block. `lang` is the fence label.
+pub fn highlight(lang: string, src: string) -> string {
+    let raylang = lang == "rust";
+    let ts = lang == "ts" || lang == "tsx" || lang == "typescript" || lang == "js";
+    let hash_comments = lang == "sh" || lang == "toml" || lang == "powershell" || lang == "bash";
+    let keywords = if (raylang) { RAY_KEYWORDS } else if (ts) { TS_KEYWORDS } else { [] };
+    let types = if (raylang) { RAY_TYPES } else if (ts) { TS_TYPES } else { [] };
+    let cs = src.chars();
+    var out: [string] = [];
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        let next = if (i + 1 < cs.len()) { cs[i + 1] } else { '\0' };
+        let line_start = i == 0 || cs[i - 1] == '\n';
+        // comentarios
+        if ((raylang || ts) && c == '/' && next == '/') {
+            let j = line_end(cs, i);
+            out.push(span("cm", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        if (hash_comments && c == '#' && (i == 0 || cs[i - 1] == ' ' || cs[i - 1] == '\n')) {
+            let j = line_end(cs, i);
+            out.push(span("cm", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        // una sección de TOML: [package]
+        if (lang == "toml" && c == '[' && line_start) {
+            let j = line_end(cs, i);
+            out.push(span("ty", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        // cadenas y caracteres
+        if (c == '"' || c == '`' || c == '\'') {
+            let j = string_end(cs, i, c);
+            out.push(span("st", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        // anotaciones de raylang: @test, @derive(...)
+        if (raylang && c == '@' && is_ident_start(next)) {
+            var j = i + 1;
+            while (j < cs.len() && is_ident_char(cs[j])) {
+                j = j + 1;
+            }
+            out.push(span("kw", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        // números: 42, 2.5, 0xFF, 1_000
+        if (is_digit(c) && (i == 0 || !is_ident_char(cs[i - 1]))) {
+            var j = i + 1;
+            while (j < cs.len()
+                && (is_ident_char(cs[j]) || (cs[j] == '.' && j + 1 < cs.len() && is_digit(cs[j + 1])))) {
+                j = j + 1;
+            }
+            out.push(span("nu", text(cs, i, j)));
+            i = j;
+            continue;
+        }
+        // identificadores: palabra clave, tipo, llamada o nombre
+        if (is_ident_start(c)) {
+            var j = i + 1;
+            while (j < cs.len() && (is_ident_char(cs[j]) || (cs[j] == '-' && lang == "sh"))) {
+                j = j + 1;
+            }
+            let word = text(cs, i, j);
+            if (keywords.contains(word)) {
+                out.push(span("kw", word));
+            } else if (types.contains(word) || ((raylang || ts) && is_upper(c))) {
+                out.push(span("ty", word));
+            } else if ((raylang || ts) && next_visible(cs, j) == '(') {
+                out.push(span("fn", word));
+            } else if (lang == "sh" && (line_start || (i > 1 && cs[i - 2] == '|'))) {
+                out.push(span("fn", word));
+            } else {
+                out.push(escape(word));
+            }
+            i = j;
+            continue;
+        }
+        out.push(escape(to_string(c)));
+        i = i + 1;
+    }
+    out.join("")
+}
+
+/// Every fenced block of a rendered page, coloured.
+pub fn code_blocks(html: string) -> string {
+    let parts = html.split(OPEN);
+    var out = parts[0];
+    var k = 1;
+    while (k < parts.len()) {
+        let p = parts[k];
+        let close_tag = match (p.index_of("\">")) {
+            Option.Some(q) => q,
+            Option.None => -1,
+        };
+        let end = match (p.index_of(CLOSE)) {
+            Option.Some(e) => e,
+            Option.None => -1,
+        };
+        if (close_tag < 0 || end < close_tag) {
+            out = out + OPEN + p;
+        } else {
+            let lang = p.substring(0, close_tag);
+            let body = p.substring(close_tag + 2, end);
+            out = out
+                + OPEN
+                + lang
+                + "\">"
+                + highlight(lang, unescape(body))
+                + p.substring(end, p.len());
+        }
+        k = k + 1;
+    }
+    out
+}

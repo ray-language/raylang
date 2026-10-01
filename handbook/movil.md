@@ -407,7 +407,5 @@ Un build de release ignora esa variable siempre.
 
 ## Siguiente paso
 
-La misma Notes, ahora en **escritorio**: macOS, Linux y Windows con menús nativos, diálogos y
-SQLite. Es el próximo capítulo del handbook. Mientras se publica, el detalle está en el manual:
-[ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
-[empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+La misma Notes, ahora también en **escritorio**: macOS, Linux y Windows con menús nativos,
+diálogos y SQLite, en la [app multiplataforma](multiplataforma.md).

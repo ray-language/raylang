@@ -21,19 +21,20 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
 2. [App móvil para iOS y Android](movil.md): una app de notas con frontend React + TypeScript y
    datos en `std/kv`, del proyecto al simulador, al emulador y a la recarga en caliente en el
    teléfono.
+3. [App multiplataforma](multiplataforma.md): la misma app en macOS, Linux y Windows, con SQLite,
+   menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
 
 ## En camino
 
 Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo completo en
 `examples/apps/`:
 
-- **App multiplataforma**: la misma app en macOS, Linux y Windows, con SQLite.
 - **API web** con el framework `web`, Postgres y pools de conexiones.
 - **Sitio con plantillas** renderizado en el servidor, con los datos en archivos.
 - **Sitio con frontend React embebido** en el binario, con Redis.
 - **LLM y MCP**: un asistente que escribe raylang verificado, y un agente escrito en raylang.
 - **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar.
 
-Mientras tanto, el detalle de escritorio está en el manual:
+El detalle de cada API de ventanas está en el manual:
 [ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
 [empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).

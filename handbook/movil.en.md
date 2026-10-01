@@ -405,9 +405,7 @@ A release build always ignores that variable.
 
 ## Next step
 
-The same Notes, now on the **desktop**: macOS, Linux and Windows with native menus, dialogs and
-SQLite. It is the next handbook chapter. Until it is published, the details are in the manual
-(Spanish): [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
-[packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
+and SQLite, in the [cross-platform app](multiplataforma.en.md).
 
-<!-- sync: sha256:dd01548155b6 -->
+<!-- sync: sha256:bd011dd12e90 -->

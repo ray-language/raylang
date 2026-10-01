@@ -390,7 +390,7 @@ From here, each handbook guide is a complete project. They are on the way, and t
 [overview](index.en.md) links each one as soon as it is published:
 
 - a [**mobile app**](movil.en.md) for iOS and Android with a React frontend;
-- the same app on the **desktop** (macOS, Linux, Windows);
+- the same app on the [**desktop**](multiplataforma.en.md) (macOS, Linux, Windows);
 - a **web API** with the `web` framework;
 - a **server-rendered site** with templates;
 - a **site with a React frontend** embedded in the binary;
@@ -400,4 +400,4 @@ From here, each handbook guide is a complete project. They are on the way, and t
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:a57de53914fa -->
+<!-- sync: sha256:b24f7bf5d49a -->

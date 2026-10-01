@@ -390,7 +390,7 @@ Desde aquí, cada guía del handbook es un proyecto completo. Están en camino, 
 [portada](index.md) enlaza cada una en cuanto se publica:
 
 - una [**app móvil**](movil.md) para iOS y Android con frontend React;
-- la misma app en **escritorio** (macOS, Linux, Windows);
+- la misma app en [**escritorio**](multiplataforma.md) (macOS, Linux, Windows);
 - una **API web** con el framework `web`;
 - un **sitio con plantillas** renderizado en el servidor;
 - un **sitio con frontend React** embebido en el binario;

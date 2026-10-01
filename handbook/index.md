@@ -34,6 +34,9 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
 8. [Distribuir](distribuir.md): empaquetar y firmar para cada sistema, publicar en las tiendas
    móviles y actualizaciones automáticas firmadas en escritorio.
 
+Al final de [Distribuir](distribuir.md#más-ejemplos-las-apps-de-ray-language) hay una guía de
+las apps de la organización ray-language, para otros casos de uso.
+
 El detalle de cada API de ventanas está en el manual:
 [ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
 [empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).

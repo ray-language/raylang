@@ -214,3 +214,20 @@ y los recursos embebidos, y se configura con variables de entorno, como en los c
 Con esto termina el recorrido. Para cualquier función, la [referencia](../REFERENCE.md) tiene su
 firma, y el [manual](../MANUAL.md) explica el lenguaje en detalle. La [portada](index.md) reúne todos
 los capítulos.
+
+## Más ejemplos: las apps de ray-language
+
+Las apps de este handbook cubren los casos más comunes. La organización
+[ray-language](https://github.com/ray-language) publica más apps escritas en raylang, con su código completo, para
+otros casos de uso:
+
+| Caso de uso | Apps |
+|---|---|
+| Escritorio y móvil | [ray808](https://github.com/ray-language/ray808) (caja de ritmos con React para escritorio, iOS y Android), [raydesk](https://github.com/ray-language/raydesk) (gestor de tareas), [raynote](https://github.com/ray-language/raynote) (bloc de notas con menús y diálogos nativos), [rayplay](https://github.com/ray-language/rayplay) (reproductor de audio en segundo plano), [raystage](https://github.com/ray-language/raystage) (tipos de ventana) |
+| Servidores y redes | [raygate](https://github.com/ray-language/raygate) (API gateway), [raywatch](https://github.com/ray-language/raywatch) (monitor de servicios con panel SSE), [raystream](https://github.com/ray-language/raystream) (servidor de medios), [rayq](https://github.com/ray-language/rayq) (cola de mensajes con WAL), [raykv](https://github.com/ray-language/raykv) (servidor compatible con Redis), [raycall](https://github.com/ray-language/raycall) (microservicios con RPC y trazas), [raybot](https://github.com/ray-language/raybot) (bot por WebSocket), [raymail](https://github.com/ray-language/raymail) (cliente SMTP), [rayrelay](https://github.com/ray-language/rayrelay) (relay) |
+| Seguridad y P2P | [msg](https://github.com/ray-language/msg) (chat P2P cifrado), [takeit](https://github.com/ray-language/takeit) (transferencia de archivos cifrada), [raypass](https://github.com/ray-language/raypass) (bóveda de secretos), [raysync](https://github.com/ray-language/raysync) (sincronización cifrada) |
+| Web | [store](https://github.com/ray-language/store) (tienda con frontend Astro y backend en raylang), [raysite](https://github.com/ray-language/raysite) (generador de sitios estáticos) |
+| Terminal | [raytop](https://github.com/ray-language/raytop) (visor de procesos), [raylogs](https://github.com/ray-language/raylogs) (analizador de logs), [raytetris](https://github.com/ray-language/raytetris), [rallyx](https://github.com/ray-language/rallyx) y [1942](https://github.com/ray-language/1942) (juegos a 30 fps) |
+
+Los paquetes que usan están en el [índice de paquetes](https://github.com/ray-language/ray-index), y se buscan con
+`ray search`.

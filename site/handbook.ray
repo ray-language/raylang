@@ -145,6 +145,72 @@ fn is_check_mark(line: string) -> bool {
     line.trim().starts_with("<!-- check:")
 }
 
+// El texto visible de un fragmento HTML: sin etiquetas y con las entidades básicas resueltas.
+fn plain(html: string) -> string {
+    var out: [string] = [];
+    var inside = false;
+    for c in html.chars() {
+        if (c == '<') {
+            inside = true;
+        } else if (c == '>') {
+            inside = false;
+        } else if (!inside) {
+            out.push(to_string(c));
+        }
+    }
+    out
+        .join("")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+}
+
+// El ancla de un encabezado, como la calcula GitHub: minúsculas; solo letras (también las
+// acentuadas), dígitos, `-` y `_`; los espacios pasan a `-`. Así un enlace `capitulo.md#seccion`
+// funciona igual en GitHub y en el sitio.
+fn slug(text: string) -> string {
+    var out: [string] = [];
+    for c in text
+        .to_lower()
+        .chars() {
+        let n = char_code(c);
+        if (c == ' ') {
+            out.push("-");
+        } else if ((n >= 97 && n <= 122) || (n >= 48 && n <= 57) || c == '-' || c == '_' || n > 127) {
+            out.push(to_string(c));
+        }
+    }
+    out.join("")
+}
+
+// Pone `id` a cada `<h2>` y `<h3>` del HTML generado.
+fn anchors(html: string) -> string {
+    var out = html;
+    for tag in ["h2", "h3"] {
+        let open = "<" + tag + ">";
+        let close = "</" + tag + ">";
+        let parts = out.split(open);
+        var acc = parts[0];
+        var i = 1;
+        while (i < parts.len()) {
+            let p = parts[i];
+            match (p.index_of(close)) {
+                Option.Some(end) => {
+                    let id = slug(plain(p.substring(0, end)));
+                    acc = acc + "<" + tag + " id=\"" + id + "\">" + p;
+                },
+                Option.None => {
+                    acc = acc + open + p;
+                },
+            }
+            i = i + 1;
+        }
+        out = acc;
+    }
+    out
+}
+
 /// A handbook source rendered as the body of a site page.
 pub fn render(md: string) -> string {
     var kept: [string] = [];
@@ -153,7 +219,7 @@ pub fn render(md: string) -> string {
             kept.push(line);
         }
     }
-    highlight.code_blocks(rewrite_links(markdown.to_html(kept.join("\n"))))
+    highlight.code_blocks(anchors(rewrite_links(markdown.to_html(kept.join("\n")))))
 }
 
 /// The sidebar: the cover plus every chapter, the current one marked.

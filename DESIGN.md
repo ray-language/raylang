@@ -16003,3 +16003,43 @@ como `skipped`, no como verdes: cuenta si algún día se marcan como requeridas 
 publicar» viajan en la misma PR que termina el arco, y el tag se pone sobre su merge. Es una
 regla de trabajo (CLAUDE.md), no código. Con las dos cosas, una funcionalidad pasa de cuatro
 CI completos a uno más la release: el gate omite el de main y el bump ya no estrena ciclo.
+
+## 320. M332 — Audio sin clics en el iPhone (oct 2026)
+
+Origen: rayplay (ray-apps) crepitaba en iOS, en la app normal y en la de desarrollo, y no en
+el Mac. El hot reload móvil recién estrenado fue la herramienta: con `ray dev --device`, la
+consola remota trajo a la terminal las trazas del programa (síntesis, espera de `audio.write`
+y `lag` = reloj de pared menos `played_ms`) corriendo en el iPhone del usuario, y cada
+hipótesis se probó en el teléfono en minutos — cuatro iteraciones de la librería de desarrollo
+y una del programa, sin tocar Xcode más que para instalar.
+
+**Lo que decían las trazas.** Reproduciendo con pantalla, `lag` estable (19–20 ms): sin huecos
+con 300 ms de latencia; el crepitar de la app normal era su latencia de 120 ms. En cada
+`background`/`foreground`, el `write` del programa se bloqueaba 130–206 ms y `played_ms`
+saltaba otro tanto: **iOS congela los hilos de la app unos 200 ms al bloquear o desbloquear**,
+el alimentador incluido, mientras la AudioQueue sigue sonando con lo que ya tiene dentro — y
+dentro tenía 3 búferes de 25 ms. Stop, cambio de pista y cierre de la app: cortes a mitad de
+onda.
+
+**Lo que cambia en `std/audio` (CoreAudio).** (1) Suelo en iOS de 4 búferes de 60 ms (240 ms
+encolados dentro de CoreAudio, que cubren la congelación) y anillo ≥ 100 ms, independientes de
+la latencia pedida; macOS no cambia. (2) El alimentador pide QoS interactiva en Apple. (3)
+Rampas anti-clic de 10 ms: el callback **retiene** la cola del anillo y solo la entrega
+atenuada cuando no ha llegado nada más (fin o hueco real), y la primera salida tras un hueco
+entra atenuada; sin mover un octeto de la línea de tiempo (la regla de rallyx sigue). La
+primera versión fundía cada vez que una vuelta vaciaba el anillo — que ocurre sin que venga
+silencio — y eso mismo era un ruido al cambiar de pista: de ahí la retención. (4)
+`ray_ui_will_terminate`: iOS avisa con `applicationWillTerminate` antes de matar una app que
+reproduce; el shell lo llama y el runtime baja el volumen de las colas vivas con la rampa
+nativa de 30 ms (`kAudioQueueParam_VolumeRampTime`) y espera. El símbolo vive en `ui` para
+existir en toda librería que enlace un shell; el aviso de librería conservada lo conoce.
+
+**Lo que no era del runtime.** El ruido al mover el volumen: rayplay aplica la ganancia como
+escalón por bloque de 50 ms; una copia experimental con rampa lineal dentro del bloque lo
+eliminó en el teléfono. El parche va a la app (el Mac lo disimula; los auriculares del iPhone
+no). Y «las canciones cambian cada pocos segundos» en la página no se vio en las trazas del
+motor: es de la página.
+
+**Verificación.** Las cuatro causas confirmadas por el usuario en el iPhone, una por iteración;
+test unitario de la rampa; `audio_cli` en verde. Entra en 1.27.26 (el bump va en esta PR, la
+regla de §319).

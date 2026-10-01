@@ -6120,6 +6120,15 @@ mod shell {
         CAPS.store(caps, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// M332: el SO va a matar el proceso (iOS `applicationWillTerminate`): apaga con rampa las
+    /// salidas de audio vivas para que la app no se cierre con un clic. Siempre presente en la
+    /// librería (vive en `ui`); sin la feature `audio` no hace nada.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_will_terminate() {
+        #[cfg(feature = "audio")]
+        crate::audio::quiesce();
+    }
+
     pub(super) fn has_capability(cap: i32) -> bool {
         CAPS.load(std::sync::atomic::Ordering::SeqCst) & cap != 0
     }

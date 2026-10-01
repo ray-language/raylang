@@ -2,7 +2,7 @@
 
 Una app de notas para iOS y Android escrita en raylang, con la interfaz en React + TypeScript y
 los datos en `std/kv`. Es el proyecto del capítulo
-[App móvil para iOS y Android](../../../handbook/movil.md) del handbook, que lo explica paso a paso.
+[App móvil para iOS y Android](../../../handbook/mobile.md) del handbook, que lo explica paso a paso.
 
 ```sh
 npm --prefix frontend install

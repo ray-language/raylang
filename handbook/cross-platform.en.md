@@ -1,8 +1,8 @@
 # Cross-platform app
 
-[Español](multiplataforma.md) · English
+[Español](cross-platform.md) · English
 
-This chapter continues the [mobile app](movil.en.md) one. The same **Notes** now also runs as a
+This chapter continues the [mobile app](mobile.en.md) one. The same **Notes** now also runs as a
 desktop app on macOS, Linux and Windows, with a single `src/` and a single interface for all five
 platforms. Along the way the store changes: the notes move from `std/kv` to **SQLite**, with
 search, and they live in the folder each system expects.
@@ -307,7 +307,7 @@ on Linux. The usual setup is a CI matrix with one job per system. With SQLite in
 macOS `.app` takes about 3 MB.
 
 To distribute the app beyond your machine, macOS asks you to sign and notarize it, and Windows
-shows a SmartScreen warning if it is unsigned. The [Shipping](distribuir.en.md) chapter covers it,
+shows a SmartScreen warning if it is unsigned. The [Shipping](shipping.en.md) chapter covers it,
 together with automatic updates.
 
 ## Next step
@@ -315,4 +315,4 @@ together with automatic updates.
 The notes leave the device: a [**server-rendered site**](ssr.en.md), and then a
 [**web API**](api.en.md) with Postgres.
 
-<!-- sync: sha256:4961f39fce03 -->
+<!-- sync: sha256:28b2af3f59d8 -->

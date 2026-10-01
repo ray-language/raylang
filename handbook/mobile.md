@@ -1,6 +1,6 @@
 # App móvil para iOS y Android
 
-Español · [English](movil.en.md)
+Español · [English](mobile.en.md)
 
 En este capítulo construyes **Notes**, una app de notas que corre en el iPhone y en Android con
 una interfaz en React + TypeScript y los datos guardados en el propio teléfono con `std/kv`. Es
@@ -408,4 +408,4 @@ Un build de release ignora esa variable siempre.
 ## Siguiente paso
 
 La misma Notes, ahora también en **escritorio**: macOS, Linux y Windows con menús nativos,
-diálogos y SQLite, en la [app multiplataforma](multiplataforma.md).
+diálogos y SQLite, en la [app multiplataforma](cross-platform.md).

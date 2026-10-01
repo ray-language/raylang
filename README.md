@@ -285,7 +285,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 
 | Documento | Qué es |
 |-----------|--------|
-| [`handbook/`](handbook/index.md) | El **handbook**: guías para construir apps reales, de `ray new` al entregable. Empieza por [Empezar](handbook/empezar.md) (instalar, el lenguaje en quince minutos, concurrencia, asistentes LLM, herramientas). Publicado en [raylang.dev/handbook](https://raylang.dev/handbook/), en español e inglés. |
+| [`handbook/`](handbook/index.md) | El **handbook**: guías para construir apps reales, de `ray new` al entregable. Empieza por [Empezar](handbook/getting-started.md) (instalar, el lenguaje en quince minutos, concurrencia, asistentes LLM, herramientas). Publicado en [raylang.dev/handbook](https://raylang.dev/handbook/), en español e inglés. |
 | [`MANUAL.md`](MANUAL.md) | La **guía práctica**: cómo usar el lenguaje, idiomas, y mejores prácticas. |
 | [`REFERENCE.md`](REFERENCE.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. También en inglés: [`REFERENCE.en.md`](REFERENCE.en.md). |
 | [`PUBLISH.md`](PUBLISH.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |

@@ -104,9 +104,9 @@ jobs:
           test -f _site/en/spec.html
           test -f _site/en/bench.html
           test -f _site/handbook/index.html
-          test -f _site/handbook/empezar.html
+          test -f _site/handbook/getting-started.html
           test -f _site/en/handbook/index.html
-          test -f _site/en/handbook/empezar.html
+          test -f _site/en/handbook/getting-started.html
           test -f _site/playground/raylang.wasm
           test -f _site/playground/editor.bundle.js
       - uses: actions/upload-pages-artifact@v3

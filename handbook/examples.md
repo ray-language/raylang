@@ -1,6 +1,6 @@
 # Más ejemplos
 
-Español · [English](ejemplos.en.md)
+Español · [English](examples.en.md)
 
 Las apps de este handbook cubren los casos más comunes, cada una explicada paso a paso. La
 organización [ray-language](https://github.com/ray-language) publica más apps escritas en raylang,

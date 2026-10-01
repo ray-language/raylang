@@ -3,7 +3,7 @@
 The notes app from the mobile chapter, now also a desktop app for macOS, Linux and Windows: one
 `src/`, one React + TypeScript frontend, five platforms. The data lives in SQLite (the `db`
 package) in the folder each platform expects. It is the project of the handbook chapter
-[Cross-platform app](../../../handbook/multiplataforma.en.md), which explains it step by step.
+[Cross-platform app](../../../handbook/cross-platform.en.md), which explains it step by step.
 
 ```sh
 npm --prefix frontend install

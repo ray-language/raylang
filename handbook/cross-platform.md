@@ -1,8 +1,8 @@
 # App multiplataforma
 
-Español · [English](multiplataforma.en.md)
+Español · [English](cross-platform.en.md)
 
-Este capítulo continúa el de la [app móvil](movil.md). La misma **Notes** corre ahora también como
+Este capítulo continúa el de la [app móvil](mobile.md). La misma **Notes** corre ahora también como
 app de escritorio en macOS, Linux y Windows, con un solo `src/` y una sola interfaz para las cinco
 plataformas. En el camino cambia el almacén: las notas pasan de `std/kv` a **SQLite**, con
 búsqueda, y se guardan en la carpeta que cada sistema espera.
@@ -312,7 +312,7 @@ ray bundle --android       # el proyecto Gradle
 `.app` de macOS de Notes ocupa unos 3 MB.
 
 Para distribuir la app fuera de tu máquina, macOS pide firmarla y notarizarla, y Windows muestra un
-aviso de SmartScreen si no está firmada. Lo explica el capítulo [Distribuir](distribuir.md), junto
+aviso de SmartScreen si no está firmada. Lo explica el capítulo [Distribuir](shipping.md), junto
 con las actualizaciones automáticas.
 
 ## Siguiente paso

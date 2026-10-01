@@ -1,6 +1,6 @@
 # Mobile app for iOS and Android
 
-[Español](movil.md) · English
+[Español](mobile.md) · English
 
 In this chapter you build **Notes**, a notes app that runs on the iPhone and on Android with a
 React + TypeScript interface and its data stored on the phone itself with `std/kv`. It is a single
@@ -406,6 +406,6 @@ A release build always ignores that variable.
 ## Next step
 
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
-and SQLite, in the [cross-platform app](multiplataforma.en.md).
+and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:bd011dd12e90 -->
+<!-- sync: sha256:2f97be30b94a -->

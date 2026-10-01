@@ -279,8 +279,8 @@ evaluation. Until then, this example is the reference.
 
 ## Next step
 
-The previous chapters teach how to build. [**Shipping**](distribuir.en.md) covers how to get each
+The previous chapters teach how to build. [**Shipping**](shipping.en.md) covers how to get each
 thing to its users: signing, notarizing and updating desktop apps, publishing mobile ones and
 deploying the servers.
 
-<!-- sync: sha256:c1f7380aba4a -->
+<!-- sync: sha256:d95cdf5a7a49 -->

@@ -289,7 +289,7 @@ The reference documents are written in Spanish (the project's working language);
 
 | Document | What it is |
 |----------|------------|
-| [`handbook/`](handbook/index.en.md) | The **handbook**: guides for building real apps, from `ray new` to the deliverable. Start with [Getting started](handbook/empezar.en.md) (install, the language in fifteen minutes, concurrency, LLM assistants, tools). Published at [raylang.dev/en/handbook](https://raylang.dev/en/handbook/), in Spanish and English. |
+| [`handbook/`](handbook/index.en.md) | The **handbook**: guides for building real apps, from `ray new` to the deliverable. Start with [Getting started](handbook/getting-started.en.md) (install, the language in fifteen minutes, concurrency, LLM assistants, tools). Published at [raylang.dev/en/handbook](https://raylang.dev/en/handbook/), in Spanish and English. |
 | [`MANUAL.md`](MANUAL.md) | The **practical guide**: how to use the language, idioms and best practices. |
 | [`REFERENCE.en.md`](REFERENCE.en.md) | The **exhaustive catalog**: keywords, operators, builtins, prelude, `std/` and CLI, with signatures (in English; original: [`REFERENCE.md`](REFERENCE.md)). |
 | [`PUBLISH.md`](PUBLISH.md) | The **publisher's guide**: packaging, versioning and publishing to the registry. |
@@ -359,4 +359,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:272e8bba9928 -->
+<!-- sync: sha256:178025197a83 -->

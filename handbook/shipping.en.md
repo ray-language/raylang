@@ -1,10 +1,10 @@
 # Shipping
 
-[Español](distribuir.md) · English
+[Español](shipping.md) · English
 
 The previous chapters build the apps. This one covers how they reach their users: packaging for
 each system, signing, publishing to the mobile stores and, on the desktop, updating themselves
-safely. The example is the Notes app from the [cross-platform](multiplataforma.en.md) chapter,
+safely. The example is the Notes app from the [cross-platform](cross-platform.en.md) chapter,
 which carries the update code.
 
 | Target | What ships | How |
@@ -169,7 +169,7 @@ again, it refuses with "the manifest signature does not verify".
 ## 4. The mobile stores
 
 **iPhone.** `ray bundle --ios` generates the Xcode project with your development team
-(`[ios] development_team`, see the [mobile chapter](movil.en.md)). To publish, open it in Xcode,
+(`[ios] development_team`, see the [mobile chapter](mobile.en.md)). To publish, open it in Xcode,
 choose *Product → Archive* and upload the archive to App Store Connect from the *Organizer*. Xcode
 handles the distribution signing with your developer account.
 
@@ -209,9 +209,9 @@ and [React site](web-react.en.md) chapters.
   and container image.
 - Behind a proxy such as nginx or Caddy, which handles HTTPS, the binary is ready for production.
 
-<!-- sync: sha256:011deec200a9 -->
+<!-- sync: sha256:087d7b4485d2 -->
 
 ## Next step
 
-That is the end of the chapters. For other use cases, [**More examples**](ejemplos.en.md) gathers
+That is the end of the chapters. For other use cases, [**More examples**](examples.en.md) gathers
 the apps of the ray-language organization, with their full source.

@@ -1,6 +1,6 @@
 # More examples
 
-[Español](ejemplos.md) · English
+[Español](examples.md) · English
 
 The apps in this handbook cover the most common cases, each explained step by step. The
 [ray-language](https://github.com/ray-language) organization publishes more apps written in
@@ -21,4 +21,4 @@ For any function, the [reference](../REFERENCE.en.md) has its signature, and the
 [manual](../MANUAL.md) (Spanish) explains the language in depth. The [overview](index.en.md)
 gathers every chapter.
 
-<!-- sync: sha256:461a12ab4661 -->
+<!-- sync: sha256:203bd6ada836 -->

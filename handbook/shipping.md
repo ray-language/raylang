@@ -1,10 +1,10 @@
 # Distribuir
 
-Español · [English](distribuir.en.md)
+Español · [English](shipping.en.md)
 
 Los capítulos anteriores construyen las apps. Este cubre cómo llegan a sus usuarios: empaquetar
 para cada sistema, firmar, publicar en las tiendas móviles y, en escritorio, actualizarse solas de
-forma segura. El ejemplo es la Notes del capítulo [multiplataforma](multiplataforma.md), que trae
+forma segura. El ejemplo es la Notes del capítulo [multiplataforma](cross-platform.md), que trae
 el código de actualización.
 
 | Destino | Qué se entrega | Cómo |
@@ -169,7 +169,7 @@ la rechaza con «the manifest signature does not verify».
 ## 4. Las tiendas móviles
 
 **iPhone.** `ray bundle --ios` genera el proyecto Xcode con tu equipo de desarrollo
-(`[ios] development_team`, ver el [capítulo móvil](movil.md)). Para publicar, ábrelo en Xcode,
+(`[ios] development_team`, ver el [capítulo móvil](mobile.md)). Para publicar, ábrelo en Xcode,
 elige *Product → Archive* y sube el archivo a App Store Connect desde el *Organizer*. La firma de
 distribución la gestiona Xcode con tu cuenta de desarrollador.
 
@@ -212,5 +212,5 @@ y los recursos embebidos, y se configura con variables de entorno, como en los c
 ## Siguiente paso
 
 Con esto termina el recorrido por los capítulos. Para otros casos de uso,
-[**Más ejemplos**](ejemplos.md) reúne las apps de la organización ray-language, con su código
+[**Más ejemplos**](examples.md) reúne las apps de la organización ray-language, con su código
 completo.

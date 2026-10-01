@@ -1,6 +1,6 @@
 # Empezar
 
-Español · [English](empezar.en.md)
+Español · [English](getting-started.en.md)
 
 El camino más corto de cero a un programa útil: instalar, preparar el editor, crear un proyecto,
 el lenguaje en quince minutos, la concurrencia, trabajar con un asistente LLM y las herramientas.
@@ -388,14 +388,14 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 
 Desde aquí, cada guía del handbook es un proyecto completo, con su app de ejemplo:
 
-- una [**app móvil**](movil.md) para iOS y Android con frontend React;
-- la misma app en [**escritorio**](multiplataforma.md) (macOS, Linux, Windows);
+- una [**app móvil**](mobile.md) para iOS y Android con frontend React;
+- la misma app en [**escritorio**](cross-platform.md) (macOS, Linux, Windows);
 - un [**sitio con plantillas**](ssr.md) renderizado en el servidor;
 - una [**API web**](api.md) con el framework `web` y Postgres;
 - un [**sitio con frontend React**](web-react.md) embebido en el binario;
 - un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang.
 
-Y para llevar todo eso a sus usuarios: [**distribuir**](distribuir.md), con firma, tiendas
+Y para llevar todo eso a sus usuarios: [**distribuir**](shipping.md), con firma, tiendas
 móviles y actualizaciones automáticas.
 
 Para todo lo demás: la [referencia](../REFERENCE.md) tiene cada función con su firma, y el

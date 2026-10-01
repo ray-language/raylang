@@ -16,12 +16,12 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
 
 ## Capítulos
 
-1. [Empezar](empezar.md): instalar, el editor, un proyecto, el lenguaje en quince minutos, la
+1. [Empezar](getting-started.md): instalar, el editor, un proyecto, el lenguaje en quince minutos, la
    concurrencia, trabajar con un asistente LLM y las herramientas.
-2. [App móvil para iOS y Android](movil.md): una app de notas con frontend React + TypeScript y
+2. [App móvil para iOS y Android](mobile.md): una app de notas con frontend React + TypeScript y
    datos en `std/kv`, del proyecto al simulador, al emulador y a la recarga en caliente en el
    teléfono.
-3. [App multiplataforma](multiplataforma.md): la misma app en macOS, Linux y Windows, con SQLite,
+3. [App multiplataforma](cross-platform.md): la misma app en macOS, Linux y Windows, con SQLite,
    menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
 4. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
    compiladas, formularios, Markdown y los datos en archivos.
@@ -31,9 +31,9 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    y las notas en Redis.
 7. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
    escrito en raylang que habla con Claude y usa herramientas por MCP.
-8. [Distribuir](distribuir.md): empaquetar y firmar para cada sistema, publicar en las tiendas
+8. [Distribuir](shipping.md): empaquetar y firmar para cada sistema, publicar en las tiendas
    móviles y actualizaciones automáticas firmadas en escritorio.
-9. [Más ejemplos](ejemplos.md): las apps de la organización ray-language, por caso de uso, para lo
+9. [Más ejemplos](examples.md): las apps de la organización ray-language, por caso de uso, para lo
    que no cubren los capítulos.
 
 El detalle de cada API de ventanas está en el manual:

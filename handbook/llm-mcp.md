@@ -279,6 +279,6 @@ copiarlos. Mientras tanto, este ejemplo es la referencia.
 
 ## Siguiente paso
 
-Los capítulos anteriores enseñan a construir. [**Distribuir**](distribuir.md) cubre cómo llevar
+Los capítulos anteriores enseñan a construir. [**Distribuir**](shipping.md) cubre cómo llevar
 cada cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, publicar las de
 móvil y desplegar los servidores.

@@ -129,7 +129,7 @@ las palabras «escritorio» ni «móvil». Caminos evaluados:
 ```
 handbook/
   index.md                # portada; el ORDEN de sus enlaces es el de la barra lateral
-  empezar.md              # instalar, editor, ray new, el lenguaje, concurrencia, ray mcp, herramientas
+  getting-started.md              # instalar, editor, ray new, el lenguaje, concurrencia, ray mcp, herramientas
   10-movil.md             # app iOS / Android con frontend react-ts        · persistencia: std/kv
   20-multiplataforma.md   # la misma app en escritorio (continuación)       · persistencia: SQLite (db)
   30-api.md               # API web con el framework `web`                  · persistencia: Postgres (db) + pools
@@ -151,7 +151,7 @@ título de cada capítulo es su primer `# `). Los nombres de archivo son el slug
 número de orden: renombrar un capítulo no rompe enlaces. Los enlaces entre capítulos pasan a
 `.html`, y los que salen del handbook (`../MANUAL.md#…`) apuntan al repositorio en GitHub. `pages.yml` asevera los HTML generados como ya hace con
 spec/bench. La landing cambia «Guía paso a paso en el manual» por el enlace al capítulo concreto
-(`/handbook/movil.html`), y la navegación gana «Handbook».
+(`/handbook/mobile.html`), y la navegación gana «Handbook».
 
 Alternativa descartada: mdbook. Ya hay un generador propio en raylang que produce el sitio;
 añadir una toolchain Rust externa para la mitad de las páginas duplica estilos y navegación.
@@ -254,7 +254,8 @@ salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compil
 En el sitio el orden lo da `handbook/index.md`: Empezar, App móvil, App multiplataforma, Sitio con
 plantillas, API web, Sitio con frontend React, LLM y MCP, Distribuir y, como cierre, Más
 ejemplos (las apps de la organización ray-language por caso de uso). Los nombres de archivo son
-el slug de la URL (`movil`, `multiplataforma`, `ssr`, `api`, `web-react`, `llm-mcp`, `distribuir`, `ejemplos`).
+el slug de la URL (`getting-started`, `mobile`, `cross-platform`, `ssr`, `api`, `web-react`, `llm-mcp`, `shipping`,
+`examples`), siempre en inglés.
 Todos los ejemplos usan los paquetes del registro (`ray add`), nunca rutas al repositorio. Los hallazgos de cada capítulo van a IDEAS §101.
 
 ### B.6 Guardas de CI nuevas

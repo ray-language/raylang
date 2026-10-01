@@ -252,8 +252,9 @@ salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compil
 ### B.5b Orden real de los capítulos
 
 En el sitio el orden lo da `handbook/index.md`: Empezar, App móvil, App multiplataforma, Sitio con
-plantillas, API web, Sitio con frontend React, LLM y MCP, y Distribuir. Los nombres de archivo son
-el slug de la URL (`movil`, `multiplataforma`, `ssr`, `api`, `web-react`, `llm-mcp`, `distribuir`).
+plantillas, API web, Sitio con frontend React, LLM y MCP, Distribuir y, como cierre, Más
+ejemplos (las apps de la organización ray-language por caso de uso). Los nombres de archivo son
+el slug de la URL (`movil`, `multiplataforma`, `ssr`, `api`, `web-react`, `llm-mcp`, `distribuir`, `ejemplos`).
 Todos los ejemplos usan los paquetes del registro (`ray add`), nunca rutas al repositorio. Los hallazgos de cada capítulo van a IDEAS §101.
 
 ### B.6 Guardas de CI nuevas

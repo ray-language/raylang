@@ -33,12 +33,11 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    agent written in raylang that talks to Claude and uses tools through MCP.
 8. [Shipping](distribuir.en.md): packaging and signing for each system, publishing to the mobile
    stores and signed automatic updates on the desktop.
-
-At the end of [Shipping](distribuir.en.md#more-examples-the-ray-language-apps) there is a guide to
-the apps of the ray-language organization, for other use cases.
+9. [More examples](ejemplos.en.md): the apps of the ray-language organization, by use case, for
+   what the chapters do not cover.
 
 The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:56ef0c572588 -->
+<!-- sync: sha256:f72a6645f406 -->

@@ -33,9 +33,8 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    escrito en raylang que habla con Claude y usa herramientas por MCP.
 8. [Distribuir](distribuir.md): empaquetar y firmar para cada sistema, publicar en las tiendas
    móviles y actualizaciones automáticas firmadas en escritorio.
-
-Al final de [Distribuir](distribuir.md#más-ejemplos-las-apps-de-ray-language) hay una guía de
-las apps de la organización ray-language, para otros casos de uso.
+9. [Más ejemplos](ejemplos.md): las apps de la organización ray-language, por caso de uso, para lo
+   que no cubren los capítulos.
 
 El detalle de cada API de ventanas está en el manual:
 [ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y

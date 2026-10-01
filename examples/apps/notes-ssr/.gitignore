@@ -1,0 +1,3 @@
+.ray-deps/
+# the notes themselves (one JSON file per note)
+notes-data/

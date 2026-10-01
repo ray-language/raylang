@@ -1,0 +1,12 @@
+[package]
+name = "notes-ssr"
+version = "0.1.0"
+
+# Files baked into the native binary (served by `static_embedded`).
+[native]
+embed = ["static"]
+
+[dependencies]
+# The application framework (Express-style) and the HTTP stack it runs on.
+web = "path:../../../packages/web"
+net = "path:../../../packages/net"

@@ -1,0 +1,63 @@
+// Tests of the store and the pages, without a server: each test uses its own folder.
+import std/fs;
+import store;
+import pages;
+from store import Store;
+
+fn fresh(name: string) -> Store {
+    store.open(fs.make_temp_dir("notes-ssr-" + name).unwrap()).unwrap()
+}
+
+@test
+fn a_saved_note_is_listed_and_found() {
+    let s = fresh("save");
+    let _ = store.save(s, "", "Groceries", "milk", 1000).unwrap();
+    let _ = store.save(s, "", "Reading", "a book about **SQLite**", 2000).unwrap();
+    assert_eq(store.list(s, "")[0].title, "Reading");
+    assert_eq(store.list(s, "MILK").len(), 1);
+    assert_eq(store.list(s, "nothing").len(), 0);
+}
+
+@test
+fn editing_replaces_the_file() {
+    let s = fresh("edit");
+    let n = store.save(s, "", "Draft", "", 1000).unwrap();
+    let _ = store.save(s, n.id, "Final", "done", 2000).unwrap();
+    assert_eq(store.list(s, "").len(), 1);
+    assert_eq(store.get(s, n.id).unwrap().title, "Final");
+}
+
+@test
+fn ids_from_outside_never_reach_the_disk() {
+    let s = fresh("ids");
+    assert(store.get(s, "../../etc/passwd").is_none());
+    assert(store.save(s, "../escape", "x", "", 1000).is_err());
+    assert_eq(store.remove(s, "../escape").unwrap(), false);
+}
+
+@test
+fn the_index_page_lists_and_escapes() {
+    let s = fresh("index");
+    let _ = store.save(s, "", "<b>bold</b> title", "", 1000).unwrap();
+    let html = pages.index_page(s, "");
+    assert(html.contains("&lt;b&gt;bold&lt;/b&gt; title"));
+    assert(!html.contains("<b>bold</b>"));
+    assert(pages.index_page(s, "zzz").contains("No notes match"));
+}
+
+@test
+fn the_note_page_renders_markdown_safely() {
+    let s = fresh("note");
+    let n = store.save(s, "", "Doc", "**strong** <script>alert(1)</script>", 1000).unwrap();
+    let html = pages.note_page(s, n.id).unwrap();
+    assert(html.contains("<strong>strong</strong>"));
+    assert(!html.contains("<script>"));
+    assert(pages.note_page(s, "no-such-id").is_none());
+}
+
+@test
+fn the_form_shows_the_error() {
+    let html = pages.edit_page("/notes", "", "text kept", "A note needs a title.");
+    assert(html.contains("A note needs a title."));
+    assert(html.contains("text kept"));
+}

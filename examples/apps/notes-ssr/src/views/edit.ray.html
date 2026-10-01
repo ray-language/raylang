@@ -1,0 +1,13 @@
+{% params title: string, action: string, note_title: string, note_body: string, error: string %}
+{% extends layout %}
+{% block content %}
+<form class="edit" method="post" action="{{ action }}">
+    <h1>{{ title }}</h1>
+    {% if error != "" %}
+    <p class="error">{{ error }}</p>
+    {% endif %}
+    <input name="title" value="{{ note_title }}" placeholder="Title" required>
+    <textarea name="body" rows="14" placeholder="Write in Markdown…">{{ note_body }}</textarea>
+    <button type="submit">Save</button>
+</form>
+{% endblock %}

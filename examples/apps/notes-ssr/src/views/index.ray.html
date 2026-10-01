@@ -1,0 +1,17 @@
+{% params title: string, query: string, notes: [store.Note] %}
+{% extends layout %}
+{% import store %}
+{% block content %}
+<form class="search" method="get" action="/">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search notes">
+</form>
+{% if notes.len() == 0 %}
+<p class="empty">{% if query == "" %}No notes yet.{% else %}No notes match “{{ query }}”.{% endif %}</p>
+{% else %}
+<ul class="notes">
+    {% for n in notes %}
+    {% include views/card(n) %}
+    {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

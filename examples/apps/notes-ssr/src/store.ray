@@ -1,0 +1,124 @@
+// The notes as files: one JSON file per note in a folder. No database, no server: the folder IS
+// the shared state, and that matters here. The web framework runs every connection in its own
+// fiber with an isolated heap, so two requests never share a variable; they share the disk.
+// Each write goes to a temporary file that is then renamed over the old one, and a rename is
+// atomic: a reader sees the old note or the new one, never half of each.
+import std/fs;
+import std/json;
+import std/uuid;
+from std/json import ToJson;
+
+/// A note as it is stored and shown.
+@derive(ToJson)
+pub struct Note {
+    id: string,
+    title: string,
+    body: string,
+    updated_ms: int,
+}
+
+/// Where the notes live.
+pub struct Store {
+    dir: string,
+}
+
+/// Opens (creating it if needed) the folder that holds the notes.
+pub fn open(dir: string) -> Result<Store, string> {
+    let _ = fs.mkdir(dir)?;
+    Result.Ok(Store { dir: dir })
+}
+
+// An id becomes part of a file path, so only ids this store generates are accepted: a request
+// for `../../etc/passwd` must not reach the filesystem.
+fn valid_id(id: string) -> bool {
+    uuid.is_uuid_v7(id)
+}
+
+fn path_of(store: Store, id: string) -> string {
+    store.dir + "/" + id + ".json"
+}
+
+fn decode(text: string) -> Option<Note> {
+    let j = match (json.parse(text)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => return Option.None,
+    };
+    Option.Some(
+        Note {
+            id: json.get_string(j, "id")?,
+            title: json.get_string(j, "title")?,
+            body: json.get_string(j, "body")?,
+            updated_ms: json.get_int(j, "updated_ms")?
+        }
+    )
+}
+
+/// One note, if it exists.
+pub fn get(store: Store, id: string) -> Option<Note> {
+    if (!valid_id(id)) {
+        return Option.None;
+    }
+    match (fs.read_file(path_of(store, id))) {
+        Result.Ok(text) => decode(text),
+        Result.Err(_) => Option.None,
+    }
+}
+
+/// The notes whose title or body contains `query` (any case; all of them if it is empty),
+/// most recently edited first.
+pub fn list(store: Store, query: string) -> [Note] {
+    let needle = query.trim().to_lower();
+    var out: [Note] = [];
+    let names = fs.list_dir(store.dir).unwrap_or([]);
+    for name in names {
+        if (!name.ends_with(".json")) {
+            continue;
+        }
+        match (fs.read_file(store.dir + "/" + name)) {
+            Result.Ok(text) => match (decode(text)) {
+                Option.Some(n) => {
+                    let hay = (n.title + "\n" + n.body).to_lower();
+                    if (needle == "" || hay.contains(needle)) {
+                        out.push(n);
+                    }
+                },
+                Option.None => { },
+            },
+            Result.Err(_) => { },
+        }
+    }
+    sort_by(out, fn(a: Note, b: Note) -> bool { a.updated_ms > b.updated_ms })
+}
+
+/// Creates a note (empty `id`) or replaces an existing one.
+pub fn save(
+    store: Store,
+    id: string,
+    title: string,
+    body: string,
+    now_ms: int
+) -> Result<Note, string> {
+    let clean = title.trim();
+    if (clean.len() == 0) {
+        return Result.Err("A note needs a title.");
+    }
+    let key = if (id == "") { uuid.uuid_v7_at(now_ms) } else { id };
+    if (id != "" && get(store, id).is_none()) {
+        return Result.Err("That note does not exist.");
+    }
+    let note = Note { id: key, title: clean, body: body, updated_ms: now_ms };
+    // Write to a temporary file, then rename it over the real one (atomic).
+    let tmp = store.dir + "/." + key + ".tmp";
+    let _ = fs.write_file(tmp, note.to_json())?;
+    let _ = fs.rename(tmp, path_of(store, key))?;
+    Result.Ok(note)
+}
+
+/// Deletes a note. `Ok(false)` if it did not exist.
+pub fn remove(store: Store, id: string) -> Result<bool, string> {
+    if (get(store, id).is_none()) {
+        return Result.Ok(false);
+    }
+    let _ = fs.remove_file(path_of(store, id))?;
+    Result.Ok(true)
+}

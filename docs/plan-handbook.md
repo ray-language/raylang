@@ -236,18 +236,25 @@ Windows signtool, Linux), `std/update` + `ray keygen`/`ray release`, códigos de
 | Fase | Entregable | PR |
 |---|---|---|
 | 0 | Correcciones inmediatas B.4 (solo docs + landing). **Hecha**: PR #448, publicada. | 1 |
-| 1 | **En curso** (rama `docs/handbook-fase1`). Infraestructura: `handbook/` + `index.md`, plantilla y renderizado en `site.ray` → `/handbook/`, aserciones en `pages.yml`, guarda `tests/handbook_snippets.rs` (cada bloque ```rust → `ray check` con el proyecto de ejemplo como contexto), extensión de `docs_root.rs` a `handbook/` (enlaces, huérfanos, sin M-números), `docs_i18n` cubre `handbook/*.en.md`. Capítulo 0 migrado desde getting-started, ES + EN. Navegación «Handbook» en la landing. | 2 |
-| 2 | **Capítulo 1 Móvil con react-ts** (`notes-mobile`, `std/kv`), ES + EN; la landing enlaza a él. | 3 |
-| 3 | **Capítulo 2 Multiplataforma** (`notes-everywhere`, SQLite), ES + EN. | 4 |
-| 4 | **Capítulo 3 API web** (`notes-api`, Postgres + pools), ES + EN. Absorbe `docs/web-framework.md`. | 5 |
-| 5 | **Capítulo 4 SSR** (`notes-ssr`, archivos) y **Capítulo 5 frontend embebido** (`notes-web`, Redis), ES + EN. | 6-7 |
-| 6 | **Capítulo 6 LLM y MCP** (`agent-cli`), ES + EN. Absorbe `docs/mcp.md`. | 8 |
+| 1 | **Hecha en local** (rama `docs/handbook-multiplataforma`; la PR #449 se cerró: el arco va en local hasta la revisión). Infraestructura `handbook/` + `index.md`, `site/handbook.ray` y plantilla, coloreado del código (`site/highlight.ray`), guarda `tests/handbook.rs` (marcas `check: skip` / `check: project=`), `docs_i18n`/`docs_sync` sobre `handbook/`, workflow `handbook.yml`. Capítulo Empezar, ES + EN. | 2 |
+| 2 | **Hecha en local.** Capítulo App móvil (`notes-mobile`, react-ts + `std/kv`), ES + EN. Probado en el simulador de iOS y el emulador de Android, incluida la recarga en caliente; destapó M334 y M335 (arreglados en ramas locales `fix/android-insets` y `fix/dev-device-embed`, fusionadas en la rama de trabajo). | 3 |
+| 3 | **Hecha en local.** Capítulo App multiplataforma (`notes-everywhere`, SQLite, menús y diálogos nativos, diseño adaptable), ES + EN. Probado: `.app` de macOS, simulador de iOS, emulador de Android y diseño de escritorio. | 4 |
+| 4 | **Pendiente: necesita un Postgres local** (no hay servidor instalado y Docker está parado). Capítulo API web (`notes-api`, Postgres + pools), ES + EN. Absorbe `docs/web-framework.md`. | 5 |
+| 5 | **SSR hecho en local** (`notes-ssr`, plantillas compiladas, archivos, CSRF, binario autocontenido; probado con un servidor real). **Frontend embebido pendiente: necesita Redis** (`notes-web`). ES + EN. | 6-7 |
+| 6 | **Hecha en local.** Capítulo LLM y MCP (`agent-cli`: Messages API por HTTP con `claude-opus-5-5`, cliente MCP por stdio contra `ray mcp`, tests sin red). No se llamó a la API real (gastaría de la cuenta del usuario). | 8 |
 | 7 | **Capítulo 7 Distribuir**, ES + EN. | 9 |
 | 8 | Poda del MANUAL: §13 se queda con io/term/fs/process/time/crypto; ventanas, bundle, hot reload, Vite, update y firma se mueven al handbook y el MANUAL los enlaza. Barrido de M-números. `llms.txt` y `ray mcp` apuntan a los capítulos (`raylang://handbook/<cap>.md`). | 10 |
 | 9 | Capítulos 8 CLI y 9 Rendimiento. | 11 |
 
 Cada capítulo sale **con su traducción EN en la misma PR** (decisión D2). Cada PR es solo-docs
 salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compilan en CI).
+
+### B.5b Orden real de los capítulos
+
+En el sitio el orden lo da `handbook/index.md`: Empezar, App móvil, App multiplataforma, Sitio con
+plantillas, LLM y MCP; después, cuando haya servicios para probarlos, API web y Sitio con frontend
+React, y luego Distribuir. Los nombres de archivo son el slug de la URL (`movil`, `multiplataforma`,
+`ssr`, `llm-mcp`). Los hallazgos de cada capítulo van a IDEAS §101.
 
 ### B.6 Guardas de CI nuevas
 

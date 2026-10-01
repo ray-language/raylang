@@ -1,0 +1,77 @@
+// Notes: a notes app for iOS and Android (and, without changing a line, for the desktop).
+//
+// The UI is React + TypeScript (frontend/), built with Vite. Under `ray dev` the window loads the
+// Vite dev server (hot reload); in a native build or a phone bundle it loads the embedded
+// `frontend/dist`, served from `ray://app/` with no port at all. The page talks to this program
+// through the `window.ray.request` bridge, and the notes live in a `std/kv` file inside the app's
+// data folder.
+import std/ui;
+import std/kv;
+import std/fs;
+import std/time;
+import api;
+
+// The data folder: `$HOME/Documents/Notes`. On iOS `$HOME` is the app container (its root is
+// read-only, `Documents/` is writable); on Android the shell points `HOME` at the app's private
+// folder; on the desktop it is the user's home. `NOTES_DIR` overrides it (tests, CI).
+fn data_dir() -> string {
+    match (env("NOTES_DIR")) {
+        Option.Some(d) => d,
+        Option.None => match (env("HOME")) {
+            Option.Some(home) => home + "/Documents/Notes",
+            Option.None => "notes-data",
+        },
+    }
+}
+
+fn main() -> int {
+    let dir = data_dir();
+    let _ = fs.mkdir(dir);
+    let store = match (kv.open(dir + "/notes.kv")) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("notes: could not open the store: " + e);
+            return 1;
+        },
+    };
+    // Under `ray dev` the build may not exist yet (Vite serves the page): only warn.
+    match (ui.mount_embed_at("", "frontend/dist")) {
+        Result.Err(e) => eprint("frontend build not mounted (fine under `ray dev`): " + e),
+        Result.Ok(_) => { },
+    }
+    let window = match (ui.open("Notes", "app://index.html", 420, 760)) {
+        Result.Err(e) => {
+            eprint("ui: " + e);
+            return 1;
+        },
+        Result.Ok(w) => w,
+    };
+    while (true) {
+        let e = match (ui.next_event()) {
+            Result.Err(err) => {
+                eprint("ui: " + err);
+                return 1;
+            },
+            Result.Ok(e) => e,
+        };
+        // On the desktop, closing the window ends the app. On a phone it never arrives: the
+        // system suspends or kills the process, which is why every change is already saved.
+        if (e.kind == "closed" && e.window == window) {
+            return 0;
+        }
+        if (e.kind == "lifecycle") {
+            print("notes: app moved to the " + e.tag);
+        }
+        if (e.kind == "message") {
+            match (ui.as_request(e)) {
+                Option.Some(request) => {
+                    let (id, body) = request;
+                    let answer = api.handle(store, body, time.now());
+                    let _ = ui.reply_json(e.window, id, answer);
+                },
+                Option.None => { },
+            }
+        }
+    }
+    0
+}

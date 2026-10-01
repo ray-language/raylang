@@ -786,7 +786,10 @@ fn parses_files_reales_equal_what_el_oracle() {
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
     // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
-    const EXCLUDED_DIRS: &[&str] = &["capsule", "modules", "project", "ssr"];
+    // `apps` (examples/apps/*): proyectos completos del handbook, con paquetes y la sintaxis actual
+    // (`for`, tuplas, interpolación, `bytes`), diferida en el toolchain auto-alojado; los cubren
+    // tests/handbook.rs y el `ray test` de cada proyecto en handbook.yml.
+    const EXCLUDED_DIRS: &[&str] = &["capsule", "modules", "project", "ssr", "apps"];
     fn collect_examples(dir: &std::path::Path, outside: &[&str], difer: &[&str], out: &mut Vec<String>) {
         let mut entries: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
         entries.sort();

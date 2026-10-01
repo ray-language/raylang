@@ -6,12 +6,15 @@ sobre `std/net` + `std/json`. Para interop externo *entrante* ya está el webser
 esto es para hablar servicio-a-servicio con id, deadline y trace en el sobre.
 
 Tier 2 del ecosistema (paquete adicional, como `net`/`db`; política de tiers en DESIGN §53). Se
-declara en `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
+añade desde el índice de paquetes con `ray add rpc`, que lo declara en tu `ray.toml` y lo fija en
+`ray.lock`:
 
 ```toml
 [dependencies]
-rpc = "path:../raylang/packages/rpc"
+rpc = "^0.1.3"
 ```
+
+Dentro del monorepo de raylang se puede usar la ruta (`rpc = "path:../raylang/packages/rpc"`).
 
 ## El protocolo
 
@@ -80,7 +83,7 @@ Handlers concurrentes no pueden compartir UN `Client` (la conexión es secuencia
 hasta `size` llamadas **en vuelo a la vez** — una conexión por hueco, que es también paralelismo
 real del lado servidor (una fibra por conexión):
 
-```raylang
+```rust
 let p = rpc.pool("127.0.0.1", 7070, 8);
 // desde CUALQUIER fibra, a la vez:
 let r = rpc.pool_call(p, "consulta", params);                 // aparca si el pool está agotado

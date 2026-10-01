@@ -2,7 +2,7 @@
 
 Módulos de biblioteca **escritos en raylang**, importables con la sintaxis de módulos por ruta:
 
-```raylang
+```rust
 import std/math;
 
 fn main() -> int {

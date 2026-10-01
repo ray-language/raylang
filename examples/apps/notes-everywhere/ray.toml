@@ -1,0 +1,20 @@
+[package]
+name = "notes-everywhere"
+version = "0.1.0"
+
+# La identidad de la app: el nombre visible y el identificador (bundle id en iOS, application
+# id en Android). `ray bundle` los lee de aquí.
+[app]
+name = "Notes"
+id = "dev.raylang.notes"
+
+[dependencies]
+db = "^0.2.1"
+
+# The web frontend (Vite). `ray dev` runs `dev` and points app:// at `url`;
+# `ray build --native` / `ray bundle` run `build` and embed `dist`.
+[frontend]
+dev = "npm --prefix frontend run dev -- --strictPort --port 5173 --clearScreen false"
+url = "http://localhost:5173"
+build = "npm --prefix frontend run build"
+dist = "frontend/dist"

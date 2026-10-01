@@ -1,0 +1,129 @@
+// Notes as a server-rendered website. Every page is HTML built on the server from compiled
+// templates (src/views/*.ray.html); the browser needs no JavaScript at all. Forms post to the
+// server, which saves and redirects (POST → redirect → GET), so a reload never resubmits.
+import std/time;
+import store;
+import pages;
+from web/framework import
+    new_app,
+    GET,
+    POST,
+    use_mw,
+    static_embedded,
+    not_found,
+    log_requests,
+    listen_graceful,
+    html,
+    redirect,
+    status,
+    text,
+    param,
+    query,
+    form_field,
+    header_of,
+    App,
+    Ctx,
+    Res,
+    Step;
+
+// Where the notes live. `NOTES_DIR` changes it (tests, deployment).
+fn notes() -> store.Store {
+    let dir = env("NOTES_DIR").unwrap_or("notes-data");
+    match (store.open(dir)) {
+        Result.Ok(s) => s,
+        Result.Err(e) => panic("cannot open " + dir + ": " + e),
+    }
+}
+
+// The host part of an Origin header: "https://notes.example:8443" → "notes.example:8443".
+fn origin_host(origin: string) -> string {
+    match (origin.index_of("://")) {
+        Option.Some(i) => origin.substring(i + 3, origin.len()).to_lower(),
+        Option.None => "",
+    }
+}
+
+// CSRF guard: a form posted from ANOTHER site carries that site's Origin. Browsers always send
+// Origin on a cross-site POST, so refusing a mismatch blocks forged requests.
+fn same_origin(c: Ctx, r: Res) -> Step {
+    if (c.req.method == "POST") {
+        let origin = c.header_of("origin");
+        if (origin != "" && origin_host(origin) != c.header_of("host").to_lower()) {
+            r.status(403).text("cross-site request refused");
+            return Step.Done;
+        }
+    }
+    Step.Next
+}
+
+// After a POST, go to a page with GET (303 See Other).
+fn go(r: Res, url: string) {
+    r.redirect(url);
+    let _ = r.status(303);
+}
+
+// The app is built by a top-level function: each connection's fiber calls it (see the chapter).
+fn build_app() -> App {
+    var app = new_app();
+    app.log_requests();
+    app.use_mw(same_origin);
+    // `static/` is embedded: read live from disk under `ray run`, baked into the native binary.
+    app.static_embedded("/assets/", "static");
+
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.html(pages.index_page(notes(), c.query("q")));
+    });
+    app.GET("/notes/new", fn(c: Ctx, r: Res) {
+        r.html(pages.edit_page("/notes", "", "", ""));
+    });
+    app.POST("/notes", fn(c: Ctx, r: Res) {
+        let title = c.form_field("title");
+        let body = c.form_field("body");
+        match (store.save(notes(), "", title, body, time.now())) {
+            Result.Ok(n) => go(r, "/notes/" + n.id),
+            Result.Err(e) => r.status(422).html(pages.edit_page("/notes", title, body, e)),
+        }
+    });
+    app.GET("/notes/:id", fn(c: Ctx, r: Res) {
+        match (pages.note_page(notes(), c.param("id"))) {
+            Option.Some(page) => r.html(page),
+            Option.None => r.status(404).text("no such note"),
+        }
+    });
+    app.GET("/notes/:id/edit", fn(c: Ctx, r: Res) {
+        match (store.get(notes(), c.param("id"))) {
+            Option.Some(n) => r.html(pages.edit_page("/notes/" + n.id, n.title, n.body, "")),
+            Option.None => r.status(404).text("no such note"),
+        }
+    });
+    app.POST("/notes/:id", fn(c: Ctx, r: Res) {
+        let id = c.param("id");
+        let title = c.form_field("title");
+        let body = c.form_field("body");
+        match (store.save(notes(), id, title, body, time.now())) {
+            Result.Ok(n) => go(r, "/notes/" + n.id),
+            Result.Err(e) => r.status(422).html(pages.edit_page("/notes/" + id, title, body, e)),
+        }
+    });
+    app.POST("/notes/:id/delete", fn(c: Ctx, r: Res) {
+        let _ = store.remove(notes(), c.param("id"));
+        go(r, "/");
+    });
+    app.not_found(fn(c: Ctx, r: Res) {
+        r.text("not found");
+    });
+    app
+}
+
+fn main() -> int {
+    let port = env("PORT").unwrap_or("8080").parse_int().unwrap_or(8080);
+    print("notes: http://127.0.0.1:" + to_string(port));
+    // SIGTERM/SIGINT: stop accepting, let the requests in flight finish (5 s), exit 0.
+    match (listen_graceful(build_app, "127.0.0.1", port, 5000)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

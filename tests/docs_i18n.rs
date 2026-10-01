@@ -1,4 +1,4 @@
-//! Política de las traducciones (M197): cada `X.en.md` (raíz y `docs/`) tiene su original `X.md`,
+//! Política de las traducciones (M197): cada `X.en.md` (raíz, `docs/` y `handbook/`) tiene su original `X.md`,
 //! ambos enlazan al otro en su cabecera (selector de idioma), y la traducción lleva al pie un
 //! marcador `<!-- sync: sha256:… -->` con el hash del original del que se tradujo. Si el original
 //! cambia sin revisar la traducción, este test lo dice — las traducciones no se pudren en silencio.
@@ -12,7 +12,7 @@ fn repo_root() -> PathBuf {
 
 fn translations() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for dir in [repo_root(), repo_root().join("docs")] {
+    for dir in [repo_root(), repo_root().join("docs"), repo_root().join("handbook")] {
         for entry in std::fs::read_dir(&dir).expect("lee el directorio") {
             let p = entry.expect("entrada").path();
             if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".en.md")) {

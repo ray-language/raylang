@@ -1768,7 +1768,7 @@ sin oráculo de desarrollo.
 
 ### 53.3 La API
 
-```raylang
+```rust
 enum Exit { Code(int), Signal(int) }
 
 struct Output { exit: Exit, stdout: bytes, stderr: bytes, truncated: bool }
@@ -1927,7 +1927,7 @@ hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, b
 Superficie EXACTA. Dos entradas y nada más; `stream()` llega en v2. Cada línea esquiva un error
 documentado de otro lenguaje (tabla al final).
 
-```raylang
+```rust
 enum Exit { Code(int), Signal(int) }
 
 struct Output {
@@ -3894,3 +3894,25 @@ contenido) — por eso `raw` passthrough como ya hace raycode, y versionado semv
 **Dependencias con el handbook.** El capítulo «LLM y MCP» del handbook se escribe en dos tiempos:
 primero el patrón a mano (sin citar raycode, decisión del 1 oct 2026) y, si este arco se aprueba,
 se reescribe sobre `llm`/`mcp`. **Estado: PROPUESTO, sin decidir.**
+
+## 101. Hallazgos del handbook (oct 2026)
+
+Escribir los capítulos del handbook con apps reales, probadas en simulador y emulador, saca a la
+luz huecos que la documentación por módulos no ve. Los arreglados van con su M-número; los demás
+quedan aquí para decidir.
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| 1 | El shell de Android (targetSdk 35, de borde a borde) no reservaba las barras del sistema ni el teclado: la página quedaba bajo la barra de estado | ✅ **M334** (PR #450): FrameLayout con los insets `systemBars`/`displayCutout`/`ime` |
+| 2 | `ray dev --device`: el dispositivo no configuraba `std/embed`; con `[frontend]` la página salía «not found» en el teléfono | ✅ **M335** (PR #451): `configure_embed` en el arranque del programa del snapshot |
+| 3 | No hay una API portable de «carpeta de datos de la app». Cada app la deriva de `$HOME` a mano (`$HOME/Documents/…` vale en iOS, Android y escritorio, pero en escritorio ensucia `~/Documents` en lugar de `~/Library/Application Support`, `$XDG_DATA_HOME` o `%APPDATA%`) | PROPUESTO: `fs.app_data_dir(app_id) -> Result<string, string>` en `std/fs` (o `std/ui`), resuelto por plataforma, creando la carpeta. Impacto: superficie nueva pequeña, sin romper nada |
+| 4 | `ray check <directorio>` falla («Is a directory»); hay que entrar en el proyecto y correr `ray check` sin argumentos. La tool MCP `ray_check` sí acepta un directorio | PROPUESTO: que `ray check`/`ray run`/`ray test` acepten un directorio de proyecto (su `src/main.ray` con su `ray.toml`), como `path` en MCP |
+| 5 | `std/markdown` no trata los comentarios HTML como bloques invisibles: salen como texto | Rodeado en el generador del sitio (quita las marcas `check:`). PROPUESTO: soportar el bloque HTML tipo 2 de CommonMark (`<!-- … -->`) en `std/markdown` |
+| 6 | Linux: los menús de `std/ui` no tienen atajos de teclado (GtkAccelGroup diferido, `ui.rs`); en macOS y Windows `cmd+n` funciona | PROPUESTO: aceleradores GTK para los `shortcut` de los menús, como el `AcceleratorKeyPressed` de Windows |
+| 7 | El framework `web` no tiene cliente de pruebas en proceso: `dispatch(app, req)` es privada, así que probar un handler exige abrir un puerto. El ejemplo SSR lo rodea con handlers finos y páginas como funciones puras | PROPUESTO: exponer `web.dispatch(app, req) -> Response` (o un `web.test_request(build_app, method, path, body)`) para tests `@test` sin red |
+| 8 | Rutas de las plantillas inconsistentes: `{% extends x %}` se resuelve respecto a la carpeta de la plantilla, mientras que `{% include x(…) %}` e `{% import x %}` se resuelven desde la raíz de módulos (`src/`). El MANUAL dice que los tres van desde la raíz del proyecto. Además `{% extends %}` debe ir antes que `{% import %}` | PROPUESTO: una sola convención (la de los `import`: desde la raíz de módulos) para los tres, y corregir el MANUAL |
+| 9 | Un parámetro con el nombre de un builtin no lo oculta: `fn run(send: fn(string) -> …)` y luego `send(x)` da «send expects 2 arguments (channel, value)». El builtin gana al nombre local | PROPUESTO: que los nombres locales (parámetros, `let`) oculten a los builtins, como ocultan a las funciones libres; o, como mínimo, un diagnóstico que diga «`send` es un builtin; renombra el parámetro» |
+| 10 | `ray doc std/crypto` (y `ray_doc` en MCP) falla con «Is a directory»: existen a la vez `std/crypto.ray` y la carpeta `std/crypto/` (md5, aes, des), y la resolución elige la carpeta | PROPUESTO: que `ray doc std/x` prefiera `x.ray` cuando existen ambos, como hace el loader con los imports |
+| 11 | `std/crypto` no expone una comparación en tiempo constante (la tienen dentro `net/jwt` y `net/scram`); el ejemplo de la API trae la suya para comparar el token | PROPUESTO: `crypto.constant_time_eq(a: bytes, b: bytes) -> bool` sobre `ring` |
+| 12 | Un montaje de estáticos en `/` (`static_embedded("/", dist)`) responde a TODOS los GET antes de las rutas: `/api/...` y el `not_found` nunca se alcanzan, sin aviso. Una SPA tiene que montar solo `/assets/` y servir `index.html` a mano | PROPUESTO: que un montaje deje pasar a las rutas lo que no encuentra (como Express), o un `web.spa(app, dist)` que monte los archivos y haga el respaldo a `index.html` |
+| 13 | Los patrones de `match` no admiten arreglos (`Reply.Arr([Reply.Str(a), …])` es error de sintaxis) | PROPUESTO: patrones de arreglo de longitud fija, como los de tupla |

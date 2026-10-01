@@ -1,0 +1,104 @@
+// Backend tests: the database and the protocol, without a window. Each test opens a database in
+// its own temporary folder and sets the clock itself, so the result is deterministic.
+import std/fs;
+import std/json;
+import db/sqlite;
+import notes;
+import api;
+import places;
+from db/sqlite import Conn;
+
+fn fresh(name: string) -> Conn {
+    let dir = fs.make_temp_dir("notes-" + name).unwrap();
+    notes.open(dir + "/notes.db").unwrap()
+}
+
+@test
+fn saving_a_note_lists_it_first() {
+    let c = fresh("save");
+    let _ = notes.save(c, "", "Shopping", "milk", 1000).unwrap();
+    let _ = notes.save(c, "", "Ideas", "", 2000).unwrap();
+    let all = notes.search(c, "").unwrap();
+    assert_eq(all.len(), 2);
+    assert_eq(all[0].title, "Ideas");
+}
+
+@test
+fn editing_keeps_the_id_and_moves_it_to_the_top() {
+    let c = fresh("edit");
+    let a = notes.save(c, "", "First", "", 1000).unwrap();
+    let _ = notes.save(c, "", "Second", "", 2000).unwrap();
+    let edited = notes.save(c, a.id, "First, edited", "now with text", 3000).unwrap();
+    assert_eq(edited.id, a.id);
+    let all = notes.search(c, "").unwrap();
+    assert_eq(all.len(), 2);
+    assert_eq(all[0].title, "First, edited");
+}
+
+@test
+fn editing_a_missing_note_is_an_error() {
+    let c = fresh("missing");
+    assert(notes.save(c, "no-such-id", "Title", "", 1000).is_err());
+}
+
+@test
+fn search_matches_title_and_body() {
+    let c = fresh("search");
+    let _ = notes.save(c, "", "Groceries", "milk and bread", 1000).unwrap();
+    let _ = notes.save(c, "", "Reading", "a book about milk", 2000).unwrap();
+    let _ = notes.save(c, "", "Work", "slides", 3000).unwrap();
+    assert_eq(notes.search(c, "milk").unwrap().len(), 2);
+    assert_eq(notes.search(c, "work").unwrap()[0].title, "Work");
+    assert_eq(notes.search(c, "nothing like this").unwrap().len(), 0);
+}
+
+@test
+fn quotes_in_a_search_are_data_not_sql() {
+    let c = fresh("quotes");
+    let _ = notes.save(c, "", "It's fine", "", 1000).unwrap();
+    assert_eq(notes.search(c, "' OR 1=1 --").unwrap().len(), 0);
+    assert_eq(notes.search(c, "It's").unwrap().len(), 1);
+}
+
+@test
+fn notes_survive_reopening_the_database() {
+    let dir = fs.make_temp_dir("notes-reopen").unwrap();
+    let c = notes.open(dir + "/notes.db").unwrap();
+    let _ = notes.save(c, "", "Persisted", "", 1000).unwrap();
+    sqlite.disconnect(c);
+    let again = notes.open(dir + "/notes.db").unwrap();
+    assert_eq(notes.search(again, "").unwrap()[0].title, "Persisted");
+}
+
+@test
+fn the_api_saves_searches_and_deletes() {
+    let c = fresh("api");
+    let saved = json.parse(api.handle(c, `{"op": "save", "title": "Hello", "body": "world"}`, 1000))
+        .unwrap();
+    let list = json.get_array(saved, "notes").unwrap();
+    assert_eq(list.len(), 1);
+    let id = json.get_string(list[0], "id").unwrap();
+    let found = json.parse(api.handle(c, `{"op": "list", "query": "wor"}`, 2000)).unwrap();
+    assert_eq(json.get_array(found, "notes").unwrap().len(), 1);
+    let after = json.parse(api.handle(c, `{"op": "delete", "id": "${id}"}`, 3000)).unwrap();
+    assert_eq(json.get_array(after, "notes").unwrap().len(), 0);
+    let bad = json.parse(api.handle(c, `{"op": "fly"}`, 4000)).unwrap();
+    assert_eq(json.get_string(bad, "error"), Option.Some("unknown op 'fly'"));
+}
+
+@test
+fn export_writes_markdown() {
+    let md = notes.to_markdown(
+        [notes.Note { id: "a", title: "One", body: "first\n", updated_ms: 1 }]
+    );
+    assert_eq(md, "# Notes\n\n## One\n\nfirst\n");
+}
+
+@test
+fn the_data_folder_follows_the_platform() {
+    let dir = places.data_dir("Notes");
+    assert(dir.ends_with("Notes"));
+    if (platform() == "macos") {
+        assert(dir.contains("/Library/Application Support/"));
+    }
+}

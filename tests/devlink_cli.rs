@@ -132,3 +132,70 @@ fn a_change_on_the_host_restarts_the_program_on_the_linked_device() {
     let _ = std::fs::remove_dir_all(&project);
     let _ = std::fs::remove_dir_all(&sandbox);
 }
+
+/// M335: el lado dispositivo configura `std/embed` como `ray run` (los `[native] embed` y el
+/// `[frontend] dist`, que comparten configuración). Antes no lo hacía: `embed.read` daba
+/// «no embedded assets configured» y el frontend de una app móvil salía «not found».
+#[test]
+fn the_device_reads_the_projects_embedded_assets() {
+    let project = scratch("embed-project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("assets")).unwrap();
+    std::fs::write(
+        project.join("ray.toml"),
+        "[package]\nname = \"embedded\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"assets\"]\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("assets/greeting.txt"), "hello from an embedded asset").unwrap();
+    std::fs::write(
+        project.join("src/main.ray"),
+        "import std/embed;\nimport std/time;\nfn main() {\n    match (embed.read(\"assets/greeting.txt\")) {\n        Result.Ok(b) => print(from_utf8(b).unwrap_or(\"?\")),\n        Result.Err(e) => print(\"embed error: \" + e),\n    }\n    time.sleep(600000);\n}\n",
+    )
+    .unwrap();
+
+    let mut host = Command::new(BIN)
+        .args(["dev", "--device"])
+        .current_dir(&project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ray dev --device");
+    let host_err = tail(host.stderr.take().unwrap());
+    let _host_out = tail(host.stdout.take().unwrap());
+    let _host = Guard(host);
+    assert!(wait_for(&host_err, "device link: ", 30), "no link URL:\n{}", host_err.lock().unwrap());
+    let url = {
+        let text = host_err.lock().unwrap();
+        let line = text.lines().find(|l| l.contains("device link: ")).unwrap();
+        line.split("device link: ").nth(1).unwrap().trim().to_string()
+    };
+    let (_, rest) = url.split_once("://").unwrap();
+    let (_, port_and_token) = rest.split_once(':').unwrap();
+    let local_url = format!("ray-dev://127.0.0.1:{port_and_token}");
+
+    let sandbox = scratch("embed-sandbox");
+    let mut client = Command::new(BIN)
+        .args(["dev-client", &local_url, sandbox.to_str().unwrap()])
+        .env("RAY_UI_BACKEND", "headless")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ray dev-client");
+    let client_out = tail(client.stdout.take().unwrap());
+    let client_err = tail(client.stderr.take().unwrap());
+    let _client = Guard(client);
+
+    assert!(
+        wait_for(&client_out, "hello from an embedded asset", 30),
+        "the device could not read the embedded asset:\nstdout:\n{}\nstderr:\n{}\nhost:\n{}",
+        client_out.lock().unwrap(),
+        client_err.lock().unwrap(),
+        host_err.lock().unwrap()
+    );
+    assert!(!client_out.lock().unwrap().contains("embed error"));
+
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_dir_all(&sandbox);
+}

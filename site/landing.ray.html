@@ -364,8 +364,8 @@ section.engines { padding: 2.5rem 0 4rem; }
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
 {% if en %}                    <p class="hint"><code>ray new</code> leaves a <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompiles and restarts on save.</p>
-                    <p class="hint">Then, <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md">raylang in half an hour</a>: the language, concurrency and a web server in a single guide.</p>{% else %}                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
-                    <p class="hint">Y después, <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.md">raylang en media hora</a>: el lenguaje, la concurrencia y un servidor web en una sola guía (también <a href="https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md">en inglés</a>).</p>{% endif %}
+                    <p class="hint">Then, the <a href="handbook/getting-started.html">handbook</a>: install, the language in fifteen minutes, concurrency and the tools, and from there one guide per kind of app.</p>{% else %}                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
+                    <p class="hint">Y después, el <a href="handbook/getting-started.html">handbook</a>: instalar, el lenguaje en quince minutos, la concurrencia y las herramientas, y desde ahí una guía por tipo de app.</p>{% endif %}
                 </div>
             </div>
         </div>
@@ -391,6 +391,8 @@ section.engines { padding: 2.5rem 0 4rem; }
                     (<code>raylang://llms.txt</code>) — the client injects it before the first
                     line. Full guide in
                     <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.en.md">docs/mcp.en.md</a>.</li>
+                    <li>And to <b>write</b> agents: the handbook builds one in raylang that talks to
+                    Claude and uses tools over MCP — <a href="handbook/llm-mcp.html">LLMs and MCP</a>.</li>
                 </ul>{% else %}                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
                 <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
                 raylang correcto — y lo verifique solo.</p>
@@ -406,6 +408,8 @@ section.engines { padding: 2.5rem 0 4rem; }
                     (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
                     primera línea. Guía completa en
                     <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
+                    <li>Y para <b>escribir</b> agentes: el handbook construye uno en raylang que habla
+                    con Claude y usa herramientas por MCP — <a href="handbook/llm-mcp.html">LLM y MCP</a>.</li>
                 </ul>{% endif %}
             </div>
             <div class="window">
@@ -450,8 +454,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <span class="chip"><b>ray bundle --ios</b> · Xcode project</span>
             <span class="chip"><b>ray bundle --android</b> · Gradle project</span>
         </div>
-        <p class="note">Step-by-step guide in the
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#empaquetar-la-app-ray-bundle">manual</a> (Spanish; windows: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#ventanas-stdui">std/ui</a>, hot reload on the phone: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device">ray dev --device</a>).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
+        <p class="note">Step-by-step guide in the handbook: <a href="handbook/mobile.html">mobile app for iOS and Android</a>, from <code>ray new</code> to the simulator, the emulator and hot reload on the phone.</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
         <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
         Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
         interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
@@ -469,8 +472,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <span class="chip"><b>ray bundle --ios</b> · proyecto Xcode</span>
             <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
         </div>
-        <p class="note">Guía paso a paso en el
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#empaquetar-la-app-ray-bundle">manual</a> (ventanas: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#ventanas-stdui">std/ui</a>; hot reload en el teléfono: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device">ray dev --device</a>).</p>{% endif %}
+        <p class="note">Guía paso a paso en el handbook: <a href="handbook/mobile.html">app móvil para iOS y Android</a>, de <code>ray new</code> al simulador, al emulador y a la recarga en caliente en el teléfono.</p>{% endif %}
     </div>
 </section>
 

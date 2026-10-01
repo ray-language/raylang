@@ -1,0 +1,96 @@
+// Tests. The pure parts (validation, the token check) always run. The database tests need a
+// Postgres: set NOTES_TEST_PG=1 plus the PG* variables (CI starts one as a service container);
+// without it they print that they were skipped.
+import std/time;
+import std/uuid;
+import db/postgres;
+import auth;
+import notes;
+from db/postgres import Pool;
+
+fn database() -> Option<Pool> {
+    if (env("NOTES_TEST_PG") != Option.Some("1")) {
+        print("skipped: set NOTES_TEST_PG=1 and the PG* variables to run the database tests");
+        return Option.None;
+    }
+    let p = notes.pool_from_env(2);
+    notes.migrate(p).unwrap();
+    Option.Some(p)
+}
+
+@test
+fn the_token_check_is_exact() {
+    assert(auth.authorized("Bearer s3cret-token-0001", "s3cret-token-0001"));
+    assert(!auth.authorized("Bearer s3cret-token-0002", "s3cret-token-0001"));
+    assert(!auth.authorized("s3cret-token-0001", "s3cret-token-0001"));
+    assert(!auth.authorized("Bearer ", "s3cret-token-0001"));
+}
+
+@test
+fn invalid_notes_are_explained() {
+    assert_eq(notes.invalid("  ", "x"), "title is required");
+    assert_eq(notes.invalid("ok", "x"), "");
+    assert_eq(notes.invalid("t".repeat(201), ""), "title is longer than 200 characters");
+}
+
+@test
+fn a_note_goes_through_its_whole_life() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    // A unique word, so the test finds its own note whatever else is in the table.
+    let tag = "life-" + uuid.uuid_v4();
+    let n = notes.create(p, "Test " + tag, "body", time.now()).unwrap();
+    assert_eq(notes.get(p, n.id).unwrap().unwrap().title, "Test " + tag);
+    assert_eq(notes.search(p, tag, 10).unwrap().len(), 1);
+    let edited = notes.update(p, n.id, "Edited " + tag, "new", time.now()).unwrap().unwrap();
+    assert_eq(edited.id, n.id);
+    assert(notes.remove(p, n.id).unwrap());
+    assert(notes.get(p, n.id).unwrap().is_none());
+    assert(!notes.remove(p, n.id).unwrap());
+    postgres.pool_close(p);
+}
+
+@test
+fn search_treats_quotes_and_wildcards_as_text() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    let tag = "quote-" + uuid.uuid_v4();
+    let n = notes.create(p, "It's " + tag, "", time.now()).unwrap();
+    assert_eq(notes.search(p, "' OR 1=1 --", 10).unwrap().len(), 0);
+    assert_eq(notes.search(p, "It's " + tag, 10).unwrap().len(), 1);
+    // `%` is a literal character, not a LIKE wildcard: "<tag>%" matches nothing.
+    assert_eq(notes.search(p, tag + "%", 10).unwrap().len(), 0);
+    let _ = notes.remove(p, n.id);
+    postgres.pool_close(p);
+}
+
+@test
+fn the_pool_serves_concurrent_requests() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    // 20 fibers share a pool of 2 connections: each waits for a free one.
+    let done: Channel<bool> = Channel.bounded(20);
+    var i = 0;
+    while (i < 20) {
+        let _ = spawn(fn() {
+            send(done, postgres.pool_query(p, "SELECT 1", []).is_ok());
+        });
+        i = i + 1;
+    }
+    var ok = 0;
+    var j = 0;
+    while (j < 20) {
+        if (recv(done).unwrap()) {
+            ok = ok + 1;
+        }
+        j = j + 1;
+    }
+    assert_eq(ok, 20);
+    postgres.pool_close(p);
+}

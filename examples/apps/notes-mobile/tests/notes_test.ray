@@ -1,0 +1,72 @@
+// Backend tests: the model and the protocol, without a window. Each test uses a store in its own
+// temporary folder and sets the clock itself, so the result is deterministic.
+import std/kv;
+import std/fs;
+import std/json;
+import notes;
+import api;
+
+fn fresh_store(name: string) -> kv.Store {
+    let dir = fs.make_temp_dir("notes-" + name).unwrap();
+    kv.open(dir + "/notes.kv").unwrap()
+}
+
+@test
+fn saving_a_note_lists_it_first() {
+    let s = fresh_store("save");
+    let _ = notes.save(s, "", "Shopping", "milk", 1000).unwrap();
+    let _ = notes.save(s, "", "Ideas", "", 2000).unwrap();
+    let all = notes.list(s);
+    assert_eq(all.len(), 2);
+    assert_eq(all[0].title, "Ideas");
+}
+
+@test
+fn editing_keeps_the_id_and_moves_it_to_the_top() {
+    let s = fresh_store("edit");
+    let a = notes.save(s, "", "First", "", 1000).unwrap();
+    let _ = notes.save(s, "", "Second", "", 2000).unwrap();
+    let edited = notes.save(s, a.id, "First, edited", "now with text", 3000).unwrap();
+    assert_eq(edited.id, a.id);
+    let all = notes.list(s);
+    assert_eq(all.len(), 2);
+    assert_eq(all[0].title, "First, edited");
+}
+
+@test
+fn a_title_is_required() {
+    let s = fresh_store("title");
+    assert(notes.save(s, "", "   ", "body", 1000).is_err());
+}
+
+@test
+fn notes_survive_reopening_the_store() {
+    let dir = fs.make_temp_dir("notes-reopen").unwrap();
+    let s = kv.open(dir + "/notes.kv").unwrap();
+    let _ = notes.save(s, "", "Persisted", "", 1000).unwrap();
+    let again = kv.open(dir + "/notes.kv").unwrap();
+    assert_eq(notes.list(again)[0].title, "Persisted");
+}
+
+@test
+fn the_api_answers_with_the_full_list() {
+    let s = fresh_store("api");
+    let saved = json.parse(api.handle(s, `{"op": "save", "title": "Hello", "body": ""}`, 1000))
+        .unwrap();
+    assert_eq(json.get_bool(saved, "ok"), Option.Some(true));
+    let list = json.get_array(saved, "notes").unwrap();
+    assert_eq(list.len(), 1);
+    assert_eq(json.get_string(list[0], "title"), Option.Some("Hello"));
+    assert(json.get_string(list[0], "id").unwrap().len() == 36);
+}
+
+@test
+fn the_api_deletes_and_reports_errors() {
+    let s = fresh_store("delete");
+    let n = notes.save(s, "", "Doomed", "", 1000).unwrap();
+    let after = json.parse(api.handle(s, `{"op": "delete", "id": "${n.id}"}`, 2000)).unwrap();
+    assert_eq(json.get_array(after, "notes").unwrap().len(), 0);
+    let bad = json.parse(api.handle(s, `{"op": "fly"}`, 3000)).unwrap();
+    assert_eq(json.get_bool(bad, "ok"), Option.Some(false));
+    assert_eq(json.get_string(bad, "error"), Option.Some("unknown op 'fly'"));
+}

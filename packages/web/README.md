@@ -5,7 +5,7 @@ producción, M56). Promovido desde `examples/web/framework.ray`; corre en la **V
 nativo** (el servidor cede fibras; el intérprete no las tiene). Guía completa:
 [`docs/web-framework.md`](../../docs/web-framework.md).
 
-```raylang
+```rust
 from web/framework import new_app, GET, listen, static_files, log_requests, text, Ctx, Res;
 
 fn main() -> int {

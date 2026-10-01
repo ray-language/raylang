@@ -1,0 +1,8 @@
+{% params n: store.Note %}
+{% import store %}
+<li>
+    <a href="/notes/{{ n.id }}">
+        <strong>{{ n.title }}</strong>
+        <span>{{ n.body.split("\n")[0] }}</span>
+    </a>
+</li>

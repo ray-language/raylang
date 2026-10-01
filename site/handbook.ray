@@ -1,0 +1,237 @@
+// site/handbook.ray — el HANDBOOK del sitio (docs/plan-handbook.md, fase 1).
+//
+// Las fuentes viven en `handbook/<slug>.md` (español) y `handbook/<slug>.en.md` (inglés). El
+// orden de los capítulos sale de los enlaces de `handbook/index.md` (la portada), y el título de
+// cada uno, de su primer `# `. Este módulo convierte esas fuentes en páginas del sitio:
+//
+// - quita la línea del selector de idioma (en el sitio lo da la barra de navegación);
+// - reescribe los enlaces: un capítulo hermano `x.md`/`x.en.md` pasa a `x.html` (el idioma lo
+//   pone el directorio de salida), y lo que sale del handbook (`../MANUAL.md#…`, `../examples/`)
+//   apunta al repositorio en GitHub, porque esos archivos no se publican en el sitio;
+// - arma la barra lateral con el capítulo activo marcado.
+
+import std/fs;
+import std/markdown;
+import highlight;
+
+const REPO_BLOB: string = "https://github.com/ray-language/raylang/blob/main/";
+
+/// One handbook chapter: its slug (the file stem) and its title in each language.
+pub struct Chapter {
+    slug: string,
+    title_es: string,
+    title_en: string,
+}
+
+// Escapa un texto para HTML (los títulos van a la barra lateral).
+fn escape(s: string) -> string {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+// El título de un capítulo: su primer encabezado `# `.
+fn title_of(md: string, fallback: string) -> string {
+    for line in md.split("\n") {
+        if (line.starts_with("# ")) {
+            return line.substring(2, line.len()).trim();
+        }
+    }
+    fallback
+}
+
+// Los destinos de los enlaces Markdown `[texto](destino)`, en orden de aparición.
+fn link_targets(md: string) -> [string] {
+    var out: [string] = [];
+    let parts = md.split("](");
+    var i = 1;
+    while (i < parts.len()) {
+        let p = parts[i];
+        match (p.index_of(")")) {
+            Option.Some(end) => out.push(p.substring(0, end)),
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The chapters in reading order: the sibling `.md` links of `handbook/index.md`.
+pub fn chapters(root: string) -> Result<[Chapter], string> {
+    let dir = root + "/handbook";
+    let index = fs.read_file(dir + "/index.md")?;
+    var out: [Chapter] = [];
+    var seen: [string] = [];
+    for target in link_targets(index) {
+        let t = target.trim();
+        if (t.contains("/") || t.contains("#") || !t.ends_with(".md") || t.ends_with(".en.md")) {
+            continue;
+        }
+        let slug = t.substring(0, t.len() - 3);
+        if (seen.contains(slug) || slug == "index") {
+            continue;
+        }
+        seen.push(slug);
+        let es = fs.read_file(dir + "/" + slug + ".md")?;
+        let en = fs.read_file(dir + "/" + slug + ".en.md")?;
+        out.push(
+            Chapter { slug: slug, title_es: title_of(es, slug), title_en: title_of(en, slug) }
+        );
+    }
+    Result.Ok(out)
+}
+
+/// The title of a source in its language (the page `<title>`).
+pub fn title(md: string) -> string {
+    title_of(md, "raylang handbook")
+}
+
+// Una línea del selector de idioma de las fuentes: `Español · [English](x.en.md)` o
+// `[Español](x.md) · English`.
+fn is_language_line(line: string) -> bool {
+    let t = line.trim();
+    (t.starts_with("Español · [English](") || t.starts_with("[Español](")) && t.len() < 80
+}
+
+// El destino reescrito para el sitio (ver la cabecera del módulo).
+fn rewrite_target(target: string) -> string {
+    if (target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+        || target.starts_with("#")) {
+        return target;
+    }
+    if (target.starts_with("../")) {
+        return REPO_BLOB + target.substring(3, target.len());
+    }
+    let path = match (target.index_of("#")) {
+        Option.Some(i) => target.substring(0, i),
+        Option.None => target,
+    };
+    let anchor = target.substring(path.len(), target.len());
+    if (path.ends_with(".en.md")) {
+        return path.substring(0, path.len() - 6) + ".html" + anchor;
+    }
+    if (path.ends_with(".md")) {
+        return path.substring(0, path.len() - 3) + ".html" + anchor;
+    }
+    REPO_BLOB + "handbook/" + target
+}
+
+// Reescribe cada `href="…"` del HTML generado.
+fn rewrite_links(html: string) -> string {
+    let parts = html.split("href=\"");
+    var out = parts[0];
+    var i = 1;
+    while (i < parts.len()) {
+        let p = parts[i];
+        match (p.index_of("\"")) {
+            Option.Some(end) => {
+                out = out
+                    + "href=\""
+                    + rewrite_target(p.substring(0, end))
+                    + p.substring(end, p.len());
+            },
+            Option.None => {
+                out = out + "href=\"" + p;
+            },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Una marca de la guarda del handbook (`<!-- check: … -->`, ver tests/handbook.rs): metadato
+// para el CI, invisible en GitHub; el sitio la quita para que no salga como texto.
+fn is_check_mark(line: string) -> bool {
+    line.trim().starts_with("<!-- check:")
+}
+
+// El texto visible de un fragmento HTML: sin etiquetas y con las entidades básicas resueltas.
+fn plain(html: string) -> string {
+    var out: [string] = [];
+    var inside = false;
+    for c in html.chars() {
+        if (c == '<') {
+            inside = true;
+        } else if (c == '>') {
+            inside = false;
+        } else if (!inside) {
+            out.push(to_string(c));
+        }
+    }
+    out
+        .join("")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+}
+
+// El ancla de un encabezado, como la calcula GitHub: minúsculas; solo letras (también las
+// acentuadas), dígitos, `-` y `_`; los espacios pasan a `-`. Así un enlace `capitulo.md#seccion`
+// funciona igual en GitHub y en el sitio.
+fn slug(text: string) -> string {
+    var out: [string] = [];
+    for c in text
+        .to_lower()
+        .chars() {
+        let n = char_code(c);
+        if (c == ' ') {
+            out.push("-");
+        } else if ((n >= 97 && n <= 122) || (n >= 48 && n <= 57) || c == '-' || c == '_' || n > 127) {
+            out.push(to_string(c));
+        }
+    }
+    out.join("")
+}
+
+// Pone `id` a cada `<h2>` y `<h3>` del HTML generado.
+fn anchors(html: string) -> string {
+    var out = html;
+    for tag in ["h2", "h3"] {
+        let open = "<" + tag + ">";
+        let close = "</" + tag + ">";
+        let parts = out.split(open);
+        var acc = parts[0];
+        var i = 1;
+        while (i < parts.len()) {
+            let p = parts[i];
+            match (p.index_of(close)) {
+                Option.Some(end) => {
+                    let id = slug(plain(p.substring(0, end)));
+                    acc = acc + "<" + tag + " id=\"" + id + "\">" + p;
+                },
+                Option.None => {
+                    acc = acc + open + p;
+                },
+            }
+            i = i + 1;
+        }
+        out = acc;
+    }
+    out
+}
+
+/// A handbook source rendered as the body of a site page.
+pub fn render(md: string) -> string {
+    var kept: [string] = [];
+    for line in md.split("\n") {
+        if (!is_language_line(line) && !is_check_mark(line)) {
+            kept.push(line);
+        }
+    }
+    highlight.code_blocks(anchors(rewrite_links(markdown.to_html(kept.join("\n")))))
+}
+
+/// The sidebar: the cover plus every chapter, the current one marked.
+pub fn sidebar(list: [Chapter], current: string, lang: string) -> string {
+    let en = lang == "en";
+    let cover = if (en) { "Overview" } else { "Portada" };
+    let cls = if (current == "index") { " class=\"active\"" } else { "" };
+    var out = "<ol>\n<li><a href=\"index.html\"" + cls + ">" + cover + "</a></li>\n";
+    for c in list {
+        let t = if (en) { c.title_en } else { c.title_es };
+        let mark = if (c.slug == current) { " class=\"active\"" } else { "" };
+        out = out + "<li><a href=\"" + c.slug + ".html\"" + mark + ">" + escape(t) + "</a></li>\n";
+    }
+    out + "</ol>\n"
+}

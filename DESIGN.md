@@ -1898,7 +1898,7 @@ construir (como `split`)— y (b) un **envoltorio en el prelude, escrito en rayl
 a `Option` con `Option.Some(r[0])`/`Option.None` corrientes. Así el intérprete y la VM **siguen sin
 saber qué es `Option`**: solo devuelven arreglos; el prelude pone la ergonomía.
 
-```raylang
+```rust
 // en el prelude (raylang), sobre el primitivo __parse_int(s) -> [int]:
 fn parse_int(s: string) -> Option<int> {
     let r = __parse_int(s);
@@ -3720,7 +3720,7 @@ librerías, en dos sub-fases:
 
 **M15.4a — JSON (especificación).** Un valor JSON es un enum recursivo:
 
-```raylang
+```rust
 pub enum Json { JNull, JBool(bool), JNum(float), JStr(string), JArray([Json]), JObject(Map<string, Json>) }
 pub fn parse(s: string) -> Result<Json, string>   // descenso recursivo sobre la cadena
 pub fn stringify(j: Json) -> string                // serialización
@@ -3738,7 +3738,7 @@ librería"). Como toda librería de raylang, **el runtime no cambia**.
 **M15.4b — HTTP (especificación).** Un cliente HTTP/1.1 en `examples/web/http.ray`, **en raylang** sobre
 los builtins TCP de M15.2 (`tcp_connect`/`socket_write`/`socket_read`/`close`). API:
 
-```raylang
+```rust
 pub struct Response { status: int, headers: Map<string, string>, body: string }
 pub fn fetch(url: string) -> Result<Response, string>        // atajo GET (no `get`: choca con el de Map)
 pub fn request(method: string, url: string, body: string) -> Result<Response, string>
@@ -3767,7 +3767,7 @@ El capstone de M15: que `tcp_accept`/`socket_read`, en vez de bloquear el hilo (
 fibras, §24.6), **cedan la fibra al scheduler de M12**. Así, con `spawn`, un servidor atiende **muchas
 conexiones concurrentes** sobre un único hilo:
 
-```raylang
+```rust
 scope(fn() {
     while (seguir) {
         match (tcp_accept(srv)) {           // cede si no hay conexión pendiente

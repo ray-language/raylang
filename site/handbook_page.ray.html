@@ -1,0 +1,20 @@
+{% params title: string, body: string, nav: string, page: string, lang: string, root: string %}
+{% extends layout %}
+{% block content %}
+<div class="handbook">
+    <div class="wrap">
+        <aside class="toc" aria-label="Handbook">
+            <p class="toc-title"><a href="index.html">Handbook</a></p>
+            {{& nav }}
+        </aside>
+        <article class="doc">
+            {% if lang == "en" %}
+            <p class="edit">Source: <a href="https://github.com/ray-language/raylang/tree/main/handbook">handbook/</a> in the repository. Every code block compiles: CI runs <code>ray check</code> on each one.</p>
+            {% else %}
+            <p class="edit">Fuente: <a href="https://github.com/ray-language/raylang/tree/main/handbook">handbook/</a> en el repositorio. Cada bloque de código compila: el CI corre <code>ray check</code> sobre cada uno.</p>
+            {% endif %}
+            {{& body }}
+        </article>
+    </div>
+</div>
+{% endblock %}

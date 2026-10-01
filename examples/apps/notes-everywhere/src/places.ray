@@ -1,0 +1,34 @@
+// Where each platform wants an app's data. A desktop app does not write into the user's
+// Documents: macOS has Application Support, Linux the XDG data folder, Windows %APPDATA%. On the
+// phone the shell already points HOME inside the app's sandbox (iOS: `Documents/` is the
+// writable part; Android: the private `files/` folder).
+
+/// The folder for the app's data on this platform. `NOTES_DIR` overrides it (tests, CI).
+pub fn data_dir(app: string) -> string {
+    match (env("NOTES_DIR")) {
+        Option.Some(d) => return d,
+        Option.None => { },
+    }
+    let home = env("HOME").unwrap_or(".");
+    let os = platform();
+    if (os == "macos") {
+        return home + "/Library/Application Support/" + app;
+    }
+    if (os == "windows") {
+        return env("APPDATA").unwrap_or(home) + "\\" + app;
+    }
+    if (os == "linux") {
+        return match (env("XDG_DATA_HOME")) {
+            Option.Some(d) => d + "/" + app,
+            Option.None => home + "/.local/share/" + app,
+        };
+    }
+    // iOS and Android
+    home + "/Documents/" + app
+}
+
+/// True on macOS, Linux and Windows: windows, menus and file dialogs exist there.
+pub fn is_desktop() -> bool {
+    let os = platform();
+    os == "macos" || os == "linux" || os == "windows"
+}

@@ -200,7 +200,28 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        setContentView(web);
+        // M334: el shell apunta a la API 35, donde Android dibuja de borde a borde: sin esto la
+        // página queda bajo la barra de estado y el teclado tapa los campos. El WebView va dentro
+        // de un FrameLayout que recibe como relleno las barras del sistema, el recorte de la
+        // cámara y el teclado (API 30+; antes el sistema ya reserva esas zonas por su cuenta).
+        android.widget.FrameLayout frame = new android.widget.FrameLayout(this);
+        frame.addView(web, new android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            frame.setOnApplyWindowInsetsListener(new android.view.View.OnApplyWindowInsetsListener() {
+                @Override
+                public android.view.WindowInsets onApplyWindowInsets(android.view.View v, android.view.WindowInsets insets) {
+                    android.graphics.Insets b = insets.getInsets(
+                        android.view.WindowInsets.Type.systemBars()
+                            | android.view.WindowInsets.Type.displayCutout()
+                            | android.view.WindowInsets.Type.ime());
+                    v.setPadding(b.left, b.top, b.right, b.bottom);
+                    return android.view.WindowInsets.CONSUMED;
+                }
+            });
+        }
+        setContentView(frame);
         RayBridge.attach(web);
         if (RayBridge.lastUrl != null) {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
@@ -773,6 +794,19 @@ mod tests {
         // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
         assert!(android_manifest(true, false, None).contains("android:icon=\"@mipmap/ic_launcher\""));
         assert!(!android_manifest(false, false, None).contains("android:icon"));
+    }
+
+    /// M334: con targetSdk 35 Android dibuja de borde a borde; el shell reserva las barras del
+    /// sistema, el recorte de la cámara y el teclado como relleno de un FrameLayout alrededor del
+    /// WebView (si no, la página queda bajo la barra de estado y el teclado tapa los campos).
+    #[test]
+    fn the_shell_pads_the_webview_with_the_system_insets() {
+        assert!(MAIN_ACTIVITY_JAVA.contains("setContentView(frame);"));
+        assert!(!MAIN_ACTIVITY_JAVA.contains("setContentView(web);"));
+        for kind in ["systemBars()", "displayCutout()", "ime()"] {
+            assert!(MAIN_ACTIVITY_JAVA.contains(&format!("WindowInsets.Type.{kind}")), "{kind}");
+        }
+        assert!(MAIN_ACTIVITY_JAVA.contains("Build.VERSION.SDK_INT >= 30"), "la API de insets es de la 30");
     }
 
     /// M324 (ray808 #18): `[android] background_audio` declara el servicio de reproducción con sus

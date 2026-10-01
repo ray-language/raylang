@@ -1,0 +1,111 @@
+// The notes and their database. Notes keeps them in SQLite: one table, an index for the list
+// order, and plain SQL for searching. The `db` package compiles SQLite into the binary, so the
+// same code runs on macOS, Linux, Windows, iOS and Android with no system library.
+import db/sqlite;
+import std/json;
+import std/uuid;
+from db/sqlite import Conn;
+from std/json import ToJson;
+
+/// A note as it is stored and as the page receives it.
+@derive(ToJson)
+pub struct Note {
+    id: string,
+    title: string,
+    body: string,
+    updated_ms: int,
+}
+
+const SCHEMA: string = `CREATE TABLE IF NOT EXISTS notes (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL
+)`;
+
+/// Opens (or creates) the database at `path` and makes sure the schema exists.
+pub fn open(path: string) -> Result<Conn, string> {
+    let conn = sqlite.connect(path)?;
+    // WAL: readers never wait for the writer, and a crash mid-write cannot corrupt the file.
+    let _ = sqlite.query(conn, "PRAGMA journal_mode=WAL", [])?;
+    let _ = sqlite.exec(conn, SCHEMA, [])?;
+    let _ = sqlite.exec(
+        conn,
+        "CREATE INDEX IF NOT EXISTS notes_by_date ON notes (updated_ms DESC)",
+        []
+    )?;
+    Result.Ok(conn)
+}
+
+// Cells come back as text (`db` convention): a row is [id, title, body, updated_ms].
+fn from_row(row: [string]) -> Note {
+    Note { id: row[0], title: row[1], body: row[2], updated_ms: row[3].parse_int().unwrap_or(0) }
+}
+
+/// Notes whose title or body contains `text` (all of them if it is empty), newest first.
+pub fn search(conn: Conn, text: string) -> Result<[Note], string> {
+    let rows = if (text.trim() == "") {
+        sqlite.query(
+            conn,
+            "SELECT id, title, body, updated_ms FROM notes ORDER BY updated_ms DESC",
+            []
+        )?
+    } else {
+        let pattern = "%" + text.trim() + "%";
+        sqlite.query(conn, `SELECT id, title, body, updated_ms FROM notes
+             WHERE title LIKE ?1 OR body LIKE ?1 ORDER BY updated_ms DESC`, [pattern])?
+    };
+    Result.Ok(rows.map(from_row))
+}
+
+/// Creates a note (empty `id`) or replaces an existing one.
+pub fn save(
+    conn: Conn,
+    id: string,
+    title: string,
+    body: string,
+    now_ms: int
+) -> Result<Note, string> {
+    let clean = title.trim();
+    if (clean.len() == 0) {
+        return Result.Err("a note needs a title");
+    }
+    if (id == "") {
+        let note = Note {
+            id: uuid.uuid_v7_at(now_ms),
+            title: clean,
+            body: body,
+            updated_ms: now_ms
+        };
+        let _ = sqlite.exec(
+            conn,
+            "INSERT INTO notes (id, title, body, updated_ms) VALUES (?1, ?2, ?3, ?4)",
+            [note.id, note.title, note.body, to_string(now_ms)]
+        )?;
+        return Result.Ok(note);
+    }
+    let changed = sqlite.exec(
+        conn,
+        "UPDATE notes SET title = ?2, body = ?3, updated_ms = ?4 WHERE id = ?1",
+        [id, clean, body, to_string(now_ms)]
+    )?;
+    if (changed == 0) {
+        return Result.Err("no note with id " + id);
+    }
+    Result.Ok(Note { id: id, title: clean, body: body, updated_ms: now_ms })
+}
+
+/// Deletes a note. `Ok(false)` if it did not exist.
+pub fn remove(conn: Conn, id: string) -> Result<bool, string> {
+    let changed = sqlite.exec(conn, "DELETE FROM notes WHERE id = ?1", [id])?;
+    Result.Ok(changed > 0)
+}
+
+/// Every note as one Markdown document, for the desktop "Export" command.
+pub fn to_markdown(list: [Note]) -> string {
+    var out = "# Notes\n";
+    for n in list {
+        out = out + "\n## " + n.title + "\n\n" + n.body.trim() + "\n";
+    }
+    out
+}

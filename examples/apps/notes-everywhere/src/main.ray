@@ -1,0 +1,174 @@
+// Notes, everywhere: the mobile app of the previous chapter, now also a desktop app for macOS,
+// Linux and Windows. One `src/`, one frontend, five platforms. What changes on the desktop is
+// added around the same event loop: native menus with shortcuts, a confirmation dialog before
+// deleting, an "Export…" command with the system save dialog, and a window that remembers its
+// size. The data moves from `std/kv` to SQLite, in the folder each platform expects.
+import std/ui;
+import std/fs;
+import std/json;
+import std/time;
+import db/sqlite;
+import api;
+import notes;
+import places;
+import updates;
+from db/sqlite import Conn;
+
+const APP: string = "Notes";
+
+// The menus exist only on the desktop; on a phone the page has its own buttons.
+fn install_menus() -> Result<int, string> {
+    ui.app_menu(APP, [ui.item("role:about", "", "")])?;
+    ui.menu(
+        "File",
+        [
+            ui.item("new", "New Note", "cmd+n"),
+            ui.item("find", "Search", "cmd+f"),
+            ui.separator(),
+            ui.item("export", "Export…", "cmd+e")
+        ]
+    )?;
+    ui.edit_menu(
+        [
+            ui.item("role:undo", "", ""),
+            ui.item("role:redo", "", ""),
+            ui.separator(),
+            ui.item("role:cut", "", ""),
+            ui.item("role:copy", "", ""),
+            ui.item("role:paste", "", ""),
+            ui.item("role:select_all", "", "")
+        ]
+    )
+}
+
+// A menu command goes to the page as a DOM event; the React app listens for `ray-menu`.
+fn tell_page(window: int, command: string) {
+    let js = "window.dispatchEvent(new CustomEvent('ray-menu', {detail: '" + command + "'}))";
+    let _ = ui.eval_js(window, js);
+}
+
+// "Export…": every note into one Markdown file the user picks.
+fn export(conn: Conn) -> string {
+    let list = match (notes.search(conn, "")) {
+        Result.Ok(l) => l,
+        Result.Err(e) => return api.fail(e),
+    };
+    var o = ui.FileDialogOptions {
+        title: "Export notes",
+        directory: "",
+        suggested: "notes.md",
+        filters: [ui.FileFilter { name: "Markdown", extensions: ["md"] }],
+        multiple: false
+    };
+    match (ui.save_file_with(o)) {
+        Result.Ok(Option.Some(path)) => match (fs.write_file(path, notes.to_markdown(list))) {
+            Result.Ok(_) => json.render(json.obj().field("ok", true).field("exported", path)),
+            Result.Err(e) => api.fail(e),
+        },
+        Result.Ok(Option.None) => json.render(json.obj().field("ok", true).field("exported", "")),
+        Result.Err(e) => api.fail(e),
+    }
+}
+
+// The desktop asks before deleting with a native dialog; the phone page asks on its own.
+fn confirmed_delete(body: string) -> bool {
+    if (!places.is_desktop()) {
+        return true;
+    }
+    let title = match (json.parse(body)) {
+        Result.Ok(j) => json.get_string(j, "title").unwrap_or("this note"),
+        Result.Err(_) => "this note",
+    };
+    ui.confirm("Delete “" + title + "”?", "This cannot be undone.", "Delete", "Cancel")
+        .unwrap_or(false)
+}
+
+// One request from the page. Most go to `api.handle`; the ones that need a window live here.
+fn answer(conn: Conn, body: string) -> string {
+    let op = match (json.parse(body)) {
+        Result.Ok(j) => json.get_string(j, "op").unwrap_or(""),
+        Result.Err(_) => "",
+    };
+    if (op == "hello") {
+        return json.render(json.obj()
+            .field("ok", true)
+            .field("platform", platform())
+            .field("desktop", places.is_desktop()));
+    }
+    if (op == "export") {
+        return export(conn);
+    }
+    if (op == "delete" && !confirmed_delete(body)) {
+        return json.render(json.obj().field("ok", false).field("error", ""));
+    }
+    api.handle(conn, body, time.now())
+}
+
+fn main() -> int {
+    let dir = places.data_dir(APP);
+    let _ = fs.mkdir(dir);
+    let conn = match (notes.open(dir + "/notes.db")) {
+        Result.Ok(c) => c,
+        Result.Err(e) => {
+            eprint("notes: could not open the database: " + e);
+            return 1;
+        },
+    };
+    match (ui.mount_embed_at("", "frontend/dist")) {
+        Result.Err(e) => eprint("frontend build not mounted (fine under `ray dev`): " + e),
+        Result.Ok(_) => { },
+    }
+    if (places.is_desktop()) {
+        match (install_menus()) {
+            Result.Err(e) => eprint("menus: " + e),
+            Result.Ok(_) => { },
+        }
+    }
+    // On the desktop: a minimum size, and the system remembers size and position ("main").
+    var o = ui.options(900, 640);
+    o.min_width = 560;
+    o.min_height = 420;
+    o.autosave = "main";
+    let window = match (ui.open_with(APP, "app://index.html", o)) {
+        Result.Err(e) => {
+            eprint("ui: " + e);
+            return 1;
+        },
+        Result.Ok(w) => w,
+    };
+    // Updates are a desktop concern (the stores update phone apps). In a fiber, so the window
+    // opens at once; a new instance replaces this one when the user accepts.
+    if (places.is_desktop()) {
+        let _ = spawn(fn() {
+            if (updates.offer()) {
+                exit(0);
+            }
+        });
+    }
+    while (true) {
+        let e = match (ui.next_event()) {
+            Result.Err(err) => {
+                eprint("ui: " + err);
+                return 1;
+            },
+            Result.Ok(e) => e,
+        };
+        if (e.kind == "closed" && e.window == window) {
+            sqlite.disconnect(conn);
+            return 0;
+        }
+        if (e.kind == "menu") {
+            tell_page(window, e.tag);
+        }
+        if (e.kind == "message") {
+            match (ui.as_request(e)) {
+                Option.Some(request) => {
+                    let (id, body) = request;
+                    let _ = ui.reply_json(e.window, id, answer(conn, body));
+                },
+                Option.None => { },
+            }
+        }
+    }
+    0
+}

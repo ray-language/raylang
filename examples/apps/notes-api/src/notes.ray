@@ -1,0 +1,133 @@
+// The notes in Postgres. Every function takes the POOL, not a connection: the web framework runs
+// each request in its own fiber with isolated memory, so a connection kept in a variable would
+// not be shared between requests. The pool travels through a channel and is shared by all of
+// them: connections are opened on demand, reused, and replaced when one breaks.
+import db/postgres;
+import std/json;
+import std/uuid;
+from db/postgres import Pool;
+from std/json import ToJson;
+
+/// A note as the API returns it.
+@derive(ToJson)
+pub struct Note {
+    id: string,
+    title: string,
+    body: string,
+    updated_ms: int,
+}
+
+/// Connects a pool with the standard Postgres variables: PGHOST, PGPORT, PGUSER, PGPASSWORD,
+/// PGDATABASE. Nothing is dialed until the first query.
+pub fn pool_from_env(size: int) -> Pool {
+    postgres.pool(
+        env("PGHOST").unwrap_or("127.0.0.1"),
+        env("PGPORT").unwrap_or("5432").parse_int().unwrap_or(5432),
+        env("PGUSER").unwrap_or("notes"),
+        env("PGPASSWORD").unwrap_or(""),
+        env("PGDATABASE").unwrap_or("notes"),
+        size
+    )
+}
+
+/// Creates the table if it does not exist, in one transaction.
+pub fn migrate(p: Pool) -> Result<int, string> {
+    postgres.pool_tx(p, fn(c: postgres.Conn) -> Result<int, string> {
+        let _ = postgres.exec(c, `CREATE TABLE IF NOT EXISTS notes (
+                    id         TEXT PRIMARY KEY,
+                    title      TEXT NOT NULL,
+                    body       TEXT NOT NULL,
+                    updated_ms BIGINT NOT NULL
+                )`, [])?;
+        postgres.exec(c, "CREATE INDEX IF NOT EXISTS notes_by_date ON notes (updated_ms DESC)", [])
+    })
+}
+
+// Cells come back as text (`db` convention): [id, title, body, updated_ms].
+fn from_row(row: [string]) -> Note {
+    Note { id: row[0], title: row[1], body: row[2], updated_ms: row[3].parse_int().unwrap_or(0) }
+}
+
+/// The notes whose title or body contains `query` (any case, taken literally: `%` and `_` are
+/// just characters), newest first, at most `limit`.
+pub fn search(p: Pool, query: string, limit: int) -> Result<[Note], string> {
+    let rows = postgres.pool_query(p, `SELECT id, title, body, updated_ms FROM notes
+         WHERE $1 = ''
+            OR position(lower($1) in lower(title)) > 0
+            OR position(lower($1) in lower(body)) > 0
+         ORDER BY updated_ms DESC LIMIT $2`, [query.trim(), to_string(limit)])?;
+    Result.Ok(rows.map(from_row))
+}
+
+/// One note by id.
+pub fn get(p: Pool, id: string) -> Result<Option<Note>, string> {
+    let rows = postgres.pool_query(
+        p,
+        "SELECT id, title, body, updated_ms FROM notes WHERE id = $1",
+        [id]
+    )?;
+    if (rows.len() == 0) {
+        return Result.Ok(Option.None);
+    }
+    Result.Ok(Option.Some(from_row(rows[0])))
+}
+
+/// Why a note cannot be saved, or "" if it can.
+pub fn invalid(title: string, body: string) -> string {
+    if (title.trim().len() == 0) {
+        return "title is required";
+    }
+    if (title.len() > 200) {
+        return "title is longer than 200 characters";
+    }
+    if (body.len() > 100000) {
+        return "body is longer than 100000 characters";
+    }
+    ""
+}
+
+/// Creates a note.
+pub fn create(p: Pool, title: string, body: string, now_ms: int) -> Result<Note, string> {
+    let n = Note {
+        id: uuid.uuid_v7_at(now_ms),
+        title: title.trim(),
+        body: body,
+        updated_ms: now_ms
+    };
+    let _ = postgres.pool_exec(
+        p,
+        "INSERT INTO notes (id, title, body, updated_ms) VALUES ($1, $2, $3, $4)",
+        [n.id, n.title, n.body, to_string(now_ms)]
+    )?;
+    Result.Ok(n)
+}
+
+/// Replaces a note. `Ok(None)` if it does not exist.
+pub fn update(
+    p: Pool,
+    id: string,
+    title: string,
+    body: string,
+    now_ms: int
+) -> Result<Option<Note>, string> {
+    let changed = postgres.pool_exec(
+        p,
+        "UPDATE notes SET title = $2, body = $3, updated_ms = $4 WHERE id = $1",
+        [id, title.trim(), body, to_string(now_ms)]
+    )?;
+    if (changed == 0) {
+        return Result.Ok(Option.None);
+    }
+    Result.Ok(Option.Some(Note { id: id, title: title.trim(), body: body, updated_ms: now_ms }))
+}
+
+/// Deletes a note. `Ok(false)` if it did not exist.
+pub fn remove(p: Pool, id: string) -> Result<bool, string> {
+    let changed = postgres.pool_exec(p, "DELETE FROM notes WHERE id = $1", [id])?;
+    Result.Ok(changed > 0)
+}
+
+/// A list of notes as a JSON array.
+pub fn list_json(list: [Note]) -> string {
+    json.render_arr(json.list(list))
+}

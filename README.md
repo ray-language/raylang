@@ -285,12 +285,12 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 
 | Documento | Qué es |
 |-----------|--------|
+| [`handbook/`](handbook/index.md) | El **handbook**: guías para construir apps reales, de `ray new` al entregable. Empieza por [Empezar](handbook/getting-started.md) (instalar, el lenguaje en quince minutos, concurrencia, asistentes LLM, herramientas). Publicado en [raylang.dev/handbook](https://raylang.dev/handbook/), en español e inglés. |
 | [`MANUAL.md`](MANUAL.md) | La **guía práctica**: cómo usar el lenguaje, idiomas, y mejores prácticas. |
 | [`REFERENCE.md`](REFERENCE.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. También en inglés: [`REFERENCE.en.md`](REFERENCE.en.md). |
 | [`PUBLISH.md`](PUBLISH.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
 | [`SPEC.md`](SPEC.md) | La **especificación normativa** del lenguaje (gramática + semántica). |
 | [`llms.txt`](llms.txt) | **raylang para LLMs**: el contexto destilado (delta vs Rust, formas canónicas, errores exactos) para que un modelo escriba raylang correcto. Pégalo en tu prompt/CLAUDE.md. |
-| [`docs/getting-started.md`](docs/getting-started.md) | **raylang en media hora**: instalar, un proyecto, el lenguaje en quince minutos, concurrencia, un servidor web y las herramientas. También en inglés: [`docs/getting-started.en.md`](docs/getting-started.en.md). |
 | [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). También en inglés: [`docs/mcp.en.md`](docs/mcp.en.md). |
 | [`docs/web-framework.md`](docs/web-framework.md) | La guía del **framework web** (estilo Express): rutas, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |

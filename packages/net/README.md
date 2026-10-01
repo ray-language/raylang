@@ -31,7 +31,7 @@ git directa (`git+https://github.com/ray-language/net@v0.3.7`) queda para un pin
 
 y luego importa el módulo que necesites (como con `std/`):
 
-```raylang
+```rust
 import net/jwt;
 
 fn main() -> int {

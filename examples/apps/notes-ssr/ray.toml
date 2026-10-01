@@ -1,0 +1,10 @@
+[package]
+name = "notes-ssr"
+version = "0.1.0"
+
+# Files baked into the native binary (served by `static_embedded`).
+[native]
+embed = ["static"]
+
+[dependencies]
+web = "^0.4.6"

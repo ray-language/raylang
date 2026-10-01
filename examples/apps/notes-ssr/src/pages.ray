@@ -1,0 +1,27 @@
+// The pages, as pure functions: data in, HTML out. The handlers in main.ray only read the request
+// and call these, so the tests can check every page without starting a server.
+import std/markdown;
+import store;
+import views/index;
+import views/note;
+import views/edit;
+from store import Store, Note;
+
+/// The list of notes, filtered by the search box.
+pub fn index_page(s: Store, query: string) -> string {
+    index.render("All notes", query, store.list(s, query))
+}
+
+/// One note, its Markdown body rendered to HTML. `None` if it does not exist.
+pub fn note_page(s: Store, id: string) -> Option<string> {
+    let n = store.get(s, id)?;
+    // std/markdown escapes any HTML the user wrote and drops `javascript:` links, so the result
+    // is safe to insert unescaped with {{& … }}.
+    Option.Some(note.render(n.title, n, markdown.to_html(n.body)))
+}
+
+/// The form for a new note, or for editing one, with an optional error message.
+pub fn edit_page(action: string, title: string, body: string, error: string) -> string {
+    let heading = if (action == "/notes") { "New note" } else { "Edit note" };
+    edit.render(heading, action, title, body, error)
+}

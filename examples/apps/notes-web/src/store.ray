@@ -1,0 +1,149 @@
+// The notes in Redis. Each note is a hash (`note:<id>` with title, body and updated_ms) and a
+// sorted set (`notes:by_date`) keeps the ids ordered by their last edit. The pool hands every
+// command to whichever connection is free, so two separate commands are not a unit: writes that
+// touch both keys run as one Lua script (`EVAL`), which Redis executes atomically.
+import std/json;
+import std/uuid;
+import net/redis;
+from net/redis import Pool, Reply;
+from std/json import ToJson;
+
+/// A note as the API returns it.
+@derive(ToJson)
+pub struct Note {
+    id: string,
+    title: string,
+    body: string,
+    updated_ms: int,
+}
+
+const INDEX: string = "notes:by_date";
+
+// Writes the hash and its place in the index together.
+const SAVE: string = `redis.call('HSET', KEYS[1], 'title', ARGV[2], 'body', ARGV[3], 'updated_ms', ARGV[4])
+redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
+return 1`;
+
+// Removes the hash and its place in the index together; 0 if it did not exist.
+const REMOVE: string = `local n = redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+return n`;
+
+/// A pool from REDIS_HOST and REDIS_PORT. Nothing is dialed until the first command.
+pub fn pool_from_env(size: int) -> Pool {
+    redis.pool(
+        env("REDIS_HOST").unwrap_or("127.0.0.1"),
+        env("REDIS_PORT").unwrap_or("6379").parse_int().unwrap_or(6379),
+        size
+    )
+}
+
+fn key(id: string) -> string {
+    "note:" + id
+}
+
+// A reply that must not be a server error.
+fn ok(r: Reply) -> Result<Reply, string> {
+    match (r) {
+        Reply.Err(e) => Result.Err("redis: " + e),
+        other => Result.Ok(other),
+    }
+}
+
+// A bulk string of a reply; `None` for nil (a missing field).
+fn text(r: Reply) -> Option<string> {
+    match (r) {
+        Reply.Str(s) => Option.Some(s),
+        _ => Option.None,
+    }
+}
+
+// The note in an HMGET reply [title, body, updated_ms]; `None` if the hash does not exist.
+fn from_fields(id: string, fields: [Reply]) -> Option<Note> {
+    if (fields.len() != 3) {
+        return Option.None;
+    }
+    Option.Some(
+        Note {
+            id: id,
+            title: text(fields[0])?,
+            body: text(fields[1])?,
+            updated_ms: text(fields[2])?.parse_int().unwrap_or(0)
+        }
+    )
+}
+
+/// One note by id.
+pub fn get(p: Pool, id: string) -> Result<Option<Note>, string> {
+    match (ok(redis.pool_command(p, ["HMGET", key(id), "title", "body", "updated_ms"])?)?) {
+        Reply.Arr(fields) => Result.Ok(from_fields(id, fields)),
+        _ => Result.Ok(Option.None),
+    }
+}
+
+/// The newest notes (at most `limit`) whose title or body contains `query` (any case).
+pub fn list(p: Pool, query: string, limit: int) -> Result<[Note], string> {
+    let ids = match (ok(redis.pool_command(p, ["ZREVRANGE", INDEX, "0", "-1"])?)?) {
+        Reply.Arr(items) => items,
+        _ => [],
+    };
+    let needle = query.trim().to_lower();
+    var out: [Note] = [];
+    for item in ids {
+        if (out.len() >= limit) {
+            break;
+        }
+        match (item) {
+            Reply.Str(id) => match (get(p, id)?) {
+                Option.Some(n) => {
+                    if (needle == "" || (n.title + "\n" + n.body).to_lower().contains(needle)) {
+                        out.push(n);
+                    }
+                },
+                Option.None => { },
+            },
+            _ => { },
+        }
+    }
+    Result.Ok(out)
+}
+
+/// Creates a note (empty `id`) or replaces an existing one. `Ok(None)` if `id` does not exist.
+pub fn save(
+    p: Pool,
+    id: string,
+    title: string,
+    body: string,
+    now_ms: int
+) -> Result<Option<Note>, string> {
+    if (id != "" && get(p, id)?.is_none()) {
+        return Result.Ok(Option.None);
+    }
+    let n = Note {
+        id: if (id == "") { uuid.uuid_v7_at(now_ms) } else { id },
+        title: title.trim(),
+        body: body,
+        updated_ms: now_ms
+    };
+    let _ = ok(
+        redis.pool_command_with(
+            p,
+            ["EVAL", SAVE, "2", key(n.id), INDEX, n.id, n.title, n.body, to_string(now_ms)],
+            false
+        )?
+    )?;
+    Result.Ok(Option.Some(n))
+}
+
+/// Deletes a note. `Ok(false)` if it did not exist.
+pub fn remove(p: Pool, id: string) -> Result<bool, string> {
+    match (ok(redis.pool_command_with(p, ["EVAL", REMOVE, "2", key(id), INDEX, id], false)?)?) {
+        Reply.Int(n) => Result.Ok(n > 0),
+        _ => Result.Ok(false),
+    }
+}
+
+/// A list of notes as a JSON array.
+pub fn list_json(list: [Note]) -> string {
+    json.render_arr(json.list(list))
+}

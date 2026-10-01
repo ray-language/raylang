@@ -1,0 +1,156 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --ink: #111827;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #2563eb;
+  --danger: #dc2626;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0f17;
+    --card: #151b26;
+    --ink: #e5e7eb;
+    --muted: #9ca3af;
+    --line: #253041;
+    --accent: #60a5fa;
+    --danger: #f87171;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* Safe areas: the notch and the home indicator on iPhone (viewport-fit=cover in index.html). */
+.screen {
+  min-height: 100vh;
+  padding: env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 12px 0 4px;
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.bar > :last-child {
+  justify-self: end;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.link {
+  color: var(--accent);
+  font-size: 17px;
+  padding: 6px 0;
+  justify-self: start;
+}
+
+.strong {
+  font-weight: 600;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--card);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.list button {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  display: grid;
+  gap: 2px;
+}
+
+.list span,
+.list time {
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list time {
+  font-size: 12px;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 30vh;
+}
+
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.title,
+.body {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  /* 16px or more: iOS does not zoom into the field on focus. */
+  font-size: 17px;
+  padding: 12px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.body {
+  flex: 1;
+  min-height: 40vh;
+  resize: none;
+}
+
+.danger {
+  color: var(--danger);
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--card);
+}

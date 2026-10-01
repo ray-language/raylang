@@ -1,0 +1,15 @@
+{% params title: string, n: store.Note, body_html: string %}
+{% extends layout %}
+{% import store %}
+{% block content %}
+<article class="note">
+    <h1>{{ n.title }}</h1>
+    <div class="body">{{& body_html }}</div>
+    <div class="actions">
+        <a class="button" href="/notes/{{ n.id }}/edit">Edit</a>
+        <form method="post" action="/notes/{{ n.id }}/delete">
+            <button class="danger" type="submit">Delete</button>
+        </form>
+    </div>
+</article>
+{% endblock %}

@@ -1,0 +1,91 @@
+# El HANDBOOK y el SITIO en una PR (docs/plan-handbook.md §B.6). ci.yml ignora los `**.md` y
+# `site/**` (ci-docs.yml los da por verdes al instante), así que una PR que solo toca capítulos
+# o el generador del sitio no comprobaría nada antes de fusionar. Este workflow cierra ese hueco
+# con lo mínimo: compila `ray`, corre `tests/handbook.rs` (cada bloque ```rust del handbook pasa
+# `ray check`; enlaces, índice, traducciones) y la sincronía de traducciones, y genera el sitio
+# entero con `site/site.ray` aseverando las páginas del handbook. No es un check requerido: es la
+# señal que se espera verde antes de fusionar una PR del handbook.
+name: Handbook
+
+on:
+  pull_request:
+    paths:
+      - "handbook/**"
+      - "site/**"
+      - "tests/handbook.rs"
+      - "tests/docs_i18n.rs"
+      - "tools/docs_sync.py"
+      - "examples/apps/**"
+      - ".github/workflows/handbook.yml"
+
+concurrency:
+  group: handbook-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  handbook:
+    name: handbook · bloques · sitio
+    runs-on: ubuntu-latest
+    # Los proyectos de ejemplo con base de datos se prueban contra servicios reales.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: notes
+          POSTGRES_PASSWORD: notes
+          POSTGRES_DB: notes
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U notes" --health-interval 2s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      NOTES_TEST_PG: "1"
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: notes
+      PGPASSWORD: notes
+      PGDATABASE: notes
+      NOTES_TEST_REDIS: "1"
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-handbook-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Bloques, enlaces e índice del handbook + traducciones
+        run: cargo test --test handbook --test docs_i18n
+      - name: Tests de los proyectos de ejemplo (examples/apps)
+        run: |
+          for dir in examples/apps/*/; do
+            [ -f "$dir/ray.toml" ] || continue
+            echo "== $dir"
+            (cd "$dir" && cargo run --quiet --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --bin ray -- test)
+          done
+      - name: Generar el sitio con el handbook
+        run: cargo run --bin ray -- run site/site.ray . _site
+      - name: Verificar las páginas del handbook
+        run: |
+          pages=0
+          for f in handbook/*.md; do
+            case "$f" in *.en.md) continue ;; esac
+            slug=$(basename "$f" .md)
+            test -f "_site/handbook/$slug.html"
+            test -f "_site/en/handbook/$slug.html"
+            pages=$((pages + 1))
+          done
+          echo "handbook OK: $pages páginas por idioma"

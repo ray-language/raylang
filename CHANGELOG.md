@@ -4,8 +4,26 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.27 — 2026-10-01
 
+- **Handbook: siete capítulos con su app de ejemplo** (`handbook/`, `examples/apps/`), en español e
+  inglés y con cada bloque de código comprobado por el CI contra su proyecto: **App móvil** (React +
+  TypeScript, `std/kv`, iOS y Android, recarga en caliente en el teléfono), **App multiplataforma**
+  (la misma app en macOS, Linux y Windows, con SQLite, menús y diálogos nativos, y actualizaciones
+  firmadas), **Sitio con plantillas** (plantillas compiladas, formularios, Markdown, datos en
+  archivos), **API web** (Postgres con pool, token Bearer, apagado ordenado), **Sitio con frontend
+  React** (SPA embebida en el binario, notas en Redis), **LLM y MCP** (un agente en raylang que habla
+  con Claude y usa `ray mcp`) y **Distribuir** (firma, tiendas móviles y auto-actualización). Los
+  ejemplos usan los paquetes del registro con `ray add`. El código del handbook se colorea en el sitio con los colores
+  de la landing, y los bloques de raylang se etiquetan `rust` en toda la documentación.
+- **El handbook en raylang.dev/handbook** (fase 1 del plan, `docs/plan-handbook.md`): guías para
+  construir apps reales, en español e inglés, generadas por `site/site.ray` desde `handbook/*.md`
+  con barra lateral de capítulos y la navegación del sitio. Primer capítulo: **Empezar** (instalar,
+  editor, proyecto, el lenguaje en quince minutos, concurrencia, asistentes LLM con `ray mcp`,
+  herramientas), que sustituye a `docs/getting-started` (queda como puntero). Cada bloque de código
+  compila: `tests/handbook.rs` pasa `ray check` sobre cada bloque ```rust, comprueba enlaces,
+  índice y traducciones, y prohíbe M-números; el workflow `handbook.yml` lo corre en las PRs que
+  solo tocan Markdown o el sitio, que `ci.yml` ignora.
 - **Documentación coherente (fase 0 del handbook)**: un solo posicionamiento en README, PRODUCTION
   (ejes nuevos «Apps» y «Agentes», estado medido de oct 2026) y la web; cifras de rendimiento
   unificadas con `benchmarks/poly` (2,6–4× / 14–28× la VM; Go en 5, `rustc -O` en 4); la landing
@@ -16,6 +34,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `docs/mcp.md` documenta el argumento `path`. `examples/README.md` usa `ray run` y marca las
   librerías de `examples/web` como históricas. Nuevo `editors/README.md` con Neovim y Helix. Plan
   del handbook en `docs/plan-handbook.md`; evaluación de paquetes `llm`/`mcp` en IDEAS §100.
+- **Android: la app ya no queda bajo la barra de estado ni el teclado tapa los campos** (M334).
+  El shell de `ray bundle --android` apunta a la API 35, donde Android dibuja de borde a borde, y
+  no reservaba las barras del sistema. Ahora el WebView va dentro de un contenedor que recibe como
+  relleno las barras, el recorte de la cámara y el teclado (Android 11+; en versiones anteriores
+  el sistema ya reservaba esas zonas). Regenera el bundle para obtenerlo. Encontrado al escribir el
+  capítulo móvil del handbook.
+- **`ray dev --device`: el teléfono ya ve los recursos embebidos y el frontend** (M335). El
+  lado dispositivo del enlace de desarrollo no configuraba `std/embed` como `ray run`: en una app
+  con `[frontend]` la página salía «not found» en el teléfono, y `embed.read` daba «no embedded
+  assets configured». Ahora el dispositivo fija los `[native] embed` y el `[frontend] dist` del
+  snapshot, y la identidad de la app, al arrancar el programa. Hay que regenerar el shell de
+  desarrollo (`ray bundle --ios --dev` / `--android --dev`). Encontrado al escribir el capítulo
+  móvil del handbook.
 
 ## 1.27.26 — 2026-10-01
 

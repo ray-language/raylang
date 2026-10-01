@@ -1,0 +1,76 @@
+// The notes and their store. Each note is one `std/kv` key (its id, a time-ordered uuid v7)
+// holding the note as JSON. `std/kv` keeps the whole map in one file and writes it atomically
+// (temporary file + rename): a crash halfway through `save` leaves the previous file intact,
+// which is exactly what a phone that may kill the app at any moment needs.
+import std/kv;
+import std/json;
+import std/uuid;
+from std/json import ToJson;
+
+/// A note as it is stored and as the page receives it.
+@derive(ToJson)
+pub struct Note {
+    id: string,
+    title: string,
+    body: string,
+    updated_ms: int,
+}
+
+/// Decodes a stored note; `None` if the text is not a note.
+pub fn decode(text: string) -> Option<Note> {
+    let j = match (json.parse(text)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => return Option.None,
+    };
+    let id = json.get_string(j, "id")?;
+    let title = json.get_string(j, "title")?;
+    let body = json.get_string(j, "body")?;
+    let updated_ms = json.get_int(j, "updated_ms")?;
+    Option.Some(Note { id: id, title: title, body: body, updated_ms: updated_ms })
+}
+
+/// Every note, most recently edited first.
+pub fn list(store: kv.Store) -> [Note] {
+    var out: [Note] = [];
+    for key in store.keys() {
+        match (store.get_string(key)) {
+            Option.Some(text) => match (decode(text)) {
+                Option.Some(n) => out.push(n),
+                Option.None => eprint("notes: skipping unreadable entry " + key),
+            },
+            Option.None => { },
+        }
+    }
+    sort_by(out, fn(a: Note, b: Note) -> bool { a.updated_ms > b.updated_ms })
+}
+
+/// Creates a note (empty `id`) or replaces an existing one, and persists the store.
+pub fn save(
+    store: kv.Store,
+    id: string,
+    title: string,
+    body: string,
+    now_ms: int
+) -> Result<Note, string> {
+    let clean = title.trim();
+    if (clean.len() == 0) {
+        return Result.Err("a note needs a title");
+    }
+    let key = if (id == "") { uuid.uuid_v7_at(now_ms) } else { id };
+    if (id != "" && store.get(key).is_none()) {
+        return Result.Err("no note with id " + id);
+    }
+    let note = Note { id: key, title: clean, body: body, updated_ms: now_ms };
+    store.set_string(key, note.to_json());
+    store.save()?;
+    Result.Ok(note)
+}
+
+/// Deletes a note and persists the store. `Ok(false)` if it did not exist.
+pub fn remove(store: kv.Store, id: string) -> Result<bool, string> {
+    let existed = store.delete(id);
+    if (existed) {
+        store.save()?;
+    }
+    Result.Ok(existed)
+}

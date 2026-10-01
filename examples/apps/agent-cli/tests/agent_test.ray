@@ -40,7 +40,7 @@ fn the_request_body_is_valid_json() {
         "claude-opus-5-5",
         "sys",
         "[]",
-        [claude.user_text("hi \"there\"")]
+        [claude.user_text(`hi "there"`)]
     );
     let j = json.parse(body).unwrap();
     assert_eq(json.get_string(j, "model"), Option.Some("claude-opus-5-5"));

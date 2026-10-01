@@ -19,14 +19,14 @@ pub struct Tool {
     schema: string,
 }
 
+fn quote(s: string) -> string {
+    json.stringify(Json.JStr(s))
+}
+
+// One request per line: the backtick string stays on ONE line (JSON-RPC over stdio is framed by
+// newlines), and the newline that ends it is added explicitly.
 fn request(id: int, method: string, params: string) -> string {
-    "{\"jsonrpc\":\"2.0\",\"id\":"
-        + to_string(id)
-        + ",\"method\":"
-        + json.stringify(Json.JStr(method))
-        + ",\"params\":"
-        + params
-        + "}\n"
+    `{"jsonrpc": "2.0", "id": ${id}, "method": ${quote(method)}, "params": ${params}}` + "\n"
 }
 
 // The next complete line of output. The process delivers chunks of bytes, not lines, so the
@@ -84,7 +84,7 @@ pub fn connect(program: string, args: [string]) -> Result<Client, string> {
         `{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-cli","version":"0.1.0"}}`
     )?;
     let _ = c.proc.write(
-        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n".to_bytes()
+        (`{"jsonrpc": "2.0", "method": "notifications/initialized"}` + "\n").to_bytes()
     )?;
     Result.Ok(c)
 }
@@ -108,11 +108,7 @@ pub fn tools(c: Client) -> Result<[Tool], string> {
 
 /// Calls a tool with its arguments (a JSON object as text). `Err` carries a failed tool's output.
 pub fn call_tool(c: Client, name: string, arguments: string) -> Result<string, string> {
-    let params = "{\"name\":"
-        + json.stringify(Json.JStr(name))
-        + ",\"arguments\":"
-        + arguments
-        + "}";
+    let params = `{"name": ${quote(name)}, "arguments": ${arguments}}`;
     let result = call(c, "tools/call", params)?;
     var text = "";
     for block in json.get_array(result, "content").unwrap_or([]) {

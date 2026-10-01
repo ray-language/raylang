@@ -11,7 +11,7 @@ from notes import Note;
 /// The answer with the notes that match `query`.
 pub fn ok(conn: Conn, query: string) -> string {
     match (notes.search(conn, query)) {
-        Result.Ok(list) => "{\"ok\":true,\"notes\":" + json.render_arr(json.list(list)) + "}",
+        Result.Ok(list) => `{"ok": true, "notes": ${json.render_arr(json.list(list))}}`,
         Result.Err(e) => fail(e),
     }
 }

@@ -15,13 +15,7 @@ pub fn tools_json(tools: [mcp.Tool]) -> string {
     var parts: [string] = [];
     for t in tools {
         parts.push(
-            "{\"name\":"
-                + json.stringify(Json.JStr(t.name))
-                + ",\"description\":"
-                + json.stringify(Json.JStr(t.description))
-                + ",\"input_schema\":"
-                + t.schema
-                + "}"
+            `{"name": ${claude.quote(t.name)}, "description": ${claude.quote(t.description)}, "input_schema": ${t.schema}}`
         );
     }
     "[" + parts.join(",") + "]"

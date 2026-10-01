@@ -8,7 +8,7 @@ import notes;
 from notes import Note;
 
 fn ok(list: [Note]) -> string {
-    "{\"ok\":true,\"notes\":" + json.render_arr(json.list(list)) + "}"
+    `{"ok": true, "notes": ${json.render_arr(json.list(list))}}`
 }
 
 fn fail(message: string) -> string {

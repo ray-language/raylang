@@ -28,30 +28,32 @@ pub struct Reply {
     calls: [ToolCall],
 }
 
+/// A string as a JSON string literal, quotes and escapes included.
+pub fn quote(s: string) -> string {
+    json.stringify(Json.JStr(s))
+}
+
 /// The request body. `tools` and `messages` are JSON arrays already rendered as text.
 pub fn request_body(model: string, system: string, tools: string, messages: [string]) -> string {
-    "{\"model\":"
-        + json.stringify(Json.JStr(model))
-        + ",\"max_tokens\":16000"
-        + ",\"output_config\":{\"effort\":\"medium\"}"
-        + ",\"fallbacks\":\"default\""
-        + ",\"system\":"
-        + json.stringify(Json.JStr(system))
-        + ",\"tools\":"
-        + tools
-        + ",\"messages\":["
-        + messages.join(",")
-        + "]}"
+    `{
+  "model": ${quote(model)},
+  "max_tokens": 16000,
+  "output_config": {"effort": "medium"},
+  "fallbacks": "default",
+  "system": ${quote(system)},
+  "tools": ${tools},
+  "messages": [${messages.join(",")}]
+}`
 }
 
 /// A user turn with plain text.
 pub fn user_text(text: string) -> string {
-    "{\"role\":\"user\",\"content\":" + json.stringify(Json.JStr(text)) + "}"
+    `{"role": "user", "content": ${quote(text)}}`
 }
 
 /// The assistant turn to send back: its content, unchanged.
 pub fn assistant_turn(r: Reply) -> string {
-    "{\"role\":\"assistant\",\"content\":" + r.content + "}"
+    `{"role": "assistant", "content": ${r.content}}`
 }
 
 /// One `tool_result` block. Every result of a turn goes back in ONE user message.
@@ -65,7 +67,7 @@ pub fn tool_result(id: string, output: string, is_error: bool) -> string {
 
 /// The user message that carries the results of a turn's tool calls.
 pub fn results_turn(results: [string]) -> string {
-    "{\"role\":\"user\",\"content\":[" + results.join(",") + "]}"
+    `{"role": "user", "content": [${results.join(",")}]}`
 }
 
 /// Reads a response body.

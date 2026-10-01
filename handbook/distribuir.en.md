@@ -209,4 +209,10 @@ and [React site](web-react.en.md) chapters.
   and container image.
 - Behind a proxy such as nginx or Caddy, which handles HTTPS, the binary is ready for production.
 
-<!-- sync: sha256:c949dc39a20c -->
+<!-- sync: sha256:2aa51501b458 -->
+
+## What now
+
+That is the end of the tour. For any function, the [reference](../REFERENCE.en.md) has its
+signature, and the [manual](../MANUAL.md) (Spanish) explains the language in depth. The
+[overview](index.en.md) gathers every chapter.

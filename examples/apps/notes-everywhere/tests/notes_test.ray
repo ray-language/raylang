@@ -73,17 +73,16 @@ fn notes_survive_reopening_the_database() {
 @test
 fn the_api_saves_searches_and_deletes() {
     let c = fresh("api");
-    let saved = json.parse(api.handle(c, "{\"op\":\"save\",\"title\":\"Hello\",\"body\":\"world\"}", 1000))
+    let saved = json.parse(api.handle(c, `{"op": "save", "title": "Hello", "body": "world"}`, 1000))
         .unwrap();
     let list = json.get_array(saved, "notes").unwrap();
     assert_eq(list.len(), 1);
     let id = json.get_string(list[0], "id").unwrap();
-    let found = json.parse(api.handle(c, "{\"op\":\"list\",\"query\":\"wor\"}", 2000)).unwrap();
+    let found = json.parse(api.handle(c, `{"op": "list", "query": "wor"}`, 2000)).unwrap();
     assert_eq(json.get_array(found, "notes").unwrap().len(), 1);
-    let after = json.parse(api.handle(c, "{\"op\":\"delete\",\"id\":\"" + id + "\"}", 3000))
-        .unwrap();
+    let after = json.parse(api.handle(c, `{"op": "delete", "id": "${id}"}`, 3000)).unwrap();
     assert_eq(json.get_array(after, "notes").unwrap().len(), 0);
-    let bad = json.parse(api.handle(c, "{\"op\":\"fly\"}", 4000)).unwrap();
+    let bad = json.parse(api.handle(c, `{"op": "fly"}`, 4000)).unwrap();
     assert_eq(json.get_string(bad, "error"), Option.Some("unknown op 'fly'"));
 }
 

@@ -208,3 +208,9 @@ y los recursos embebidos, y se configura con variables de entorno, como en los c
 - `--without crypto,tls,sqlite,…` deja fuera lo que el servicio no usa, para un binario y una
   imagen de contenedor más pequeños.
 - Detrás de un proxy como nginx o Caddy, que pone el HTTPS, el binario está listo para producción.
+
+## Y ahora
+
+Con esto termina el recorrido. Para cualquier función, la [referencia](../REFERENCE.md) tiene su
+firma, y el [manual](../MANUAL.md) explica el lenguaje en detalle. La [portada](index.md) reúne todos
+los capítulos.

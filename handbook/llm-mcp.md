@@ -98,18 +98,15 @@ modelo, las herramientas y la conversación:
 ```rust
 /// The request body. `tools` and `messages` are JSON arrays already rendered as text.
 pub fn request_body(model: string, system: string, tools: string, messages: [string]) -> string {
-    "{\"model\":"
-        + json.stringify(Json.JStr(model))
-        + ",\"max_tokens\":16000"
-        + ",\"output_config\":{\"effort\":\"medium\"}"
-        + ",\"fallbacks\":\"default\""
-        + ",\"system\":"
-        + json.stringify(Json.JStr(system))
-        + ",\"tools\":"
-        + tools
-        + ",\"messages\":["
-        + messages.join(",")
-        + "]}"
+    `{
+  "model": ${quote(model)},
+  "max_tokens": 16000,
+  "output_config": {"effort": "medium"},
+  "fallbacks": "default",
+  "system": ${quote(system)},
+  "tools": ${tools},
+  "messages": [${messages.join(",")}]
+}`
 }
 ```
 
@@ -180,7 +177,7 @@ pub fn connect(program: string, args: [string]) -> Result<Client, string> {
         `{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-cli","version":"0.1.0"}}`
     )?;
     let _ = c.proc.write(
-        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n".to_bytes()
+        (`{"jsonrpc": "2.0", "method": "notifications/initialized"}` + "\n").to_bytes()
     )?;
     Result.Ok(c)
 }
@@ -276,8 +273,12 @@ ray test                                                    # sin red, sin clave
 ANTHROPIC_API_KEY=… ray run -- "invierte las palabras de un string en raylang"
 ```
 
-## Siguiente paso
-
 Este agente implementa los dos protocolos a mano, en unas 400 líneas con el bucle incluido. Se está
 evaluando convertirlo en paquetes estándar, `llm` y `mcp`, para que cualquier app los use sin
 copiarlos. Mientras tanto, este ejemplo es la referencia.
+
+## Siguiente paso
+
+Los capítulos anteriores enseñan a construir. [**Distribuir**](distribuir.md) cubre cómo llevar
+cada cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, publicar las de
+móvil y desplegar los servidores.

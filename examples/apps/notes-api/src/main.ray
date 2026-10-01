@@ -65,7 +65,7 @@ fn routes(db: Pool, token: string) -> App {
 
     app.GET("/health", fn(c: Ctx, r: Res) {
         match (postgres.pool_query(db, "SELECT 1", [])) {
-            Result.Ok(_) => r.json("{\"ok\":true}"),
+            Result.Ok(_) => r.json(`{"ok": true}`),
             Result.Err(e) => fail(r, 503, "database unavailable: " + e),
         }
     });

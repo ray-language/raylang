@@ -238,7 +238,7 @@ is configured with `HOST`, `PORT`, `REDIS_HOST` and `REDIS_PORT`.
 
 ## Next step
 
-The previous chapters teach how to build. [**Shipping**](distribuir.en.md) covers how to get each
-thing to its users: signing, notarizing and updating desktop apps, and publishing mobile ones.
+[**LLMs and MCP**](llm-mcp.en.md): how to use an assistant that writes verified raylang, and how to
+build an agent in raylang that talks to Claude and uses tools.
 
-<!-- sync: sha256:478e971589a3 -->
+<!-- sync: sha256:c362b3b6e8a0 -->

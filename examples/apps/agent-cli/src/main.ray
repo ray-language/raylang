@@ -25,7 +25,7 @@ fn api_key() -> Result<string, string> {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("usage: agent-cli \"your question\"");
+        eprint(`usage: agent-cli "your question"`);
         return 64;
     }
     let key = match (api_key()) {

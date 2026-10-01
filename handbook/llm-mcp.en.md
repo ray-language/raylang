@@ -98,18 +98,15 @@ tools and the conversation:
 ```rust
 /// The request body. `tools` and `messages` are JSON arrays already rendered as text.
 pub fn request_body(model: string, system: string, tools: string, messages: [string]) -> string {
-    "{\"model\":"
-        + json.stringify(Json.JStr(model))
-        + ",\"max_tokens\":16000"
-        + ",\"output_config\":{\"effort\":\"medium\"}"
-        + ",\"fallbacks\":\"default\""
-        + ",\"system\":"
-        + json.stringify(Json.JStr(system))
-        + ",\"tools\":"
-        + tools
-        + ",\"messages\":["
-        + messages.join(",")
-        + "]}"
+    `{
+  "model": ${quote(model)},
+  "max_tokens": 16000,
+  "output_config": {"effort": "medium"},
+  "fallbacks": "default",
+  "system": ${quote(system)},
+  "tools": ${tools},
+  "messages": [${messages.join(",")}]
+}`
 }
 ```
 
@@ -179,7 +176,7 @@ pub fn connect(program: string, args: [string]) -> Result<Client, string> {
         `{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-cli","version":"0.1.0"}}`
     )?;
     let _ = c.proc.write(
-        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n".to_bytes()
+        (`{"jsonrpc": "2.0", "method": "notifications/initialized"}` + "\n").to_bytes()
     )?;
     Result.Ok(c)
 }
@@ -276,10 +273,14 @@ ray test                                                   # no network, no key
 ANTHROPIC_API_KEY=… ray run -- "reverse the words of a string in raylang"
 ```
 
-## Next step
-
 This agent implements both protocols by hand, in about 400 lines including the loop. Turning them
 into standard packages, `llm` and `mcp`, so any app can use them without copying is under
 evaluation. Until then, this example is the reference.
 
-<!-- sync: sha256:582348d1862f -->
+## Next step
+
+The previous chapters teach how to build. [**Shipping**](distribuir.en.md) covers how to get each
+thing to its users: signing, notarizing and updating desktop apps, publishing mobile ones and
+deploying the servers.
+
+<!-- sync: sha256:c1f7380aba4a -->

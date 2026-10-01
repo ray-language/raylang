@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El handbook en raylang.dev/handbook** (fase 1 del plan, `docs/plan-handbook.md`): guías para
+  construir apps reales, en español e inglés, generadas por `site/site.ray` desde `handbook/*.md`
+  con barra lateral de capítulos y la navegación del sitio. Primer capítulo: **Empezar** (instalar,
+  editor, proyecto, el lenguaje en quince minutos, concurrencia, asistentes LLM con `ray mcp`,
+  herramientas), que sustituye a `docs/getting-started` (queda como puntero). Cada bloque de código
+  compila: `tests/handbook.rs` pasa `ray check` sobre cada bloque ```rust, comprueba enlaces,
+  índice y traducciones, y prohíbe M-números; el workflow `handbook.yml` lo corre en las PRs que
+  solo tocan Markdown o el sitio, que `ci.yml` ignora.
 - **Documentación coherente (fase 0 del handbook)**: un solo posicionamiento en README, PRODUCTION
   (ejes nuevos «Apps» y «Agentes», estado medido de oct 2026) y la web; cifras de rendimiento
   unificadas con `benchmarks/poly` (2,6–4× / 14–28× la VM; Go en 5, `rustc -O` en 4); la landing

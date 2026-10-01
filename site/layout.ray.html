@@ -1,12 +1,11 @@
 {% params title: string, page: string, lang: string, root: string %}
 {% let en = lang == "en" %}
 {% let file = page + ".html" %}
-{% let alt = if (en) { root + file } else { "en/" + file } %}
+{% let up = if (page.starts_with("handbook/")) { "../" } else { "" } %}
+{% let alt = if (en) { root + file } else { root + "en/" + file } %}
 {% let nav_platforms = if (en) { "Desktop & mobile" } else { "Desktop y móvil" } %}
 {% let nav_eco = if (en) { "Ecosystem" } else { "Ecosistema" } %}
-{% let nav_guide = if (en) { "Guide" } else { "Guía" } %}
 {% let nav_spec = if (en) { "Specification" } else { "Especificación" } %}
-{% let guide_url = if (en) { "https://github.com/ray-language/raylang/blob/main/docs/getting-started.en.md" } else { "https://github.com/ray-language/raylang/blob/main/docs/getting-started.md" } %}
 {% let t_theme = if (en) { "Theme" } else { "Tema" } %}
 {% let t_light = if (en) { "Light theme" } else { "Tema claro" } %}
 {% let t_system = if (en) { "System theme" } else { "Tema del sistema" } %}
@@ -282,6 +281,23 @@ section h2.sec {
 }
 section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
 
+/* El handbook: barra lateral con los capítulos + el artículo. */
+.handbook > .wrap { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+.handbook aside.toc { position: sticky; top: 4.5rem; padding: 2.5rem 0 1rem; font-size: .92rem; }
+.handbook aside.toc .toc-title { font-weight: 600; margin: 0 0 .6rem; }
+.handbook aside.toc .toc-title a { color: var(--ink); text-decoration: none; }
+.handbook aside.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: ch -1; }
+.handbook aside.toc li { counter-increment: ch; margin: 0; }
+.handbook aside.toc li a { display: block; padding: .32rem .6rem; border-radius: 6px; color: var(--muted); text-decoration: none; }
+.handbook aside.toc li a:hover { background: var(--bg-soft); color: var(--ink); }
+.handbook aside.toc li a.active { background: var(--bg-soft); color: var(--ink); font-weight: 600; }
+.handbook article.doc { min-width: 0; }
+.handbook article.doc p.edit { color: var(--muted); font-size: .85rem; margin: 0 0 1rem; }
+@media (max-width: 860px) {
+    .handbook > .wrap { grid-template-columns: 1fr; gap: 0; }
+    .handbook aside.toc { position: static; padding: 1.5rem 0 0; }
+}
+
 article.doc { padding: 2.5rem 0 4rem; }
 article.doc .wrap { max-width: 64rem; }
 article.doc h1 { font-size: 2rem; letter-spacing: -.02em; }
@@ -362,7 +378,7 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
 <body>
 <nav class="top">
     <div class="wrap">
-        <a class="brand" href="index.html"><img src="{{ root }}assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
+        <a class="brand" href="{{ up }}index.html"><img src="{{ root }}assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
         <span class="spacer"></span>
         <div class="links">
         {% if page == "index" %}
@@ -370,22 +386,26 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
         <a class="link" href="#plataformas" data-spy="plataformas">{{ nav_platforms }}</a>
         <a class="link" href="#playground" data-spy="playground">Playground</a>
         <a class="link" href="#ecosistema" data-spy="ecosistema">{{ nav_eco }}</a>
-        <a class="link" href="{{ guide_url }}">{{ nav_guide }}</a>
-        <a class="link" href="bench.html">Benchmarks</a>
-        <a class="link" href="spec.html">{{ nav_spec }}</a>
         {% else %}
-        <a class="link" href="index.html#plataformas">{{ nav_platforms }}</a>
-        <a class="link" href="index.html#agentes">LLMs</a>
-        <a class="link" href="index.html#playground">Playground</a>
-        <a class="link" href="index.html#ecosistema">{{ nav_eco }}</a>
-        <a class="link" href="{{ guide_url }}">{{ nav_guide }}</a>
-        {% if page == "bench" %}
-        <a class="link active" href="bench.html">Benchmarks</a>
-        <a class="link" href="spec.html">{{ nav_spec }}</a>
-        {% else %}
-        <a class="link" href="bench.html">Benchmarks</a>
-        <a class="link active" href="spec.html">{{ nav_spec }}</a>
+        <a class="link" href="{{ up }}index.html#agentes">LLMs</a>
+        <a class="link" href="{{ up }}index.html#plataformas">{{ nav_platforms }}</a>
+        <a class="link" href="{{ up }}index.html#playground">Playground</a>
+        <a class="link" href="{{ up }}index.html#ecosistema">{{ nav_eco }}</a>
         {% endif %}
+        {% if page.starts_with("handbook/") %}
+        <a class="link active" href="{{ up }}handbook/index.html">Handbook</a>
+        {% else %}
+        <a class="link" href="{{ up }}handbook/index.html">Handbook</a>
+        {% endif %}
+        {% if page == "bench" %}
+        <a class="link active" href="{{ up }}bench.html">Benchmarks</a>
+        {% else %}
+        <a class="link" href="{{ up }}bench.html">Benchmarks</a>
+        {% endif %}
+        {% if page == "spec" %}
+        <a class="link active" href="{{ up }}spec.html">{{ nav_spec }}</a>
+        {% else %}
+        <a class="link" href="{{ up }}spec.html">{{ nav_spec }}</a>
         {% endif %}
         {% if en %}
         <a class="link lang" href="{{ alt }}" hreflang="es" lang="es" title="Versión en español">ES</a>

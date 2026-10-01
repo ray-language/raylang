@@ -1,0 +1,55 @@
+# El HANDBOOK y el SITIO en una PR (docs/plan-handbook.md §B.6). ci.yml ignora los `**.md` y
+# `site/**` (ci-docs.yml los da por verdes al instante), así que una PR que solo toca capítulos
+# o el generador del sitio no comprobaría nada antes de fusionar. Este workflow cierra ese hueco
+# con lo mínimo: compila `ray`, corre `tests/handbook.rs` (cada bloque ```rust del handbook pasa
+# `ray check`; enlaces, índice, traducciones) y la sincronía de traducciones, y genera el sitio
+# entero con `site/site.ray` aseverando las páginas del handbook. No es un check requerido: es la
+# señal que se espera verde antes de fusionar una PR del handbook.
+name: Handbook
+
+on:
+  pull_request:
+    paths:
+      - "handbook/**"
+      - "site/**"
+      - "tests/handbook.rs"
+      - "tests/docs_i18n.rs"
+      - "tools/docs_sync.py"
+      - "examples/apps/**"
+      - ".github/workflows/handbook.yml"
+
+concurrency:
+  group: handbook-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  handbook:
+    name: handbook · bloques · sitio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-handbook-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Bloques, enlaces e índice del handbook + traducciones
+        run: cargo test --test handbook --test docs_i18n
+      - name: Generar el sitio con el handbook
+        run: cargo run --bin ray -- run site/site.ray . _site
+      - name: Verificar las páginas del handbook
+        run: |
+          for f in $(ls handbook/*.md | grep -v '\.en\.md$'); do
+            slug=$(basename "$f" .md)
+            test -f "_site/handbook/$slug.html"
+            test -f "_site/en/handbook/$slug.html"
+          done
+          echo "handbook OK: $(ls _site/handbook | wc -l) páginas por idioma"

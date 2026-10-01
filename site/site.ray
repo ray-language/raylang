@@ -11,6 +11,8 @@
 //
 //   ray run site/site.ray <raíz-del-repo> <dir-de-salida>
 //
+// El handbook (`handbook/`) sale en `handbook/` y `en/handbook/` (módulo `handbook`).
+//
 // Previsualización local: `ray serve <salida>` (el iframe del playground requiere servirlo
 // por http en algunos navegadores).
 
@@ -20,12 +22,55 @@ import bench_chart;
 import landing;
 import spec_page;
 import bench_page;
+import handbook;
+import handbook_page;
 
 fn write_or_die(path: string, content: string) {
     match (fs.write_file(path, content)) {
         Result.Ok(n) => { },
         Result.Err(e) => panic("no se pudo escribir '" + path + "': " + e),
     }
+}
+
+// Las páginas del handbook (`handbook/*.md` → `handbook/<slug>.html`, y `.en.md` → `en/handbook/`):
+// la portada (`index`) y cada capítulo que enlaza, con la barra lateral de capítulos.
+fn write_handbook(root: string, out: string) -> Result<int, string> {
+    let list = handbook.chapters(root)?;
+    let _ = fs.mkdir(out + "/handbook");
+    let _ = fs.mkdir(out + "/en/handbook");
+    var slugs = ["index"];
+    for c in list {
+        slugs.push(c.slug);
+    }
+    var pages = 0;
+    for slug in slugs {
+        let es = fs.read_file(root + "/handbook/" + slug + ".md")?;
+        let en = fs.read_file(root + "/handbook/" + slug + ".en.md")?;
+        write_or_die(
+            out + "/handbook/" + slug + ".html",
+            handbook_page.render(
+                handbook.title(es) + " — raylang",
+                handbook.render(es),
+                handbook.sidebar(list, slug, "es"),
+                "handbook/" + slug,
+                "es",
+                "../"
+            )
+        );
+        write_or_die(
+            out + "/en/handbook/" + slug + ".html",
+            handbook_page.render(
+                handbook.title(en) + " — raylang",
+                handbook.render(en),
+                handbook.sidebar(list, slug, "en"),
+                "handbook/" + slug,
+                "en",
+                "../../"
+            )
+        );
+        pages = pages + 2;
+    }
+    Result.Ok(pages)
 }
 
 // Copia un archivo de TEXTO del repo a la salida.
@@ -203,6 +248,13 @@ fn main() -> int {
             "../"
         )
     );
+    match (write_handbook(root, out)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => {
+            eprint("could not build the handbook: " + e);
+            return 65;
+        },
+    }
     print("site generated in " + out);
     0
 }

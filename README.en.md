@@ -284,17 +284,17 @@ raylang ships the two pieces an AI coding agent needs to write correct raylang:
 
 The reference documents are written in Spanish (the project's working language); the code, the
 `///` doc comments and every message the compiler emits are in English. Translated so far:
-[`REFERENCE.en.md`](REFERENCE.en.md) and [`docs/mcp.en.md`](docs/mcp.en.md) (kept in sync with their
-originals by a CI guard).
+[`REFERENCE.en.md`](REFERENCE.en.md), [`docs/mcp.en.md`](docs/mcp.en.md) and the whole
+[handbook](handbook/index.en.md) (kept in sync with their originals by a CI guard).
 
 | Document | What it is |
 |----------|------------|
+| [`handbook/`](handbook/index.en.md) | The **handbook**: guides for building real apps, from `ray new` to the deliverable. Start with [Getting started](handbook/empezar.en.md) (install, the language in fifteen minutes, concurrency, LLM assistants, tools). Published at [raylang.dev/en/handbook](https://raylang.dev/en/handbook/), in Spanish and English. |
 | [`MANUAL.md`](MANUAL.md) | The **practical guide**: how to use the language, idioms and best practices. |
 | [`REFERENCE.en.md`](REFERENCE.en.md) | The **exhaustive catalog**: keywords, operators, builtins, prelude, `std/` and CLI, with signatures (in English; original: [`REFERENCE.md`](REFERENCE.md)). |
 | [`PUBLISH.md`](PUBLISH.md) | The **publisher's guide**: packaging, versioning and publishing to the registry. |
 | [`SPEC.md`](SPEC.md) | The **normative specification** of the language (grammar + semantics). |
 | [`llms.txt`](llms.txt) | **raylang for LLMs**: the distilled context (delta vs Rust, canonical forms, exact errors) so a model writes correct raylang. Paste it into your prompt/CLAUDE.md. |
-| [`docs/getting-started.en.md`](docs/getting-started.en.md) | **raylang in half an hour**: install, a project, the language in fifteen minutes, concurrency, a web server and the tools (in English; original: [`docs/getting-started.md`](docs/getting-started.md)). |
 | [`docs/mcp.en.md`](docs/mcp.en.md) | The **MCP server** (`ray mcp`): the check/run/test/fmt/doc tools for LLM agents, with the code sandboxed (fuel/heap/deadline) (in English; original: [`docs/mcp.md`](docs/mcp.md)). |
 | [`docs/web-framework.md`](docs/web-framework.md) | The **web framework** guide (Express-style): routes, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | The **builds** guide: slim features, PGO, native binary. |
@@ -359,4 +359,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:a49c41f15abf -->
+<!-- sync: sha256:272e8bba9928 -->

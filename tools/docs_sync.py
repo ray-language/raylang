@@ -13,7 +13,7 @@ MARK = re.compile(r"<!-- sync: sha256:([0-9a-f]{12}) -->")
 
 
 def pairs():
-    for en in sorted(list(ROOT.glob("*.en.md")) + list((ROOT / "docs").glob("*.en.md"))):
+    for en in sorted(list(ROOT.glob("*.en.md")) + list((ROOT / "docs").glob("*.en.md")) + list((ROOT / "handbook").glob("*.en.md"))):
         yield en, en.with_name(en.name.replace(".en.md", ".md"))
 
 

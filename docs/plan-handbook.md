@@ -2,7 +2,7 @@
 
 Estado: **APROBADO con decisiones** (1 oct 2026, sobre 1.27.26). Parte A es la auditoría de lo que
 hay; parte B es el plan del handbook, ya con las decisiones del usuario (B.7). La fase 0 (B.4) se
-ejecuta en la rama `docs/fase0-coherencia`.
+ejecutó en la PR #448 (fusionada el 1 oct 2026); la fase 1 va en `docs/handbook-fase1`.
 
 ---
 
@@ -128,8 +128,8 @@ las palabras «escritorio» ni «móvil». Caminos evaluados:
 
 ```
 handbook/
-  SUMMARY.md              # índice (fuente para la navegación del sitio)
-  00-empezar.md           # instalar, ray new, run/build/test, editor + ray mcp
+  index.md                # portada; el ORDEN de sus enlaces es el de la barra lateral
+  empezar.md              # instalar, editor, ray new, el lenguaje, concurrencia, ray mcp, herramientas
   10-movil.md             # app iOS / Android con frontend react-ts        · persistencia: std/kv
   20-multiplataforma.md   # la misma app en escritorio (continuación)       · persistencia: SQLite (db)
   30-api.md               # API web con el framework `web`                  · persistencia: Postgres (db) + pools
@@ -145,8 +145,11 @@ examples/apps/
 ```
 
 Publicación: **raylang.dev/handbook/** (decisión D1). `site/site.ray` renderiza `handbook/*.md` →
-`_site/handbook/<slug>.html` y `_site/en/handbook/...`, con una plantilla `handbook_page.ray.html`
-(barra lateral desde `SUMMARY.md`). `pages.yml` asevera los HTML generados como ya hace con
+`_site/handbook/<slug>.html` y `_site/en/handbook/...` (módulo `site/handbook.ray`), con una
+plantilla `handbook_page.ray.html` y la barra lateral sacada de los enlaces de `index.md` (el
+título de cada capítulo es su primer `# `). Los nombres de archivo son el slug de la URL, sin
+número de orden: renombrar un capítulo no rompe enlaces. Los enlaces entre capítulos pasan a
+`.html`, y los que salen del handbook (`../MANUAL.md#…`) apuntan al repositorio en GitHub. `pages.yml` asevera los HTML generados como ya hace con
 spec/bench. La landing cambia «Guía paso a paso en el manual» por el enlace al capítulo concreto
 (`/handbook/movil.html`), y la navegación gana «Handbook».
 
@@ -232,8 +235,8 @@ Windows signtool, Linux), `std/update` + `ray keygen`/`ray release`, códigos de
 
 | Fase | Entregable | PR |
 |---|---|---|
-| 0 | Correcciones inmediatas B.4 (solo docs + landing). **En curso**, rama `docs/fase0-coherencia`. | 1 |
-| 1 | Infraestructura: `handbook/` + `SUMMARY.md`, plantilla y renderizado en `site.ray` → `/handbook/`, aserciones en `pages.yml`, guarda `tests/handbook_snippets.rs` (cada bloque ```rust → `ray check` con el proyecto de ejemplo como contexto), extensión de `docs_root.rs` a `handbook/` (enlaces, huérfanos, sin M-números), `docs_i18n` cubre `handbook/*.en.md`. Capítulo 0 migrado desde getting-started, ES + EN. Navegación «Handbook» en la landing. | 2 |
+| 0 | Correcciones inmediatas B.4 (solo docs + landing). **Hecha**: PR #448, publicada. | 1 |
+| 1 | **En curso** (rama `docs/handbook-fase1`). Infraestructura: `handbook/` + `index.md`, plantilla y renderizado en `site.ray` → `/handbook/`, aserciones en `pages.yml`, guarda `tests/handbook_snippets.rs` (cada bloque ```rust → `ray check` con el proyecto de ejemplo como contexto), extensión de `docs_root.rs` a `handbook/` (enlaces, huérfanos, sin M-números), `docs_i18n` cubre `handbook/*.en.md`. Capítulo 0 migrado desde getting-started, ES + EN. Navegación «Handbook» en la landing. | 2 |
 | 2 | **Capítulo 1 Móvil con react-ts** (`notes-mobile`, `std/kv`), ES + EN; la landing enlaza a él. | 3 |
 | 3 | **Capítulo 2 Multiplataforma** (`notes-everywhere`, SQLite), ES + EN. | 4 |
 | 4 | **Capítulo 3 API web** (`notes-api`, Postgres + pools), ES + EN. Absorbe `docs/web-framework.md`. | 5 |
@@ -248,16 +251,22 @@ salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compil
 
 ### B.6 Guardas de CI nuevas
 
-- `tests/handbook_snippets.rs`: extrae bloques ```rust de `handbook/*.md`; los que llevan
-  `// project: examples/apps/<x>` se chequean con ese proyecto como raíz; el resto, aislados.
-  Bloques marcados ```rust,ignore se saltan (fragmentos). Falla el CI si algo no compila.
-- `tests/docs_root.rs` extendido: enlaces relativos de `handbook/` resuelven; todo capítulo está
-  en `SUMMARY.md`; ningún M-número (`\bM\d{2,3}\b`) en `handbook/`.
-- `pages.yml`: `test -f _site/handbook/movil.html` etc. para cada entrada de `SUMMARY.md`.
-- `tests/docs_i18n.rs` ya cubre `.en.md` en raíz y `docs/`; se añade `handbook/`.
+- `tests/handbook.rs` (hecho en la fase 1): todo bloque ```rust de `handbook/*.md` pasa
+  `ray check`. Dos marcas invisibles, un comentario HTML en la línea anterior al bloque, cambian
+  eso: `<!-- check: skip (motivo) -->` lo salta (fragmentos de varios archivos, código con
+  dependencias) y `<!-- check: project=examples/apps/<x> -->` exige que el bloque aparezca tal
+  cual en un `.ray` de ese proyecto y que el proyecto compile. Además: ningún bloque `raylang`,
+  enlaces relativos que resuelven, cada capítulo enlazado desde `index.md` y con su `.en.md`, y
+  ningún M-número fuera del código.
+- `tests/docs_i18n.rs` y `tools/docs_sync.py` cubren `handbook/*.en.md` (hecho).
+- `.github/workflows/handbook.yml` (hecho): `ci.yml` ignora `**.md` y `site/**`, así que una PR
+  que solo toque capítulos no correría la guarda. Este workflow compila `ray`, corre
+  `tests/handbook.rs` y `docs_i18n`, y genera el sitio aseverando una página por capítulo y
+  idioma. Se espera verde antes de fusionar cualquier PR del handbook.
+- `pages.yml` asevera las páginas del handbook en el despliegue (hecho).
 - Los proyectos `examples/apps/*` entran en la batería de ejemplos que ya compila el CI
-  (`ray check` + `ray test`); los de escritorio/móvil al menos `ray check` y `ray bundle --dry-run`
-  si existe, o `ray build --native --lib` para iOS/Android en el job de macOS.
+  (`ray check` + `ray test`); los de escritorio y móvil, al menos `ray check`, y
+  `ray build --native --lib` para iOS/Android en el job de macOS.
 
 ### B.7 Decisiones (tomadas el 1 oct 2026)
 

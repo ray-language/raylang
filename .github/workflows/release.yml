@@ -93,8 +93,6 @@ jobs:
           - { os: ubuntu-latest, target: aarch64-linux-android }
           - { os: ubuntu-latest, target: x86_64-linux-android }
     runs-on: ${{ matrix.os }}
-    env:
-      ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Rust estable + target
@@ -102,7 +100,11 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add ${{ matrix.target }}
       - name: Construir ray y la librería de desarrollo
+        # El NDK del runner de Ubuntu llega en ANDROID_NDK_LATEST_HOME; `ray dev-lib` lo busca en
+        # ANDROID_NDK_HOME. (El contexto `env` no está disponible en el `env:` de un job — el intento
+        # de mapearlo ahí invalidaba el workflow entero: runs 86–88 «workflow file issue».)
         run: |
+          if [ -n "${ANDROID_NDK_LATEST_HOME:-}" ]; then export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"; fi
           cargo build --release --quiet
           ./target/release/ray dev-lib --target ${{ matrix.target }} -o "$RUNNER_TEMP/devlib"
           file="libray_dev.a"; case "${{ matrix.target }}" in *android*) file="libray_dev.so";; esac

@@ -153,6 +153,7 @@ button.menu:hover { color: var(--ink); border-color: var(--accent); }
 button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* Móvil: los enlaces colapsan a un desplegable bajo la barra; GitHub y el tema se quedan. */
 @media (max-width: 56rem) {
+    .wrap { padding: 0 1rem; }
     nav.top .links {
         display: none;
         position: absolute;
@@ -164,7 +165,7 @@ button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentCo
         gap: 0;
         background: var(--bg);
         border-bottom: 1px solid var(--line);
-        padding: .3rem 1.5rem .9rem;
+        padding: .3rem 1rem .9rem;
         box-shadow: 0 18px 40px rgba(8, 24, 39, .25);
     }
     nav.top.open .links { display: flex; }

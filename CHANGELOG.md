@@ -16,6 +16,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `docs/mcp.md` documenta el argumento `path`. `examples/README.md` usa `ray run` y marca las
   librerías de `examples/web` como históricas. Nuevo `editors/README.md` con Neovim y Helix. Plan
   del handbook en `docs/plan-handbook.md`; evaluación de paquetes `llm`/`mcp` en IDEAS §100.
+- **`ray dev --device`: el teléfono ya ve los recursos embebidos y el frontend** (M335). El
+  lado dispositivo del enlace de desarrollo no configuraba `std/embed` como `ray run`: en una app
+  con `[frontend]` la página salía «not found» en el teléfono, y `embed.read` daba «no embedded
+  assets configured». Ahora el dispositivo fija los `[native] embed` y el `[frontend] dist` del
+  snapshot, y la identidad de la app, al arrancar el programa. Hay que regenerar el shell de
+  desarrollo (`ray bundle --ios --dev` / `--android --dev`). Encontrado al escribir el capítulo
+  móvil del handbook.
 
 ## 1.27.26 — 2026-10-01
 

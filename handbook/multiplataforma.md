@@ -317,5 +317,5 @@ publica, está en el manual: [auto-actualización y firma](../MANUAL.md#auto-act
 
 ## Siguiente paso
 
-Las notas salen del dispositivo: una **API web** con el framework `web`, Postgres y pools de
-conexiones. Es el próximo capítulo del handbook.
+Las notas salen del dispositivo: un [**sitio con plantillas**](ssr.md) renderizado en el servidor,
+y después una [**API web**](api.md) con Postgres.

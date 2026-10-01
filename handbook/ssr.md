@@ -320,5 +320,5 @@ programa, `listen_tls` recibe el certificado y la clave.
 
 ## Siguiente paso
 
-El mismo tipo de servidor, pero sin páginas: una **API web** que responde JSON, con Postgres y
-pools de conexiones. Es el próximo capítulo del handbook.
+El mismo tipo de servidor, pero sin páginas: una [**API web**](api.md) que responde JSON, con
+Postgres y un pool de conexiones.

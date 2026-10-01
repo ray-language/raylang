@@ -27,13 +27,14 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    templates, forms, Markdown and the data in files.
 5. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
    agent written in raylang that talks to Claude and uses tools through MCP.
+6. [Web API](api.en.md): the notes as a JSON API with the `web` framework, Postgres with a
+   connection pool, token authentication and graceful shutdown.
 
 ## Coming next
 
 These chapters are published one by one, each with its complete example project in
 `examples/apps/`:
 
-- **Web API** with the `web` framework, Postgres and connection pools.
 - **Site with an embedded React frontend** in the binary, with Redis.
 - **Shipping**: packaging, signing, notarizing and auto-updating.
 
@@ -41,4 +42,4 @@ The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:0be86cba6019 -->
+<!-- sync: sha256:d4426494fc83 -->

@@ -313,7 +313,7 @@ published, it is in the manual (Spanish):
 
 ## Next step
 
-The notes leave the device: a **web API** with the `web` framework, Postgres and connection pools.
-It is the next handbook chapter.
+The notes leave the device: a [**server-rendered site**](ssr.en.md), and then a
+[**web API**](api.en.md) with Postgres.
 
-<!-- sync: sha256:8f033bb88665 -->
+<!-- sync: sha256:f0133db13e02 -->

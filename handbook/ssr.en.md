@@ -318,7 +318,7 @@ takes the certificate and the key.
 
 ## Next step
 
-The same kind of server, without pages: a **web API** that answers JSON, with Postgres and
-connection pools. It is the next handbook chapter.
+The same kind of server, without pages: a [**web API**](api.en.md) that answers JSON, with
+Postgres and a connection pool.
 
-<!-- sync: sha256:6f65fea405f6 -->
+<!-- sync: sha256:36a766814f07 -->

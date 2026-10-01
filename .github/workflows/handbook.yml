@@ -29,6 +29,32 @@ jobs:
   handbook:
     name: handbook · bloques · sitio
     runs-on: ubuntu-latest
+    # Los proyectos de ejemplo con base de datos se prueban contra servicios reales.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: notes
+          POSTGRES_PASSWORD: notes
+          POSTGRES_DB: notes
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U notes" --health-interval 2s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      NOTES_TEST_PG: "1"
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: notes
+      PGPASSWORD: notes
+      PGDATABASE: notes
+      NOTES_TEST_REDIS: "1"
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Rust estable

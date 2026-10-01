@@ -391,7 +391,7 @@ From here, each handbook guide is a complete project. They are on the way, and t
 
 - a [**mobile app**](movil.en.md) for iOS and Android with a React frontend;
 - the same app on the [**desktop**](multiplataforma.en.md) (macOS, Linux, Windows);
-- a **web API** with the `web` framework;
+- a [**web API**](api.en.md) with the `web` framework;
 - a [**server-rendered site**](ssr.en.md) with templates;
 - a **site with a React frontend** embedded in the binary;
 - an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang;
@@ -400,4 +400,4 @@ From here, each handbook guide is a complete project. They are on the way, and t
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:be6579fbd305 -->
+<!-- sync: sha256:aa2f51be1e7b -->

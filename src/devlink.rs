@@ -831,6 +831,14 @@ impl Runner {
             .spawn(move || {
                 // El cwd del proceso es del programa (rutas relativas de `fs`, `ray.toml`…).
                 let _ = std::env::set_current_dir(&project);
+                // M335: `std/embed` (los `[native] embed` y el `[frontend] dist`) y la identidad
+                // de la app, como en `ray run`. Sin esto `ui.mount_embed_at("", "frontend/dist")`
+                // fallaba en el teléfono y la página salía «not found». La config se fija una vez
+                // por proceso: la raíz del snapshot no cambia entre recargas, y los archivos se
+                // leen en vivo de ella.
+                if let Ok(Some(m)) = crate::manifest::Manifest::load(&project) {
+                    crate::cli::configure_embed(&m.entry_path().to_string_lossy());
+                }
                 match load_and_compile(&project) {
                     Err(e) => {
                         eprintln!("{e}");

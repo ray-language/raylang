@@ -16,6 +16,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `docs/mcp.md` documenta el argumento `path`. `examples/README.md` usa `ray run` y marca las
   librerías de `examples/web` como históricas. Nuevo `editors/README.md` con Neovim y Helix. Plan
   del handbook en `docs/plan-handbook.md`; evaluación de paquetes `llm`/`mcp` en IDEAS §100.
+- **Android: la app ya no queda bajo la barra de estado ni el teclado tapa los campos** (M334).
+  El shell de `ray bundle --android` apunta a la API 35, donde Android dibuja de borde a borde, y
+  no reservaba las barras del sistema. Ahora el WebView va dentro de un contenedor que recibe como
+  relleno las barras, el recorte de la cámara y el teclado (Android 11+; en versiones anteriores
+  el sistema ya reservaba esas zonas). Regenera el bundle para obtenerlo. Encontrado al escribir el
+  capítulo móvil del handbook.
 
 ## 1.27.26 — 2026-10-01
 

@@ -1,0 +1,67 @@
+// Tests of the Redis store. They need a Redis: set NOTES_TEST_REDIS=1 plus REDIS_HOST and
+// REDIS_PORT (CI starts one as a service container); without it they print that they were
+// skipped. Each test tags its notes with a unique word and cleans up after itself.
+import std/uuid;
+import net/redis;
+import store;
+from net/redis import Pool;
+
+fn database() -> Option<Pool> {
+    if (env("NOTES_TEST_REDIS") != Option.Some("1")) {
+        print("skipped: set NOTES_TEST_REDIS=1, REDIS_HOST and REDIS_PORT to run the Redis tests");
+        return Option.None;
+    }
+    Option.Some(store.pool_from_env(2))
+}
+
+@test
+fn a_note_goes_through_its_whole_life() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    let tag = "life-" + uuid.uuid_v4();
+    let n = store.save(p, "", "Test " + tag, "body", 1000).unwrap().unwrap();
+    assert_eq(store.get(p, n.id).unwrap().unwrap().title, "Test " + tag);
+    assert_eq(store.list(p, tag, 10).unwrap().len(), 1);
+    let edited = store.save(p, n.id, "Edited " + tag, "new", 2000).unwrap().unwrap();
+    assert_eq(edited.id, n.id);
+    assert(store.save(p, "no-such-id", "x", "", 3000).unwrap().is_none());
+    assert(store.remove(p, n.id).unwrap());
+    assert(store.get(p, n.id).unwrap().is_none());
+    assert(!store.remove(p, n.id).unwrap());
+    redis.pool_close(p);
+}
+
+@test
+fn the_newest_edit_comes_first() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    let tag = "order-" + uuid.uuid_v4();
+    let a = store.save(p, "", "A " + tag, "", 1000).unwrap().unwrap();
+    let b = store.save(p, "", "B " + tag, "", 2000).unwrap().unwrap();
+    assert_eq(store.list(p, tag, 10).unwrap()[0].id, b.id);
+    let _ = store.save(p, a.id, "A " + tag, "edited", 3000).unwrap();
+    assert_eq(store.list(p, tag, 10).unwrap()[0].id, a.id);
+    let _ = store.remove(p, a.id);
+    let _ = store.remove(p, b.id);
+    redis.pool_close(p);
+}
+
+@test
+fn deleting_also_leaves_the_index() {
+    let p = match (database()) {
+        Option.Some(p) => p,
+        Option.None => return,
+    };
+    let n = store.save(p, "", "Gone " + uuid.uuid_v4(), "", 1000).unwrap().unwrap();
+    let _ = store.remove(p, n.id).unwrap();
+    // The Lua script removed the hash and the index entry together.
+    match (redis.pool_command(p, ["ZSCORE", "notes:by_date", n.id]).unwrap()) {
+        redis.Reply.Nil => { },
+        other => panic("still in the index: " + redis.reply_str(other)),
+    }
+    redis.pool_close(p);
+}

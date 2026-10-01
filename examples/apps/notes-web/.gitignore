@@ -1,0 +1,4 @@
+.ray-deps/
+.ray-dev
+frontend/node_modules/
+frontend/dist/

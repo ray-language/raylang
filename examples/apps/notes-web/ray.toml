@@ -1,0 +1,15 @@
+[package]
+name = "notes-web"
+version = "0.1.0"
+
+[dependencies]
+web = "^0.4.6"
+net = "^0.5.0"
+
+# The React frontend (Vite). `ray dev` runs `dev` next to the program; `ray build --native`
+# runs `build` and embeds `dist` in the binary, which then serves it.
+[frontend]
+dev = "npm --prefix frontend run dev -- --strictPort --clearScreen false"
+url = "http://localhost:5173"
+build = "npm --prefix frontend run build"
+dist = "frontend/dist"

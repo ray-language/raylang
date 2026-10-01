@@ -151,9 +151,15 @@ button.menu {
 }
 button.menu:hover { color: var(--ink); border-color: var(--accent); }
 button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-/* Móvil: los enlaces colapsan a un desplegable bajo la barra; GitHub y el tema se quedan. */
+/* En teléfonos, menos margen lateral. */
 @media (max-width: 56rem) {
     .wrap { padding: 0 1rem; }
+}
+/* Los enlaces de la barra no parten línea («Desktop y móvil» en dos líneas rompía la barra). */
+nav.top .links a.link { white-space: nowrap; }
+/* Hasta 75rem la barra completa no cabe (medido: ocho enlaces + idioma + tema + GitHub caben
+   desde 1200 px): los enlaces colapsan a un desplegable bajo la barra; GitHub queda fuera. */
+@media (max-width: 75rem) {
     nav.top .links {
         display: none;
         position: absolute;
@@ -181,7 +187,7 @@ button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentCo
 /* El selector de tema: en la barra en escritorio, dentro del desplegable en móvil (hay un
    grupo en cada sitio; el JS los sincroniza todos). */
 nav.top .links .theme { display: none; }
-@media (max-width: 56rem) {
+@media (max-width: 75rem) {
     nav.top .wrap > .theme { display: none; }
     nav.top .links .theme { display: flex; margin-top: .9rem; align-self: flex-start; }
 }

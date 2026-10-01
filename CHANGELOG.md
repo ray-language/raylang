@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.26 — 2026-10-01
+
+- **Audio sin clics en iPhone** (M332, rayplay): `std/audio` crepitaba en iOS con la latencia
+  por defecto y hacía clic al parar, al cambiar de pista y al bloquear la pantalla. La salida
+  CoreAudio aplica ahora una rampa de ~3 ms a la salida y a la entrada de cada hueco (sin mover
+  un octeto de la línea de tiempo), el hilo alimentador corre con QoS interactiva en Apple, y en
+  iOS la AudioQueue tiene un suelo de 25 ms por búfer y 100 ms de anillo independiente de la
+  latencia pedida. macOS no cambia de latencia.
+
 ## 1.27.25 — 2026-09-30
 
 - **Hot reload del programa en el teléfono, primeras fases** (M330, `RAYLANG-FINDINGS.md`

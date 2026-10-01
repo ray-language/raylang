@@ -39,12 +39,20 @@ const APP_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
 /*RAY_AUDIO_IMPORT*/
 
+extern void ray_ui_will_terminate(void); // M332: apaga el audio con rampa antes de morir
+
 @implementation AppDelegate
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     /*RAY_AUDIO_SESSION*/
     return YES;
+}
+
+// M332 (rayplay): cerrar la app desde el selector con el audio sonando mataba el proceso con la
+// cola a mitad de onda (clic). Con la sesión de reproducción activa iOS avisa aquí antes.
+- (void)applicationWillTerminate:(UIApplication *)application {
+    ray_ui_will_terminate();
 }
 
 @end

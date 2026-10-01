@@ -183,6 +183,18 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
         // drena el backend y termina.
         let ctl_thread = ctl.clone();
         std::thread::spawn(move || {
+            // M332: en Apple el alimentador pide la clase de QoS interactiva — en iOS un hilo
+            // de prioridad normal puede tardar más que un búfer de la AudioQueue en despertar
+            // (y al bloquear la pantalla, bastante más): el anillo se vaciaba y crepitaba.
+            // SAFETY: llamada de libSystem sobre el hilo actual; un fallo solo deja la QoS por defecto.
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            unsafe {
+                unsafe extern "C" {
+                    fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+                }
+                const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            }
             let mut sink = sink;
             let mut buf = vec![0u8; chunk];
             loop {
@@ -257,6 +269,13 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
 /// Espera a que TODO lo escrito suene: pipe vacío + alimentador sin nada en vuelo + un margen de
 /// la latencia del dispositivo. Bloquea el hilo (uso raro, al final de una sesión) — el margen
 /// es aproximado por diseño: el "de verdad sonó" exacto es del backend y v1 no lo persigue.
+/// M332: apaga con rampa las salidas vivas antes de que el proceso muera (iOS:
+/// `applicationWillTerminate`). Fuera de CoreAudio no hace nada.
+pub fn quiesce() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    coreaudio::quiesce();
+}
+
 pub fn drain(key: i64) -> Result<(), String> {
     let ctl = match ctls().lock().unwrap().get(&key) {
         Some(c) => c.clone(),
@@ -457,6 +476,35 @@ mod coreaudio {
         ) -> i32;
         fn AudioQueueStop(q: AudioQueueRef, immediate: u8) -> i32;
         fn AudioQueueDispose(q: AudioQueueRef, immediate: u8) -> i32;
+        fn AudioQueueSetParameter(q: AudioQueueRef, param: u32, value: f32) -> i32;
+    }
+    const PARAM_VOLUME: u32 = 1; // kAudioQueueParam_Volume
+    const PARAM_VOLUME_RAMP_TIME: u32 = 4; // kAudioQueueParam_VolumeRampTime (segundos)
+
+    /// M332: las colas vivas, para apagarlas con rampa cuando el SO va a matar el proceso
+    /// (`quiesce`): en iOS cerrar la app desde el selector mata el proceso con la cola a mitad
+    /// de onda — un clic que ninguna rampa sobre nuestros datos puede evitar.
+    fn live_queues() -> &'static Mutex<Vec<usize>> {
+        static Q: std::sync::OnceLock<Mutex<Vec<usize>>> = std::sync::OnceLock::new();
+        Q.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    /// Baja a cero el volumen de todas las colas vivas con una rampa de CoreAudio de 30 ms y
+    /// espera a que termine. Para llamar justo antes de que el proceso muera (el shell iOS en
+    /// `applicationWillTerminate`). Idempotente; sin colas no hace nada.
+    pub fn quiesce() {
+        let queues: Vec<usize> = live_queues().lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if queues.is_empty() {
+            return;
+        }
+        for q in &queues {
+            // SAFETY: refs de colas vivas (se retiran del registro antes de Dispose).
+            unsafe {
+                AudioQueueSetParameter(*q as AudioQueueRef, PARAM_VOLUME_RAMP_TIME, 0.03);
+                AudioQueueSetParameter(*q as AudioQueueRef, PARAM_VOLUME, 0.0);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(60));
     }
 
     /// El AudioTimeStamp de CoreAudio (solo se lee mSampleTime y mFlags).
@@ -488,6 +536,45 @@ mod coreaudio {
         /// Todo lo encolado se INSERTA en la línea de tiempo — el silencio es latencia
         /// permanente, así que se encola el mínimo que evita que la cola muera (rallyx).
         keepalive_bytes: usize,
+        /// M332: ¿la salida anterior terminó en silencio (anillo seco o rampa de salida)? Si
+        /// sí, el siguiente bloque con datos arranca con una rampa de entrada. Solo lo toca el
+        /// callback (un hilo), con el anillo bloqueado.
+        after_gap: std::sync::atomic::AtomicBool,
+        /// M332: fotogramas de la rampa anti-clic (10 ms). Un corte a mitad de onda — `close`,
+        /// cambio de pista, o el anillo vaciándose porque iOS congeló el proceso al bloquear la
+        /// pantalla — suena como un clic; atenuado a cero en unos milisegundos es un silencio
+        /// limpio. El callback RETIENE siempre esta cola del anillo y solo la entrega atenuada
+        /// cuando no ha llegado nada más (fin real o hueco real): vaciar el anillo en una vuelta
+        /// no significa que venga silencio, y fundir ahí a ciegas sonaba como un ruido al cambiar
+        /// de pista. No añade ni quita un octeto: la línea de tiempo no cambia (la regla de
+        /// rallyx de arriba se mantiene).
+        ramp_frames: usize,
+    }
+
+    /// Rampa lineal sobre `frames` fotogramas s16le de `out` desde el fotograma `from`
+    /// (`fade_in`: de 0 a 1; si no, de 1 a 0). Todos los canales del fotograma por igual.
+    fn ramp(out: &mut [u8], frame_bytes: usize, from: usize, frames: usize, fade_in: bool) {
+        for i in 0..frames {
+            let k = if fade_in { i as f32 / frames as f32 } else { 1.0 - (i + 1) as f32 / frames as f32 };
+            let base = (from + i) * frame_bytes;
+            let mut off = 0;
+            while off + 1 < frame_bytes {
+                let p = base + off;
+                if p + 1 >= out.len() {
+                    return;
+                }
+                let s = i16::from_le_bytes([out[p], out[p + 1]]);
+                let b = ((s as f32 * k) as i16).to_le_bytes();
+                out[p] = b[0];
+                out[p + 1] = b[1];
+                off += 2;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn ramp_for_tests(out: &mut [u8], frame_bytes: usize, from: usize, frames: usize, fade_in: bool) {
+        ramp(out, frame_bytes, from, frames, fade_in)
     }
 
     pub struct CoreAudioSink {
@@ -513,22 +600,43 @@ mod coreaudio {
             // relleno es LATENCIA PERMANENTE (hallazgo de rallyx: 150 ms de cebado + 50 ms por
             // underrun con el diseño anterior).
             let fb = shared.frame_bytes;
-            let take = (ring.len().min(cap) / fb) * fb;
+            let avail = (ring.len() / fb) * fb;
+            let hold = shared.ramp_frames * fb;
+            // M332: si esta vuelta vaciaría el anillo, retén la cola de la rampa (salvo que ya
+            // sea solo la cola: entonces es el fin o un hueco real, y sale fundida).
+            let (take, fading_out) = if avail > cap {
+                (cap / fb * fb, false)
+            } else if avail > hold {
+                (avail - hold, false)
+            } else {
+                (avail, avail > 0)
+            };
             if take > 0 {
                 for slot in out.iter_mut().take(take) {
                     *slot = ring.pop_front().unwrap_or(0);
                 }
+                drop(ring);
+                let frames = take / fb;
+                if shared.after_gap.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    ramp(out, fb, 0, shared.ramp_frames.min(frames), true);
+                }
+                if fading_out {
+                    let n = shared.ramp_frames.min(frames);
+                    ramp(out, fb, frames - n, n, false);
+                    shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 (*buf).audio_data_byte_size = take as u32;
             } else {
+                drop(ring);
                 // Anillo seco: el MÍNIMO de silencio que mantiene viva la cola (~8 ms) — un
                 // buffer sin encolar sale de la rotación y la cola muere.
                 let silence = shared.keepalive_bytes.min(cap).max(fb);
                 for slot in out.iter_mut().take(silence) {
                     *slot = 0;
                 }
+                shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
                 (*buf).audio_data_byte_size = silence as u32;
             }
-            drop(ring);
             shared.space.notify_all();
             AudioQueueEnqueueBuffer(q, buf, 0, std::ptr::null());
         }
@@ -558,9 +666,25 @@ mod coreaudio {
         // ya guarda la otra mitad (ver `open`). Suelos: 4 KiB de anillo y 1 KiB por buffer.
         let frame_bytes = bytes_per_frame as usize;
         let bytes_per_sec = (rate * channels * 2) as usize;
-        let cap =
-            (bytes_per_sec * latency_ms as usize / 4000).max(4096) / frame_bytes * frame_bytes;
-        let buf_size = ((bytes_per_sec * latency_ms as usize / 12000).max(1024) / frame_bytes * frame_bytes) as u32;
+        // M332 (rayplay en iPhone): en iOS la AudioQueue no perdona búferes de 10 ms con un
+        // consumidor que no es de tiempo real — con la latencia por defecto se vaciaba y
+        // crepitaba. Y al bloquear o desbloquear la pantalla iOS CONGELA los hilos de la app
+        // unos 200 ms (medido: el `write` del programa se bloquea 130–206 ms y `played_ms`
+        // salta otro tanto) mientras la cola sigue sonando: lo único que la alimenta entonces
+        // es lo que ya tiene encolado DENTRO. Suelo en iOS: 4 búferes de 60 ms (240 ms
+        // encolados) y un anillo de al menos 100 ms, independientes de la latencia pedida (que
+        // sigue mandando por encima). En macOS sobra CPU y se respeta la petición tal cual.
+        let (min_buf_ms, min_ring_ms): (usize, usize) = if cfg!(target_os = "ios") { (60, 100) } else { (0, 0) };
+        let cap = (bytes_per_sec * latency_ms as usize / 4000)
+            .max(bytes_per_sec * min_ring_ms / 1000)
+            .max(4096)
+            / frame_bytes
+            * frame_bytes;
+        let buf_size = ((bytes_per_sec * latency_ms as usize / 12000)
+            .max(bytes_per_sec * min_buf_ms / 1000)
+            .max(1024)
+            / frame_bytes
+            * frame_bytes) as u32;
         // ~8 ms de silencio de keepalive (el cebado son 3 → ~24 ms de retraso inicial, no 150).
         let keepalive_bytes = (bytes_per_sec / 125).max(frame_bytes) / frame_bytes * frame_bytes;
         let shared = Arc::new(Shared {
@@ -569,6 +693,8 @@ mod coreaudio {
             cap,
             frame_bytes,
             keepalive_bytes,
+            after_gap: std::sync::atomic::AtomicBool::new(true), // la primera salida arranca suave
+            ramp_frames: (rate as usize / 100).max(64),       // 10 ms
         });
         let user = Arc::into_raw(shared.clone()) as *mut std::ffi::c_void;
         let mut q: AudioQueueRef = std::ptr::null_mut();
@@ -581,8 +707,9 @@ mod coreaudio {
             unsafe { drop(Arc::from_raw(user as *const Shared)) };
             return Err(format!("audio: AudioQueueNewOutput failed (OSStatus {st})"));
         }
+        let buffers = if cfg!(target_os = "ios") { 4 } else { 3 };
         unsafe {
-            for _ in 0..3 {
+            for _ in 0..buffers {
                 let mut b: AudioQueueBufferRef = std::ptr::null_mut();
                 if AudioQueueAllocateBuffer(q, buf_size, &mut b) == 0 {
                     on_buffer(user, q, b); // se estrena con silencio y queda encolado
@@ -595,6 +722,7 @@ mod coreaudio {
                 return Err(format!("audio: AudioQueueStart failed (OSStatus {st})"));
             }
         }
+        live_queues().lock().unwrap_or_else(|e| e.into_inner()).push(q as usize);
         Ok(Box::new(CoreAudioSink { q, shared, played }))
     }
 
@@ -636,6 +764,7 @@ mod coreaudio {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
+            live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
             unsafe {
                 AudioQueueStop(self.q, 0);
                 AudioQueueDispose(self.q, 0);
@@ -646,6 +775,38 @@ mod coreaudio {
 }
 
 // ── Linux: ALSA por dlopen (sin headers de build; sin libasound → Err claro) ────
+#[cfg(all(test, any(target_os = "macos", target_os = "ios")))]
+mod coreaudio_tests {
+    /// M332: la rampa atenúa a cero (salida) o desde cero (entrada) sin mover un octeto, por
+    /// fotograma y para todos los canales.
+    #[test]
+    fn the_ramp_fades_frames_in_place() {
+        let frame_bytes = 4; // estéreo s16le
+        let mut out = Vec::new();
+        for _ in 0..8 {
+            out.extend_from_slice(&1000i16.to_le_bytes());
+            out.extend_from_slice(&(-1000i16).to_le_bytes());
+        }
+        let before = out.len();
+        super::coreaudio::ramp_for_tests(&mut out, frame_bytes, 4, 4, false);
+        assert_eq!(out.len(), before);
+        fn l(o: &[u8], f: usize) -> i16 {
+            i16::from_le_bytes([o[f * 4], o[f * 4 + 1]])
+        }
+        fn r(o: &[u8], f: usize) -> i16 {
+            i16::from_le_bytes([o[f * 4 + 2], o[f * 4 + 3]])
+        }
+        assert_eq!((l(&out, 3), r(&out, 3)), (1000, -1000), "untouched before the ramp");
+        let tail = [l(&out, 4), l(&out, 5), l(&out, 6), l(&out, 7)];
+        assert!(tail[0] < 1000 && tail[0] > tail[1] && tail[1] > tail[2] && tail[2] > tail[3], "decreasing: {tail:?}");
+        assert_eq!((l(&out, 7), r(&out, 7)), (0, 0), "ends at silence");
+        super::coreaudio::ramp_for_tests(&mut out, frame_bytes, 0, 4, true);
+        let head = [l(&out, 0), l(&out, 1), l(&out, 2), l(&out, 3)];
+        assert_eq!(head[0], 0);
+        assert!(head[0] < head[1] && head[1] < head[2] && head[2] < head[3], "increasing: {head:?}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod alsa {
     use super::Sink;

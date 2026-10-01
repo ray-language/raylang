@@ -365,7 +365,8 @@ documentada:
   grupo del hijo, `WaitForSingleObject` sobre el handle que posee `Child`, y `PeekNamedPipe` sobre un
   pipe propio pidiendo solo el contador de octetos.
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
-  pipe + `read`/`close`/`fcntl` variádico del hilo alimentador e `ioctl(FIONREAD)` del drain; en
+  pipe + `read`/`close`/`fcntl` variádico del hilo alimentador (M332: y `pthread_set_qos_class_self_np` sobre
+  el propio hilo en Apple) e `ioctl(FIONREAD)` del drain; en
   macOS **e iOS** (M324: el mismo `mod coreaudio` bajo `cfg(any(macos, ios))`; el shell iOS
   enlaza el framework) las llamadas a **AudioQueue** (AudioToolbox.framework, enlazado — structs
   replicadas del header, el callback solo toca estado propio sincronizado); en Linux **ALSA por `dlopen`** en

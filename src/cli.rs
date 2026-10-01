@@ -2881,7 +2881,7 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
 /// Devuelve el primero ausente; `None` si están todos o si `nm` no está (no se puede saber → callar).
 fn preserved_lib_missing_symbol(lib: &Path) -> Option<&'static str> {
     // Los símbolos del runtime que el shell iOS referencia, del más reciente al más antiguo.
-    const SHELL_SYMBOLS: &[&str] = &["ray_ui_shell_capabilities", "ray_ui_scheme_open", "ray_ui_push_event", "ray_ui_set_handlers", "ray_start"];
+    const SHELL_SYMBOLS: &[&str] = &["ray_ui_will_terminate", "ray_ui_shell_capabilities", "ray_ui_scheme_open", "ray_ui_push_event", "ray_ui_set_handlers", "ray_start"];
     let out = process::Command::new("nm").arg("-gU").arg(lib).output().ok()?;
     if !out.status.success() {
         return None;

@@ -1,0 +1,78 @@
+// Tests without network and without an API key. The Messages API is replaced by a scripted
+// function; the MCP server is the real `ray mcp` of the toolchain running the tests.
+import std/json;
+import std/process;
+import claude;
+import mcp;
+import agent;
+
+// The `ray` that runs these tests (so CI and your machine use the same toolchain).
+fn ray_bin() -> string {
+    process.self_command()[0]
+}
+
+const TOOL_USE: string = `{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use",
+"content":[{"type":"text","text":"Let me run it."},
+{"type":"tool_use","id":"toolu_1","name":"ray_run","input":{"code":"fn main() { print(6 * 7); }"}}]}`;
+
+const END_TURN: string = `{"id":"msg_2","type":"message","role":"assistant","stop_reason":"end_turn",
+"content":[{"type":"text","text":"It prints 42."}]}`;
+
+@test
+fn a_tool_use_reply_is_parsed() {
+    let r = claude.parse_reply(TOOL_USE).unwrap();
+    assert_eq(r.stop_reason, "tool_use");
+    assert_eq(r.text, "Let me run it.");
+    assert_eq(r.calls.len(), 1);
+    assert_eq(r.calls[0].name, "ray_run");
+    assert(r.calls[0].input.contains("print(6 * 7)"));
+}
+
+@test
+fn an_api_error_is_an_error() {
+    let body = `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`;
+    assert(claude.parse_reply(body).is_err());
+}
+
+@test
+fn the_request_body_is_valid_json() {
+    let body = claude.request_body(
+        "claude-opus-5-5",
+        "sys",
+        "[]",
+        [claude.user_text("hi \"there\"")]
+    );
+    let j = json.parse(body).unwrap();
+    assert_eq(json.get_string(j, "model"), Option.Some("claude-opus-5-5"));
+    assert_eq(json.get_array(j, "messages").unwrap().len(), 1);
+}
+
+@test
+fn the_mcp_client_talks_to_ray_mcp() {
+    let server = mcp.connect(ray_bin(), ["mcp"]).unwrap();
+    let names = mcp.tools(server).unwrap().map(fn(t: mcp.Tool) -> string { t.name });
+    assert(names.contains("ray_check"));
+    assert(names.contains("ray_run"));
+    let out = mcp.call_tool(server, "ray_run", `{"code":"fn main() { print(6 * 7); }"}`).unwrap();
+    assert(out.contains("42"));
+    mcp.close(server);
+}
+
+@test
+fn the_loop_runs_a_tool_and_returns_the_answer() {
+    let server = mcp.connect(ray_bin(), ["mcp"]).unwrap();
+    // The scripted API: the first request has no tool result yet, so it asks for `ray_run`;
+    // once the result (with 42 in it) comes back, it answers.
+    let seen: Channel<string> = Channel.bounded(8);
+    let ask = fn(body: string) -> Result<string, string> {
+        send(seen, body);
+        if (body.contains("tool_result")) { Result.Ok(END_TURN) } else { Result.Ok(TOOL_USE) }
+    };
+    let answer = agent.run(ask, server, "claude-opus-5-5", "what does 6 * 7 print?", 5).unwrap();
+    assert_eq(answer, "It prints 42.");
+    let _first = recv(seen).unwrap();
+    let second = recv(seen).unwrap();
+    assert(second.contains("tool_use_id"));
+    assert(second.contains("42"));
+    mcp.close(server);
+}

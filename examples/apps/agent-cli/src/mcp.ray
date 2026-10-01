@@ -1,0 +1,131 @@
+// A minimal MCP client over stdio. An MCP server is a process that reads JSON-RPC 2.0 requests on
+// stdin, one per line, and answers on stdout, also one per line. The client starts it once, says
+// hello (`initialize`), and then asks for its tools and calls them on the same process.
+import std/json;
+import std/process;
+from std/json import Json;
+
+/// A running server and what is left of its output after the last complete line.
+pub struct Client {
+    proc: process.Proc,
+    pending: string,
+    next_id: int,
+}
+
+/// A tool the server offers: its name, description and JSON schema (as text).
+pub struct Tool {
+    name: string,
+    description: string,
+    schema: string,
+}
+
+fn request(id: int, method: string, params: string) -> string {
+    "{\"jsonrpc\":\"2.0\",\"id\":"
+        + to_string(id)
+        + ",\"method\":"
+        + json.stringify(Json.JStr(method))
+        + ",\"params\":"
+        + params
+        + "}\n"
+}
+
+// The next complete line of output. The process delivers chunks of bytes, not lines, so the
+// client keeps what is left after the last newline for the next call.
+fn read_line(c: Client) -> Result<string, string> {
+    while (true) {
+        match (c.pending.index_of("\n")) {
+            Option.Some(i) => {
+                let line = c.pending.substring(0, i);
+                c.pending = c.pending.substring(i + 1, c.pending.len());
+                return Result.Ok(line);
+            },
+            Option.None => { },
+        }
+        match (recv(c.proc.out)) {
+            Option.Some(chunk) => {
+                c.pending = c.pending + from_utf8(chunk).unwrap_or("");
+            },
+            Option.None => return Result.Err("the MCP server closed its output"),
+        }
+    }
+    Result.Err("unreachable")
+}
+
+// Sends a request and waits for the answer with the same id (notifications in between are skipped).
+fn call(c: Client, method: string, params: string) -> Result<Json, string> {
+    c.next_id = c.next_id + 1;
+    let id = c.next_id;
+    let _ = c.proc.write(request(id, method, params).to_bytes())?;
+    while (true) {
+        let line = read_line(c)?;
+        let msg = match (json.parse(line)) {
+            Result.Ok(m) => m,
+            Result.Err(_) => continue,
+        };
+        if (json.get_int(msg, "id") != Option.Some(id)) {
+            continue;
+        }
+        match (json.member(msg, "error")) {
+            Option.Some(e) => return Result.Err(json.get_string(e, "message").unwrap_or("MCP error")),
+            Option.None => { },
+        }
+        return Result.Ok(json.member(msg, "result").unwrap_or(Json.JNull));
+    }
+    Result.Err("unreachable")
+}
+
+/// Starts `program args…` as an MCP server and performs the handshake.
+pub fn connect(program: string, args: [string]) -> Result<Client, string> {
+    let proc = process.cmd(program, args).stdin_pipe().stream()?;
+    let c = Client { proc: proc, pending: "", next_id: 0 };
+    let _ = call(
+        c,
+        "initialize",
+        `{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-cli","version":"0.1.0"}}`
+    )?;
+    let _ = c.proc.write(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n".to_bytes()
+    )?;
+    Result.Ok(c)
+}
+
+/// The tools the server offers.
+pub fn tools(c: Client) -> Result<[Tool], string> {
+    let result = call(c, "tools/list", "{}")?;
+    var out: [Tool] = [];
+    for t in json.get_array(result, "tools")
+        .unwrap_or([]) {
+        out.push(
+            Tool {
+                name: json.get_string(t, "name").unwrap_or(""),
+                description: json.get_string(t, "description").unwrap_or(""),
+                schema: json.stringify(json.member(t, "inputSchema").unwrap_or(Json.JObject(Map.new())))
+            }
+        );
+    }
+    Result.Ok(out)
+}
+
+/// Calls a tool with its arguments (a JSON object as text). `Err` carries a failed tool's output.
+pub fn call_tool(c: Client, name: string, arguments: string) -> Result<string, string> {
+    let params = "{\"name\":"
+        + json.stringify(Json.JStr(name))
+        + ",\"arguments\":"
+        + arguments
+        + "}";
+    let result = call(c, "tools/call", params)?;
+    var text = "";
+    for block in json.get_array(result, "content").unwrap_or([]) {
+        text = text + json.get_string(block, "text").unwrap_or("");
+    }
+    if (json.get_bool(result, "isError").unwrap_or(false)) {
+        return Result.Err(text);
+    }
+    Result.Ok(text)
+}
+
+/// Ends the session: closes the server's stdin and waits for it to exit.
+pub fn close(c: Client) {
+    c.proc.close_stdin();
+    let _ = c.proc.wait();
+}

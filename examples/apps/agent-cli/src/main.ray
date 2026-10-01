@@ -1,0 +1,64 @@
+// agent-cli: ask a question about raylang from the terminal. The model answers using the tools of
+// `ray mcp` (check, run, test, format and look up raylang), so the code it shows has been compiled
+// and run first.
+//
+//   ANTHROPIC_API_KEY=… ray run -- "write a function that reverses the words of a string"
+import std/keychain;
+import claude;
+import mcp;
+import agent;
+from claude import Config;
+
+// The API key: ANTHROPIC_API_KEY, or the system keychain (service "agent-cli", account
+// "anthropic"), where `keychain.set("agent-cli", "anthropic", key)` stored it once.
+fn api_key() -> Result<string, string> {
+    match (env("ANTHROPIC_API_KEY")) {
+        Option.Some(k) => return Result.Ok(k),
+        Option.None => { },
+    }
+    match (keychain.get("agent-cli", "anthropic")?) {
+        Option.Some(k) => Result.Ok(k),
+        Option.None => Result.Err("set ANTHROPIC_API_KEY or store the key in the keychain"),
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() == 0) {
+        eprint("usage: agent-cli \"your question\"");
+        return 64;
+    }
+    let key = match (api_key()) {
+        Result.Ok(k) => k,
+        Result.Err(e) => {
+            eprint(e);
+            return 1;
+        },
+    };
+    let c = Config {
+        api_key: key,
+        model: env("AGENT_MODEL").unwrap_or("claude-opus-5-5"),
+        base_url: env("ANTHROPIC_BASE_URL").unwrap_or("https://api.anthropic.com")
+    };
+    // The MCP server: raylang's own toolchain. `RAY_BIN` points at a specific `ray` binary.
+    let server = match (mcp.connect(env("RAY_BIN").unwrap_or("ray"), ["mcp"])) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("could not start `ray mcp`: " + e);
+            return 1;
+        },
+    };
+    let ask = fn(body: string) -> Result<string, string> { claude.send(c, body) };
+    let code = match (agent.run(ask, server, c.model, argv.join(" "), 12)) {
+        Result.Ok(answer) => {
+            print(answer);
+            0
+        },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    };
+    mcp.close(server);
+    code
+}

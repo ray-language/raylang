@@ -1,0 +1,7 @@
+[package]
+name = "agent-cli"
+version = "0.1.0"
+
+[dependencies]
+# The HTTP client (TLS included) that talks to the Messages API.
+net = "path:../../../packages/net"

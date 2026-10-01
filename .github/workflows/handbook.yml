@@ -80,9 +80,12 @@ jobs:
         run: cargo run --bin ray -- run site/site.ray . _site
       - name: Verificar las páginas del handbook
         run: |
-          for f in $(ls handbook/*.md | grep -v '\.en\.md$'); do
+          pages=0
+          for f in handbook/*.md; do
+            case "$f" in *.en.md) continue ;; esac
             slug=$(basename "$f" .md)
             test -f "_site/handbook/$slug.html"
             test -f "_site/en/handbook/$slug.html"
+            pages=$((pages + 1))
           done
-          echo "handbook OK: $(ls _site/handbook | wc -l) páginas por idioma"
+          echo "handbook OK: $pages páginas por idioma"

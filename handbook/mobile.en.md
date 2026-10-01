@@ -382,8 +382,8 @@ Mac:
 A release build always ignores that variable.
 
 > [!NOTE]
-> With 1.27.26, the development app cannot find the embedded frontend and shows "not found". It is
-> fixed in the next version: update raylang and regenerate the development app with
+> Up to 1.27.26, the development app could not find the embedded frontend and showed "not found".
+> It is fixed since 1.27.27: update raylang and regenerate the development app with
 > `ray bundle --ios --dev` or `--android --dev`.
 
 ## 11. What changes compared to the desktop
@@ -399,13 +399,13 @@ A release build always ignores that variable.
 - **Inspecting the page:** with `--devtools`, Safari (Develop menu) inspects the iPhone's webview,
   and `chrome://inspect` the Android one.
 - **Android edge to edge:** since Android 15 the system draws the app under the bars. The shell from
-  `ray bundle --android` reserves the system bars and the keyboard from the version after 1.27.26.
-  If your app shows up under the status bar or the keyboard covers the fields, update raylang and
-  regenerate the bundle.
+  `ray bundle --android` reserves the system bars and the keyboard since 1.27.27. If your app shows
+  up under the status bar or the keyboard covers the fields, update raylang and regenerate the
+  bundle.
 
 ## Next step
 
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:2f97be30b94a -->
+<!-- sync: sha256:3e8400fb74b0 -->

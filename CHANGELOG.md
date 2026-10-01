@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.27 — 2026-10-01
 
 - **Handbook: siete capítulos con su app de ejemplo** (`handbook/`, `examples/apps/`), en español e
   inglés y con cada bloque de código comprobado por el CI contra su proyecto: **App móvil** (React +

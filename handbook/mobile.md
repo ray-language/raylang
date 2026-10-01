@@ -384,8 +384,8 @@ de Vite de tu Mac:
 Un build de release ignora esa variable siempre.
 
 > [!NOTE]
-> Con la 1.27.26, la app de desarrollo no encuentra el frontend embebido y muestra «not found».
-> Está corregido en la versión siguiente: actualiza raylang y regenera la app de desarrollo con
+> Hasta la 1.27.26, la app de desarrollo no encontraba el frontend embebido y mostraba «not
+> found». Está corregido desde la 1.27.27: actualiza raylang y regenera la app de desarrollo con
 > `ray bundle --ios --dev` o `--android --dev`.
 
 ## 11. Lo que cambia respecto al escritorio
@@ -401,9 +401,9 @@ Un build de release ignora esa variable siempre.
 - **Inspeccionar la página:** con `--devtools`, Safari (menú Develop) inspecciona el webview del
   iPhone, y `chrome://inspect` el de Android.
 - **Android de borde a borde:** desde Android 15 el sistema dibuja la app bajo las barras. El shell
-  de `ray bundle --android` reserva las barras del sistema y el teclado desde la versión siguiente
-  a la 1.27.26. Si tu app aparece debajo de la barra de estado o el teclado tapa los campos,
-  actualiza raylang y regenera el bundle.
+  de `ray bundle --android` reserva las barras del sistema y el teclado desde la 1.27.27. Si tu app
+  aparece debajo de la barra de estado o el teclado tapa los campos, actualiza raylang y regenera
+  el bundle.
 
 ## Siguiente paso
 

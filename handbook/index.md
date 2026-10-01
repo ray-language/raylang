@@ -25,6 +25,8 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
 4. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
    compiladas, formularios, Markdown y los datos en archivos.
+5. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
+   escrito en raylang que habla con Claude y usa herramientas por MCP.
 
 ## En camino
 
@@ -33,7 +35,6 @@ Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo comp
 
 - **API web** con el framework `web`, Postgres y pools de conexiones.
 - **Sitio con frontend React embebido** en el binario, con Redis.
-- **LLM y MCP**: un asistente que escribe raylang verificado, y un agente escrito en raylang.
 - **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar.
 
 El detalle de cada API de ventanas está en el manual:

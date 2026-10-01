@@ -394,10 +394,10 @@ From here, each handbook guide is a complete project. They are on the way, and t
 - a **web API** with the `web` framework;
 - a [**server-rendered site**](ssr.en.md) with templates;
 - a **site with a React frontend** embedded in the binary;
-- an **LLM agent** and an **MCP** server written in raylang;
+- an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang;
 - how to **ship** all of the above: packaging, signing and auto-updating.
 
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:12d7e4deb5c6 -->
+<!-- sync: sha256:be6579fbd305 -->

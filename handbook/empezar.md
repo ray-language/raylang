@@ -394,7 +394,7 @@ Desde aquí, cada guía del handbook es un proyecto completo. Están en camino, 
 - una **API web** con el framework `web`;
 - un [**sitio con plantillas**](ssr.md) renderizado en el servidor;
 - un **sitio con frontend React** embebido en el binario;
-- un **agente LLM** y un servidor **MCP** escritos en raylang;
+- un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang;
 - cómo **distribuir** lo anterior: empaquetar, firmar y auto-actualizar.
 
 Para todo lo demás: la [referencia](../REFERENCE.md) tiene cada función con su firma, y el

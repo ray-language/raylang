@@ -25,6 +25,8 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    SQLite, native menus and dialogs, and an interface that adapts to every screen.
 4. [Server-rendered site](ssr.en.md): the notes as a server-rendered website, with compiled
    templates, forms, Markdown and the data in files.
+5. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
+   agent written in raylang that talks to Claude and uses tools through MCP.
 
 ## Coming next
 
@@ -33,11 +35,10 @@ These chapters are published one by one, each with its complete example project 
 
 - **Web API** with the `web` framework, Postgres and connection pools.
 - **Site with an embedded React frontend** in the binary, with Redis.
-- **LLMs and MCP**: an assistant that writes verified raylang, and an agent written in raylang.
 - **Shipping**: packaging, signing, notarizing and auto-updating.
 
 The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:5a3e81997e31 -->
+<!-- sync: sha256:0be86cba6019 -->

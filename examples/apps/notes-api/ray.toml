@@ -1,0 +1,7 @@
+[package]
+name = "notes-api"
+version = "0.1.0"
+
+[dependencies]
+web = "^0.4.6"
+db = "^0.2.1"

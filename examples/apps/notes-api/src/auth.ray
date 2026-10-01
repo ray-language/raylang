@@ -1,0 +1,24 @@
+// Bearer-token authentication. Clients send `Authorization: Bearer <token>`; the server knows the
+// token from NOTES_API_TOKEN. The comparison takes the same time whatever the input, so an
+// attacker cannot guess the token byte by byte by timing the answers.
+
+/// Whether `a` and `b` are equal, in time that depends only on their lengths.
+pub fn same(a: string, b: string) -> bool {
+    let x = a.to_bytes();
+    let y = b.to_bytes();
+    if (x.len() != y.len()) {
+        return false;
+    }
+    var diff = 0;
+    var i = 0;
+    while (i < x.len()) {
+        diff = diff | (x[i] ^ y[i]);
+        i = i + 1;
+    }
+    diff == 0
+}
+
+/// Whether an `Authorization` header carries `token`.
+pub fn authorized(header: string, token: string) -> bool {
+    header.starts_with("Bearer ") && same(header.substring(7, header.len()), token)
+}

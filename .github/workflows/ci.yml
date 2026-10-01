@@ -257,6 +257,22 @@ jobs:
 
   # Fuzzing prolongado, programado (no en cada push): muchas más iteraciones que el `cargo test` de arriba.
   # El fuzzer es determinista y sembrado, así que un hallazgo trae su semilla exacta para reproducir.
+  # Dieta del CI (M331): los workflows se validan al cambiar — un `${{ env.X }}` donde no vale
+  # invalidó release.yml entero y GitHub marcó en rojo cada push que lo tocaba (runs 86–88 de
+  # release) sin que ningún job lo cazara antes del tag. Segundos de coste.
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar actionlint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash -o "$RUNNER_TEMP/dl.bash"
+          bash "$RUNNER_TEMP/dl.bash" latest "$RUNNER_TEMP"
+      - name: Validar .github/workflows
+        run: |
+          "$RUNNER_TEMP/actionlint" -color
   fuzz-nocturno:
     name: fuzz nocturno (prolongado)
     runs-on: ubuntu-latest

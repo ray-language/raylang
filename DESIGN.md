@@ -15951,3 +15951,34 @@ con y sin esquema, el fuente del cdylib con `devLink`. En el simulador: app en f
 enlace guardado → página de emparejamiento → `simctl openurl` con el enlace → `running`; y
 un segundo `openurl` con la app enlazada → re-enlace. En el emulador, lo mismo con `am start
 -a VIEW -d`.
+
+## 318. M331 — Dieta del CI (oct 2026)
+
+El usuario pidió el recuento de lo que costó llevar el arco M330 a una release: **19 runs de
+workflow y unos 58 jobs** entre tres PRs (la del arco, la del `release.yml` roto y la del
+bump), tres merges a main y el tag. El esquema dejó claro dónde estaba el desperdicio, y
+también corrigió una impresión mía: los jobs «duplicados» de `ci-docs.yml` son *no-ops* de
+segundos que existen para que las comprobaciones requeridas por la protección de main tengan
+su nombre en una PR solo-docs — no cuestan nada y se quedan.
+
+**Lo que sí costaba, y lo que se hizo.**
+- **Dos reruns por un test intermitente.** `pool_prefers_ready_connections_and_retries_once_after_a_restart`
+  daba `noretry=?` en el runner y nunca en local. La causa no era el pool: era la propia
+  prueba. Dos `pool_call("ping")` «concurrentes» no garantizan dos conexiones — en un runner
+  lento la primera respondía antes de que la segunda eligiera hueco y ambas usaban la misma;
+  tras el reinicio, `noretry` encontraba un hueco vacío, abría una conexión nueva y salía `Ok`.
+  La solución es hacer la concurrencia real: un método `lento` (150 ms) en el servidor del
+  fixture, para que la segunda llamada tenga que marcar la otra conexión. Determinista, y la
+  aserción original se mantiene intacta.
+- **Tres runs rojas de `release` que no eran releases.** Un `${{ env.X }}` en el `env:` de un
+  job invalidó el workflow entero (DESIGN §315) y GitHub lo marcó en cada push que lo tocaba,
+  sin que nada lo cazara antes del tag. Un job `actionlint` en `ci.yml` (segundos) lo detecta en
+  la PR. Entra a PRODUCTION §4 como guarda.
+- **Pages en cada push a main.** El sitio sale de la landing, SPEC, el libro, los docs, el bench
+  y el playground (la VM en wasm, desde `src/`); un cambio en `tests/`, `tools/`, `packages/`,
+  `crates/` o en los otros workflows no lo mueve y ahora no despliega.
+
+**Lo que se dejó como está, a conciencia.** El CI completo tras cada merge a main (12 jobs
+aquí) es la red que cazó la carrera de `local_guard` en septiembre; y el bump de versión como PR
+aparte es la política de main protegida del usuario. Los dos se podrían recortar, pero son
+decisiones de proceso, no de tubería.

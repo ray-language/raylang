@@ -379,6 +379,7 @@ fn pool_prefers_ready_connections_and_retries_once_after_a_restart() {
         base.join("src/fixed.ray"),
         r#"import rpc/rpc;
 from std/json import Json;
+import std/time;
 
 fn main() -> int {
     let port = match (parse_int(args()[0])) {
@@ -388,6 +389,9 @@ fn main() -> int {
     let stop: Channel<int> = Channel.new();
     let r = rpc.serve_shutdown("127.0.0.1", port, stop, 200, fn(req: rpc.Req) -> Result<Json, string> {
         if (req.method == "ping") {
+            Result.Ok(Json.JStr("pong"))
+        } else if (req.method == "lento") {
+            time.sleep(150);
             Result.Ok(Json.JStr("pong"))
         } else if (req.method == "apagar") {
             send(stop, 1);
@@ -413,9 +417,13 @@ fn main() -> int {
         Option.None => panic("bad port"),
     };
     let p = rpc.pool("127.0.0.1", port, 2);
-    // Dos llamadas CONCURRENTES: los dos huecos marcan conexión.
-    let t1 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "ping", Json.JNull) });
-    let t2 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "ping", Json.JNull) });
+    // Dos llamadas CONCURRENTES a un método LENTO: la primera ocupa su conexión 150 ms, así la
+    // segunda tiene que marcar la otra — los dos huecos quedan con conexión SEGURO. (Con `ping`,
+    // en un runner lento la primera respondía antes de que la segunda eligiera hueco y reutilizaba
+    // la misma conexión; tras el reinicio, `noretry` encontraba un hueco vacío, abría una conexión
+    // nueva y salía Ok en vez del Err esperado: `noretry=?`, el rojo intermitente del CI.)
+    let t1 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "lento", Json.JNull) });
+    let t2 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "lento", Json.JNull) });
     let _ = join(t1);
     let _ = join(t2);
     // El servidor se apaga (la llamada va por una conexión del pool y responde antes de parar).

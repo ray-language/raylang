@@ -11,6 +11,7 @@ import db/sqlite;
 import api;
 import notes;
 import places;
+import updates;
 from db/sqlite import Conn;
 
 const APP: string = "Notes";
@@ -135,6 +136,15 @@ fn main() -> int {
         },
         Result.Ok(w) => w,
     };
+    // Updates are a desktop concern (the stores update phone apps). In a fiber, so the window
+    // opens at once; a new instance replaces this one when the user accepts.
+    if (places.is_desktop()) {
+        let _ = spawn(fn() {
+            if (updates.offer()) {
+                exit(0);
+            }
+        });
+    }
     while (true) {
         let e = match (ui.next_event()) {
             Result.Err(err) => {

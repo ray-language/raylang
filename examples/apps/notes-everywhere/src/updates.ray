@@ -1,0 +1,54 @@
+// Updates for the desktop app. The publisher puts three files at a fixed URL: `update.json`, its
+// signature `update.json.sig` and a zip per platform (`ray release` generates them). The app
+// downloads the manifest, checks the signature with the public key baked in at `ray bundle`
+// ([app] public_key in ray.toml), and if there is a newer version it asks, downloads it,
+// verifies its SHA-256, swaps the installed bundle and restarts.
+import std/ui;
+import std/update;
+
+// Where this app's releases are published, for example
+// https://github.com/<org>/<repo>/releases/latest/download/update.json. Empty: no updates.
+// NOTES_UPDATE_URL overrides it (rehearsals against a local server).
+const MANIFEST: string = "";
+
+fn manifest_url() -> string {
+    env("NOTES_UPDATE_URL").unwrap_or(MANIFEST)
+}
+
+/// Offers a newer version, if there is one. Returns true when a new instance was launched and
+/// this one must exit.
+pub fn offer() -> bool {
+    let _ = update.cleanup();
+    let url = manifest_url();
+    if (url == "") {
+        return false;
+    }
+    let release = match (update.check(url)) {
+        Result.Ok(Option.Some(r)) => r,
+        Result.Ok(Option.None) => return false,
+        Result.Err(e) => {
+            eprint(e);
+            return false;
+        },
+    };
+    let question = "You have "
+        + update.current()
+        + ". Install "
+        + release.version
+        + " and restart?";
+    if (!ui.confirm("Notes " + release.version + " is available", question, "Update", "Later")
+        .unwrap_or(false)) {
+        return false;
+    }
+    let installed = match (update.download(release)) {
+        Result.Ok(package) => update.apply(package),
+        Result.Err(e) => Result.Err(e),
+    };
+    match (installed) {
+        Result.Ok(_) => update.relaunch().is_ok(),
+        Result.Err(e) => {
+            eprint(e);
+            false
+        },
+    }
+}

@@ -28,11 +28,17 @@ messages), with no dependencies and no state.
 
 | Tool | Arguments | What it returns |
 |---|---|---|
-| `ray_check` | `code` | `ok` or the compiler's exact diagnostics (position + line + `^`) |
-| `ray_run` | `code`, `stdin?` | `exit` (the `int` of `main`) + stdout + stderr |
-| `ray_test` | `code` | the `@test` runner's report; `exit` 0 = green, 1 = failures |
-| `ray_fmt` | `code` | the canonical source (`ray fmt`) |
-| `ray_doc` | `symbol` | signature + doc of a builtin, a `std/*` function or a **type** (`len`, `json.parse`, `ui.MenuItem` with its fields, `process.Exit` with its variants…) |
+| `ray_check` | `code` \| `path` | `ok` or the compiler's exact diagnostics (position + line + `^`) |
+| `ray_run` | `code` \| `path`, `stdin?` | `exit` (the `int` of `main`) + stdout + stderr |
+| `ray_test` | `code` \| `path` | the `@test` runner's report; `exit` 0 = green, 1 = failures |
+| `ray_fmt` | `code` \| `path` | the canonical source (`ray fmt`) |
+| `ray_doc` | `symbol`, `path?` | signature + doc of a builtin, a `std/*` function or a **type** (`len`, `json.parse`, `ui.MenuItem` with its fields, `process.Exit` with its variants…); with `path`, also the project's own modules and its dependencies (`http.stream_with` from `net`) |
+
+`code` is a self-contained program (a quick experiment in an isolated temporary directory: neither
+project files nor packages resolve). **`path`** is a `.ray` file or a project directory **on disk**:
+the tool runs with the nearest `ray.toml` as context, so multi-file imports and `[dependencies]`
+resolve exactly as in `ray run`. For anything beyond a one-file experiment the model should use
+`path` — the server's *instructions* say so.
 
 And two *resources*: **`raylang://llms.txt`** — the distilled context of piece A (delta against
 Rust, canonical forms, exact error messages) — and **`raylang://reference.md`** — the full
@@ -61,7 +67,7 @@ A compiler diagnostic is **not** a tool error (`isError: false`): it is the feed
 
 ## Implementation
 
-`src/mcp.rs` (~300 lines), a 100% external client like the LSP/REPL/runner: zero changes to the
+`src/mcp.rs` (~1,200 lines), a 100% external client like the LSP/REPL/runner: zero changes to the
 core, zero dependencies (the JSON is the LSP's, `lsp::json`). Tests: in-memory unit tests (`serve`
 is generic over the streams) + `tests/mcp_cli.rs` (the real server over stdio, the five tools end to
 end, including the loop bomb cut by fuel).
@@ -87,4 +93,4 @@ failure is silent: it compiles, the tests pass and the change is not there (ray-
 Rule: format at the end of the task, never between patches, and verify with `grep` that every patch
 landed.
 
-<!-- sync: sha256:e8fb8f57c968 -->
+<!-- sync: sha256:3e1821f60e64 -->

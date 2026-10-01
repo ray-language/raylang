@@ -20,7 +20,7 @@ Español · [English](README.en.md)
 
 ---
 
-**raylang** es un lenguaje enfocado a **producción real**: genéricos, traits, pattern matching,
+**raylang** se escribe como un script y se despliega como un binario: genéricos, traits, pattern matching,
 concurrencia multicore por actores, un ecosistema de herramientas y **tres motores que coinciden byte a
 byte** — una VM de bytecode para desarrollar, un **binario nativo** para desplegar y un intérprete como
 oráculo de validación. Además se **compila a sí mismo** (self-hosting) y corre **en el navegador** vía
@@ -147,7 +147,7 @@ cd hola
 ray run                # ejecuta src/main.ray en la VM
 ray dev                # modo desarrollo: recompila y reinicia ante cambios (+ live-reload del navegador)
 ray build              # chequea y compila sin ejecutar
-ray build --native     # transpila a Rust y compila un binario nativo (3–57× la VM, según la carga)
+ray build --native     # transpila a Rust y compila un binario nativo (2,6–28× la VM, según la carga)
 ray bundle             # empaqueta la app de escritorio: .app (macOS) / .desktop (Linux) / .exe (Windows)
 ray bundle --ios       # genera el proyecto Xcode (--android: el proyecto Gradle)
 ray test               # corre las funciones @test
@@ -272,7 +272,7 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
 
 raylang trae de serie las dos piezas para que un agente de código escriba raylang correcto:
 
-- **[`llms.txt`](llms.txt)** — el contexto destilado (~250 líneas): el delta contra Rust, las
+- **[`llms.txt`](llms.txt)** — el contexto destilado (~450 líneas): el delta contra Rust, las
   formas canónicas y los mensajes de error exactos. Pégalo en tu prompt / `CLAUDE.md` (o deja
   que tu cliente MCP cargue el resource `raylang://llms.txt`).
 - **`ray mcp`** — un servidor [MCP](https://modelcontextprotocol.io) embebido en el binario, que
@@ -312,7 +312,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 
 Editores: extensión de [VSCode](editors/vscode/) (con cliente LSP), paquete de [Sublime Text](editors/sublime/),
 extensión de [Zed](https://github.com/ray-language/zed-raylang) (tree-sitter + `ray lsp`; cómo mantenerla, en [editors/zed/](editors/zed/))
-y config para Neovim/Helix (usan `ray lsp` directo).
+y snippets para Neovim/Helix en [editors/README.md](editors/README.md) (usan `ray lsp` directo).
 
 ## Estado
 
@@ -326,7 +326,7 @@ centenar de archivos de tests de integración, un fuzzer del front-end, los orá
 VM↔intérprete y el corpus de paridad del binario nativo. Lo publicado y lo que está en camino, en
 [`CHANGELOG.md`](CHANGELOG.md).
 
-El foco es **producción real**, con el alcance dicho de frente: lo hace un solo mantenedor y no ha pasado
+El alcance, dicho de frente: lo hace un solo mantenedor y no ha pasado
 una auditoría externa (ver [`SECURITY.md`](SECURITY.md#alcance)).
 
 ## Contribuir

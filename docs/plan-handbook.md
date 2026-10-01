@@ -1,7 +1,8 @@
 # Plan: auditoría de la documentación y handbook técnico
 
-Estado: **PROPUESTA** (1 oct 2026, sobre 1.27.26). Parte A es la auditoría de lo que hay;
-parte B es el plan del handbook. Nada de esto está aplicado.
+Estado: **APROBADO con decisiones** (1 oct 2026, sobre 1.27.26). Parte A es la auditoría de lo que
+hay; parte B es el plan del handbook, ya con las decisiones del usuario (B.7). La fase 0 (B.4) se
+ejecuta en la rama `docs/fase0-coherencia`.
 
 ---
 
@@ -113,8 +114,10 @@ las palabras «escritorio» ni «móvil». Caminos evaluados:
    `src/`, tests `@test`, compilado en CI. El capítulo cita el ejemplo; el ejemplo es la verdad.
 3. **Sin historia**: ningún M-número, ninguna «desde 1.x», ningún «#findings». Lo que no
    funciona aún se dice en presente («no soportado»). La historia queda en CHANGELOG/DESIGN.
-4. **Cada snippet compila**: todo bloque ```raylang del handbook pasa por `ray check` en CI (con
-   el proyecto de ejemplo del capítulo como contexto para imports y dependencias).
+4. **Cada snippet compila**: todo bloque ```rust del handbook pasa por `ray check` en CI (con
+   el proyecto de ejemplo del capítulo como contexto para imports y dependencias). Convención:
+   el código raylang se etiqueta **`rust`** en todo Markdown (coloreado en GitHub y en el sitio
+   hasta que raylang tenga soporte propio); nunca `raylang` ni sin etiqueta.
 5. **Publicado en raylang.dev**, no solo en GitHub: el mismo pipeline `site/site.ray` +
    `std/markdown` que ya renderiza la SPEC. Bilingüe ES/EN con la guarda `docs_i18n` existente.
 6. **Reparto de responsabilidades claro**: handbook = caminos (cómo construir X); MANUAL =
@@ -126,81 +129,84 @@ las palabras «escritorio» ni «móvil». Caminos evaluados:
 ```
 handbook/
   SUMMARY.md              # índice (fuente para la navegación del sitio)
-  00-empezar.md           # instalar, ray new, run/build/test, editor + MCP
-  10-cli.md               # herramienta de línea de comandos
-  20-api.md               # API HTTP de producción
-  30-escritorio.md        # app de escritorio
-  40-movil.md             # app iOS / Android
-  50-multiplataforma.md   # un fuente → escritorio + móvil
-  60-llm-mcp.md           # usar un LLM para escribir raylang; escribir agentes y MCP
-  70-servicios.md         # rpc/gRPC, colas, cron, resiliencia, tracing
-  80-distribuir.md        # bundle, firma, notarización, update, release, CI
-  90-rendimiento.md       # perfilar, nativo, flags, memoria
-  *.en.md                 # traducciones, sincronizadas con docs_sync
+  00-empezar.md           # instalar, ray new, run/build/test, editor + ray mcp
+  10-movil.md             # app iOS / Android con frontend react-ts        · persistencia: std/kv
+  20-multiplataforma.md   # la misma app en escritorio (continuación)       · persistencia: SQLite (db)
+  30-api.md               # API web con el framework `web`                  · persistencia: Postgres (db) + pools
+  40-ssr.md               # sitio SSR con plantillas .ray.html compiladas   · persistencia: archivos (std/fs + JSON)
+  50-web-frontend.md      # sitio con frontend react-ts embebido             · persistencia: Redis (db)
+  60-llm-mcp.md           # usar un LLM para escribir raylang (ray mcp); el patrón de agente a mano
+  70-distribuir.md        # bundle, firma, notarización, update, release, CI
+  80-cli.md               # herramienta de línea de comandos (más adelante)
+  90-rendimiento.md       # perfilar, nativo, flags, memoria (más adelante)
+  *.en.md                 # cada capítulo existe en ES y EN, sincronizados con docs_sync
 examples/apps/
-  todo-cli/  notes-api/  notes-desktop/  notes-mobile/  notes-everywhere/  agent/  mcp-server/
+  notes-mobile/  notes-everywhere/  notes-api/  notes-ssr/  notes-web/  agent-cli/
 ```
 
-Publicación: `site/site.ray` renderiza `handbook/*.md` → `_site/handbook/<slug>.html` y
-`_site/en/handbook/...`, con una plantilla `handbook_page.ray.html` (barra lateral desde
-`SUMMARY.md`). `pages.yml` asevera los HTML generados como ya hace con spec/bench. La landing
-cambia «Guía paso a paso en el manual» por el enlace al capítulo concreto (`/handbook/movil.html`),
-y la navegación gana «Handbook».
+Publicación: **raylang.dev/handbook/** (decisión D1). `site/site.ray` renderiza `handbook/*.md` →
+`_site/handbook/<slug>.html` y `_site/en/handbook/...`, con una plantilla `handbook_page.ray.html`
+(barra lateral desde `SUMMARY.md`). `pages.yml` asevera los HTML generados como ya hace con
+spec/bench. La landing cambia «Guía paso a paso en el manual» por el enlace al capítulo concreto
+(`/handbook/movil.html`), y la navegación gana «Handbook».
 
 Alternativa descartada: mdbook. Ya hay un generador propio en raylang que produce el sitio;
 añadir una toolchain Rust externa para la mitad de las páginas duplica estilos y navegación.
 
 ### B.3 Índice de capítulos y qué resuelve cada uno
 
+Decisión del usuario: las guías son **apps completas encadenadas** (una libreta de notas que crece),
+cada una con una **persistencia distinta** para cubrir toda la gama de la stdlib y de `db`.
+
 **0. Empezar** (reescritura de `getting-started`): instalar, `ray new`, el bucle
 `run/test/fmt/build`, editor (VS Code/Sublime/Zed/Neovim), conectar `ray mcp` al asistente,
 «qué leer después» según lo que quieras construir.
 
-**1. Herramienta CLI** (`examples/apps/todo-cli`): `args()` y parseo de flags (receta propia,
-no hay módulo), `std/io`/`std/term` (colores, teclas, barra de progreso), stdin por bytes,
-`exit`/códigos de salida, `std/fs` con errores como valores, `std/process` para hablar con
-otros programas, `ray build --native` como entregable, binarios por plataforma en CI.
+**1. App móvil iOS/Android con react-ts** (`examples/apps/notes-mobile`, persistencia `std/kv`):
+`ray new notes --frontend react-ts`, arquitectura (webview `std/ui` + backend raylang en el mismo
+proceso), puente `window.ray.request` / `ui.reply`, `app://` en dev y `ray://app` empaquetado,
+qué cambia en el teléfono (`window = 0`, sin `process`, ciclo de vida), `ray bundle --ios`
+(Xcode, firma persistente, simulador/dispositivo), `ray bundle --android` (Gradle, ABI, firma de
+release), **hot reload** `ray dev --device` + shell `--dev` + QR, devtools en el móvil, audio y
+segundo plano, hasta dónde llega la toolchain para App Store / Play.
 
-**2. API HTTP de producción** (`examples/apps/notes-api`): `web` (rutas, middleware, JSON,
-validación), `db` con **pools** y transacciones, estado compartido (actor, nunca captura),
-gzip, streaming/SSE, `listen_graceful` + señales, TLS, `net/trace`, `std/resilience`, tests
-`@test` con cliente HTTP, despliegue como binario nativo (systemd, contenedor slim, `--without`).
+**2. App multiplataforma** (continuación: `examples/apps/notes-everywhere`, persistencia SQLite
+vía `db`): el mismo `src/` en macOS, Linux, Windows, iOS y Android; `platform()`/`arch()` y ramas
+por plataforma; menús, roles de edición, diálogos, tipos de ventana, `intercept_close`;
+`std/keychain` para secretos; `std/embed`; layout responsivo; `ray.toml` con
+`[app]`/`[ios]`/`[android]`/`[native]`; `ray bundle` por plataforma y una matriz de CI que
+produce `.app`/`.exe`/`.desktop`/Xcode/Gradle.
 
-**3. App de escritorio** (`examples/apps/notes-desktop`): arquitectura (ventana `std/ui` +
-backend raylang en el mismo proceso), `ray://app` sin puerto, puente `window.ray.request` /
-`ui.reply`, menús/roles de edición/`replace_menu`, diálogos, tipos de ventana, `intercept_close`,
-`std/kv`/`std/keychain` para datos y secretos, `std/embed`, live-reload y devtools, frontend con
-Vite (React/Vue/Svelte) y `ray dev`, backends por plataforma (WKWebView / WebKitGTK / WebView2).
+**3. API web con el framework** (`examples/apps/notes-api`, persistencia Postgres vía `db` con
+**pools** y transacciones): rutas, middleware, JSON y validación, estado compartido (actor, nunca
+captura), gzip, streaming/SSE, `listen_graceful` + señales, TLS, `net/trace`, `std/resilience`,
+tests `@test` con cliente HTTP, despliegue como binario nativo (systemd, contenedor slim,
+`--without`).
 
-**4. App móvil** (`examples/apps/notes-mobile`): qué cambia en el teléfono (`window = 0`, sin
-`process`, cwd, ciclo de vida), `ray bundle --ios` (proyecto Xcode, firma persistente,
-simulador/dispositivo), `ray bundle --android` (Gradle, ABI, firma release), **hot reload**
-`ray dev --device` + shell `--dev` + QR, devtools en el móvil, audio y segundo plano,
-publicar en App Store / Play (hasta donde la toolchain llega, y dónde termina).
+**4. Sitio SSR con plantillas de raylang** (`examples/apps/notes-ssr`, persistencia en archivos
+con `std/fs` + JSON): `vistas/*.ray.html` compiladas con firma tipada (`ray build
+--templates-only`), layouts y parciales, formularios y sesiones, estáticos con ETag, `std/markdown`
+para contenido, live-reload con `ray dev`, binario único con las vistas dentro.
 
-**5. Multiplataforma** (`examples/apps/notes-everywhere`, modelado sobre raydesk): un `src/`
-para las cinco plataformas, `platform()`/`arch()` y ramas por plataforma, assets compartidos,
-layout responsivo en el webview, `ray.toml` con `[app]`/`[ios]`/`[android]`/`[native]`, matriz de
-CI que produce `.app`/`.exe`/`.desktop`/Xcode/Gradle.
+**5. Sitio web con frontend react-ts embebido** (`examples/apps/notes-web`, persistencia Redis vía
+`db`): `[frontend]` + Vite en dev (`ray dev` arranca ambos), build embebido con
+`ui.mount_embed_at`/`static_embedded` en producción, API JSON + SSE para la SPA, autenticación con
+sesiones, un solo binario que sirve todo.
 
-**6. LLM y MCP** (dos mitades, `examples/apps/agent` y `examples/apps/mcp-server`):
-(a) *usar* un LLM para escribir raylang: `llms.txt`, `ray mcp` con el argumento `path`, el
-bucle escribir→verificar→corregir, CLAUDE.md de un proyecto raylang;
-(b) *escribir* un agente en raylang: cliente de la API de mensajes con `net/http` streaming +
-`net/sse` + `std/json`, bucle de tool-use, `std/keychain` para la clave, cliente MCP por stdio
-(`std/process` sesión) y por HTTP, y un servidor MCP propio en raylang (JSON-RPC por stdio).
-Ver decisión abierta D3.
+**6. LLM y MCP** (`examples/apps/agent-cli`): (a) *usar* un LLM para escribir raylang: `llms.txt`,
+`ray mcp` con el argumento `path`, el bucle escribir→verificar→corregir, CLAUDE.md de un proyecto
+raylang; (b) *escribir* un agente en raylang **a mano**, sin citar raycode (decisión del usuario):
+cliente de la API de mensajes con `net/http` streaming + `net/sse` + `std/json`, bucle de
+tool-use, `std/keychain` para la clave, cliente MCP por stdio (`std/process` sesión). Si se aprueba
+IDEAS §100 (paquetes `llm`/`mcp`), el capítulo se reescribe sobre ellos.
 
-**7. Servicios** (`examples/apps/notes-api` extendido): `rpc` y gRPC servidor/cliente, pools de
-RPC, `cron`, `tz`, colas (patrón rayq), resiliencia, tracing distribuido, observabilidad.
-
-**8. Distribuir**: `ray bundle` por plataforma, **firma y notarización** (macOS `--sign/--notary`,
+**7. Distribuir**: `ray bundle` por plataforma, **firma y notarización** (macOS `--sign/--notary`,
 Windows signtool, Linux), `std/update` + `ray keygen`/`ray release`, códigos de salida (incl. 74),
 `install.sh` propio, GitHub Actions de release, builds reproducibles.
 
-**9. Rendimiento**: VM vs nativo (cifras **únicas** y actualizadas, fuente `benchmarks/poly`),
-`ray profile`, PGO, mimalloc/ahash/fibras, memoria en servidores, `RAYLANG_THREADS`,
-determinismo.
+**8. Herramienta CLI** y **9. Rendimiento**: después de los anteriores (CLI con `args()`,
+`std/io`/`std/term`, `std/process`, `ray build --native`; rendimiento con cifras únicas de
+`benchmarks/poly`, `ray profile`, PGO, memoria, `RAYLANG_THREADS`).
 
 ### B.4 Correcciones inmediatas (independientes del handbook, PR 1)
 
@@ -219,30 +225,32 @@ determinismo.
 6. `examples/README.md`: `ray run`, cubrir db/ffi/term, marcar `examples/web/*.ray` como
    copias históricas (o moverlas a `examples/historico/`).
 7. `pages.yml:10` y `RELEASE-1.0.md`: decir la verdad sobre qué se publica.
-8. `book/`: prefacio con aviso «crónica histórica de la construcción (M1-M40); para usar
-   raylang ve al handbook».
+8. `book/`: **se ignora por ahora** (decisión D4); solo se corrige el comentario de `pages.yml`
+   que decía publicarlo.
 
 ### B.5 Fases
 
 | Fase | Entregable | PR |
 |---|---|---|
-| 0 | Correcciones inmediatas B.4 (solo docs + landing) | 1 |
-| 1 | Infraestructura: `handbook/` + `SUMMARY.md`, plantilla y renderizado en `site.ray`, aserciones en `pages.yml`, guarda `tests/handbook_snippets.rs` (cada bloque ```raylang → `ray check` con el proyecto de ejemplo como contexto), extensión de `docs_root.rs` a `handbook/` (enlaces y huérfanos), `docs_i18n` cubre `handbook/*.en.md`. Capítulo 0 migrado desde getting-started. Navegación «Handbook» en la landing. | 2 |
-| 2 | **Capítulo 3 Escritorio + Capítulo 4 Móvil** con `notes-desktop` y `notes-mobile`; la landing enlaza a ellos. Es el hueco que motivó la revisión: va primero. | 3-4 |
-| 3 | Capítulo 2 API + Capítulo 7 Servicios con `notes-api` (pools, gzip, gRPC, cron). Absorbe `docs/web-framework.md` (queda como redirección). | 5 |
-| 4 | Capítulo 6 LLM y MCP con `agent` y `mcp-server`. Absorbe `docs/mcp.md`. | 6 |
-| 5 | Capítulo 1 CLI, Capítulo 5 Multiplataforma (`notes-everywhere`), Capítulo 8 Distribuir, Capítulo 9 Rendimiento (absorbe `docs/build.md` en lo que es guía). | 7-8 |
-| 6 | Poda del MANUAL: §13 se queda con io/term/fs/process/time/crypto; ventanas, bundle, hot reload, Vite, update y firma se mueven al handbook y el MANUAL los enlaza. Barrido de M-números del MANUAL. | 9 |
-| 7 | Traducción EN de todos los capítulos (sincronizada con `docs_sync.py`); `llms.txt` apunta a los capítulos; `ray mcp` expone `raylang://handbook/<cap>.md` como resources. | 10 |
+| 0 | Correcciones inmediatas B.4 (solo docs + landing). **En curso**, rama `docs/fase0-coherencia`. | 1 |
+| 1 | Infraestructura: `handbook/` + `SUMMARY.md`, plantilla y renderizado en `site.ray` → `/handbook/`, aserciones en `pages.yml`, guarda `tests/handbook_snippets.rs` (cada bloque ```rust → `ray check` con el proyecto de ejemplo como contexto), extensión de `docs_root.rs` a `handbook/` (enlaces, huérfanos, sin M-números), `docs_i18n` cubre `handbook/*.en.md`. Capítulo 0 migrado desde getting-started, ES + EN. Navegación «Handbook» en la landing. | 2 |
+| 2 | **Capítulo 1 Móvil con react-ts** (`notes-mobile`, `std/kv`), ES + EN; la landing enlaza a él. | 3 |
+| 3 | **Capítulo 2 Multiplataforma** (`notes-everywhere`, SQLite), ES + EN. | 4 |
+| 4 | **Capítulo 3 API web** (`notes-api`, Postgres + pools), ES + EN. Absorbe `docs/web-framework.md`. | 5 |
+| 5 | **Capítulo 4 SSR** (`notes-ssr`, archivos) y **Capítulo 5 frontend embebido** (`notes-web`, Redis), ES + EN. | 6-7 |
+| 6 | **Capítulo 6 LLM y MCP** (`agent-cli`), ES + EN. Absorbe `docs/mcp.md`. | 8 |
+| 7 | **Capítulo 7 Distribuir**, ES + EN. | 9 |
+| 8 | Poda del MANUAL: §13 se queda con io/term/fs/process/time/crypto; ventanas, bundle, hot reload, Vite, update y firma se mueven al handbook y el MANUAL los enlaza. Barrido de M-números. `llms.txt` y `ray mcp` apuntan a los capítulos (`raylang://handbook/<cap>.md`). | 10 |
+| 9 | Capítulos 8 CLI y 9 Rendimiento. | 11 |
 
-Cada PR es solo-docs salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/`
-(compilan en CI). Las fases 2-5 pueden ir en paralelo si hace falta.
+Cada capítulo sale **con su traducción EN en la misma PR** (decisión D2). Cada PR es solo-docs
+salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compilan en CI).
 
 ### B.6 Guardas de CI nuevas
 
-- `tests/handbook_snippets.rs`: extrae bloques ```raylang de `handbook/*.md`; los que llevan
+- `tests/handbook_snippets.rs`: extrae bloques ```rust de `handbook/*.md`; los que llevan
   `// project: examples/apps/<x>` se chequean con ese proyecto como raíz; el resto, aislados.
-  Bloques marcados ```raylang,ignore se saltan (fragmentos). Falla el CI si algo no compila.
+  Bloques marcados ```rust,ignore se saltan (fragmentos). Falla el CI si algo no compila.
 - `tests/docs_root.rs` extendido: enlaces relativos de `handbook/` resuelven; todo capítulo está
   en `SUMMARY.md`; ningún M-número (`\bM\d{2,3}\b`) en `handbook/`.
 - `pages.yml`: `test -f _site/handbook/movil.html` etc. para cada entrada de `SUMMARY.md`.
@@ -251,21 +259,17 @@ Cada PR es solo-docs salvo la fase 1 (tests + `site.ray`) y los proyectos de `ex
   (`ray check` + `ray test`); los de escritorio/móvil al menos `ray check` y `ray bundle --dry-run`
   si existe, o `ray build --native --lib` para iOS/Android en el job de macOS.
 
-### B.7 Decisiones abiertas (del usuario)
+### B.7 Decisiones (tomadas el 1 oct 2026)
 
-- **D1. Nombre y URL**: `handbook/` → raylang.dev/handbook/ (propuesto) frente a «guides» o
-  integrarlo como MANUAL v2.
-- **D2. Idioma de origen**: ES original + EN traducido (como hoy, con `docs_sync`) o EN original
-  (la web y las apps apuntan a público internacional; el MCP y llms.txt ya son EN).
-- **D3. LLM/MCP como código, no solo docs**: el capítulo 6b necesita un cliente de LLM y un
-  cliente/servidor MCP. Opciones: (a) el capítulo enseña a hacerlo a mano con `net/http` +
-  `std/json` + `std/process` y cita raycode; (b) extraer de raycode un paquete `llm` (Anthropic +
-  OpenAI, streaming, tool-use) y otro `mcp` (cliente stdio/HTTP + servidor) a `packages/`, y el
-  handbook los usa. (b) hace verdad el «nativo para agentes LLM» de la landing; es un arco de
-  código con su propio IDEAS. Recomendación: empezar por (a) en el handbook y abrir (b) como
-  arco aparte.
-- **D4. Destino de `book/`**: dejarlo en el repo como crónica con aviso (propuesto) o publicarlo
-  en raylang.dev/book con mdbook. Publicarlo cuesta un job más y expone un texto que dice «no
-  para producción».
+- **D1. Nombre y URL**: `handbook/` → **raylang.dev/handbook/**.
+- **D2. Idioma**: **ES y EN** desde el primer capítulo, sincronizados con `docs_sync`.
+- **D3. LLM/MCP**: el capítulo enseña el patrón **a mano** y **no cita raycode** hasta que se
+  decida el arco de paquetes `llm`/`mcp`, registrado en **IDEAS §100** (evaluación: qué
+  estandarizar, de dónde extraerlo, impacto). La landing conserva «nativo para agentes LLM»
+  apoyada en `llms.txt` + `ray mcp` mientras tanto.
+- **D4. `book/`**: **se ignora por ahora**; no se publica ni se toca.
 - **D5. Qué absorbe el handbook**: `getting-started`, `web-framework`, `mcp` y la parte guía de
-  `build.md` (propuesto); `windows.md` y `transpilador-nativo.md` siguen como contratos/diseño.
+  `build.md`; `windows.md` y `transpilador-nativo.md` siguen como contratos/diseño.
+- **D6. Guías**: apps completas encadenadas con una persistencia distinta cada una (ver B.3):
+  móvil iOS/Android con react-ts → multiplataforma → API web → sitio SSR con plantillas → sitio
+  con frontend react-ts embebido.

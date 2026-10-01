@@ -331,7 +331,8 @@ browser. Routes with parameters, middleware, typed JSON, static files, cookies a
 | `ray test` | the `@test` functions; `--watch` re-runs on save |
 | `ray fmt --write src/` | canonical formatting (keeps your parentheses and comments) |
 | `ray build --native --release` | optimized native binary; `ray toolchain install` if you have no Rust |
-| `ray bundle` | desktop app (`.app`, `.desktop`, `.exe`) or an iOS/Android project |
+| `ray bundle` | desktop app (`.app`, `.desktop`, `.exe`) or an iOS/Android project (`--ios`, `--android`) |
+| `ray dev --device` | hot reload of the program on the phone (shell from `ray bundle --ios --dev` / `--android --dev`) |
 | `ray doc src/main.ray` | documentation from `///` comments |
 | `ray serve _site` | serves a static directory for previews (`--port`, `--host`) |
 | `ray lsp` / `ray mcp` | editors (VSCode, Sublime, Zed, Neovim/Helix) / LLM agents |
@@ -343,8 +344,12 @@ browser. Routes with parameters, middleware, typed JSON, static files, cookies a
   whenever a function "should exist" (it almost always does).
 - [`MANUAL.md`](../MANUAL.md): the long guide, with the idioms and the decisions explained
   (Spanish).
+- **Desktop and mobile apps** (Spanish): windows with [`std/ui`](../MANUAL.md#ventanas-stdui),
+  packaging with [`ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle) (macOS/Linux/Windows, iOS,
+  Android), [hot reload on the phone](../MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device)
+  and the [Vite frontend](../MANUAL.md#frontend-con-vite-react-vue-svelte--y-ray-dev).
 - [`examples/`](../examples/): more than 170 programs, from `fib` to a server with WebSockets.
 - With an agent: paste [`llms.txt`](../llms.txt) into the prompt and connect `ray mcp`
   ([`mcp.en.md`](mcp.en.md)) so it verifies what it writes.
 
-<!-- sync: sha256:6aa52a519e95 -->
+<!-- sync: sha256:94ae30c03753 -->

@@ -14,7 +14,7 @@ arco (el detalle y las mediciones, en §3):
 
 | Frente | Dónde estábamos | Dónde estamos |
 |---|---|---|
-| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 3–4× la VM en cargas de servicio y 28–57× en cómputo puro; gana a node en 9 de 10 programas, a `rustc -O` en 5 y a Go en 4 (§0.1) |
+| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 2,6–4× la VM (build PGO) en cargas de servicio y 14–28× en cómputo puro; gana a node en 9 de 10 programas, a Go en 5 y a `rustc -O` en 4 (22 sep 2026, `benchmarks/poly/README.md`) |
 | **VM** | `Map` alocando en el camino caliente, SipHash | aHash + `get_or`/`add_to`, superinstrucciones por histograma (−19/−28%), PGO (−5/−9%), `ConcatN`, fusión de `Option`, fast-paths ASCII, `IntArray` (−68% RSS) |
 | **Concurrencia nativa** | hilo por tarea (~265 KB/conexión) | **fibras M:N** por defecto (corosensei + reactor), ~21 KB/conexión y 350× menos CPU en esperas ociosas |
 | **Web** | servidor propio sin cifra comparable | framework a **~188k req/s** — 93% de axum, p50/p99.9 empatadas, 1,5× Go+chi |

@@ -451,7 +451,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <span class="chip"><b>ray bundle --android</b> · Gradle project</span>
         </div>
         <p class="note">Step-by-step guide in the
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a> (Spanish).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#empaquetar-la-app-ray-bundle">manual</a> (Spanish; windows: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#ventanas-stdui">std/ui</a>, hot reload on the phone: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device">ray dev --device</a>).</p>{% else %}        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
         <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS, Linux y
         Windows y como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
         interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
@@ -470,7 +470,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
         </div>
         <p class="note">Guía paso a paso en el
-        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>{% endif %}
+        <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#empaquetar-la-app-ray-bundle">manual</a> (ventanas: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#ventanas-stdui">std/ui</a>; hot reload en el teléfono: <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device">ray dev --device</a>).</p>{% endif %}
     </div>
 </section>
 
@@ -483,7 +483,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extension on the marketplace, with the LSP client built in</span></a>
             <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>syntax + LSP; <code>Package Control: Install Package → raylang</code></span></a>
             <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">under review in the Zed gallery</em><span>tree-sitter grammar + LSP; until approved, install it as a dev extension</span></a>
-            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>point at <code>ray lsp</code> directly; config in editors/</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>point at <code>ray lsp</code> directly; snippets in editors/README.md</span></a>
         </div>
         <p class="note">The Zed extension is submitted to the official gallery and awaiting
         approval:{% else %}        <h2 class="sec">En tu <span class="grad">editor</span></h2>
@@ -493,7 +493,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extensión en el marketplace, con cliente LSP integrado</span></a>
             <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>sintaxis + LSP; <code>Package Control: Install Package → raylang</code></span></a>
             <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">en revisión en la galería de Zed</em><span>gramática tree-sitter + LSP; mientras se aprueba, se instala como extensión de desarrollo</span></a>
-            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; snippets en editors/README.md</span></a>
         </div>
         <p class="note">La extensión de Zed está enviada a la galería oficial y en proceso de
         aprobación:{% endif %}
@@ -562,9 +562,9 @@ section.engines { padding: 2.5rem 0 4rem; }
                 <div class="ico">»</div>
 {% if en %}                <h3>Native binary</h3>
                 <p><code>ray build --native</code> transpiles to Rust and compiles an executable:
-                3–4× the VM on service workloads and 28–57× on pure compute.</p>{% else %}                <h3>Binario nativo</h3>
+                2.6–4× the VM on service workloads and 14–28× on pure compute.</p>{% else %}                <h3>Binario nativo</h3>
                 <p><code>ray build --native</code> transpila a Rust y compila un ejecutable:
-                3–4× la VM en cargas de servicio y 28–57× en cómputo puro.</p>{% endif %}
+                2,6–4× la VM en cargas de servicio y 14–28× en cómputo puro.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">⇄</div>
@@ -646,7 +646,7 @@ section.engines { padding: 2.5rem 0 4rem; }
         (<code>net</code> — HTTP/1.1 and 2, DNS, WebSocket, TLS —, <code>web</code>,
         <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) lives in
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
-        written in pure raylang, and community packages are published in the
+        written in raylang (TLS and SQLite come from the runtime's <code>rustls</code>/<code>rusqlite</code>), and community packages are published in the
         <a href="https://github.com/ray-language/ray-index">registry</a> with hashes and signatures.</p>{% else %}        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
         <p class="lead">Un agente de código LLM, una app de escritorio, servidores y herramientas — dogfood real,
         publicado en la organización.</p>
@@ -665,7 +665,7 @@ section.engines { padding: 2.5rem 0 4rem; }
         (<code>net</code> — HTTP/1.1 y 2, DNS, WebSocket, TLS —, <code>web</code>,
         <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) vive en
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
-        escrita en raylang puro, y los paquetes de la comunidad se publican en el
+        escrita en raylang (TLS y SQLite vienen del runtime, <code>rustls</code>/<code>rusqlite</code>), y los paquetes de la comunidad se publican en el
         <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>{% endif %}
     </div>
 </section>

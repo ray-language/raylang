@@ -251,7 +251,9 @@ Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
 std/base64 std/url std/regex std/csv std/toml std/template std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
-std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
+std/keychain std/bigint std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
+std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
+`tz`, `cron`.
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
 `std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration

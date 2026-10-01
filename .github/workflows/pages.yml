@@ -7,8 +7,8 @@ name: Pages
 on:
   push:
     branches: [main]
-    # Dieta del CI (M331): el sitio sale de la landing, SPEC, el libro, los docs, el bench y el
-    # playground (la VM en wasm, compilada desde `src/`); lo demás no lo cambia y no despliega.
+    # Dieta del CI (M331): el sitio sale de la landing, SPEC.md, el bench y el playground
+    # (el libro y docs/ NO se publican; ver docs/plan-handbook.md) (la VM en wasm, compilada desde `src/`); lo demás no lo cambia y no despliega.
     paths-ignore:
       - "tests/**"
       - "tools/**"

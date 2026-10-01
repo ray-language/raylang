@@ -20,7 +20,7 @@
 
 ---
 
-**raylang** is a language aimed at **real production**: generics, traits, pattern matching, multicore
+**raylang** is written like a script and shipped as a binary: generics, traits, pattern matching, multicore
 actor concurrency, a tooling ecosystem and **three engines that agree byte for byte** — a bytecode VM
 for development, a **native binary** for deployment and an interpreter as a validation oracle. It also
 **compiles itself** (self-hosting) and runs **in the browser** via WebAssembly.
@@ -145,7 +145,7 @@ cd hello
 ray run                # runs src/main.ray on the VM
 ray dev                # development mode: rebuilds and restarts on changes (+ browser live-reload)
 ray build              # checks and compiles without running
-ray build --native     # transpiles to Rust and builds a native binary (3–57× the VM, depending on the load)
+ray build --native     # transpiles to Rust and builds a native binary (2.6–28× the VM, depending on the load)
 ray bundle             # packages the desktop app: .app (macOS) / .desktop (Linux) / .exe (Windows)
 ray bundle --ios       # generates the Xcode project (--android: the Gradle project)
 ray test               # runs the @test functions
@@ -271,14 +271,14 @@ It covers the core language (the whole language + prelude + pure stdlib). See [`
 
 raylang ships the two pieces an AI coding agent needs to write correct raylang:
 
-- **[`llms.txt`](llms.txt)** — the distilled context (~250 lines): the delta against Rust, the canonical
+- **[`llms.txt`](llms.txt)** — the distilled context (~450 lines): the delta against Rust, the canonical
   forms and the exact error messages. Paste it into your prompt / `CLAUDE.md` (or let your MCP client
   load the `raylang://llms.txt` resource).
 - **`ray mcp`** — an [MCP](https://modelcontextprotocol.io) server embedded in the binary, which gives
   the model the **write → verify → fix** loop: `ray_check` (exact diagnostics), `ray_run`, `ray_test`,
   `ray_fmt` and `ray_doc` tools, with the model's code **sandboxed** (fuel + heap + deadline, in a
   subprocess). With Claude Code: `claude mcp add raylang -- ray mcp`. Full guide:
-  [`docs/mcp.md`](docs/mcp.md).
+  [`docs/mcp.en.md`](docs/mcp.en.md).
 
 ## Documentation
 
@@ -316,7 +316,7 @@ originals by a CI guard).
 
 Editors: a [VSCode](editors/vscode/) extension (with LSP client), a [Sublime Text](editors/sublime/)
 package, a [Zed](https://github.com/ray-language/zed-raylang) extension (tree-sitter + `ray lsp`) and
-config for Neovim/Helix (they use `ray lsp` directly).
+snippets for Neovim/Helix in [editors/README.md](editors/README.md) (they use `ray lsp` directly).
 
 ## Status
 
@@ -329,7 +329,7 @@ development oracle. The suite includes unit tests per phase, more than a hundred
 files, a front-end fuzzer, the VM↔interpreter oracles and the native binary's parity corpus. What is
 published and what is on the way, in [`CHANGELOG.md`](CHANGELOG.md).
 
-The focus is **real production**, with the scope stated up front: it is built by a single maintainer
+The scope, stated up front: it is built by a single maintainer
 and has not been externally audited (see [`SECURITY.md`](SECURITY.md#alcance)).
 
 ## Contributing
@@ -359,4 +359,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:de64907892f0 -->
+<!-- sync: sha256:a49c41f15abf -->

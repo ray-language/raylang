@@ -332,7 +332,8 @@ Rutas con parámetros, middleware, JSON tipado, estáticos, cookies y sesiones: 
 | `ray test` | los `@test`; `--watch` re-corre al guardar |
 | `ray fmt --write src/` | formato canónico (conserva tus paréntesis y comentarios) |
 | `ray build --native --release` | binario nativo optimizado; `ray toolchain install` si no tienes Rust |
-| `ray bundle` | app de escritorio (`.app`, `.desktop`, `.exe`) o proyecto iOS/Android |
+| `ray bundle` | app de escritorio (`.app`, `.desktop`, `.exe`) o proyecto iOS/Android (`--ios`, `--android`) |
+| `ray dev --device` | hot reload del programa en el teléfono (shell `ray bundle --ios --dev` / `--android --dev`) |
 | `ray doc src/main.ray` | documentación desde los comentarios `///` |
 | `ray serve _site` | sirve un directorio estático para previsualizar (`--port`, `--host`) |
 | `ray lsp` / `ray mcp` | editor (VSCode, Sublime, Zed, Neovim/Helix) / agentes LLM |
@@ -343,6 +344,10 @@ Rutas con parámetros, middleware, JSON tipado, estáticos, cookies y sesiones: 
 - [`REFERENCE.md`](../REFERENCE.md): todo lo que existe, con firmas — es la fuente cuando una función
   "debería existir" (casi siempre existe).
 - [`MANUAL.md`](../MANUAL.md): la guía larga, con los idiomas y las decisiones explicadas.
+- **Apps de escritorio y móvil**: ventanas con [`std/ui`](../MANUAL.md#ventanas-stdui), empaquetado
+  con [`ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle) (macOS/Linux/Windows, iOS, Android),
+  [hot reload en el teléfono](../MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device) y
+  [frontend con Vite](../MANUAL.md#frontend-con-vite-react-vue-svelte--y-ray-dev).
 - [`examples/`](../examples/): más de 170 programas, de `fib` a un servidor con WebSockets.
 - Con un agente: pega [`llms.txt`](../llms.txt) en el prompt y conecta `ray mcp`
   ([`mcp.md`](mcp.md)) para que verifique lo que escribe.

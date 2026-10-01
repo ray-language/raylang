@@ -3847,3 +3847,50 @@ Hallazgos #67–#75 de `RAYLANG-FINDINGS.md` (raymart distribuido bajo carga y r
 | 120 | Usar la barra de título para el contenido, como Chrome/VS Code (pedido del usuario con captura; `kind` solo tenía document/panel/borderless) | ✅ **M328**: `kind = "full_content"` en macOS (FullSizeContentView + barra transparente + título oculto), `window.ray.titlebar_height` y `data-ray-drag` en el shim (arrastre/zoom por mensaje de control; macOS y Windows, también `borderless`); Linux/Windows `full_content` = `document` hasta que una app lo pida |
 | 109 | Regresión 1.27.19: `ray bundle --android` sin `[android] background_audio` no compila («cannot find symbol: variable RayPlaybackService»); con el flag, el diálogo de POST_NOTIFICATIONS al arrancar produce un `lifecycle` `background` fantasma (`RAYLANG-FINDINGS.md` #99) | ✅ **M325**: `RayPlaybackService.java` se escribe siempre; sin petición de permiso al arrancar (Android 13+ sin él: servicio sí, notificación no); `javac` con el flag en `false` y en `true` + `gradle assembleDebug` del proyecto sin flag |
 
+
+## 100. Agentes LLM y MCP escritos EN raylang: ¿librería o patrón? (oct 2026)
+
+**De dónde sale.** La auditoría de documentación (`docs/plan-handbook.md`, 1 oct 2026) dejó claro
+que «nativo para agentes LLM» en la landing hoy significa dos piezas para que un LLM *escriba*
+raylang (`llms.txt` + `ray mcp`). Para *escribir un agente* en raylang no hay nada de serie: ni
+cliente de LLM ni cliente/servidor MCP. La única implementación es `ray-apps/raycode`, como código
+de aplicación: `anthropic.ray` (467 l), `openai.ray` (388 l), `client.ray` (804 l: envío, streaming,
+reintentos, `Retry-After`, lista de modelos), `message.ray` (63 l), `mcp.ray` (1218 l: cliente MCP
+por stdio con sesión-actor y por Streamable HTTP, descubrimiento de tools/resources,
+`instructions`). Unas **3.000 líneas probadas en producción** que cualquier segundo agente tendría
+que copiar.
+
+**¿Hace falta una librería?** Sí, si la landing quiere sostener la frase; no es imprescindible
+para el handbook (que puede enseñar el patrón a mano con `net/http` streaming + `net/sse` +
+`std/json` + `std/process`). La decisión de fondo es si raylang quiere que «agente» sea una
+categoría de app de primera clase, como lo son hoy «API», «escritorio» o «móvil». El coste de no
+tenerla: cada app repite el protocolo de mensajes, el bucle de tool-use, el streaming SSE y el
+handshake MCP — exactamente lo que `web` evitó para los servidores.
+
+**Qué se estandariza (propuesta, Tier-2 en `packages/`, no stdlib):**
+
+| Paquete | Superficie | De dónde |
+|---|---|---|
+| `llm` | un tipo `Message`/`ToolCall`/`Reply` común; `send(cfg, tools, history) -> Result<Reply, _>`; `send_stream(...)` con callback por delta; proveedores `llm/anthropic` y `llm/openai` (y compatibles OpenAI: Ollama, vLLM) tras la misma interfaz; reintentos con `Retry-After`; `std/keychain` para la clave | `raycode/src/{client,anthropic,openai,message}.ray` |
+| `mcp` | **cliente**: `mcp.connect_stdio(cmd, args)` / `mcp.connect_http(url)`, `discover`, `call`, `read_resource`, `instructions`; sesión como actor en su fibra (el patrón ya resuelto en raycode); **servidor**: `mcp.serve(tools, resources)` por stdio y por HTTP, para que una app raylang exponga sus propias tools a Claude Code/Desktop con diez líneas | `raycode/src/mcp.ray` + `src/mcp.rs` (el servidor de la toolchain, hoy en Rust, sirve de modelo de protocolo) |
+| `agent` (opcional, después) | el bucle: `run(cfg, tools, prompt)` que alterna `llm.send` y ejecución de tools (locales o MCP) hasta `stop`, con presupuesto de pasos/tokens y hooks de aprobación | `raycode/src/agent.ray` (801 l) y `tools.ray` |
+
+Formas canónicas que el handbook enseñaría encima: (1) chat con streaming a la terminal;
+(2) agente con dos tools locales + un servidor MCP externo; (3) un servidor MCP propio que
+expone datos de la app a un asistente; (4) `ray mcp` como tool del propio agente (el agente
+escribe raylang y lo verifica).
+
+**Lo que NO es:** no es «raylang habla con Claude»; es el protocolo de mensajes con tool-use tal
+como lo exponen las APIs actuales (Anthropic Messages, OpenAI Chat/Responses) y MCP
+(JSON-RPC 2.0; stdio y Streamable HTTP). Sin SDK oficial de ningún proveedor: `net/http` ya hace
+el trabajo (raycode lo demuestra).
+
+**Impacto.** Cero en el compilador; dos paquetes nuevos + espejos en `ray-index`; raycode pasa
+a consumirlos (prueba de que la extracción es fiel: su suite debe seguir verde). Tamaño:
+un arco de ~3 PRs (extraer `llm`, extraer `mcp` cliente, escribir `mcp` servidor + ejemplos).
+Riesgo: la API del proveedor cambia (bloques de razonamiento firmados, nuevos tipos de
+contenido) — por eso `raw` passthrough como ya hace raycode, y versionado semver del paquete.
+
+**Dependencias con el handbook.** El capítulo «LLM y MCP» del handbook se escribe en dos tiempos:
+primero el patrón a mano (sin citar raycode, decisión del 1 oct 2026) y, si este arco se aprueba,
+se reescribe sobre `llm`/`mcp`. **Estado: PROPUESTO, sin decidir.**

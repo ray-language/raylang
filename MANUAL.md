@@ -1092,9 +1092,11 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    import std/random;        // random.below(6)
    ```
 
-   El catálogo: `math` `text` `sort` `fs` `net` `process` `time` `units` `random` `crypto` `resilience`
-   `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
-   `inflate` `deflate` `huffman` `protobuf` `uuid`.
+   El catálogo: `io` `term` `fs` `process` `time` `units` `random` `math` `bigint` `text` `sort`
+   `kv` `keychain` `crypto` (+ `crypto/{md5,aes,des}`) `resilience` `net` `json` `hex` `base64`
+   `url` `regex` `csv` `toml` `template` `markdown` `inflate` `deflate` `zip` `huffman` `protobuf`
+   `uuid` `collections/{set,deque,stringbuilder,dict}` `image` `audio` `ui` `embed` `update` `ffi`
+   (firmas en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)).
 
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos (M235): `platform()` en la
    prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
@@ -1126,7 +1128,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
    feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
 
-3. **Paquetes** (`packages/net`, `packages/db`) — no embebidos; se declaran como dependencia (§14).
+3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema
 
@@ -1553,9 +1555,9 @@ remedio es regenerar el bundle (firma, keystore e icono se preservan).
 
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
-van embebidos, no en rutas relativas —, y en v1 no hay firma/notarización: tu propio .app corre
-sin fricción, pero uno DESCARGADO sin firma exige aprobación en Ajustes → Privacidad y
-seguridad (macOS 15+). El `.desktop` de Linux lleva `Exec=` absoluto: para instalarlo, cópialo
+van embebidos, no en rutas relativas —, y una app DESCARGADA sin firmar exige aprobación en
+Ajustes → Privacidad y seguridad (macOS 15+): para distribuir, fírmala y notarízala con
+`[app] sign`/`[app] notary` (ver «Auto-actualización», más abajo). El `.desktop` de Linux lleva `Exec=` absoluto: para instalarlo, cópialo
 a `~/.local/share/applications`.
 
 ### Ventanas (`std/ui`)
@@ -2197,25 +2199,24 @@ el portapapeles, "abrir con la app por defecto". Un proceso con `argv` tipado, s
 y código de salida como valor es la forma correcta — sin `unsafe`, sin cadenas de shell y sin
 depender de que el usuario tenga otra cosa instalada (feedback de `ray-remote`, M205):
 
+El llavero ya no necesita ni eso: `std/keychain` habla con Keychain Services (macOS), Secret
+Service (Linux) y Credential Manager (Windows) directamente, con la misma firma en los tres:
+
+```rust
+import std/keychain;
+
+// Un secreto del llavero del sistema: Ok(None) si no existe, Err si el llavero falla.
+fn api_key() -> Result<Option<string>, string> {
+    keychain.get("mi-app", "anthropic_api_key")
+}
+keychain.set("mi-app", "anthropic_api_key", "sk-…")?;   // crea o reemplaza
+keychain.delete("mi-app", "anthropic_api_key")?;        // Ok(true) si existía
+```
+
+El resto del sistema sigue siendo un proceso:
+
 ```rust
 import std/process;
-
-// Un secreto del llavero de macOS (`security` viene con el sistema): "" si no está.
-fn keychain_password(service: string, account: string) -> string {
-    match (process.run("security", ["find-generic-password", "-s", service, "-a", account, "-w"])) {
-        Result.Ok(o) => match (o.exit) {
-            process.Exit.Code(c) => {
-                if (c != 0) { return ""; }    // no existe, o el usuario denegó el acceso
-                match (from_utf8(o.stdout)) {
-                    Result.Ok(s) => s.trim(),
-                    Result.Err(_) => "",
-                }
-            },
-            process.Exit.Signal(_) => "",
-        },
-        Result.Err(_) => "",               // no es macOS
-    }
-}
 
 // Al portapapeles: `pbcopy` (macOS), `xclip`/`wl-copy` (Linux), `clip` (Windows).
 fn copy_to_clipboard(text: string) -> bool {
@@ -3131,9 +3132,9 @@ detalle del confinamiento, `docs/mcp.md`.
 **Compilación a binario nativo** (`ray build --native`): además de correr sobre la VM, un programa se
 puede **transpilar a Rust** y compilar a un ejecutable de código máquina — el modelo *dev = VM / deploy =
 nativo*, como el ciclo dev/release de Rust. El binario es **byte-idéntico a la VM** (verificado con
-oráculos) y mucho más rápido: **3–4× la VM** en cargas de servicio y **28–57×** en cómputo puro. En el
-banco poliglota le gana a node en 9 de los 10 programas de cómputo, a Go en seis y a `rustc -O` en
-cuatro, empatando con ambos en otros dos (medido 29 jul 2026; tablas en `benchmarks/poly/README.md`).
+oráculos) y mucho más rápido: **2,6–4× la VM** en cargas de servicio y **14–28×** en cómputo puro. En el
+banco poliglota le gana a node en 9 de los 10 programas de cómputo, a Go en cinco y a `rustc -O` en
+cuatro, empatando con ambos en otros dos (medido 22 sep 2026; tablas en `benchmarks/poly/README.md`).
 
 ```sh
 ray build --native fib.ray            # → binario './fib' (rustc -O, ~0,2 s, portable)

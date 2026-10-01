@@ -28,11 +28,18 @@ por línea), sin dependencias ni estado.
 
 | Tool | Argumentos | Qué devuelve |
 |---|---|---|
-| `ray_check` | `code` | `ok` o los diagnósticos exactos del compilador (posición + línea + `^`) |
-| `ray_run` | `code`, `stdin?` | `exit` (el `int` de `main`) + stdout + stderr |
-| `ray_test` | `code` | el reporte del runner `@test`; `exit` 0 = verde, 1 = fallos |
-| `ray_fmt` | `code` | el fuente canónico (`ray fmt`) |
-| `ray_doc` | `symbol` | firma + doc de un builtin, una función o un **tipo** de `std/*` (`len`, `json.parse`, `ui.MenuItem` con sus campos, `process.Exit` con sus variantes…) |
+| `ray_check` | `code` \| `path` | `ok` o los diagnósticos exactos del compilador (posición + línea + `^`) |
+| `ray_run` | `code` \| `path`, `stdin?` | `exit` (el `int` de `main`) + stdout + stderr |
+| `ray_test` | `code` \| `path` | el reporte del runner `@test`; `exit` 0 = verde, 1 = fallos |
+| `ray_fmt` | `code` \| `path` | el fuente canónico (`ray fmt`) |
+| `ray_doc` | `symbol`, `path?` | firma + doc de un builtin, una función o un **tipo** de `std/*` (`len`, `json.parse`, `ui.MenuItem` con sus campos, `process.Exit` con sus variantes…); con `path`, también los módulos del proyecto y sus dependencias (`http.stream_with` de `net`) |
+
+`code` es un programa autocontenido (experimento rápido en un directorio temporal aislado: ni los
+archivos del proyecto ni los paquetes resuelven). **`path`** es un `.ray` o un directorio de proyecto
+**en disco**: la tool corre con el `ray.toml` más cercano como contexto, así que los imports
+multi-archivo y las `[dependencies]` resuelven exactamente como en `ray run`. Para cualquier cosa
+más allá de un experimento de un archivo, el modelo debe usar `path` — las *instructions* del
+servidor se lo dicen.
 
 Y dos *resources*: **`raylang://llms.txt`** — el contexto destilado de la pieza A (delta contra
 Rust, formas canónicas, mensajes de error exactos) — y **`raylang://reference.md`** — el catálogo
@@ -61,7 +68,7 @@ que el modelo necesita. `isError: true` queda para fallos del envoltorio (timeou
 
 ## Implementación
 
-`src/mcp.rs` (~300 líneas), cliente 100% externo como el LSP/REPL/runner: cero cambios en el
+`src/mcp.rs` (~1.200 líneas), cliente 100% externo como el LSP/REPL/runner: cero cambios en el
 core, cero dependencias (el JSON es el del LSP, `lsp::json`). Tests: unitarios en memoria
 (`serve` es genérico sobre los flujos) + `tests/mcp_cli.rs` (el servidor real por stdio,
 las cinco tools de punta a punta, incluida la bomba de bucle cortada por fuel).

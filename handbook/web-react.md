@@ -237,6 +237,6 @@ Notes ocupa unos 3 MB. Se configura con `HOST`, `PORT`, `REDIS_HOST` y `REDIS_PO
 
 ## Siguiente paso
 
-Los capítulos anteriores enseñan a construir. El siguiente, **Distribuir**, cubre cómo llevar cada
-cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, y publicar las de
+Los capítulos anteriores enseñan a construir. [**Distribuir**](distribuir.md) cubre cómo llevar
+cada cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, y publicar las de
 móvil.

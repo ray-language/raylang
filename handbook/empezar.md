@@ -395,8 +395,8 @@ Desde aquí, cada guía del handbook es un proyecto completo, con su app de ejem
 - un [**sitio con frontend React**](web-react.md) embebido en el binario;
 - un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang.
 
-Falta un capítulo, **Distribuir** (firmar, notarizar y auto-actualizar), que la
-[portada](index.md) enlazará cuando se publique.
+Y para llevar todo eso a sus usuarios: [**distribuir**](distribuir.md), con firma, tiendas
+móviles y actualizaciones automáticas.
 
 Para todo lo demás: la [referencia](../REFERENCE.md) tiene cada función con su firma, y el
 [manual](../MANUAL.md) explica el lenguaje en detalle.

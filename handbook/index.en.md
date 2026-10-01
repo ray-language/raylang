@@ -31,13 +31,11 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    API and the notes in Redis.
 7. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
    agent written in raylang that talks to Claude and uses tools through MCP.
-
-## Coming next
-
-- **Shipping**: packaging, signing, notarizing and auto-updating the apps.
+8. [Shipping](distribuir.en.md): packaging and signing for each system, publishing to the mobile
+   stores and signed automatic updates on the desktop.
 
 The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:57e2a9fbb3e8 -->
+<!-- sync: sha256:56e75c733a4e -->

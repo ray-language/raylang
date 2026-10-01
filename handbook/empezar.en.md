@@ -395,10 +395,10 @@ From here, each handbook guide is a complete project, with its example app:
 - a [**site with a React frontend**](web-react.en.md) embedded in the binary;
 - an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang.
 
-One chapter is still missing, **Shipping** (signing, notarizing and auto-updating), which the
-[overview](index.en.md) will link once it is published.
+And to get all of that to its users: [**shipping**](distribuir.en.md), with signing, the mobile
+stores and automatic updates.
 
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:654687536e2c -->
+<!-- sync: sha256:2a6557e06bb7 -->

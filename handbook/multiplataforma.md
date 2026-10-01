@@ -312,8 +312,8 @@ ray bundle --android       # el proyecto Gradle
 `.app` de macOS de Notes ocupa unos 3 MB.
 
 Para distribuir la app fuera de tu máquina, macOS pide firmarla y notarizarla, y Windows muestra un
-aviso de SmartScreen si no está firmada. Lo explica el capítulo **Distribuir**; mientras se
-publica, está en el manual: [auto-actualización y firma](../MANUAL.md#auto-actualización-stdupdate).
+aviso de SmartScreen si no está firmada. Lo explica el capítulo [Distribuir](distribuir.md), junto
+con las actualizaciones automáticas.
 
 ## Siguiente paso
 

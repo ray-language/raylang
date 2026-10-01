@@ -31,10 +31,8 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    y las notas en Redis.
 7. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
    escrito en raylang que habla con Claude y usa herramientas por MCP.
-
-## En camino
-
-- **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar las apps.
+8. [Distribuir](distribuir.md): empaquetar y firmar para cada sistema, publicar en las tiendas
+   móviles y actualizaciones automáticas firmadas en escritorio.
 
 El detalle de cada API de ventanas está en el manual:
 [ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y

@@ -307,13 +307,12 @@ on Linux. The usual setup is a CI matrix with one job per system. With SQLite in
 macOS `.app` takes about 3 MB.
 
 To distribute the app beyond your machine, macOS asks you to sign and notarize it, and Windows
-shows a SmartScreen warning if it is unsigned. The **Shipping** chapter covers it; until it is
-published, it is in the manual (Spanish):
-[auto-update and signing](../MANUAL.md#auto-actualización-stdupdate).
+shows a SmartScreen warning if it is unsigned. The [Shipping](distribuir.en.md) chapter covers it,
+together with automatic updates.
 
 ## Next step
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md), and then a
 [**web API**](api.en.md) with Postgres.
 
-<!-- sync: sha256:f0133db13e02 -->
+<!-- sync: sha256:4961f39fce03 -->

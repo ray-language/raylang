@@ -238,7 +238,7 @@ is configured with `HOST`, `PORT`, `REDIS_HOST` and `REDIS_PORT`.
 
 ## Next step
 
-The previous chapters teach how to build. The next one, **Shipping**, covers how to get each thing
-to its users: signing, notarizing and updating desktop apps, and publishing mobile ones.
+The previous chapters teach how to build. [**Shipping**](distribuir.en.md) covers how to get each
+thing to its users: signing, notarizing and updating desktop apps, and publishing mobile ones.
 
-<!-- sync: sha256:f0bb9e950375 -->
+<!-- sync: sha256:478e971589a3 -->

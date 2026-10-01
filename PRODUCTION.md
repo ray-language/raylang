@@ -1,6 +1,6 @@
 # raylang — El contrato de producción
 
-> Qué significa, en concreto, que raylang esté enfocado a **producción real**: los ejes que se
+> Qué significa, en concreto, «escribe como script, despliega como binario»: los ejes que se
 > mantienen, las invariantes que no se negocian, el estado medido y las guardas que lo sostienen.
 > Es un documento **vigente** (se actualiza con el proyecto), no una crónica: el porqué histórico
 > de cada decisión vive en [DESIGN.md](DESIGN.md) y las mediciones en
@@ -11,8 +11,10 @@
 
 ## 1. Los ejes
 
-raylang se juzga contra seis ejes. Los cinco primeros vienen del cambio de norte de julio de 2026;
-el sexto se añadió el 14 de julio, cuando el rendimiento pasó a ser el objetivo nº 1.
+raylang se juzga contra ocho ejes. Los cinco primeros vienen del cambio de norte de julio de 2026;
+el sexto se añadió el 14 de julio, cuando el rendimiento pasó a ser el objetivo nº 1; los dos
+últimos recogen el posicionamiento de septiembre de 2026 (el de la landing): apps de escritorio y
+móvil de fábrica, y un lenguaje que un agente LLM escribe bien.
 
 | Eje | Qué significa aquí |
 |---|---|
@@ -22,6 +24,8 @@ el sexto se añadió el 14 de julio, cuando el rendimiento pasó a ser el objeti
 | **Ligero** | binario único, arranque de milisegundos, dependencias contadas, y builds a medida (*slim*, `--without`) para contenedores y embedding |
 | **Seguro** | memory safety, sin `null`, sin data races por construcción, compilador sin pánicos, confinamiento opcional y cadena de suministro verificada. El detalle es [SECURITY.md](SECURITY.md) |
 | **Elegante** | la propiedad arquitectónica: núcleo pequeño, todo lo demás encima (erasure, azúcar de front-end, builtins registrados una sola vez). Cada fase declara qué **no** va a engordar |
+| **Apps** | el mismo fuente corre como app de escritorio (macOS, Linux, Windows) y móvil (iOS, Android) sin framework externo: ventana + webview (`std/ui`), puente JS↔raylang, menús, diálogos, audio, assets horneados, `ray bundle`, hot reload en el dispositivo (`ray dev --device`), firma y auto-actualización (`std/update`). Se mide con las apps dogfood de `ray-apps` |
+| **Agentes** | un LLM escribe raylang correcto a la primera o a la segunda: `llms.txt` (el delta y los errores exactos), `ray mcp` (check/run/test/fmt/doc con el código confinado) y el `ray doc` que el modelo consulta. La guarda es `tests/llms_signatures.rs` (lo citado existe) y los barridos de `ray-apps` escritos por agentes |
 
 ## 2. Las invariantes (no negociables)
 
@@ -44,15 +48,15 @@ el sexto se añadió el 14 de julio, cuando el rendimiento pasó a ser el objeti
 7. **Lo que el lenguaje entrega al usuario va en inglés** (diagnósticos, LSP, CLI); los
    identificadores también. Los comentarios del código van en español. Lo vigila un test de CI.
 
-## 3. Estado medido (jul 2026)
+## 3. Estado medido (oct 2026, 1.27.26)
 
 | Métrica | Valor |
 |---|---|
-| Núcleo Rust | ~53.100 líneas en `src/` + ~2.800 en `crates/ray-runtime` |
-| Código raylang | 268 archivos `.ray` (173 ejemplos, 15 módulos `std/`, 35 de paquetes, 13 del compilador auto-alojado) |
-| Tests | **703** unitarios + **123** archivos de integración (~28.300 líneas), con oráculo VM↔intérprete y corpus de paridad del binario nativo |
-| Dependencias de Cargo | 7 externas directas en el binario `ray` (`ahash`, `mimalloc`, `rustls` + 2 satélites, `rusqlite`, `libloading`) y 4 más en `ray-runtime` (`ring`, `regex`, `corosensei`, y las mismas tras features). Todas justificadas, casi todas tras una feature (ver SECURITY.md) |
-| Higiene | ~90 avisos de clippy (55 son `collapsible_if`; ninguno es error) y 29 `TODO` anotados |
+| Núcleo Rust | ~81.900 líneas en `src/` + ~15.800 en `crates/ray-runtime` |
+| Código raylang | 270 archivos `.ray` (185 ejemplos, 30 módulos `std/`, 42 de paquetes, 13 del compilador auto-alojado) |
+| Tests | **172** archivos de integración (~39.700 líneas) más los unitarios por módulo, con oráculo VM↔intérprete, corpus de paridad del binario nativo y diferencial generado |
+| Dependencias de Cargo | el binario `ray` y `ray-runtime` (19 directas, casi todas tras una feature: TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, regex acelerada, fibras/`corosensei`, webview, notificación de archivos, `mimalloc`, `ahash`). Inventario y justificación: [SECURITY.md](SECURITY.md#política-de-dependencias) |
+| Higiene | clippy en CI sin errores (`cargo clippy` como check propio, M333); los `TODO` anotados |
 | `unsafe` | acotado a una docena de archivos, cada bloque con su invariante `SAFETY` documentada e inventariado en SECURITY.md |
 | Motores | VM (producto) · binario nativo (despliegue, byte-idéntico) · intérprete (oráculo) |
 | Concurrencia | actores con heap aislado sobre scheduler **M:N multicore** (VM) y fibras M:N (nativo) |

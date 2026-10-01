@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Documentación coherente (fase 0 del handbook)**: un solo posicionamiento en README, PRODUCTION
+  (ejes nuevos «Apps» y «Agentes», estado medido de oct 2026) y la web; cifras de rendimiento
+  unificadas con `benchmarks/poly` (2,6–4× / 14–28× la VM; Go en 5, `rustc -O` en 4); la landing
+  enlaza las secciones concretas del manual para escritorio/móvil. REFERENCE documenta `tz` y
+  `cron`, el código de salida 74, los flags `--devtools`/`--lib`/`--embed`/`--no-stubs` y las
+  variables de entorno que faltaban; se retira el «sin firma/notarización en v1» (contradicho por
+  M249). El MANUAL enseña `std/keychain` en lugar de `security`, con el catálogo de `std/` al día.
+  `docs/mcp.md` documenta el argumento `path`. `examples/README.md` usa `ray run` y marca las
+  librerías de `examples/web` como históricas. Nuevo `editors/README.md` con Neovim y Helix. Plan
+  del handbook en `docs/plan-handbook.md`; evaluación de paquetes `llm`/`mcp` en IDEAS §100.
+
 ## 1.27.26 — 2026-10-01
 
 - **Audio sin clics en iPhone** (M332, rayplay): `std/audio` crepitaba en iOS con la latencia

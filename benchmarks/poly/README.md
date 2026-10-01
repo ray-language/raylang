@@ -154,8 +154,8 @@ arco F enlaza **fibras M:N** por defecto.
   P0, 14 jul) medía la VM contra intérpretes y celebraba "2.0–2.7× del líder". Hoy la comparación
   relevante es contra **binarios compilados**, y ahí se pelea de tú a tú con Go y Rust.
 - **La VM sigue siendo el motor de desarrollo**, y su distancia al nativo dice para qué es cada
-  uno: 3–4× en los workloads de servicio (donde el coste real está en la stdlib, compartida) y
-  28–57× en los micro de cómputo puro (donde solo se mide el bucle de despacho). El modelo
+  uno: 2,6–4× en los workloads de servicio (donde el coste real está en la stdlib, compartida) y
+  14–28× en los micro de cómputo puro (donde solo se mide el bucle de despacho). El modelo
   *dev = VM / deploy = nativo* no es un eslogan: es esta tabla.
 - **Las fibras M:N salen gratis en cómputo.** A/B del mismo programa con y sin `--without fibers`
   (mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — todo dentro del

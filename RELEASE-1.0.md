@@ -32,9 +32,9 @@ servicios externos (del mantenedor).
       La VM es el motor de producto (M35); el intérprete es el oráculo de validación cruzada (verde). Suite
       completa verde: **626 tests unitarios + 101 archivos de integración**. (Después de la 1.0 se sumó un
       tercer motor, el **binario nativo**, con su propio corpus de paridad byte-idéntica.)
-- [ ] **SPEC publicada** — 🟡
-      `SPEC.md` está **escrita y es normativa** (versiona con el lenguaje). Falta **publicarla** (hostearla
-      como sitio/página). El parser auto-alojado (M14) valida la gramática descrita.
+- [x] **SPEC publicada** — ✅ (ago 2026)
+      `SPEC.md` está **escrita y es normativa** (versiona con el lenguaje) y se publica renderizada en
+      [raylang.dev/spec.html](https://raylang.dev/spec.html) en cada push a main. El parser auto-alojado (M14) valida la gramática descrita.
 - [x] **Benchmarks dentro del presupuesto** — ✅
       Hay banco (`benchmarks/`, con el poliglota y el de carga web) + **guardas de regresión** de tiempo
       (`tests/perf_regression.rs`, falla si degrada >5%) y de **memoria** (pico de RSS). El criterio de la
@@ -59,10 +59,10 @@ servicios externos (del mantenedor).
 - [x] **Extensión VSCode publicada** — ✅ (ago 2026)
       Publicada en el marketplace (`editors/vscode/`, con cliente LSP); el paquete de Sublime Text
       (`editors/sublime/`) también está disponible.
-- [ ] **Libro y sitio publicados** — 🌐
-      El libro (`book/`, mdBook) existe; falta hostearlo + un sitio de aterrizaje (que puede alojar el
-      playground y la SPEC). **Es lo único del lanzamiento que sigue pendiente** (junto con hostear la
-      SPEC, arriba).
+- [x] **Sitio publicado** — ✅ (26 ago 2026) · libro no publicado (decisión)
+      El sitio [raylang.dev](https://raylang.dev) (landing, SPEC, bench, playground) se despliega en cada
+      push a main. El libro (`book/`, mdBook) existe como crónica de construcción y **no se publica**
+      (decisión del 1 oct 2026; la guía de uso será el handbook, `docs/plan-handbook.md`).
 - [x] **Declarar `1.0.0`** — ✅ (resuelto como `v1.1.0`)
       Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; licencia MIT OR Apache-2.0
       (`LICENSE-MIT`/`LICENSE-APACHE`). El tag `v1.0.0` no llegó a empujarse: lo acumulado desde la
@@ -74,7 +74,7 @@ servicios externos (del mantenedor).
 - Buena parte de "Distribución" es **externa** (🌐): requiere cuentas del mantenedor (GitHub Releases, brew
   tap, marketplace de VSCode, hosting). Lo **en-repo** (instalador, workflow de release, `SECURITY.md`, subir
   la versión) está preparado y se ejecuta cuando se decida.
-- **Ningún criterio técnico está pendiente de código**: los ⬜/🟡 que quedan son de publicación (hostear la
-  SPEC y el libro, subir la extensión, empujar el tag).
+- **Ningún criterio del lanzamiento sigue pendiente**: la SPEC y el sitio están publicados, la extensión
+  subida y las releases salen con su tag desde la v1.1.0.
 - La primera Release fue **`v1.1.0`** (25 ago 2026): comprobó de punta a punta el workflow de release
   y el instalador; desde entonces cada versión del `CHANGELOG.md` sale con su tag `v*`.

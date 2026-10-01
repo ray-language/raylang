@@ -3,9 +3,14 @@
 Programas de ejemplo, organizados por categoría. Ejecútalos con:
 
 ```sh
-cargo run -- examples/<categoría>/<archivo>.ray          # intérprete
-cargo run -- --vm examples/<categoría>/<archivo>.ray     # VM (necesaria para concurrencia/red)
+ray run examples/<categoría>/<archivo>.ray            # la VM (motor de producto)
+ray run --interp examples/<categoría>/<archivo>.ray   # el intérprete (oráculo; sin fibras ni red)
+ray build --native examples/basics/fib.ray            # el mismo programa como binario nativo
 ```
+
+Los **proyectos** (directorios con `ray.toml`: `web/framework/`, `web/desktop_window/`, `web/ssr/`,
+`db/`, `proyecto/`) se ejecutan desde su directorio con `ray run`. Para las apps completas
+(móvil, multiplataforma, API, SSR, frontend embebido) ver el handbook (`docs/plan-handbook.md`).
 
 ## `basics/` — fundamentos
 Control de flujo, funciones, recursión y aritmética.
@@ -35,9 +40,26 @@ Archivos, datos binarios (`bytes`), reloj y aleatoriedad.
 Cliente y servidor TCP; servidor concurrente (VM y binario nativo).
 `tcp_cliente` · `tcp_servidor` · `servidor_concurrente`
 
+## `db/` — bases de datos
+Un proyecto con `ray.toml` que usa el paquete `db` (SQLite embebido, Postgres, MySQL, Redis, Mongo).
+Ver `db/README.md`.
+
+## `ffi/` — llamar a C
+`std/ffi`: cargar una librería del sistema y llamar funciones con tipos marshalables.
+
+## `term/` — terminal
+`std/term`: teclas crudas (`keys`) y sprites con el protocolo gráfico de kitty (`sprite`).
+
 ## `web/` — la capa web
-Librerías en raylang (importables) + sus demos. **El servidor corre en la VM y en el binario nativo** (el intérprete no tiene fibras).
-- **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE + `html_response`),
+Demos y proyectos web. **El servidor corre en la VM y en el binario nativo** (el intérprete no tiene fibras).
+
+> **Aviso.** Los `.ray` sueltos de este directorio (`http`, `webserver`, `websocket`, `jwt`, `redis`,
+> `dns`, `http2`, `hpack`, `framework`, …) son las **versiones históricas** de lo que hoy vive en
+> `packages/net`, `packages/web` y `packages/db`, congeladas aquí como corpus de pruebas y de
+> paridad. Para un programa nuevo declara los paquetes en `[dependencies]` y usa `net/http`,
+> `web/framework`, `db/redis`…; las firmas actuales están en `REFERENCE.md`.
+
+- **Librerías (históricas)**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE + `html_response`),
   `websocket` (handshake + framing), `sha1` / `sha256` / `hmac` / `base64` / `hex` (cripto),
   `jwt` (JSON Web Tokens HS256), `uuid` (v4), `url` (percent-encoding + query string), `cookie`,
   `time` (fechas/horas UTC: ISO 8601, RFC 1123, duraciones), `redis` (cliente RESP2 sobre TCP),

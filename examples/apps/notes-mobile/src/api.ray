@@ -1,7 +1,7 @@
-// El protocolo entre la página y el programa. La página llama a
-// `window.ray.request({op: "...", ...})`; cada petición llega aquí como texto JSON y la respuesta
-// vuelve con `ui.reply_json`, así que la Promise de la página resuelve con un objeto. Todas las
-// operaciones devuelven la lista completa: la interfaz se repinta con una sola fuente de verdad.
+// The protocol between the page and the program. The page calls
+// `window.ray.request({op: "...", ...})`; each request arrives here as JSON text and the answer
+// goes back with `ui.reply_json`, so the page's Promise resolves with an object. Every operation
+// answers with the full list: the UI repaints from a single source of truth.
 import std/kv;
 import std/json;
 import notes;

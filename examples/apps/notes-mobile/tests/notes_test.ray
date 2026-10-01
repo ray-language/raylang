@@ -1,5 +1,5 @@
-// Tests del backend: el modelo y el protocolo, sin ventana. Cada test usa un almacén en una
-// carpeta temporal propia, y la hora la fija el test, así que el resultado es determinista.
+// Backend tests: the model and the protocol, without a window. Each test uses a store in its own
+// temporary folder and sets the clock itself, so the result is deterministic.
 import std/kv;
 import std/fs;
 import std/json;

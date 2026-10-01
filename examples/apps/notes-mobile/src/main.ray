@@ -1,19 +1,19 @@
-// Notes: una app de notas para iOS y Android (y, sin cambiar una línea, para escritorio).
+// Notes: a notes app for iOS and Android (and, without changing a line, for the desktop).
 //
-// La interfaz es React + TypeScript (frontend/), construida con Vite. Bajo `ray dev` la ventana
-// carga el dev server de Vite (recarga en caliente); en un build nativo o en el bundle del
-// teléfono carga el `frontend/dist` embebido, servido por `ray://app/` sin ningún puerto. La
-// página habla con este programa por el puente `window.ray.request`, y las notas viven en un
-// archivo de `std/kv` dentro de la carpeta de datos de la app.
+// The UI is React + TypeScript (frontend/), built with Vite. Under `ray dev` the window loads the
+// Vite dev server (hot reload); in a native build or a phone bundle it loads the embedded
+// `frontend/dist`, served from `ray://app/` with no port at all. The page talks to this program
+// through the `window.ray.request` bridge, and the notes live in a `std/kv` file inside the app's
+// data folder.
 import std/ui;
 import std/kv;
 import std/fs;
 import std/time;
 import api;
 
-// La carpeta de datos: `$HOME/Documents/Notes`. En iOS `$HOME` es el contenedor de la app (su
-// raíz no se puede escribir, `Documents/` sí); en Android el shell pone `HOME` en la carpeta
-// privada de la app; en escritorio es la carpeta del usuario. `NOTES_DIR` la cambia (tests, CI).
+// The data folder: `$HOME/Documents/Notes`. On iOS `$HOME` is the app container (its root is
+// read-only, `Documents/` is writable); on Android the shell points `HOME` at the app's private
+// folder; on the desktop it is the user's home. `NOTES_DIR` overrides it (tests, CI).
 fn data_dir() -> string {
     match (env("NOTES_DIR")) {
         Option.Some(d) => d,
@@ -35,7 +35,7 @@ fn main() -> int {
             return 1;
         },
     };
-    // Bajo `ray dev` el build puede no existir todavía (lo sirve Vite): solo se avisa.
+    // Under `ray dev` the build may not exist yet (Vite serves the page): only warn.
     match (ui.mount_embed_at("", "frontend/dist")) {
         Result.Err(e) => eprint("frontend build not mounted (fine under `ray dev`): " + e),
         Result.Ok(_) => { },
@@ -55,8 +55,8 @@ fn main() -> int {
             },
             Result.Ok(e) => e,
         };
-        // En escritorio, cerrar la ventana termina la app. En el teléfono no llega nunca: el
-        // sistema suspende o mata el proceso, y por eso cada cambio ya está guardado.
+        // On the desktop, closing the window ends the app. On a phone it never arrives: the
+        // system suspends or kills the process, which is why every change is already saved.
         if (e.kind == "closed" && e.window == window) {
             return 0;
         }
@@ -77,7 +77,7 @@ fn main() -> int {
     0
 }
 
-// El padre de la carpeta de datos (`…/Documents`), que en un escritorio nuevo puede no existir.
+// The parent of the data folder (`…/Documents`), which may not exist on a fresh desktop.
 fn home_documents(dir: string) -> string {
     match (dir.last_index_of("/")) {
         Option.Some(i) => dir.substring(0, i),

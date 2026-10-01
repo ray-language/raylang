@@ -1,7 +1,7 @@
-// Las notas y su almacén. Cada nota es una clave de `std/kv` (su id, un uuid v7 ordenado por
-// tiempo) con la nota en JSON como valor. `std/kv` guarda todo el mapa en un archivo con
-// escritura atómica (temporal + rename): un corte a mitad de `save` deja el archivo anterior
-// intacto, que es justo lo que pide un teléfono que puede matar la app en cualquier momento.
+// The notes and their store. Each note is one `std/kv` key (its id, a time-ordered uuid v7)
+// holding the note as JSON. `std/kv` keeps the whole map in one file and writes it atomically
+// (temporary file + rename): a crash halfway through `save` leaves the previous file intact,
+// which is exactly what a phone that may kill the app at any moment needs.
 import std/kv;
 import std/json;
 import std/uuid;

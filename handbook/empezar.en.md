@@ -389,7 +389,7 @@ exactly as with `ray run`. The server's own instructions tell it so. The details
 From here, each handbook guide is a complete project. They are on the way, and the
 [overview](index.en.md) links each one as soon as it is published:
 
-- a **mobile app** for iOS and Android with a React frontend;
+- a [**mobile app**](movil.en.md) for iOS and Android with a React frontend;
 - the same app on the **desktop** (macOS, Linux, Windows);
 - a **web API** with the `web` framework;
 - a **server-rendered site** with templates;
@@ -400,4 +400,4 @@ From here, each handbook guide is a complete project. They are on the way, and t
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:735bf8064fab -->
+<!-- sync: sha256:a57de53914fa -->

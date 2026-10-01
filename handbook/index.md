@@ -18,13 +18,15 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
 
 1. [Empezar](empezar.md): instalar, el editor, un proyecto, el lenguaje en quince minutos, la
    concurrencia, trabajar con un asistente LLM y las herramientas.
+2. [App móvil para iOS y Android](movil.md): una app de notas con frontend React + TypeScript y
+   datos en `std/kv`, del proyecto al simulador, al emulador y a la recarga en caliente en el
+   teléfono.
 
 ## En camino
 
 Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo completo en
 `examples/apps/`:
 
-- **App móvil para iOS y Android** con un frontend React + TypeScript y datos en `std/kv`.
 - **App multiplataforma**: la misma app en macOS, Linux y Windows, con SQLite.
 - **API web** con el framework `web`, Postgres y pools de conexiones.
 - **Sitio con plantillas** renderizado en el servidor, con los datos en archivos.
@@ -32,7 +34,6 @@ Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo comp
 - **LLM y MCP**: un asistente que escribe raylang verificado, y un agente escrito en raylang.
 - **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar.
 
-Mientras tanto, el detalle de escritorio y móvil está en el manual:
-[ventanas con `std/ui`](../MANUAL.md#ventanas-stdui),
-[empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle) y
-[hot reload en el teléfono](../MANUAL.md#hot-reload-del-programa-en-el-teléfono-ray-dev---device).
+Mientras tanto, el detalle de escritorio está en el manual:
+[ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
+[empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).

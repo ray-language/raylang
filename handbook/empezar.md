@@ -389,7 +389,7 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 Desde aquí, cada guía del handbook es un proyecto completo. Están en camino, y la
 [portada](index.md) enlaza cada una en cuanto se publica:
 
-- una **app móvil** para iOS y Android con frontend React;
+- una [**app móvil**](movil.md) para iOS y Android con frontend React;
 - la misma app en **escritorio** (macOS, Linux, Windows);
 - una **API web** con el framework `web`;
 - un **sitio con plantillas** renderizado en el servidor;

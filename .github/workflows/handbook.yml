@@ -43,6 +43,13 @@ jobs:
           key: cargo-handbook-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Bloques, enlaces e índice del handbook + traducciones
         run: cargo test --test handbook --test docs_i18n
+      - name: Tests de los proyectos de ejemplo (examples/apps)
+        run: |
+          for dir in examples/apps/*/; do
+            [ -f "$dir/ray.toml" ] || continue
+            echo "== $dir"
+            (cd "$dir" && cargo run --quiet --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --bin ray -- test)
+          done
       - name: Generar el sitio con el handbook
         run: cargo run --bin ray -- run site/site.ray . _site
       - name: Verificar las páginas del handbook

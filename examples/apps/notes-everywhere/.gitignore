@@ -1,0 +1,7 @@
+# dependencies downloaded by the package manager (M39c)
+.ray-deps/
+# the device link of `ray dev --device` (port + token; M330)
+.ray-dev
+# the frontend's packages and build (Vite)
+frontend/node_modules/
+frontend/dist/

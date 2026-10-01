@@ -26,7 +26,6 @@ fn data_dir() -> string {
 
 fn main() -> int {
     let dir = data_dir();
-    let _ = fs.mkdir(home_documents(dir));
     let _ = fs.mkdir(dir);
     let store = match (kv.open(dir + "/notes.kv")) {
         Result.Ok(s) => s,
@@ -75,12 +74,4 @@ fn main() -> int {
         }
     }
     0
-}
-
-// The parent of the data folder (`…/Documents`), which may not exist on a fresh desktop.
-fn home_documents(dir: string) -> string {
-    match (dir.last_index_of("/")) {
-        Option.Some(i) => dir.substring(0, i),
-        Option.None => ".",
-    }
 }

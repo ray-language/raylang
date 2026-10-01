@@ -297,7 +297,7 @@ the order of 188,000 requests per second in the project's load benchmark.
 
 ## Next step
 
-A site with a **React frontend embedded** in the binary and a JSON API behind it, with the notes in
-Redis. It is the next handbook chapter.
+A [**site with a React frontend**](web-react.en.md) embedded in the binary and a JSON API behind it,
+with the notes in Redis.
 
-<!-- sync: sha256:89d4e526fd27 -->
+<!-- sync: sha256:877604dd89d0 -->

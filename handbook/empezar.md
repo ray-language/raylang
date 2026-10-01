@@ -386,16 +386,17 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 
 ## 8. Qué construir
 
-Desde aquí, cada guía del handbook es un proyecto completo. Están en camino, y la
-[portada](index.md) enlaza cada una en cuanto se publica:
+Desde aquí, cada guía del handbook es un proyecto completo, con su app de ejemplo:
 
 - una [**app móvil**](movil.md) para iOS y Android con frontend React;
 - la misma app en [**escritorio**](multiplataforma.md) (macOS, Linux, Windows);
-- una [**API web**](api.md) con el framework `web`;
 - un [**sitio con plantillas**](ssr.md) renderizado en el servidor;
-- un **sitio con frontend React** embebido en el binario;
-- un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang;
-- cómo **distribuir** lo anterior: empaquetar, firmar y auto-actualizar.
+- una [**API web**](api.md) con el framework `web` y Postgres;
+- un [**sitio con frontend React**](web-react.md) embebido en el binario;
+- un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang.
+
+Falta un capítulo, **Distribuir** (firmar, notarizar y auto-actualizar), que la
+[portada](index.md) enlazará cuando se publique.
 
 Para todo lo demás: la [referencia](../REFERENCE.md) tiene cada función con su firma, y el
 [manual](../MANUAL.md) explica el lenguaje en detalle.

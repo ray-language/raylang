@@ -25,18 +25,16 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
 4. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
    compiladas, formularios, Markdown y los datos en archivos.
-5. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
-   escrito en raylang que habla con Claude y usa herramientas por MCP.
-6. [API web](api.md): las notas como API JSON con el framework `web`, Postgres con un pool de
+5. [API web](api.md): las notas como API JSON con el framework `web`, Postgres con un pool de
    conexiones, autenticación por token y apagado ordenado.
+6. [Sitio con frontend React](web-react.md): un frontend React embebido en el binario, una API JSON
+   y las notas en Redis.
+7. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
+   escrito en raylang que habla con Claude y usa herramientas por MCP.
 
 ## En camino
 
-Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo completo en
-`examples/apps/`:
-
-- **Sitio con frontend React embebido** en el binario, con Redis.
-- **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar.
+- **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar las apps.
 
 El detalle de cada API de ventanas está en el manual:
 [ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y

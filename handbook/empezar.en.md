@@ -386,18 +386,19 @@ exactly as with `ray run`. The server's own instructions tell it so. The details
 
 ## 8. What to build
 
-From here, each handbook guide is a complete project. They are on the way, and the
-[overview](index.en.md) links each one as soon as it is published:
+From here, each handbook guide is a complete project, with its example app:
 
 - a [**mobile app**](movil.en.md) for iOS and Android with a React frontend;
 - the same app on the [**desktop**](multiplataforma.en.md) (macOS, Linux, Windows);
-- a [**web API**](api.en.md) with the `web` framework;
 - a [**server-rendered site**](ssr.en.md) with templates;
-- a **site with a React frontend** embedded in the binary;
-- an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang;
-- how to **ship** all of the above: packaging, signing and auto-updating.
+- a [**web API**](api.en.md) with the `web` framework and Postgres;
+- a [**site with a React frontend**](web-react.en.md) embedded in the binary;
+- an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang.
+
+One chapter is still missing, **Shipping** (signing, notarizing and auto-updating), which the
+[overview](index.en.md) will link once it is published.
 
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:aa2f51be1e7b -->
+<!-- sync: sha256:654687536e2c -->

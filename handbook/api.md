@@ -298,5 +298,5 @@ sirve del orden de 188 000 peticiones por segundo en el banco de carga del proye
 
 ## Siguiente paso
 
-Un sitio con un **frontend React embebido** en el binario y una API JSON detrás, con las notas en
-Redis. Es el próximo capítulo del handbook.
+Un [**sitio con frontend React**](web-react.md) embebido en el binario y una API JSON detrás, con
+las notas en Redis.

@@ -25,21 +25,19 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    SQLite, native menus and dialogs, and an interface that adapts to every screen.
 4. [Server-rendered site](ssr.en.md): the notes as a server-rendered website, with compiled
    templates, forms, Markdown and the data in files.
-5. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
-   agent written in raylang that talks to Claude and uses tools through MCP.
-6. [Web API](api.en.md): the notes as a JSON API with the `web` framework, Postgres with a
+5. [Web API](api.en.md): the notes as a JSON API with the `web` framework, Postgres with a
    connection pool, token authentication and graceful shutdown.
+6. [Site with a React frontend](web-react.en.md): a React frontend embedded in the binary, a JSON
+   API and the notes in Redis.
+7. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
+   agent written in raylang that talks to Claude and uses tools through MCP.
 
 ## Coming next
 
-These chapters are published one by one, each with its complete example project in
-`examples/apps/`:
-
-- **Site with an embedded React frontend** in the binary, with Redis.
-- **Shipping**: packaging, signing, notarizing and auto-updating.
+- **Shipping**: packaging, signing, notarizing and auto-updating the apps.
 
 The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:d4426494fc83 -->
+<!-- sync: sha256:57e2a9fbb3e8 -->

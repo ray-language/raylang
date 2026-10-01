@@ -23,6 +23,8 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    teléfono.
 3. [App multiplataforma](multiplataforma.md): la misma app en macOS, Linux y Windows, con SQLite,
    menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
+4. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
+   compiladas, formularios, Markdown y los datos en archivos.
 
 ## En camino
 
@@ -30,7 +32,6 @@ Estos capítulos se publican uno a uno, cada uno con su proyecto de ejemplo comp
 `examples/apps/`:
 
 - **API web** con el framework `web`, Postgres y pools de conexiones.
-- **Sitio con plantillas** renderizado en el servidor, con los datos en archivos.
 - **Sitio con frontend React embebido** en el binario, con Redis.
 - **LLM y MCP**: un asistente que escribe raylang verificado, y un agente escrito en raylang.
 - **Distribuir**: empaquetar, firmar, notarizar y auto-actualizar.

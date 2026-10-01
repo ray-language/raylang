@@ -392,7 +392,7 @@ Desde aquí, cada guía del handbook es un proyecto completo. Están en camino, 
 - una [**app móvil**](movil.md) para iOS y Android con frontend React;
 - la misma app en [**escritorio**](multiplataforma.md) (macOS, Linux, Windows);
 - una **API web** con el framework `web`;
-- un **sitio con plantillas** renderizado en el servidor;
+- un [**sitio con plantillas**](ssr.md) renderizado en el servidor;
 - un **sitio con frontend React** embebido en el binario;
 - un **agente LLM** y un servidor **MCP** escritos en raylang;
 - cómo **distribuir** lo anterior: empaquetar, firmar y auto-actualizar.

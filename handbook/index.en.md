@@ -23,6 +23,8 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    phone.
 3. [Cross-platform app](multiplataforma.en.md): the same app on macOS, Linux and Windows, with
    SQLite, native menus and dialogs, and an interface that adapts to every screen.
+4. [Server-rendered site](ssr.en.md): the notes as a server-rendered website, with compiled
+   templates, forms, Markdown and the data in files.
 
 ## Coming next
 
@@ -30,7 +32,6 @@ These chapters are published one by one, each with its complete example project 
 `examples/apps/`:
 
 - **Web API** with the `web` framework, Postgres and connection pools.
-- **Server-rendered site** with templates and the data in files.
 - **Site with an embedded React frontend** in the binary, with Redis.
 - **LLMs and MCP**: an assistant that writes verified raylang, and an agent written in raylang.
 - **Shipping**: packaging, signing, notarizing and auto-updating.
@@ -39,4 +40,4 @@ The details of every window API are in the manual (Spanish):
 [windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
 [packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
 
-<!-- sync: sha256:7666fb9b4fd6 -->
+<!-- sync: sha256:5a3e81997e31 -->

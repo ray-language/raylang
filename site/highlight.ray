@@ -140,13 +140,18 @@ fn line_end(cs: [char], i: int) -> int {
 }
 
 // El índice tras la cadena que abre `quote` en `i` (con escapes `\`). Las de comilla invertida
-// pueden ocupar varias líneas; las demás terminan en el salto de línea si no se cierran.
-fn string_end(cs: [char], i: int, quote: char) -> int {
+// pueden ocupar varias líneas; las demás terminan en el salto de línea si no se cierran. En
+// raylang se salta cada `${…}` entero: dentro puede haber comillas (`${xs.join(",")}`).
+fn string_end(cs: [char], i: int, quote: char, raylang: bool) -> int {
     var j = i + 1;
     while (j < cs.len()) {
         let c = cs[j];
         if (c == '\\') {
             j = j + 2;
+            continue;
+        }
+        if (raylang && c == '$' && j + 1 < cs.len() && cs[j + 1] == '{') {
+            j = interpolation_end(cs, j);
             continue;
         }
         if (c == quote) {
@@ -158,6 +163,53 @@ fn string_end(cs: [char], i: int, quote: char) -> int {
         j = j + 1;
     }
     cs.len()
+}
+
+// El índice tras el `}` que cierra la interpolación `${` que empieza en `i` (llaves anidadas).
+fn interpolation_end(cs: [char], i: int) -> int {
+    var depth = 0;
+    var j = i + 1;
+    while (j < cs.len()) {
+        if (cs[j] == '{') {
+            depth = depth + 1;
+        }
+        if (cs[j] == '}') {
+            depth = depth - 1;
+            if (depth == 0) {
+                return j + 1;
+            }
+        }
+        j = j + 1;
+    }
+    cs.len()
+}
+
+// Una cadena de raylang: el texto en `st`, y cada `${expr}` coloreado como código.
+fn interpolated(cs: [char], from: int, to: int) -> string {
+    var out: [string] = [];
+    var start = from;
+    var k = from;
+    while (k < to) {
+        if (cs[k] == '\\') {
+            k = k + 2;
+            continue;
+        }
+        if (cs[k] == '$' && k + 1 < to && cs[k + 1] == '{') {
+            let end = interpolation_end(cs, k);
+            if (k > start) {
+                out.push(span("st", text(cs, start, k)));
+            }
+            out.push("\${" + highlight("rust", text(cs, k + 2, end - 1)) + "}");
+            start = end;
+            k = end;
+            continue;
+        }
+        k = k + 1;
+    }
+    if (to > start) {
+        out.push(span("st", text(cs, start, to)));
+    }
+    out.join("")
 }
 
 // El siguiente carácter que no es espacio a partir de `i` ('\0' al final).
@@ -215,8 +267,14 @@ pub fn highlight(lang: string, src: string) -> string {
         }
         // cadenas y caracteres
         if (c == '"' || c == '`' || c == '\'') {
-            let j = string_end(cs, i, c);
-            out.push(span("st", text(cs, i, j)));
+            let j = string_end(cs, i, c, raylang);
+            out.push(
+                if (raylang && c != '\'') {
+                    interpolated(cs, i, j)
+                } else {
+                    span("st", text(cs, i, j))
+                }
+            );
             i = j;
             continue;
         }

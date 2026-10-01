@@ -138,7 +138,16 @@ fn scratch_dir(tag: &str) -> PathBuf {
 }
 
 fn ray_check(path: &Path) -> Result<(), String> {
-    let out = Command::new(BIN).arg("check").arg(path).output().expect("could not run ray check");
+    // Un archivo se chequea suelto; un directorio es un PROYECTO y se chequea desde dentro
+    // (`ray check` sin argumentos: `src/main.ray` con su `ray.toml` y sus dependencias).
+    let mut cmd = Command::new(BIN);
+    cmd.arg("check");
+    if path.is_dir() {
+        cmd.current_dir(path);
+    } else {
+        cmd.arg(path);
+    }
+    let out = cmd.output().expect("could not run ray check");
     if out.status.success() {
         Ok(())
     } else {

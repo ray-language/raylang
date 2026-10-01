@@ -1,0 +1,45 @@
+// El protocolo entre la página y el programa. La página llama a
+// `window.ray.request({op: "...", ...})`; cada petición llega aquí como texto JSON y la respuesta
+// vuelve con `ui.reply_json`, así que la Promise de la página resuelve con un objeto. Todas las
+// operaciones devuelven la lista completa: la interfaz se repinta con una sola fuente de verdad.
+import std/kv;
+import std/json;
+import notes;
+from notes import Note;
+
+fn ok(list: [Note]) -> string {
+    "{\"ok\":true,\"notes\":" + json.render_arr(json.list(list)) + "}"
+}
+
+fn fail(message: string) -> string {
+    json.render(json.obj().field("ok", false).field("error", message))
+}
+
+/// Answers one request from the page. `now_ms` comes from the caller so tests are deterministic.
+pub fn handle(store: kv.Store, body: string, now_ms: int) -> string {
+    let req = match (json.parse(body)) {
+        Result.Ok(j) => j,
+        Result.Err(e) => return fail("bad request: " + e),
+    };
+    let op = json.get_string(req, "op").unwrap_or("");
+    if (op == "list") {
+        return ok(notes.list(store));
+    }
+    if (op == "save") {
+        let id = json.get_string(req, "id").unwrap_or("");
+        let title = json.get_string(req, "title").unwrap_or("");
+        let text = json.get_string(req, "body").unwrap_or("");
+        return match (notes.save(store, id, title, text, now_ms)) {
+            Result.Ok(_) => ok(notes.list(store)),
+            Result.Err(e) => fail(e),
+        };
+    }
+    if (op == "delete") {
+        let id = json.get_string(req, "id").unwrap_or("");
+        return match (notes.remove(store, id)) {
+            Result.Ok(_) => ok(notes.list(store)),
+            Result.Err(e) => fail(e),
+        };
+    }
+    fail("unknown op '" + op + "'")
+}

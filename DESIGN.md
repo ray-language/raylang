@@ -15982,3 +15982,24 @@ su nombre en una PR solo-docs — no cuestan nada y se quedan.
 aquí) es la red que cazó la carrera de `local_guard` en septiembre; y el bump de versión como PR
 aparte es la política de main protegida del usuario. Los dos se podrían recortar, pero son
 decisiones de proceso, no de tubería.
+
+## 319. M331b — El CI de main que no repite lo ya verificado, y el bump dentro del arco (oct 2026)
+
+Tras el recuento de §318 quedaban dos repeticiones que eran de proceso: el CI completo tras
+cada merge a main y la PR aparte del bump de versión. El usuario quiso quitar las dos.
+
+**El gate por hash de árbol.** El CI de una PR no corre sobre su rama sino sobre el merge
+provisional con main (`refs/pull/N/merge`); si main no se movió, el merge real tiene el mismo
+árbol, y repetir el CI sobre él no aporta información. Ahora cada PR verde publica un artefacto
+diminuto `ci-tree-<hash>` (el job `verified`, que depende de todos los pesados: el artefacto
+solo existe si todo pasó), y en un push a main el job `gate` calcula `HEAD^{tree}`, busca ese
+artefacto con la API de Actions y, si lo encuentra, los jobs pesados se omiten. Si main se movió
+el árbol es otro y corre todo; si la búsqueda falla, corre todo. Se eligió esto frente a quitar
+el CI de push y exigir «rama al día» (cambia la protección de main y deja a main sin runs) y
+frente a la merge queue (añade una pasada, no la quita). Las comprobaciones omitidas aparecen
+como `skipped`, no como verdes: cuenta si algún día se marcan como requeridas en main.
+
+**El bump dentro de la última PR del arco.** La versión, `SPEC.md` y el cierre del bloque «Sin
+publicar» viajan en la misma PR que termina el arco, y el tag se pone sobre su merge. Es una
+regla de trabajo (CLAUDE.md), no código. Con las dos cosas, una funcionalidad pasa de cuatro
+CI completos a uno más la release: el gate omite el de main y el bump ya no estrena ciclo.

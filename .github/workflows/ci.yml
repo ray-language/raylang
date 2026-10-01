@@ -47,6 +47,46 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # M331 (dieta del CI, opción B): el push a main repite el CI completo sobre un árbol que la PR
+  # acaba de verificar — el CI de una PR corre sobre su merge provisional con main
+  # (`refs/pull/N/merge`), y si main no se movió, el merge real tiene el MISMO árbol. El job
+  # `verified` de cada PR verde publica un artefacto diminuto con el hash de ese árbol; este
+  # `gate`, en un push a main, lo busca y, si existe, los jobs pesados se omiten. Si main se
+  # movió, el árbol es otro y corre todo. Si la búsqueda falla por lo que sea, corre todo
+  # (falla hacia el lado seguro). En una PR el gate no hace nada (skip=false).
+  gate:
+    name: gate (¿árbol ya verificado?)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      tree: ${{ steps.check.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buscar el árbol entre los verificados por una PR
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          found="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=ci-tree-$tree&per_page=5" \
+            --jq '[.artifacts[] | select(.expired == false)] | length' 2>/dev/null || echo 0)"
+          if [ "${found:-0}" -gt 0 ]; then
+            echo "árbol $tree ya verificado por el CI de una PR: se omiten los jobs pesados"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "árbol $tree sin verificación previa: CI completo"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Lints + tests + build. Es el grueso: si algo se rompe, aquí se ve. (No hay paso de `cargo fmt
   # --check`: el código usa alineación manual de comentarios deliberada que rustfmt reformatearía; el
   # estilo del proyecto no es el de rustfmt por defecto. El código RAYLANG sí se comprueba, pero desde
@@ -55,6 +95,8 @@ jobs:
   test:
     name: clippy · test · build
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Rust estable (con clippy)
@@ -118,6 +160,8 @@ jobs:
   windows:
     name: build · smoke (windows)
     runs-on: windows-latest
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -224,6 +268,8 @@ jobs:
   wasm:
     name: build wasm32 (playground)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Rust estable + target wasm32
@@ -246,6 +292,8 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Rust estable
@@ -273,6 +321,24 @@ jobs:
       - name: Validar .github/workflows
         run: |
           "$RUNNER_TEMP/actionlint" -color
+  # M331: en una PR verde, publica el hash del árbol verificado (ver `gate`). Solo en PRs: el
+  # artefacto es la prueba de que TODOS los jobs pesados pasaron sobre ese árbol.
+  verified:
+    name: árbol verificado
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [gate, test, windows, wasm, audit, actionlint]
+    steps:
+      - name: Marcar el árbol
+        run: |
+          mkdir -p verified
+          echo "${{ needs.gate.outputs.tree }}" > verified/tree
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-tree-${{ needs.gate.outputs.tree }}
+          path: verified/tree
+          retention-days: 30
+
   fuzz-nocturno:
     name: fuzz nocturno (prolongado)
     runs-on: ubuntu-latest

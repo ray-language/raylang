@@ -138,6 +138,10 @@ de ejecución es bytecode + VM.
   commit debe compilar.
 - Antes de comprometer una decisión que pueda bloquear features futuras, clasificar
   su impacto en `IDEAS.md`.
+- **Releases (M331)**: el bump de versión (`Cargo.toml`, `SPEC.md`, el bloque «Sin publicar»
+  del CHANGELOG → `## X — fecha`) va **dentro de la última PR del arco**, no en una PR aparte;
+  el tag `vX` se pone sobre el merge de esa PR. Un CI completo menos por release (y el CI de
+  push a main se omite cuando la PR ya verificó el mismo árbol — `gate` en `ci.yml`).
 
 ### Autonomía dentro del proyecto (preferencia del usuario)
 

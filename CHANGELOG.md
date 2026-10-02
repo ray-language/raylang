@@ -12,7 +12,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (`call`, `call_json`, `read_resource`, `instructions`). Una sesión por servidor en su propia
   fibra: la `Session` se copia entre fibras, un servidor caído se relanza en la siguiente
   petición y una sesión HTTP caducada se reabre sola. `mcp/protocol` lleva las piezas puras del
-  protocolo. Es la primera fase del arco de agentes; siguen el servidor, `llm` y `agent`.
+  protocolo.
+- **Paquete `mcp`: el servidor.** `import mcp/serve;` deja que una app ofrezca sus propias
+  herramientas y recursos a un asistente: `serve.provider`, `serve.tool` (una función que recibe
+  `Json` y devuelve `Result<string, string>`), `serve.resource`, y `serve.stdio` o `serve.http`
+  para servirlo. Una herramienta que aborta es una llamada fallida, no un servidor caído; por
+  HTTP se rechaza un `Origin` ajeno y `token` exige `Authorization: Bearer`. Comprobado con el
+  inspector oficial de MCP y contra su servidor de referencia.
+- **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
+  cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un
   botón flotante arriba a la izquierda que abre un panel desde ese lado, y el menú principal abre
   el suyo desde la derecha. Comparten velo, botón de cierre y gestos (tocar fuera, deslizar,

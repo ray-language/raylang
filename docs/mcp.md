@@ -49,6 +49,10 @@ que una feature falta: la stdlib va embebida en el toolchain y una búsqueda de 
 encuentra — el antídoto del patrón "propuse lo que ya existía" (visto tres veces seguidas desde
 un proyecto real: `std/inflate`, `stdin_pipe` y la FFI).
 
+`ray_fmt` y `ray_doc` se anuncian con `annotations.readOnlyHint`: solo devuelven texto, así que un
+cliente puede ejecutarlas sin pedir permiso. `ray_run` y `ray_test` ejecutan código, y `ray_check`
+con una ruta puede descargar las dependencias del proyecto: no llevan la pista.
+
 ## Confinamiento
 
 `ray_run`/`ray_test` ejecutan código arbitrario del modelo → corren **en un subproceso** del

@@ -3909,7 +3909,7 @@ donde las API de los proveedores cambian), y `agent` deja de ser «después»: y
 | Fase | Qué | Estado |
 |---|---|---|
 | 1 | `mcp` cliente: stdio + Streamable HTTP, herramientas, recursos, instrucciones | ✅ M336 (DESIGN §322) |
-| 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | pendiente |
+| 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | ✅ M337 (DESIGN §323) |
 | 3 | `llm`: tipos comunes, envío y streaming, proveedores | pendiente |
 | 4 | `agent`: el bucle con presupuesto y aprobación | pendiente |
 | 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | pendiente |
@@ -3938,3 +3938,5 @@ quedan aquí para decidir.
 | 11 | `std/crypto` no expone una comparación en tiempo constante (la tienen dentro `net/jwt` y `net/scram`); el ejemplo de la API trae la suya para comparar el token | PROPUESTO: `crypto.constant_time_eq(a: bytes, b: bytes) -> bool` sobre `ring` |
 | 12 | Un montaje de estáticos en `/` (`static_embedded("/", dist)`) responde a TODOS los GET antes de las rutas: `/api/...` y el `not_found` nunca se alcanzan, sin aviso. Una SPA tiene que montar solo `/assets/` y servir `index.html` a mano | PROPUESTO: que un montaje deje pasar a las rutas lo que no encuentra (como Express), o un `web.spa(app, dist)` que monte los archivos y haga el respaldo a `index.html` |
 | 13 | Los patrones de `match` no admiten arreglos (`Reply.Arr([Reply.Str(a), …])` es error de sintaxis) | PROPUESTO: patrones de arreglo de longitud fija, como los de tupla |
+| 14 | Nativo: el mensaje de un índice fuera de rango capturado por `try_call` no es el de la VM. `try_call(fn() -> int { empty[3] })` da `index 3 out of range (length 0)` en la VM e `index out of bounds: the len is 0 but the index is 3` en el binario nativo (el pánico de Rust sin traducir). Rompe la identidad byte a byte en cualquier programa que muestre ese error (lo destapó el servidor MCP, que devuelve al modelo el fallo de una herramienta) | PROPUESTO: que el nativo emita el mismo texto que la VM en el acceso indexado |
+| 15 | Nativo: no compila una closure que captura un `Map` declarado con anotación y sin uso previo. `var m: Map<string, int> = Map.new(); try_call(fn() -> int { 10 / (m.len()) })` corre en la VM y en nativo falla en `rustc` con E0282 (`cannot infer type of the type parameter T` en el `RefCell` del mapa capturado) | PROPUESTO: que el transpilador emita el tipo del `Map` capturado a partir de la anotación |

@@ -2161,8 +2161,38 @@ fn main() -> int {
 
 `connect_stdio` lanza el servidor como proceso; `connect_http(url)` habla con uno remoto. Una
 `Session` se puede pasar a otras fibras: todas las copias usan el mismo servidor. Si el servidor
-muere, la petición devuelve `Err` y la siguiente lo relanza. Los detalles y la superficie
-completa están en el README del paquete y en la referencia.
+muere, la petición devuelve `Err` y la siguiente lo relanza.
+
+El otro lado es `mcp/serve`: tu app ofrece sus propias herramientas a un asistente. Cada
+herramienta es una función que recibe sus argumentos como `Json` y devuelve el texto que lee el
+modelo:
+
+```rust
+import std/json;
+import mcp/serve;
+from std/json import Json;
+
+fn main() -> int {
+    var p = serve.provider("demo", "0.1.0");
+    let _ = serve.read_only_tool(
+        p,
+        "shout",
+        "Upper-cases a text",
+        `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+        fn(args: Json) -> Result<string, string> {
+            match (json.get_string(args, "text")) {
+                Option.Some(t) => Result.Ok(t.to_upper()),
+                Option.None => Result.Err("'text' is required"),
+            }
+        }
+    );
+    serve.stdio(p)
+}
+```
+
+`serve.stdio` habla por la entrada y la salida estándar, que es como un asistente lanza un
+servidor local (`claude mcp add demo -- ./demo`); `serve.http` lo sirve por HTTP. Los detalles y
+la superficie completa están en el README del paquete y en la referencia.
 
 ### Bases de datos (`packages/db`, dependencia)
 

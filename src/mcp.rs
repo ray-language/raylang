@@ -202,13 +202,23 @@ fn code_schema(desc: &str) -> Json {
     ])
 }
 
+/// Las tools que solo leen: devuelven texto sin ejecutar el programa ni tocar el disco. Se
+/// declaran con `annotations.readOnlyHint`, la pista que deja a un cliente correrlas sin pedir
+/// permiso. `ray_run` y `ray_test` ejecutan código, y `ray_check` con una ruta puede descargar
+/// las dependencias del proyecto: no la llevan.
+const READ_ONLY_TOOLS: [&str; 2] = ["ray_fmt", "ray_doc"];
+
 /// Una definición de tool para `tools/list`.
 fn tool(name: &str, desc: &str, schema: Json) -> Json {
-    Json::Obj(vec![
+    let mut fields = vec![
         ("name".into(), Json::Str(name.into())),
         ("description".into(), Json::Str(desc.into())),
         ("inputSchema".into(), schema),
-    ])
+    ];
+    if READ_ONLY_TOOLS.contains(&name) {
+        fields.push(("annotations".into(), Json::Obj(vec![("readOnlyHint".into(), Json::Bool(true))])));
+    }
+    Json::Obj(fields)
 }
 
 /// Las cinco tools (IDEAS §51): check / run / test / fmt / doc.
@@ -970,6 +980,13 @@ mod tests {
             .expect("lista de tools");
         let names: Vec<_> = tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
         assert_eq!(names, vec!["ray_check", "ray_run", "ray_test", "ray_fmt", "ray_doc"]);
+        // Solo las que no ejecutan ni escriben se declaran de solo lectura.
+        let read_only: Vec<_> = tools
+            .iter()
+            .filter(|t| t.get("annotations").and_then(|a| a.get("readOnlyHint")).is_some())
+            .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert_eq!(read_only, vec!["ray_fmt", "ray_doc"]);
     }
 
     #[test]

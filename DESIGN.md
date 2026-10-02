@@ -16113,3 +16113,56 @@ corre sobre la VM, como los de `rpc` y `cron`).
 **Hallazgo lateral.** Las herramientas de `ray mcp` no declaran `readOnlyHint`, aunque
 `ray_check`, `ray_doc` y `ray_fmt` solo leen: un agente que respete la pista las trata como si
 escribieran. Se anota para la fase 2.
+
+## 323. M337 — El paquete `mcp`: el servidor (oct 2026)
+
+Segunda fase del arco de IDEAS §100. Es el lado que ninguna de las dos apps tenía: `raycode` y
+`ray-sublime` consumen herramientas ajenas, y la única implementación de servidor del proyecto
+era la de la toolchain (`src/mcp.rs`, en Rust), que no se puede reutilizar desde un programa
+raylang. Con `mcp/serve`, una app expone las suyas.
+
+**`handle` es puro.** Recibe la línea JSON-RPC y devuelve la línea de respuesta (o `None` para
+una notificación). Los dos transportes son envoltorios de quince líneas sobre él, y por eso el
+protocolo entero se prueba con texto fijo, sin procesos ni puertos.
+
+**Decisiones de interfaz.**
+
+- **El módulo se llama `mcp/serve`**, no `mcp/server`: por la misma razón que `mcp/mcp` (§322),
+  y porque en el cliente `Server` ya es «cómo llegar a un servidor ajeno». Lo que una app ofrece
+  es un `Provider`.
+- **El esquema de una herramienta es texto JSON.** Escribir un JSON Schema construyendo valores
+  `Json` a mano son veinte líneas por herramienta; como texto en una cadena de comilla invertida
+  se lee igual que en cualquier otro SDK. A cambio, `tool` devuelve `Result`: un esquema mal
+  escrito es un error al arrancar, no en la primera llamada.
+- **Una herramienta devuelve `Result<string, string>`.** El `Err` es una llamada fallida que el
+  modelo lee (`isError`), no un error del protocolo: es lo que le permite corregirse. Un `panic`
+  dentro de la herramienta se captura con `try_call` y toma el mismo camino, así que un fallo en
+  una herramienta no tumba el servidor.
+- **HTTP sin sesiones, y `build` es una función de nivel superior.** Cada conexión corre en su
+  fibra con memoria aislada: el proveedor se construye en ella, como hace `web` con la app. Un
+  servidor con estado lo guarda donde lo guardaría un servidor web.
+- **Dos defensas en HTTP de serie:** se rechaza un `Origin` distinto del `Host` (una página web
+  no debe poder hablar con un servidor local; es lo que el protocolo pide contra el *DNS
+  rebinding*), y `token` exige `Authorization: Bearer`, comparado en tiempo constante.
+- **La versión del protocolo se devuelve tal como la pide el cliente.** Lo que se sirve
+  (herramientas y recursos) no cambió de forma entre versiones, y un cliente reciente que pide
+  `2025-06-18` no debe recibir una más vieja de la que tenga que desconfiar.
+
+**Lo que queda fuera de la 0.1.0**: *prompts*, las notificaciones del servidor al cliente
+(progreso, `list_changed`) y el flujo `GET` de Streamable HTTP.
+
+**Verificación.** Además de los tests (`handle` con mensajes fijos; y de punta a punta con el
+cliente del propio paquete, por stdio —el programa se lanza a sí mismo como servidor— y por
+HTTP, con lo que el transporte rechaza y el token), se comprobó la interoperabilidad con las
+implementaciones de referencia, a mano: el **inspector oficial** de MCP lista y llama las
+herramientas y lee los recursos de un servidor raylang nativo por stdio y por HTTP, y el
+**cliente** del paquete habla con `@modelcontextprotocol/server-everything`. Eso valida las dos
+fases contra código que no es el nuestro.
+
+**`ray mcp` declara sus herramientas de solo lectura.** El hallazgo de §322: `ray_fmt` y
+`ray_doc` llevan ahora `annotations.readOnlyHint`. `ray_check` no: con una ruta puede descargar
+las dependencias del proyecto, y eso es escribir en disco.
+
+**Hallazgos del backend nativo**, registrados en IDEAS §101 (14 y 15): el mensaje de un índice
+fuera de rango bajo `try_call` no es el de la VM, y una closure que captura un `Map` anotado y
+sin uso previo no compila. El test del servidor usa `panic("boom")` para no depender del primero.

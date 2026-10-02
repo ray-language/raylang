@@ -1,7 +1,13 @@
-//! `packages/mcp`: el cliente del Model Context Protocol. Tres frentes: las piezas puras del
-//! protocolo (mensajes y lectura de respuestas, con texto fijo), el transporte por stdio contra
-//! el servidor MCP real de la toolchain (`ray mcp`), y el transporte HTTP contra un servidor
-//! mínimo dentro del propio programa de prueba, en un puerto efímero.
+//! `packages/mcp`: el Model Context Protocol, cliente y servidor.
+//!
+//! El cliente (`mcp/mcp`), en tres frentes: las piezas puras del protocolo (mensajes y lectura
+//! de respuestas, con texto fijo), el transporte por stdio contra el servidor MCP real de la
+//! toolchain (`ray mcp`), y el transporte HTTP contra un servidor mínimo dentro del propio
+//! programa de prueba, en un puerto efímero.
+//!
+//! El servidor (`mcp/serve`), en dos: `handle` con mensajes fijos, y de punta a punta con el
+//! cliente del mismo paquete, por stdio (el programa se lanza a sí mismo como servidor) y por
+//! HTTP (lo que rechaza, lo que acepta sin cuerpo y el token).
 //!
 //! Corre sobre la VM: el intérprete no tiene fibras ni procesos con stdin abierto.
 
@@ -382,3 +388,293 @@ true
 server: initialize
 Result.Err(HTTP 401: who are you)
 "##;
+
+const HANDLE_MAIN: &str = r##"import std/json;
+import mcp/serve;
+from std/json import Json;
+from mcp/serve import Provider;
+
+fn build() -> Provider {
+    var p = serve.provider("demo", "1.0.0");
+    p.instructions = "A demo server.";
+    let _ = serve.read_only_tool(
+        p,
+        "shout",
+        "Upper-cases a text",
+        `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+        fn(args: Json) -> Result<string, string> {
+            match (json.get_string(args, "text")) {
+                Option.Some(t) => Result.Ok(t.to_upper()),
+                Option.None => Result.Err("'text' is required"),
+            }
+        }
+    );
+    let _ = serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
+        panic("boom");
+        Result.Ok("unreachable")
+    });
+    let _ = serve.resource(
+        p,
+        "demo://greeting",
+        "Greeting",
+        "",
+        "text/plain",
+        fn() -> Result<string, string> { Result.Ok("hello") }
+    );
+    let _ = serve.resource(
+        p,
+        "demo://broken",
+        "Broken",
+        "Cannot be read",
+        "",
+        fn() -> Result<string, string> { Result.Err("disk on fire") }
+    );
+    p
+}
+
+fn show(p: Provider, line: string) {
+    match (serve.handle(p, line)) {
+        Option.Some(out) => print(out),
+        Option.None => print("(no reply)"),
+    }
+}
+
+fn main() -> int {
+    let p = build();
+    // Registrar dos veces lo mismo, o con un esquema que no es JSON, es un error al arrancar.
+    print(serve.tool(p, "shout", "again", "", fn(args: Json) -> Result<string, string> { Result.Ok("") }));
+    print(serve.tool(p, "bad", "bad schema", "{not json", fn(args: Json) -> Result<string, string> { Result.Ok("") }));
+    print(serve.resource(p, "demo://greeting", "again", "", "", fn() -> Result<string, string> { Result.Ok("") }));
+    show(p, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`);
+    show(p, `{"jsonrpc":"2.0","id":"a","method":"initialize","params":{}}`);
+    show(p, `{"jsonrpc":"2.0","method":"notifications/initialized"}`);
+    show(p, `{"jsonrpc":"2.0","id":2,"method":"ping"}`);
+    show(p, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`);
+    show(p, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"shout","arguments":{"text":"hola"}}}`);
+    show(p, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"shout"}}`);
+    show(p, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"crash"}}`);
+    show(p, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nope"}}`);
+    show(p, `{"jsonrpc":"2.0","id":8,"method":"resources/list"}`);
+    show(p, `{"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":"demo://greeting"}}`);
+    show(p, `{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"demo://broken"}}`);
+    show(p, `{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{"uri":"demo://nope"}}`);
+    show(p, `{"jsonrpc":"2.0","id":12,"method":"prompts/list"}`);
+    show(p, `{"jsonrpc":"2.0","id":13}`);
+    show(p, `{"jsonrpc":"2.0","id":14,"result":{}}`);
+    show(p, "not json");
+    // Un servidor sin recursos no los anuncia.
+    show(serve.provider("bare", "0.0.1"), `{"jsonrpc":"2.0","id":15,"method":"initialize"}`);
+    0
+}
+"##;
+
+const HANDLE_EXPECTED: &str = r##"Result.Err(tool 'shout' is already registered)
+Result.Err(the schema of tool 'bad' is not valid JSON: expected a string key)
+Result.Err(resource 'demo://greeting' is already registered)
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2025-06-18","serverInfo":{"name":"demo","version":"1.0.0"}}}
+{"id":"a","jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2024-11-05","serverInfo":{"name":"demo","version":"1.0.0"}}}
+(no reply)
+{"id":2,"jsonrpc":"2.0","result":{}}
+{"id":3,"jsonrpc":"2.0","result":{"tools":[{"annotations":{"readOnlyHint":true},"description":"Upper-cases a text","inputSchema":{"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"shout"},{"description":"Always aborts","inputSchema":{"properties":{},"type":"object"},"name":"crash"}]}}
+{"id":4,"jsonrpc":"2.0","result":{"content":[{"text":"HOLA","type":"text"}],"isError":false}}
+{"id":5,"jsonrpc":"2.0","result":{"content":[{"text":"'text' is required","type":"text"}],"isError":true}}
+{"id":6,"jsonrpc":"2.0","result":{"content":[{"text":"the tool failed: boom","type":"text"}],"isError":true}}
+{"error":{"code":-32602,"message":"unknown tool: nope"},"id":7,"jsonrpc":"2.0"}
+{"id":8,"jsonrpc":"2.0","result":{"resources":[{"mimeType":"text/plain","name":"Greeting","uri":"demo://greeting"},{"description":"Cannot be read","name":"Broken","uri":"demo://broken"}]}}
+{"id":9,"jsonrpc":"2.0","result":{"contents":[{"mimeType":"text/plain","text":"hello","uri":"demo://greeting"}]}}
+{"error":{"code":-32603,"message":"cannot read demo://broken: disk on fire"},"id":10,"jsonrpc":"2.0"}
+{"error":{"code":-32002,"message":"unknown resource: demo://nope"},"id":11,"jsonrpc":"2.0"}
+{"error":{"code":-32601,"message":"method not found: prompts/list"},"id":12,"jsonrpc":"2.0"}
+{"error":{"code":-32600,"message":"invalid request: no method"},"id":13,"jsonrpc":"2.0"}
+(no reply)
+{"error":{"code":-32700,"message":"parse error: expected 'null'"},"id":null,"jsonrpc":"2.0"}
+{"id":15,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"bare","version":"0.0.1"}}}
+"##;
+
+#[test]
+fn server_answers_each_protocol_message() {
+    let app = project("handle", HANDLE_MAIN);
+    let (stdout, stderr, code) = run(&app);
+    assert_eq!(code, 0, "el programa sale 0\n{stdout}\n{stderr}");
+    assert_eq!(stdout, HANDLE_EXPECTED, "la salida esperada\n{stderr}");
+}
+
+const SERVE_MAIN: &str = r##"import std/json;
+import std/net;
+import net/http;
+import mcp/mcp;
+import mcp/serve;
+from std/json import Json;
+from mcp/serve import Provider;
+
+fn number(args: Json, key: string) -> Result<int, string> {
+    match (json.get_int(args, key)) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => Result.Err("'${key}' must be an integer"),
+    }
+}
+
+// Lo que ofrece el servidor de prueba. Función de nivel superior: el transporte HTTP la llama
+// en la fibra de cada conexión.
+fn build() -> Provider {
+    var p = serve.provider("demo", "1.0.0");
+    p.instructions = "A demo server.";
+    let _ = serve.read_only_tool(
+        p,
+        "add",
+        "Adds two integers",
+        `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}`,
+        fn(args: Json) -> Result<string, string> {
+            let a = number(args, "a")?;
+            let b = number(args, "b")?;
+            Result.Ok(to_string(a + b))
+        }
+    );
+    let _ = serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
+        panic("boom");
+        Result.Ok("unreachable")
+    });
+    let _ = serve.resource(
+        p,
+        "demo://greeting",
+        "Greeting",
+        "A friendly line",
+        "text/plain",
+        fn() -> Result<string, string> { Result.Ok("hello from the server") }
+    );
+    p
+}
+
+// El mismo servidor, pero exige un token.
+fn build_private() -> Provider {
+    var p = build();
+    p.token = "s3cret-t0ken";
+    p
+}
+
+// El estado y el cuerpo de una petición HTTP cruda al servidor.
+fn raw(method: string, url: string, body: string, name: string, value: string) -> string {
+    var headers: Map<string, string> = Map.new();
+    headers.insert("Content-Type", "application/json");
+    if (name != "") {
+        headers.insert(name, value);
+    }
+    match (http.request_bytes(method, url, body.to_bytes(), headers, 5000)) {
+        Result.Ok(r) => "${r.status} ${http.body_text(r).unwrap_or("")}",
+        Result.Err(e) => "failed: " + e,
+    }
+}
+
+// Usa una sesión de punta a punta e imprime lo que ve el cliente.
+fn exercise(label: string, c: mcp.Session) {
+    print("== ${label}");
+    print("instructions: [${mcp.instructions(c)}]");
+    print("offers tools=${mcp.offers(c, "tools")} resources=${mcp.offers(c, "resources")}");
+    for t in mcp.tools(c).unwrap() {
+        print("tool ${t.name} | ${t.description} | read_only=${t.read_only} | ${json.stringify(t.schema)}");
+    }
+    print(mcp.call_json(c, "add", `{"a": 19, "b": 23}`));
+    print(mcp.call_json(c, "add", `{"a": "x"}`));
+    print(mcp.call_json(c, "crash", ""));
+    print(mcp.call_json(c, "missing", ""));
+    for r in mcp.resources(c).unwrap() {
+        print("resource ${r.uri} | ${r.name} | ${r.description} | ${r.mime}");
+    }
+    print(mcp.read_resource(c, "demo://greeting"));
+    print(mcp.read_resource(c, "demo://nope"));
+    print(mcp.request(c, "ping", json.parse("{}").unwrap()).map(fn(j: Json) -> string { json.stringify(j) }));
+    print(mcp.request(c, "prompts/list", json.parse("{}").unwrap()).is_err());
+    mcp.close(c);
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() > 0 && argv[0] == "server") {
+        return serve.stdio(build());
+    }
+    // El mismo programa, lanzado como servidor por stdio.
+    let ray = env("RAY_BIN").unwrap();
+    exercise("stdio", mcp.connect(mcp.stdio_server("demo", ray, ["run", "src/main.ray", "server"])).unwrap());
+    // Y por HTTP, en un puerto libre.
+    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(listener);
+    spawn(fn() {
+        let _ = serve.http_on(build, listener);
+    });
+    exercise("http", mcp.connect_http("http://127.0.0.1:${port}/mcp").unwrap());
+    // Lo que el transporte HTTP rechaza o acepta sin cuerpo.
+    let url = "http://127.0.0.1:${port}/mcp";
+    let ping = `{"jsonrpc":"2.0","id":9,"method":"ping"}`;
+    print("== http, raw");
+    print(raw("GET", url, "", "", ""));
+    print(raw("POST", url, ping, "Origin", "https://evil.example"));
+    print(raw("POST", url, ping, "Origin", "http://127.0.0.1:${port}"));
+    print(raw("POST", url, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, "", ""));
+    print(raw("POST", url, "not json", "", ""));
+    // Con token: sin él no se entra; con él, la sesión funciona.
+    let private_listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let private_url = "http://127.0.0.1:${net.local_port(private_listener)}/mcp";
+    spawn(fn() {
+        let _ = serve.http_on(build_private, private_listener);
+    });
+    print("== http, token");
+    print(raw("POST", private_url, ping, "", ""));
+    print(raw("POST", private_url, ping, "Authorization", "Bearer wrong"));
+    print(mcp.connect_http(private_url).is_err());
+    var trusted = mcp.http_server("private", private_url);
+    trusted.headers.insert("Authorization", "Bearer s3cret-t0ken");
+    let c = mcp.connect(trusted).unwrap();
+    print(mcp.call_json(c, "add", `{"a": 2, "b": 2}`));
+    mcp.close(c);
+    0
+}
+"##;
+
+const SERVE_EXPECTED: &str = r##"== stdio
+instructions: [A demo server.]
+offers tools=true resources=true
+tool add | Adds two integers | read_only=true | {"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}
+tool crash | Always aborts | read_only=false | {"properties":{},"type":"object"}
+Result.Ok(42)
+Result.Err('a' must be an integer)
+Result.Err(the tool failed: boom)
+Result.Err(the server answered an error: unknown tool: missing (code -32602))
+resource demo://greeting | Greeting | A friendly line | text/plain
+Result.Ok(hello from the server)
+Result.Err(the server answered an error: unknown resource: demo://nope (code -32002))
+Result.Ok({})
+true
+== http
+instructions: [A demo server.]
+offers tools=true resources=true
+tool add | Adds two integers | read_only=true | {"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"],"type":"object"}
+tool crash | Always aborts | read_only=false | {"properties":{},"type":"object"}
+Result.Ok(42)
+Result.Err('a' must be an integer)
+Result.Err(the tool failed: boom)
+Result.Err(the server answered an error: unknown tool: missing (code -32602))
+resource demo://greeting | Greeting | A friendly line | text/plain
+Result.Ok(hello from the server)
+Result.Err(the server answered an error: unknown resource: demo://nope (code -32002))
+Result.Ok({})
+true
+== http, raw
+405 use POST
+403 cross-origin request refused
+200 {"id":9,"jsonrpc":"2.0","result":{}}
+202 
+200 {"error":{"code":-32700,"message":"parse error: expected 'null'"},"id":null,"jsonrpc":"2.0"}
+== http, token
+401 missing or wrong bearer token
+401 missing or wrong bearer token
+true
+Result.Ok(4)
+"##;
+
+#[test]
+fn server_and_client_talk_over_stdio_and_http() {
+    let app = project("serve", SERVE_MAIN);
+    let (stdout, stderr, code) = run(&app);
+    assert_eq!(code, 0, "el programa sale 0\n{stdout}\n{stderr}");
+    assert_eq!(stdout, SERVE_EXPECTED, "la salida esperada\n{stderr}");
+}

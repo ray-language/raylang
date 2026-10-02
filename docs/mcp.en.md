@@ -48,6 +48,10 @@ model to read them BEFORE assuming a feature is missing: the stdlib is embedded 
 a file search will not find it — the antidote to the "I proposed what already existed" pattern
 (seen three times in a row from a real project: `std/inflate`, `stdin_pipe` and the FFI).
 
+`ray_fmt` and `ray_doc` are announced with `annotations.readOnlyHint`: they only return text, so a
+client may run them without asking. `ray_run` and `ray_test` execute code, and `ray_check` with a
+path may download the project's dependencies: they do not carry the hint.
+
 ## Sandboxing
 
 `ray_run`/`ray_test` execute arbitrary code from the model → they run **in a subprocess** of the
@@ -93,4 +97,4 @@ failure is silent: it compiles, the tests pass and the change is not there (ray-
 Rule: format at the end of the task, never between patches, and verify with `grep` that every patch
 landed.
 
-<!-- sync: sha256:cd683c173668 -->
+<!-- sync: sha256:339d34041020 -->

@@ -7,6 +7,8 @@
 {% let nav_eco = if (en) { "Ecosystem" } else { "Ecosistema" } %}
 {% let nav_spec = if (en) { "Specification" } else { "Especificación" } %}
 {% let t_theme = if (en) { "Theme" } else { "Tema" } %}
+{% let t_menu = if (en) { "Menu" } else { "Menú" } %}
+{% let t_close = if (en) { "Close" } else { "Cerrar" } %}
 {% let t_light = if (en) { "Light theme" } else { "Tema claro" } %}
 {% let t_system = if (en) { "System theme" } else { "Tema del sistema" } %}
 {% let t_dark = if (en) { "Dark theme" } else { "Tema oscuro" } %}
@@ -157,39 +159,116 @@ button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentCo
 }
 /* Los enlaces de la barra no parten línea («Desktop y móvil» en dos líneas rompía la barra). */
 nav.top .links a.link { white-space: nowrap; }
+/* El velo que oscurece la página bajo un panel deslizante (el menú o el índice del handbook). */
+.drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(8, 24, 39, .5);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .3s ease, visibility 0s linear .3s;
+}
+html.nav-open .drawer-scrim, html.toc-open .drawer-scrim { opacity: 1; visibility: visible; transition: opacity .3s ease; }
+html.nav-open, html.toc-open { overflow: hidden; }
+nav.top .links-head { display: none; }
 /* Hasta 75rem la barra completa no cabe (medido: ocho enlaces + idioma + tema + GitHub caben
-   desde 1200 px): los enlaces colapsan a un desplegable bajo la barra; GitHub queda fuera. */
+   desde 1200 px): los enlaces pasan a un panel que entra deslizándose desde la derecha, el lado
+   de su botón. GitHub queda fuera. `nav.top` lleva backdrop-filter y por eso es el bloque
+   contenedor del panel fijo: está pegado arriba y ocupa todo el ancho, así que sus coordenadas
+   coinciden con las de la ventana. */
 @media (max-width: 75rem) {
-    nav.top .links {
-        display: none;
+    nav.top { transition: z-index 0s linear .32s; }
+    html.nav-open nav.top { z-index: 41; transition: z-index 0s; }
+    /* La barra queda por encima del velo: se oscurece con él. */
+    nav.top::after {
+        content: "";
         position: absolute;
-        top: 100%;
-        left: 0;
+        inset: 0;
+        z-index: 1;
+        background: rgba(8, 24, 39, .5);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .3s ease;
+    }
+    html.nav-open nav.top::after { opacity: 1; }
+    nav.top .links {
+        display: flex;
+        position: fixed;
+        z-index: 2;
+        top: 0;
         right: 0;
+        width: min(20rem, 86vw);
+        height: 100vh;
+        height: 100dvh;
         flex-direction: column;
         align-items: stretch;
         gap: 0;
+        padding: 0 calc(.9rem + env(safe-area-inset-right, 0px)) calc(1.5rem + env(safe-area-inset-bottom, 0px)) .9rem;
+        background: var(--bg);
+        border-left: 1px solid var(--line);
+        border-radius: 18px 0 0 18px;
+        box-shadow: -24px 0 60px rgba(8, 24, 39, .28);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        transform: translateX(105%);
+        visibility: hidden;
+        transition: transform .32s cubic-bezier(.22, .8, .3, 1), visibility 0s linear .32s;
+    }
+    html.nav-open nav.top .links {
+        transform: none;
+        visibility: visible;
+        transition: transform .32s cubic-bezier(.22, .8, .3, 1);
+    }
+    nav.top .links-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 -.9rem .6rem;
+        padding: calc(.9rem + env(safe-area-inset-top, 0px)) .9rem .8rem 1.7rem;
         background: var(--bg);
         border-bottom: 1px solid var(--line);
-        padding: .3rem 1rem .9rem;
-        box-shadow: 0 18px 40px rgba(8, 24, 39, .25);
     }
-    nav.top.open .links { display: flex; }
+    nav.top .links-title { font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; color: var(--ink); }
     nav.top .links a.link {
-        padding: .65rem 0;
-        font-size: 1.05rem;
-        border-bottom: 1px solid var(--line);
+        padding: .62rem .8rem;
+        font-size: 1rem;
+        border-bottom: none;
     }
-    nav.top .links a.link:last-child { border-bottom: none; }
-    nav.top .links a.link.active { border-bottom-color: var(--line); }
     button.menu { display: flex; }
+}
+/* El botón de cierre de los dos paneles. */
+.drawer-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.3rem;
+    height: 2.3rem;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--bg-soft);
+    color: var(--muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.drawer-close:hover, .drawer-close:focus-visible { color: var(--ink); }
+.drawer-close svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+@media (prefers-reduced-motion: reduce) {
+    .drawer-scrim, html.nav-open .drawer-scrim, html.toc-open .drawer-scrim, nav.top::after,
+    nav.top .links, html.nav-open nav.top .links { transition: none; }
 }
 /* El selector de tema: en la barra en escritorio, dentro del desplegable en móvil (hay un
    grupo en cada sitio; el JS los sincroniza todos). */
 nav.top .links .theme { display: none; }
 @media (max-width: 75rem) {
     nav.top .wrap > .theme { display: none; }
-    nav.top .links .theme { display: flex; margin-top: .9rem; align-self: flex-start; }
+    nav.top .links .theme { display: flex; margin: 1rem .8rem 0; align-self: flex-start; }
 }
 nav.top a.gh { display: flex; align-items: center; color: var(--muted); }
 nav.top a.gh:hover { color: var(--ink); }
@@ -291,18 +370,18 @@ section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
 /* El handbook: barra lateral con los capítulos + el artículo. */
 .handbook > .wrap { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
 .handbook aside.toc { position: sticky; top: 4.5rem; padding: 2.5rem 0 1rem; font-size: .92rem; }
-.handbook aside.toc .toc-title { font-weight: 600; margin: 0 0 .6rem; }
+.handbook aside.toc .toc-title { font-weight: 600; margin: 0 0 .6rem; padding: 0 .6rem; }
 .handbook aside.toc .toc-title a { color: var(--ink); text-decoration: none; }
 .handbook aside.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: ch -1; }
 .handbook aside.toc li { counter-increment: ch; margin: 0; }
 .handbook aside.toc li a { display: block; padding: .32rem .6rem; border-radius: 6px; color: var(--muted); text-decoration: none; }
-.handbook aside.toc li a:hover { background: var(--bg-soft); color: var(--ink); }
-.handbook aside.toc li a.active { background: var(--bg-soft); color: var(--ink); font-weight: 600; }
+.handbook aside.toc li a:hover { color: var(--ink); }
+.handbook aside.toc li a.active { color: var(--accent); font-weight: 500; }
 .handbook article.doc { min-width: 0; }
 .markdown-alert { border-left: 3px solid var(--accent); background: var(--bg-soft); border-radius: 0 8px 8px 0; padding: .3rem 1.1rem; margin: 1.2rem 0; }
 .markdown-alert-title { font-weight: 600; margin: .4rem 0 .2rem; }
 .handbook article.doc p.edit { color: var(--muted); font-size: .85rem; margin: 0 0 1rem; }
-.toc-fab, .toc-scrim, .handbook aside.toc .toc-close { display: none; }
+.toc-fab, .handbook aside.toc .toc-close { display: none; }
 /* En pantallas estrechas el índice de capítulos sale de la página: un botón flotante arriba a la
    izquierda lo abre como panel que entra deslizándose, sobre un velo que oscurece el artículo. */
 @media (max-width: 860px) {
@@ -333,22 +412,8 @@ section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
     }
     .toc-fab:hover, .toc-fab:focus-visible { opacity: 1; }
     .toc-fab:active { transform: scale(.92); }
-    .toc-fab svg, .toc-close svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-    html.toc-open { overflow: hidden; }
+    .toc-fab svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
     html.toc-open .toc-fab { opacity: 0; pointer-events: none; }
-    .toc-scrim {
-        display: block;
-        position: fixed;
-        inset: 0;
-        z-index: 39;
-        background: rgba(8, 24, 39, .5);
-        backdrop-filter: blur(3px);
-        -webkit-backdrop-filter: blur(3px);
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity .3s ease, visibility 0s linear .3s;
-    }
-    html.toc-open .toc-scrim { opacity: 1; visibility: visible; transition: opacity .3s ease; }
     .handbook aside.toc {
         position: fixed;
         z-index: 40;
@@ -385,27 +450,12 @@ section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
         background: var(--bg);
         border-bottom: 1px solid var(--line);
     }
-    .handbook aside.toc .toc-title { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
-    .handbook aside.toc .toc-close {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 2.3rem;
-        height: 2.3rem;
-        padding: 0;
-        border: none;
-        border-radius: 50%;
-        background: var(--bg-soft);
-        color: var(--muted);
-        cursor: pointer;
-        -webkit-tap-highlight-color: transparent;
-    }
-    .handbook aside.toc .toc-close:hover, .handbook aside.toc .toc-close:focus-visible { color: var(--ink); }
+    .handbook aside.toc .toc-title { margin: 0; padding: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
+    .handbook aside.toc .toc-close { display: flex; }
     .handbook aside.toc li a { padding: .62rem .8rem; border-radius: 10px; }
-    .handbook aside.toc li a.active { color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 }
 @media (max-width: 860px) and (prefers-reduced-motion: reduce) {
-    .toc-fab, .toc-scrim, .handbook aside.toc, html.toc-open .toc-scrim, html.toc-open .handbook aside.toc { transition: none; }
+    .toc-fab, .handbook aside.toc, html.toc-open .handbook aside.toc { transition: none; }
 }
 
 article.doc { padding: 2.5rem 0 4rem; }
@@ -491,6 +541,12 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
         <a class="brand" href="{{ up }}index.html"><img src="{{ root }}assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
         <span class="spacer"></span>
         <div class="links">
+        <div class="links-head">
+            <span class="links-title">{{ t_menu }}</span>
+            <button type="button" class="links-close drawer-close" aria-label="{{ t_close }}" title="{{ t_close }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+        </div>
         {% if page == "index" %}
         <a class="link" href="#agentes" data-spy="agentes">LLMs</a>
         <a class="link" href="#plataformas" data-spy="plataformas">{{ nav_platforms }}</a>
@@ -553,6 +609,7 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
         </a>
     </div>
 </nav>
+<div class="drawer-scrim"></div>
 {% block content %}
 {% endblock %}
 <footer class="site">
@@ -597,68 +654,73 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
     }
     apply(current());
 })();
-// Menú desplegable móvil: la hamburguesa abre/cierra los enlaces; elegir uno lo cierra.
+// Paneles deslizantes en pantallas estrechas: el menú principal entra desde la derecha y el índice
+// del handbook desde la izquierda. Comparten el velo; abrir uno cierra el otro.
 (function () {
+    var root = document.documentElement;
+    var scrim = document.querySelector(".drawer-scrim");
+    var drawers = [];
+    function closeAll(focus) {
+        for (var i = 0; i < drawers.length; i++) {
+            if (drawers[i].isOpen()) { drawers[i].set(false, focus); }
+        }
+    }
+    // `side`: -1 si el panel está a la izquierda (deslizar a la izquierda lo cierra), 1 a la derecha.
+    function drawer(cls, opener, panel, closeBtn, side, wideQuery) {
+        if (!opener || !panel) { return; }
+        var d = {
+            isOpen: function () { return root.classList.contains(cls); },
+            set: function (open, focus) {
+                if (open) { closeAll(false); }
+                root.classList.toggle(cls, open);
+                opener.setAttribute("aria-expanded", open ? "true" : "false");
+                if (open) {
+                    // El elemento actual queda a la vista dentro del panel.
+                    var active = panel.querySelector("a.active");
+                    if (active) { panel.scrollTop = Math.max(0, active.offsetTop - panel.clientHeight / 2); }
+                }
+                if (focus) {
+                    var target = open ? closeBtn : opener;
+                    if (target) { target.focus({ preventScroll: true }); }
+                }
+            }
+        };
+        drawers.push(d);
+        opener.addEventListener("click", function () { d.set(!d.isOpen(), true); });
+        if (closeBtn) { closeBtn.addEventListener("click", function () { d.set(false, true); }); }
+        var links = panel.querySelectorAll("a");
+        for (var i = 0; i < links.length; i++) {
+            links[i].addEventListener("click", function () { d.set(false, false); });
+        }
+        var startX = null;
+        panel.addEventListener("touchstart", function (e) { startX = e.touches[0].clientX; }, { passive: true });
+        panel.addEventListener("touchend", function (e) {
+            if (startX !== null && (e.changedTouches[0].clientX - startX) * side > 60) { d.set(false, false); }
+            startX = null;
+        }, { passive: true });
+        // Al ensanchar la ventana el contenido vuelve a su sitio: el panel no debe quedar abierto.
+        if (window.matchMedia) {
+            var wide = window.matchMedia(wideQuery);
+            var onWide = function (m) { if (m.matches && d.isOpen()) { d.set(false, false); } };
+            if (wide.addEventListener) { wide.addEventListener("change", onWide); } else if (wide.addListener) { wide.addListener(onWide); }
+        }
+    }
     var nav = document.querySelector("nav.top");
-    var btn = document.querySelector("button.menu");
-    if (!nav || !btn) { return; }
-    btn.addEventListener("click", function () {
-        var open = nav.classList.toggle("open");
-        btn.setAttribute("aria-expanded", open ? "true" : "false");
-    });
-    var links = document.querySelectorAll("nav.top .links a");
-    for (var i = 0; i < links.length; i++) {
-        links[i].addEventListener("click", function () {
-            nav.classList.remove("open");
-            btn.setAttribute("aria-expanded", "false");
+    var navLinks = document.querySelector("nav.top .links");
+    var menuBtn = document.querySelector("button.menu");
+    drawer("nav-open", menuBtn, navLinks, document.querySelector(".links-close"), 1, "(min-width: 1201px)");
+    var toc = document.getElementById("handbook-toc");
+    drawer("toc-open", document.querySelector(".toc-fab"), toc, toc ? toc.querySelector(".toc-close") : null, -1, "(min-width: 861px)");
+    if (scrim) { scrim.addEventListener("click", function () { closeAll(true); }); }
+    // La barra queda sobre el velo: tocarla fuera del panel también cierra el menú.
+    if (nav && navLinks && menuBtn) {
+        nav.addEventListener("click", function (e) {
+            if (root.classList.contains("nav-open") && !navLinks.contains(e.target) && !menuBtn.contains(e.target)) { closeAll(true); }
         });
     }
-})();
-// Handbook en pantallas estrechas: el índice de capítulos es un panel que entra desde la izquierda.
-(function () {
-    var fab = document.querySelector(".toc-fab");
-    var toc = document.getElementById("handbook-toc");
-    var scrim = document.querySelector(".toc-scrim");
-    if (!fab || !toc || !scrim) { return; }
-    var root = document.documentElement;
-    var closeBtn = toc.querySelector(".toc-close");
-    function isOpen() { return root.classList.contains("toc-open"); }
-    function set(open, focus) {
-        root.classList.toggle("toc-open", open);
-        fab.setAttribute("aria-expanded", open ? "true" : "false");
-        if (open) {
-            // El capítulo actual queda a la vista dentro del panel.
-            var active = toc.querySelector("a.active");
-            if (active) { toc.scrollTop = Math.max(0, active.offsetTop - toc.clientHeight / 2); }
-        }
-        if (focus) {
-            var target = open ? closeBtn : fab;
-            if (target) { target.focus({ preventScroll: true }); }
-        }
-    }
-    fab.addEventListener("click", function () { set(true, true); });
-    scrim.addEventListener("click", function () { set(false, true); });
-    if (closeBtn) { closeBtn.addEventListener("click", function () { set(false, true); }); }
     document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape" && isOpen()) { set(false, true); }
+        if (e.key === "Escape") { closeAll(true); }
     });
-    var links = toc.querySelectorAll("a");
-    for (var i = 0; i < links.length; i++) {
-        links[i].addEventListener("click", function () { set(false, false); });
-    }
-    // Deslizar el panel hacia la izquierda lo cierra.
-    var startX = null;
-    toc.addEventListener("touchstart", function (e) { startX = e.touches[0].clientX; }, { passive: true });
-    toc.addEventListener("touchend", function (e) {
-        if (startX !== null && startX - e.changedTouches[0].clientX > 60) { set(false, false); }
-        startX = null;
-    }, { passive: true });
-    // Al ensanchar la ventana el índice vuelve a la columna: el panel no debe quedar abierto.
-    if (window.matchMedia) {
-        var wide = window.matchMedia("(min-width: 861px)");
-        var onWide = function (m) { if (m.matches && isOpen()) { set(false, false); } };
-        if (wide.addEventListener) { wide.addEventListener("change", onWide); } else if (wide.addListener) { wide.addListener(onWide); }
-    }
 })();
 // Scrollspy: marca en la nav la sección visible (solo en páginas con anclas espiadas).
 (function () {

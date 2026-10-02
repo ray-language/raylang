@@ -115,9 +115,9 @@ fn setup() -> Result<int, string> {
 ```
 
 `return e` is also an EXPRESSION (diverges): `Option.None => return -1,` in a match arm,
-`else { return 99 }` as a block tail. So are `break` and `continue` (since M300):
+`else { return 99 }` as a block tail. So are `break` and `continue`:
 `Result.Err(e) => break,` in a match arm inside a loop, `if (c) { continue } else { v }`.
-Labeled loops (M308): `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
+Labeled loops: `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
 — `break outer` / `continue outer` from any inner loop of the same function (`outer: while` too). `?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
 otherwise: `'?' on Result<int, string> requires the function to return Result<_, string>,
 but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
@@ -148,7 +148,7 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Core builtins (`print`, `to_string`, `panic`…) cannot be redefined. A top-level function of
   the root module MAY redefine a prelude function (`get`, `sort`, `index_of`, `map`…) and the
   root's code then uses yours; the stdlib, packages and submodules keep the prelude's (the
-  override is lexical to the root, M270). Still, prefer trait methods for such names in a
+  override is lexical to the root). Still, prefer trait methods for such names in a
   library module: dispatch by receiver type avoids the clash. A user type cannot take the
   name of a prelude trait (`Eq`, `Show`, `Ord`, `Hash`, `Add`, `Sub`, `Mul`, `Div`, `Neg`,
   `Clone`, `ToJson`, `Len`, `Contains`…): the checker rejects it at the type.
@@ -285,12 +285,12 @@ group, and a never-`wait()`ed process is killed+reaped on scope exit.
 Pseudo-terminal (1.16+, Linux/macOS/Windows): `.pty(cols, rows).stream()` runs the child
 under a real terminal — `p.out` carries the VT stream, `p.write(bytes)` sends keys
 (Ctrl-C = `b"\x03"`), `p.resize(cols, rows)` follows the window; `err` starts closed.
-Relaunch / hand-off (M246): `process.self_command() -> [string]` is the command line that
+Relaunch / hand-off: `process.self_command() -> [string]` is the command line that
 reproduces this program (`[exe]` in a native binary or bundle, `[ray, "run", entry]` under
 `ray run`); `process.cmd(p, args).spawn_detached() -> Result<int, string>` launches a child that
 OUTLIVES this process (own session, stdio to null, no scope) and returns its pid.
 
-App self-update (`import std/update;`, M247): publish `update.json` (`version`, `artifacts` keyed
+App self-update (`import std/update;`): publish `update.json` (`version`, `artifacts` keyed
 by `<platform>-<arch>` = `platform() + "-" + arch()`, each with `url`, hex `sha256`, `size`) plus
 `update.json.sig` (hex Ed25519 signature over the manifest bytes); bake the public key with
 `[app] public_key = "<hex>"` in ray.toml. Then `update.check(url)` → `Ok(None)` up to date /

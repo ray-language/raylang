@@ -84,6 +84,13 @@ and compiles it to machine code. Both produce exactly the same output, byte for 
 language's CI checks it on every change. The native binary is several times faster; the figures
 are on the [benchmarks page](https://raylang.dev/en/bench.html).
 
+| | VM (`ray run`, `ray dev`, `ray test`) | Native (`ray build --native`) |
+|---|---|---|
+| Starts | instantly, nothing to compile | after compiling: seconds, more with `--release` |
+| Good for | developing, testing, scripts | deploying and distributing |
+| Needs | just `ray` | a Rust toolchain as well |
+| Delivers | nothing: it runs the source | an executable that does not depend on `ray` |
+
 ### Dependencies
 
 The standard library ships inside the `ray` binary and is imported with `import std/…`. Everything
@@ -96,7 +103,9 @@ ray add web                # adds the dependency to ray.toml and downloads it
 
 The official packages are `net` (HTTP/1.1 and 2, WebSocket, DNS, TLS, gRPC), `web` (the
 Express-style application framework), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`
-and `cron`. Versions are pinned in `ray.lock` with their hash.
+and `cron`. Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
+`.ray-deps/`, which stays out of version control: after cloning a project, `ray fetch` downloads
+them again.
 
 ## 4. The language in fifteen minutes
 
@@ -123,6 +132,21 @@ fn main() -> int {
 
 Everything is an **expression**: `if`, `match` and blocks produce a value. Function signatures are
 always annotated; locals are inferred. There is no `null`.
+
+### When something does not compile
+
+The compiler checks the whole program before running anything. An error points at the line and
+the column, with the source line underneath:
+
+```text
+type error at 2:22: 'total' is declared as int but initialized with string
+  2 |     let total: int = "42";
+    |                      ^^^^
+```
+
+`ray run` then exits with code 65. Messages carry one of three headers, `lex error`,
+`syntax error` or `type error`, and always the position. The editor shows the same as you type,
+and `ray check` verifies without running.
 
 ### Structs, enums and `match`
 
@@ -152,8 +176,26 @@ fn main() -> int {
 }
 ```
 
-`match` is **exhaustive** (the compiler demands every variant be covered) and the scrutinee goes in
-parentheses. On primitives (`int`, `string`) you use `if`/`else`, not `match`.
+`match` is **exhaustive**: the compiler demands every variant be covered, so adding a variant to
+the enum flags every `match` that needs updating. The scrutinee goes in parentheses.
+
+Patterns also match literals, tuples and nested variants (`Result.Ok(Option.Some(v))`). On an
+`int` or a `string` a `_` arm is required, because the possible values cannot be listed:
+
+```rust
+fn label(code: int) -> string {
+    match (code) {
+        200 => "ok",
+        404 => "not found",
+        _ => "other",
+    }
+}
+
+fn main() -> int {
+    print(label(404));
+    0
+}
+```
 
 ### Errors as values: `Option`, `Result` and `?`
 
@@ -311,7 +353,25 @@ fn main() -> int { 0 }
 ```
 
 `ray test` runs the project's `@test` functions (also those in `tests/*.ray`); each one runs
-isolated.
+isolated. A test that returns `bool` passes with `true`; one with no return value passes if no
+`assert` fails. `ray test --watch` reruns them on save.
+
+### If you come from another language
+
+raylang looks enough like Rust and TypeScript that habit makes you write things that do not
+compile. These are the differences you notice on the first day:
+
+| If you write | In raylang it is |
+|---|---|
+| `if x > 0 {` | `if (x > 0) {`: the condition of `if`, `while` and `match` goes in parentheses |
+| `let mut total = 0` | `var total = 0` |
+| `Some(3)`, `Ok(v)`, `None` | `Option.Some(3)`, `Result.Ok(v)`, `Option.None`: variants are qualified |
+| `null`, `nil`, `undefined` | does not exist: a value that may be missing is an `Option<T>` |
+| `try` / `catch`, `throw` | do not exist: a function that can fail returns `Result<T, E>`, and `?` propagates |
+| `f"hello {x}"` | `"hello ${x}"`, in any string |
+| a multi-line string | backticks: `` `…` ``, which allow line breaks and double quotes |
+| a mutable global variable | does not exist: the top level only has `const`; state lives in `main` or in a fiber |
+| two functions with the same name | one name, one signature: there is no overloading |
 
 ## 5. Concurrency in two minutes
 
@@ -371,6 +431,7 @@ exactly as with `ray run`. The server's own instructions tell it so. The details
 | Command | What for |
 |---|---|
 | `ray run` / `ray dev` | run on the VM / development mode with restart and browser reload |
+| `ray check` | verifies the program compiles, without running it |
 | `ray test` | the `@test` functions; `--watch` re-runs on save |
 | `ray fmt --write src/` | canonical formatting (keeps your parentheses and comments) |
 | `ray build --native --release` | optimized native binary |
@@ -405,4 +466,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:3835e1e0ec44 -->
+<!-- sync: sha256:44a52522fa15 -->

@@ -47,6 +47,23 @@ folder) instead of loose code: that way imports across files and the `ray.toml` 
 resolve exactly as with `ray run`. The server's own instructions tell the model so. The details
 are in [docs/mcp.en.md](../docs/mcp.en.md).
 
+Other MCP clients, such as Claude Desktop or an editor, are configured with a JSON file that
+launches the same command:
+
+```json
+{ "mcpServers": { "raylang": { "command": "ray", "args": ["mcp"] } } }
+```
+
+With the tools connected, three habits give better results:
+
+- **Ask for a project, not a snippet.** With a `ray.toml` and a `src/`, the assistant checks the
+  whole program, with its modules and dependencies, and not an isolated piece.
+- **Have it look things up instead of assuming.** `ray_doc` returns the real signature of any
+  function in the standard library or in one of the project's packages. An assistant that looks
+  it up does not invent functions that do not exist.
+- **Have it finish with the tests.** `ray_check` says it compiles; `ray_test` says it does what it
+  should.
+
 ## 2. An agent written in raylang
 
 `agent-cli` takes a question in the terminal. Claude answers it and, along the way, compiles and
@@ -119,6 +136,43 @@ pub fn request_body(model: string, system: string, tools: string, messages: [str
 
 Messages travel as JSON text. The assistant turn goes back to the API **exactly as it arrived**:
 it may carry reasoning blocks, and the API requires them unchanged.
+
+A response that asks for a tool looks like this. The content is a list of blocks, and each
+`tool_use` carries an identifier:
+
+```json
+{
+  "role": "assistant",
+  "stop_reason": "tool_use",
+  "content": [
+    {"type": "text", "text": "Let me run it."},
+    {"type": "tool_use", "id": "toolu_1", "name": "ray_run",
+     "input": {"code": "fn main() { print(6 * 7); }"}}
+  ]
+}
+```
+
+The agent runs the tool and answers with a user message that carries the result, with the same
+identifier:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "tool_result", "tool_use_id": "toolu_1",
+     "content": "exit: 0\n--- stdout ---\n42", "is_error": false}
+  ]
+}
+```
+
+The `stop_reason` field says why the model stopped, and the next step depends on it:
+
+| `stop_reason` | What happened | What the agent does |
+|---|---|---|
+| `end_turn` | the model finished its answer | returns the text |
+| `tool_use` | it wants to use tools | runs them and asks again |
+| `max_tokens` | the answer hit the limit and was cut | returns what there is |
+| `refusal` | the model declined the request | ends with an error |
 
 ## 4. The agent loop
 
@@ -215,6 +269,36 @@ With that, `tools(c)` asks for the list of tools (`tools/list`) and `call_tool(c
 calls one (`tools/call`). MCP tools go to the API with the same name and their JSON schema as
 `input_schema`.
 
+<!-- check: project=examples/apps/agent-cli -->
+```rust
+/// The MCP tools in the shape the Messages API expects (`input_schema`).
+pub fn tools_json(tools: [mcp.Tool]) -> string {
+    var parts: [string] = [];
+    for t in tools {
+        parts.push(
+            `{"name": ${claude.quote(t.name)}, "description": ${claude.quote(t.description)}, "input_schema": ${t.schema}}`
+        );
+    }
+    "[" + parts.join(",") + "]"
+}
+```
+
+This is what travels between the agent (→) and `ray mcp` (←), one line per message, trimmed:
+
+```text
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",…}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"raylang",…},…}}
+→ {"jsonrpc":"2.0","method":"notifications/initialized"}
+→ {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+← {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"ray_check","description":"…","inputSchema":{…}},…]}}
+→ {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ray_run","arguments":{"code":"fn main() { print(6 * 7); }"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"exit: 0\n--- stdout ---\n42"}],"isError":false}}
+```
+
+Every request carries an `id` and the response repeats it; the `initialized` notification has no
+`id` because it expects no answer. The client knows nothing about raylang:
+`mcp.connect(program, args)` works for any MCP server that talks over standard input and output.
+
 ## 6. The API key
 
 The key comes from `ANTHROPIC_API_KEY` or, if it is not set, from the system keychain with
@@ -239,6 +323,19 @@ fn api_key() -> Result<string, string> {
 To store it once: a one-line program with `keychain.set("agent-cli", "anthropic", key)`. On macOS
 it goes to Keychain, on Linux to Secret Service and on Windows to Credential Manager. Never into a
 text file.
+
+The rest of the configuration comes from the environment too:
+
+| Variable | What for | Default |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | the API key | the one in the keychain |
+| `AGENT_MODEL` | the model | `claude-opus-5-5` |
+| `ANTHROPIC_BASE_URL` | the API address, to go through your own proxy | `https://api.anthropic.com` |
+| `RAY_BIN` | the `ray` binary that acts as the MCP server | `ray` |
+
+The program exits with 64 if it gets no question and with 1 on any other failure. The answer goes
+to standard output and the tool trace (`[tool] ray_run`) to standard error, so
+`agent-cli "…" > answer.txt` saves only the answer.
 
 ## 7. Testing without network
 
@@ -277,9 +374,21 @@ This agent implements both protocols by hand, in about 400 lines including the l
 into standard packages, `llm` and `mcp`, so any app can use them without copying is under
 evaluation. Until then, this example is the reference.
 
+## 8. What is missing for a production agent
+
+The example is short on purpose. Before putting it in front of users, add:
+
+| What | Why |
+|---|---|
+| Streaming | the agent waits for the whole response, which is why the timeout is 10 minutes; with streaming the text shows up as it is generated |
+| Retries | a 429 (rate limit) or a 529 (API overloaded) ends the program; the right thing is to retry with growing waits |
+| Prompt caching | the instructions and the tools are sent again at every step; the API's cache avoids paying for them each time |
+| History | every run is a single question; a conversation needs the messages stored |
+| Confirmation | the agent runs whatever the model asks for; a tool with side effects, such as writing files, should ask for permission first |
+
 ## Next step
 
 [**Performance**](performance.en.md): how to measure a program, find where the time goes and make
 it fast.
 
-<!-- sync: sha256:da0d27ed60e3 -->
+<!-- sync: sha256:d94ff739cceb -->

@@ -31,6 +31,23 @@ icon = "icon.png"          # optional: the app icon on every system
 Since each system is packaged on its own machine, the usual setup is a CI matrix with one job per
 operating system.
 
+Everything `ray bundle` needs to know about the app is in the `[app]` section:
+
+| Key | What for |
+|---|---|
+| `name` | the app's visible name |
+| `id` | its identifier, in reverse-domain notation |
+| `icon` | a PNG; `ray bundle` generates each system's format |
+| `copyright` | the text of the About panel on macOS and of the `.exe` properties on Windows |
+| `sign` | the signing identity (section 2) |
+| `notary` | the macOS notarization profile (section 2) |
+| `entitlements` | a permissions file for the macOS signature |
+| `public_key` | the public key for updates (section 3); `ray keygen` writes it |
+
+Besides, `[app.plist]` adds keys to the macOS `Info.plist`, and `[native] embed` lists the folders
+that go inside the binary. A packaged app starts with the current directory at `/`, so every
+resource it reads must be embedded.
+
 ## 2. Signing
 
 Unsigned, macOS asks the user to approve a downloaded app by hand, and Windows shows a SmartScreen
@@ -57,12 +74,52 @@ the `RAY_SIGN_IDENTITY` and `RAY_NOTARY_PROFILE` variables for CI.
 **Windows** uses `signtool`: `[app] sign` is the subject of the installed certificate, or the path
 of a `.pfx` file whose password goes in `RAY_SIGN_PFX_PASSWORD`.
 
+To check the result on macOS before publishing it:
+
+```sh
+codesign --verify --deep --strict Notes.app && echo signed
+spctl --assess --type execute Notes.app && echo accepted by Gatekeeper
+```
+
+In CI, identities and keys arrive as secrets, through environment variables:
+
+| Variable | Same as | What it is |
+|---|---|---|
+| `RAY_SIGN_IDENTITY` | `[app] sign`, `--sign` | the signing identity |
+| `RAY_NOTARY_PROFILE` | `[app] notary`, `--notary` | the notarization profile |
+| `RAY_SIGN_PFX_PASSWORD` | | the password of the `.pfx` on Windows |
+| `RAY_SIGNING_KEY` | `--key` | the private key for updates (section 3) |
+
 ## 3. Automatic updates on the desktop
 
 The publisher puts three files at a fixed URL: `update.json` with the version and the artifacts,
 its signature `update.json.sig`, and a `.zip` per platform. The app downloads the manifest, checks
 the signature with the public key it carries, and if there is a newer version it downloads it,
 verifies its SHA-256, replaces the installed bundle and restarts.
+
+This is a real `update.json`, as `ray release` writes it:
+
+```json
+{
+  "app": "dev.raylang.notes",
+  "version": "0.2.0",
+  "notes": "https://example.com/notes/0.2.0",
+  "min_version": "",
+  "artifacts": {
+    "macos-aarch64": {"url": "Notes-0.2.0-macos-aarch64.zip", "sha256": "2d2f6fd5ae6ce1aa33efb89c746162d9f16e23cefad6443cb023623d63937fe9", "size": 271727}
+  }
+}
+```
+
+Every platform has its entry in `artifacts`, under the key `<system>-<architecture>`:
+`macos-aarch64`, `linux-x86_64`, `windows-x86_64`. Security does not depend on the server that
+hosts the files, but on three checks:
+
+| Check | What it prevents |
+|---|---|
+| the signature of `update.json` with the app's key | someone publishing a forged manifest, even with control of the server |
+| the `sha256` and `size` of each artifact | the downloaded `.zip` differing from the published one |
+| the public key lives inside the installed binary | the attacker also replacing the key used to verify |
 
 **Once**, create the app's signing key:
 
@@ -72,6 +129,10 @@ ray keygen          # the seed goes to ~/.ray/keys/<app-id>.key; the public key,
 
 The private key never leaves your machine or the CI secrets (`RAY_SIGNING_KEY`). The public key
 stays in `[app] public_key`, and `ray bundle` puts it inside the binary.
+
+Keep a copy of that key in a secrets manager. If it is lost, the apps already installed cannot
+accept any further update, because that key is the only one they trust. That is why `ray keygen`
+refuses to overwrite an existing key unless `--force` is passed.
 
 **For each version**, raise `version` in `ray.toml` and publish:
 
@@ -209,9 +270,30 @@ and [React site](web-react.en.md) chapters.
   and container image.
 - Behind a proxy such as nginx or Caddy, which handles HTTPS, the binary is ready for production.
 
-<!-- sync: sha256:087d7b4485d2 -->
+In a container, the image only needs the binary, built for Linux:
+
+```dockerfile
+FROM debian:stable-slim
+COPY notes-api /usr/local/bin/notes-api
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+CMD ["notes-api"]
+```
+
+## 6. Before publishing
+
+| Check | How |
+|---|---|
+| The version is bumped | `version` in `ray.toml`: it is what updates compare |
+| The tests pass natively too | `ray test --native` |
+| The signature verifies | `codesign --verify` and `spctl --assess` on macOS |
+| The update works | the local rehearsal from section 3, starting from the previous version |
+| The keys are backed up | the update key and the Android keystore: without them there are no more versions |
+| No secrets in the repository | `keystore.properties`, the `.pfx` and `~/.ray/keys/` stay out |
 
 ## Next step
 
 That is the end of the chapters. For other use cases, [**More examples**](examples.en.md) gathers
 the apps of the ray-language organization, with their full source.
+
+<!-- sync: sha256:b1a0b6f95039 -->

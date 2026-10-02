@@ -13,6 +13,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   **Rendimiento** (`perf-lab`: medir, `ray profile`, algoritmo, nativo y fibras, con cifras). El
   MANUAL deja de duplicar lo que cubre el handbook (bundle, hot reload, ventanas, Vite y
   auto-actualización pasan a una tabla de enlaces) y ya no lleva M-números ni referencias internas.
+- **Handbook: revisión de contenido de todos los capítulos.** Cada capítulo gana material de
+  consulta al nivel de «Ventanas a fondo» y «Herramienta de terminal»: tablas de rutas, estados y
+  variables de entorno, sesiones reales con `curl`, la forma de los mensajes de la API y de MCP, un
+  `update.json` real, diferencias entre escritorio, iOS y Android, opciones de `ray bundle`,
+  problemas frecuentes, y una lista de comprobación antes de publicar. «Empezar» corrige que
+  `match` sí casa literales y añade la tabla «si vienes de otro lenguaje».
+- **REFERENCE, `llms.txt` y README sin M-números** ni referencias internas (hallazgos, secciones de
+  IDEAS), en español e inglés.
 
 ## 1.27.27 — 2026-10-01
 

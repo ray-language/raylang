@@ -31,6 +31,23 @@ icon = "icon.png"          # opcional: el icono de la app en cada sistema
 Como cada sistema se empaqueta en su propia máquina, lo habitual es una matriz de CI con un job por
 sistema operativo.
 
+Todo lo que `ray bundle` necesita saber de la app está en la sección `[app]`:
+
+| Clave | Para qué |
+|---|---|
+| `name` | el nombre visible de la app |
+| `id` | su identificador, en notación de dominio inverso |
+| `icon` | un PNG; `ray bundle` genera el formato de cada sistema |
+| `copyright` | el texto del panel «Acerca de» en macOS y de las propiedades del `.exe` en Windows |
+| `sign` | la identidad de firma (sección 2) |
+| `notary` | el perfil de notarización de macOS (sección 2) |
+| `entitlements` | un archivo de permisos para la firma de macOS |
+| `public_key` | la clave pública de las actualizaciones (sección 3); la escribe `ray keygen` |
+
+Además, `[app.plist]` añade claves al `Info.plist` de macOS, y `[native] embed` lista las carpetas
+que van dentro del binario. Una app empaquetada arranca con el directorio actual en `/`, así que
+todo recurso que lea debe ir embebido.
+
 ## 2. Firmar
 
 Sin firma, macOS pide al usuario que apruebe a mano una app descargada, y Windows muestra un aviso
@@ -57,12 +74,52 @@ mismas opciones existen como `--sign`, `--notary` y `--entitlements`, y como las
 **Windows** usa `signtool`: `[app] sign` es el sujeto del certificado instalado, o la ruta de un
 archivo `.pfx` cuya contraseña va en `RAY_SIGN_PFX_PASSWORD`.
 
+Para comprobar el resultado en macOS antes de publicarlo:
+
+```sh
+codesign --verify --deep --strict Notes.app && echo firmada
+spctl --assess --type execute Notes.app && echo aceptada por Gatekeeper
+```
+
+En CI, las identidades y las claves llegan como secretos, por variables de entorno:
+
+| Variable | Equivale a | Qué es |
+|---|---|---|
+| `RAY_SIGN_IDENTITY` | `[app] sign`, `--sign` | la identidad de firma |
+| `RAY_NOTARY_PROFILE` | `[app] notary`, `--notary` | el perfil de notarización |
+| `RAY_SIGN_PFX_PASSWORD` | | la contraseña del `.pfx` en Windows |
+| `RAY_SIGNING_KEY` | `--key` | la clave privada de las actualizaciones (sección 3) |
+
 ## 3. Actualizaciones automáticas en escritorio
 
 El publicador deja tres archivos en una URL fija: `update.json` con la versión y los artefactos,
 su firma `update.json.sig`, y un `.zip` por plataforma. La app descarga el manifiesto, comprueba la
 firma con la clave pública que lleva dentro, y si hay una versión nueva la descarga, verifica su
 SHA-256, reemplaza el bundle instalado y se reinicia.
+
+Este es un `update.json` real, tal como lo escribe `ray release`:
+
+```json
+{
+  "app": "dev.raylang.notes",
+  "version": "0.2.0",
+  "notes": "https://example.com/notes/0.2.0",
+  "min_version": "",
+  "artifacts": {
+    "macos-aarch64": {"url": "Notes-0.2.0-macos-aarch64.zip", "sha256": "2d2f6fd5ae6ce1aa33efb89c746162d9f16e23cefad6443cb023623d63937fe9", "size": 271727}
+  }
+}
+```
+
+Cada plataforma tiene su entrada en `artifacts`, con la clave `<sistema>-<arquitectura>`:
+`macos-aarch64`, `linux-x86_64`, `windows-x86_64`. La seguridad no depende del servidor que aloja
+los archivos, sino de tres comprobaciones:
+
+| Comprobación | Qué impide |
+|---|---|
+| la firma de `update.json` con la clave de la app | que alguien publique un manifiesto falso, aunque controle el servidor |
+| el `sha256` y el `size` de cada artefacto | que el `.zip` descargado sea distinto del publicado |
+| la clave pública va dentro del binario instalado | que el atacante cambie también la clave con la que se verifica |
 
 **Una vez**, crea la clave de firma de la app:
 
@@ -72,6 +129,10 @@ ray keygen          # la semilla va a ~/.ray/keys/<app-id>.key; la pública, al 
 
 La clave privada nunca sale de tu máquina o de los secretos de CI (`RAY_SIGNING_KEY`). La pública
 queda en `[app] public_key`, y `ray bundle` la mete en el binario.
+
+Guarda una copia de esa clave en un gestor de secretos. Si se pierde, las apps ya instaladas no
+pueden aceptar ninguna actualización más, porque solo confían en esa clave. Por eso `ray keygen`
+se niega a sobrescribir una clave existente si no se le pasa `--force`.
 
 **En cada versión**, sube `version` en el `ray.toml` y publica:
 
@@ -208,6 +269,27 @@ y los recursos embebidos, y se configura con variables de entorno, como en los c
 - `--without crypto,tls,sqlite,…` deja fuera lo que el servicio no usa, para un binario y una
   imagen de contenedor más pequeños.
 - Detrás de un proxy como nginx o Caddy, que pone el HTTPS, el binario está listo para producción.
+
+En un contenedor, la imagen solo necesita el binario, compilado para Linux:
+
+```dockerfile
+FROM debian:stable-slim
+COPY notes-api /usr/local/bin/notes-api
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+CMD ["notes-api"]
+```
+
+## 6. Antes de publicar
+
+| Comprueba | Cómo |
+|---|---|
+| La versión está subida | `version` en el `ray.toml`: es la que comparan las actualizaciones |
+| Los tests pasan también en nativo | `ray test --native` |
+| La firma verifica | `codesign --verify` y `spctl --assess` en macOS |
+| La actualización funciona | el ensayo en local de la sección 3, desde la versión anterior |
+| Las claves tienen copia | la clave de actualizaciones y el keystore de Android: sin ellos no hay más versiones |
+| Los secretos no están en el repositorio | `keystore.properties`, el `.pfx` y `~/.ray/keys/` quedan fuera |
 
 ## Siguiente paso
 

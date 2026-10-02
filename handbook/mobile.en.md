@@ -13,11 +13,15 @@ block on this page is copied from that project, and CI checks that it still is.
 
 ## What you need
 
-- **raylang** and **Node.js** with npm, for the frontend.
-- For **iOS**: a Mac with Xcode and the iPhone Rust targets:
-  `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
-- For **Android**: the Android SDK and NDK (Android Studio installs them), Gradle and the target
-  `rustup target add aarch64-linux-android` (add `x86_64-linux-android` if your emulator is x86).
+| For | You need |
+|---|---|
+| Any target | raylang and Node.js with npm, for the frontend |
+| Compiling to native | a Rust toolchain (`ray toolchain install` installs a private one) |
+| iOS | a Mac with Xcode, and the targets `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` |
+| Android | the Android SDK and NDK (Android Studio installs them), Gradle 9 with JDK 17 or later, and `rustup target add aarch64-linux-android` (add `x86_64-linux-android` if your emulator is x86) |
+
+None of that is needed to start: up to section 7 the app is developed and tested on the desktop,
+with just raylang and Node.js.
 
 ## 1. How a raylang mobile app is built
 
@@ -31,6 +35,19 @@ A raylang app on the phone has two parts that live **in the same process**:
 The page does not talk HTTP to the program: it calls `window.ray.request(...)`, the message
 reaches the program as an event, and the answer resolves the page's Promise. There is no server
 and no open port, so no other app on the phone can talk to yours.
+
+```text
+                          the app: one process
+┌────────────────────┐   window.ray.request(…)   ┌────────────────────┐
+│ the shell's webview│ ────────────────────────▶ │  raylang program   │
+│ React + TypeScript │ ◀──────────────────────── │  (machine code)    │
+└────────────────────┘     ui.reply_json(…)      └────────────────────┘
+  page served from                                 data: std/kv,
+  ray://app/ (embedded)                            files, network
+```
+
+The split of work follows from that: the page draws and collects what the user does; the program
+stores the data and talks to the network and the system. The page never touches the disk.
 
 The interface is served from inside the binary through the `ray://app/` scheme. During
 development, the Vite server loads it instead, with hot reload.
@@ -126,9 +143,13 @@ Errors are values: a note without a title returns `Err`, and `?` propagates a di
 On the phone there is no useful working directory: the program starts with the current directory
 at `/`. The right place depends on the system, and `$HOME` resolves it on both:
 
-- on **iOS**, `$HOME` is the app container. Its root is read-only, but `Documents/` is writable;
-- on **Android**, the shell points `HOME` at the app's private folder (`files/`);
-- on the **desktop**, `$HOME` is the user's home folder.
+| System | `$HOME` is | The notes end up in | To look at them |
+|---|---|---|---|
+| iOS | the app container; its root is read-only, `Documents/` is writable | `<container>/Documents/Notes` | `xcrun simctl get_app_container booted dev.raylang.notes data` prints the path on the simulator |
+| Android | the app's private folder, `files/` | `files/Documents/Notes` | `adb shell run-as dev.raylang.notes ls files/Documents/Notes` |
+| Desktop | the user's home folder | `~/Documents/Notes` | the file manager |
+
+Data in the private folder is deleted when the app is uninstalled, and no other app can read it.
 
 <!-- check: project=examples/apps/notes-mobile -->
 ```rust
@@ -266,7 +287,8 @@ Two CSS details matter on a phone:
 - `viewport-fit=cover` in the `<meta name="viewport">` of `index.html`, together with
   `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)` in the CSS, keeps the content away
   from the iPhone's dynamic island and home indicator.
-- Text fields use `font-size: 17px` or more: below that, iOS zooms in when they get focus.
+- Text fields use `font-size: 16px` or more (Notes uses 17): below that, iOS zooms into the
+  field when it gets focus and the page is left shifted.
 
 ## 7. Try it on the desktop
 
@@ -387,34 +409,78 @@ Mac:
 
 A release build always ignores that variable.
 
-> [!NOTE]
-> Up to 1.27.26, the development app could not find the embedded frontend and showed "not found".
-> It is fixed since 1.27.27: update raylang and regenerate the development app with
-> `ray bundle --ios --dev` or `--android --dev`.
-
 ## 11. What changes compared to the desktop
 
-- **There is no `closed`.** The system suspends or kills the app without warning: save every change
-  as soon as it happens, as Notes does.
-- **The current directory is `/`.** Use `$HOME` (section 3) for data and `std/embed` or the
-  embedded frontend for resources.
-- **iOS does not allow launching processes:** `std/process` is not available there.
-- **Background:** JavaScript timers freeze when the app is not visible. Whatever must keep running,
-  like an audio player, lives in the raylang program; `[ios] background_audio = true` and
-  `[android] background_audio = true` keep it playing.
-- **The page on Android** loads through `https://app.ray.invalid/…`, an alias of `ray://app/` that
-  never reaches the network. Relative URLs and `fetch("/api/x")` work the same; it only matters if
-  you write absolute URLs by hand.
-- **Inspecting the page:** with `--devtools`, Safari (Develop menu) inspects the iPhone's webview,
-  and `chrome://inspect` the Android one.
-- **Android edge to edge:** since Android 15 the system draws the app under the bars. The shell from
-  `ray bundle --android` reserves the system bars and the keyboard since 1.27.27. If your app shows
-  up under the status bar or the keyboard covers the fields, update raylang and regenerate the
-  bundle.
+The same `main` runs in all three places, but the system underneath does not behave the same:
+
+| | Desktop | iOS | Android |
+|---|---|---|---|
+| The interface | a native window, with menus | the shell's webview, full screen | the shell's webview, full screen |
+| `closed` event | when the window closes | never arrives | never arrives |
+| `lifecycle` event | no | `background` and `foreground` | `background` and `foreground` |
+| Current directory | where it was launched | `/` | `/` |
+| `std/process` | yes | does not exist | does not exist |
+| The page loads from | `ray://app/…` | `ray://app/…` | `https://app.ray.invalid/…` |
+| What the program prints | the terminal | `simctl launch --console-pty`, or the Xcode console | `adb logcat -s ray` |
+| Inspecting the page | `ray dev`, or `ray run --devtools` | Safari, Develop menu, with `--devtools` | `chrome://inspect`, with `--devtools` |
+
+What that forces you to do:
+
+- **Save every change as soon as it happens.** The system suspends or kills the app without
+  warning, so there is no "on exit" moment to save in. That is what Notes does.
+- **Do not depend on the current directory.** Use `$HOME` (section 3) for data, and the embedded
+  frontend or `std/embed` for resources.
+- **Whatever must keep running in the background lives in the program.** JavaScript timers freeze
+  when the app is not visible. An audio player plays from raylang, and
+  `[ios] background_audio = true` and `[android] background_audio = true` keep it playing.
+- **Do not write absolute URLs by hand.** On Android the page loads through
+  `https://app.ray.invalid/…`, an alias of `ray://app/` that never reaches the network. Relative
+  URLs and `fetch("/api/x")` work the same in all three places.
+
+## 12. Options and configuration
+
+The `ray bundle` options for the phone:
+
+| Option | What it does |
+|---|---|
+| `--ios` | generates the Xcode project in `<Name>-ios/` |
+| `--ios-target device\|sim\|both` | builds only the phone library or the simulator one; both by default |
+| `--android` | generates the Gradle project in `<Name>-android/` |
+| `--android-abi arm64\|x86_64\|all` | the architecture of the `.so`; arm64 by default |
+| `--dev` | the development app, for `ray dev --device` |
+| `--devtools` | allows inspecting the webview from Safari or Chrome |
+| `--without list` | leaves subsystems out of the binary, for example `--without audio,sqlite` |
+
+And what is declared in `ray.toml`:
+
+| Key | Effect |
+|---|---|
+| `[app] name` | the name under the icon |
+| `[app] id` | the iOS bundle id and, unless another is given, the Android application id |
+| `[app] icon` | a PNG: the app icon on both systems |
+| `[app.plist]` | keys that go as they are into the iOS `Info.plist`, for example the text of a permission |
+| `[ios] development_team` | the development team, to install on a real iPhone |
+| `[ios] background_audio` | audio keeps playing with the app in the background |
+| `[android] application_id` | an application id different from `[app] id` |
+| `[android] background_audio` | the same on Android, with a foreground service |
+| `[frontend]` | the frontend's commands and folder (section 2) |
+
+## 13. Common problems
+
+| Symptom | Cause and fix |
+|---|---|
+| `ray dev` exits with code 73 | the Vite port is taken by another process, usually an earlier session; the message says which |
+| Xcode asks for a team after every `ray bundle --ios` | declare `[ios] development_team` in `ray.toml`: regenerating the bundle rewrites the project |
+| The phone does not connect to `ray dev --device` | the link uses the local network: the phone and the computer must be on the same network |
+| The development app shows "not found" | it was a bug up to 1.27.26; update raylang and regenerate the app with `ray bundle --ios --dev` or `--android --dev` |
+| On Android the app sits under the status bar, or the keyboard covers the fields | the shell reserves the bars and the keyboard since 1.27.27; update raylang and regenerate the bundle |
+| iOS zooms in when a text field is tapped | the field's font is smaller than 16px |
+| The content sits under the dynamic island | `viewport-fit=cover` or the `env(safe-area-inset-*)` values are missing (section 6) |
+| A change in `[app]` does not show up on the phone | the identity and the icon are written when the project is generated: run `ray bundle` again |
 
 ## Next step
 
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:7503c6a895b4 -->
+<!-- sync: sha256:8c15e350be5e -->

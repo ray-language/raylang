@@ -7,6 +7,8 @@ organización [ray-language](https://github.com/ray-language) publica más apps 
 con su código completo, para otros casos de uso. Son un buen punto de partida cuando lo que quieres
 construir no está en el handbook: busca la más parecida, clónala y cámbiala.
 
+## Por caso de uso
+
 | Caso de uso | Apps |
 |---|---|
 | Escritorio y móvil | [ray808](https://github.com/ray-language/ray808) (caja de ritmos con React para escritorio, iOS y Android), [raydesk](https://github.com/ray-language/raydesk) (gestor de tareas), [raynote](https://github.com/ray-language/raynote) (bloc de notas con menús y diálogos nativos), [rayplay](https://github.com/ray-language/rayplay) (reproductor de audio en segundo plano), [raystage](https://github.com/ray-language/raystage) (tipos de ventana) |
@@ -25,6 +27,32 @@ estas apps en un sistema real.
 
 Los paquetes que usan están en el
 [índice de paquetes](https://github.com/ray-language/ray-index), y se buscan con `ray search`.
+
+## Después de cada capítulo
+
+Cada capítulo del handbook tiene apps que llevan la misma idea más lejos:
+
+| Si acabas de leer | Mira después | Qué añaden |
+|---|---|---|
+| [App móvil](mobile.md) y [multiplataforma](cross-platform.md) | [ray808](https://github.com/ray-language/ray808), [rayplay](https://github.com/ray-language/rayplay), [raydesk](https://github.com/ray-language/raydesk) | audio en tiempo real y en segundo plano, y una app con más pantallas |
+| [Ventanas a fondo](windows.md) | [raynote](https://github.com/ray-language/raynote), [raystage](https://github.com/ray-language/raystage) | un editor con documentos de verdad y todos los tipos de ventana |
+| [Sitio con plantillas](ssr.md) y [con React](web-react.md) | [store](https://github.com/ray-language/store), [raysite](https://github.com/ray-language/raysite) | una tienda con frontend aparte y un generador de sitios |
+| [API web](api.md) | [raygate](https://github.com/ray-language/raygate), [raycall](https://github.com/ray-language/raycall), [raymart](https://github.com/ray-language/raymart) | un gateway, trazas entre servicios y un sistema entero |
+| [Herramienta de terminal](cli.md) | [raytop](https://github.com/ray-language/raytop), [raylogs](https://github.com/ray-language/raylogs), [raytetris](https://github.com/ray-language/raytetris) | interfaces de terminal a pantalla completa |
+| [Rendimiento](performance.md) | [rayq](https://github.com/ray-language/rayq), [raykv](https://github.com/ray-language/raykv), [raystream](https://github.com/ray-language/raystream) | servidores medidos bajo carga |
+
+## Empezar desde una
+
+```sh
+git clone https://github.com/ray-language/raydesk && cd raydesk
+ray fetch          # descarga las dependencias del ray.toml a .ray-deps/
+ray test
+ray dev
+```
+
+Cada repositorio trae un README que dice qué cubre y cómo se ejecuta. Para convertirla en tu
+proyecto, cambia `name` en `[package]` y `name` e `id` en `[app]`, y borra lo que no necesites:
+el compilador señala cada sitio que dependía de lo borrado.
 
 Para cualquier función, la [referencia](../REFERENCE.md) tiene su firma, y el
 [manual](../MANUAL.md) explica el lenguaje en detalle. La [portada](index.md) reúne todos los

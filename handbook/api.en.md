@@ -36,6 +36,17 @@ versions are pinned in `ray.lock`. The code is split into three modules: `notes.
 | `PUT /notes/:id` | replaces | 200, 404, 422 |
 | `DELETE /notes/:id` | deletes | 204, 404 |
 
+Errors always have the same shape, `{"error":"…"}`, and the status says what kind they are. A
+client only needs the status to decide, and the text to show:
+
+| Status | When |
+|---|---|
+| 401 | the token is missing, or is not the right one |
+| 404 | the note or the route does not exist |
+| 422 | the body is not valid JSON, or the note cannot be saved: no title, a title over 200 characters or a body over 100,000 |
+| 500 | the database returned an error |
+| 503 | only on `/health`: the database is not answering |
+
 ## 2. A shared connection pool
 
 The framework runs each request in its own fiber, with isolated memory. A connection kept in a
@@ -84,6 +95,21 @@ pub fn migrate(p: Pool) -> Result<int, string> {
 `pool_tx` takes a connection and runs `BEGIN`, the function and `COMMIT`; if the function fails, it
 runs `ROLLBACK`. `pool_query` and `pool_exec` are for a single statement, and `pool_query` retries
 once on a fresh connection if the reused one was cut (for example because the server restarted).
+
+| Function | What for | If the connection was cut |
+|---|---|---|
+| `pool_query(p, sql, params)` | a query that returns rows | retries once on a fresh connection |
+| `pool_exec(p, sql, params)` | a statement that writes; returns the affected rows | does not retry: it cannot know whether it ran |
+| `pool_tx(p, f)` | several statements in one transaction | retries only the `BEGIN` |
+| `pool_with(p, f)` | several statements on the same connection, no transaction | does not retry |
+| `pool_with_retry(p, f)` | like `pool_with`, for a block that is safe to repeat | repeats the block |
+| `pool_close(p)` | closes every connection, on shutdown | |
+
+The pool size, 10 in this example, is the maximum number of simultaneous queries against Postgres.
+A request that arrives while every connection is busy waits for one to be released; it does not
+fail. It does not need to be large: a query takes milliseconds and the connection comes straight
+back. What does matter is that the pools of all instances together fit in the server's
+`max_connections`.
 
 ## 3. Queries with parameters
 
@@ -134,6 +160,32 @@ fn routes(db: Pool, token: string) -> App {
 - `gzip()` compresses responses of 512 bytes or more when the client accepts it.
 - `use_on("/notes", …)` applies the middleware only to routes under `/notes`; `/health` stays open
   for the load balancer.
+
+Reading a note has three endings, and the type of `notes.get` separates them:
+`Result<Option<Note>, string>`. With nested patterns, each ending is one arm and one HTTP status:
+
+<!-- check: project=examples/apps/notes-api -->
+```rust
+    app.GET("/notes/:id", fn(c: Ctx, r: Res) {
+        match (notes.get(db, c.param("id"))) {
+            Result.Ok(Option.Some(n)) => r.json(n.to_json()),
+            Result.Ok(Option.None) => fail(r, 404, "no such note"),
+            Result.Err(e) => fail(r, 500, e),
+        }
+    });
+```
+
+<!-- check: project=examples/apps/notes-api -->
+```rust
+// An error as JSON: {"error": "..."}.
+fn fail(r: Res, code: int, message: string) {
+    r.status(code).json(json.render(json.obj().field("error", message)));
+}
+```
+
+The example returns the database's message as it is in the 500, which is handy while developing.
+In a public service, write the detail to the log and answer with a generic text, so table names
+are not shown to callers.
 
 Creating a note reads the JSON body, validates it and answers 201 with the `Location` header:
 
@@ -198,6 +250,18 @@ pub fn same(a: string, b: string) -> bool {
 
 `main` refuses to start if the token is shorter than 16 characters.
 
+<!-- check: project=examples/apps/notes-api -->
+```rust
+/// Whether an `Authorization` header carries `token`.
+pub fn authorized(header: string, token: string) -> bool {
+    header.starts_with("Bearer ") && same(header.substring(7, header.len()), token)
+}
+```
+
+A token is generated with `openssl rand -hex 32` and handed to the service as an environment
+variable, never in the code or the repository. Changing it only takes a restart with the new
+value.
+
 ## 6. Startup and shutdown
 
 <!-- check: project=examples/apps/notes-api -->
@@ -237,6 +301,21 @@ fn main() -> int {
 - `listen_graceful` handles SIGTERM and Ctrl-C: it stops accepting connections, waits up to 5
   seconds for the ones in flight and returns. Then `main` closes the pool. That is what Kubernetes,
   systemd and any orchestrator expect.
+
+All the configuration comes from environment variables:
+
+| Variable | What for | Default |
+|---|---|---|
+| `NOTES_API_TOKEN` | the token clients must send; 16 characters or more | none: it is required |
+| `PGHOST`, `PGPORT` | where Postgres is | `127.0.0.1`, `5432` |
+| `PGUSER`, `PGPASSWORD` | the credentials | `notes`, empty |
+| `PGDATABASE` | the database | `notes` |
+| `HOST` | the address it listens on | `127.0.0.1` |
+| `PORT` | the port | `8080` |
+
+The exit code tells the orchestrator what happened: 64 if the token is missing, which is a
+configuration error that retrying will not fix; 1 if the database does not answer at startup,
+which does deserve a retry; 0 after a graceful shutdown.
 
 ## 7. Tests with and without a database
 
@@ -287,7 +366,34 @@ NOTES_TEST_PG=1 PGHOST=127.0.0.1 PGPORT=55432 PGUSER=notes PGPASSWORD=notes ray 
 export PGHOST=127.0.0.1 PGPORT=55432 PGUSER=notes PGPASSWORD=notes PGDATABASE=notes
 export NOTES_API_TOKEN=a-secret-of-at-least-16
 ray run
-curl -H "Authorization: Bearer $NOTES_API_TOKEN" -d '{"title":"Hello"}' http://127.0.0.1:8080/notes
+```
+
+A complete session, with what each request answers:
+
+```sh
+# create: 201, the Location header and the note
+curl -i -H "Authorization: Bearer $NOTES_API_TOKEN" -d '{"title":"Hello"}' http://127.0.0.1:8080/notes
+```
+
+```text
+HTTP/1.1 201 Created
+Location: /notes/01a0fa15-c9d5-7201-91f7-b7a2d893f9ca
+
+{"id":"01a0fa15-c9d5-7201-91f7-b7a2d893f9ca","title":"Hello","body":"","updated_ms":1790902127000}
+```
+
+```sh
+# a note without a title: 422
+curl -H "Authorization: Bearer $NOTES_API_TOKEN" -d '{"title":""}' http://127.0.0.1:8080/notes
+{"error":"title is required"}
+
+# no token: 401
+curl http://127.0.0.1:8080/notes
+{"error":"missing or wrong bearer token"}
+
+# the health check asks for no token
+curl http://127.0.0.1:8080/health
+{"ok": true}
 ```
 
 For production, `ray build --native --release` produces a single binary. It is configured entirely
@@ -295,9 +401,21 @@ with environment variables (`PG*`, `NOTES_API_TOKEN`, `HOST`, `PORT`), so it fit
 container or an application platform alike. The framework's server, compiled to native, serves on
 the order of 188,000 requests per second in the project's load benchmark.
 
+What a production environment expects from a service, and how this one meets it:
+
+| What | In Notes |
+|---|---|
+| Configuration | environment variables, no files |
+| Health check | `GET /health`, no token: it queries the database and answers 200 or 503 |
+| Logs | one JSON line per request on standard output, with a trace identifier |
+| Shutdown | on SIGTERM it stops accepting, waits 5 seconds for requests in flight and closes the pool |
+| Secrets | the token comes from the environment and is compared in constant time |
+| HTTPS | a proxy in front, or `listen_tls` with the certificate and the key |
+| Container | `HOST=0.0.0.0`, to listen outside the container itself |
+
 ## Next step
 
 A [**site with a React frontend**](web-react.en.md) embedded in the binary and a JSON API behind it,
 with the notes in Redis.
 
-<!-- sync: sha256:877604dd89d0 -->
+<!-- sync: sha256:53f9c2f5b319 -->

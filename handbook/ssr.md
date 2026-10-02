@@ -7,6 +7,11 @@ construye con plantillas de raylang compiladas; el navegador no ejecuta nada de 
 formularios envían al servidor, que guarda y redirige. Las notas se guardan como **archivos**, un
 JSON por nota.
 
+Este diseño conviene cuando el contenido pesa más que la interacción: páginas que se leen,
+formularios, paneles de administración. La primera respuesta ya es la página completa, funciona
+sin JavaScript y no hay un frontend que construir. Para una interfaz con mucho estado en el
+navegador, el capítulo [sitio con frontend React](web-react.md) es la otra opción.
+
 El proyecto completo está en [`examples/apps/notes-ssr`](../examples/apps/notes-ssr/), con sus
 tests. Los bloques de raylang están copiados de él y el CI comprueba que sigan siéndolo.
 
@@ -49,6 +54,20 @@ notes-ssr/
 `web` es el framework de aplicación, al estilo de Express, y corre sobre el servidor HTTP del
 paquete `net`. Las versiones exactas quedan fijadas en `ray.lock`. La [guía del framework](../docs/web-framework.md) tiene todo el detalle.
 
+Estas son las rutas del sitio. Un formulario HTML solo sabe enviar `GET` y `POST`, así que editar
+y borrar también son `POST`:
+
+| Ruta | Qué hace | Responde |
+|---|---|---|
+| `GET /` | la lista de notas; `?q=` busca | 200 |
+| `GET /notes/new` | el formulario vacío | 200 |
+| `POST /notes` | crea una nota | 303 a la nota, o 422 con el formulario |
+| `GET /notes/:id` | una nota, con su Markdown ya convertido | 200, 404 |
+| `GET /notes/:id/edit` | el formulario con la nota | 200, 404 |
+| `POST /notes/:id` | guarda los cambios | 303 a la nota, o 422 |
+| `POST /notes/:id/delete` | borra | 303 a `/` |
+| `GET /assets/…` | la hoja de estilos | 200, 304 |
+
 ## 2. El servidor
 
 La aplicación se construye en una función de nivel superior. El servidor ejecuta cada conexión en
@@ -69,6 +88,29 @@ fn build_app() -> App {
 - `use_mw(same_origin)` registra un middleware: corre antes de las rutas y puede cortar la
   petición (sección 6).
 - `static_embedded` sirve `static/` bajo `/assets/`, con `ETag` y `304`.
+
+La línea que escribe `log_requests()` va a la salida estándar, lista para un recolector de logs:
+
+```json
+{"ts":"2026-10-02T00:48:47Z","level":"INFO","service":"web","trace_id":"9fe1bc0fa334f19c853116ea16dc31cd","msg":"request","method":"POST","path":"/notes","status":303,"ms":0}
+```
+
+Un handler recibe dos valores: `c`, la petición, y `r`, la respuesta que va construyendo.
+
+| Para leer la petición | Devuelve |
+|---|---|
+| `c.param("id")` | el segmento `:id` de la ruta |
+| `c.query("q")` | un parámetro de la URL, o `""` si no viene |
+| `c.form_field("title")` | un campo del formulario enviado, o `""` |
+| `c.header_of("origin")` | una cabecera, o `""` |
+| `c.json_body()` | el cuerpo como JSON, en un `Result` |
+
+| Para responder | Hace |
+|---|---|
+| `r.html(texto)`, `r.text(texto)`, `r.json(texto)` | fija el cuerpo y su tipo de contenido |
+| `r.status(422)` | fija el estado; se encadena: `r.status(422).html(…)` |
+| `r.header(nombre, valor)` | añade una cabecera |
+| `r.redirect(url)` | redirige |
 
 Una ruta lee la petición y devuelve una página. Esta crea una nota con los campos del formulario:
 
@@ -168,6 +210,28 @@ La página de inicio **hereda** del layout, recibe la lista de notas tipada (`[s
 - `{% import store %}` trae el módulo para usar su tipo `Note` en los parámetros.
 - `{% extends layout %}` va justo después de `{% params %}` y se resuelve junto a la plantilla;
   `{% include views/card(n) %}` se resuelve desde `src/`.
+
+Todas las etiquetas:
+
+| Etiqueta | Qué hace |
+|---|---|
+| `{% params a: T, b: U %}` | la primera línea: los parámetros de `render`, con sus tipos |
+| `{{ expr }}` | escribe el valor, con el HTML escapado |
+| `{{& expr }}` | escribe el valor tal cual, sin escapar |
+| `{% if c %}` … `{% elif c %}` … `{% else %}` … `{% endif %}` | condicional |
+| `{% for x in xs %}` … `{% endfor %}` | bucle |
+| `{% let n = expr %}` | una variable local |
+| `{% include ruta(args) %}` | inserta otra plantilla |
+| `{% extends ruta %}` | hereda de un layout |
+| `{% block nombre %}` … `{% endblock %}` | un hueco del layout, o lo que lo rellena |
+| `{% import módulo %}` | trae un módulo para usar sus tipos y funciones |
+
+Dentro de `{{ }}` y `{% %}` va raylang normal: `{{ n.body.split("\n")[0] }}` es una expresión
+como cualquier otra, y el editor la autocompleta y la comprueba.
+
+Una plantilla se usa como un módulo más: `import views/index;` y después
+`index.render("All notes", query, notes)`. `ray build --templates-only` escribe en disco el módulo
+que genera cada plantilla, por si quieres ver en qué se convierte.
 
 En raylang las páginas se construyen con funciones puras: datos de entrada, HTML de salida. Así los
 handlers solo leen la petición y los tests prueban cada página sin levantar un servidor.
@@ -287,6 +351,26 @@ ray run                        # http://127.0.0.1:8080
 ray dev                        # recarga el navegador al guardar
 ```
 
+Con el servidor en marcha, `curl` enseña el patrón POST, redirección, GET:
+
+```sh
+curl -i -d 'title=Compras&body=**leche**+y+pan' http://127.0.0.1:8080/notes
+```
+
+```text
+HTTP/1.1 303 See Other
+Location: /notes/01a0fa15-c9d5-7201-91f7-b7a2d893f9ca
+```
+
+Y lo que el sitio rechaza:
+
+| Petición | Respuesta |
+|---|---|
+| un formulario con el título vacío | 422, el formulario con el error y lo escrito |
+| un `POST` con la cabecera `Origin` de otro sitio | 403 |
+| `GET /notes/../../etc/passwd` | 404: el id no es válido y no se toca el disco |
+| `GET /assets/app.css` con el `ETag` que ya tiene el navegador | 304, sin cuerpo |
+
 `main` lee el puerto de `PORT` y apaga el servidor con orden ante SIGTERM o Ctrl-C: deja de aceptar
 conexiones y espera hasta 5 segundos a que terminen las que están en curso.
 
@@ -317,6 +401,31 @@ El binario lleva dentro las plantillas compiladas y la hoja de estilos (`[native
 funciona desde cualquier carpeta. El de Notes ocupa unos 3 MB. Detrás de un proxy como nginx o
 Caddy, que pone el HTTPS, ya está listo para producción. Si prefieres que lo sirva el propio
 programa, `listen_tls` recibe el certificado y la clave.
+
+| Variable | Para qué | Por defecto |
+|---|---|---|
+| `PORT` | el puerto en el que escucha | 8080 |
+| `NOTES_DIR` | la carpeta de las notas | `notes-data`, en el directorio actual |
+
+El servidor escucha solo en `127.0.0.1`: el proxy está en la misma máquina y es lo único que debe
+alcanzarlo. Como servicio de systemd:
+
+```ini
+[Unit]
+Description=Notes
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/notes-ssr
+Environment=PORT=8080 NOTES_DIR=/var/lib/notes
+User=notes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl stop` envía SIGTERM, y el programa termina las peticiones en curso antes de salir.
 
 ## Siguiente paso
 

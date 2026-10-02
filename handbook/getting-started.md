@@ -84,6 +84,13 @@ Rust y lo compila a código máquina. Los dos producen exactamente la misma sali
 CI del lenguaje lo comprueba en cada cambio. El binario nativo es varias veces más rápido; las
 cifras están en la [página de benchmarks](https://raylang.dev/bench.html).
 
+| | VM (`ray run`, `ray dev`, `ray test`) | Nativo (`ray build --native`) |
+|---|---|---|
+| Arranca | al instante, sin compilar | tras compilar: segundos, y más con `--release` |
+| Sirve para | desarrollar, probar, scripts | desplegar y distribuir |
+| Necesita | solo `ray` | además, una toolchain de Rust |
+| Entrega | nada: corre el fuente | un ejecutable que no depende de `ray` |
+
 ### Dependencias
 
 La biblioteca estándar va dentro del binario `ray` y se importa con `import std/…`. Lo demás son
@@ -96,7 +103,8 @@ ray add web                # añade la dependencia a ray.toml y la descarga
 
 Los paquetes oficiales son `net` (HTTP/1.1 y 2, WebSocket, DNS, TLS, gRPC), `web` (el framework de
 aplicación al estilo Express), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz` y `cron`.
-Las versiones quedan fijadas en `ray.lock` con su hash.
+Las versiones quedan fijadas en `ray.lock` con su hash. Los paquetes se descargan a `.ray-deps/`,
+que no va al control de versiones: tras clonar un proyecto, `ray fetch` los vuelve a bajar.
 
 ## 4. El lenguaje en quince minutos
 
@@ -123,6 +131,21 @@ fn main() -> int {
 
 Todo es una **expresión**: `if`, `match` y los bloques producen valor. Las firmas de función se
 anotan siempre; los locales se infieren. No hay `null`.
+
+### Cuando algo no compila
+
+El compilador comprueba el programa entero antes de ejecutar nada. Un error señala la línea y la
+columna, con la línea del fuente debajo:
+
+```text
+type error at 2:22: 'total' is declared as int but initialized with string
+  2 |     let total: int = "42";
+    |                      ^^^^
+```
+
+`ray run` sale entonces con el código 65. Los mensajes llevan una de tres cabeceras, `lex error`,
+`syntax error` o `type error`, y siempre la posición. El editor muestra lo mismo mientras escribes,
+y `ray check` lo comprueba sin ejecutar.
 
 ### Structs, enums y `match`
 
@@ -152,8 +175,27 @@ fn main() -> int {
 }
 ```
 
-El `match` es **exhaustivo** (el compilador exige cubrir todas las variantes) y el escrutinio va entre
-paréntesis. Sobre primitivos (`int`, `string`) se usa `if`/`else`, no `match`.
+El `match` es **exhaustivo**: el compilador exige cubrir todas las variantes, así que añadir una
+variante al enum señala cada `match` que hay que actualizar. El escrutinio va entre paréntesis.
+
+Los patrones también casan literales, tuplas y variantes anidadas
+(`Result.Ok(Option.Some(v))`). Sobre un `int` o un `string` hace falta un brazo `_`, porque los
+valores posibles no se pueden enumerar:
+
+```rust
+fn label(code: int) -> string {
+    match (code) {
+        200 => "ok",
+        404 => "not found",
+        _ => "other",
+    }
+}
+
+fn main() -> int {
+    print(label(404));
+    0
+}
+```
 
 ### Errores como valores: `Option`, `Result` y `?`
 
@@ -312,6 +354,25 @@ fn main() -> int { 0 }
 ```
 
 `ray test` corre los `@test` del proyecto (también los de `tests/*.ray`); cada uno corre aislado.
+Un test que devuelve `bool` pasa con `true`; uno sin valor de retorno pasa si ningún `assert`
+falla. `ray test --watch` los repite al guardar.
+
+### Si vienes de otro lenguaje
+
+raylang se parece a Rust y a TypeScript lo bastante como para escribir por costumbre algo que no
+compila. Estas son las diferencias que más se notan el primer día:
+
+| Si escribes | En raylang es |
+|---|---|
+| `if x > 0 {` | `if (x > 0) {`: la condición de `if`, `while` y `match` va entre paréntesis |
+| `let mut total = 0` | `var total = 0` |
+| `Some(3)`, `Ok(v)`, `None` | `Option.Some(3)`, `Result.Ok(v)`, `Option.None`: las variantes van calificadas |
+| `null`, `nil`, `undefined` | no existe: un valor que puede faltar es un `Option<T>` |
+| `try` / `catch`, `throw` | no existen: una función que puede fallar devuelve `Result<T, E>`, y `?` propaga |
+| `f"hola {x}"` | `"hola ${x}"`, en cualquier cadena |
+| una cadena de varias líneas | comillas invertidas: `` `…` ``, que admiten saltos de línea y comillas dobles |
+| una variable global mutable | no existe: arriba solo hay `const`; el estado vive en `main` o en una fibra |
+| dos funciones con el mismo nombre | un nombre, una firma: no hay sobrecarga |
 
 ## 5. Concurrencia en dos minutos
 
@@ -371,6 +432,7 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 | Comando | Para qué |
 |---|---|
 | `ray run` / `ray dev` | ejecutar en la VM / modo desarrollo con reinicio y recarga del navegador |
+| `ray check` | comprueba que el programa compila, sin ejecutarlo |
 | `ray test` | las funciones `@test`; `--watch` vuelve a correr al guardar |
 | `ray fmt --write src/` | formato canónico (conserva tus paréntesis y comentarios) |
 | `ray build --native --release` | binario nativo optimizado |

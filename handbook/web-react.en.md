@@ -37,12 +37,37 @@ The `[frontend]` section connects the program with Vite:
 - `ray dev` starts Vite next to the program and stops it on exit;
 - `ray build --native` runs `build` and puts `dist` inside the binary.
 
+Who serves what changes between development and production, but the browser always sees a single
+origin:
+
+| | In development, with `ray dev` | In production, the binary |
+|---|---|---|
+| The page | Vite, at `localhost:5173`, with hot reload | the program, from the embedded frontend |
+| `/assets/…` | Vite | the program, with `ETag` and gzip |
+| `/api/…` | Vite forwards it to the program | the program |
+| Processes | two: Vite and the program | one |
+
+Because the page and the API share an origin in both cases, there is no CORS to configure, and
+the frontend's relative URLs do not change.
+
 `net` is added besides `web` because the program uses its Redis client directly.
 
 ## 2. The notes in Redis
 
 Each note is a hash, `note:<id>`, with its title, body and date. A sorted set, `notes:by_date`,
 keeps the ids by edit date: it is the index for listing from newest to oldest.
+
+| Key | Type | Holds |
+|---|---|---|
+| `note:<id>` | hash | the fields `title`, `body` and `updated_ms` |
+| `notes:by_date` | sorted set | the ids, with the edit date as the score |
+
+You can look at them with `redis-cli` while the app runs:
+
+```sh
+redis-cli -p 56379 ZREVRANGE notes:by_date 0 -1      # the ids, newest first
+redis-cli -p 56379 HGETALL note:<id>                 # one note
+```
 
 The pool hands each command to whichever connection is free, so two commands in a row are not a
 unit: another request could slip in between them. Writes that touch both keys go as a Lua script,
@@ -196,6 +221,40 @@ fn spa(c: Ctx, r: Res) {
 
 `app.gzip()` compresses the assets: the Notes JavaScript goes from 222 KB to 69 KB.
 
+The program's routes, all of them:
+
+| Route | What it does | Answers |
+|---|---|---|
+| `GET /api/notes?q=…&limit=…` | lists and searches | 200, 503 |
+| `POST /api/notes` | creates | 201, 422, 503 |
+| `PUT /api/notes/:id` | replaces | 200, 404, 422, 503 |
+| `DELETE /api/notes/:id` | deletes | 204, 404, 503 |
+| `GET /assets/…` | the frontend's assets | 200, 304 |
+| any other `GET` | `index.html` | 200 |
+
+The last row is `app.not_found(spa)`: whatever no route handles goes to the same function. The
+API routes separate their endings with the type the store returns,
+`Result<Option<Note>, string>`:
+
+<!-- check: project=examples/apps/notes-web -->
+```rust
+    app.PUT("/api/notes/:id", fn(c: Ctx, r: Res) {
+        match (note_input(c)) {
+            Result.Err(e) => fail(r, 422, e),
+            Result.Ok(input) => {
+                let (title, body) = input;
+                match (store.save(db, c.param("id"), title, body, time.now())) {
+                    Result.Ok(Option.Some(n)) => r.json(n.to_json()),
+                    Result.Ok(Option.None) => fail(r, 404, "no such note"),
+                    Result.Err(e) => fail(r, 503, e),
+                }
+            },
+        }
+    });
+```
+
+The 503 says a dependency failed, Redis, and not the request: a client can retry it.
+
 ## 5. Tests
 
 The store tests run against a real Redis when `NOTES_TEST_REDIS=1`; otherwise they report that they
@@ -236,9 +295,23 @@ REDIS_PORT=56379 ./notes-web              # http://127.0.0.1:8080: page, assets 
 The binary carries the built frontend, so it runs from any folder: the Notes one is about 3 MB. It
 is configured with `HOST`, `PORT`, `REDIS_HOST` and `REDIS_PORT`.
 
+| Variable | What for | Default |
+|---|---|---|
+| `HOST` | the address it listens on; `0.0.0.0` in a container | `127.0.0.1` |
+| `PORT` | the port; in development the Vite proxy reads it too | `8080` |
+| `REDIS_HOST` | where Redis is | `127.0.0.1` |
+| `REDIS_PORT` | its port | `6379` |
+
+At startup the program sends a `PING` to Redis and exits with code 1 if it does not answer,
+instead of accepting requests that are going to fail. On SIGTERM it stops accepting, waits 5
+seconds for the requests in flight and closes the pool, like the [API](api.en.md).
+
+Publishing a new version only takes replacing the binary: the frontend is inside, so the page and
+the API are never left on different versions.
+
 ## Next step
 
 From the browser to the terminal: a [**command-line tool**](cli.en.md), the smallest thing raylang
 ships.
 
-<!-- sync: sha256:df54f18d085e -->
+<!-- sync: sha256:37186d9efbce -->

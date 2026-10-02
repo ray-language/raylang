@@ -1,0 +1,80 @@
+// Command-line parsing. raylang has no flags library in the standard library, and a tool with a
+// handful of commands does not need one: `args()` gives the arguments as an array, and this
+// module sorts them into a command, its positional arguments, and its options.
+
+/// A parsed command line: `notes add "Title" --tag work --json`.
+pub struct Parsed {
+    command: string,
+    positional: [string],
+    options: Map<string, [string]>,
+}
+
+/// Sorts `argv` into command, positionals and options. `value_options` are the options that
+/// take a value (`--tag work` or `--tag=work`); any other `--name` is a switch. A bare `--`
+/// ends the options: everything after it is positional.
+pub fn parse(argv: [string], value_options: [string]) -> Result<Parsed, string> {
+    var command = "";
+    var positional: [string] = [];
+    var options: Map<string, [string]> = Map.new();
+    var only_positional = false;
+    var i = 0;
+    while (i < argv.len()) {
+        let a = argv[i];
+        i = i + 1;
+        if (only_positional || !a.starts_with("--")) {
+            if (command == "") {
+                command = a;
+            } else {
+                positional.push(a);
+            }
+            continue;
+        }
+        if (a == "--") {
+            only_positional = true;
+            continue;
+        }
+        var name = a.substring(2, a.len());
+        var values = options.get_or(name, []);
+        match (name.index_of("=")) {
+            // --tag=work
+            Option.Some(eq) => {
+                let value = name.substring(eq + 1, name.len());
+                name = name.substring(0, eq);
+                values = options.get_or(name, []);
+                values.push(value);
+            },
+            Option.None => {
+                if (value_options.contains(name)) {
+                    // --tag work
+                    if (i >= argv.len()) {
+                        return Result.Err("option --" + name + " needs a value");
+                    }
+                    values.push(argv[i]);
+                    i = i + 1;
+                }
+            },
+        }
+        options.insert(name, values);
+    }
+    Result.Ok(Parsed { command: command, positional: positional, options: options })
+}
+
+/// Whether a switch such as `--json` was given.
+pub fn has(p: Parsed, name: string) -> bool {
+    p.options.contains_key(name)
+}
+
+/// Every value given for an option (`--tag a --tag b` is ["a", "b"]).
+pub fn values(p: Parsed, name: string) -> [string] {
+    p.options.get_or(name, [])
+}
+
+/// Rejects options the command does not know, so a typo is an error and not a silent no-op.
+pub fn only(p: Parsed, known: [string]) -> Result<int, string> {
+    for (name, _) in p.options {
+        if (!known.contains(name)) {
+            return Result.Err("unknown option --" + name);
+        }
+    }
+    Result.Ok(0)
+}

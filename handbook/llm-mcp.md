@@ -48,6 +48,23 @@ proyecto) en lugar del código suelto: así los imports entre archivos y las dep
 `ray.toml` resuelven igual que con `ray run`. Las instrucciones del propio servidor se lo dicen al
 modelo. El detalle está en [docs/mcp.md](../docs/mcp.md).
 
+Otros clientes MCP, como Claude Desktop o un editor, se configuran con un archivo JSON que lanza
+la misma orden:
+
+```json
+{ "mcpServers": { "raylang": { "command": "ray", "args": ["mcp"] } } }
+```
+
+Con las herramientas conectadas, tres costumbres dan mejores resultados:
+
+- **Pide un proyecto, no un fragmento.** Con un `ray.toml` y un `src/`, el asistente comprueba el
+  programa entero, con sus módulos y dependencias, y no un trozo aislado.
+- **Que consulte antes de suponer.** `ray_doc` devuelve la firma real de cualquier función de la
+  biblioteca estándar o de un paquete del proyecto. Un asistente que la consulta no inventa
+  funciones que no existen.
+- **Que termine con los tests.** `ray_check` dice que compila; `ray_test` dice que hace lo que
+  debe.
+
 ## 2. Un agente escrito en raylang
 
 `agent-cli` recibe una pregunta en la terminal. Claude la responde y, por el camino, compila y
@@ -119,6 +136,43 @@ pub fn request_body(model: string, system: string, tools: string, messages: [str
 
 Los mensajes viajan como texto JSON. El turno del asistente se devuelve a la API **tal como
 llegó**: puede traer bloques de razonamiento, y la API exige recibirlos sin cambios.
+
+Una respuesta que pide una herramienta tiene esta forma. El contenido es una lista de bloques, y
+cada `tool_use` lleva un identificador:
+
+```json
+{
+  "role": "assistant",
+  "stop_reason": "tool_use",
+  "content": [
+    {"type": "text", "text": "Let me run it."},
+    {"type": "tool_use", "id": "toolu_1", "name": "ray_run",
+     "input": {"code": "fn main() { print(6 * 7); }"}}
+  ]
+}
+```
+
+El agente ejecuta la herramienta y contesta con un mensaje de usuario que lleva el resultado, con
+el mismo identificador:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "tool_result", "tool_use_id": "toolu_1",
+     "content": "exit: 0\n--- stdout ---\n42", "is_error": false}
+  ]
+}
+```
+
+El campo `stop_reason` dice por qué se detuvo el modelo, y de él depende el siguiente paso:
+
+| `stop_reason` | Qué pasó | Qué hace el agente |
+|---|---|---|
+| `end_turn` | el modelo terminó su respuesta | devuelve el texto |
+| `tool_use` | quiere usar herramientas | las ejecuta y vuelve a preguntar |
+| `max_tokens` | la respuesta llegó al límite y quedó cortada | devuelve lo que hay |
+| `refusal` | el modelo declinó la petición | termina con un error |
 
 ## 4. El bucle del agente
 
@@ -216,6 +270,36 @@ Con eso, `tools(c)` pide la lista de herramientas (`tools/list`) y `call_tool(c,
 argumentos)` llama a una (`tools/call`). Las herramientas de MCP se pasan a la API con el mismo
 nombre y su esquema JSON como `input_schema`.
 
+<!-- check: project=examples/apps/agent-cli -->
+```rust
+/// The MCP tools in the shape the Messages API expects (`input_schema`).
+pub fn tools_json(tools: [mcp.Tool]) -> string {
+    var parts: [string] = [];
+    for t in tools {
+        parts.push(
+            `{"name": ${claude.quote(t.name)}, "description": ${claude.quote(t.description)}, "input_schema": ${t.schema}}`
+        );
+    }
+    "[" + parts.join(",") + "]"
+}
+```
+
+Esto es lo que viaja entre el agente (→) y `ray mcp` (←), una línea por mensaje, recortado:
+
+```text
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",…}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"raylang",…},…}}
+→ {"jsonrpc":"2.0","method":"notifications/initialized"}
+→ {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+← {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"ray_check","description":"…","inputSchema":{…}},…]}}
+→ {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ray_run","arguments":{"code":"fn main() { print(6 * 7); }"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"exit: 0\n--- stdout ---\n42"}],"isError":false}}
+```
+
+Cada petición lleva un `id` y la respuesta lo repite; la notificación `initialized` no lleva `id`
+porque no espera respuesta. El cliente no sabe nada de raylang: `mcp.connect(programa, argumentos)`
+vale para cualquier servidor MCP que hable por la entrada y la salida estándar.
+
 ## 6. La clave de la API
 
 La clave sale de `ANTHROPIC_API_KEY` o, si no está, del llavero del sistema con `std/keychain`:
@@ -239,6 +323,19 @@ fn api_key() -> Result<string, string> {
 Para guardarla una vez: un programa de una línea con
 `keychain.set("agent-cli", "anthropic", clave)`. En macOS queda en Keychain, en Linux en Secret
 Service y en Windows en Credential Manager. Nunca en un archivo de texto.
+
+El resto de la configuración también llega por el entorno:
+
+| Variable | Para qué | Por defecto |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | la clave de la API | la del llavero |
+| `AGENT_MODEL` | el modelo | `claude-opus-5-5` |
+| `ANTHROPIC_BASE_URL` | la dirección de la API, para pasar por un proxy propio | `https://api.anthropic.com` |
+| `RAY_BIN` | el binario `ray` que hace de servidor MCP | `ray` |
+
+El programa sale con 64 si no recibe una pregunta y con 1 ante cualquier otro fallo. La respuesta
+va a la salida estándar y el rastro de herramientas (`[tool] ray_run`) a la de errores, así que
+`agent-cli "…" > respuesta.txt` guarda solo la respuesta.
 
 ## 7. Probar sin red
 
@@ -277,8 +374,19 @@ Este agente implementa los dos protocolos a mano, en unas 400 líneas con el buc
 evaluando convertirlo en paquetes estándar, `llm` y `mcp`, para que cualquier app los use sin
 copiarlos. Mientras tanto, este ejemplo es la referencia.
 
+## 8. Lo que falta para un agente de producción
+
+El ejemplo es deliberadamente corto. Antes de ponerlo delante de usuarios conviene añadir:
+
+| Qué | Por qué |
+|---|---|
+| Respuesta por partes (streaming) | el agente espera la respuesta completa, y por eso el plazo es de 10 minutos; con streaming el texto aparece mientras se genera |
+| Reintentos | un 429 (límite de peticiones) o un 529 (API sobrecargada) terminan el programa; lo correcto es reintentar con esperas crecientes |
+| Caché de prompt | las instrucciones y las herramientas se reenvían en cada paso; la caché de la API evita pagarlas cada vez |
+| Historial | cada ejecución es una pregunta suelta; una conversación necesita guardar los mensajes |
+| Confirmación | el agente ejecuta lo que pide el modelo; una herramienta con efectos, como escribir archivos, debería pedir permiso antes |
+
 ## Siguiente paso
 
-Los capítulos anteriores enseñan a construir. [**Distribuir**](shipping.md) cubre cómo llevar
-cada cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, publicar las de
-móvil y desplegar los servidores.
+[**Rendimiento**](performance.md): cómo medir un programa, encontrar dónde se va el tiempo y
+hacerlo rápido.

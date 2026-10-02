@@ -13,11 +13,15 @@ raylang de esta página está copiado de ese proyecto, y el CI comprueba que sig
 
 ## Qué necesitas
 
-- **raylang** y **Node.js** con npm, para el frontend.
-- Para **iOS**: un Mac con Xcode y los targets de Rust del iPhone:
-  `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
-- Para **Android**: el SDK y el NDK de Android (Android Studio los instala), Gradle y el target
-  `rustup target add aarch64-linux-android` (añade `x86_64-linux-android` si tu emulador es x86).
+| Para | Hace falta |
+|---|---|
+| Cualquier destino | raylang y Node.js con npm, para el frontend |
+| Compilar a nativo | una toolchain de Rust (`ray toolchain install` instala una privada) |
+| iOS | un Mac con Xcode, y los targets `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` |
+| Android | el SDK y el NDK de Android (Android Studio los instala), Gradle 9 con JDK 17 o posterior, y `rustup target add aarch64-linux-android` (añade `x86_64-linux-android` si tu emulador es x86) |
+
+Nada de eso hace falta para empezar: hasta la sección 7 la app se desarrolla y se prueba en el
+escritorio, solo con raylang y Node.js.
 
 ## 1. Cómo está hecha una app móvil en raylang
 
@@ -31,6 +35,19 @@ Una app de raylang en el teléfono tiene dos partes que viven **en el mismo proc
 La página no habla HTTP con el programa: llama a `window.ray.request(...)`, el mensaje llega al
 programa como un evento, y la respuesta resuelve la Promise de la página. No hay servidor ni
 puerto abierto, así que ninguna otra app del teléfono puede hablar con el tuyo.
+
+```text
+                         la app: un solo proceso
+┌────────────────────┐   window.ray.request(…)   ┌────────────────────┐
+│ webview del shell  │ ────────────────────────▶ │  programa raylang  │
+│ React + TypeScript │ ◀──────────────────────── │  (código máquina)  │
+└────────────────────┘     ui.reply_json(…)      └────────────────────┘
+  página servida desde                             datos: std/kv,
+  ray://app/ (embebida)                            archivos, red
+```
+
+El reparto de trabajo sale de ahí: la página dibuja y recoge lo que hace el usuario; el programa
+guarda los datos, habla con la red y con el sistema. La página nunca toca el disco.
 
 La interfaz se sirve desde dentro del binario con el esquema `ray://app/`. En desarrollo, en
 cambio, la carga el servidor de Vite, con recarga en caliente.
@@ -126,10 +143,13 @@ Los errores son valores: una nota sin título devuelve `Err`, y `?` propaga el f
 En el teléfono no hay una carpeta de trabajo útil: el programa arranca con el directorio actual en
 `/`. El sitio correcto depende del sistema, y `$HOME` lo resuelve en los dos:
 
-- en **iOS**, `$HOME` es el contenedor de la app. Su raíz es de solo lectura, pero `Documents/` se
-  puede escribir;
-- en **Android**, el shell apunta `HOME` a la carpeta privada de la app (`files/`);
-- en el **escritorio**, `$HOME` es la carpeta del usuario.
+| Sistema | `$HOME` es | Las notas quedan en | Para verlas |
+|---|---|---|---|
+| iOS | el contenedor de la app; su raíz es de solo lectura, `Documents/` se puede escribir | `<contenedor>/Documents/Notes` | `xcrun simctl get_app_container booted dev.raylang.notes data` da la ruta en el simulador |
+| Android | la carpeta privada de la app, `files/` | `files/Documents/Notes` | `adb shell run-as dev.raylang.notes ls files/Documents/Notes` |
+| Escritorio | la carpeta del usuario | `~/Documents/Notes` | el gestor de archivos |
+
+Los datos de la carpeta privada se borran al desinstalar la app, y ninguna otra app puede leerlos.
 
 <!-- check: project=examples/apps/notes-mobile -->
 ```rust
@@ -268,7 +288,8 @@ Dos detalles de CSS importan en un teléfono:
 - `viewport-fit=cover` en el `<meta name="viewport">` de `index.html`, junto con
   `env(safe-area-inset-top)` y `env(safe-area-inset-bottom)` en el CSS, mantiene el contenido
   lejos de la isla dinámica y del indicador de inicio del iPhone.
-- Los campos de texto usan `font-size: 17px` o más: con menos, iOS hace zoom al enfocarlos.
+- Los campos de texto usan `font-size: 16px` o más (Notes usa 17): con menos, iOS hace zoom
+  sobre el campo al enfocarlo y la página queda desplazada.
 
 ## 7. Probar en el escritorio
 
@@ -316,7 +337,9 @@ xcrun simctl launch --console-pty booted dev.raylang.notes
 ```
 
 Con `--console-pty`, lo que el programa imprime aparece en tu terminal: al arrancar verás
-`notes: app moved to the foreground`.
+`notes: app moved to the foreground`. `--ios-target sim` compila solo la librería del simulador,
+que es más rápido mientras no pruebes en un teléfono. El icono de la app sale de `[app] icon` en el
+`ray.toml`, un PNG.
 
 Para un **iPhone real**, declara tu equipo de desarrollo una vez en el `ray.toml` y abre el
 proyecto en Xcode:
@@ -373,6 +396,10 @@ teléfono**, en su VM: archivos, red y permisos son los del dispositivo, y lo qu
 programa llega a tu terminal. Un cambio que no compila no se envía: el diagnóstico sale en la
 terminal y el teléfono sigue con la versión anterior.
 
+El enlace con el teléfono se guarda en `.ray-dev`, dentro del proyecto, para emparejar una sola
+vez; ese archivo no va al control de versiones. En el escritorio, `ray dev-client <url> <carpeta>`
+hace el papel del teléfono, útil para probar el flujo en CI.
+
 Para iterar también la **interfaz** con recarga en caliente, el teléfono puede cargar el servidor
 de Vite de tu Mac:
 
@@ -383,27 +410,74 @@ de Vite de tu Mac:
 
 Un build de release ignora esa variable siempre.
 
-> [!NOTE]
-> Hasta la 1.27.26, la app de desarrollo no encontraba el frontend embebido y mostraba «not
-> found». Está corregido desde la 1.27.27: actualiza raylang y regenera la app de desarrollo con
-> `ray bundle --ios --dev` o `--android --dev`.
-
 ## 11. Lo que cambia respecto al escritorio
 
-- **No hay `closed`.** El sistema suspende o mata la app sin avisar: guarda cada cambio en cuanto
-  ocurre, como hace Notes.
-- **El directorio actual es `/`.** Usa `$HOME` (sección 3) para los datos y `std/embed` o el
-  frontend embebido para los recursos.
-- **iOS no permite lanzar procesos:** `std/process` no está disponible allí.
-- **Segundo plano:** los temporizadores de JavaScript se congelan cuando la app no está a la
-  vista. Lo que deba seguir corriendo, como un reproductor de audio, vive en el programa raylang;
+El mismo `main` corre en los tres sitios, pero el sistema que hay debajo no se comporta igual:
+
+| | Escritorio | iOS | Android |
+|---|---|---|---|
+| La interfaz | una ventana nativa, con menús | el webview del shell, a pantalla completa | el webview del shell, a pantalla completa |
+| Evento `closed` | al cerrar la ventana | nunca llega | nunca llega |
+| Evento `lifecycle` | no | `background` y `foreground` | `background` y `foreground` |
+| Directorio actual | el del lanzamiento | `/` | `/` |
+| `std/process` | sí | no existe | no existe |
+| La página se carga desde | `ray://app/…` | `ray://app/…` | `https://app.ray.invalid/…` |
+| Lo que imprime el programa | la terminal | `simctl launch --console-pty`, o la consola de Xcode | `adb logcat -s ray` |
+| Inspeccionar la página | `ray dev`, o `ray run --devtools` | Safari, menú Develop, con `--devtools` | `chrome://inspect`, con `--devtools` |
+
+Lo que eso obliga a hacer:
+
+- **Guarda cada cambio en cuanto ocurre.** El sistema suspende o mata la app sin avisar, así que no
+  hay un momento «al salir» en el que guardar. Es lo que hace Notes.
+- **No dependas del directorio actual.** Usa `$HOME` (sección 3) para los datos, y el frontend
+  embebido o `std/embed` para los recursos.
+- **Lo que deba seguir en segundo plano vive en el programa.** Los temporizadores de JavaScript se
+  congelan cuando la app no está a la vista. Un reproductor de audio suena desde raylang, y
   `[ios] background_audio = true` y `[android] background_audio = true` lo mantienen sonando.
-- **Inspeccionar la página:** con `--devtools`, Safari (menú Develop) inspecciona el webview del
-  iPhone, y `chrome://inspect` el de Android.
-- **Android de borde a borde:** desde Android 15 el sistema dibuja la app bajo las barras. El shell
-  de `ray bundle --android` reserva las barras del sistema y el teclado desde la 1.27.27. Si tu app
-  aparece debajo de la barra de estado o el teclado tapa los campos, actualiza raylang y regenera
-  el bundle.
+- **No escribas URLs absolutas a mano.** En Android la página se carga por
+  `https://app.ray.invalid/…`, un alias de `ray://app/` que nunca sale a la red. Las rutas
+  relativas y `fetch("/api/x")` funcionan igual en los tres sitios.
+
+## 12. Opciones y configuración
+
+Las opciones de `ray bundle` para el teléfono:
+
+| Opción | Qué hace |
+|---|---|
+| `--ios` | genera el proyecto Xcode en `<Nombre>-ios/` |
+| `--ios-target device\|sim\|both` | compila solo la librería del teléfono o la del simulador; por defecto, las dos |
+| `--android` | genera el proyecto Gradle en `<Nombre>-android/` |
+| `--android-abi arm64\|x86_64\|all` | la arquitectura del `.so`; por defecto, arm64 |
+| `--dev` | la app de desarrollo, para `ray dev --device` |
+| `--devtools` | permite inspeccionar el webview desde Safari o Chrome |
+| `--without lista` | deja subsistemas fuera del binario, por ejemplo `--without audio,sqlite` |
+
+Y lo que se declara en el `ray.toml`:
+
+| Clave | Efecto |
+|---|---|
+| `[app] name` | el nombre bajo el icono |
+| `[app] id` | el bundle id de iOS y, si no se indica otro, el application id de Android |
+| `[app] icon` | un PNG: el icono de la app en los dos sistemas |
+| `[app.plist]` | claves que van tal cual al `Info.plist` de iOS, por ejemplo el texto de un permiso |
+| `[ios] development_team` | el equipo de desarrollo, para instalar en un iPhone real |
+| `[ios] background_audio` | el audio sigue sonando con la app en segundo plano |
+| `[android] application_id` | un application id distinto del de `[app] id` |
+| `[android] background_audio` | lo mismo en Android, con un servicio en primer plano |
+| `[frontend]` | los comandos y la carpeta del frontend (sección 2) |
+
+## 13. Problemas frecuentes
+
+| Síntoma | Causa y arreglo |
+|---|---|
+| `ray dev` termina con el código 73 | el puerto de Vite está ocupado por otro proceso, normalmente una sesión anterior; el mensaje dice cuál |
+| Xcode pide elegir equipo después de cada `ray bundle --ios` | declara `[ios] development_team` en el `ray.toml`: regenerar el bundle reescribe el proyecto |
+| El teléfono no conecta con `ray dev --device` | el enlace usa la red local: el teléfono y el ordenador deben estar en la misma red |
+| La app de desarrollo muestra «not found» | era un fallo hasta la 1.27.26; actualiza raylang y regenera la app con `ray bundle --ios --dev` o `--android --dev` |
+| En Android la app queda bajo la barra de estado, o el teclado tapa los campos | el shell reserva las barras y el teclado desde la 1.27.27; actualiza raylang y regenera el bundle |
+| iOS hace zoom al tocar un campo de texto | el campo tiene menos de 16px de letra |
+| El contenido queda bajo la isla dinámica | falta `viewport-fit=cover` o los `env(safe-area-inset-*)` (sección 6) |
+| Un cambio en `[app]` no aparece en el teléfono | la identidad y el icono se escriben al generar el proyecto: vuelve a ejecutar `ray bundle` |
 
 ## Siguiente paso
 

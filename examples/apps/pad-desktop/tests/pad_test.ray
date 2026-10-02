@@ -1,0 +1,54 @@
+// Tests. `ray test` runs with the headless window backend, so opening windows, installing menus
+// and asking dialogs all work without a display: a dialog answers its first button unless
+// RAY_UI_ANSWER says otherwise.
+import std/ui;
+import doc;
+import menus;
+import dialogs;
+
+@test
+fn the_title_follows_the_file() {
+    let d = doc.empty();
+    assert_eq(doc.title(d), "Untitled — Pad");
+    d.path = "/tmp/notes/todo.txt";
+    assert_eq(doc.title(d), "todo.txt — Pad");
+    d.path = "C:\\Users\\ada\\todo.txt";
+    assert_eq(doc.name(d), "todo.txt");
+}
+
+@test
+fn find_counts_matches_in_any_case() {
+    let d = doc.empty();
+    d.text = "Ray rays RAY";
+    assert_eq(doc.count_matches(d, "ray"), 3);
+    assert_eq(doc.count_matches(d, ""), 0);
+    assert_eq(doc.count_matches(d, "zig"), 0);
+}
+
+@test
+fn the_menus_install_without_a_display() {
+    assert(menus.install().is_ok());
+    menus.sync(false, false);
+}
+
+@test
+fn a_window_opens_and_takes_the_document_calls() {
+    var o = ui.options(900, 640);
+    o.titlebar_color = "#1f2430";
+    let w = ui.open_with("Pad", "ray://app/assets/index.html", o).unwrap();
+    assert(ui.set_title(w, "x — Pad").is_ok());
+    assert(ui.set_edited(w, true).is_ok());
+    assert(ui.intercept_close(w, true).is_ok());
+    assert(menus.context(w, true).is_ok());
+    // A colour that is not #rrggbb is an error, not a silent default.
+    o.titlebar_color = "navy";
+    assert(ui.open_with("Bad", "ray://app/assets/index.html", o).is_err());
+}
+
+@test
+fn the_save_question_defaults_to_its_first_button() {
+    match (dialogs.ask_save("todo.txt")) {
+        dialogs.Choice.Save => { },
+        _ => panic("headless dialogs answer the first button"),
+    }
+}

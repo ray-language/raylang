@@ -1,0 +1,130 @@
+// The notes as Markdown files: `0001.md`, `0002.md`… in one folder. Each file is readable and
+// editable with any other tool, which is what a command-line program should aim for:
+//
+//     # Shopping list
+//     tags: home, weekend
+//
+//     milk, bread
+import std/fs;
+
+/// A note. `id` is the number in its file name.
+pub struct Note {
+    id: int,
+    title: string,
+    tags: [string],
+    body: string,
+}
+
+/// The folder with the notes: NOTES_DIR, or `~/.notes`.
+pub fn default_dir() -> string {
+    match (env("NOTES_DIR")) {
+        Option.Some(d) => d,
+        Option.None => env("HOME").unwrap_or(".") + "/.notes",
+    }
+}
+
+fn file_of(dir: string, id: int) -> string {
+    let n = to_string(id);
+    dir + "/" + "0".repeat(4 - n.len()) + n + ".md"
+}
+
+/// The text of a note's file.
+pub fn render(n: Note) -> string {
+    let tags = if (n.tags.len() == 0) { "" } else { "tags: " + n.tags.join(", ") + "\n" };
+    "# " + n.title + "\n" + tags + "\n" + n.body.trim() + "\n"
+}
+
+/// Reads a note's file back. `None` if it does not start with a `# Title` line.
+pub fn parse(id: int, text: string) -> Option<Note> {
+    let lines = text.split("\n");
+    if (lines.len() == 0 || !lines[0].starts_with("# ")) {
+        return Option.None;
+    }
+    var tags: [string] = [];
+    var body_from = 1;
+    if (lines.len() > 1 && lines[1].starts_with("tags: ")) {
+        for t in lines[1].substring(6, lines[1].len()).split(",") {
+            if (t.trim() != "") {
+                tags.push(t.trim());
+            }
+        }
+        body_from = 2;
+    }
+    Option.Some(
+        Note {
+            id: id,
+            title: lines[0].substring(2, lines[0].len()).trim(),
+            tags: tags,
+            body: lines.slice(body_from, lines.len()).join("\n").trim()
+        }
+    )
+}
+
+/// Every note in the folder, by id. A missing folder is an empty list, not an error.
+pub fn all(dir: string) -> [Note] {
+    var out: [Note] = [];
+    for name in fs.list_dir(dir).unwrap_or([]) {
+        if (!name.ends_with(".md")) {
+            continue;
+        }
+        let id = match (name.substring(0, name.len() - 3).parse_int()) {
+            Option.Some(n) => n,
+            Option.None => continue,
+        };
+        match (fs.read_file(dir + "/" + name)) {
+            Result.Ok(text) => match (parse(id, text)) {
+                Option.Some(n) => out.push(n),
+                Option.None => { },
+            },
+            Result.Err(_) => { },
+        }
+    }
+    sort_by(out, fn(a: Note, b: Note) -> bool { a.id < b.id })
+}
+
+/// One note by id.
+pub fn get(dir: string, id: int) -> Option<Note> {
+    match (fs.read_file(file_of(dir, id))) {
+        Result.Ok(text) => parse(id, text),
+        Result.Err(_) => Option.None,
+    }
+}
+
+/// Adds a note with the next free id.
+pub fn add(dir: string, title: string, tags: [string], body: string) -> Result<Note, string> {
+    let _ = fs.mkdir(dir)?;
+    var id = 1;
+    for n in all(dir) {
+        if (n.id >= id) {
+            id = n.id + 1;
+        }
+    }
+    let note = Note { id: id, title: title.trim(), tags: tags, body: body };
+    let _ = fs.write_file(file_of(dir, id), render(note))?;
+    Result.Ok(note)
+}
+
+/// Deletes a note. `Ok(false)` if it does not exist.
+pub fn remove(dir: string, id: int) -> Result<bool, string> {
+    if (get(dir, id).is_none()) {
+        return Result.Ok(false);
+    }
+    let _ = fs.remove_file(file_of(dir, id))?;
+    Result.Ok(true)
+}
+
+/// The notes with tag `tag` (empty: any) whose title or body contains `text` (any case).
+pub fn filter(notes: [Note], tag: string, text: string) -> [Note] {
+    let needle = text.to_lower();
+    var out: [Note] = [];
+    for n in notes {
+        if (tag != "" && !n.tags.contains(tag)) {
+            continue;
+        }
+        if (needle != "" && !(n.title + "\n" + n.body).to_lower().contains(needle)) {
+            continue;
+        }
+        out.push(n);
+    }
+    out
+}

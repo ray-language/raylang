@@ -1,8 +1,8 @@
 # Guía de construcción del binario
 
 Todas las formas de construir `ray`/`raylang`, de la release normal al binario slim
-para contenedores, y cómo combinar cada una con PGO (`tools/pgo.sh`). Contexto de
-las decisiones: IDEAS §45 (PGO), §47 (features slim, arco M89).
+para contenedores, y cómo combinar cada una con PGO (`tools/pgo.sh`). El contexto de
+las decisiones está en [IDEAS.md](../IDEAS.md): PGO y features slim.
 
 > Recuerda: `source "$HOME/.cargo/env"` antes de cualquier `cargo` (PATH).
 
@@ -18,7 +18,7 @@ El perfil release ya lleva `strip = "symbols"` (Cargo.toml): los símbolos se qu
 siempre, no hace falta `strip` manual. El symlink `~/.local/bin/ray` apunta a
 `target/release/ray` → **lo que dejes ahí es lo que corre el día a día**.
 
-## 2. Features de compilación (arco M89)
+## 2. Features de compilación
 
 Cinco features, todas activas por defecto (el binario normal es idéntico a siempre).
 Cada una se puede excluir para adelgazar el binario o reducir superficie de ataque;
@@ -87,7 +87,7 @@ CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 sh tools/pgo
 
 # panic=abort: quita el código de unwinding (~100-300 KB).
 # Seguro hoy: el único catch_unwind vive en un test (diagnostic.rs) y el hook del
-# ICE banner (M33b) corre antes del abort. Revalidar si algún día un worker
+# ICE banner corre antes del abort. Revalidar si algún día un worker
 # captura panics.
 CARGO_PROFILE_RELEASE_PANIC=abort cargo build --release --no-default-features --features interp
 ```
@@ -96,7 +96,7 @@ CARGO_PROFILE_RELEASE_PANIC=abort cargo build --release --no-default-features --
 y el lazo de despacho paga la des-optimización; el ahorro de tamaño es menor que el
 de las features slim.
 
-## 5. wasm (playground, M44a)
+## 5. wasm (playground)
 
 `cargo build --release --target wasm32-unknown-unknown` — el `cdylib` exporta
 `alloc`/`run`/`dealloc`. ring/rustls/rusqlite quedan fuera solos (dependencias
@@ -142,11 +142,11 @@ de strings pequeños (macOS). Medido (bench políglota, `docs/bench-poliglota-op
 wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el build nativo por
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
 máquina); `--without mimalloc,ahash,fibers` recupera el `rustc` pelado (sin Cargo/red).
-`--without bigint` (M195) deja `std/bigint` devolviendo `Err` en vez de enlazar `num-bigint`.
-`--without keychain` (M266) deja `std/keychain` devolviendo `Err` (sin Security/libsecret/advapi32).
-`--no-stubs` (M273) convierte el aviso "N function(s) not supported in the native subset — emitted as
+`--without bigint` deja `std/bigint` devolviendo `Err` en vez de enlazar `num-bigint`.
+`--without keychain` deja `std/keychain` devolviendo `Err` (sin Security/libsecret/advapi32).
+`--no-stubs` convierte el aviso "N function(s) not supported in the native subset — emitted as
 stubs" en un error de build (65): sin minas en runtime.
-`--without deflate` (M253) deja `std/deflate`/`std/inflate` con su algoritmo en raylang (mismo
+`--without deflate` deja `std/deflate`/`std/inflate` con su algoritmo en raylang (mismo
 resultado descomprimido, otro stream comprimido, mucho más lento) en vez de enlazar `miniz_oxide`.
 
 **Regex acelerado (R5, jul 2026).** Si el programa usa `std/regex`, el nativo enlaza el crate `regex` de Rust vía `ray-runtime` (feature detectada por uso): mismo comportamiento que la Pike VM de la librería (dialecto traducido, validación raylang) a velocidad de Rust — medido 570→71 ms en el bench regex, por delante de Go. `--without regex` recupera la Pike VM transpilada (raylang puro).
@@ -162,7 +162,7 @@ M:N de fibras (`ray_runtime::fibers`: corrutinas corosensei + reactor kqueue/epo
 hilo de SO por tarea/conexión — medido en el banco web: techo +16 %, y 14 hilos / 8 MB donde el
 modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.md §7-§8).
 `--without fibers` recupera el hilo-por-tarea (y es necesario para la vía `rustc` pelada). En
-Windows x86_64 el reactor es `WSAPoll` (M182); en Windows ARM64 se apaga solo (corosensei no tiene
+Windows x86_64 el reactor es `WSAPoll`; en Windows ARM64 se apaga solo (corosensei no tiene
 backend para esa arquitectura).
 
 **Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui` — para los subsistemas de uso
@@ -171,18 +171,18 @@ sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para
 builds herméticos/cross-compile/policy.
 
-**Empaquetado (M147c).** `ray bundle` compone este build (`--native --release` + embed) y lo
+**Empaquetado.** `ray bundle` compone este build (`--native --release` + embed) y lo
 deja en el formato del SO: `.app` en macOS, directorio + `.desktop` en Linux, directorio + `.exe`
-(icono, VERSIONINFO, sin consola) + `.lnk` en Windows (M180). Ver REFERENCE §14.
+(icono, VERSIONINFO, sin consola) + `.lnk` en Windows. Ver REFERENCE §14.
 
-**Assets embebidos (M147).** `[native] embed = ["assets"]` en el `ray.toml` (o `--embed dirs`
+**Assets embebidos.** `[native] embed = ["assets"]` en el `ray.toml` (o `--embed dirs`
 ad-hoc) hornea los directorios dados DENTRO del binario (`include_bytes!`): `std/embed` los lee
 por clave ("assets/app.css") con el mismo espacio de nombres que en `ray run` (donde se leen en
 vivo del disco). Un dir configurado que no existe aborta el build (exit 64, nombrando el
 origen). No es un subsistema de ray-runtime: un programa solo-embed conserva la vía `rustc`
 pelada.
 
-### 6.c Toolchain autocontenida (M171): un equipo sin Rust
+### 6.c Toolchain autocontenida: un equipo sin Rust
 
 `ray build --native` necesita `cargo` (vía Cargo, la común) o `rustc` (vía pelada). En un equipo
 recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario instale Rust a mano:
@@ -208,7 +208,7 @@ recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario in
   con TLS (ring+rustls desde el vendor) también offline. Una versión de desarrollo sin release no
   tiene vendor: `install` lo dice y el build tira de crates.io como antes.
 - **`ray toolchain status`**: qué usaría el build y de dónde, versiones, el **triple efectivo**
-  (M184: el que reporta `rustc -vV`, no la arquitectura del proceso `ray`), el linker del sistema
+  (el que reporta `rustc -vV`, no la arquitectura del proceso `ray`), el linker del sistema
   (`xcode-select -p` / `cc` / `link.exe`), el compilador de C y el vendor; exit 1 si falta `cargo`
   o `rustc`.
 
@@ -218,14 +218,14 @@ final y `status` lo lista. En Windows la toolchain privada es `-msvc` (la `-gnu`
 rustup no trae `gcc`, y ring/mimalloc/rusqlite compilan C): las Build Tools siguen haciendo falta.
 En Windows **ARM64** hace falta además **LLVM** (`winget install LLVM.LLVM`): `ring` compila su
 ensamblador con clang. No hace falta ponerlo en el PATH — si está instalado donde lo dejan los
-instaladores, `ray build --native` añade su `bin` al PATH del cargo hijo (M184).
+instaladores, `ray build --native` añade su `bin` al PATH del cargo hijo.
 
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
 > (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del
 > binario transpilado, no en la VM (que compila rustls/rusqlite directo tras sus features).
 
-### 6.b Android (M156): el programa como `.so` (modo lib)
+### 6.b Android: el programa como `.so` (modo lib)
 
 `ray build --native --lib --target aarch64-linux-android prog.ray -o libray_app.so` compila el
 programa como **cdylib** cargable con `System.loadLibrary` (los símbolos JNI `JNI_OnLoad` /

@@ -114,7 +114,7 @@ Las líneas citadas son las actuales (17 jul 2026), para localizar cada bloque a
 | `core.rs` | El grueso del `impl Checker`: expr/stmt/llamadas/ámbitos/divergencia (593–3700) — si al moverlo se ve una costura natural (p. ej. `check_call` y la resolución por punto), partir en `core.rs` + `calls.rs` | ~1 500 ×2 |
 | `support.rs` (né `aux.rs`) | "Auxiliares libres" (3700–3941): `subst`/`unify`/helpers puros | ~250 |
 | `enums.rs` | Resolución de construcción de enums, M5 (3942–4080) | ~150 |
-| `traits.rs` | Auxiliares de traits M9 + `@derive` M10.1 (4081–5163) | ~1 000 |
+| `traits.rs` | Auxiliares de traits + `@derive` (4081–5163) | ~1 000 |
 | `lowering.rs` | Las 6 bajadas post-check: UFCS/dicts/dyn/uint/`?`-conv/operadores (5164–6053). Son secciones de ~150 líneas: UN archivo con las cabeceras actuales como separadores | ~900 |
 | `tests.rs` | `mod tests` (6141–7849, actualizado 20 jul) | ~1 700 |
 
@@ -126,9 +126,9 @@ Rust y no cambia ningún mensaje.
 | Archivo nuevo | Contenido (líneas actuales) | Tamaño estimado |
 |---|---|---:|
 | `mod.rs` | API (`run_program`/`run`/`set_deterministic`, `num_workers`), struct `Vm` y el **bucle de despacho** (el `match` de opcodes, 285–~3000) | ~1 500 |
-| `sched.rs` | El scheduler: `Fiber`/`ScopeFrame`/`Waiting`/`Parked`/`IoParked`/`Shared` (161–284) + los métodos de scheduling del `impl Vm` (`poll_next`, `wake_*`, `cancel_task`, `fail_current_fiber`, aparcamiento de E/S, M38 workers) | ~1 200 |
+| `sched.rs` | El scheduler: `Fiber`/`ScopeFrame`/`Waiting`/`Parked`/`IoParked`/`Shared` (161–284) + los métodos de scheduling del `impl Vm` (`poll_next`, `wake_*`, `cancel_task`, `fail_current_fiber`, aparcamiento de E/S, workers) | ~1 200 |
 | `values.rs` | Conversión y formato de valores: `const_to_heap`/`values_equal`/`format_value`/`to_value`/`heap_to_key` (3490–3650, 3741–3812) | ~250 |
-| `transfer.rs` | M38.1a transferencia de subgrafo entre heaps (3650–3740) | ~100 |
+| `transfer.rs` | Transferencia de subgrafo entre heaps (3650–3740) | ~100 |
 | `tests.rs` | `mod tests` (4120–7221, actualizado 20 jul) — si estorba, segunda pasada: `tests/oracle.rs` (los `oracle_*`) vs `tests/unit.rs` | ~3 100 |
 
 El corte exacto despacho-vs-scheduler dentro del `impl Vm` se decide al ejecutar (regla: si el

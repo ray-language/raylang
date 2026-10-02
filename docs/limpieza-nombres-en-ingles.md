@@ -18,8 +18,8 @@ variables, parámetros, tipos y campos— van en **inglés**; los **comentarios*
 **documentación** `///` (visible en el LSP/raydoc) en **inglés**. El código antiguo mezcla los dos idiomas
 en los nombres (`cargar`, `analizar`, `nombre_fachada`, `receptor`, `otro`, …); esta limpieza lo unifica a inglés.
 
-**Cuándo**: DIFERIDA — se hace **después de cerrar los puntos pendientes** en curso (M49.2 `std/time`+
-`std/random`, M49.3 `std/crypto`, y lo que el usuario tenga en cola). Código **nuevo** ya se escribe en
+**Cuándo**: DIFERIDA — se hace **después de cerrar los puntos pendientes** en curso (`std/time`+
+`std/random`, `std/crypto`, y lo que el usuario tenga en cola). Código **nuevo** ya se escribe en
 inglés desde ahora.
 
 ## Alcance (dos superficies, tres tiers por riesgo)
@@ -43,7 +43,7 @@ Los **métodos de los traits del prelude** están en español y son parte de la 
 Renombrarlos toca **cada `impl`** (incl. los primitivos del prelude, los generados por `@derive(Eq,Show)`,
 y los de usuario) y **cada sitio de llamada** (`x.igual(y)`, `x.mostrar()`, `a.menor(b)`) del corpus + de
 cualquier código de usuario. **Cambio de lenguaje incompatible** → requiere: (1) actualizar DESIGN.md,
-(2) el codegen de `@derive` (genera `fn igual`/`fn mostrar`), (3) el **reescritor AST** (como en M48.4e) para
+(2) el codegen de `@derive` (genera `fn igual`/`fn mostrar`), (3) el **reescritor AST** (como en el retiro de los builtins de contenedor) para
 migrar los sitios del corpus + las fixtures de test, (4) el compilador auto-alojado (`selfhost/*.ray`
 también implementa/llama estos métodos), (5) DESIGN/MANUAL/libro/playground. Es el tier de mayor riesgo y
 debe ir en su propia fase, verificado con el oráculo.

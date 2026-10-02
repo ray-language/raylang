@@ -23,19 +23,25 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    teléfono.
 3. [App multiplataforma](cross-platform.md): la misma app en macOS, Linux y Windows, con SQLite,
    menús y diálogos nativos, y una interfaz que se adapta a cada pantalla.
-4. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
+4. [Ventanas a fondo](windows.md): todo lo que `std/ui` da a una app de escritorio, sobre un
+   editor de texto: el puente con la página, menús, diálogos, tipos de ventana y cambios sin
+   guardar.
+5. [Sitio con plantillas](ssr.md): las notas como sitio renderizado en el servidor, con plantillas
    compiladas, formularios, Markdown y los datos en archivos.
-5. [API web](api.md): las notas como API JSON con el framework `web`, Postgres con un pool de
+6. [API web](api.md): las notas como API JSON con el framework `web`, Postgres con un pool de
    conexiones, autenticación por token y apagado ordenado.
-6. [Sitio con frontend React](web-react.md): un frontend React embebido en el binario, una API JSON
+7. [Sitio con frontend React](web-react.md): un frontend React embebido en el binario, una API JSON
    y las notas en Redis.
-7. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
+8. [Herramienta de terminal](cli.md): una herramienta de línea de comandos con opciones, entrada
+   por tubería, salida para personas y para programas, y códigos de salida.
+9. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
    escrito en raylang que habla con Claude y usa herramientas por MCP.
-8. [Distribuir](shipping.md): empaquetar y firmar para cada sistema, publicar en las tiendas
+10. [Rendimiento](performance.md): medir, perfilar con `ray profile`, arreglar el algoritmo,
+    compilar a nativo y repartir el trabajo entre núcleos, con cifras medidas.
+11. [Distribuir](shipping.md): empaquetar y firmar para cada sistema, publicar en las tiendas
    móviles y actualizaciones automáticas firmadas en escritorio.
-9. [Más ejemplos](examples.md): las apps de la organización ray-language, por caso de uso, para lo
+12. [Más ejemplos](examples.md): las apps de la organización ray-language, por caso de uso, para lo
    que no cubren los capítulos.
 
-El detalle de cada API de ventanas está en el manual:
-[ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
-[empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+Para cualquier función, la [referencia](../REFERENCE.md) tiene su firma, y el
+[manual](../MANUAL.md) explica el lenguaje en detalle.

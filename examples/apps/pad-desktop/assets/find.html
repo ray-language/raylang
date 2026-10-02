@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Find</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 14px; background: #2a3040; color: #e6e9ef; font: 14px system-ui, sans-serif; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+  p { margin: 10px 0 0; color: #9aa4b8; }
+</style>
+</head>
+<body>
+<input id="q" placeholder="Find in the document" autofocus>
+<p id="count"></p>
+<script>
+  const q = document.getElementById('q');
+  q.addEventListener('input', async () => {
+    const answer = await window.ray.request({ op: 'find', query: q.value });
+    document.getElementById('count').textContent = answer.count + ' matches';
+  });
+</script>
+</body>
+</html>

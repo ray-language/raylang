@@ -1,0 +1,31 @@
+// The input: an access log, generated in the program so every run and every machine measures
+// exactly the same work. A linear congruential generator gives the same lines for the same n.
+
+/// `n` log lines such as `GET /api/users/17 200 42`: method, path, status, milliseconds.
+pub fn log(n: int) -> [string] {
+    let paths = [
+        "/",
+        "/login",
+        "/api/users",
+        "/api/orders",
+        "/api/products",
+        "/search",
+        "/static/app.js",
+        "/health"
+    ];
+    var lines: [string] = [];
+    var seed = 12345;
+    var i = 0;
+    while (i < n) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let path = paths[seed % paths.len()];
+        // Some paths carry an id: more distinct keys, as in a real log.
+        let id = (seed / 8) % 2000;
+        let full = if (path.starts_with("/api/")) { path + "/" + to_string(id) } else { path };
+        let status = if (seed % 50 == 0) { 500 } else { 200 };
+        let ms = 1 + (seed / 64) % 300;
+        lines.push("GET " + full + " " + to_string(status) + " " + to_string(ms));
+        i = i + 1;
+    }
+    lines
+}

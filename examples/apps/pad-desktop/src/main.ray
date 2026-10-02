@@ -1,0 +1,217 @@
+// Pad: a tiny desktop text editor. It exists to show what a native window gives a raylang app
+// beyond a page: menus with shortcuts, system dialogs, a floating panel, the unsaved-changes
+// flow, the clipboard and the file manager. The handbook chapter "Windows in depth" walks
+// through it.
+import std/ui;
+import std/fs;
+import std/json;
+import doc;
+import menus;
+import dialogs;
+from doc import Doc;
+from dialogs import Choice;
+from std/json import Json;
+
+const PAGE: string = "ray://app/assets/index.html";
+
+const FIND: string = "ray://app/assets/find.html";
+
+const DARK: string = "#1f2430";
+
+// Sends the document to the page and refreshes everything the window shows about it.
+fn show(w: int, d: Doc, on_top: bool) {
+    let _ = ui.eval_js(w, "setText(" + json.stringify(Json.JStr(d.text)) + ")");
+    refresh(w, d, on_top);
+}
+
+// The title, the "edited" dot of the close button (macOS) and the menu items that depend on it.
+fn refresh(w: int, d: Doc, on_top: bool) {
+    let _ = ui.set_title(w, doc.title(d));
+    let _ = ui.set_edited(w, d.dirty);
+    menus.sync(d.path != "", on_top);
+}
+
+// Writes the document, asking for a file the first time. False: the user cancelled or it failed.
+fn save(d: Doc, ask: bool) -> bool {
+    if (d.path == "" || ask) {
+        let suggested = if (d.path == "") { "untitled.txt" } else { doc.name(d) };
+        match (dialogs.pick_target(suggested)) {
+            Option.Some(path) => {
+                d.path = path;
+            },
+            Option.None => return false,
+        }
+    }
+    match (fs.write_file(d.path, d.text)) {
+        Result.Ok(_) => {
+            d.dirty = false;
+            true
+        },
+        Result.Err(e) => {
+            let _ = ui.alert("Could not save", e);
+            false
+        },
+    }
+}
+
+// Before losing the document (new, open, close, quit): true if it is safe to go on.
+fn may_discard(d: Doc) -> bool {
+    if (!d.dirty) {
+        return true;
+    }
+    match (dialogs.ask_save(doc.name(d))) {
+        Choice.Save => save(d, false),
+        Choice.Discard => true,
+        Choice.Cancel => false,
+    }
+}
+
+// The Find panel: a floating utility window that belongs to the document window.
+fn open_find(parent: int) -> int {
+    var o = ui.options(320, 96);
+    o.kind = "panel";
+    o.parent = parent;
+    o.resizable = false;
+    o.minimizable = false;
+    o.background = "#2a3040";
+    ui.open_with("Find", FIND, o).unwrap_or(0)
+}
+
+fn main() -> int {
+    // The embedded assets become ray://app/assets/…: no HTTP server, no port.
+    match (ui.mount_embed("", "assets")) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("pad: " + e);
+            return 1;
+        },
+    }
+    match (menus.install()) {
+        Result.Ok(_) => { },
+        Result.Err(e) => eprint("pad: menus: " + e),
+    }
+    // A minimum size, remembered geometry, and the title bar in the page's colour.
+    var o = ui.options(900, 640);
+    o.min_width = 420;
+    o.min_height = 300;
+    o.autosave = "pad-main";
+    o.titlebar_color = DARK;
+    o.background = DARK;
+    let w = match (ui.open_with("Untitled — Pad", PAGE, o)) {
+        Result.Ok(w) => w,
+        Result.Err(e) => {
+            eprint("pad: " + e);
+            return 1;
+        },
+    };
+    // Closing and quitting ask first: the attempt arrives as an event and the window stays.
+    let _ = ui.intercept_close(w, true);
+    let _ = ui.intercept_quit(true);
+
+    let d = doc.empty();
+    var find = 0;
+    var on_top = false;
+    var fullscreen = false;
+    refresh(w, d, on_top);
+
+    while (true) {
+        let e = match (ui.next_event()) {
+            Result.Ok(e) => e,
+            Result.Err(err) => {
+                eprint("pad: " + err);
+                return 1;
+            },
+        };
+        if (e.kind == "closed") {
+            if (e.window == find) {
+                find = 0;
+            }
+            if (e.window == w) {
+                return 0;
+            }
+        }
+        if (e.kind == "close_requested" && may_discard(d)) {
+            let _ = close(e.window);
+        }
+        if (e.kind == "quit_requested" && may_discard(d)) {
+            return 0;
+        }
+        if (e.kind == "message") {
+            match (ui.as_request(e)) {
+                Option.Some(request) => {
+                    let (id, body) = request;
+                    let req = json.parse(body).unwrap_or(Json.JNull);
+                    let op = json.get_string(req, "op").unwrap_or("");
+                    if (op == "changed") {
+                        d.text = json.get_string(req, "text").unwrap_or("");
+                        d.dirty = true;
+                        refresh(w, d, on_top);
+                        let _ = ui.reply_json(e.window, id, `{"ok": true}`);
+                    }
+                    if (op == "find") {
+                        let n = doc.count_matches(d, json.get_string(req, "query").unwrap_or(""));
+                        let _ = ui.reply_json(e.window, id, `{"count": ${n}}`);
+                    }
+                },
+                // A plain window.ray.send("context"): show the context menu at the pointer.
+                Option.None => {
+                    if (e.tag == "context") {
+                        let _ = menus.context(e.window, d.path != "");
+                    }
+                },
+            }
+        }
+        if (e.kind == "menu") {
+            if (e.tag == "new" && may_discard(d)) {
+                d.path = "";
+                d.text = "";
+                d.dirty = false;
+                show(w, d, on_top);
+            }
+            if (e.tag == "open" && may_discard(d)) {
+                match (dialogs.pick_document()) {
+                    Option.Some(path) => match (fs.read_file(path)) {
+                        Result.Ok(text) => {
+                            d.path = path;
+                            d.text = text;
+                            d.dirty = false;
+                            show(w, d, on_top);
+                        },
+                        Result.Err(err) => {
+                            let _ = ui.alert("Could not open", err);
+                        },
+                    },
+                    Option.None => { },
+                }
+            }
+            if (e.tag == "save" || e.tag == "save_as") {
+                let _ = save(d, e.tag == "save_as");
+                refresh(w, d, on_top);
+            }
+            if (e.tag == "find") {
+                // One panel: if it is already open, bring it to the front.
+                if (find == 0) {
+                    find = open_find(w);
+                } else {
+                    let _ = ui.focus(find);
+                }
+            }
+            if (e.tag == "fullscreen") {
+                fullscreen = !fullscreen;
+                let _ = ui.set_fullscreen(w, fullscreen);
+            }
+            if (e.tag == "on_top") {
+                on_top = !on_top;
+                let _ = ui.set_always_on_top(w, on_top);
+                menus.sync(d.path != "", on_top);
+            }
+            if (e.tag == "copy_path") {
+                let _ = ui.clipboard_write(d.path);
+            }
+            if (e.tag == "reveal") {
+                let _ = ui.reveal(d.path);
+            }
+        }
+    }
+    0
+}

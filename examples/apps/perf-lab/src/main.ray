@@ -1,0 +1,33 @@
+// perf-lab: the same report computed two ways, to measure.
+//
+//   ray run -- slow 200000        the first version, on the VM
+//   ray run -- fast 200000        the optimized version
+//   ray run -- parallel 200000    the optimized version on four fibers
+//   ray profile -- slow 200000    where the time goes, function by function
+import std/time;
+import data;
+import slow;
+import fast;
+import parallel;
+
+fn main() -> int {
+    let argv = args();
+    let which = if (argv.len() > 0) { argv[0] } else { "fast" };
+    let n = if (argv.len() > 1) { argv[1].parse_int().unwrap_or(200000) } else { 200000 };
+    let lines = data.log(n);
+    // Time only the work being compared, not the generation of the input.
+    let start = time.monotonic_millis();
+    let report = if (which == "slow") {
+        slow.report(lines)
+    } else if (which == "parallel") {
+        parallel.report(lines, 4)
+    } else {
+        fast.report(lines)
+    };
+    let elapsed = time.monotonic_millis() - start;
+    // The first lines of the report, and its size as a quick check that both versions agree.
+    let rows = report.split("\n");
+    print(rows.slice(0, 3).join("\n"));
+    print("${which}: ${n} lines, ${rows.len() - 1} paths, ${report.len()} chars, ${elapsed} ms");
+    0
+}

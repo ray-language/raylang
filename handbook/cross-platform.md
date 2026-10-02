@@ -23,7 +23,18 @@ siéndolo.
 | Interfaz | una columna | una columna en el teléfono; lista y editor lado a lado en pantallas anchas |
 
 El modelo de la app es el mismo: el programa raylang y el webview viven en un proceso, y la página
-habla con el programa por `window.ray.request`.
+habla con el programa por `window.ray.request`. Lo nuevo se añade alrededor del mismo bucle de
+eventos, y casi todo es del lado del programa:
+
+| Lo decide el programa | Lo decide la página |
+|---|---|
+| dónde y cómo se guardan los datos | el diseño y la navegación |
+| los menús, sus atajos y los diálogos del sistema | qué hace cada comando de menú |
+| en qué plataforma corre | qué mostrar en cada una |
+| leer y escribir archivos | el estado de lo que se está editando |
+
+Esa frontera es la que permite una sola interfaz: la página no sabe si hay menús ni dónde está la
+base de datos, y el programa no sabe cómo se dibuja una nota.
 
 ## 1. SQLite con el paquete `db`
 
@@ -191,13 +202,60 @@ fn tell_page(window: int, command: string) {
 }
 ```
 
-En la página, un `useEffect` hace `window.addEventListener('ray-menu', …)` y abre una nota nueva,
-pone el foco en la búsqueda o exporta, según el comando.
+En la página, el comando acaba en las mismas funciones que llaman los botones:
+
+```ts
+  // Commands from the native menu (desktop): the program dispatches a `ray-menu` event.
+  useEffect(() => {
+    const onMenu = (e: Event) => {
+      const command = (e as CustomEvent<string>).detail
+      if (command === 'new') open(empty)
+      if (command === 'find') search.current?.focus()
+      if (command === 'export') void doExport()
+    }
+    window.addEventListener('ray-menu', onMenu)
+    return () => window.removeEventListener('ray-menu', onMenu)
+  }, [doExport])
+```
+
+Así los menús no añaden un segundo camino en la interfaz: «Nueva nota» hace lo mismo desde el menú,
+desde el atajo y desde el botón, y en el teléfono, donde no hay menús, no falta nada.
+
+`eval_js` ejecuta el texto que recibe. Aquí el comando es una de las etiquetas que el propio
+programa declaró, así que es seguro concatenarlo. Un texto que venga del usuario nunca se
+concatena en JavaScript: se pasa como JSON, o se devuelve como respuesta de una petición.
 
 ## 4. Diálogos nativos
 
 Dos operaciones necesitan una ventana del sistema, así que el programa las atiende antes de pasar
-la petición a `api.handle`.
+la petición a `api.handle`. Una función mira qué pide la página y decide quién responde:
+
+<!-- check: project=examples/apps/notes-everywhere -->
+```rust
+// One request from the page. Most go to `api.handle`; the ones that need a window live here.
+fn answer(conn: Conn, body: string) -> string {
+    let op = match (json.parse(body)) {
+        Result.Ok(j) => json.get_string(j, "op").unwrap_or(""),
+        Result.Err(_) => "",
+    };
+    if (op == "hello") {
+        return json.render(json.obj()
+            .field("ok", true)
+            .field("platform", platform())
+            .field("desktop", places.is_desktop()));
+    }
+    if (op == "export") {
+        return export(conn);
+    }
+    if (op == "delete" && !confirmed_delete(body)) {
+        return json.render(json.obj().field("ok", false).field("error", ""));
+    }
+    api.handle(conn, body, time.now())
+}
+```
+
+`api.handle` sigue sin conocer ninguna ventana, así que sus tests no cambian. Lo que depende de
+la plataforma queda en `main.ray`, en una función corta que se lee de arriba abajo.
 
 **Confirmar antes de borrar.** En el escritorio, un diálogo nativo con botones propios:
 
@@ -274,8 +332,23 @@ mostrar: el botón «Export…» solo existe en el escritorio. El diseño lo dec
 - en el **teléfono**, un panel cada vez: la lista, o el editor mientras editas;
 - en **pantallas anchas** (escritorio o tablet), la lista a la izquierda y el editor a la derecha.
 
-Basta una media query sobre el ancho; la lógica de React es la misma en todos los casos. El código
-está en `frontend/src/App.tsx` y `frontend/src/index.css`.
+Basta una media query sobre el ancho; la lógica de React es la misma en todos los casos:
+
+```css
+@media (min-width: 720px) {
+  .list-pane {
+    flex: 0 0 300px;
+    overflow-y: auto;
+  }
+  .phone.editing .list-pane {
+    display: flex;
+  }
+}
+```
+
+La regla mira el ancho y no la plataforma: una tablet, o una ventana de escritorio estrecha,
+reciben el diseño que les cabe. El código está en `frontend/src/App.tsx` y
+`frontend/src/index.css`.
 
 ## 7. Tests
 
@@ -308,8 +381,19 @@ ray bundle --android       # el proyecto Gradle
 ```
 
 `ray bundle` empaqueta para el sistema en el que se ejecuta: el `.exe` se construye en Windows y el
-`.desktop` en Linux. Lo habitual es una matriz de CI con un job por sistema. Con SQLite dentro, el
-`.app` de macOS de Notes ocupa unos 3 MB.
+`.desktop` en Linux. Lo habitual es una matriz de CI con un job por sistema.
+
+| Sistema | Qué produce | En la máquina del usuario hace falta |
+|---|---|---|
+| macOS | `Notes.app` | nada |
+| Linux | una carpeta con el binario y `Notes.desktop` | GTK 3 y WebKitGTK |
+| Windows | una carpeta con `Notes.exe`, sin consola, con icono, y el acceso directo `Notes.lnk` | el WebView2 Runtime, que Windows 11 ya trae |
+| iOS | el proyecto Xcode `Notes-ios/` | |
+| Android | el proyecto Gradle `Notes-android/` | |
+
+El programa, SQLite y el frontend van dentro del ejecutable: no hay un runtime que instalar aparte.
+El `.app` de macOS de Notes ocupa unos 3 MB. Una app empaquetada arranca con el directorio actual
+en `/`, y por eso los datos van a la carpeta de la sección 2 y los recursos van embebidos.
 
 Para distribuir la app fuera de tu máquina, macOS pide firmarla y notarizarla, y Windows muestra un
 aviso de SmartScreen si no está firmada. Lo explica el capítulo [Distribuir](shipping.md), junto
@@ -317,5 +401,5 @@ con las actualizaciones automáticas.
 
 ## Siguiente paso
 
-Las notas salen del dispositivo: un [**sitio con plantillas**](ssr.md) renderizado en el servidor,
-y después una [**API web**](api.md) con Postgres.
+[**Ventanas a fondo**](windows.md): todo lo demás que `std/ui` ofrece a una app de escritorio,
+con un editor de texto de ejemplo.

@@ -2,7 +2,7 @@
 
 [Español](mcp.md) · English
 
-"The LSP for agents" (IDEAS §51, piece B): an [MCP](https://modelcontextprotocol.io) server
+"The LSP for agents": an [MCP](https://modelcontextprotocol.io) server
 embedded in the `ray` binary that gives an LLM the **write → verify → fix** loop. Hallucination
 turns into iteration: the model writes raylang, `ray_check` hands back the exact diagnostics
 (positioned, up to 20), and `ray_run` verifies the behavior.
@@ -46,13 +46,13 @@ module-by-module catalog of signatures (the English `REFERENCE.en.md`). In addit
 `initialize` **instructions** (the server's "system prompt", which clients incorporate) direct the
 model to read them BEFORE assuming a feature is missing: the stdlib is embedded in the toolchain and
 a file search will not find it — the antidote to the "I proposed what already existed" pattern
-(seen three times in a row from a real project: inflate/M64, stdin_pipe/M100 v3, FFI/M41).
+(seen three times in a row from a real project: `std/inflate`, `stdin_pipe` and the FFI).
 
 ## Sandboxing
 
 `ray_run`/`ray_test` execute arbitrary code from the model → they run **in a subprocess** of the
 binary itself (process isolation; the guest's stdout never touches the MCP channel) with the
-embedding limits of M42:
+embedding limits:
 
 - **fuel**: 100 M VM instructions (an infinite loop dies by fuel, with a clear error;
   `RAYLANG_MCP_FUEL` adjusts it — the tests use it so the fuel cut always wins over the wall-clock
@@ -93,4 +93,4 @@ failure is silent: it compiles, the tests pass and the change is not there (ray-
 Rule: format at the end of the task, never between patches, and verify with `grep` that every patch
 landed.
 
-<!-- sync: sha256:3e1821f60e64 -->
+<!-- sync: sha256:cd683c173668 -->

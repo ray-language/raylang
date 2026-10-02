@@ -1,4 +1,4 @@
-# Diseño: hot reload del programa en el teléfono (arco M330)
+# Diseño: hot reload del programa en el teléfono
 
 Origen: `RAYLANG-FINDINGS.md` de ray-apps, #50 y #106 (ray808). El nivel 1 ya existía (la
 página se recarga; con `[frontend]`, Vite sirve el frontend al webview del teléfono). Lo que no se
@@ -75,12 +75,12 @@ cooperativo no converge en unos segundos, la librería hace `exit(0)` y el usuar
 
 Reusa la fontanería que ya tenía el scheduler de la VM:
 
-- **Bandera atómica + self-pipe** (`src/vm/stop.rs`), el patrón del canal de señales (M88.1). El
+- **Bandera atómica + self-pipe** (`src/vm/stop.rs`), el patrón del canal de señales. El
   extremo de lectura del pipe entra **siempre** al conjunto del poller de `io_wait`, así que una
   fibra aparcada en red, en `sleep` o en un `select_timeout` despierta en cuanto alguien pide la
   parada. Sin fd (Windows, wasm) el poller ya sondea a cuantos cortos y consulta la bandera.
 - **Puntos de comprobación.** `poll_next` (cada conmutación de fibra) fija `outcome = Err(STOP)`,
-  la señal de apagado global de M38.3b que detiene a todos los workers. Para un bucle que nunca
+  la señal de apagado global que detiene a todos los workers. Para un bucle que nunca
   conmuta, la comprobación va en los **saltos hacia atrás** (`Jump` atrás e `IncJump`, el cierre
   fusionado de los bucles contados): una cuenta atrás por worker lee la bandera cada 4096
   vueltas. El despacho por instrucción queda intacto — instrumentarlo (una máscara sobre el
@@ -89,7 +89,7 @@ Reusa la fontanería que ya tenía el scheduler de la VM:
 - **Error distinguido.** `run_program` devuelve `Err` con `RuntimeError::is_stop() == true`:
   quien embebe la VM lo separa de un crash. Una parada pedida sin programa en marcha se descarta
   al arrancar el siguiente (`stop::clear` en `run_program`): no se guarda para él.
-- **Reset del runtime** (`builtins::runtime_reset`): `close_all_handles` (M129, el aislamiento de
+- **Reset del runtime** (`builtins::runtime_reset`): `close_all_handles` (el aislamiento de
   `ray test`: sockets, listeners, TLS, SQLite, pipes, watches, archivos y las salidas de audio, cuyo
   alimentador ve el EOF y se retira), `ui::reset_for_restart` (cierra ventanas de escritorio;
   olvida las filas del shell móvil y de mesa SIN avisar al shell — su webview sigue en pantalla y
@@ -148,7 +148,7 @@ pedida sin programa en marcha.
   ocupado avisa y toma otro. Sin esto, cada sesión pedía emparejar de nuevo.
 - **Android (D3b)**: el cdylib de desarrollo define él mismo los símbolos JNI que el shell
   resuelve por nombre (`JNI_OnLoad`, `Java_org_raylang_shell_RayBridge_*`), delegando en
-  `ray_runtime::ui::android_*` exactamente como el transpilador (M156); por eso el proyecto
+  `ray_runtime::ui::android_*` exactamente como el transpilador; por eso el proyecto
   Cargo generado declara `ray-runtime` también como dependencia directa. El shell pone
   `HOME` en el directorio de datos de la app, así `default_dir()` cae en `$HOME/.ray-dev`.
 - **La librería prebuilt (D3b)**: `build_dev_lib` prueba `RAY_DEV_LIB`, luego el árbol de

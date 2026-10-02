@@ -23,21 +23,26 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    phone.
 3. [Cross-platform app](cross-platform.en.md): the same app on macOS, Linux and Windows, with
    SQLite, native menus and dialogs, and an interface that adapts to every screen.
-4. [Server-rendered site](ssr.en.md): the notes as a server-rendered website, with compiled
+4. [Windows in depth](windows.en.md): everything `std/ui` gives a desktop app, on a text editor:
+   the bridge to the page, menus, dialogs, window kinds and unsaved changes.
+5. [Server-rendered site](ssr.en.md): the notes as a server-rendered website, with compiled
    templates, forms, Markdown and the data in files.
-5. [Web API](api.en.md): the notes as a JSON API with the `web` framework, Postgres with a
+6. [Web API](api.en.md): the notes as a JSON API with the `web` framework, Postgres with a
    connection pool, token authentication and graceful shutdown.
-6. [Site with a React frontend](web-react.en.md): a React frontend embedded in the binary, a JSON
+7. [Site with a React frontend](web-react.en.md): a React frontend embedded in the binary, a JSON
    API and the notes in Redis.
-7. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
+8. [Command-line tool](cli.en.md): a command-line tool with options, piped input, output for
+   people and for programs, and exit codes.
+9. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
    agent written in raylang that talks to Claude and uses tools through MCP.
-8. [Shipping](shipping.en.md): packaging and signing for each system, publishing to the mobile
+10. [Performance](performance.en.md): measuring, profiling with `ray profile`, fixing the
+    algorithm, compiling to native and spreading work across cores, with measured figures.
+11. [Shipping](shipping.en.md): packaging and signing for each system, publishing to the mobile
    stores and signed automatic updates on the desktop.
-9. [More examples](examples.en.md): the apps of the ray-language organization, by use case, for
+12. [More examples](examples.en.md): the apps of the ray-language organization, by use case, for
    what the chapters do not cover.
 
-The details of every window API are in the manual (Spanish):
-[windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
-[packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+For any function, the [reference](../REFERENCE.en.md) has its signature, and the
+[manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:3a67dd887cc0 -->
+<!-- sync: sha256:cf26c1567d6e -->

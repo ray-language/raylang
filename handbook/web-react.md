@@ -36,6 +36,19 @@ La sección `[frontend]` conecta el programa con Vite:
 - `ray dev` arranca Vite junto al programa y lo detiene al salir;
 - `ray build --native` ejecuta `build` y mete `dist` dentro del binario.
 
+Quién sirve cada cosa cambia entre desarrollo y producción, pero el navegador ve siempre un solo
+origen:
+
+| | En desarrollo, con `ray dev` | En producción, el binario |
+|---|---|---|
+| La página | Vite, en `localhost:5173`, con recarga en caliente | el programa, desde el frontend embebido |
+| `/assets/…` | Vite | el programa, con `ETag` y gzip |
+| `/api/…` | Vite lo reenvía al programa | el programa |
+| Procesos | dos: Vite y el programa | uno |
+
+Como la página y la API comparten origen en los dos casos, no hace falta configurar CORS, y las
+rutas relativas del frontend no cambian.
+
 `net` se añade además de `web` porque el programa usa directamente su cliente de Redis.
 
 ## 2. Las notas en Redis
@@ -43,6 +56,18 @@ La sección `[frontend]` conecta el programa con Vite:
 Cada nota es un hash, `note:<id>`, con su título, su cuerpo y su fecha. Un conjunto ordenado,
 `notes:by_date`, guarda los ids por fecha de edición: es el índice para listar de la más nueva a la
 más vieja.
+
+| Clave | Tipo | Contiene |
+|---|---|---|
+| `note:<id>` | hash | los campos `title`, `body` y `updated_ms` |
+| `notes:by_date` | conjunto ordenado | los ids, con la fecha de edición como puntuación |
+
+Se pueden mirar con `redis-cli` mientras la app corre:
+
+```sh
+redis-cli -p 56379 ZREVRANGE notes:by_date 0 -1      # los ids, de la más nueva a la más vieja
+redis-cli -p 56379 HGETALL note:<id>                 # una nota
+```
 
 El pool reparte cada comando a la conexión que esté libre, así que dos comandos seguidos no son una
 unidad: otra petición podría colarse entre ellos. Las escrituras que tocan las dos claves van como
@@ -195,6 +220,40 @@ fn spa(c: Ctx, r: Res) {
 
 `app.gzip()` comprime los recursos: el JavaScript de Notes pasa de 222 KB a 69 KB.
 
+Las rutas del programa, completas:
+
+| Ruta | Qué hace | Responde |
+|---|---|---|
+| `GET /api/notes?q=…&limit=…` | lista y busca | 200, 503 |
+| `POST /api/notes` | crea | 201, 422, 503 |
+| `PUT /api/notes/:id` | reemplaza | 200, 404, 422, 503 |
+| `DELETE /api/notes/:id` | borra | 204, 404, 503 |
+| `GET /assets/…` | los recursos del frontend | 200, 304 |
+| cualquier otro `GET` | `index.html` | 200 |
+
+La última fila es `app.not_found(spa)`: lo que ninguna ruta atiende va a la misma función. Las
+rutas de la API separan sus finales con el tipo que devuelve el almacén,
+`Result<Option<Note>, string>`:
+
+<!-- check: project=examples/apps/notes-web -->
+```rust
+    app.PUT("/api/notes/:id", fn(c: Ctx, r: Res) {
+        match (note_input(c)) {
+            Result.Err(e) => fail(r, 422, e),
+            Result.Ok(input) => {
+                let (title, body) = input;
+                match (store.save(db, c.param("id"), title, body, time.now())) {
+                    Result.Ok(Option.Some(n)) => r.json(n.to_json()),
+                    Result.Ok(Option.None) => fail(r, 404, "no such note"),
+                    Result.Err(e) => fail(r, 503, e),
+                }
+            },
+        }
+    });
+```
+
+El 503 dice que falló una dependencia, Redis, y no la petición: un cliente puede reintentarla.
+
 ## 5. Tests
 
 Los tests del almacén se ejecutan contra un Redis real cuando `NOTES_TEST_REDIS=1`; si no, avisan
@@ -235,7 +294,21 @@ REDIS_PORT=56379 ./notes-web              # http://127.0.0.1:8080: página, recu
 El binario lleva dentro el frontend construido, así que funciona desde cualquier carpeta: el de
 Notes ocupa unos 3 MB. Se configura con `HOST`, `PORT`, `REDIS_HOST` y `REDIS_PORT`.
 
+| Variable | Para qué | Por defecto |
+|---|---|---|
+| `HOST` | la dirección en la que escucha; `0.0.0.0` en un contenedor | `127.0.0.1` |
+| `PORT` | el puerto; en desarrollo lo lee también el proxy de Vite | `8080` |
+| `REDIS_HOST` | dónde está Redis | `127.0.0.1` |
+| `REDIS_PORT` | su puerto | `6379` |
+
+Al arrancar, el programa envía un `PING` a Redis y sale con el código 1 si no responde, en lugar
+de aceptar peticiones que van a fallar. Con SIGTERM deja de aceptar, espera 5 segundos a las
+peticiones en curso y cierra el pool, igual que la [API](api.md).
+
+Para publicar una versión nueva basta reemplazar el binario: el frontend va dentro, así que la
+página y la API nunca quedan en versiones distintas.
+
 ## Siguiente paso
 
-[**LLM y MCP**](llm-mcp.md): cómo usar un asistente que escribe raylang verificado, y cómo
-construir en raylang un agente que habla con Claude y usa herramientas.
+Del navegador a la terminal: una [**herramienta de línea de comandos**](cli.md), el entregable más
+pequeño de raylang.

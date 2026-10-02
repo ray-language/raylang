@@ -1,0 +1,81 @@
+// The first version: correct, and written the way one writes before measuring. It keeps the
+// paths in an array and looks each one up by scanning it, sorts by hand, and builds the report
+// by appending to one growing string. Three functions, so the profiler can tell them apart.
+
+struct Tally {
+    paths: [string],
+    counts: [int],
+    totals: [int],
+}
+
+// Requests and total milliseconds per path.
+fn count(lines: [string]) -> Tally {
+    let t = Tally { paths: [], counts: [], totals: [] };
+    for line in lines {
+        let parts = line.split(" ");
+        let path = parts[1];
+        let ms = parts[3].parse_int().unwrap_or(0);
+        // Linear search: every line scans the paths seen so far.
+        match (t.paths.position(path)) {
+            Option.Some(i) => {
+                t.counts[i] = t.counts[i] + 1;
+                t.totals[i] = t.totals[i] + ms;
+            },
+            Option.None => {
+                t.paths.push(path);
+                t.counts.push(1);
+                t.totals.push(ms);
+            },
+        }
+    }
+    t
+}
+
+// The positions of the paths, most requested first (ties by path): a selection sort by hand.
+fn order(t: Tally) -> [int] {
+    var result: [int] = [];
+    var used: [bool] = [];
+    for _ in t.paths {
+        used.push(false);
+    }
+    var k = 0;
+    while (k < t.paths.len()) {
+        var best = -1;
+        var i = 0;
+        while (i < t.paths.len()) {
+            if (!used[i]) {
+                if (best < 0
+                    || t.counts[i] > t.counts[best]
+                    || (t.counts[i] == t.counts[best] && t.paths[i] < t.paths[best])) {
+                    best = i;
+                }
+            }
+            i = i + 1;
+        }
+        used[best] = true;
+        result.push(best);
+        k = k + 1;
+    }
+    result
+}
+
+// One string that grows a line at a time: each `+` copies everything written so far.
+fn render(t: Tally, positions: [int]) -> string {
+    var out = "";
+    for i in positions {
+        out = out
+            + t.paths[i]
+            + " "
+            + to_string(t.counts[i])
+            + " "
+            + to_string(t.totals[i] / t.counts[i])
+            + "\n";
+    }
+    out
+}
+
+/// Requests and average milliseconds per path, most requested first.
+pub fn report(lines: [string]) -> string {
+    let t = count(lines);
+    render(t, order(t))
+}

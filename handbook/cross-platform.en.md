@@ -22,7 +22,18 @@ previous chapter, every raylang block is copied from that project and CI checks 
 | Interface | one column | one column on the phone; list and editor side by side on wide screens |
 
 The app model is the same: the raylang program and the webview live in one process, and the page
-talks to the program through `window.ray.request`.
+talks to the program through `window.ray.request`. What is new is added around the same event
+loop, and nearly all of it is on the program's side:
+
+| The program decides | The page decides |
+|---|---|
+| where and how the data is stored | the layout and the navigation |
+| the menus, their shortcuts and the system dialogs | what each menu command does |
+| which platform it runs on | what to show on each one |
+| reading and writing files | the state of what is being edited |
+
+That boundary is what allows a single interface: the page does not know whether there are menus
+or where the database is, and the program does not know how a note is drawn.
 
 ## 1. SQLite with the `db` package
 
@@ -187,13 +198,61 @@ fn tell_page(window: int, command: string) {
 }
 ```
 
-In the page, a `useEffect` calls `window.addEventListener('ray-menu', …)` and opens a new note,
-focuses the search or exports, depending on the command.
+In the page, the command ends in the same functions the buttons call:
+
+```ts
+  // Commands from the native menu (desktop): the program dispatches a `ray-menu` event.
+  useEffect(() => {
+    const onMenu = (e: Event) => {
+      const command = (e as CustomEvent<string>).detail
+      if (command === 'new') open(empty)
+      if (command === 'find') search.current?.focus()
+      if (command === 'export') void doExport()
+    }
+    window.addEventListener('ray-menu', onMenu)
+    return () => window.removeEventListener('ray-menu', onMenu)
+  }, [doExport])
+```
+
+So the menus do not add a second path through the interface: "New note" does the same from the
+menu, from the shortcut and from the button, and on the phone, where there are no menus, nothing
+is missing.
+
+`eval_js` runs the text it receives. Here the command is one of the tags the program itself
+declared, so concatenating it is safe. Text that comes from the user is never concatenated into
+JavaScript: it is passed as JSON, or returned as the answer to a request.
 
 ## 4. Native dialogs
 
 Two operations need a system window, so the program handles them before passing the request to
-`api.handle`.
+`api.handle`. One function looks at what the page asks for and decides who answers:
+
+<!-- check: project=examples/apps/notes-everywhere -->
+```rust
+// One request from the page. Most go to `api.handle`; the ones that need a window live here.
+fn answer(conn: Conn, body: string) -> string {
+    let op = match (json.parse(body)) {
+        Result.Ok(j) => json.get_string(j, "op").unwrap_or(""),
+        Result.Err(_) => "",
+    };
+    if (op == "hello") {
+        return json.render(json.obj()
+            .field("ok", true)
+            .field("platform", platform())
+            .field("desktop", places.is_desktop()));
+    }
+    if (op == "export") {
+        return export(conn);
+    }
+    if (op == "delete" && !confirmed_delete(body)) {
+        return json.render(json.obj().field("ok", false).field("error", ""));
+    }
+    api.handle(conn, body, time.now())
+}
+```
+
+`api.handle` still knows nothing about windows, so its tests do not change. What depends on the
+platform stays in `main.ray`, in a short function that reads top to bottom.
 
 **Confirm before deleting.** On the desktop, a native dialog with its own buttons:
 
@@ -269,8 +328,22 @@ to show: the "Export…" button only exists on the desktop. The layout is up to 
 - on the **phone**, one pane at a time: the list, or the editor while you edit;
 - on **wide screens** (desktop or tablet), the list on the left and the editor on the right.
 
-A media query on the width is enough; the React logic is the same in every case. The code is in
-`frontend/src/App.tsx` and `frontend/src/index.css`.
+A media query on the width is enough; the React logic is the same in every case:
+
+```css
+@media (min-width: 720px) {
+  .list-pane {
+    flex: 0 0 300px;
+    overflow-y: auto;
+  }
+  .phone.editing .list-pane {
+    display: flex;
+  }
+}
+```
+
+The rule looks at the width, not the platform: a tablet, or a narrow desktop window, get the
+layout that fits them. The code is in `frontend/src/App.tsx` and `frontend/src/index.css`.
 
 ## 7. Tests
 
@@ -303,8 +376,19 @@ ray bundle --android       # the Gradle project
 ```
 
 `ray bundle` packages for the system it runs on: the `.exe` is built on Windows and the `.desktop`
-on Linux. The usual setup is a CI matrix with one job per system. With SQLite inside, the Notes
-macOS `.app` takes about 3 MB.
+on Linux. The usual setup is a CI matrix with one job per system.
+
+| System | What it produces | Needed on the user's machine |
+|---|---|---|
+| macOS | `Notes.app` | nothing |
+| Linux | a folder with the binary and `Notes.desktop` | GTK 3 and WebKitGTK |
+| Windows | a folder with `Notes.exe`, no console, with its icon, and the `Notes.lnk` shortcut | the WebView2 Runtime, which Windows 11 already ships |
+| iOS | the Xcode project `Notes-ios/` | |
+| Android | the Gradle project `Notes-android/` | |
+
+The program, SQLite and the frontend go inside the executable: there is no separate runtime to
+install. The Notes macOS `.app` takes about 3 MB. A packaged app starts with the current directory
+at `/`, which is why the data goes to the folder from section 2 and the resources are embedded.
 
 To distribute the app beyond your machine, macOS asks you to sign and notarize it, and Windows
 shows a SmartScreen warning if it is unsigned. The [Shipping](shipping.en.md) chapter covers it,
@@ -312,7 +396,7 @@ together with automatic updates.
 
 ## Next step
 
-The notes leave the device: a [**server-rendered site**](ssr.en.md), and then a
-[**web API**](api.en.md) with Postgres.
+[**Windows in depth**](windows.en.md): everything else `std/ui` offers a desktop app, with a text
+editor as the example.
 
-<!-- sync: sha256:28b2af3f59d8 -->
+<!-- sync: sha256:f731ac72beda -->

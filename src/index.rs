@@ -236,7 +236,7 @@ pub fn write_owners(index_dir: &Path, name: &str, owners: &Owners) -> Result<(),
     std::fs::create_dir_all(index_dir)
         .map_err(|e| format!("could not create the index '{}': {e}", index_dir.display()))?;
     let s = format!(
-        "# owner of '{name}' (M83b): claimed on the first signed publication\nowner = \"{}\"\npubkey = \"{}\"\n",
+        "# owner of '{name}': claimed on the first signed publication\nowner = \"{}\"\npubkey = \"{}\"\n",
         owners.owner, owners.pubkey
     );
     std::fs::write(&path, s).map_err(|e| format!("could not write '{}': {e}", path.display()))
@@ -294,7 +294,7 @@ pub fn write_meta(index_dir: &Path, name: &str, meta: &Meta) -> Result<(), Strin
         .map_err(|e| format!("could not create the index '{}': {e}", index_dir.display()))?;
     let clean = |s: &str| s.replace('"', "'").replace('\n', " ");
     let s = format!(
-        "# search metadata of '{name}' (M268): refreshed on every publish\ndescription = \"{}\"\nkeywords = \"{}\"\nmodules = \"{}\"\n",
+        "# search metadata of '{name}': refreshed on every publish\ndescription = \"{}\"\nkeywords = \"{}\"\nmodules = \"{}\"\n",
         clean(&meta.description),
         clean(&meta.keywords.join(", ")),
         clean(&meta.modules.join(", ")),

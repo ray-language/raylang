@@ -119,7 +119,7 @@ import androidx.webkit.WebViewFeature;
 import java.util.Collections;
 
 public class MainActivity extends Activity {
-    // M152: el puente IPC — el MISMO contrato que el user script de WKWebView (window.ray.send /
+    // El puente IPC — el MISMO contrato que el user script de WKWebView (window.ray.send /
     // request / _deliver / _deliver_json).
     static final String RAY_SHIM =
         "(function(){var p={},n=0;function e(t){return typeof t==='string'?t:JSON.stringify(t)}"
@@ -129,17 +129,17 @@ public class MainActivity extends Activity {
             + "_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},"
             + "_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})()";
 
-    // M309 (findings #41): el <input type="file"> de la página abre el selector del sistema.
+    // El <input type="file"> de la página abre el selector del sistema.
     private static final int RAY_FILE_CHOOSER = 7001;
     private ValueCallback<Uri[]> rayFileCallback = null;
-    // M324 (ray808 #18): `[android] background_audio` — foreground service mientras la app está
+    // `[android] background_audio` — foreground service mientras la app está
     // en segundo plano, para que el sistema no mate el proceso (y con él std/audio).
     static final boolean RAY_BACKGROUND_AUDIO = /*RAY_BACKGROUND_AUDIO*/false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // M309 (findings #40): el programa corre con cwd=/ y sin HOME — no tendría dónde escribir.
+        // El programa corre con cwd=/ y sin HOME — no tendría dónde escribir.
         // HOME = el directorio de datos privado de la app; TMPDIR = su caché (fs.temp_dir()).
         try {
             android.system.Os.setenv("HOME", getFilesDir().getAbsolutePath(), true);
@@ -166,7 +166,7 @@ public class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new RayJs(), "RayAndroid");
-        // M323 (ray808 #12): el shim va como script de INICIO DE DOCUMENTO, antes de cualquier
+        // El shim va como script de INICIO DE DOCUMENTO, antes de cualquier
         // <script> de la página — una página servida por ray://app ejecuta el suyo antes de que
         // llegue onPageStarted. Si el WebView del dispositivo no lo soporta, onPageStarted como antes.
         boolean shimAtStart = false;
@@ -178,7 +178,7 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
-                // M322: ray://app/… (y su alias https) se sirve desde el programa.
+                // ray://app/… (y su alias https) se sirve desde el programa.
                 return RayScheme.intercept(req);
             }
 
@@ -200,7 +200,7 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        // M334: el shell apunta a la API 35, donde Android dibuja de borde a borde: sin esto la
+        // El shell apunta a la API 35, donde Android dibuja de borde a borde: sin esto la
         // página queda bajo la barra de estado y el teclado tapa los campos. El WebView va dentro
         // de un FrameLayout que recibe como relleno las barras del sistema, el recorte de la
         // cámara y el teclado (API 30+; antes el sistema ya reserva esas zonas por su cuenta).
@@ -365,7 +365,7 @@ public final class RayBridge {
     static void startOnce() {
         if (!started) {
             started = true;
-            capabilities(1); // M323: este shell sirve ray://app (RayScheme)
+            capabilities(1); // Este shell sirve ray://app (RayScheme)
             start(); // registra los handlers y lanza el programa raylang en su hilo
         }
     }
@@ -377,7 +377,7 @@ public final class RayBridge {
     public static native void pushEvent(String kind, long window, String tag);
     /*RAY_DEV_NATIVE*/
 
-    // M322: el esquema ray://app/… (ver RayScheme).
+    // El esquema ray://app/… (ver RayScheme).
     public static native long schemeOpen(String url, String method, String range, String ifNoneMatch);
 
     public static native int schemeStatus(long handle);
@@ -390,7 +390,7 @@ public final class RayBridge {
 
     // Llamados desde NATIVO (el hilo del programa): siempre postear al main thread.
     public static void onOpen(String title, String url) {
-        String target = RayScheme.alias(url); // M322: ray://app/… carga por su alias https
+        String target = RayScheme.alias(url); // ray://app/… carga por su alias https
         lastUrl = target;
         MAIN.post(() -> {
             if (webView != null) {
@@ -602,7 +602,7 @@ android {{
 }}
 
 dependencies {{
-    // M323: WebViewCompat.addDocumentStartJavaScript (el shim window.ray antes de la página).
+    // WebViewCompat.addDocumentStartJavaScript (el shim window.ray antes de la página).
     implementation 'androidx.webkit:webkit:1.12.1'
 }}
 "#
@@ -632,16 +632,16 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
   solo-arm64 no instala en un emulador x86_64 (INSTALL_FAILED_NO_MATCHING_ABIS) — usa
   `--android-abi all`.
 - stdout/stderr del programa van a **logcat** con tag `ray`: `adb logcat -s ray`.
-- El puente IPC (M152) funciona igual que en escritorio/iOS: `window.ray.send(text)` llega
+- El puente IPC funciona igual que en escritorio/iOS: `window.ray.send(text)` llega
   como evento `"message"` (window 0). Los eventos `lifecycle` llegan en onPause/onResume.
-- `ray://app/…` (M322): `ui.open` con una URL `ray://app/…` la sirve desde el programa
+- `ray://app/…`: `ui.open` con una URL `ray://app/…` la sirve desde el programa
   (`ui.mount_embed`/`mount_dir`/`mount_bytes`), sin puerto. El WebView la carga por el alias
   `https://app.ray.invalid/…` (Chromium no admite `fetch()` hacia un esquema propio); las
   rutas relativas y `fetch("/api/x")` de la página funcionan igual, y un enlace absoluto
   `ray://app/…` se reescribe al alias al navegar.
 - `std/fs`/`std/kv`: escribe en el directorio privado de la app (el cwd no es tuyo); las
   rutas externas están restringidas (scoped storage) — también para `fs.watch`.
-- Firma: el debug keystore de Gradle basta para instalar. **Release** (M160): crea un
+- Firma: el debug keystore de Gradle basta para instalar. **Release**: crea un
   keystore y un `keystore.properties` en ESTA raíz del proyecto —
   `keytool -genkeypair -v -keystore release.jks -alias app -keyalg RSA -keysize 2048 -validity 10000`
   y luego:
@@ -656,7 +656,7 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
   Con eso, `gradle assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
   firmado. Ambos archivos se PRESERVAN al regenerar con `ray bundle --android`
   (`keystore.properties` y los `*.jks`/`*.keystore` de la raíz); no los subas al VCS.
-- Icono (M160): `ray bundle --android --icon icon.png` genera los `mipmap-*/ic_launcher.png`
+- Icono: `ray bundle --android --icon icon.png` genera los `mipmap-*/ic_launcher.png`
   multi-densidad (necesita `sips`, macOS). Es el icono legacy: en Android 8+ el sistema lo
   enmascara a círculo (el adaptive icon con capas queda para v2).
 "#;
@@ -712,11 +712,11 @@ pub fn write_project(
     // M330 D5: el shell de desarrollo entrega a la librería las URLs de su esquema (el QR).
     let (dev_oncreate, dev_method, dev_native) = match url_scheme {
         Some(scheme) => (
-            format!("rayDevLink(getIntent()); // M330 D5: enlace recibido al arrancar ({scheme}://…)"),
+            format!("rayDevLink(getIntent()); // Enlace recibido al arrancar ({scheme}://…)"),
             format!(
-                "// M330 D5: la app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n    @Override\n    protected void onNewIntent(Intent intent) {{\n        super.onNewIntent(intent);\n        rayDevLink(intent);\n    }}\n\n    private static void rayDevLink(Intent intent) {{\n        android.net.Uri data = intent != null ? intent.getData() : null;\n        if (data != null && \"{scheme}\".equals(data.getScheme())) {{\n            RayBridge.devLink(data.toString());\n        }}\n    }}"
+                "// La app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n    @Override\n    protected void onNewIntent(Intent intent) {{\n        super.onNewIntent(intent);\n        rayDevLink(intent);\n    }}\n\n    private static void rayDevLink(Intent intent) {{\n        android.net.Uri data = intent != null ? intent.getData() : null;\n        if (data != null && \"{scheme}\".equals(data.getScheme())) {{\n            RayBridge.devLink(data.toString());\n        }}\n    }}"
             ),
-            "public static native void devLink(String url); // M330 D5: solo la librería de desarrollo lo define".to_string(),
+            "public static native void devLink(String url); // Solo la librería de desarrollo lo define".to_string(),
         ),
         None => (String::new(), String::new(), String::new()),
     };
@@ -778,7 +778,7 @@ mod tests {
             assert!(RAY_BRIDGE_JAVA.contains(native), "{native}");
         }
         assert!(RAY_BRIDGE_JAVA.contains("String target = RayScheme.alias(url);"));
-        assert!(RAY_BRIDGE_JAVA.contains("capabilities(1); // M323"));
+        assert!(RAY_BRIDGE_JAVA.contains("capabilities(1); // Este shell sirve ray://app"));
         assert!(RAY_BRIDGE_JAVA.contains("public static native void capabilities(int caps)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("return RayScheme.intercept(req);"));

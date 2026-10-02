@@ -63,7 +63,7 @@ handler en ESE hilo, el envío del resultado de vuelta, y el `join` del hilo de 
 workers aparcados del perfil son precisamente esa maquinaria en reposo.
 
 Y el `spawn` no está ahí por concurrencia — el comentario del propio código lo dice: es
-**aislamiento de panic** (M56.5), para que un handler que revienta responda 500 sin tumbar el
+**aislamiento de panic**, para que un handler que revienta responda 500 sin tumbar el
 servidor.
 
 ## 4. Por qué esto produce cola y no mediana
@@ -85,11 +85,11 @@ Coherente además con que raylang gane el throughput: el trabajo por petición e
 p50 y p99 mejores que Go); lo que se paga es la **varianza** de meter al scheduler del SO en el
 camino de cada petición.
 
-## 5. Propuesta — implementar `try_call` (M97.2) y quitar el `spawn` por petición
+## 5. Propuesta — implementar `try_call` y quitar el `spawn` por petición
 
-La solución **ya está diseñada en el backlog**: `IDEAS.md` §49, **M97.2**, con el plan fijado y
+La solución **ya está diseñada en el backlog**: `IDEAS.md` §49, con el plan fijado y
 clasificado como "aditivo, no bloquea nada". Esta investigación no propone algo nuevo: le da a
-M97.2 una **justificación de rendimiento** que no tenía (estaba planteada como ergonomía —
+esa propuesta una **justificación de rendimiento** que no tenía (estaba planteada como ergonomía —
 el "recover" del proyecto).
 
 ```
@@ -123,17 +123,17 @@ Por motor, según el plan de §49 —que ya contempla los tres— y por qué enc
   medio mutar (el mismo trade-off que `catch_unwind` de Rust). Para el webserver es aceptable y
   conviene ser explícito: tras recuperar se responde 500 y **se cierra la conexión** (que es lo que
   el código ya hace hoy), así que no se sigue usando estado sospechoso.
-- **M97.4 (recursos huérfanos en unwind)**: §49 lo difiere "solo si 97.2 lo destapa como dolor
+- **(recursos huérfanos en unwind)**: §49 lo difiere "solo si 97.2 lo destapa como dolor
   real". En este caso concreto el único recurso en juego es el handle de la conexión, y lo posee el
   llamador (`handle_http`), no el handler — así que este caso de uso **no** lo destapa. Vale
   registrarlo como dato para esa decisión.
 - **Paridad de mensajes**: el 500 y cualquier texto de error deben quedar byte-idénticos entre los
   tres motores; el corpus nativo (`tests/native_corpus.rs`) es el guardián, y la lección de la
-  ronda M96f fue correrlo **antes** de medir rendimiento, no después.
+  ronda del fix de `print` fue correrlo **antes** de medir rendimiento, no después.
 
 ### Implementado (27 jul 2026) — y qué quedó demostrado y qué no
 
-M97.2 está hecho en los tres motores y `handle_http` ya usa `try_call`. Resultados, separando lo
+`try_call` está hecho en los tres motores y `handle_http` ya lo usa. Resultados, separando lo
 confirmado de lo que sigue en el aire:
 
 **✅ El mecanismo desapareció.** Censo de hilos de SO del mismo binario bajo la misma carga (120k
@@ -250,7 +250,7 @@ orden de 2.6 GB solo en pilas, y el SO se negaría mucho antes. No es que raylan
 lento con mucha carga: es que hay un número de conexiones a partir del cual sencillamente no
 funciona, y Go y Rust lo cruzan sin enterarse.
 
-Duele además en el activo que el proyecto sí presume: la huella de memoria (arco M98; arranque
+Duele además en el activo que el proyecto sí presume: la huella de memoria (arranque
 nativo 1.5 MB, la mejor de la mesa). Aquí son 5.5× la de Go.
 
 ### 6.1b De dónde salen esos 265 KB por conexión (28 jul 2026)

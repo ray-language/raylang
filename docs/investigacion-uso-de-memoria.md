@@ -86,7 +86,7 @@ son el caso legítimo).
 
 ## 5. Producción: el webserver bajo carga — nativo acotado, la VM FUGA
 
-Escenario: `~/Desktop/framework` (framework express M93, 15 rutas), `oha -c 100` sobre
+Escenario: `~/Desktop/framework` (framework express, 15 rutas), `oha -c 100` sobre
 `/users/42`, rounds de 10 s (~680k requests por round el nativo, ~300k la VM).
 
 **Nativo** (68.2k req/s): arranca en **1.7 MB**; bajo carga sube a ~80 MB y se **estabiliza en
@@ -101,8 +101,8 @@ malloc), **no fuga**. ~1 MB por conexión concurrente a c=100 — alto pero acot
 
 `Vm.shared.tasks: Vec<VmTask>` y `Vm.shared.channels: Vec<VmChannel>` solo hacen `push` (el handle
 es el índice); **ninguna entrada se retira jamás**. Peor: una tarea terminada guarda su resultado
-(`TaskState::Done(v)` + el heap transferido de la fibra, M38.1b-2) **para siempre**, aunque ya se
-haya hecho `join`. El webserver hace `spawn` + `try_join` por request (M56.5) → cada request deja en
+(`TaskState::Done(v)` + el heap transferido de la fibra) **para siempre**, aunque ya se
+haya hecho `join`. El webserver hace `spawn` + `try_join` por request → cada request deja en
 el almacén una entrada con **la respuesta HTTP entera** retenida.
 
 Verificado con un micro dirigido (`task_churn.ray`: N tareas efímeras `spawn`+`join` que devuelven un
@@ -114,7 +114,7 @@ Esto **no** lo ve ningún test actual: los tests de concurrencia usan decenas de
 de benchmarks mide tiempo, no residencia. Solo aparece en procesos de larga vida con churn — es
 decir, exactamente en producción.
 
-### 5b. Bug del nativo: explosión de hilos por la trampa de paridad del pool shardeado (M96e)
+### 5b. Bug del nativo: explosión de hilos por la trampa de paridad del pool shardeado
 
 El mismo micro `task_churn` en el **nativo** directamente **crashea**: `failed to spawn thread:
 Os { code: 35 … EAGAIN }` (con 184 MB de RSS de pilas de hilos), incluso con solo 20k tareas.
@@ -129,7 +129,7 @@ de ocio de 10 s, miles de hilos se acumulan en segundos → EAGAIN → el proces
 
 El webserver no lo sufre a c=100 porque la concurrencia entremezcla las llamadas al contador (los
 residuos se mezclan), pero cualquier programa nativo con churn secuencial de tareas (un worker de
-lotes: `while … { join(spawn(f)) }`) muere hoy. Es un regresión funcional introducida por M96e
+lotes: `while … { join(spawn(f)) }`) muere hoy. Es un regresión funcional introducida por el sharding del pool de hilos
 (antes del sharding había una sola lista: el pop siempre veía al worker).
 
 ## 6. Conclusiones
@@ -144,7 +144,7 @@ lotes: `while … { join(spawn(f)) }`) muere hoy. Es un regresión funcional int
    retiene su resultado para siempre → el webserver sobre la VM fuga ~1 KB/request sin techo
    (924 MB en 30 s de carga). El modelo *dev = VM / deploy = nativo* salva al deploy, pero un `ray
    dev` con tráfico sostenido o cualquier daemon sobre la VM se hincha hasta el OOM.
-4. **Bug de producción #2 (nativo)**: la trampa de paridad del pool shardeado (M96e) hace que el
+4. **Bug de producción #2 (nativo)**: la trampa de paridad del pool shardeado hace que el
    churn secuencial de tareas cree un hilo por spawn → EAGAIN → crash. Un batch worker nativo con
    `join(spawn(f))` en bucle muere hoy.
 
@@ -155,22 +155,22 @@ lotes: `while … { join(spawn(f)) }`) muere hoy. Es un regresión funcional int
 - El GC de la VM (umbral, multi-raíz, heap-por-fibra) se comporta bien en churn puro (`gcnested`,
   `strings`: sin despegue de la línea base).
 - El nativo bajo carga **concurrente** (webserver) es estable y acotado; no hay fuga en el runtime
-  de red/print de M96c–g.
+  de red/print.
 
-## 8. Plan por pasos (propuesta: arco M98 — memoria)
+## 8. Plan por pasos (propuesta: arco de memoria)
 
 Orden por severidad; cada paso con su verificación. Los pasos de código van por rama + PR.
 
-> **Progreso (20 jul 2026, rama `feature/m98-memoria`)**: ✅ **M98.1** y ✅ **M98.2** implementados y
+> **Progreso (20 jul 2026, rama `feature/m98-memoria`)**: ✅ y ✅ implementados y
 > verificados — `task_churn` 100k: VM 123.8 MB → **6.9 MB** (línea base), nativo crash → **2.1 MB**;
 > webserver sobre la VM a c=100: 343→924 MB creciendo → **~31 MB plano**. Semántica fijada:
 > **una tarea es de un solo consumidor** (`join`/`try_join` consumen; el scope consume a sus hijas;
 > doble join = `task already consumed`, byte-idéntico en VM y nativo). Espec en DESIGN §21.7.
-> ✅ **M98.3** (rama `feature/m98-canales`): el almacén de canales libera al quedar **cerrado y
+> ✅ (rama `feature/m98-canales`): el almacén de canales libera al quedar **cerrado y
 > drenado**; el handle stale responde como cerrado+vacío (cero semántica nueva). `chan_churn` 100k
 > canales: 45.4 MB → **7.0 MB** (línea base). Límite documentado: un canal abierto cuyos handles se
 > pierden sigue retenido (liberarlo exigiría GC global de referencias entre fibras).
-> ✅ **M98.5** (rama `feature/m98-coste-elemento`): **arreglos homogéneos de ints** (`Obj::IntArray`,
+> ✅ (rama `feature/m98-coste-elemento`): **arreglos homogéneos de ints** (`Obj::IntArray`,
 > *storage strategy* estilo V8/PyPy) — 8 B/elemento en vez de 32. Nace en el literal todo-ints o al
 > primer `push` de un int sobre un arreglo vacío; las operaciones calientes (push/index/set/len/pop)
 > van nativas y cualquier otra **degrada** in place a genérico (invisible; mismo handle → aliasing
@@ -180,13 +180,13 @@ Orden por severidad; cada paso con su verificación. Los pasos de código van po
 > re-medir: (b) da −75% en el caso objetivo sin el riesgo de CPU del boxing de Str. Gotcha de
 > medición: el baseline de TIEMPO de ayer midió +6–10% hoy en AMBAS ramas (estado térmico de la
 > máquina) — el veredicto de CPU exige A/B de la misma sesión, no gate-contra-baseline.
-> ✅ **M98.4** (rama `feature/m98-banco-memoria`): el banco de regresión gana el **gate de memoria** —
+> ✅ (rama `feature/m98-banco-memoria`): el banco de regresión gana el **gate de memoria** —
 > `regress.py` mide el pico de RSS (`os.wait4` → `ru_maxrss`, cero deps) de `task_churn`/`chan_churn`/
 > `arr_while` (ahora en `benchmarks/`) contra `baseline.json` con umbral propio del 15% (el RSS midió
 > ±0.0% de ruido entre corridas); `measure.py` gana la columna de memoria. Verificado que caza fugas
 > (baseline simulado a la mitad → GORDO, exit 1).
 
-- **M98.1 — liberar el almacén de tareas de la VM** (bug #1, prioridad máxima).
+- **— liberar el almacén de tareas de la VM** (bug #1, prioridad máxima).
   *Decisión de semántica primero* (DESIGN): **`join`/`try_join` consumen la tarea** (precedente:
   `JoinHandle::join` de Rust toma `self`; hoy re-unir una tarea ya unida es un caso sin especificar).
   Con eso, la entrada se libera en el join/observación (y las hijas de un `scope` al cerrarse);
@@ -197,22 +197,22 @@ Orden por severidad; cada paso con su verificación. Los pasos de código van po
   nunca observada → retener solo el estado, descartar el heap del resultado). Verificación:
   `task_churn.ray` con RSS plano; el webserver VM bajo `oha` estabilizado como el nativo; tándem
   con el runtime nativo si la semántica de consumo cambia mensajes (paridad).
-- **M98.2 — matar la trampa de paridad del pool nativo** (bug #2, prioridad máxima, fix pequeño).
+- **— matar la trampa de paridad del pool nativo** (bug #2, prioridad máxima, fix pequeño).
   El spawner, tras fallar el pop en su shard round-robin, **sondea los demás shards** antes de crear
-  hilo (el primer probe mantiene la baja contención de M96e; el barrido solo corre en el caso miss).
+  hilo (el primer probe mantiene la baja contención del pool shardeado; el barrido solo corre en el caso miss).
   Alternativa: el worker aparca en el shard indexado por **su propio id** (elimina la correlación
   con el contador del spawner). Añadir un tope de hilos de salvavidas (p. ej. 4096) con error claro
   mejor que EAGAIN críptico. Verificación: `task_churn` nativo termina con RSS plano y ≤ N hilos;
-  re-medir el webserver a c=100/150 para confirmar que el p99 de M96e no se pierde.
-- **M98.3 — canales: misma anatomía, misma cura** (tras 98.1, reusa la maquinaria).
+  re-medir el webserver a c=100/150 para confirmar que el p99 ganado con el pool shardeado no se pierde.
+- **— canales: misma anatomía, misma cura** (tras 98.1, reusa la maquinaria).
   `close` + cola vacía + sin aparcados → liberable con free-list/generación; `recv` sobre un id
   liberado → error claro. Menos urgente que tasks (el webserver crea menos canales que tareas),
   pero es la misma fuga a menor tasa.
-- **M98.4 — memoria en el banco de regresión** (barato, evita recaídas).
+- **— memoria en el banco de regresión** (barato, evita recaídas).
   `benchmarks/measure.py`/`regress.py` ganan la columna RSS (`/usr/bin/time -l` / `getrusage`);
   `task_churn.ray` y `arr_while.ray` entran al banco con umbral de regresión. El método del
   webserver (oha + `ps` por rounds, §5) queda documentado aquí como procedimiento manual.
-- **M98.5 — evaluar (medir, no comprometer): el coste de 32 B/elemento** (§4).
+- **— evaluar (medir, no comprometer): el coste de 32 B/elemento** (§4).
   Dos candidatos con trade-off CPU/memoria a medir en ambos ejes: (a) `HeapValue` 32→16 B
   (boxing de `Str`/`Bytes`; Opt.10/Opt.3 lo descartaron **por CPU** — el criterio ahora incluye
   memoria: −50% en arreglos de escalares); (b) **arreglos homogéneos especializados**
@@ -232,4 +232,4 @@ for r in 1 2 3 4; do oha -z 10s -c 100 --no-tui http://127.0.0.1:8080/users/42 >
 ```
 
 Micro-benchmarks de esta investigación: `task_churn.ray` (N tareas efímeras de 1 KB) y
-`arr_while.ray` (1M de ints, suma con while) — a integrar al banco en M98.4.
+`arr_while.ray` (1M de ints, suma con while) — a integrar al banco.

@@ -67,7 +67,8 @@ fn main() -> int {
   interfaz es HTML en el webview del sistema (`std/ui`), el backend es tu servidor web en raylang,
   y el puente JS ↔ raylang, los menús nativos, los diálogos, el audio y los assets horneados vienen
   en la toolchain. `ray bundle` deja la `.app`, el `.desktop` o el `.exe`; `--ios` y `--android`
-  generan el proyecto Xcode o Gradle. Guía: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle).
+  generan el proyecto Xcode o Gradle. Guías en el handbook: [app móvil](handbook/mobile.md),
+  [app multiplataforma](handbook/cross-platform.md) y [ventanas a fondo](handbook/windows.md).
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
   programas (22 sep 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–23×), **a Go
@@ -296,7 +297,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
 | [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md) | El **backend nativo** por dentro: cómo se transpila a Rust y cómo se garantiza la paridad. |
 | [`docs/diseno-concurrencia-nativa.md`](docs/diseno-concurrencia-nativa.md) | El **scheduler de fibras M:N** del binario nativo: corrutinas, reactor y decisiones. |
-| [`docs/diseno-hot-reload-movil.md`](docs/diseno-hot-reload-movil.md) | El **hot reload del programa en el teléfono** (arco M330): la VM como librería de desarrollo, parada cooperativa y protocolo. |
+| [`docs/diseno-hot-reload-movil.md`](docs/diseno-hot-reload-movil.md) | El **hot reload del programa en el teléfono**: la VM como librería de desarrollo, parada cooperativa y protocolo. |
 | [`docs/windows.md`](docs/windows.md) | El **contrato de Windows**: qué funciona, cómo, y las deudas que quedan. |
 | [`PERFORMANCE.md`](PERFORMANCE.md) | La **crónica de rendimiento**: cada arco de optimización, medido. |
 | [`PRODUCTION.md`](PRODUCTION.md) | El **contrato de producción**: ejes, invariantes y criterios de calidad vigentes. |

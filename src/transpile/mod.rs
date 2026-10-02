@@ -542,7 +542,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
     // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     if lib_mode {
-        out.push_str("/// §80b: la entrada C-llamable del shell. Contrato: llamar UNA vez (tras\n");
+        out.push_str("/// La entrada C-llamable del shell. Contrato: llamar UNA vez (tras\n");
         out.push_str("/// registrar los handlers de ui, si aplica); retorna 0 con el programa ya\n");
         out.push_str("/// corriendo en su hilo (1 = no se pudo crear el hilo). El fin del programa\n");
         out.push_str("/// no termina el proceso; un `exit()` del programa sí.\n");

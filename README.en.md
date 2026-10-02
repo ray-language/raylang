@@ -66,7 +66,8 @@ fn main() -> int {
   language: the UI is HTML in the system webview (`std/ui`), the backend is your raylang web
   server, and the JS ↔ raylang bridge, native menus, dialogs, audio and baked-in assets ship with
   the toolchain. `ray bundle` produces the `.app`, `.desktop` or `.exe`; `--ios` and `--android`
-  generate the Xcode or Gradle project. Guide: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle) (Spanish).
+  generate the Xcode or Gradle project. Guides in the handbook: [mobile app](handbook/mobile.en.md),
+  [cross-platform app](handbook/cross-platform.en.md) and [windows in depth](handbook/windows.en.md).
 - **Compiles to a native binary.** `ray build --native` transpiles the program to Rust and compiles it to
   an executable with byte-identical parity (*dev = VM / deploy = native*). On the 14-program polyglot
   bench (22 Sep 2026, M3 Pro) it **beats node in 9 of the 10 compute programs** (1.1×–23×), **Go in
@@ -300,7 +301,7 @@ The reference documents are written in Spanish (the project's working language);
 | [`docs/build.md`](docs/build.md) | The **builds** guide: slim features, PGO, native binary. |
 | [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md) | The **native backend** from the inside: how it transpiles to Rust and how parity is guaranteed. |
 | [`docs/diseno-concurrencia-nativa.md`](docs/diseno-concurrencia-nativa.md) | The native binary's **M:N fiber scheduler**: coroutines, reactor and decisions. |
-| [`docs/diseno-hot-reload-movil.md`](docs/diseno-hot-reload-movil.md) | **Hot reload of the program on the phone** (arc M330): the VM as a development library, cooperative stop and the link protocol. |
+| [`docs/diseno-hot-reload-movil.md`](docs/diseno-hot-reload-movil.md) | **Hot reload of the program on the phone**: the VM as a development library, cooperative stop and the link protocol. |
 | [`docs/windows.md`](docs/windows.md) | The **Windows** contract: what works, how, and the remaining debts. |
 | [`PERFORMANCE.md`](PERFORMANCE.md) | The **performance chronicle**: every optimization arc, measured. |
 | [`PRODUCTION.md`](PRODUCTION.md) | The **production contract**: axes, invariants and current quality criteria. |
@@ -359,4 +360,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:178025197a83 -->
+<!-- sync: sha256:496d05817bb0 -->

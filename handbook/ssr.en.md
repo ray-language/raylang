@@ -6,6 +6,11 @@ The notes, now as a **website rendered on the server**. Every page is HTML that 
 with compiled raylang templates; the browser runs no JavaScript at all. Forms post to the server,
 which saves and redirects. The notes are stored as **files**, one JSON file per note.
 
+This design fits when content matters more than interaction: pages that are read, forms, admin
+panels. The first response is already the whole page, it works without JavaScript and there is no
+frontend to build. For an interface with a lot of state in the browser, the
+[site with a React frontend](web-react.en.md) chapter is the other option.
+
 The complete project is in [`examples/apps/notes-ssr`](../examples/apps/notes-ssr/), with its
 tests. The raylang blocks are copied from it and CI checks that they still are.
 
@@ -48,6 +53,20 @@ notes-ssr/
 `web` is the application framework, in the style of Express, and runs on the HTTP server of the
 `net` package. The exact versions are pinned in `ray.lock`. The [framework guide](../docs/web-framework.md) (Spanish) has every detail.
 
+These are the site's routes. An HTML form can only send `GET` and `POST`, so editing and deleting
+are `POST` too:
+
+| Route | What it does | Answers |
+|---|---|---|
+| `GET /` | the list of notes; `?q=` searches | 200 |
+| `GET /notes/new` | the empty form | 200 |
+| `POST /notes` | creates a note | 303 to the note, or 422 with the form |
+| `GET /notes/:id` | one note, its Markdown already converted | 200, 404 |
+| `GET /notes/:id/edit` | the form with the note | 200, 404 |
+| `POST /notes/:id` | saves the changes | 303 to the note, or 422 |
+| `POST /notes/:id/delete` | deletes | 303 to `/` |
+| `GET /assets/…` | the stylesheet | 200, 304 |
+
 ## 2. The server
 
 The application is built by a top-level function. The server runs every connection in its own
@@ -68,6 +87,29 @@ fn build_app() -> App {
 - `use_mw(same_origin)` registers a middleware: it runs before the routes and can stop the request
   (section 6).
 - `static_embedded` serves `static/` under `/assets/`, with `ETag` and `304`.
+
+The line `log_requests()` writes goes to standard output, ready for a log collector:
+
+```json
+{"ts":"2026-10-02T00:48:47Z","level":"INFO","service":"web","trace_id":"9fe1bc0fa334f19c853116ea16dc31cd","msg":"request","method":"POST","path":"/notes","status":303,"ms":0}
+```
+
+A handler receives two values: `c`, the request, and `r`, the response it builds.
+
+| To read the request | Returns |
+|---|---|
+| `c.param("id")` | the `:id` segment of the route |
+| `c.query("q")` | a URL parameter, or `""` if absent |
+| `c.form_field("title")` | a field of the submitted form, or `""` |
+| `c.header_of("origin")` | a header, or `""` |
+| `c.json_body()` | the body as JSON, in a `Result` |
+
+| To answer | Does |
+|---|---|
+| `r.html(text)`, `r.text(text)`, `r.json(text)` | sets the body and its content type |
+| `r.status(422)` | sets the status; it chains: `r.status(422).html(…)` |
+| `r.header(name, value)` | adds a header |
+| `r.redirect(url)` | redirects |
 
 A route reads the request and returns a page. This one creates a note from the form fields:
 
@@ -167,6 +209,28 @@ The home page **inherits** from the layout, receives the typed list of notes (`[
 - `{% import store %}` brings in the module to use its `Note` type in the parameters.
 - `{% extends layout %}` goes right after `{% params %}` and resolves next to the template;
   `{% include views/card(n) %}` resolves from `src/`.
+
+All the tags:
+
+| Tag | What it does |
+|---|---|
+| `{% params a: T, b: U %}` | the first line: the parameters of `render`, with their types |
+| `{{ expr }}` | writes the value, with HTML escaped |
+| `{{& expr }}` | writes the value as it is, unescaped |
+| `{% if c %}` … `{% elif c %}` … `{% else %}` … `{% endif %}` | conditional |
+| `{% for x in xs %}` … `{% endfor %}` | loop |
+| `{% let n = expr %}` | a local variable |
+| `{% include path(args) %}` | inserts another template |
+| `{% extends path %}` | inherits from a layout |
+| `{% block name %}` … `{% endblock %}` | a slot in the layout, or what fills it |
+| `{% import module %}` | brings a module in to use its types and functions |
+
+Inside `{{ }}` and `{% %}` goes ordinary raylang: `{{ n.body.split("\n")[0] }}` is an expression
+like any other, and the editor completes and checks it.
+
+A template is used like any other module: `import views/index;` and then
+`index.render("All notes", query, notes)`. `ray build --templates-only` writes to disk the module
+each template generates, if you want to see what it becomes.
 
 In raylang, pages are built with pure functions: data in, HTML out. The handlers only read the
 request, and the tests check every page without starting a server.
@@ -285,6 +349,26 @@ ray run                        # http://127.0.0.1:8080
 ray dev                        # reloads the browser on save
 ```
 
+With the server running, `curl` shows the POST, redirect, GET pattern:
+
+```sh
+curl -i -d 'title=Compras&body=**leche**+y+pan' http://127.0.0.1:8080/notes
+```
+
+```text
+HTTP/1.1 303 See Other
+Location: /notes/01a0fa15-c9d5-7201-91f7-b7a2d893f9ca
+```
+
+And what the site refuses:
+
+| Request | Response |
+|---|---|
+| a form with an empty title | 422, the form with the error and what was typed |
+| a `POST` with another site's `Origin` header | 403 |
+| `GET /notes/../../etc/passwd` | 404: the id is not valid and the disk is never touched |
+| `GET /assets/app.css` with the `ETag` the browser already has | 304, no body |
+
 `main` reads the port from `PORT` and shuts the server down cleanly on SIGTERM or Ctrl-C: it stops
 accepting connections and waits up to 5 seconds for the ones in flight.
 
@@ -316,9 +400,34 @@ from any folder. The Notes one is about 3 MB. Behind a proxy such as nginx or Ca
 HTTPS, it is ready for production. If you prefer the program to serve HTTPS itself, `listen_tls`
 takes the certificate and the key.
 
+| Variable | What for | Default |
+|---|---|---|
+| `PORT` | the port it listens on | 8080 |
+| `NOTES_DIR` | the folder with the notes | `notes-data`, in the current directory |
+
+The server listens on `127.0.0.1` only: the proxy is on the same machine and is the only thing
+that should reach it. As a systemd service:
+
+```ini
+[Unit]
+Description=Notes
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/notes-ssr
+Environment=PORT=8080 NOTES_DIR=/var/lib/notes
+User=notes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl stop` sends SIGTERM, and the program finishes the requests in flight before exiting.
+
 ## Next step
 
 The same kind of server, without pages: a [**web API**](api.en.md) that answers JSON, with
 Postgres and a connection pool.
 
-<!-- sync: sha256:36a766814f07 -->
+<!-- sync: sha256:9ec23454a9dd -->

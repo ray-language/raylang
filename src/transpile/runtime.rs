@@ -2449,7 +2449,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    #[cfg(not(any(unix, windows)))] { None }\n",
             "}\n",
             "fn __ray_term_raw(on: bool) -> Result<(), String> {\n",
-            "    // El hilo escritor de print (M96f) es ASINCRONO: drenar ANTES de tocar el termios,\n",
+            "    // El hilo escritor de print es ASINCRONO: drenar ANTES de tocar el termios,\n",
             "    // o la salida encolada en modo cocido se escribiria ya en crudo (\\n sin \\r —\n",
             "    // escalera; hallazgo de raycode). Cubre entrar Y salir: ambos pasan por aqui.\n",
             "    __ray_flush_prints();\n",

@@ -2,7 +2,7 @@
 
 > Nota de alcance: esto es una investigación puntual (no un documento-contrato). Registra el
 > método y los hallazgos de una sesión de profiling sobre el binario nativo de
-> `examples/web/framework` (M93), motivada por una diferencia de p99/p99.9 observada con `oha`
+> `examples/web/framework`, motivada por una diferencia de p99/p99.9 observada con `oha`
 > entre la demo completa y una app con una sola ruta. No reemplaza a `docs/web-framework.md` ni a
 > `PERFORMANCE.md`; si alguna hipótesis de aquí se implementa, su crónica va en `PERFORMANCE.md`
 > como una entrada más del arco P2.b.
@@ -59,7 +59,7 @@ mismo M3 Pro).
 Pero el código real de `serve_with` (`packages/net/webserver.ray:1157-1175`) dice lo contrario,
 explícitamente, en su propio comentario:
 
-> "Se construye **POR PETICIÓN, no por conexión**: el aislamiento panic→500 (M56.5) corre cada
+> "Se construye **POR PETICIÓN, no por conexión**: el aislamiento panic→500 corre cada
 > petición en su propia tarea, así que el handler cruzaría OTRO hilo igualmente."
 
 Y en efecto, `handle_http` (`packages/net/webserver.ray:827-835`) hace, dentro del bucle
@@ -75,7 +75,7 @@ donde `handler` (armado por `serve_with_limits`, línea 1174) es
 (`framework.ray:672-677`, `listen`) es justamente `let app = build(); ...` — es decir,
 **`build_app()` corre una vez por cada request**, no una vez por conexión. El comentario de
 `framework.ray:660-665` describe una intención que el código de `webserver.ray` contradice
-explícitamente; son dos módulos del mismo commit (M93.3) con relatos distintos del mismo
+explícitamente; son dos módulos del mismo commit con relatos distintos del mismo
 comportamiento. Vale la pena corregir el comentario de `framework.ray` para que no induzca a
 error (documentado aquí; no lo he tocado).
 
@@ -156,7 +156,7 @@ archivos, streams TLS y conexiones SQLite comparten el mismo registro y el mismo
 lectura de socket (`__ray_socket_read`/`_bytes`, vía `__ray_sock_clone`) y cada
 `set_read_timeout` (que `leer_con_plazo` en `webserver.ray` parece invocar en cada ciclo de
 lectura, no solo al aceptar la conexión) toma este lock brevemente — solo para resolver el
-`i64` al `Arc<TcpStream>` real, ya optimizado desde M96b para no hacer el `dup()` bajo el lock
+`i64` al `Arc<TcpStream>` real, ya optimizado para no hacer el `dup()` bajo el lock
 (commit `503771c`). Con 200 conexiones concurrentes, **todas** compiten por este mismo mutex en
 cada ciclo de lectura, sin importar si es A, B o C — el código de lectura es idéntico.
 
@@ -164,7 +164,7 @@ cada ciclo de lectura, sin importar si es A, B o C — el código de lectura es 
 
 El lock en sí no distingue A de B (mismo `net/webserver` por debajo). La hipótesis que conecta
 el hallazgo 2 (7.5 µs extra de CPU) con el hallazgo 3 (8× más contención) es de **amplificación
-por Little's Law / efecto convoy** — el mismo fenómeno que M96b ya documentó y parcialmente
+por Little's Law / efecto convoy** — el mismo fenómeno que un arreglo anterior ya documentó y parcialmente
 corrigió para este lock (el comentario de `transpile.rs:1096-1098` habla literalmente de
 "convoyes de ~100 ms" antes del fix del `dup()`):
 
@@ -252,8 +252,8 @@ En orden de menor a mayor invasividad:
    raíz para el framework específicamente (no para el lock del registro, que es un problema más
    general de `net/webserver`). Exige resolver el conflicto con el modelo de actores de
    heap-aislado (una `App` con closures no puede cruzar el hilo donde se spawnea cada request
-   sin `catch_unwind` o defuncionalización, según el propio comentario de M93.3) — es la opción
-   de mayor payback pero también la de mayor costo de diseño; encaja como un M93.x futuro, no
+   sin `catch_unwind` o defuncionalización, según el propio comentario del código) — es la opción
+   de mayor payback pero también la de mayor costo de diseño; encaja como un arco futuro del framework, no
    como un fix puntual.
 
 ## 9. Experimento — ¿la brecha crece con la concurrencia?
@@ -281,7 +281,7 @@ conexiones simultáneas, el mutex del registro (§5) rara vez colisiona lo basta
 formar un convoy visible; por encima, la probabilidad de colisión cruza un punto donde los
 convoyes empiezan a formarse y la cola se dispara de golpe. Es el patrón típico de un mutex
 global bajo un número creciente de hilos (más que el de una cola M/M/1 con utilización
-gradual), y coincide con el propio relato de M96b (`transpile.rs:1096-1098`), que ya había
+gradual), y coincide con el relato de ese arreglo anterior (`transpile.rs:1096-1098`), que ya había
 visto convoyes de ~100 ms en el mismo lock antes de su fix parcial.
 
 ### 9.1 Acotando el umbral (`-c 120/150/175`)
@@ -326,7 +326,7 @@ nativo — no toca `checker`/`interpreter`/VM ni ningún archivo `.ray`.
 
 **Idea**: una conexión aceptada la sirve SIEMPRE el mismo hilo de SO durante toda su vida
 (`handle_http`, línea 827 de `webserver.ray`, corre en el hilo que `loop_iter_servidor` le
-asignó al aceptar — el pool M96 solo reasigna ESE hilo a otra conexión distinta cuando la
+asignó al aceptar — el pool de hilos solo reasigna ESE hilo a otra conexión distinta cuando la
 actual termina y se cierra, nunca lo comparte concurrentemente). Eso hace válido cachear el
 `Arc<TcpStream>` ya resuelto en un `thread_local!` por handle: el primer acceso de esa
 conexión paga el `Mutex` global (como antes), y todos los accesos siguientes — que son la
@@ -345,7 +345,7 @@ multi-request en una sola conexión, POST/echo, burst de `oha` con 100% success 
 
 La primera comparación (A/B recompilados, mismo proceso reutilizado para TODO el barrido de
 concurrencia de la sesión) dio resultados contradictorios y ruidosos — en algunos casos el fix
-se veía PEOR que el baseline. Sospecha: el pool de hilos (M96) reusa hilos entre conexiones
+se veía PEOR que el baseline. Sospecha: el pool de hilos reusa hilos entre conexiones
 distintas a lo largo de TODA la vida del proceso; si la caché thread-local no se vacía siempre
 (p. ej. un panic salta el `close(conn)` normal) o simplemente por el volumen de miles de
 conexiones servidas en una sesión de pruebas larga, el estado acumulado contamina las
@@ -380,7 +380,7 @@ fixed a `-c 200` con reinicio limpio y 3 repeticiones (§10.1): ahí la mejora e
 reproducible.
 
 **Hipótesis para el remanente**: el mutex del registro (§5) no es el único lock global de la
-ruta caliente. `__RAY_POOL` (`transpile.rs`, el pool de hilos de M96) es OTRO
+ruta caliente. `__RAY_POOL` (`transpile.rs`, el pool de hilos) es OTRO
 `Mutex<Vec<(u64, Sender)>>` global, tomado en cada `spawn`/retorno-a-pool — y **cada request**
 hace un spawn+join para aislar panics (`handle_http`, línea 835), tanto en el baseline como en
 el binario con este fix (no se tocó). Es un candidato directo para la siguiente ronda: mismo
@@ -423,7 +423,7 @@ Dos hallazgos, ninguno el que se esperaba:
   handle?" ANTES de mi caché del §10 — esa consulta también toma `__ray_reg()`, sin cachear.
   Documentado, no arreglado en esta ronda (ver "Pendiente" más abajo).
 
-**Fix implementado** (`src/transpile.rs`, M96d): el PRNG pasa de un `Mutex<u64>` global a
+**Fix implementado** (`src/transpile.rs`): el PRNG pasa de un `Mutex<u64>` global a
 **estado thread-local** (`thread_local! { static __RAY_RNG: Cell<u64> }`), sembrado distinto por
 hilo (reloj + contador atómico, para que dos hilos no repitan la misma secuencia — importante
 para no emitir trace_ids duplicados entre requests concurrentes en hilos distintos). Es sano
@@ -437,7 +437,7 @@ competían por orden de llegada, no determinista). 28 tests verdes (incluida
 camino nativo antes ni ahora, pero confirma que el algoritmo SplitMix64 no se tocó).
 
 **Medición — primero inconclusa, luego confirmada con la máquina más calma.** Tres repeticiones
-iniciales a `-c 200` A/B (M96c solo vs M96c+M96d) dieron resultados contradictorios — a veces
+iniciales a `-c 200` A/B (solo el fix del registro vs registro + PRNG) dieron resultados contradictorios — a veces
 mejor, a veces peor, incluso invirtiendo el orden de las pruebas dentro de cada repetición (para
 descartar sesgo de "lo segundo que corre ya encontró el sistema más caliente"). El `load
 average` de la máquina venía alto (~9.8, con 8 sesiones de usuario abiertas y, se descubrió
@@ -446,14 +446,14 @@ anterior — sin uso pero acumulando estado del sistema). Tras identificar y cer
 huérfano (y con el `load average` bajando a ~5.5–7), se repitió la comparación (3 repeticiones,
 `-c 200 -q 15000 --latency-correction`, reinicio limpio de ambos binarios en cada una):
 
-| repetición | p99.9 solo M96c | p99.9 M96c+M96d | mejora | p99.99 solo M96c | p99.99 M96c+M96d | mejora |
+| repetición | p99.9 solo registro | p99.9 registro + PRNG | mejora | p99.99 solo registro | p99.99 registro + PRNG | mejora |
 |---|---|---|---|---|---|---|
 | 1 | 7.54 ms | 4.62 ms | 1.6× | 12.47 ms | 6.27 ms | 2.0× |
 | 2 | 62.06 ms | 7.66 ms | 8.1× | 68.63 ms | 15.03 ms | 4.6× |
 | 3 | 58.97 ms | 2.84 ms | 20.8× | 66.32 ms | 4.69 ms | 14.1× |
 
-Con la máquina más calma la señal salió consistente: el fix del PRNG (M96d) mejora sobre el fix
-del registro solo (M96c) en las tres repeticiones, entre 1.6× y 20.8× en p99.9. **Lección
+Con la máquina más calma la señal salió consistente: el fix del PRNG mejora sobre el fix
+del registro solo en las tres repeticiones, entre 1.6× y 20.8× en p99.9. **Lección
 metodológica reforzada**: en esta clase de medición, un proceso huérfano de otra sesión —aunque
 esté inactivo (0% CPU)— puede ser suficiente para enmascarar la señal que se busca medir; vale
 la pena revisar `ps`/`lsof` de procesos ajenos a la prueba antes de descartar un resultado como
@@ -471,7 +471,7 @@ la pena revisar `ps`/`lsof` de procesos ajenos a la prueba antes de descartar un
 
 ## 12. Tercera ronda — `__RAY_POOL` shardeado, y un caso de manual de sesgo de medición
 
-Con la máquina ya en reposo (§11), se perfiló el binario M96c+d bajo `-c 200 -q 15000` y se
+Con la máquina ya en reposo (§11), se perfiló el binario con los fixes del registro y del PRNG bajo `-c 200 -q 15000` y se
 repitió el conteo de apariciones detrás de `__psynch_mutexwait`:
 
 | función | apariciones |
@@ -485,7 +485,7 @@ pasó a ser el mayor contribuyente, por encima de `__RAY_POOL` — queda anotado
 ronda (no se tocó en esta). Se siguió con `__RAY_POOL` por ser el pedido explícito de esta
 ronda.
 
-**Fix implementado** (`src/transpile.rs`, M96e): `__RAY_POOL` pasa de un único
+**Fix implementado** (`src/transpile.rs`): `__RAY_POOL` pasa de un único
 `Mutex<Vec<(u64,Sender)>>` global a **N listas independientes** ("shards"), `N =
 available_parallelism() × 2` (acotado a `[4, 64]`); cada `spawn` (pop) y cada retorno-a-pool de
 un worker ocioso (push) eligen su shard por un contador round-robin atómico, sin relación entre
@@ -509,7 +509,7 @@ posición de su par), el resultado fue: sharded (B) típico ~2.1-2.3 ms de p99.9
 corridas (con un outlier de 10.4 ms); sin shardear (A) típico ~3.3-3.4 ms en 2 de 4 corridas
 (con dos outliers de 9.9 y 15.0 ms). **Lectura**: el sharding parece dar una mejora modesta y
 real en el caso típico, con menos outliers severos que la versión sin shardear — pero la señal
-es más débil y ruidosa que la de M96c (§10, 6.8×-18×) o M96d (§11, 1.6×-20.8×), consistente con
+es más débil y ruidosa que la del fix del registro (§10, 6.8×-18×) o la del PRNG (§11, 1.6×-20.8×), consistente con
 que `__RAY_POOL` cargaba menos peticiones-por-lock (2 por request) que el registro o el PRNG.
 
 **Lección metodológica** (la más importante de esta ronda, más que el propio fix): con gaps
@@ -549,7 +549,7 @@ distinto: `cargo test` lo cazó de inmediato (diff de string exacto, no ambiguo)
 principio del proyecto de que nativo y VM deben dar la MISMA salida (`tests/native_corpus.rs`,
 "Dos motores que deben coincidir").
 
-**Fix correcto (M96f, mantenido): un único hilo escritor + canal `mpsc`.** Cada `print` solo
+**Fix correcto (mantenido): un único hilo escritor + canal `mpsc`.** Cada `print` solo
 hace `send(línea)` a un canal (std, sin dependencias) — NUNCA toca `stdout` directamente. Un
 único hilo de fondo (arrancado perezosamente al primer `print`) drena el canal y hace el
 `write_all` real, agrupando lo que haya llegado junto (una espera de hasta 5 ms + drenado no
@@ -572,7 +572,7 @@ print).
 
 **Medición** (`-c 200 -q 15000 --latency-correction`, máquina en reposo, ABBA×2, gaps de 1.5s):
 
-| corrida | p99.9 sin fix (M96c+d+e) | p99.9 con fix (M96c+d+e+f) | p99.99 sin fix | p99.99 con fix |
+| corrida | p99.9 sin fix (registro + PRNG + pool) | p99.9 con fix (más el fix de `print`) | p99.99 sin fix | p99.99 con fix |
 |---|---|---|---|---|
 | 1 | 16.37 ms | 2.49 ms | 23.92 ms | 3.80 ms |
 | 2 | 18.03 ms | 2.70 ms | 25.99 ms | 4.09 ms |
@@ -581,7 +581,7 @@ print).
 
 Consistente y grande en las 4 corridas (7×–15× en p99.9), con el "con fix" mucho más estable
 (2.49–3.35 ms) que el "sin fix" (16.4–48.8 ms) — el mismo patrón de "menos ruidoso, no solo más
-rápido" que M96c/M96d.
+rápido" que los fixes del registro y del PRNG.
 
 Re-perfilando con este fix: `net::log::emit` desaparece del top (era 208, ahora las llamadas a
 `__ray_buffered_print` —el `send` al canal, mucho más barato— aparecen solo 60 veces). **El
@@ -593,7 +593,7 @@ TLS este handle?" contra el registro `__ray_reg()` SIN cachear, en cada lectura 
 directo para una quinta ronda, con el cuidado ya anotado de invalidar la caché si hay un
 `tls_upgrade` (STARTTLS) a mitad de conexión.
 
-**Lección reforzada**: de los cuatro fixes de esta investigación (M96c/d/e/f), este es el único
+**Lección reforzada**: de los cuatro fixes de esta investigación (registro, PRNG, pool y `print`), este es el único
 que en su primer intento rompió una garantía de corrección real (no solo un número de
 performance) — vale la pena, para cualquier cambio de concurrencia en el backend nativo, correr
 `tests/native_corpus.rs` (el oráculo de equivalencia nativo↔VM más amplio) ANTES de medir
@@ -601,9 +601,9 @@ performance, no después; hubiera cazado el bug sin necesitar la vuelta de `oha`
 
 ## 14. Quinta ronda — `__ray_tls_get`: correcto, pero sin ganancia medible
 
-**Fix implementado (M96g)**: mismo patrón que M96c, aplicado al chequeo "¿es TLS este handle?"
+**Fix implementado**: mismo patrón que el fix del registro, aplicado al chequeo "¿es TLS este handle?"
 que corre en CADA lectura/escritura de socket (incluso sobre una conexión que nunca será TLS,
-porque el binario linkea el soporte TLS aunque `main.ray` no lo use). Diferencia con M96c: un
+porque el binario linkea el soporte TLS aunque `main.ray` no lo use). Diferencia con el fix del registro: un
 handle SÍ puede cambiar de tipo en vivo (STARTTLS, `tls_accept`/`tls_upgrade` insertan `Tls`
 donde antes había `Tcp`, mismo id) — la caché thread-local se ACTUALIZA explícitamente en el
 sitio del upgrade (mismo hilo que hizo el upgrade), en vez de solo rellenarse perezosa, para no
@@ -626,10 +626,10 @@ verdes).
 totales): p99.9 sin el fix, ordenado: [2.16, 2.42, 2.60, 5.99] ms (mediana 2.51 ms); con el fix:
 [2.48, 2.52, 2.56, 2.89] ms (mediana 2.54 ms) — **prácticamente empatados**; el único corrida
 donde "sin fix" se veía peor (5.99 ms) fue un outlier aislado, no una tendencia — con más
-repeticiones el patrón se sostiene parejo. A diferencia de M96c/d/f (mejoras de 5×-20×, claras
+repeticiones el patrón se sostiene parejo. A diferencia de los fixes del registro, del PRNG y de `print` (mejoras de 5×-20×, claras
 desde la primera corrida), acá no hay señal de wall-clock que reportar como ganancia.
 
-**Por qué, siendo el mismo patrón que sí funcionó en M96c**: la contención de `__ray_tls_get`
+**Por qué, siendo el mismo patrón que sí funcionó con el registro**: la contención de `__ray_tls_get`
 (339 apariciones en el profile de la ronda anterior) era real, pero pequeña en comparación con
 lo que ya se arregló — el registro (2-3 locks/request), el PRNG (48/request) y `Stdout`
 (1/request pero con escritura+formato bajo el lock) dominaban tanto que, una vez fuera de la
@@ -640,8 +640,8 @@ menos trabajo real, y en un programa que SÍ use TLS con muchas conexiones concu
 ganancia debería notarse más), pero no hay caso de negocio urgente para priorizarlo por
 performance en el caso general.
 
-**Estado de la rama tras 5 rondas**: los tres primeros fixes (M96c registro, M96d PRNG, M96f
+**Estado de la rama tras 5 rondas**: los tres primeros fixes (registro, PRNG y
 `print`) tienen ganancia grande y clara, cada uno verificado y reproducible. Los dos últimos
-(M96e pool, M96g tls_get) son correctos y atacan contención real medida, pero con ganancia
+(pool y tls_get) son correctos y atacan contención real medida, pero con ganancia
 marginal o no discernible del ruido en este workload — vale la pena mantenerlos por corrección/
 limpieza de arquitectura, sin prometer un número de mejora que no se pudo demostrar.

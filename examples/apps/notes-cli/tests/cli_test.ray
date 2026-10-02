@@ -1,0 +1,96 @@
+// Tests of the pieces: the argument parser, the Markdown files and the output. Each test uses its
+// own temporary folder.
+import std/fs;
+import std/json;
+import flags;
+import store;
+import output;
+
+fn folder(name: string) -> string {
+    fs.make_temp_dir("notes-cli-" + name).unwrap()
+}
+
+@test
+fn arguments_are_sorted_into_command_positionals_and_options() {
+    let p = flags.parse(["add", "Shopping list", "--tag", "home", "--tag=weekend", "--json"], ["tag"])
+        .unwrap();
+    assert_eq(p.command, "add");
+    assert_eq(p.positional, ["Shopping list"]);
+    assert_eq(flags.values(p, "tag"), ["home", "weekend"]);
+    assert(flags.has(p, "json"));
+    assert(!flags.has(p, "yes"));
+}
+
+@test
+fn a_double_dash_ends_the_options() {
+    let p = flags.parse(["search", "--", "--tag"], ["tag"]).unwrap();
+    assert_eq(p.positional, ["--tag"]);
+    assert_eq(flags.values(p, "tag").len(), 0);
+}
+
+@test
+fn a_value_option_without_its_value_is_an_error() {
+    assert(flags.parse(["list", "--tag"], ["tag"]).is_err());
+}
+
+@test
+fn unknown_options_are_rejected() {
+    let p = flags.parse(["list", "--jsno"], ["tag"]).unwrap();
+    assert(flags.only(p, ["tag", "json"]).is_err());
+    assert(flags.only(p, ["jsno"]).is_ok());
+}
+
+@test
+fn a_note_survives_the_round_trip_through_its_file() {
+    let dir = folder("roundtrip");
+    let n = store.add(dir, "  Groceries ", ["home", "weekend"], "milk\nbread\n").unwrap();
+    assert_eq(n.id, 1);
+    let back = store.get(dir, 1).unwrap();
+    assert_eq(back.title, "Groceries");
+    assert_eq(back.tags, ["home", "weekend"]);
+    assert_eq(back.body, "milk\nbread");
+    assert_eq(
+        fs.read_file(dir + "/0001.md").unwrap(),
+        "# Groceries\ntags: home, weekend\n\nmilk\nbread\n"
+    );
+}
+
+@test
+fn ids_grow_and_are_not_reused_downwards() {
+    let dir = folder("ids");
+    let _ = store.add(dir, "one", [], "").unwrap();
+    let two = store.add(dir, "two", [], "").unwrap();
+    assert(store.remove(dir, 1).unwrap());
+    assert(!store.remove(dir, 1).unwrap());
+    assert_eq(store.add(dir, "three", [], "").unwrap().id, two.id + 1);
+}
+
+@test
+fn filtering_by_tag_and_text() {
+    let dir = folder("filter");
+    let _ = store.add(dir, "Groceries", ["home"], "milk and bread").unwrap();
+    let _ = store.add(dir, "Slides", ["work"], "about milk").unwrap();
+    let all = store.all(dir);
+    assert_eq(store.filter(all, "", "MILK").len(), 2);
+    assert_eq(store.filter(all, "work", "milk")[0].title, "Slides");
+    assert_eq(store.filter(all, "home", "slides").len(), 0);
+    assert_eq(store.all(dir + "/does-not-exist").len(), 0);
+}
+
+@test
+fn the_json_output_parses() {
+    let dir = folder("json");
+    let _ = store.add(dir, `He said "hi"`, ["a"], "line\nbreak").unwrap();
+    let parsed = json.parse(output.as_json(store.all(dir))).unwrap();
+    let first = json.as_array(parsed).unwrap()[0];
+    assert_eq(json.get_string(first, "title"), Option.Some(`He said "hi"`));
+    assert_eq(json.get_int(first, "id"), Option.Some(1));
+}
+
+@test
+fn the_table_has_no_colour_codes_unless_asked() {
+    let dir = folder("table");
+    let _ = store.add(dir, "Plain", ["x"], "").unwrap();
+    assert(!output.table(store.all(dir), false).contains("\u{1B}["));
+    assert(output.table(store.all(dir), true).contains("\u{1B}[1m"));
+}

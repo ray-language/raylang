@@ -88,7 +88,7 @@ en el lote D del plan.
      CI**. Esto explica que nadie viera el test rojo.
 4. **Causa raíz del goteo**: el código nuevo se escribe imitando el estilo del código vecino (los
    tests históricos en español), y sin gate operativo nada lo frena. Aplica también al asistente:
-   varios tests de esta semana (M97/M98) se nombraron en español siguiendo el patrón local.
+   varios tests de esta semana se nombraron en español siguiendo el patrón local.
 5. Menor: el encabezado del test dice que la wordlist se debe alimentar ("si aparece un token
    español nuevo… añádelo") — proceso manual que en la práctica nadie ejecuta; conviene que la
    wordlist del test absorba la lista curada del arqueo.

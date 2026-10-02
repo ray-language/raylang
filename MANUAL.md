@@ -9,6 +9,10 @@ recomendaciones. Complementa a los otros documentos:
   operadores con precedencia, builtins, prelude, módulos `std/` y paquetes, con sus firmas.
 - **`book/`** — el libro *Construyendo raylang*: cómo se **construyó** el lenguaje, fase a fase (pedagogía de
   implementación).
+- **[`handbook/`](handbook/index.md)** — el **handbook**: guías para construir apps completas (móvil,
+  escritorio, sitios, APIs, herramientas de terminal, agentes), publicado en
+  [raylang.dev/handbook](https://raylang.dev/handbook/). El manual explica el lenguaje; el handbook, qué
+  construir con él.
 - **[`PUBLISH.md`](PUBLISH.md)** — la guía del **publicador**: empaquetar, versionar y publicar
   en el registro (`ray registry publish`, índice, yank, garantías del lock).
 - **Este manual** — cómo **usar** raylang para programar.
@@ -141,14 +145,14 @@ Los **parámetros son inmutables**. Las **firmas de función se anotan siempre**
 La asignación es una **sentencia**, no una expresión (`x = y = 5` no existe). Para descartar un valor:
 `let _ = f();`.
 
-Constantes globales con `const` (su valor debe ser un **literal**, o un **arreglo de literales** —
-M274— que se evalúa de nuevo en cada uso: un arreglo fresco por evaluación, sin estado compartido;
+Constantes globales con `const` (su valor debe ser un **literal**, o un **arreglo de literales**
+que se evalúa de nuevo en cada uso: un arreglo fresco por evaluación, sin estado compartido;
 en un bucle caliente ízalo a un local):
 
 ```rust
 const GRAVEDAD: float = 9.81;     // para π/e usa `math.PI`/`math.E` (import std/math), no una const
 const MAX_INTENTOS: int = 3;
-const EXTENSIONES: [string] = ["srt", "vtt"];   // tabla de consulta con nombre (M274)
+const EXTENSIONES: [string] = ["srt", "vtt"];   // tabla de consulta con nombre
 const BITRATES: [[int]] = [[32, 64, 96], [128, 192, 256]];
 ```
 
@@ -211,7 +215,7 @@ protocolos binarios. Los literales se adaptan al contexto sin cast:
 let b: u8 = 200;               // literal coercionado
 let h: u32 = 2166136261;       // FNV offset basis
 let k: u64 = 0x428A2F98D728AE22;  // cabe en int: coercionado
-let all = 0xFFFFFFFFFFFFFFFF;  // no cabe en int → literal AMPLIO: es u64 sin anotar (M192)
+let all = 0xFFFFFFFFFFFFFFFF;  // no cabe en int → literal AMPLIO: es u64 sin anotar
 let m = 0xFFu32;               // sufijo u8/u32/u64: el literal tiene ese tipo sin contexto
 fn rotl(v: u32, n: int) -> u32 { (v << n) | (v >> (32 - n)) }   // la cuenta del shift es int
 var acc: u32 = h;
@@ -277,7 +281,7 @@ let back: Option<int> = r.ok();                 // Result → Option (descarta e
 let y = r.expect("config");                     // panic con contexto si es Err
 ```
 
-Y para ENCADENAR sin desenvolver, los combinadores (M304):
+Y para ENCADENAR sin desenvolver, los combinadores:
 
 ```rust
 let port = env("PORT").and_then(fn(s: string) -> Option<int> { s.parse_int() }).unwrap_or(8080);
@@ -412,9 +416,9 @@ print(xs.position(99));        // Some(0)
 print(xs.pop());               // Some(4) — y xs queda [99, 2, 3]
 let ys = xs + [7, 8];          // concatenación (copia nueva)
 let z = xs.sort();             // copia ordenada (T: Ord)
-let rest = xs.slice(1, xs.len());          // copia de [1, len): sin el primero (M315)
+let rest = xs.slice(1, xs.len());          // copia de [1, len): sin el primero
 let desc = xs.sort_by(fn(a: int, b: int) -> bool { a > b });  // el comparador devuelve bool: "a va antes"
-let strs = xs.map(to_string);              // un builtin como valor, donde se espera una función (M315)
+let strs = xs.map(to_string);              // un builtin como valor, donde se espera una función
 ```
 
 El comparador de `sort_by` es **`bool`** («`a` va antes que `b`»), no un entero de tres valores como
@@ -508,7 +512,7 @@ fn main() -> int {
     set.add(vistos, 7);
     print(set.has(vistos, 7));                 // true
 
-    // Dict<K,V> (M82): claves de USUARIO vía Hash + Eq (p. ej. @derive(Hash, Eq)).
+    // Dict<K,V>: claves de USUARIO vía Hash + Eq (p. ej. @derive(Hash, Eq)).
     // Para claves primitivas prefiere el Map<K,V> builtin (más rápido, keys() ordenadas).
     var indice: dict.Dict<string, int> = dict.new();
     dict.insert(indice, "ada", 1815);
@@ -528,7 +532,7 @@ fn main() -> int {
 
 ### Alias de tipo `type`
 
-Un alias da nombre a un tipo que se repite (M311). No crea un tipo nuevo: `Id` **es** `int`, y
+Un alias da nombre a un tipo que se repite. No crea un tipo nuevo: `Id` **es** `int`, y
 un valor `Pair<int>` es una tupla `(int, int)` — nada que envolver ni desenvolver. Los alias
 genéricos toman sus argumentos en cada uso, y `pub type` se exporta del módulo como un struct.
 
@@ -579,7 +583,7 @@ Un string **no se muta** (`s[i] = c` es error): construye uno nuevo, o usa `Stri
 
 Un literal `"…"` **no puede cruzar líneas** (`lex error: newline inside an unterminated string`).
 Para texto de varias líneas, o con muchas comillas dobles dentro (JSON, SQL, HTML), se usan los
-**acentos graves** `` `…` `` (M95): mismo valor y mismo tipo `string`, pero la comilla doble es
+**acentos graves** `` `…` ``: mismo valor y mismo tipo `string`, pero la comilla doble es
 literal y los saltos de línea se conservan tal cual. La interpolación `${expr}` funciona igual:
 
 ```rust
@@ -621,7 +625,7 @@ print(b.len());                          // 6 (¡octetos, no caracteres!)
 print(b[0]);                             // 115 — indexar da el octeto como int
 let s = from_utf8(b);                    // bytes -> Result<string, string>
 let corte = b.sub_bytes(0, 3);           // rebanada [0, 3)
-let fin = b.index_of("\r\n\r\n".to_bytes()); // Option<int>: índice de octeto, sin asignar (M245)
+let fin = b.index_of("\r\n\r\n".to_bytes()); // Option<int>: índice de octeto, sin asignar
 let es_http = b.starts_with("HTTP/".to_bytes());
 let crudo = bytes_of([72, 111, 108, 97]); // [int] -> bytes
 print(crudo);                            // se imprime en hex: 486f6c61
@@ -672,7 +676,7 @@ Para abortar de verdad (bug, invariante rota — no para entrada del usuario):
 panic("estado imposible");         // aborta con mensaje y posición
 assert(x > 0);                     // aborta si es falso
 assert_eq(resultado, esperado);    // aborta mostrando ambos (T: Eq + Show)
-assert_eq_msg(modo, 384, "permission bits"); // M326: «assert_eq failed: permission bits: 420 != 384»
+assert_eq_msg(modo, 384, "permission bits"); // «assert_eq failed: permission bits: 420 != 384»
 ```
 
 Y para **terminar el proceso a propósito** (no es un error): `exit(code)` sale con ese código
@@ -717,8 +721,8 @@ let r = [1, 2, 3, 4]
     |> filter(fn(x: int) -> bool { x > 4 });
 ```
 
-`f` puede ser un builtin, una función del ámbito (propia, del prelude o `from`-importada) y, desde
-M206, **una función pública del módulo que declara el tipo del receptor**: si `c` es un
+`f` puede ser un builtin, una función del ámbito (propia, del prelude o `from`-importada) y
+**una función pública del módulo que declara el tipo del receptor**: si `c` es un
 `proto.Conn`, `c.set_encodings(x)` es `proto.set_encodings(c, x)` con solo `import rfb/proto;`. Es
 lo que hace encadenables a los builders (`json.obj().field("host", h).field("port", p)`) sin listar
 sus funciones en un `from … import`. Límites: el tipo tiene que ser un struct o enum de ese módulo
@@ -821,7 +825,7 @@ from std/json import ToJson;      // ToJson vive en std/json: derivarlo exige te
 @derive(Eq, Show, Hash, ToJson, Clone)
 struct Par { a: int, b: int }
 
-// Clone  → clone(self) -> Self, copia SUPERFICIAL (M221): los campos por valor se copian y los
+// Clone  → clone(self) -> Self, copia SUPERFICIAL: los campos por valor se copian y los
 //          de referencia (arreglos, mapas, structs) se comparten — lo que hace el literal a mano
 // Eq     → habilita == y assert_eq
 // Show   → habilita print/to_string ("Par { a: 1, b: 2 }")
@@ -861,7 +865,7 @@ match (evento) {
 }
 ```
 
-**Patrones de tupla y literales** (M310). El escrutinio no tiene por qué ser un enum: una tupla se
+**Patrones de tupla y literales**. El escrutinio no tiene por qué ser un enum: una tupla se
 destructura posición a posición, y un `int`/`string`/`char`/`bool` (también anidados en un payload)
 casan contra un literal. La exhaustividad es real, no conservadora: cubre cada combinación y no hace
 falta el `_`; sobre un `int`/`string`/`char` sí (solo el comodín los agota; un `bool` también con
@@ -887,13 +891,13 @@ match (shape) {
 }
 ```
 
-Un brazo puede **salir de la función** con `return` como expresión (M220): `Option.None =>
+Un brazo puede **salir de la función** con `return` como expresión: `Option.None =>
 return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así que no fija el tipo del
 `match` (lo fija el otro brazo). Lo mismo en un `else` (`let v = if (ok) { x } else { return 99 };`).
-Y dentro de un bucle, **`break` y `continue`** son expresión igual (M300): `Result.Err(e) => break,`
+Y dentro de un bucle, **`break` y `continue`** son expresión igual: `Result.Err(e) => break,`
 en el brazo de un `match`, `let w = if (v < 0) { continue } else { v };`.
 
-**Bucles etiquetados** (M308): para salir de (o reanudar) un bucle EXTERIOR desde uno interior,
+**Bucles etiquetados**: para salir de (o reanudar) un bucle EXTERIOR desde uno interior,
 etiquétalo — `nombre:` delante del `while`/`for` — y nombra la etiqueta en el `break`/`continue`.
 Sin la bandera que raycode arrastraba para salir de dos bucles:
 
@@ -1034,9 +1038,9 @@ cara pública de la cápsula. Sin `pub`, el `from`-import es privado al `mod.ray
 [package]
 name = "hola"
 version = "0.1.0"
-description = "Saludos en varios idiomas"        # opcional: lo muestra `ray search` (M268)
+description = "Saludos en varios idiomas"        # opcional: lo muestra `ray search`
 keywords = ["saludo", "i18n"]                    # opcional: por lo que `ray search` lo encuentra
-license = "Apache-2.0"                           # opcional: identificador SPDX (los paquetes oficiales van bajo Apache-2.0, M281)
+license = "Apache-2.0"                           # opcional: identificador SPDX (los paquetes oficiales van bajo Apache-2.0)
 
 [dependencies]
 textutils = "^1.2"                              # del registro central (rangos semver: 1.2.0, ^1.2, ~1.2.3, *)
@@ -1098,14 +1102,14 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    `uuid` `collections/{set,deque,stringbuilder,dict}` `image` `audio` `ui` `embed` `update` `ffi`
    (firmas en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)).
 
-   Una app de escritorio (`std/ui`) habla con el sistema sin rodeos (M235): `platform()` en la
+   Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
    prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
    archivo con su aplicación, `ui.reveal(p)` lo muestra en el gestor de archivos y
    `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
    app de terminal en macOS y Windows). Nada de eso pasa por una shell.
 
    `std/regex` trae **dos dialectos**: el propio (`compile`/`search`/…, motor lineal escrito en
-   raylang, sin look-around) y, desde M232, el **Oniguruma** de `regex.onig` — el que usan los
+   raylang, sin look-around) y el **Oniguruma** de `regex.onig` — el que usan los
    `.sublime-syntax`, Ruby y TextMate — con look-around, backreferences, `\G`, grupos atómicos y
    posesivos, `\p{…}`, flags en línea. Va sobre el motor nativo (`fancy-regex`) en los tres
    motores y está pensado para el bucle de un tokenizador: compila una vez y pregunta por posición.
@@ -1242,7 +1246,7 @@ for row in rows {
 }
 ```
 
-Y la **entrada oculta** (M125) para passphrases/tokens, sin artesanía sobre `raw`:
+Y la **entrada oculta** para passphrases/tokens, sin artesanía sobre `raw`:
 
 ```rust
 match (term.read_hidden("passphrase: ")) {   // prompt a stderr; nada se ecoa
@@ -1255,12 +1259,12 @@ Es un wcwidth pragmático (control/combinantes → 0, ancho-Este-Asiático y emo
 intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal. Portable: no necesita
 un tty (es cálculo puro), así que sirve también para medir texto que no vas a imprimir.
 
-**Terminal gráfico** (M143): para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
+**Terminal gráfico**: para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
 celda y qué soporta el terminal. `term.size_px()` da el área en píxeles (`None` si el terminal no
 la reporta — muchos dejan los campos en 0) y `term.cell_px()` el tamaño de una celda (área ÷
 rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`:
 con stdin y stdout en tty pregunta al PROPIO terminal (una query DA1 para sixel y la sonda APC
-de gráficos kitty — M161 — en la misma sesión raw, plazo ~150 ms; bajo tmux la sonda responde
+de gráficos kitty en la misma sesión raw, plazo ~150 ms; bajo tmux la sonda responde
 `false`, que es lo correcto: el multiplexor se traga los APC y no podrías dibujar); sin tty,
 `kitty_graphics` cae a la pista de entorno (`TERM`/`KITTY_WINDOW_ID`) y truecolor/256 siempre
 salen de `COLORTERM`/`TERM`. Todo lo indetectable es `false`: elige el peldaño más alto
@@ -1304,7 +1308,7 @@ tiene que ser `width * height * 4` o la llamada devuelve `Err`.
 
 ### Sprites en el terminal (kitty graphics, `std/term`)
 
-Con las tres piezas juntas, dibujar es una llamada (M161 — protocolo kitty graphics: kitty,
+Con las tres piezas juntas, dibujar es una llamada (protocolo kitty graphics: kitty,
 Ghostty, WezTerm):
 
 ```rust
@@ -1357,9 +1361,8 @@ let _ = close(h);
 Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
 ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
 chunk del alimentador y la cola entre tu programa y el dispositivo: `write` aparca cuando hay
-~esa latencia encolada EN TOTAL (desde M326 el presupuesto se reparte entre las etapas: la cola
-del programa ½, el anillo del backend ¼ y los buffers del dispositivo ¼; antes cada etapa
-recibía la latencia entera y 200 ms pedidos eran ~600 encolados). A tasas bajas mandan los
+~esa latencia encolada EN TOTAL (el presupuesto se reparte entre las etapas: la cola
+del programa ½, el anillo del backend ¼ y los buffers del dispositivo ¼). A tasas bajas mandan los
 suelos de ~2 KiB por etapa (22050 Hz mono con 30 ms ≈ 120–140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
 devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
 escrito, que es lo que hace falta para pintar el compás exacto.
@@ -1398,526 +1401,21 @@ motores), 304 y Range que `static_files`. Bajo `ray dev`, un cambio en un asset 
 reinicia** el programa (la lectura ya es en vivo): el supervisor recarga el navegador directo
 por el hub de live-reload.
 
-### Empaquetar la app (`ray bundle`)
+### Apps de escritorio y móvil (`std/ui`, `ray bundle`)
 
-El cierre del círculo de escritorio: `ray bundle` compila el binario nativo `--release` (con
-los assets de `[native] embed` dentro) y lo deja en el formato del SO:
+Las ventanas, el empaquetado y todo lo que rodea a una app de escritorio o móvil se explican en el
+**handbook**, con apps completas y probadas:
 
-```sh
-ray bundle                            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
-                                      #   nombre/icono/id: [app] name/icon/id del ray.toml (o --name/--icon/--id)
-                                      #   [app.plist] → claves extra del Info.plist (cadena, bool o array de cadenas); el permiso de red local
-                                      #   (NSLocalNetworkUsageDescription) se añade solo si el programa usa la red
-                                      # Linux: MiApp/ con el binario + MiApp.desktop
-                                      # Windows: MiApp con MiApp.exe (icono y versión embebidos,
-                                      #          sin consola al doble clic) + MiApp.lnk
-```
+| Tema | Capítulo |
+|---|---|
+| App para iOS y Android, `ray bundle --ios`/`--android`, recarga en caliente en el teléfono | [App móvil](handbook/mobile.md) |
+| La misma app en macOS, Linux y Windows; menús y diálogos; `ray bundle` | [App multiplataforma](handbook/cross-platform.md) |
+| `std/ui` entero: el puente con la página, `ray://app`, menús, diálogos, tipos de ventana, eventos | [Ventanas a fondo](handbook/windows.md) |
+| Frontend con Vite (React, Vue, Svelte) y `ray dev` | [App móvil](handbook/mobile.md) y [Sitio con frontend React](handbook/web-react.md) |
+| Firma, notarización, tiendas y auto-actualización (`std/update`, `ray release`) | [Distribuir](handbook/shipping.md) |
 
-Y la MISMA app, en el iPhone: `ray bundle --ios` genera un **proyecto Xcode** — un shell
-WKWebView en ObjC que linkea el programa como **librería estática** (`ray build --native
---lib`: la entrada C `ray_start()`) para dispositivo y simulador. `ui.open(title, url)` entrega
-la URL al webview del shell: el fuente de escritorio corre sin tocar. El ciclo de vida llega
-como eventos (`kind="lifecycle"`, `tag="background"/"foreground"`). Simulador: compilar sin
-firma y `simctl install/launch`; dispositivo: declara tu team una vez en el ray.toml —
-`[ios] development_team = "ABCDE12345"` — y cada regeneración lo escribe en el `App.xcconfig`
-(o escríbelo tú en el xcconfig: `DEVELOPMENT_TEAM = ABCDE12345`). Elegir el equipo en Xcode
-(Signing & Capabilities) NO basta: Xcode lo guarda en `project.pbxproj`, que el bundle
-reescribe; desde M309 el bundle rescata ese `DEVELOPMENT_TEAM` del pbxproj anterior al
-xcconfig, pero la fuente de verdad es el xcconfig o el `ray.toml`. Y tras cambiar solo el
-programa o el frontend no hace falta regenerar: `ray build --native --lib --release --target
-aarch64-apple-ios -o <App>-ios/libs/libray_app.a` deja el proyecto Xcode intacto. `--ios` excluye `process` (fork/exec denegado en
-iOS). Con `--ios-target sim` (o `device`) el `.a` del otro lado se conserva del proyecto
-anterior, y desde M324 el bundle comprueba con `nm` que ese `.a` exporta lo que el shell
-recién generado llama: si viene de un raylang anterior, avisa con el `ray build --native --lib`
-exacto para recompilarlo (antes Xcode fallaba con «Undefined symbol»). El icono de `[app] icon`
-va al catálogo `Shell/Assets.xcassets` y desde M324 el pbxproj lo compila (fase Resources +
-`ASSETCATALOG_COMPILER_APPICON_NAME`): la app sale con su icono, no con el genérico.
-
-**Sonido y segundo plano en el teléfono** (M324). `std/audio` suena en iOS por AudioQueue (el
-mismo backend que en macOS; el shell enlaza `AudioToolbox`). Por defecto iOS corta el audio y
-suspende el proceso al pasar la app a segundo plano; para que un reproductor o una caja de
-ritmos escrita con `std/audio` siga sonando, declara en el `ray.toml`:
-
-```toml
-[ios]
-background_audio = true       # AVAudioSession «playback» al arrancar + UIBackgroundModes = ["audio"]
-                              # (también suena con el interruptor de silencio)
-
-[android]
-background_audio = true       # foreground service de reproducción mientras la app está en segundo plano
-                              # (notificación «Playing in the background»; se retira al volver; en Android 13+
-                              # el permiso de notificaciones no se pide al arrancar: sin él el servicio corre
-                              # igual, solo sin notificación visible — concédelo en Ajustes si la quieres)
-```
-
-En iOS el programa (sus fibras, su `audio.write`) sigue corriendo mientras haya audio
-reproduciéndose; en Android el servicio evita que el sistema mate el proceso. Los timers de
-JavaScript del webview sí se congelan en segundo plano en ambos: el secuenciador debe vivir en
-el programa raylang (`std/audio` con `open_latency`/`write`/`played_ms`), no en la página.
-`[app.plist]` admite además arrays de cadenas (`UIBackgroundModes = ["audio", "fetch"]`) si
-necesitas otros modos.
-
-Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — shell Java con
-WebView que carga el programa como `.so` (los símbolos JNI viajan dentro del cdylib; el puente
-`ray_start`/handlers es el mismo de iOS). `gradle assembleDebug` produce el APK; `adb install`
-+ lanzar; el stdout del programa va a **logcat** con tag `ray`. El puente IPC (`window.ray.send`)
-y los eventos `lifecycle` funcionan igual que en las otras plataformas, y `std/audio` suena
-por AAudio (`[android] background_audio = true` lo mantiene en segundo plano, arriba); `--android-abi
-arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64). Con `--icon
-icon.png` (M160) la app gana su icono de launcher (los `mipmap-*` multi-densidad, vía sips;
-Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (keytool) y un
-`keystore.properties` en la raíz del proyecto generado — `gradle assembleRelease` produce el
-APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
-por ray.toml (el README generado trae el paso a paso).
-
-### Hot reload del programa en el teléfono (`ray dev --device`)
-
-Recompilar la librería e instalar la app por cada cambio en un `.ray` es un ciclo de minutos.
-`ray dev --device` (M330, `docs/diseno-hot-reload-movil.md`) lo convierte en el de escritorio:
-no corre el programa en el Mac — vigila el proyecto, comprueba que compila y envía el
-**snapshot del fuente** (`.ray`, `ray.toml`, `.ray.html`, assets embebidos y `.ray-deps` ya
-resueltos) a los dispositivos enlazados, que paran el programa en curso y arrancan el nuevo en
-su VM. Como es la misma VM y el mismo runtime corriendo **en el dispositivo**, archivos,
-llavero, red local, audio y permisos son los del teléfono, y lo que pruebas en caliente es lo
-que después compila `ray bundle` (VM y nativo son byte-idénticos por contrato).
-
-```
-ray dev --device
-[dev] device link: org.raylang.myapp.dev://192.168.1.20:52731/3f9c…
-[dev] scan it with the phone's camera (the development shell opens):
-█████████████████████████████████
-████ ▄▄▄▄▄ █▀ █▄▀ ▄▀▄ █ ▄▄▄▄▄ ████
-…
-[dev] on this machine: ray dev-client ray-dev://192.168.1.20:52731/3f9c… <dir>
-[dev] start: snapshot of 4 files (12 KB) sent to 0 device(s)
-[dev] device connected: iPhone (192.168.1.31, raylang 1.27.24)
-[dev] iPhone: running
-hello from the phone
-[dev] change in src/main.ray: snapshot of 4 files (12 KB) — 1 file(s) sent to 1 device(s)
-[dev] iPhone: stopped
-[dev] iPhone: 1 changed, 0 removed
-[dev] iPhone: running
-```
-
-Los `print`/`eprint` del programa **llegan a esta terminal** (además de a la consola del
-dispositivo): stdout y stderr, tal cual. A cada dispositivo viaja solo lo que le falta (el
-anfitrión sabe qué tiene cada uno; al reconectar, el dispositivo dice lo que hay en su
-sandbox y recibe el delta). Las dependencias `path = …` fuera de la raíz viajan también (solo
-sus fuentes y manifiestos) y resuelven igual en el dispositivo.
-
-Un cambio que no compila no se envía (el diagnóstico sale aquí; el dispositivo sigue con el
-programa anterior). La URL lleva un token y el enlace es solo LAN; puerto y token se recuerdan
-por proyecto en `.ray-dev` (oculto; no viaja en el snapshot ni conviene subirlo a git), así el
-teléfono se empareja **una sola vez**. La librería de desarrollo jamás entra en un build de
-release. En escritorio, `ray dev-client <url> <dir>` es el mismo lado dispositivo (con
-`RAY_UI_BACKEND=headless` sirve para CI).
-
-**El shell de desarrollo en el iPhone** (`ray bundle --ios --dev`): genera el mismo proyecto
-Xcode de siempre, con nombre `<app>-dev` y bundle id `<id>.dev` para que conviva con la app
-real, pero enlazando la **librería de desarrollo** (la toolchain entera —loader, checker, VM y
-runtime— compilada para iOS; su `ray_start` arranca el enlace) en vez del programa. El shell
-no cambia: son los mismos símbolos. Instálala una vez desde Xcode. **Para emparejarla, escanea
-con la cámara del teléfono el QR** que imprime `ray dev --device`: el enlace lleva como
-esquema el id del shell de desarrollo (`org.raylang.myapp.dev://…`), que el shell registra
-como suyo, así que el sistema abre exactamente esa app —con varias apps en desarrollo
-instaladas, cada QR va a la suya, sin selector—. Si la app ya estaba abierta y enlazada, un
-QR nuevo la re-enlaza en el acto. Como respaldo, al abrirse sin enlace muestra una **página de
-emparejamiento** donde se teclea la URL. La recuerda (`Application Support/ray-dev/link.url`)
-y desde entonces cada guardado en el Mac reinicia el programa en el teléfono. Si el anfitrión deja de responder 20 s (otra sesión en
-otro puerto), vuelve a la página con la URL anterior rellenada. Va con `--devtools` implícito
-(inspeccionable desde el menú Develop de Safari). **En Android** es lo mismo con `ray bundle
---android --dev`: el proyecto Gradle de siempre, application id `<id>.dev`, el `.so` de
-desarrollo define él mismo los símbolos JNI del shell, y el QR se escanea con la cámara o
-Google Lens (el shell registra el esquema con un `intent-filter`). La librería de desarrollo se compila
-desde el árbol de fuentes de la toolchain si `ray` se construyó ahí (unos minutos en frío por
-target, cacheado después); una instalación sin fuentes descarga el asset prebuilt de su
-versión (`ray-dev-lib-<target>.tar.gz` de la release, a `~/.ray/dev-lib/<versión>/`), y
-`RAY_DEV_LIB=<archivo>` fuerza una concreta. `ray dev-lib --target <triple> -o <archivo>` la
-construye suelta (es lo que usa el workflow de release).
-
-**Lo que cambia en el móvil respecto al escritorio** (M307/M322, IDEAS §97 #28/#37, §99 #39).
-(1) `ray://app` y `ui.mount_embed`/`mount_dir`/`mount_bytes` funcionan en los CINCO shells: el
-de iOS registra un `WKURLSchemeHandler` (el mismo resolver que macOS: montajes, `Range`,
-ETag/304, MIME, cuerpo por trozos) y el de Android sirve la petición en `shouldInterceptRequest`.
-Como Chromium no admite `fetch()` hacia un esquema propio ni le da un origen con localStorage,
-el WebView de Android carga `ray://app/…` por el alias `https://app.ray.invalid/…`: las rutas
-relativas y `fetch("/api/x")` de la página funcionan igual, un enlace absoluto `ray://app/…` se
-reescribe al navegar, y `.invalid` nunca resuelve (no hay sitio real detrás). Un shell generado
-con raylang ≤ 1.27.16 sigue cargando solo por HTTP (`http://127.0.0.1:<puerto>`; en Android el
-cleartext está permitido solo para 127.0.0.1): regenera el bundle. Si la app conserva un
-servidor local en el móvil, ciérralo con `web.listen_local` / `webserver.local_limits(token)`
-(M297), que es lo que cierra ese puerto a otras apps del dispositivo. (2) El puente `window.ray.request` con
-respuesta JSON (`ui.reply_json`) necesita el shim `_deliver_json` del shell, que generan
-`ray bundle --ios/--android` desde raylang **1.12.1** (M225; la forma `ui.reply` con string, desde
-1.5.0): un shell generado antes no lo trae y el síntoma es una promesa que nunca resuelve.
-Detectarlo: `grep _deliver_json` en el `ViewController.m` / `MainActivity.java` generados; el
-remedio es regenerar el bundle (firma, keystore e icono se preservan).
-
-El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
-Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
-van embebidos, no en rutas relativas —, y una app DESCARGADA sin firmar exige aprobación en
-Ajustes → Privacidad y seguridad (macOS 15+): para distribuir, fírmala y notarízala con
-`[app] sign`/`[app] notary` (ver «Auto-actualización», más abajo). El `.desktop` de Linux lleva `Exec=` absoluto: para instalarlo, cópialo
-a `~/.local/share/applications`.
-
-### Ventanas (`std/ui`)
-
-La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**
-cargando una URL. Para una app chica basta el **puente IPC integrado** (`window.ray.send` →
-evento `"message"`, y `eval_js` de vuelta — sin servidor); el patrón con backend sigue siendo
-apuntarla al webserver embebido del programa — la UI es HTML/CSS/JS servido por ti, y el IPC
-JS↔raylang **es el framework web** (`fetch`/WS contra tus handlers),
-sin mensajería nueva que aprender:
-
-```rust
-import std/ui;
-
-// Con backend HTTP local: `listen_local` (M297) — el token en la URL cierra el puerto a cualquier
-// otro proceso de la máquina y a cualquier página web del navegador (ver «Servidores locales»
-// en SECURITY.md). Sin backend, mejor `ray://app/...` (más abajo): sin puerto alguno.
-let token = webserver.local_token();
-let h = ui.open("Mi app", "http://127.0.0.1:" + to_string(port) + "/?ray_token=" + token, 900, 640)?;
-// … y en otra fibra: web.listen_local(build_app, listener, token)
-ui.eval_js(h, "console.log('hola desde raylang')")?;   // fire-and-forget
-
-// Los eventos son una cola por proceso; la fibra APARCA (sin sondeo).
-match (ui.next_event()) {
-    Result.Ok(e) => {
-        // v1: e.kind == "closed" (botón rojo o close(h) — exactamente uno por ventana)
-        if (e.kind == "closed" && e.window == h) { exit(0); }
-    },
-    Result.Err(e) => eprint(e),
-}
-```
-
-No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la primera ventana
-(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). Bajo
-`ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
-que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. Bajo `ray dev` el webview
-lleva además las **herramientas de desarrollo** (M231): botón derecho → "Inspect Element" (F12 en
-Windows), y en macOS la app aparece en el menú Develop de Safari. Es una decisión del build o de
-la toolchain, nunca del entorno: `ray run --devtools` las enciende en la VM, y un binario nativo
-solo las lleva si se construyó con `ray build --native --devtools` o `ray bundle --devtools` — sin
-el flag la llamada no existe en el programa, y ninguna variable de entorno puede encenderlas en un
-release. En el móvil, `ray bundle --ios --devtools` (o `--android`) deja el shell inspeccionable
-desde el escritorio: Safari → Develop → el iPhone, o `chrome://inspect` para Android. `close(h)`
-cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
-con tus otros canales); `next_event_timeout(ms)` acota la espera.
-
-**Menús y diálogos (M148).** El menú estándar se instala solo al abrir la primera ventana —
-App (⌘Q, ⌘H) y Edit completo: sin él, en macOS **⌘C/⌘V/⌘X no funcionan ni en los campos de
-texto del webview** (los atajos viajan por el menú). Los tuyos se declaran por datos y llegan
-como eventos:
-
-```rust
-ui.menu("Partida", [
-    ui.MenuItem { tag: "new", title: "Nueva", shortcut: "n" },     // ⌘N
-    ui.MenuItem { tag: "scores", title: "Récords", shortcut: "" },
-])?;
-// … en tu bucle de eventos:
-//   e.kind == "menu" && e.tag == "new"  → nueva partida
-```
-
-**JS→raylang sin servidor** (M152): en cada webview vive `window.ray.send(text)` — el texto
-llega como evento `kind == "message"` con `tag` = el texto y `window` = el handle de la
-ventana (0 en iOS). Con `eval_js` de vuelta, una app chica no necesita webserver:
-
-```rust
-// En la página:  <button onclick="window.ray.send('hola')">saluda</button>
-match (ui.next_event()) {
-    Result.Ok(e) => {
-        if (e.kind == "message") {
-            let _ = ui.eval_js(e.window, "document.body.append(' raylang dice: recibido')");
-        }
-    },
-    Result.Err(_) => {},
-}
-```
-
-Y el puente tiene **petición con respuesta** (M157): `window.ray.request(v)` devuelve una
-**Promise** que tu programa resuelve — sin webserver y sin maquinaria nueva (viaja por el
-mismo canal y la respuesta va en el `eval_js` de siempre):
-
-```rust
-// En la página:  window.ray.request({op:'sum', a:2, b:3}).then(r => …)
-match (ui.next_event()) {
-    Result.Ok(e) => match (ui.as_request(e)) {
-        Option.Some(pair) => {
-            let (id, body) = pair;             // body: string, o el JSON de un no-string
-            let _ = ui.reply(e.window, id, "5");
-        },
-        Option.None => { /* un send plano */ },
-    },
-    Result.Err(_) => {},
-}
-```
-
-`window.ray.send(v)` también acepta no-strings (M157): viajan como su **JSON** (parséalo con
-`std/json`). Tres cosas del contrato: los payloads son strings al llegar (los NUL se eliminan);
-los mensajes viajan por el **mismo stream** que `closed`/`menu` (un solo consumidor —
-`next_event` o `events()`, no ambos); y la página es **código tuyo** — mismo modelo de
-confianza que el resto del programa (la vía de bajo nivel es
-`window.webkit.messageHandlers.ray.postMessage`). En headless (tests), `RAY_UI_MSG` inyecta
-un `"message"` por ventana abierta. El puente vive en las tres plataformas de escritorio: macOS, Linux
-(WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente), Windows (WebView2, M179)
-y el shell iOS de
-`ray bundle --ios` (allí `window` llega como 0). Para la geometría más allá de ancho × alto —tamaño
-mínimo, `resizable`, centrado y que el sistema recuerde tamaño y posición—, `ui.open_with(title, url,
-o)` con `var o = ui.options(1024, 720); o.min_width = 640; o.autosave = "main";` (M210; el autosave lo
-da macOS, Linux y Windows lo ignoran). Para que la barra de título del sistema lleve el color del
-tema, como en Sublime, `o.titlebar_color = "#1f2430"` (M224): en macOS la barra se vuelve
-transparente sobre el fondo de la ventana y el título sale claro u oscuro según la luminancia; en
-Windows 11 es el color de la caption; Linux lo ignora. La página pinta su propio fondo del mismo
-color, y un valor que no sea `#rrggbb` es `Err`. Y para que la ventana no pase en blanco (o en
-gris, en apariencia oscura) los 150–250 ms que WebKit tarda en parsear una app grande,
-`o.background = "#21242f"` (M327): el color que el webview muestra hasta que la página pinta, en
-los tres backends; si no lo pones, `titlebar_color` hace de fondo — el mismo color en la barra y
-bajo la página —, y `ui.set_background(h, color)` lo cambia en caliente cuando cambia el tema
-(en macOS, junto a `set_titlebar_color`: la barra transparente enseña el fondo de la VENTANA). Un panel secundario como un About lleva
-`o.minimizable = false` (M230: el botón de minimizar nace deshabilitado; GTK lo ignora), y si el
-menú lo vuelve a pedir con la ventana ya abierta detrás de la principal, `ui.focus(h)` (M229) la
-trae al frente con foco: `eval_js(h, "window.focus()")` solo enfoca el documento, no la ventana.
-
-**Sin servidor local: el esquema `ray://`** (M226). En vez de levantar un servidor HTTP en
-`127.0.0.1` para servir la interfaz y los archivos del proyecto, la app los monta y la página los
-carga por `ray://app/…` directamente del proceso: `ui.mount_embed("", "assets")` deja los assets
-embebidos en `ray://app/assets/…`, `ui.mount_dir("files", project_dir)` sirve el directorio del
-proyecto en `ray://app/files/<ruta>` (ruta canónica, `..` nunca sale de él, Range para leer por
-tramos, ETag/304), y `ui.open("App", "ray://app/assets/index.html", 1200, 800)` abre sin puerto
-alguno. Ninguna otra aplicación de la máquina —ni ninguna página web abierta en el navegador del
-usuario— puede hablar con ese "servidor", el bundle no
-necesita el permiso de red local y los bytes van en streaming por trozos de 256 KiB — un archivo
-de 8 MiB con `fetch` y `Range` tarda unos 50 ms en macOS. Lo sirven los tres backends: WKWebView,
-WebKitGTK (con una lib anterior a 2.36 solo cuerpo y MIME, sin Range ni 304) y WebView2 (el tramo
-pedido se contesta desde memoria).
-
-Las respuestas grandes no tienen coste oculto (M225): el literal JS de `ui.reply` se escapa en el
-runtime en una pasada, así que responder 1 MB cuesta unos 4 ms de ida y vuelta y 8 MB unos 30 ms
-(medido en WKWebView). Si la respuesta es JSON, `ui.reply_json(window, id, json)` entrega a la
-página `JSON.parse(json)` directamente: la Promise resuelve con el objeto. Para archivos de cientos
-de MB o binarios sigue siendo mejor servirlos por HTTP con `Range` que meterlos en un mensaje.
-
-Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
-canales — `(messages, other)`: los `"message"` por el primero, `closed`/`menu` por el
-segundo — con una sola fibra-bomba (es TAMBIÉN el consumidor único: llámalo una vez y no lo
-mezcles con `next_event`/`events()`; drena ambos canales — el lado ignorado crece):
-
-```rust
-let (msgs, other) = ui.split_events();
-// una fibra atiende la página, otra el resto de la app:
-spawn(fn() {
-    while (true) {
-        match (recv(msgs)) {
-            Option.Some(e) => { let _ = ui.eval_js(e.window, "…"); },
-            Option.None => { break; },
-        }
-    }
-});
-```
-
-Dos guardas del puente (M159): la cola de eventos tiene **cota dura** (65536) — si la página
-inunda `send` con el consumidor parado, cae el `"message"` más viejo (nunca un `"closed"`)
-con un aviso en stderr —, y en macOS/iOS **solo el main frame** alcanza el puente: un iframe
-de terceros no puede hablar con tu programa ni llamando `postMessage` a mano. **Nota de seguridad**: en Linux
-(WebKitGTK) y Android el handler nativo NO discrimina frames — el shim `window.ray` solo se
-instala en el main frame, pero un iframe de terceros aún podría alcanzar el canal de bajo
-nivel a mano; si incrustas iframes no confiables ahí, trata los mensajes entrantes en
-consecuencia.
-
-El **menú de aplicación** de macOS (el primero, en negrita) también es tuyo: `ui.app_menu`
-mete items encima de Hide/Quit y lo re-titula (bajo `ray run` salía "ray"; el `.app` ya
-muestra su nombre). El tag especial `"role:about"` instala el "About" **nativo** — el panel
-estándar, sin evento:
-
-```rust
-ui.app_menu("MiApp", [
-    ui.MenuItem { tag: "role:about", title: "About MiApp", shortcut: "" },
-    ui.MenuItem { tag: "settings", title: "Settings...", shortcut: "," },   // ⌘,
-])?;
-```
-
-En Linux no existe ese menú global: los items van como un menú normal titulado `name` y todos
-— `"role:about"` incluido — emiten el evento `"menu"` (muestra tu propio about). Llámalo una
-vez, antes de abrir ventanas.
-
-Una app de documentos necesita tres cosas más de la ventana nativa (M257): el **título** cambia
-con el documento, el botón de cerrar muestra el **punto de "modificado"** en macOS, y cerrar o
-salir con cambios sin guardar debe **preguntar** antes. Por defecto cerrar es inmediato (llega
-`"closed"`); con `intercept_close(h, true)` el intento del usuario — botón, ⌘W/Alt+F4, el gestor
-de ventanas — llega como evento `"close_requested"` y la ventana sigue abierta hasta que tú
-llames `close(h)` (que siempre cierra). `intercept_quit(true)` hace lo mismo con ⌘Q en macOS:
-llega `"quit_requested"` con `window` 0 y la app sigue viva hasta que `main` retorna.
-
-```rust
-let w = ui.open("Editor", "ray://app/index.html", 1024, 720)?;
-ui.set_title(w, "main.ray — Editor")?;
-ui.set_edited(w, true)?;            // el punto en el botón rojo (Linux/Windows lo ignoran)
-ui.intercept_close(w, true)?;
-ui.intercept_quit(true)?;
-while (true) {
-    let e = ui.next_event()?;
-    if (e.kind == "close_requested") {
-        if (!dirty || ask_save_changes()) { close(e.window); }   // si no, la ventana se queda
-    }
-    if (e.kind == "quit_requested") { if (save_all()) { return 0; } }
-    if (e.kind == "closed") { return 0; }
-}
-```
-
-Para preguntar de verdad están los **diálogos de mensaje nativos** (M258): `ui.message(title,
-text, botones)` muestra la alerta del sistema con hasta tres botones con tus etiquetas y devuelve
-el índice del pulsado; cerrar el diálogo con Esc cuenta como el último botón, así que pon
-"Cancelar" al final. `ui.alert` es la versión de un botón, `ui.confirm` la de dos con `bool`, y
-`ui.message_styled` añade el estilo `"warning"` o `"error"`. Los diálogos de archivo aceptan
-opciones: título, carpeta inicial, nombre sugerido, filtros por extensión y selección múltiple.
-
-```rust
-match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
-    Result.Ok(i) => if (i == 0) { save(); } else if (i == 1) { close(w); },   // 2 (Cancel o Esc): se queda
-    Result.Err(e) => print(e),
-}
-var o = ui.file_options();
-o.title = "Open a source file";
-o.filters = [ui.filter("Ray sources", ["ray", "toml"]), ui.filter("Text", ["txt"])];
-let paths = ui.pick_files(o)?;                 // [] si canceló
-o.suggested = "untitled.ray";
-let target = ui.save_file_with(o)?;            // Option<string>
-```
-
-Hay **cuatro tipos de ventana** (M260, M328) y todos aceptan el mismo webview: `kind = "document"` es la
-de siempre; `"panel"` es una paleta de utilidad flotante sobre las ventanas de la app (paleta de
-comandos, panel de búsqueda); `"borderless"` no tiene marco ni título (un splash, un HUD que
-dibujas tú); y `"full_content"` (M328) mete la página **bajo la barra de título**, como Chrome o
-VS Code: en macOS la barra se vuelve transparente y sin título, los semáforos flotan sobre la
-página y esta ocupa toda la altura — reserva esa franja con `window.ray.titlebar_height` (px) y
-marca con `data-ray-drag` el elemento que debe arrastrar la ventana (sus `button`/`a`/`input`
-siguen siendo clicables, o `data-ray-no-drag`; doble clic = zoom). En Linux y Windows
-`full_content` se comporta como `document` por ahora; `data-ray-drag` también sirve en Windows y
-macOS para las ventanas `borderless`. `always_on_top` la mantiene sobre todo lo demás y `parent` la hace hija de otra
-ventana: queda encima de su dueña y la sigue, que es lo más parecido a un *sheet* en los tres
-sistemas. Y sobre una ventana abierta: `set_fullscreen`, `set_always_on_top`, `set_size`,
-`set_position`, `center`, `minimize` y `maximize`.
-
-```rust
-var o = ui.options(360, 220);
-o.kind = "panel";
-o.parent = main_w;           // pegado al documento, siempre encima de él
-o.center = false;
-let find = ui.open_with("Find", "ray://app/assets/find.html", o)?;
-ui.set_position(find, 900, 120)?;
-ui.set_fullscreen(main_w, true)?;   // modo presentación; false lo deshace
-```
-
-El **menú contextual** (M259) reutiliza los mismos `MenuItem`: `ui.popup_menu(h, items)` lo
-muestra en la posición del puntero sobre la ventana `h` y la elección llega como evento `"menu"`,
-igual que la barra. Como el clic derecho ocurre en la página, el cableado es: la página captura
-`contextmenu`, manda un mensaje con el contexto y el programa responde con el menú.
-
-```rust
-// en la página:  document.oncontextmenu = (e) => { e.preventDefault(); window.ray.send("ctx:" + id); };
-if (e.kind == "message" && e.tag.starts_with("ctx:")) {
-    ui.popup_menu(e.window, [
-        ui.item("rename", "Rename...", ""), ui.item("delete", "Delete", ""),
-        ui.separator(), ui.item("role:copy", "", ""),
-    ])?;
-}
-```
-
-El **menú Edit** también es tuyo (M255). Sus items estándar funcionan por acciones nativas del
-sistema (el portapapeles y el undo del webview viven ahí), así que reemplazarlo con items
-corrientes los perdería. Los **roles estándar** lo evitan: un item con tag `"role:undo"`,
-`"role:redo"`, `"role:cut"`, `"role:copy"`, `"role:paste"`, `"role:select_all"` o `"role:close"`
-hace lo que haría el del sistema y no emite evento; título y atajo vacíos toman el estándar, y
-propios lo renombran o le cambian el atajo. `ui.edit_menu(items)` rehace el Edit con tus items
-entre los roles (en macOS reemplaza el estándar en su sitio; en Linux/Windows, que no traen Edit,
-lo crea al final de la barra la primera vez — llámalo justo después de declarar File):
-
-```rust
-ui.edit_menu([
-    ui.item("role:undo", "", ""), ui.item("role:redo", "", ""), ui.separator(),
-    ui.item("role:cut", "", ""), ui.item("role:copy", "", ""), ui.item("role:paste", "", ""),
-    ui.separator(),
-    ui.item("find", "Find...", "cmd+f"),              // tuyo: llega como evento "menu"
-    ui.item("role:select_all", "Seleccionar todo", ""), // renombrado, atajo estándar ⌘A
-])?;
-ui.set_menu_item("role:paste", false, false)?;      // los roles también se gobiernan por tag
-```
-
-Y el **contenido** del panel About es tuyo (M155): `ui.set_about(name, version, description,
-copyright)` — el mismo panel nativo, con tu nombre en negrita, la línea "Version …", la
-descripción (como créditos, al estilo del Finder) y el copyright; `""` omite un campo y queda
-lo del bundle. En un `.app` de `ray bundle`, además, `[app] copyright = "…"` en el `ray.toml`
-se escribe en el Info.plist — el panel lo muestra sin llamar a nada:
-
-```rust
-ui.set_about("MiApp", "Version 1.2", "La experiencia de escritorio de raylang",
-    "(TM) y (c) 2026 MiOrg")?;
-```
-
-Y los diálogos de archivo nativos, modales (la llamada aparca hasta que el usuario decide;
-`None` = canceló): `ui.pick_file()`, `ui.pick_folder()`, `ui.save_file("borrador.txt")`. En
-headless (tests/CI) el resultado se inyecta con `RAY_UI_PICK`. Nota Linux v1: el menubar es
-por-ventana (aplica a ventanas abiertas después de `ui.menu`) y sin atajos de teclado. Windows (M179/M183):
-menubar por ventana como Linux, pero los `shortcut` SÍ son atajos (`Ctrl+X`; mayúscula = `Ctrl+Shift+X`,
-visibles a la derecha del item) y los diálogos son modales de la ventana. Backends reales: macOS
-(WKWebView), Linux (GTK3 + WebKitGTK, cargados en runtime: sin `libwebkit2gtk` o sin display
-el `open` da un `Err` claro) y Windows (Win32 + WebView2; sin el WebView2 Runtime, `Err` claro); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria
-(tests/CI en cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del
-binario nativo.
-Nota: sin `Info.plist` (binario suelto), el webview bloquea `http://` remoto (ATS) —
-`http://127.0.0.1` está exento, que es justo el patrón. El ejemplo completo (webserver + ventana
-+ salir al cerrarla) está en [`examples/web/desktop_window/`](examples/web/desktop_window/).
-
-### Frontend con Vite (React, Vue, Svelte, …) y `ray dev`
-
-Para una app de escritorio o móvil cuya interfaz se construye con un framework web, raylang no
-trae bundler propio: se apoya en el que ya usas (Vite, Parcel, Astro…) con el **mismo contrato
-que Tauri**: un comando de desarrollo que expone una URL y un comando de build que deja una
-carpeta. Se declara en `ray.toml` (M263):
-
-```toml
-[frontend]
-dev   = "npm --prefix frontend run dev -- --strictPort --port 5173 --clearScreen false"
-url   = "http://localhost:5173"          # opcional: por defecto la URL de Vite
-build = "npm --prefix frontend run build"
-dist  = "frontend/dist"                  # el build, embebido en el binario y el bundle
-```
-
-Con eso, **`ray dev`** lanza el dev server del frontend una vez por sesión, espera a que
-responda, y hace que **`app://`** apunte a él: `ui.open("App", "app://index.html", 1000, 700)`
-abre la ventana sobre Vite, con su hot module replacement — editas un componente y la página se
-actualiza sin recargar; editas un `.ray` y se reinicia solo el programa (el dev server sigue
-vivo). Al salir de `ray dev` el dev server muere con él, con todo su árbol de procesos. Fuera de
-`ray dev` (`ray run`, `ray build --native`, `ray bundle`) la misma URL `app://index.html` es
-`ray://app/index.html`: el build embebido, que montas con `ui.mount_embed_at("", "frontend/dist")`.
-`ray build --native` y `ray bundle` corren el `build` antes y embeben `dist` como un
-`[native] embed` más, así que el binario y el `.app` son autocontenidos. `ui.app_url(url)` hace
-la misma resolución a mano (una `http://` de tu webserver también cambia de origen al del dev
-server bajo `ray dev`, conservando la ruta).
-
-El punto de partida es `ray new miapp --frontend react-ts` (cualquier plantilla de
-`npm create vite`): escribe el proyecto con la sección de arriba, un `src/main.ray` que abre
-`app://index.html` y contesta a `window.ray.request(...)` con `ui.reply`, y el `.gitignore` de
-`frontend/node_modules` y `frontend/dist`. No corre npm: al terminar imprime los pasos —
-`npm create vite@latest frontend -- --template react-ts`, `npm --prefix frontend install`,
-`ray dev`. El puente `window.ray` está disponible en la página venga de donde venga (el webview
-lo inyecta al arrancar cada documento), así que un componente React llama al backend con
-`window.ray.request({op: "list"})` igual en desarrollo y en producción; si prefieres HTTP, tu
-webserver embebido sigue ahí y en `vite.config` un `server.proxy` de `/api` lo hace mismo-origen.
-
-**Iterar la UI en el teléfono** (M309, findings #49). Como el shell inyecta `window.ray` en
-cualquier página que cargue el webview, la app del iPhone o del emulador puede cargar el dev
-server del Mac y conservar el puente: (1) arranca Vite escuchando en la red — `npm --prefix
-frontend run dev -- --host 0.0.0.0` (añádelo como script `dev:device` en el `package.json`);
-(2) construye la app con devtools (`ray bundle --ios --devtools` o `ray build --native --devtools
---lib …`); (3) lánzala con `RAY_DEV_FRONTEND_URL=http://<ip-del-mac>:5173` en el entorno (una
-variable del esquema de Xcode; en Android, un extra del intent o `adb reverse tcp:5173
-tcp:5173` y `http://127.0.0.1:5173`). Un build de desarrollo comprueba que la URL responde y
-entonces `app://` resuelve contra ella (HMR incluido); si no responde, usa la build embebida.
-Un build `--release` (sin devtools) ignora la variable siempre. En iOS la primera conexión a la
-red local falla mientras el sistema pide el permiso (`NSLocalNetworkUsageDescription`, que el
-bundle ya declara): la comprobación reintenta una vez.
-
+Las firmas de `std/ui` y `std/update` están en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std),
+y `ray doc std/ui` las da con su documentación.
 
 ### Markdown (`std/markdown`)
 
@@ -2015,7 +1513,7 @@ match (fs.open("video.bin", "r")) {
 Para **escribir** binario sobre un handle está `fs.write_bytes(h, data)` (el gemelo de
 `fs.write`), y `fs.sync(h)` fuerza lo escrito a **almacenamiento estable** (fsync; en macOS/APFS
 es `F_FULLFSYNC`, 4–5 ms por llamada — `fs.sync_data(h)` entrega solo los datos sin vaciar la
-caché de la unidad, ~50× más barato allí desde M326, para un log o AOF por registro). La
+caché de la unidad, ~50× más barato allí, para un log o AOF por registro). La
 distinción importa: un `write`/`append` llega al *page cache* del SO — sobrevive a un crash
 del **proceso**, pero no a un corte de luz. Un log de escritura anticipada (WAL/AOF) durable
 es el patrón de las tres piezas juntas:
@@ -2069,7 +1567,7 @@ match (fs.stat(path)) {
 }
 ```
 
-`st.mode` son los 12 bits de permiso. Con los literales octales (M118) se escriben directamente:
+`st.mode` son los 12 bits de permiso. Con los literales octales se escriben directamente:
 `0o600` (dueño rw), `0o755` (rwxr-xr-x). `fs.chmod(path, mode)` los cambia — el gesto de una
 bóveda de secretos: `fs.chmod("vault.db", 0o600)` la restringe a su dueño.
 
@@ -2117,6 +1615,9 @@ let home = env("HOME");            // Option<string>
 let argv = args();                 // [string]
 ```
 
+Para una herramienta de línea de comandos completa (opciones, tuberías, colores, códigos de salida),
+el capítulo [Herramienta de terminal](handbook/cli.md) del handbook.
+
 ### Profundidad de recursión
 
 Los tres motores cortan una recursión demasiado profunda con un error limpio en vez de
@@ -2124,10 +1625,10 @@ reventar la pila de Rust: `stack overflow (recursion too deep: 1024 frames; RAYL
 raises the limit)`. El límite por defecto es 1024 marcos; `RAYLANG_MAX_DEPTH=N` en el entorno lo
 cambia (mínimo 16). Un compilador que recorre árboles de profundidad arbitraria conviene que lo
 suba a sabiendas —o que convierta la recursión en bucle—; el mensaje dice siempre el límite
-vigente (M217). La recursión **en cola** no cuenta marcos en ninguno de los tres (la VM reutiliza
+vigente. La recursión **en cola** no cuenta marcos en ninguno de los tres (la VM reutiliza
 el marco; el nativo suelta el contador antes de la llamada): un bucle escrito por recursión en
 cola corre sin límite. En el binario nativo el contador lo llevan solo las funciones que pueden
-recurrir (M295; `--fast` lo quita del todo, como quita la aritmética checked): una cadena no
+recurrir (`--fast` lo quita del todo, como quita la aritmética checked): una cadena no
 recursiva entre dos de ellas no se cuenta, así que el corte puede llegar unos marcos más tarde
 que en la VM, nunca antes.
 
@@ -2192,12 +1693,12 @@ Detalles que evitan los errores clásicos de otras plataformas:
   completo (los nietos de un `sh -c "a | b"` también).
 - **`.merge_output()`** manda stderr al MISMO pipe que stdout: el entrelazado es el orden real
   en que el hijo escribió (fusionar después inventa un orden); `stderr` vuelve vacío.
-- macOS, Linux y Windows (M175: `CreateProcess` + Job Objects; `Exit.Signal` no ocurre en Windows).
+- macOS, Linux y Windows (`CreateProcess` + Job Objects; `Exit.Signal` no ocurre en Windows).
 
 **Hablar con el sistema sin FFI.** El patrón se repite en cualquier app de escritorio: el llavero,
 el portapapeles, "abrir con la app por defecto". Un proceso con `argv` tipado, salida como `bytes`
 y código de salida como valor es la forma correcta — sin `unsafe`, sin cadenas de shell y sin
-depender de que el usuario tenga otra cosa instalada (feedback de `ray-remote`, M205):
+depender de que el usuario tenga otra cosa instalada:
 
 El llavero ya no necesita ni eso: `std/keychain` habla con Keychain Services (macOS), Secret
 Service (Linux) y Credential Manager (Windows) directamente, con la misma firma en los tres:
@@ -2314,62 +1815,15 @@ let estado = p.wait();
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 
-### Auto-actualización (`std/update`)
-
-Publica dos archivos en una URL fija —`update.json` y su firma `update.json.sig`— y un `.zip`
-por plataforma; `ray release` (M248) los genera. En la app:
-
-```rust
-import std/update;
-
-fn main() -> int {
-    let _ = update.cleanup();                       // restos de la actualización anterior
-    match (update.check("https://example.dev/myapp/update.json")) {
-        Result.Ok(Option.Some(r)) => {
-            // La app decide: preguntar, o actualizar sola.
-            let pkg = update.download(r).unwrap();  // verifica sha256 y tamaño
-            let _ = update.apply(pkg).unwrap();     // swap atómico del bundle
-            let _ = update.relaunch();              // instancia nueva, desacoplada
-            return 0;
-        },
-        Result.Ok(Option.None) => { },              // al día
-        Result.Err(e) => eprint(e),                 // sin red, firma inválida, min_version…
-    }
-    0
-}
-```
-
-La clave pública va en `ray.toml` (`[app] public_key = "<hex>"`) y `ray bundle` la hornea; bajo
-`ray run` la app es `"dev"`: `check` funciona y `apply` devuelve `Err`.
-
-Del lado del publicador, dos comandos (M248):
-
-```sh
-ray keygen                      # una vez: semilla en ~/.ray/keys/<app-id>.key, pública al ray.toml
-ray release -o dist             # por plataforma: zip del bundle + update.json + update.json.sig
-ray release -o dist --publish   # además: gh release create/upload; URLs a releases/download/<tag>/
-```
-
-Para que macOS 15+ abra la app actualizada sin pedir aprobación, el bundle va firmado y
-notarizado (M249): en `ray.toml`, `[app] sign = "Developer ID Application: Tu Nombre (TEAM)"` y
-`[app] notary = "perfil"` (creado una vez con `xcrun notarytool store-credentials perfil`);
-`ray bundle`/`ray release` firman con hardened runtime, verifican, notarizan y grapan. En Windows,
-`[app] sign` es el sujeto del certificado o un `.pfx` para `signtool`.
-
-`ray release` conserva en `update.json` los artefactos de otras plataformas de la misma versión,
-así que se corre en cada máquina (o job de CI, con `RAY_SIGNING_KEY`) sobre el mismo `dist/`. La
-app consulta un URL fijo: con GitHub Releases,
-`https://github.com/<org>/<repo>/releases/latest/download/update.json`.
-
 ### Criptografía y canal seguro (`std/crypto`)
 
 Para un Diffie-Hellman clásico, RSA o un JWT RS256 hace falta aritmética de enteros grandes:
-`std/bigint` (M195) la hace sobre `bytes` big-endian con el runtime detrás (`bigint.modpow(base,
+`std/bigint` la hace sobre `bytes` big-endian con el runtime detrás (`bigint.modpow(base,
 exp, m)`, `modinv`, `mul`…; una exponenciación de 4096 bits tarda milisegundos). No es de tiempo
 constante: vale para el lado cliente.
 
 Para hablar con un protocolo que exige MD5, DES/3DES o AES en ECB/CBC (VNC, Apple Remote Desktop,
-Kerberos, digest auth) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des` (M194): raylang
+Kerberos, digest auth) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des`: raylang
 puro, sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo.
 
 `std/crypto` es criptografía de **producción** (tiempo constante, respaldada por `ring` y
@@ -2382,7 +1836,7 @@ canal cifrado entre dos pares:
 | **acuerdo de claves** | `x25519_public_key(secret)`, `x25519_shared_secret(secret, peer_public)` |
 | **derivación** | `hkdf_sha256(salt, ikm, info, len)` |
 | cifrado autenticado | `chacha20poly1305_seal(key, nonce, aad, plain)`, `..._open(…)` |
-| hashing (una pasada e **incremental**) | `sha256(b)`/`sha512(b)`; por trozos (archivos grandes sin cargarlos enteros, M126): `sha256_init()` → `hash_update(h, chunk)`* → `hash_final(h)` — digest idéntico al de una pasada |
+| hashing (una pasada e **incremental**) | `sha256(b)`/`sha512(b)`; por trozos (archivos grandes sin cargarlos enteros): `sha256_init()` → `hash_update(h, chunk)`* → `hash_final(h)` — digest idéntico al de una pasada |
 
 Las claves privadas —la semilla Ed25519 y el secreto X25519— son **32 octetos cualesquiera**, así que
 se crean con `crypto.random_bytes(32)` y se pueden guardar: la identidad de un nodo sobrevive al
@@ -2478,7 +1932,7 @@ horas exactas; los calendarios son asunto de `DateTime`). Nota: la forma `2.seco
 import **sin calificar** (`from std/time import seconds`); con `import std/time;` se usa
 `time.seconds(2)`.
 
-**Pacing (juegos, animaciones, muestreadores).** `sleep` es **preciso** (M119: espera por `poll(2)`,
+**Pacing (juegos, animaciones, muestreadores).** `sleep` es **preciso** (espera por `poll(2)`,
 ~1 ms de desvío), así que dormir un presupuesto de frame mantiene el ritmo. Pero sumar sleeps
 **acumula deriva**: cada vuelta añade el tiempo del propio trabajo más el ~1 ms de desvío. Para un
 ritmo estable a lo largo de muchos frames, duerme contra un **reloj absoluto** en vez de sumar:
@@ -2525,7 +1979,7 @@ TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_
 `net.tls_upgrade(h, host)` (STARTTLS sobre un socket ya abierto), `net.tls_accept` (lado servidor),
 `net.tcp_listen`/`net.tcp_accept` para servir.
 
-**Los plazos y la identidad del otro extremo** (M121–M124, lo que un servicio real necesita el
+**Los plazos y la identidad del otro extremo** (lo que un servicio real necesita el
 primer día):
 
 - `net.tcp_connect_timeout(host, port, ms)` — el connect con plazo: un host que descarta los SYN
@@ -2584,7 +2038,7 @@ fn build_app() -> App {
 
 fn main() -> int {
     match (listen(build_app, "127.0.0.1", 8080)) {   // keep-alive + límites + panic→500 heredados
-                                                     // build_app() corre POR PETICIÓN (M326): sin
+                                                     // build_app() corre POR PETICIÓN: sin
                                                      // recursos dentro — fibra dueña o net/pool
         Result.Ok(_) => 0,
         Result.Err(e) => { eprint(e); 1 },
@@ -2634,14 +2088,14 @@ fn free_port() -> Result<int, string> {
 Con `ray build --native` queda un **binario único** que al ejecutarse abre su propia UI — una
 app de escritorio sin instalación ni runtime aparte. El ejemplo completo y ejecutable está en
 [`examples/web/desktop/`](examples/web/desktop/). La **ventana propia** es la evolución directa:
-`std/ui` abre el mismo webserver en un webview nativo (§13, "Ventanas") — ejemplo en
-[`examples/web/desktop_window/`](examples/web/desktop_window/); los assets van dentro del
-binario con `std/embed` y `ray bundle` produce la app instalable (§13, "Assets del proyecto" y
-"Empaquetar la app").
+`std/ui` abre la interfaz en un webview nativo, los assets van dentro del binario con `std/embed`
+y `ray bundle` produce la app instalable. Lo explican los capítulos
+[App multiplataforma](handbook/cross-platform.md) y [Ventanas a fondo](handbook/windows.md) del
+handbook.
 
 ### RPC entre servicios (`packages/rpc`, dependencia)
 
-La comunicación **nativa** servicio-a-servicio (M88.4), sin el peso de HTTP: framing con prefijo
+La comunicación **nativa** servicio-a-servicio, sin el peso de HTTP: framing con prefijo
 de longitud sobre TCP + JSON, request/response con id correlado, deadline y traceparent en el
 sobre. Servidor con una fibra por conexión y **apagado ordenado de serie**:
 
@@ -2669,7 +2123,7 @@ fn main() -> int {
 Un handler que devuelve `Err` (o que panica) llega al cliente como `Err` del `call`, sin matar
 la conexión. Interop externo entrante: el webserver (HTTP/1.1 + JSON), que ya está.
 
-Para **llamadas concurrentes** (varias fibras a la vez), el **pool** (M127): hasta `size`
+Para **llamadas concurrentes** (varias fibras a la vez), el **pool**: hasta `size`
 llamadas en vuelo, con reconexión automática tras un timeout —
 
 ```rust
@@ -2855,7 +2309,7 @@ fn main() -> int {
 ### Tareas y concurrencia estructurada
 
 `spawn` devuelve un `Task<T>`; `join` espera su resultado. `scope` ata el ciclo de vida.
-`spawn_isolated` es `spawn` en un **dominio de handles** propio (M296): la tarea aislada no puede
+`spawn_isolated` es `spawn` en un **dominio de handles** propio: la tarea aislada no puede
 usar los archivos, sockets, procesos ni ventanas que abrieron otras tareas —para ella se comportan
 como cerrados— y las suyas quedan invisibles fuera; las tareas que ella lance heredan su dominio.
 Es la pieza para correr un plugin o código de menos confianza dentro del proceso: los valores y
@@ -2987,7 +2441,7 @@ read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás 
 (una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
 y el actor muere cuando su canal se cierra (`close(ch)`).
 
-**Lo que captura un handler es una COPIA** (M309, findings #58). Un servidor `web`, `rpc` o gRPC
+**Lo que captura un handler es una COPIA**. Un servidor `web`, `rpc` o gRPC
 corre cada conexión en su fibra, y lo que el handler captura del ámbito exterior (un `Map` de
 estado, un contador) se copia al arrancar la fibra: mutarlo dentro del handler no persiste fuera.
 En la VM la copia es **por conexión** (un test con una sola conexión «funciona»); en el binario
@@ -3102,8 +2556,8 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios; --native [--release] sobre el binario nativo
-ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS` (M217/M305);
-                         # `ray doc bytes.index_of_from` / `Result.map` (Tipo.metodo, M316) y, dentro de un proyecto, sus módulos y dependencias
+ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS`;
+                         # `ray doc bytes.index_of_from` / `Result.map` (Tipo.metodo) y, dentro de un proyecto, sus módulos y dependencias
 ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
@@ -3182,7 +2636,7 @@ cerraste tú con su propia tecla → `ray dev` **sale con ella**, sin teclas ext
 termina queda a la espera del siguiente cambio para re-correr (el contrato del modo watch; una
 sola **`q`** sale), y un programa que **crashea** también espera — editas el fix y se relanza
 solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: lo usan
-el webserver (inyecta el snippet al servir HTML) y las ventanas de `std/ui` (M234: el runtime se
+el webserver (inyecta el snippet al servir HTML) y las ventanas de `std/ui` (el runtime se
 suscribe al hub y recarga la página; `mount_embed` sirve los assets del disco en vivo, así que
 un cambio en `assets/` se ve sin reiniciar el proceso ni perder el estado del backend).
 
@@ -3194,7 +2648,7 @@ guardado sin cambios reales se ignora, y `q` sale. No hay check-before-restart: 
 corrida muestra el diagnóstico si algo no compila. `ray test` acepta además varias suites
 explícitas (`ray test a.ray b.ray [filtro]`).
 
-**`ray profile archivo.ray`** (M240) corre el programa en la VM con el perfilador por función y,
+**`ray profile archivo.ray`** corre el programa en la VM con el perfilador por función y,
 al terminar, imprime en stderr una tabla ordenada por **tiempo propio** (la función sin sus
 hijos): propio, %, inclusivo, llamadas y media por llamada. Es la herramienta para el "¿dónde
 se va el tiempo?" que antes había que hacer a mano con `time.monotonic_nanos()`: los
@@ -3202,7 +2656,7 @@ builtins (`split`, `to_string`, `get`…) no son funciones y su coste aparece en
 quien los llama, así que una función con mucho propio y pocas llamadas es un bucle caro, y
 una con muchas llamadas y poco propio es candidata a llamar menos. `--json --out perfil.json`
 deja el informe en un archivo para compararlo entre corridas; `--top N` acorta la tabla. Solo VM
-(en el nativo usa `perf`/Instruments); el informe sale también tras `exit()` o un error.
+(en el nativo usa `perf`/Instruments); el informe sale también tras `exit()` o un error. El capítulo [Rendimiento](handbook/performance.md) del handbook lo usa en un caso real, de la medición a la versión optimizada.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**
@@ -3220,7 +2674,7 @@ por reload; si quieres estado persistente entre reloads, guárdalo en un `sqlite
 Y **live-reload del navegador**: `ray dev` levanta un canal SSE lateral e
 **inyecta** en tus respuestas HTML (del paquete `webserver`) un `<script>` que **refresca la página**
 sola cuando un cambio compila y reinicia; una app de escritorio de `std/ui` (sin servidor, por
-`ray://app`) se suscribe sola desde el runtime y recarga sus ventanas igual (M234). No tocas nada;
+`ray://app`) se suscribe sola desde el runtime y recarga sus ventanas igual. No tocas nada;
 en producción no se inyecta ni se suscribe. (Es un canal
 solo-de-dev, distinto del SSE de tu aplicación: tu `sse_open`/`sse_event` sigue en tu puerto, intacto.)
 
@@ -3249,7 +2703,7 @@ suite aparte. Un fallo reporta su mensaje **y su ubicación** (`at módulo:líne
 compila. Un filtro (`ray test suma`, o `ray test archivo.ray suma`) selecciona por subcadena del
 nombre.
 
-**`ray test --native [--release]`** (M312) corre las mismas pruebas sobre el **binario nativo**:
+**`ray test --native [--release]`** corre las mismas pruebas sobre el **binario nativo**:
 cada suite se compila una vez a un ejecutable cuyo `main` despacha por el nombre de la prueba, y
 cada prueba corre como un proceso aparte (aislada, como en la VM). El informe y los códigos de
 salida son los mismos; la única diferencia es que un fallo no trae la línea `at módulo:línea:col`
@@ -3364,7 +2818,7 @@ Cosas que sorprenden viniendo de otros lenguajes:
   compilador los rechaza, y dentro de una función anónima están "fuera del bucle". Los patrones
   que suelen evitarlos (extraer a función, búsquedas de la stdlib, `.take(n)`) están en §4, "Salir
   temprano".
-- **`match` casa enums, tuplas, structs y primitivos** (M310): `match (n) { 0 => …, _ => … }`,
+- **`match` casa enums, tuplas, structs y primitivos**: `match (n) { 0 => …, _ => … }`,
   `match ((m, p)) { ("GET", "/") => …, _ => … }` y literales dentro de un payload
   (`Shape.Rect(w, 0)`). Un `int`/`string`/`char` siempre necesita el brazo `_` (los literales no
   los agotan); las guardas (`patrón if cond`) siguen valiendo para el resto de condiciones.
@@ -3376,7 +2830,7 @@ Cosas que sorprenden viniendo de otros lenguajes:
   `=> { x = y; },`.
 - **Precedencia estilo C en los bit a bit**: `(flags & 32) != 0`, con paréntesis — `&`/`|`/`^` ligan más
   flojo que `==`/`!=`.
-- **Un literal en cola tras un `if`/`while` de sentencia YA FUNCIONA** (M153): `if (c) { … }`
+- **Un literal en cola tras un `if`/`while` de sentencia YA FUNCIONA**: `if (c) { … }`
   seguido de `(a, b)` o `[1, 2]` en la línea siguiente es el `if` como sentencia y el literal
   como valor del bloque — antes se parseaba como llamada/indexación del valor del `if` y había
   que esquivarlo con `return`. La regla (SPEC §5): en posición de sentencia, una forma-con-

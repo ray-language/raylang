@@ -1,0 +1,45 @@
+// The native dialogs: a three-button question, and the system's open and save panels.
+import std/ui;
+
+/// What the user chose when asked about unsaved changes.
+pub enum Choice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// "Save changes?" with three buttons. Esc counts as the LAST button, so Cancel goes last.
+pub fn ask_save(name: string) -> Choice {
+    let answer = ui.message_styled(
+        "Save changes to " + name + "?",
+        "Your changes will be lost if you don't save them.",
+        "warning",
+        ["Save", "Don't Save", "Cancel"]
+    );
+    match (answer) {
+        Result.Ok(0) => Choice.Save,
+        Result.Ok(1) => Choice.Discard,
+        _ => Choice.Cancel,
+    }
+}
+
+fn text_files() -> ui.FileDialogOptions {
+    var o = ui.file_options();
+    o.filters = [ui.filter("Text", ["txt", "md"]), ui.filter("Source", ["ray", "toml", "json"])];
+    o
+}
+
+/// The system "Open" panel. `None`: the user cancelled.
+pub fn pick_document() -> Option<string> {
+    var o = text_files();
+    o.title = "Open a document";
+    ui.pick_file_with(o).unwrap_or(Option.None)
+}
+
+/// The system "Save" panel, with a suggested name. `None`: the user cancelled.
+pub fn pick_target(suggested: string) -> Option<string> {
+    var o = text_files();
+    o.title = "Save the document";
+    o.suggested = suggested;
+    ui.save_file_with(o).unwrap_or(Option.None)
+}

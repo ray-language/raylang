@@ -3911,7 +3911,7 @@ donde las API de los proveedores cambian), y `agent` deja de ser «después»: y
 | 1 | `mcp` cliente: stdio + Streamable HTTP, herramientas, recursos, instrucciones | ✅ M336 (DESIGN §322) |
 | 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | ✅ M337 (DESIGN §323) |
 | 3 | `llm`: tipos comunes, envío y streaming, proveedores | ✅ M338 (DESIGN §324) |
-| 4 | `agent`: el bucle con presupuesto y aprobación | pendiente |
+| 4 | `agent`: el bucle con presupuesto y aprobación | ✅ M339 (DESIGN §325) |
 | 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | pendiente |
 
 La migración de `raycode` y `ray-sublime` a los paquetes la hace quien lleva cada repositorio: el

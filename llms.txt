@@ -259,7 +259,10 @@ std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, 
 arguments as `Json` and returns `Result<string, string>`, then `serve.stdio(p)`), `llm` (language models: `import llm/llm;` →
 `llm.for_anthropic(model, key)` or `llm.for_endpoint(base_url, model, key)` for any OpenAI-compatible server, then
 `llm.send(c, tools, history)` with `history` built from `llm.user(text)`; the reply has `.message.text` and
-`llm.tool_calls(reply)`; push `reply.message` and one `llm.tool_result(call.id, text)` per call, and send again).
+`llm.tool_calls(reply)`; push `reply.message` and one `llm.tool_result(call.id, text)` per call, and send again), `agent`
+(that loop, done: `import agent/agent;` → `agent.new(config)`, `agent.tool(a, name, description, schema_json_text, agent.READ, run)`,
+`agent.connect(a, "name", mcp_session)`, `agent.run(a, prompt)`; tools marked `agent.WRITE` or `agent.EXEC` need
+`agent.on_approve` or a higher `a.autonomy`).
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
 `std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration

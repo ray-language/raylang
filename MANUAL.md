@@ -1132,7 +1132,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
    feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
 
-3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`) — no embebidos; se declaran como dependencia (§14).
+3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema
 
@@ -2224,6 +2224,51 @@ fn main() -> int {
 un `llm.tool_result` por llamada, y vuelve a enviar: el bucle es tuyo. Los fallos pasajeros (un
 429, un 5xx, una conexión cortada) se reintentan solos. El README del paquete trae el bucle
 completo y todos los parámetros.
+
+### Un agente (`packages/agent`, dependencia)
+
+El paquete `agent` es el bucle que une los dos anteriores: un modelo (`llm`), herramientas
+tuyas y, si quieres, las de un servidor MCP (`mcp`). El modelo pide una herramienta, el agente la
+ejecuta, le devuelve el resultado y repite hasta que conteste.
+
+```rust
+import std/json;
+import agent/agent;
+import llm/llm;
+from std/json import Json;
+
+fn main() -> int {
+    let a = agent.new(llm.for_anthropic("claude-opus-5-5", env("ANTHROPIC_API_KEY").unwrap_or("")));
+    let _ = agent.tool(
+        a,
+        "add",
+        "Adds two integers",
+        `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}`,
+        agent.READ,
+        fn(args: Json) -> Result<string, string> {
+            let sum = json.get_int(args, "a").unwrap_or(0) + json.get_int(args, "b").unwrap_or(0);
+            Result.Ok(to_string(sum))
+        }
+    );
+    match (agent.run(a, "What is 19 + 23?")) {
+        Result.Ok(outcome) => {
+            print(outcome.text);
+            0
+        },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}
+```
+
+Cada herramienta declara su riesgo (`READ`, `WRITE` o `EXEC`) y el agente tiene un nivel de
+autonomía (`ASK`, `EDITS` o `AUTO`). Lo que solo lee corre siempre; lo que cambia cosas se
+pregunta primero, con `agent.on_approve`, salvo que el nivel lo deje pasar. Sin nadie a quien
+preguntar, no corre. `agent.connect(a, "nombre", sesión)` añade las herramientas de un servidor
+MCP, y `agent.on_event` cuenta lo que va pasando para que lo muestres como quieras. El README del
+paquete trae la tabla de qué corre solo en cada nivel.
 
 ### Bases de datos (`packages/db`, dependencia)
 

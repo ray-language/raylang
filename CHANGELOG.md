@@ -26,6 +26,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `llm.send_stream` entrega el texto según llega. Reintenta los fallos pasajeros respetando
   `Retry-After`, corrige solo los parámetros que el proveedor rechaza, reenvía intactos los
   bloques de razonamiento de Anthropic y usa su caché de prompt.
+- **Paquete `agent` 0.1.0: el bucle de un agente.** `import agent/agent;` une un modelo (`llm`),
+  herramientas propias y las de servidores MCP (`mcp`): `agent.new`, `agent.tool`,
+  `agent.connect` y `agent.run`. Cada herramienta declara su riesgo (`READ`, `WRITE`, `EXEC`) y
+  el agente un nivel de autonomía (`ASK`, `EDITS`, `AUTO`); lo que el nivel no deja pasar se
+  pregunta con `agent.on_approve`, y sin nadie a quien preguntar no corre. Un turno tiene un
+  presupuesto de pasos, se puede cancelar, y cuenta lo que pasa por `agent.on_event`.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

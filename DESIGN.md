@@ -16236,3 +16236,75 @@ posterior.
 
 **Hallazgo del backend nativo**, registrado en IDEAS §101 (16): comparar con `==` un enum de la
 stdlib sin `Eq` derivado corre en la VM y no compila en nativo.
+
+## 325. M339 — El paquete `agent` (oct 2026)
+
+Cuarta fase del arco de IDEAS §100: el bucle que une `llm` (§324) y `mcp` (§322–§323). En
+IDEAS figuraba como «opcional, después», con la condición de que hubiera dos apps que lo
+usaran. Las hay: `raycode` (801 líneas de bucle) y el agente de `ray-sublime`.
+
+**Lo que las dos apps tienen en común es el paquete; lo que no, se queda fuera.** Coinciden,
+casi palabra por palabra, en las reglas: tres niveles de autonomía (`ask`/`edits`/`auto`), un
+riesgo por herramienta, un tope de pasos, y que un «no» se le contesta al modelo como resultado
+de la llamada en vez de romper el turno. Difieren en todo lo demás: una pinta en un terminal en
+modo crudo y la otra en una ventana; una presta programas por nombre y la otra aplica ediciones
+en un búfer. El paquete lleva las reglas y no sabe nada de pintar ni de preguntar.
+
+**Decisiones de interfaz.**
+
+- **Preguntar y mostrar son dos funciones que pone la app.** `on_approve` recibe la llamada y su
+  riesgo y devuelve `Yes`, `Always` o `No`; `on_event` recibe lo que va pasando. Así el mismo
+  bucle sirve a un terminal, a un editor y a un servicio sin nadie delante.
+- **Sin `on_approve`, lo que necesita permiso no corre.** El defecto seguro: un agente en un
+  servidor no ejecuta nada que cambie cosas porque a nadie se le ocurrió preguntar. raycode ya
+  hacía esto cuando no había terminal.
+- **Las herramientas corren en la fibra que llamó a `run`.** raycode las lanzaba cada una en su
+  fibra para poder cancelarlas, pero una fibra recibe una COPIA de lo que captura: una
+  herramienta con estado (un contador, una caché, una conexión) lo perdería. En una librería
+  eso es una trampa; se prefiere que una herramienta sea una función normal.
+- **La cancelación abandona la espera al modelo, no la herramienta.** Es lo que sí se puede
+  hacer sin la trampa anterior: la petición corre en su fibra (solo lee) y el turno espera por
+  canal. El texto por partes se entrega en la fibra del llamador, así que al cancelar deja de
+  llegar en el acto. Cancelado en el primer paso, la pregunta sin contestar se retira del
+  historial.
+- **Una herramienta MCP sin declarar es `EXEC`.** Lo que un servidor declara de solo lectura
+  corre sin preguntar; un servidor que no dice nada se trata como si lo cambiara todo. Es la
+  regla de raycode, y es la razón de que `ray mcp` declare ahora sus herramientas (§323).
+- **`run` solo falla si falla el modelo.** Una herramienta que da `Err`, que aborta, que no
+  existe o cuyos argumentos no son JSON es parte de la conversación: el modelo lo lee como
+  `error: …` y decide. Quien llama a `run` distingue «no pude hablar con el modelo» de todo lo
+  demás sin mirar el texto.
+- **Lo que `llm` aprende del proveedor se guarda.** La petición usa una copia de la
+  configuración (el prompt efectivo lleva la nota de autonomía y las instrucciones de los
+  servidores); si `llm` corrige un parámetro en esa copia, el agente lo conserva. Es el mismo
+  problema que raycode resolvió aplicando el arreglo «en el turno y no en la petición».
+
+**Lo que queda fuera de la 0.1.0**: herramientas en paralelo, interrumpir una herramienta en
+curso, compactar el historial y los presupuestos por tokens o por coste.
+
+**Verificación.** `tests/agent_package_cli.rs`, de punta a punta contra un proveedor simulado
+que obedece un guion escrito en la pregunta (qué herramientas pedir, repetir sin fin, negarse,
+cortarse, tardar): los tres riesgos frente a los tres niveles, la aprobación en sus cuatro
+casos, lo que sale mal dentro de una herramienta, el presupuesto de pasos y el historial que
+deja, la respuesta por partes, la cancelación, y las herramientas del `ray mcp` real. VM y
+nativo dan la misma salida, comprobado a mano.
+
+**Contra un modelo real**, a mano (llama.cpp con Qwen 3.8 de 27B): una herramienta de lectura
+con estado en el propio programa; una de escritura sin nadie a quien preguntar (no corrió, y el
+modelo explicó por qué) y con alguien que dice sí (corrió y el estado cambió); una herramienta
+que falla; las herramientas de `ray mcp` con respuesta por partes; y la cancelación a los 1,5 s
+de una respuesta larga. Todo correcto. Lo más instructivo fue lo que no estaba en el guion: el
+modelo pidió la nota con dos títulos equivocados, leyó los dos `error: there is no note called
+…` y acertó al tercero. Que un fallo sea un resultado que el modelo lee, y no un error del
+turno, es lo que le deja corregirse solo.
+
+Y contra la **API real de OpenAI** (`gpt-4.1-nano`), lo que el modelo local no ejercitó: dos
+llamadas a herramientas en una misma respuesta (el historial queda `user assistant+2 tool tool
+assistant`); y que la conversación sigue siendo válida, y el proveedor la acepta, después de un
+«no», después de agotar el presupuesto de pasos y después de cancelar a mitad de una respuesta
+por partes. Con `gpt-5-nano` hablado a propósito con `max_tokens` y una temperatura, el agente
+conservó la corrección en su configuración. Todo correcto.
+
+Una limitación que la prueba hizo visible: al cancelar, la petición abandonada sigue generando
+en el servidor hasta que termina. Cerrar esa conexión desde la fibra que cancela no es posible
+hoy; queda anotado.

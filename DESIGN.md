@@ -16287,5 +16287,17 @@ que obedece un guion escrito en la pregunta (qué herramientas pedir, repetir si
 cortarse, tardar): los tres riesgos frente a los tres niveles, la aprobación en sus cuatro
 casos, lo que sale mal dentro de una herramienta, el presupuesto de pasos y el historial que
 deja, la respuesta por partes, la cancelación, y las herramientas del `ray mcp` real. VM y
-nativo dan la misma salida, comprobado a mano. **El bucle no está probado contra un modelo
-real**: al escribirlo ya no había modelo local ni clave. Lo que tiene debajo sí (§324).
+nativo dan la misma salida, comprobado a mano.
+
+**Contra un modelo real**, a mano (llama.cpp con Qwen 3.8 de 27B): una herramienta de lectura
+con estado en el propio programa; una de escritura sin nadie a quien preguntar (no corrió, y el
+modelo explicó por qué) y con alguien que dice sí (corrió y el estado cambió); una herramienta
+que falla; las herramientas de `ray mcp` con respuesta por partes; y la cancelación a los 1,5 s
+de una respuesta larga. Todo correcto. Lo más instructivo fue lo que no estaba en el guion: el
+modelo pidió la nota con dos títulos equivocados, leyó los dos `error: there is no note called
+…` y acertó al tercero. Que un fallo sea un resultado que el modelo lee, y no un error del
+turno, es lo que le deja corregirse solo.
+
+Una limitación que la prueba hizo visible: al cancelar, la petición abandonada sigue generando
+en el servidor hasta que termina. Cerrar esa conexión desde la fibra que cancela no es posible
+hoy; queda anotado.

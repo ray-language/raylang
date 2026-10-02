@@ -174,6 +174,8 @@ nav.top .links a.link { white-space: nowrap; }
 html.nav-open .drawer-scrim, html.toc-open .drawer-scrim { opacity: 1; visibility: visible; transition: opacity .3s ease; }
 html.nav-open, html.toc-open { overflow: hidden; }
 nav.top .links-head { display: none; }
+/* En escritorio el contenedor del panel no existe para el diseño: los enlaces siguen en la barra. */
+nav.top .links-clip { display: contents; }
 /* Hasta 75rem la barra completa no cabe (medido: ocho enlaces + idioma + tema + GitHub caben
    desde 1200 px): los enlaces pasan a un panel que entra deslizándose desde la derecha, el lado
    de su botón. GitHub queda fuera. `nav.top` lleva backdrop-filter y por eso es el bloque
@@ -194,15 +196,29 @@ nav.top .links-head { display: none; }
         transition: opacity .3s ease;
     }
     html.nav-open nav.top::after { opacity: 1; }
-    nav.top .links {
-        display: flex;
+    /* El panel cerrado queda fuera por la derecha, y eso ensancharía la página (lo que sobresale
+       por la derecha sí cuenta como desbordamiento): este contenedor, del tamaño de la ventana, lo
+       recorta. No recibe toques; el panel sí. */
+    nav.top .links-clip {
+        display: block;
         position: fixed;
         z-index: 2;
         top: 0;
-        right: 0;
-        width: min(20rem, 86vw);
+        left: 0;
+        width: 100%;
         height: 100vh;
         height: 100dvh;
+        overflow: hidden;
+        pointer-events: none;
+    }
+    nav.top .links {
+        display: flex;
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: min(20rem, 86vw);
+        height: 100%;
+        pointer-events: auto;
         flex-direction: column;
         align-items: stretch;
         gap: 0;
@@ -540,6 +556,7 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
     <div class="wrap">
         <a class="brand" href="{{ up }}index.html"><img src="{{ root }}assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
         <span class="spacer"></span>
+        <div class="links-clip">
         <div class="links">
         <div class="links-head">
             <span class="links-title">{{ t_menu }}</span>
@@ -588,6 +605,7 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
             <button type="button" data-mode="dark" title="{{ t_dark }}" aria-label="{{ t_dark }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path></svg>
             </button>
+        </div>
         </div>
         </div>
         <div class="theme" role="group" aria-label="{{ t_theme }}">

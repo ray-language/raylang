@@ -1,0 +1,26 @@
+// The optimization must not change the answer: the three versions produce the same report.
+import data;
+import slow;
+import fast;
+import parallel;
+
+@test
+fn both_versions_agree() {
+    let lines = data.log(5000);
+    assert_eq(slow.report(lines), fast.report(lines));
+    assert_eq(parallel.report(lines, 4), fast.report(lines));
+    assert_eq(parallel.report(lines, 1), fast.report(lines));
+}
+
+@test
+fn the_report_counts_and_averages() {
+    let lines = ["GET /a 200 10", "GET /b 200 5", "GET /a 200 30"];
+    assert_eq(fast.report(lines), "/a 2 20\n/b 1 5\n");
+    assert_eq(slow.report(lines), "/a 2 20\n/b 1 5\n");
+}
+
+@test
+fn the_input_is_deterministic() {
+    assert_eq(data.log(100), data.log(100));
+    assert_eq(data.log(3)[0].split(" ").len(), 4);
+}

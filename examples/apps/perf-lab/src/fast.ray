@@ -1,0 +1,46 @@
+// The second version, after profiling: the same report, with a map for the lookup, the built-in
+// sort, and the lines joined once at the end.
+
+/// What is known about one path.
+pub struct Stat {
+    path: string,
+    count: int,
+    total: int,
+}
+
+/// Requests and total milliseconds per path.
+pub fn tally(lines: [string]) -> Map<string, Stat> {
+    var stats: Map<string, Stat> = Map.new();
+    for line in lines {
+        let parts = line.split(" ");
+        let path = parts[1];
+        let ms = parts[3].parse_int().unwrap_or(0);
+        // Hash lookup: constant time, however many paths there are.
+        match (stats.get(path)) {
+            Option.Some(s) => {
+                s.count = s.count + 1;
+                s.total = s.total + ms;
+            },
+            Option.None => stats.insert(path, Stat { path: path, count: 1, total: ms }),
+        }
+    }
+    stats
+}
+
+/// The report text: one line per path, most requested first (ties by path).
+pub fn render(stats: Map<string, Stat>) -> string {
+    let sorted = sort_by(stats.values(), fn(a: Stat, b: Stat) -> bool {
+        a.count > b.count || (a.count == b.count && a.path < b.path)
+    });
+    // Collect the lines and join them once.
+    var out: [string] = [];
+    for s in sorted {
+        out.push(s.path + " " + to_string(s.count) + " " + to_string(s.total / s.count));
+    }
+    out.join("\n") + "\n"
+}
+
+/// Requests and average milliseconds per path, most requested first.
+pub fn report(lines: [string]) -> string {
+    render(tally(lines))
+}

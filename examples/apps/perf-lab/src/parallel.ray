@@ -1,0 +1,32 @@
+// The third version: the fast one, spread over several cores. Each fiber tallies one slice of the
+// log and the results are merged. Fibers do not share memory: a fiber receives a COPY of its
+// slice and its result is copied back, so this only pays when the work per slice outweighs
+// the copying.
+import fast;
+from fast import Stat;
+
+/// The same report as `fast.report`, computed by `workers` fibers.
+pub fn report(lines: [string], workers: int) -> string {
+    let chunk = lines.len() / workers + 1;
+    var tasks: [Task<Map<string, Stat>>] = [];
+    var from = 0;
+    while (from < lines.len()) {
+        let part = lines.slice(from, from + chunk);
+        tasks.push(spawn(fn() -> Map<string, Stat> { fast.tally(part) }));
+        from = from + chunk;
+    }
+    // Merge: add up each path's counts across the slices.
+    var merged: Map<string, Stat> = Map.new();
+    for t in tasks {
+        for (path, s) in join(t) {
+            match (merged.get(path)) {
+                Option.Some(m) => {
+                    m.count = m.count + s.count;
+                    m.total = m.total + s.total;
+                },
+                Option.None => merged.insert(path, s),
+            }
+        }
+    }
+    fast.render(merged)
+}

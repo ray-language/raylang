@@ -1,15 +1,15 @@
-# Investigación: el costo de la "azúcar" del framework `web/framework` (post M96c-g)
+# Investigación: el costo de la "azúcar" del framework `web/framework` (tras los fixes de contención)
 
 > Nota de alcance: continuación directa de
 > [`docs/investigacion-p99-framework-web.md`](investigacion-p99-framework-web.md) (rama
 > `perf/registro-handles-contencion`, fusionada). Esa investigación resolvió la contención de
-> mutexes globales del runtime nativo (M96c-g); con eso fuera de la ecuación, esta retoma la
+> mutexes globales del runtime nativo; con eso fuera de la ecuación, esta retoma la
 > pregunta original — cuánto cuesta la capa de conveniencia del framework tipo Express frente al
 > `net/webserver` pelado — que antes quedaba enmascarada por la contención.
 
 ## 1. Punto de partida
 
-Con M96c-g mergeados (registro de handles, PRNG, pool de hilos, `print`, chequeo TLS — todos
+Con esos fixes mergeados (registro de handles, PRNG, pool de hilos, `print`, chequeo TLS — todos
 cacheados/sin lock global), se repitió la comparación original A (framework completo, 15 rutas) /
 B (framework, 1 ruta) / C (`net/webserver` pelado) para ver cuánto de la brecha sigue viva.
 
@@ -43,7 +43,7 @@ esa contención no está, se ve la letra chica.
 ## 4. Hallazgo 2 — el profile ya no tiene locks; el trabajo real es reconstrucción + tracing/logging
 
 `sample` bajo `-c 200 -q 15000` sobre A: `__psynch_mutexwait` cayó de **110 996** (medición
-original, pre-M96c) a **188** — confirma que la contención está resuelta. Contando apariciones de
+original, antes de los fixes) a **188** — confirma que la contención está resuelta. Contando apariciones de
 funciones raylang en el árbol de llamadas (proxy de "cuánto tiempo se ve esto en la pila"):
 
 | función | apariciones |
@@ -73,7 +73,7 @@ Dos familias de costo real (ninguna es un lock, todo es cómputo puro):
    investigación anterior (§4), ahora sin nada que lo tape.
 2. **Tracing + logging estructurado** — `random_hex`/`new_trace`/`log::emit`/`json_escape`: NO
    estaba en el radar de la investigación anterior (esa se centró en el LOCK del PRNG y de
-   `Stdout`, ya resueltos por M96d/M96f — pero el trabajo de CÓMPUTO detrás de generar un
+   `Stdout`, ya resueltos — pero el trabajo de CÓMPUTO detrás de generar un
    trace_id y renderizar la línea JSON nunca se había medido en microbenchmark aislado).
 
 ## 5. Hallazgo 3 — microbenchmark aislado: el logging pesa MÁS que reconstruir la app
@@ -125,9 +125,9 @@ implementarse.
    anterior (`investigacion-p99-framework-web.md` §8, ítem 1) descartó esto por un problema de
    *soundness*: un `Regex` raylang usa `Rc` internamente, y compartirlo entre hilos de verdad
    (una caché GLOBAL) es una carrera de datos en su contador de referencias. Pero acá el patrón
-   es distinto: si la caché es **thread-local** (no cruza de hilo jamás, como M96c/M96g), no hay
+   es distinto: si la caché es **thread-local** (no cruza de hilo jamás, como las cachés del registro y de TLS), no hay
    ningún problema de soundness — el primer request que un hilo del pool atiende paga el
-   `compile()`, los siguientes (el pool reusa hilos entre miles de requests, M96) lo encuentran
+   `compile()`, los siguientes (el pool reusa hilos entre miles de requests) lo encuentran
    cacheado. Esto SÍ necesita una pieza nueva: raylang no tiene hoy ninguna forma de expresar
    "guardame esto por hilo" desde código raylang — hace falta un builtin nuevo (candidato:
    algo como `once_per_thread<T>(f: fn() -> T) -> T`, ver ítem 3).
@@ -138,10 +138,10 @@ implementarse.
    reusarla en cada request siguiente que ESE MISMO hilo atienda — sin importar de qué conexión
    venga (el pool ya reusa hilos entre conexiones distintas). Elimina de un saque el `build_app()`
    completo (~7 µs) para la inmensa mayoría de los requests. Es seguro exactamente por la misma
-   razón que M96c/g: nunca cruza de hilo. **Pero necesita un builtin nuevo de lenguaje** (algo
+   razón que esas cachés: nunca cruza de hilo. **Pero necesita un builtin nuevo de lenguaje** (algo
    como `once_per_thread`), lo cual implica:
    - Checker: nueva regla de tipos para un builtin genérico.
-   - Nativo: `thread_local!` + `OnceCell` — trivial, mismo patrón que M96c/g.
+   - Nativo: `thread_local!` + `OnceCell` — trivial, mismo patrón que esas cachés.
    - **VM: semántica DISTINTA, no es "no-op safe by default".** La VM usa fibras M:1 (muchas
      fibras concurrentes sobre el MISMO hilo de SO) — cachear "por hilo de SO" en la VM
      compartiría la App entre fibras que lógicamente son conexiones DISTINTAS y sí corren
@@ -180,7 +180,7 @@ verdes, línea JSON idéntica (`{"ts":...,"trace_id":...}` bien formada, probado
 **Medición end-to-end (`oha`, ABBA, `-c 200 -q 15000`)**: sin diferencia distinguible del ruido
 (p50 ~0.78–0.83 ms para ambos binarios, dentro del rango de variación normal entre corridas). Es
 un resultado ESPERADO y honesto: 0.6 µs de ahorro está muy por debajo del piso de ruido de
-medición de este harness (decenas de µs) — el mismo patrón que M96e/M96g en la ronda anterior
+medición de este harness (decenas de µs) — el mismo patrón que los fixes del pool y de TLS en la ronda anterior
 (fix correcto y verificado, ganancia real pero no discernible en `oha` a esta escala). Se
 mantiene por ser la práctica ya establecida en el propio archivo, no por una promesa de
 performance medible.
@@ -189,7 +189,7 @@ performance medible.
 
 Antes de tocar código: estos dos ítems comparten la misma pieza de lenguaje nueva
 (`once_per_thread<T>(f: fn() -> T) -> T` o equivalente) — un builtin que no existe hoy en
-raylang. A diferencia de M96c-g (glue interno del backend nativo, invisible a cualquier programa
+raylang. A diferencia de los fixes de contención (glue interno del backend nativo, invisible a cualquier programa
 raylang) y del ítem 1 de esta ronda (una función de stdlib reescrita, misma firma), esto agrega
 **superficie nueva al lenguaje**: nueva regla en el checker, nueva semántica que la VM y el
 nativo deben implementar DISTINTO (nativo: `thread_local!` real; VM: debe ser un no-op — "llamar
@@ -202,7 +202,7 @@ ganancia, o se prefiere no crecer la superficie del lenguaje y aceptar el costo 
 como el precio del modelo de actores de heap-aislado?
 
 **Decisión (19 jul 2026)**: NO se implementa. El costo de reconstrucción (~7 µs de `build_app()`
-+ ~7 µs de logging, frente a un piso de latencia de ~0.7 ms de mediana tras M96c-g) se considera
++ ~7 µs de logging, frente a un piso de latencia de ~0.7 ms de mediana tras los fixes de contención) se considera
 aceptable — no se justifica agregar `once_per_thread` (o equivalente) al lenguaje, con el costo
 de mantenimiento de una semántica distinta VM-vs-nativo, por esta ganancia. **Investigación
 cerrada** con el ítem 1 (§8) implementado y los ítems 2-4 documentados como diferidos, sin

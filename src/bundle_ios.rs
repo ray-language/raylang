@@ -39,7 +39,7 @@ const APP_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
 /*RAY_AUDIO_IMPORT*/
 
-extern void ray_ui_will_terminate(void); // M332: apaga el audio con rampa antes de morir
+extern void ray_ui_will_terminate(void); // Apaga el audio con rampa antes de morir
 
 @implementation AppDelegate
 
@@ -49,7 +49,7 @@ extern void ray_ui_will_terminate(void); // M332: apaga el audio con rampa antes
     return YES;
 }
 
-// M332 (rayplay): cerrar la app desde el selector con el audio sonando mataba el proceso con la
+// Cerrar la app desde el selector con el audio sonando mataba el proceso con la
 // cola a mitad de onda (clic). Con la sesión de reproducción activa iOS avisa aquí antes.
 - (void)applicationWillTerminate:(UIApplication *)application {
     ray_ui_will_terminate();
@@ -84,10 +84,10 @@ extern int ray_ui_scheme_status(long long h);
 extern const char *ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
-extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve ray://app
+extern void ray_ui_shell_capabilities(int caps); // 1 = este shell sirve ray://app
 /*RAY_DEV_EXTERN*/
 
-// M322 — `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
+// `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
 // shell de macOS: montajes, Range, ETag/304, MIME). El cuerpo se lee por trozos en una cola
 // global y se entrega en el hilo principal; una tarea parada por WebKit queda en `_stopped`
 // (consultado SOLO en el hilo principal, donde también llega stop) — entregar a una tarea parada
@@ -171,7 +171,7 @@ extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve r
 
 @end
 
-// M152 — el puente IPC: window.ray.send(text) llega aquí y se empuja como evento "message"
+// El puente IPC: window.ray.send(text) llega aquí y se empuja como evento "message"
 // (window 0: el shell no conoce el handle del programa; documentado). Clase DEDICADA — el
 // SceneDelegate como handler crearía un ciclo de retención
 // window -> ... -> userContentController -> (strong) delegate -> window.
@@ -182,7 +182,7 @@ extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve r
 - (void)userContentController:(WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if (!message.frameInfo.isMainFrame) {
-        return; // M159: solo el main frame habla con el programa (paridad con macOS)
+        return; // Solo el main frame habla con el programa (paridad con macOS)
     }
     if (![message.body isKindOfClass:[NSString class]]) {
         return; // solo strings v1 (paridad con escritorio)
@@ -191,7 +191,7 @@ extern void ray_ui_shell_capabilities(int caps); // M323: 1 = este shell sirve r
 }
 @end
 
-// El MISMO shim que inyecta el escritorio (ray_runtime::ui::RAY_JS_SHIM, M152/M157:
+// El MISMO shim que inyecta el escritorio (ray_runtime::ui::RAY_JS_SHIM:
 // send + request/Promise + _deliver).
 static NSString *const rayJsShim =
     @"(function(){var p={},n=0;function e(t){return typeof t===\"string\"?t:JSON.stringify(t)}"
@@ -227,10 +227,10 @@ static void ray_eval(const char *js) {
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     UIViewController *vc = [UIViewController new];
-    // M152: el puente se (re)instala EN CADA conexión de escena — el webview muere y renace
+    // El puente se (re)instala EN CADA conexión de escena — el webview muere y renace
     // con ella (sceneDidDisconnect lo anula), así que esto va fuera del dispatch_once.
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
-    [cfg setURLSchemeHandler:[RaySchemeHandler new] forURLScheme:@"ray"]; // M322: ray://app/…
+    [cfg setURLSchemeHandler:[RaySchemeHandler new] forURLScheme:@"ray"]; // ray://app/…
     [cfg.userContentController addScriptMessageHandler:[RayMsgHandler new] name:@"ray"];
     [cfg.userContentController
         addUserScript:[[WKUserScript alloc] initWithSource:rayJsShim
@@ -577,9 +577,9 @@ pub fn write_project(
     {
         let (dev_extern, dev_connect, dev_method) = match url_scheme {
             Some(_) => (
-                "extern void ray_dev_link(const char *url); // M330 D5: enlace por el esquema URL del shell de desarrollo",
-                "for (UIOpenURLContext *ctx in connectionOptions.URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); } // M330 D5",
-                "// M330 D5: la app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {\n    for (UIOpenURLContext *ctx in URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); }\n}",
+                "extern void ray_dev_link(const char *url); // Enlace por el esquema URL del shell de desarrollo",
+                "for (UIOpenURLContext *ctx in connectionOptions.URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); }",
+                "// La app ya abierta recibe un enlace (QR escaneado con la cámara del sistema).\n- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {\n    for (UIOpenURLContext *ctx in URLContexts) { ray_dev_link(ctx.URL.absoluteString.UTF8String); }\n}",
             ),
             None => ("", "", ""),
         };

@@ -81,7 +81,7 @@ Aplicando los tres niveles acordados:
 - **Puntos de cesión**: `recv` sobre canal vacío, `send` sobre canal acotado lleno, E/S de socket que
   bloquearía, `sleep`, `join`. Ni más ni menos: añadir un punto de cesión donde hoy no lo hay cambia
   el entrelazado observable de programas correctos.
-- **FIFO de canales** y **orden causal de `print`** (la lección de M96f: un `join` que pasa-antes-que
+- **FIFO de canales** y **orden causal de `print`** (una lección ya aprendida: un `join` que pasa-antes-que
   un `print` debe seguir viéndose en ese orden).
 - **Aislamiento de heap por fibra** (modelo de actores) y semántica de movimiento en `send`.
 - **Propagación de fallos**: `Task` que falla → `Failed`; `scope` que cierra → cancela hermanas.
@@ -294,7 +294,7 @@ Medido sobre el `plaintext` del bench, A/B intercalado ×3, misma sesión, `-c 1
    hazard clásico de las corrutinas stackful compiladas (Go lo evita porque su compilador conoce
    los puntos de cesión). La fijación lo elimina de raíz: cualquier TLS cacheado sigue siendo del
    hilo correcto. Consecuencia: **el robo de trabajo queda PROHIBIDO, no pendiente.**
-   Corolario (M254, DESIGN §242): el worker de origen decide quién puede retrasar a quién. Se
+   Corolario (DESIGN §242): el worker de origen decide quién puede retrasar a quién. Se
    elegía por round-robin ciego, y una fibra ocupada en CPU retrasaba a la vecina que le tocó por
    el módulo aunque hubiera workers libres; ahora se elige el worker con **menos fibras vivas**
    (contador por worker), así dos fibras concurrentes solo comparten worker cuando hay más fibras
@@ -377,7 +377,7 @@ Lo que faltaba para que `--fibers` cubra TODA la superficie de red:
   `WouldBlock` esperan readiness y reintentan — en fibra APARCAN, fuera hacen poll(2). La
   **dirección** de la espera sale de la sesión rustls (`wants_write`): el handshake alterna
   lecturas y escrituras, y aparcar por lectura cuando toca escribir interbloquearía. El timeout de
-  lectura (M56.4) va por el mismo camino y vence con `"read timeout"` byte-idéntico a la VM. Los
+  lectura va por el mismo camino y vence con `"read timeout"` byte-idéntico a la VM. Los
   sockets de `connect`/`connect_h2` pasan a no-bloqueantes al crearse (los de accept/upgrade ya lo
   eran por F2); el handshake eager de `connect_h2` (ALPN) sigue bloqueante-acotado.
 - **La lectura TLS aparca DENTRO del despacho** → dos reglas nuevas con dientes: el búfer no puede
@@ -387,7 +387,7 @@ Lo que faltaba para que `--fibers` cubra TODA la superficie de red:
   fijación (el guard nunca cambia de hilo) y porque la sesión es fiber-privada.
 - **La caché "¿es TLS este handle?" viaja en el ctx** (como la de sockets: el estado por-conexión
   muere con su fibra dueña, no con un hilo).
-- **UDP**: bind no-bloqueante; `recv_from` aparca la fibra hasta el datagrama (la cesión M20.11 de
+- **UDP**: bind no-bloqueante; `recv_from` aparca la fibra hasta el datagrama (la misma cesión que hace
   la VM); `send_to` aparca en el raro búfer-lleno.
 
 Paridad: 9/9 en `native_fibers_cli` (los 2 nuevos: TLS self-talk — handshake+I/O aparcando por
@@ -451,7 +451,7 @@ esperador ocioso) y pasan a una **lista de esperas** (`WaitList` en `ray_runtime
 - El runtime emitido unifica los sitios (send/recv/close/wait/select/scope) sobre una tríada
   `__RaySync<T>` = (Mutex, Condvar, WaitList) con helpers `__ray_cv_wait`/`__ray_notify`: las
   cadenas de los sitios son IDÉNTICAS en ambos modos; solo cambian los helpers y el alias. El
-  hilo `main` esperaba por la condvar (ambas vías se notifican); desde **M329** (findings #107) el
+  hilo `main` esperaba por la condvar (ambas vías se notifican); desde el
   programa corre como FIBRA (pila reservada de 8 MiB) en los binarios normales y el hilo 1 solo
   espera su fin — la condvar queda para los modos `--lib` y con `std/ui`, que conservan el hilo.
 
@@ -468,7 +468,7 @@ canales no están en el hot path. Paridad intacta: 9/9 de fibras, AMBOS corpus, 
 **El arco no tiene ya piezas interinas.** Pendientes menores (no bloqueantes): connect
 no-bloqueante del cliente, pool de pilas de corrutina, sharding del buzón del reactor.
 
-## 12. Windows (M182, sep 2026) — el reactor `WSAPoll` y el límite de corosensei
+## 12. Windows (sep 2026) — el reactor `WSAPoll` y el límite de corosensei
 
 El port a Windows (`docs/windows.md` 3.6, DESIGN §174) no cambió el modelo: el scheduler es de
 *readiness* y la forma que encaja en Windows es `WSAPoll` — persistente sobre la lista de
@@ -483,7 +483,7 @@ cross-compilando desde una VM ARM64 y ejecutando bajo la emulación x64 de Windo
 byte-idéntica a la VM en el servidor TCP que se habla a sí mismo y en los canales); el runner
 x86_64 de CI corre `tests/native_fibers_cli.rs`.
 
-## 13. M319 (sep 2026) — spin-then-park y cancelación sin pulso
+## 13. Sep 2026 — spin-then-park y cancelación sin pulso
 
 Findings #75: el despertar por futex entre workers dominaba el patrón pedir/responder. Dos
 cambios en `fibers.rs` + el runtime emitido (crónica y medidas en DESIGN §301 y PERFORMANCE.md):

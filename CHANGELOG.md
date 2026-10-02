@@ -22,7 +22,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **REFERENCE, `llms.txt` y README sin M-números** ni referencias internas (hallazgos, secciones de
   IDEAS), en español e inglés.
 - **`ray help`, el `.gitignore` de `ray new` y el README del proyecto Android generado** ya no
-  muestran M-números. Tampoco `docs/web-framework.md`, `docs/build.md` ni `docs/mcp.md`.
+  muestran M-números. Tampoco los comentarios de los shells iOS y Android generados, las entradas
+  que `ray registry publish` escribe en el índice, ni las guías, diseños e investigaciones de
+  `docs/` (quedan solo las especificaciones de hito y los planes, que se indexan por M-número).
 
 ## 1.27.27 — 2026-10-01
 

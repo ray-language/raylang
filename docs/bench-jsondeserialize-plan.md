@@ -141,7 +141,7 @@ de 20k objetos ×5, y regex `find_all` sobre ~300 KB de log sintético):
 
 - **`std/json` casi no hereda** — y es lo esperado: su parser ya esquiva por
   diseño los builtins mejorados (cursor sobre `[char]` materializado una vez,
-  M59.5, justo porque `s[i]`/`substring` eran O(n); StringBuilder para strings).
+  justo porque `s[i]`/`substring` eran O(n); StringBuilder para strings).
   D3 tampoco le aplica (usa `match`, no `unwrap_or`). Su coste en la VM es el
   **bucle interpretado por-carácter** (~51 µs/registro): cada carácter son
   varios opcodes+marcos. Eso no lo mueve ningún builtin — es territorio del

@@ -20,8 +20,8 @@ al resto), el porqué medido con perfil, y el plan.
 | **regex-std.ray VM** | **Pike VM interpretada** | **55.9 s** (723× Go) |
 
 Contexto honesto: todos los demás lenguajes **bindean un motor en C/C++/nativo**;
-`std/regex` es el único motor escrito EN el propio lenguaje del bench (M29.1,
-Thompson→Pike VM, tiempo lineal garantizado). La comparación es motor-contra-
+`std/regex` es el único motor escrito EN el propio lenguaje del bench
+(Thompson→Pike VM, tiempo lineal garantizado). La comparación es motor-contra-
 motor, no lenguaje-contra-lenguaje. Aun así, 25× en nativo tiene margen real:
 
 ## 2. Atribución (perfil del binario nativo, top-of-stack)

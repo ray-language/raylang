@@ -41,10 +41,10 @@ fuente → [loader] → [checker] → AST bajado → [transpile.rs] → .rs → 
 closures → `Rc<dyn Fn>`, `ptr` → `i64`. La semántica de valor de raylang sobre la de movimiento
 de Rust se resuelve **clonando al leer** (bump de refcount, O(1)). Traits por **erasure** (los
 métodos ya llegan bajados como funciones `Tipo#metodo` → `mangle` los hace identificadores Rust);
-bounds `T: Eq`/`T: Show`/`T: Ord` por **paso de diccionarios** (`Ord` desde M120: `less` se emite
+bounds `T: Eq`/`T: Show`/`T: Ord` por **paso de diccionarios** (`Ord` incluido: `less` se emite
 como `eq`/`show` para que el argumento-diccionario `int#less`/`Tipo#less` exista como valor; las
 comparaciones directas siguen bajando a `<`); `print`/`to_string` vía un trait propio
-`RayShow` (con impls para `Rc<RefCell<…>>`, Map, tuplas, y u8/u32/u64 desde M120).
+`RayShow` (con impls para `Rc<RefCell<…>>`, Map, tuplas, y u8/u32/u64).
 
 **El mecanismo clave para lo que sigue — emisión bajo demanda del runtime**: el struct
 `Transpiler` lleva flags `needs_handles` / `needs_concurrency` / `needs_signals` /
@@ -105,14 +105,14 @@ web-demos 24 → 38 byte-idénticos).
 Dos categorías muy distintas:
 
 1. **Diferidos de ingeniería** (proyectos con tradeoffs, no huecos): canales de tipos mutables
-   (struct/arreglo/Map cruzando hilos), `spawn` de función nombrada, cancelación M12.5,
+   (struct/arreglo/Map cruzando hilos), `spawn` de función nombrada, cancelación de hermanas,
    `try_join`, `print` de `ptr`, structs/arreglos por FFI. De la fase 45 quedan además tres
    web-demos caídos por bugs concretos del transpilador (no de crates): `metrics_server_demo`
    (canal de struct no-Send), `udp_yield_demo` (`spawn` de fn nombrada), `framework`/`webserver`
    (captura `t` en spawn + `RayShow` de un `[fn]`).
 2. **El techo de los crates** — la razón de este documento: **TLS (`rustls`), criptografía de
    producción (`ring`) y bases de datos (`rusqlite`, y los clientes que cuelgan de TLS)**. La VM
-   los tiene (M43, M53.3) porque el binario `ray` es un proyecto Cargo. El transpilado **no**,
+   los tiene porque el binario `ray` es un proyecto Cargo. El transpilado **no**,
    y la causa raíz no está en el transpilador: es que `build_native` compila con **`rustc`
    pelado**, y un `rustc` suelto no puede resolver dependencias de crates.io (eso lo hace Cargo).
    Los `__tls_*`, `ring::*`, `sqlite_*` hoy quedan como stubs que panican si se alcanzan.
@@ -243,7 +243,7 @@ pub fn sqlite_open(path: &str) -> Result<i64, String> { /* rusqlite + registro d
 pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> { /* rustls + registro */ }
 ```
 
-Y ya están tras features de Cargo (`net-tls`, `sqlite` — M89 build slim, M44a wasm), con **doble
+Y ya están tras features de Cargo (`net-tls`, `sqlite` — el build slim y wasm), con **doble
 definición**: la real y un fallback "unavailable" cuando la feature está apagada:
 
 ```rust
@@ -294,8 +294,7 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # … webpki-roots, rustls-pki-types (las mismas líneas del Cargo.toml raíz actual)
 ```
 
-El binario `ray` pasa a consumirlo — sus features actuales (`net-tls`, `sqlite`, el build slim
-M89) se convierten en *reenvíos*:
+El binario `ray` pasa a consumirlo — sus features actuales (`net-tls`, `sqlite`, el build slim) se convierten en *reenvíos*:
 
 ```toml
 # Cargo.toml raíz
@@ -430,7 +429,7 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
 - **Los mensajes de error cara-al-usuario** (por convención en inglés y byte-idénticos entre
   motores) viven una vez, en el crate.
 - **`--without <dep>` sale gratis**: apaga `needs_rt_*` → la función vuelve a caer en
-  `emit_stub` → el binario-que-panica de hoy. El build slim M89 de la propia VM ya demuestra el
+  `emit_stub` → el binario-que-panica de hoy. El build slim de la propia VM ya demuestra el
   patrón feature-apagada→fallback en este mismo código.
 - **Escala fila-a-fila**, como todo el arco: el siguiente crate (p. ej. un cliente postgres
   nativo algún día) es un módulo + una feature en el runtime, una interceptación en `emit_call`,
@@ -558,8 +557,8 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > handshake rendezvous pasa de "cola vacía" a **generación de consumo** (`taken`) — con ≥2 emisores,
 > A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el suyo ya se
 > consumió; (2) **`send` sobre canal cerrado** aborta con el texto de la VM (`send on a closed
-> channel`; antes: descarte silencioso); (3) **`close` con emisor bloqueado** — M190: lo DESPIERTA y
-> es su `send` el que aborta con `send on a closed channel`, como la VM (hasta M190 abortaba en el
+> channel`; antes: descarte silencioso); (3) **`close` con emisor bloqueado** — lo DESPIERTA y
+> es su `send` el que aborta con `send on a closed channel`, como la VM (antes abortaba en el
 > sitio del close con `close on a channel with a blocked sender`, contador `senders`; antes de eso,
 > return silencioso del emisor y su valor quedaba consumible). Los panics llevan el MISMO texto que el error de ejecución de
 > la VM; el exit code (101 vs 70) queda con H6. Tests: multi-emisor ×10, send-cerrado y
@@ -573,7 +572,7 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > `NATIVE_STUBBED_BUILTINS` queda VACÍO. **N5 — valores de heap y funciones cruzando hilos**:
 > (a) structs/enums/Map/arrays/tuplas cruzan canales/Tasks/capturas de spawn por DEEP COPY — la repr
 > Send universal `__RaySend` + conversores `__to_send_N`/`__from_send_N` generados bajo demanda
-> (semántica de heap aislado M38: lo que cruza se copia; los canales son el conducto); las capturas
+> (semántica de heap aislado: lo que cruza se copia; los canales son el conducto); las capturas
 > del closure de spawn se convierten fuera y se reconstruyen dentro (una `var`-celda se re-crea como
 > celda local → mutación aislada, como la VM). (b) un param de tipo fn que cruza un spawn (directa o
 > transitivamente — punto fijo sobre el grafo de llamadas) se emite como GENÉRICO de Rust
@@ -584,7 +583,7 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > NATIVO byte-idéntico a la VM (`/`, `/lang/rust`, 404).
 >
 > **Port H21 N3/N4 (17 jul 2026): HECHOS — port de scheduler COMPLETO.**
-> **N3 — cancelación de hermanas (M12.5)**: cada Task lleva un token `Arc<AtomicBool>`; el hilo hijo
+> **N3 — cancelación de hermanas**: cada Task lleva un token `Arc<AtomicBool>`; el hilo hijo
 > ESCRIBE su resultado al terminar (push + condvar, ya no `JoinHandle.join`) y el scope, al salir,
 > espera a sus hijas SIN orden fijo: si alguna falló, cancela a las pendientes y propaga el fallo
 > ORIGINAL de inmediato (antes: unión en orden de registro → un fallo podía colgar para siempre
@@ -600,7 +599,7 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > CPU esperando. Orden de locks canal/tarea → actividad, sin ciclos.
 > **Bonus — bug REAL de la VM destapado por el port**: `ScopeEnd` aparca sobre la PRIMERA hija
 > pendiente y `fail_current_fiber` solo despertaba a los joiners de la tarea que falló → si fallaba
-> OTRA hermana, el scope nunca re-escaneaba: **deadlock en vez de propagar** (violaba M12.5; el test
+> OTRA hermana, el scope nunca re-escaneaba: **deadlock en vez de propagar** (violaba la cancelación de hermanas; el test
 > existente pasaba porque registraba la que falla primero). Fix en tándem en `src/vm.rs`:
 > `wake_all_join_waiters` al fallar una tarea (despertar espurio seguro: re-escanean y se re-aparcan)
 > + `cancel_task` despierta a los joiners de la cancelada. Test de regresión con el orden inverso en
@@ -621,10 +620,10 @@ distingue el origen).
 **H2. ✅ RESUELTO. Deadlock en canales rendezvous (`channel(0)`).** En el runtime de canales embebido
 (`src/transpile.rs:843-894`), `send` espera en la condvar mientras `q.len() >= cap` (con `cap=0`,
 siempre cierto) y `recv` espera mientras `q.is_empty()` — **no existe la entrega directa
-emisor→receptor** que la VM sí hace (M12.2, caso 1 de `send`). Ambos hilos duermen para siempre:
+emisor→receptor** que la VM sí hace (caso 1 de `send`). Ambos hilos duermen para siempre:
 un programa rendezvous válido que corre en la VM se cuelga en nativo. Además `__ray_select` solo
 considera listo `!q.is_empty() || closed` — no ve "emisor bloqueado", que en la VM cuenta como
-canal listo (M12.4). *Fix:* implementar el handshake de entrega directa (un slot de rendezvous o
+canal listo. *Fix:* implementar el handshake de entrega directa (un slot de rendezvous o
 un contador de emisores esperando que `recv` consuma) + que `select` lo consulte; testear los
 tres casos (cap=0, acotado lleno, `select` sobre emisor bloqueado). **Esfuerzo: ~1 día** (el
 runtime es código-como-string, cada iteración recompila el binario de prueba).
@@ -697,7 +696,7 @@ resta algo del 24–61×; quizá un flag `--unchecked` para el tier release). **
 > menú de enfoques (paridad+`--fast` / solo-exit-code / solo-panic / documentar) quedó en la conversación.
 
 **H7. ✅ RESUELTO (parcial: aviso de stubs). Semántica no implementada que NO se rechaza en compilación.** Dos formas:
-- **Divergencia muda**: la **cancelación de hermanas M12.5** y `try_join` no están implementadas
+- **Divergencia muda**: la **cancelación de hermanas** y `try_join` no están implementadas
   en nativo (deuda declarada en §2.4), pero un programa que dependa de ellas **compila sin aviso
   y se comporta distinto** (las hermanas siguen corriendo). Peor que un stub que panica.
 - **Stub silencioso**: la degradación a `panic!("… no está soportada")` (`transpile.rs:625-648`)
@@ -708,7 +707,7 @@ compilar. **Esfuerzo: ~0,5 día** (es detectar y reportar, no implementar).
 > **HECHO — el stub silencioso**: `build_native` ahora AVISA de cada función stubbeada (nombre + motivo)
 > al compilar (`Transpiled.stubbed`), no solo con `RAYLANG_TRANSPILE_DEBUG`. Un uso de `try_join` cae en
 > ese aviso. **QUEDA — la divergencia muda de cancelación**: la semántica automática de cancelación de
-> hermanas (M12.5) es un comportamiento del scheduler, no una llamada detectable en un punto → no se
+> hermanas es un comportamiento del scheduler, no una llamada detectable en un punto → no se
 > rechaza estáticamente; sigue documentada como límite del backend nativo (§2.4). Un futuro análisis
 > estático (¿un `scope` con hijos que puedan fallar?) podría avisar, pero es incierto y de bajo ROI.
 
@@ -743,7 +742,7 @@ silencio. *Fix:* test corpus que itera los ejemplos deterministas nativo↔VM, p
 > implementaron, y la prueba de que el brazo existe pasó a ser **ejecutarlo**:
 > `cli_cli::build_native_covers_the_array_math_and_fs_surface` compila un programa que los usa todos
 > y compara nativo ≡ VM. Sigue abierto: `min`/`max` de iterador (bound `T: Ord`) — su DEFINICIÓN
-> del prelude se salta y no hay brazo en emit_call. *(Actualizado en M120: los genéricos de
+> del prelude se salta y no hay brazo en emit_call. *(Actualizado: los genéricos de
 > usuario acotados por `Ord` YA compilan — el harness diferencial cazó el hueco y ahora los
 > diccionarios `int#less`/`Tipo#less` se emiten como los de `Eq`/`Show`; soportar min/max hoy
 > sería dejar de saltar sus defs, pendiente.)*
@@ -845,7 +844,7 @@ código generado.
 > ROI): cerrar del todo el anti-patrón `s[i]` exige cambiar la representación de string (`Rc<str>` →
 > indexable por char), un cambio grande y arriesgado que solo beneficia código no-idiomático; los clones
 > de `for`/`filter` no son cuello (el nativo gana igual) → no valen el análisis de mutación.
-> **Cerrado en M223 (sep 2026):** el anti-patrón `s[i]` dejó de ser cuadrático sin cambiar la
+> **Cerrado (sep 2026):** el anti-patrón `s[i]` dejó de ser cuadrático sin cambiar la
 > representación: `__ray_char_at`/`__ray_char_len` con la caché por cadena de la VM (DESIGN §215).
 
 **H20. ✅ RESUELTO. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
@@ -866,11 +865,11 @@ hilos reales vs VM determinista (el oráculo CSP lo mitiga corriendo solo salida
 `cli_cli.rs:225` — es decir, solo se testea el subconjunto determinista); `__ray_select` es poll
 con sleep de 50µs (busy-wait); **`send` sobre canal cerrado se descarta en silencio**
 (`transpile.rs:846`) donde la VM tiene semántica propia — este último sí merece fix junto a H2.
-La implementación real de cancelación M12.5/`try_join` en hilos reales es el ítem más difícil de
+La implementación real de cancelación de hermanas/`try_join` en hilos reales es el ítem más difícil de
 toda la lista: **3–5 días**, diferible si H7 los rechaza en compilación.
 > **Resuelto en tres tandas (la parte de CONCURRENCIA quedó cerrada):** el slice de canales
 > (16 jul: rendezvous multi-emisor, `send` sobre cerrado y `close` con emisor bloqueado ≡ VM) y el
-> port de scheduler N1–N5 (17 jul: contención de fallos, `try_join`, cancelación M12.5, select por
+> port de scheduler N1–N5 (17 jul: contención de fallos, `try_join`, cancelación de hermanas, select por
 > condvar sin busy-wait, y heap/funciones cruzando hilos — `Rc<dyn Fn>`/webserver incluidos). Los
 > flecos que SIGUEN siendo límites documentados del backend (§2.4), fuera del alcance de la
 > concurrencia: guardas de `match` y patrones de struct fuera del subconjunto, `signals()` solo

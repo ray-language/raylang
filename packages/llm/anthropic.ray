@@ -1,0 +1,432 @@
+// El dialecto de Anthropic (`POST /v1/messages`): el contenido va en bloques (`text`,
+// `tool_use`, `tool_result`) y los resultados de herramientas se agrupan en un único turno
+// `user`. Los bloques del asistente se reenvían tal cual (campo `raw`) para no romper los
+// bloques de razonamiento firmados. Todo aquí es puro: construir el cuerpo, leer la respuesta
+// y ensamblar un flujo.
+import std/json;
+import llm/wire;
+import llm/message;
+from std/json import Json;
+from llm/config import Config;
+from llm/message import Message, ToolCall, Reply, Tool, Usage;
+
+const VERSION: string = "2023-06-01";
+
+// La marca que le dice a Anthropic que se quede con todo lo anterior a este bloque y lo cobre
+// a una décima parte la próxima vez. Va al final de lo que no cambia dentro de una
+// conversación: el prompt de sistema y la última herramienta del catálogo.
+fn cached(block: Json) -> Json {
+    match (json.as_object(block)) {
+        Option.Some(table) => {
+            var marked: Map<string, Json> = Map.new();
+            for (k, v) in table {
+                marked.insert(k, v);
+            }
+            marked.insert("cache_control", wire.obj(["type"], [wire.jstr("ephemeral")]));
+            Json.JObject(marked)
+        },
+        Option.None => block,
+    }
+}
+
+fn tool_json(t: Tool) -> Json {
+    wire.obj(
+        ["name", "description", "input_schema"],
+        [wire.jstr(t.name), wire.jstr(t.description), t.schema]
+    )
+}
+
+// Los bloques de un turno del asistente: los originales si se conservaron, o una
+// reconstrucción a partir del texto y las llamadas.
+fn assistant_blocks(m: Message) -> [Json] {
+    if (m.raw.trim() != "") {
+        match (json.parse(m.raw)) {
+            Result.Ok(j) => match (json.as_array(j)) {
+                Option.Some(blocks) => {
+                    return blocks;
+                },
+                Option.None => { },
+            },
+            Result.Err(_) => { },
+        }
+    }
+    var blocks: [Json] = [];
+    if (m.text.trim() != "") {
+        blocks.push(wire.obj(["type", "text"], [wire.jstr("text"), wire.jstr(m.text)]));
+    }
+    for c in m.tool_calls {
+        blocks.push(
+            wire.obj(
+                ["type", "id", "name", "input"],
+                [
+                    wire.jstr("tool_use"),
+                    wire.jstr(c.id),
+                    wire.jstr(c.name),
+                    wire.arguments_json(c.arguments)
+                ]
+            )
+        );
+    }
+    blocks
+}
+
+/// The JSON body of a `/v1/messages` request. Consecutive tool results are merged into a
+/// single `user` turn, as the protocol requires. `streaming` asks for a stream.
+pub fn build_body(c: Config, tools: [Tool], history: [Message], streaming: bool) -> string {
+    var messages: [Json] = [];
+    var pending: [Json] = [];
+    for m in history {
+        if (m.role == "tool") {
+            pending.push(
+                wire.obj(
+                    ["type", "tool_use_id", "content"],
+                    [wire.jstr("tool_result"), wire.jstr(m.tool_call_id), wire.jstr(m.text)]
+                )
+            );
+        } else {
+            if (pending.len() > 0) {
+                messages.push(
+                    wire.obj(["role", "content"], [wire.jstr("user"), Json.JArray(pending)])
+                );
+                pending = [];
+            }
+            if (m.role == "assistant") {
+                messages.push(
+                    wire.obj(
+                        ["role", "content"],
+                        [wire.jstr("assistant"), Json.JArray(assistant_blocks(m))]
+                    )
+                );
+            } else {
+                let block = wire.obj(["type", "text"], [wire.jstr("text"), wire.jstr(m.text)]);
+                messages.push(
+                    wire.obj(["role", "content"], [wire.jstr("user"), Json.JArray([block])])
+                );
+            }
+        }
+    }
+    if (pending.len() > 0) {
+        messages.push(wire.obj(["role", "content"], [wire.jstr("user"), Json.JArray(pending)]));
+    }
+    var keys = ["model", "messages", "max_tokens"];
+    var values = [wire.jstr(c.model), Json.JArray(messages), wire.jint(c.max_tokens)];
+    if (c.system.trim() != "") {
+        // Como BLOQUE: es el mismo texto en cada petición de la conversación, y marcado se
+        // cobra a una décima parte a partir de la segunda.
+        let block = wire.obj(["type", "text"], [wire.jstr("text"), wire.jstr(c.system)]);
+        keys.push("system");
+        values.push(Json.JArray([if (c.cache) { cached(block) } else { block }]));
+    }
+    if (tools.len() > 0) {
+        var decls: [Json] = [];
+        var i = 0;
+        for t in tools {
+            i = i + 1;
+            // El catálogo entero es una sola cosa para la caché: basta marcar la última.
+            let declared = tool_json(t);
+            decls.push(if (c.cache && i == tools.len()) { cached(declared) } else { declared });
+        }
+        keys.push("tools");
+        values.push(Json.JArray(decls));
+    }
+    if (c.temperature >= 0.0) {
+        keys.push("temperature");
+        values.push(Json.JNum(c.temperature));
+    }
+    if (c.effort.trim() != "") {
+        keys.push("output_config");
+        values.push(wire.obj(["effort"], [wire.jstr(c.effort)]));
+    }
+    if (streaming) {
+        keys.push("stream");
+        values.push(Json.JBool(true));
+    }
+    wire.with_extra(wire.obj(keys, values), c.extra)
+}
+
+/// The headers `/v1/messages` requires: the API key and the API version.
+pub fn headers(c: Config) -> Map<string, string> {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "application/json");
+    h.insert("Accept", "application/json");
+    h.insert("anthropic-version", VERSION);
+    if (c.api_key.trim() != "") {
+        h.insert("x-api-key", c.api_key);
+    }
+    for (k, v) in c.headers {
+        h.insert(k, v);
+    }
+    h
+}
+
+fn usage_of(u: Json) -> Usage {
+    var used = message.no_usage();
+    used.input_tokens = wire.int_or(u, "input_tokens", 0);
+    used.output_tokens = wire.int_or(u, "output_tokens", 0);
+    used.cached_tokens = wire.int_or(u, "cache_read_input_tokens", 0);
+    used.measured = used.input_tokens > 0 || used.output_tokens > 0;
+    used
+}
+
+/// Parses a `/v1/messages` response: text blocks are concatenated, `tool_use` blocks become
+/// tool calls, and the whole content array is kept verbatim so the next request can replay it.
+pub fn parse_reply(body: string) -> Result<Reply, string> {
+    let root = json.parse(body)?;
+    if (wire.string_or(root, "type", "") == "error") {
+        let detail = match (json.member(root, "error")) {
+            Option.Some(e) => wire.string_or(e, "message", json.stringify(e)),
+            Option.None => body,
+        };
+        return Result.Err("provider error: ${detail}");
+    }
+    let blocks = match (json.get_array(root, "content")) {
+        Option.Some(a) => a,
+        Option.None => {
+            return Result.Err("malformed response: no 'content' array");
+        },
+    };
+    var said = "";
+    var calls: [ToolCall] = [];
+    for b in blocks {
+        let kind = wire.string_or(b, "type", "");
+        if (kind == "text") {
+            let piece = wire.string_or(b, "text", "");
+            said = if (said == "") { piece } else { said + "\n" + piece };
+        } else if (kind == "tool_use") {
+            let input = match (json.member(b, "input")) {
+                Option.Some(i) => json.stringify(i),
+                Option.None => "{}",
+            };
+            calls.push(
+                ToolCall {
+                    id: wire.string_or(b, "id", "call_${calls.len()}"),
+                    name: wire.string_or(b, "name", ""),
+                    arguments: input
+                }
+            );
+        }
+    }
+    let used = match (json.member(root, "usage")) {
+        Option.Some(u) => usage_of(u),
+        Option.None => message.no_usage(),
+    };
+    Result.Ok(
+        Reply {
+            message: message.assistant_raw(said, calls, json.stringify(Json.JArray(blocks))),
+            usage: used,
+            stop_reason: wire.string_or(root, "stop_reason", ""),
+            model: wire.string_or(root, "model", "")
+        }
+    )
+}
+
+// ---------------------------------------------------------------- streaming
+
+// Un bloque de contenido en construcción. Se guardan TODOS, también los de razonamiento con su
+// firma y los que este paquete no conoce: el turno siguiente los reenvía tal cual, y perder
+// uno invalidaría el historial igual que perder un `tool_result`.
+struct StreamBlock {
+    kind: string,
+    text: string,
+    id: string,
+    name: string,
+    json: string,
+    signature: string,
+    // El bloque tal como llegó en `content_block_start`, para los tipos que no se reconstruyen.
+    start: Json,
+    started: bool,
+}
+
+/// A streamed answer under construction: fed one SSE payload at a time, it ends as a normal
+/// `Reply`. `error` is set if the provider reported one in the middle of the stream.
+pub struct Assembly {
+    blocks: [StreamBlock],
+    usage: Usage,
+    stop_reason: string,
+    model: string,
+    error: string,
+    done: bool,
+}
+
+/// An empty assembly.
+pub fn assembly() -> Assembly {
+    let none: [StreamBlock] = [];
+    Assembly {
+        blocks: none,
+        usage: message.no_usage(),
+        stop_reason: "",
+        model: "",
+        error: "",
+        done: false
+    }
+}
+
+// El bloque en la posición `index`, creándolo si hace falta (los eventos traen el índice).
+fn block_at(a: Assembly, index: int) -> StreamBlock {
+    while (a.blocks.len() <= index) {
+        a.blocks.push(
+            StreamBlock {
+                kind: "text",
+                text: "",
+                id: "",
+                name: "",
+                json: "",
+                signature: "",
+                start: Json.JNull,
+                started: false
+            }
+        );
+    }
+    a.blocks[index]
+}
+
+/// Absorbs one `data:` payload and returns the text it produced: what there is to show right
+/// now. Unknown event types (`ping`, anything newer) are ignored.
+pub fn absorb(a: Assembly, data: string) -> string {
+    let root = match (json.parse(data.trim())) {
+        Result.Ok(j) => j,
+        Result.Err(_) => {
+            return "";
+        },
+    };
+    let kind = wire.string_or(root, "type", "");
+    if (kind == "message_start") {
+        match (json.member(root, "message")) {
+            Option.Some(m) => {
+                a.model = wire.string_or(m, "model", a.model);
+                match (json.member(m, "usage")) {
+                    Option.Some(u) => {
+                        a.usage = usage_of(u);
+                    },
+                    Option.None => { },
+                }
+            },
+            Option.None => { },
+        }
+        return "";
+    }
+    if (kind == "content_block_start") {
+        let target = block_at(a, wire.int_or(root, "index", 0));
+        match (json.member(root, "content_block")) {
+            Option.Some(b) => {
+                target.kind = wire.string_or(b, "type", "text");
+                target.text = wire.string_or(b, "text", wire.string_or(b, "thinking", ""));
+                target.id = wire.string_or(b, "id", "");
+                target.name = wire.string_or(b, "name", "");
+                target.signature = wire.string_or(b, "signature", "");
+                target.start = b;
+                target.started = true;
+            },
+            Option.None => { },
+        }
+        return "";
+    }
+    if (kind == "content_block_delta") {
+        let target = block_at(a, wire.int_or(root, "index", 0));
+        match (json.member(root, "delta")) {
+            Option.Some(d) => {
+                let delta_kind = wire.string_or(d, "type", "");
+                if (delta_kind == "text_delta") {
+                    let piece = wire.string_or(d, "text", "");
+                    target.text = target.text + piece;
+                    return piece;
+                }
+                if (delta_kind == "thinking_delta") {
+                    // El razonamiento se guarda para reenviarlo, pero no es texto de la respuesta.
+                    target.text = target.text + wire.string_or(d, "thinking", "");
+                }
+                if (delta_kind == "signature_delta") {
+                    target.signature = target.signature + wire.string_or(d, "signature", "");
+                }
+                if (delta_kind == "input_json_delta") {
+                    target.json = target.json + wire.string_or(d, "partial_json", "");
+                }
+            },
+            Option.None => { },
+        }
+        return "";
+    }
+    if (kind == "message_delta") {
+        match (json.member(root, "delta")) {
+            Option.Some(d) => {
+                let reason = wire.string_or(d, "stop_reason", "");
+                if (reason != "") {
+                    a.stop_reason = reason;
+                }
+            },
+            Option.None => { },
+        }
+        match (json.member(root, "usage")) {
+            Option.Some(u) => {
+                let output = wire.int_or(u, "output_tokens", 0);
+                if (output > 0) {
+                    a.usage.output_tokens = output;
+                    a.usage.measured = true;
+                }
+            },
+            Option.None => { },
+        }
+        return "";
+    }
+    if (kind == "error") {
+        a.error = match (json.member(root, "error")) {
+            Option.Some(e) => wire.string_or(e, "message", json.stringify(e)),
+            Option.None => "the provider reported an error",
+        };
+        return "";
+    }
+    if (kind == "message_stop") {
+        a.done = true;
+    }
+    ""
+}
+
+/// The assembled reply, with the content blocks rebuilt for the next request.
+pub fn assembled(a: Assembly) -> Reply {
+    var said = "";
+    var calls: [ToolCall] = [];
+    var blocks: [Json] = [];
+    for b in a.blocks {
+        if (b.kind == "text") {
+            said = if (said == "") { b.text } else { said + "\n" + b.text };
+            blocks.push(wire.obj(["type", "text"], [wire.jstr("text"), wire.jstr(b.text)]));
+        } else if (b.kind == "tool_use") {
+            let arguments = if (b.json.trim() == "") { "{}" } else { b.json };
+            calls.push(
+                ToolCall {
+                    id: if (b.id == "") { "call_${calls.len()}" } else { b.id },
+                    name: b.name,
+                    arguments: arguments
+                }
+            );
+            blocks.push(
+                wire.obj(
+                    ["type", "id", "name", "input"],
+                    [
+                        wire.jstr("tool_use"),
+                        wire.jstr(b.id),
+                        wire.jstr(b.name),
+                        wire.arguments_json(arguments)
+                    ]
+                )
+            );
+        } else if (b.kind == "thinking") {
+            blocks.push(
+                wire.obj(
+                    ["type", "thinking", "signature"],
+                    [wire.jstr("thinking"), wire.jstr(b.text), wire.jstr(b.signature)]
+                )
+            );
+        } else if (b.started) {
+            // Un tipo que este paquete no reconstruye (razonamiento cifrado, lo que venga):
+            // se devuelve como llegó.
+            blocks.push(b.start);
+        }
+    }
+    Reply {
+        message: message.assistant_raw(said, calls, json.stringify(Json.JArray(blocks))),
+        usage: a.usage,
+        stop_reason: a.stop_reason,
+        model: a.model
+    }
+}

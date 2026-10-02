@@ -1,0 +1,336 @@
+// El dialecto de OpenAI (`POST /chat/completions`), que es también el que hablan la mayoría de
+// los demás proveedores y los servidores locales (Ollama, LM Studio, llama.cpp): mismos campos,
+// mismo `tools`/`tool_calls`. Todo aquí es puro.
+import std/json;
+import llm/wire;
+import llm/message;
+from std/json import Json;
+from llm/config import Config;
+from llm/message import Message, ToolCall, Reply, Tool, Usage;
+
+// La declaración de una herramienta en el esquema de OpenAI.
+fn tool_json(t: Tool) -> Json {
+    wire.obj(
+        ["type", "function"],
+        [
+            wire.jstr("function"),
+            wire.obj(
+                ["name", "description", "parameters"],
+                [wire.jstr(t.name), wire.jstr(t.description), t.schema]
+            )
+        ]
+    )
+}
+
+// Un turno del historial como mensaje del protocolo.
+fn message_json(m: Message) -> Json {
+    if (m.role == "tool") {
+        return wire.obj(
+            ["role", "tool_call_id", "content"],
+            [wire.jstr("tool"), wire.jstr(m.tool_call_id), wire.jstr(m.text)]
+        );
+    }
+    if (m.role == "assistant" && m.tool_calls.len() > 0) {
+        var calls: [Json] = [];
+        for c in m.tool_calls {
+            calls.push(
+                wire.obj(
+                    ["id", "type", "function"],
+                    [
+                        wire.jstr(c.id),
+                        wire.jstr("function"),
+                        wire.obj(
+                            ["name", "arguments"],
+                            [
+                                wire.jstr(c.name),
+                                wire.jstr(
+                                    if (c.arguments.trim() == "") { "{}" } else { c.arguments }
+                                )
+                            ]
+                        )
+                    ]
+                )
+            );
+        }
+        return wire.obj(
+            ["role", "content", "tool_calls"],
+            [wire.jstr("assistant"), wire.jstr(m.text), Json.JArray(calls)]
+        );
+    }
+    wire.obj(["role", "content"], [wire.jstr(m.role), wire.jstr(m.text)])
+}
+
+/// The JSON body of a chat completion request. With `streaming`, `stream_options` makes the
+/// endpoint report token usage at the end: without it a streamed answer has no counts at all.
+pub fn build_body(c: Config, tools: [Tool], history: [Message], streaming: bool) -> string {
+    var messages: [Json] = [];
+    if (c.system.trim() != "") {
+        messages.push(wire.obj(["role", "content"], [wire.jstr("system"), wire.jstr(c.system)]));
+    }
+    for m in history {
+        messages.push(message_json(m));
+    }
+    // El tope de salida, con el nombre que quiera este endpoint, y la temperatura solo si hay
+    // una que pedir: los modelos de razonamiento rechazan cualquiera que no sea la suya.
+    var keys = ["model", "messages", c.max_tokens_field, "stream"];
+    var values = [
+        wire.jstr(c.model),
+        Json.JArray(messages),
+        wire.jint(c.max_tokens),
+        Json.JBool(streaming)
+    ];
+    if (c.temperature >= 0.0) {
+        keys.push("temperature");
+        values.push(Json.JNum(c.temperature));
+    }
+    if (c.effort.trim() != "") {
+        keys.push("reasoning_effort");
+        values.push(wire.jstr(c.effort));
+    }
+    if (tools.len() > 0) {
+        var decls: [Json] = [];
+        for t in tools {
+            decls.push(tool_json(t));
+        }
+        keys.push("tools");
+        values.push(Json.JArray(decls));
+        keys.push("tool_choice");
+        values.push(wire.jstr("auto"));
+    }
+    if (streaming) {
+        keys.push("stream_options");
+        values.push(wire.obj(["include_usage"], [Json.JBool(true)]));
+    }
+    wire.with_extra(wire.obj(keys, values), c.extra)
+}
+
+/// The HTTP headers for this endpoint. The key is optional: a local server usually has none.
+pub fn headers(c: Config) -> Map<string, string> {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "application/json");
+    h.insert("Accept", "application/json");
+    if (c.api_key.trim() != "") {
+        h.insert("Authorization", "Bearer ${c.api_key}");
+    }
+    for (k, v) in c.headers {
+        h.insert(k, v);
+    }
+    h
+}
+
+// Los tokens de prompt servidos desde caché viven anidados (`prompt_tokens_details`).
+fn cached_of(u: Json) -> int {
+    match (json.member(u, "prompt_tokens_details")) {
+        Option.Some(d) => wire.int_or(d, "cached_tokens", 0),
+        Option.None => 0,
+    }
+}
+
+fn usage_of(u: Json) -> Usage {
+    var used = message.no_usage();
+    used.input_tokens = wire.int_or(u, "prompt_tokens", 0);
+    used.output_tokens = wire.int_or(u, "completion_tokens", 0);
+    used.cached_tokens = cached_of(u);
+    used.measured = used.input_tokens > 0 || used.output_tokens > 0;
+    used
+}
+
+/// Parses a chat completion response.
+pub fn parse_reply(body: string) -> Result<Reply, string> {
+    let root = json.parse(body)?;
+    // Un error del proveedor llega con 200 en algunos servidores: se detecta por el campo.
+    match (json.member(root, "error")) {
+        Option.Some(e) => {
+            let detail = match (json.as_string(e)) {
+                Option.Some(said) => said,
+                Option.None => wire.string_or(e, "message", json.stringify(e)),
+            };
+            return Result.Err("provider error: ${detail}");
+        },
+        Option.None => { },
+    }
+    let choices = match (json.get_array(root, "choices")) {
+        Option.Some(a) => a,
+        Option.None => {
+            return Result.Err("malformed response: no 'choices' array");
+        },
+    };
+    if (choices.len() == 0) {
+        return Result.Err("malformed response: empty 'choices'");
+    }
+    let choice = choices[0];
+    let msg = match (json.member(choice, "message")) {
+        Option.Some(m) => m,
+        Option.None => {
+            return Result.Err("malformed response: choice without 'message'");
+        },
+    };
+    var calls: [ToolCall] = [];
+    match (json.get_array(msg, "tool_calls")) {
+        Option.Some(list) => {
+            for c in list {
+                let f = json.member(c, "function").unwrap_or(c);
+                calls.push(
+                    ToolCall {
+                        id: wire.string_or(c, "id", "call_${calls.len()}"),
+                        name: wire.string_or(f, "name", ""),
+                        arguments: wire.string_or(f, "arguments", "{}")
+                    }
+                );
+            }
+        },
+        Option.None => { },
+    }
+    let used = match (json.member(root, "usage")) {
+        Option.Some(u) => usage_of(u),
+        Option.None => message.no_usage(),
+    };
+    Result.Ok(
+        Reply {
+            message: message.assistant(wire.string_or(msg, "content", ""), calls),
+            usage: used,
+            stop_reason: wire.string_or(choice, "finish_reason", ""),
+            model: wire.string_or(root, "model", "")
+        }
+    )
+}
+
+// ---------------------------------------------------------------- streaming
+
+/// A streamed answer under construction: fed one SSE payload at a time, it ends as a normal
+/// `Reply`. `error` is set if the provider reported one in the middle of the stream.
+pub struct Assembly {
+    text: string,
+    calls: [ToolCall],
+    usage: Usage,
+    stop_reason: string,
+    model: string,
+    error: string,
+    done: bool,
+}
+
+/// An empty assembly.
+pub fn assembly() -> Assembly {
+    let none: [ToolCall] = [];
+    Assembly {
+        text: "",
+        calls: none,
+        usage: message.no_usage(),
+        stop_reason: "",
+        model: "",
+        error: "",
+        done: false
+    }
+}
+
+// La llamada en la posición `index`, creándola si es la primera vez que se ve. Los argumentos
+// llegan partidos en trozos arbitrarios, así que se van concatenando.
+fn slot(a: Assembly, index: int) -> ToolCall {
+    while (a.calls.len() <= index) {
+        a.calls.push(ToolCall { id: "", name: "", arguments: "" });
+    }
+    a.calls[index]
+}
+
+/// Absorbs one `data:` payload and returns the text it produced: what there is to show right
+/// now. Anything unrecognised is ignored: a stream is not a place to be strict.
+pub fn absorb(a: Assembly, data: string) -> string {
+    let payload = data.trim();
+    if (payload == "[DONE]") {
+        a.done = true;
+        return "";
+    }
+    let root = match (json.parse(payload)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => {
+            return "";
+        },
+    };
+    match (json.member(root, "error")) {
+        Option.Some(e) => {
+            a.error = match (json.as_string(e)) {
+                Option.Some(said) => said,
+                Option.None => wire.string_or(e, "message", json.stringify(e)),
+            };
+            return "";
+        },
+        Option.None => { },
+    }
+    if (a.model == "") {
+        a.model = wire.string_or(root, "model", "");
+    }
+    match (json.member(root, "usage")) {
+        Option.Some(u) => {
+            let used = usage_of(u);
+            if (used.measured) {
+                a.usage = used;
+            }
+        },
+        Option.None => { },
+    }
+    let choices = match (json.get_array(root, "choices")) {
+        Option.Some(list) => list,
+        Option.None => {
+            return "";
+        },
+    };
+    if (choices.len() == 0) {
+        return "";
+    }
+    let choice = choices[0];
+    let reason = wire.string_or(choice, "finish_reason", "");
+    if (reason != "") {
+        a.stop_reason = reason;
+    }
+    let delta = match (json.member(choice, "delta")) {
+        Option.Some(d) => d,
+        Option.None => {
+            return "";
+        },
+    };
+    match (json.get_array(delta, "tool_calls")) {
+        Option.Some(list) => {
+            for call in list {
+                let target = slot(a, wire.int_or(call, "index", 0));
+                let id = wire.string_or(call, "id", "");
+                if (id != "") {
+                    target.id = id;
+                }
+                match (json.member(call, "function")) {
+                    Option.Some(f) => {
+                        let name = wire.string_or(f, "name", "");
+                        if (name != "") {
+                            target.name = name;
+                        }
+                        target.arguments = target.arguments + wire.string_or(f, "arguments", "");
+                    },
+                    Option.None => { },
+                }
+            }
+        },
+        Option.None => { },
+    }
+    let piece = wire.string_or(delta, "content", "");
+    a.text = a.text + piece;
+    piece
+}
+
+/// The assembled reply. Calls with no id get one: a tool result has to answer something.
+pub fn assembled(a: Assembly) -> Reply {
+    var i = 0;
+    while (i < a.calls.len()) {
+        if (a.calls[i].id == "") {
+            a.calls[i].id = "call_${i}";
+        }
+        if (a.calls[i].arguments.trim() == "") {
+            a.calls[i].arguments = "{}";
+        }
+        i = i + 1;
+    }
+    Reply {
+        message: message.assistant(a.text, a.calls),
+        usage: a.usage,
+        stop_reason: a.stop_reason,
+        model: a.model
+    }
+}

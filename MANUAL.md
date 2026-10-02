@@ -1132,7 +1132,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
    feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
 
-3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`) — no embebidos; se declaran como dependencia (§14).
+3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema
 
@@ -2193,6 +2193,37 @@ fn main() -> int {
 `serve.stdio` habla por la entrada y la salida estándar, que es como un asistente lanza un
 servidor local (`claude mcp add demo -- ./demo`); `serve.http` lo sirve por HTTP. Los detalles y
 la superficie completa están en el README del paquete y en la referencia.
+
+### Hablar con un modelo de lenguaje (`packages/llm`, dependencia)
+
+El paquete `llm` es una conversación con un modelo: le envías el historial y te devuelve el
+turno del asistente. Vale igual para Claude, para OpenAI y para cualquier servidor que hable su
+dialecto, incluido uno local.
+
+```rust
+import llm/llm;
+
+fn main() -> int {
+    var c = llm.for_anthropic("claude-opus-5-5", env("ANTHROPIC_API_KEY").unwrap_or(""));
+    c.system = "Answer in one sentence.";
+    match (llm.send(c, [], [llm.user("What is raylang?")])) {
+        Result.Ok(reply) => {
+            print(reply.message.text);
+            0
+        },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}
+```
+
+`llm.send_stream` entrega el texto según llega. Si la respuesta trae llamadas a herramientas
+(`llm.tool_calls(reply)`), tu programa las ejecuta, añade al historial el turno del asistente y
+un `llm.tool_result` por llamada, y vuelve a enviar: el bucle es tuyo. Los fallos pasajeros (un
+429, un 5xx, una conexión cortada) se reintentan solos. El README del paquete trae el bucle
+completo y todos los parámetros.
 
 ### Bases de datos (`packages/db`, dependencia)
 

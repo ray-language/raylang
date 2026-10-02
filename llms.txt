@@ -256,7 +256,10 @@ std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, 
 `tz`, `cron`, `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
 `mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`; server side: `import mcp/serve;` →
 `serve.provider(name, version)`, `serve.tool(p, name, description, schema_json_text, run)` where `run` takes the
-arguments as `Json` and returns `Result<string, string>`, then `serve.stdio(p)`).
+arguments as `Json` and returns `Result<string, string>`, then `serve.stdio(p)`), `llm` (language models: `import llm/llm;` →
+`llm.for_anthropic(model, key)` or `llm.for_endpoint(base_url, model, key)` for any OpenAI-compatible server, then
+`llm.send(c, tools, history)` with `history` built from `llm.user(text)`; the reply has `.message.text` and
+`llm.tool_calls(reply)`; push `reply.message` and one `llm.tool_result(call.id, text)` per call, and send again).
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
 `std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration

@@ -1,0 +1,551 @@
+// Hablar con un modelo de lenguaje: una ida y vuelta de conversación, entera o por partes.
+//
+// `send` hace UNA petición con el historial y las herramientas, y devuelve el turno del
+// asistente: su texto, las herramientas que pide y por qué se detuvo. El bucle que ejecuta
+// esas herramientas y vuelve a preguntar es de quien llama. `send_stream` hace lo mismo
+// entregando el texto según llega.
+//
+// Dos dialectos cubren a casi todos los proveedores: el de Anthropic y el de OpenAI, que
+// hablan también OpenRouter, Groq, Mistral, Gemini y los servidores locales. Un fallo que
+// merece otro intento (sin conexión, un 429, un 5xx) se reintenta respetando la espera que
+// pida el proveedor.
+import std/json;
+import std/time;
+import net/http;
+import net/sse;
+import llm/config;
+import llm/message;
+import llm/anthropic;
+import llm/openai;
+from std/json import Json;
+from llm/config import Config;
+from llm/message import Message, ToolCall, Reply, Tool;
+
+/// How long a provider may ask to be left alone before the request gives up instead.
+pub const MAX_RATE_WAIT_MS: int = 60000;
+
+// Cuánto cuerpo de un error se conserva para el mensaje.
+const MAX_ERROR_BODY: int = 600;
+
+// ---------------------------------------------------------------- configuración
+
+/// Anthropic's API with `model`, for example `"claude-opus-5-5"`.
+pub fn for_anthropic(model: string, api_key: string) -> Config {
+    config.new_config(config.ANTHROPIC, "https://api.anthropic.com", model, api_key)
+}
+
+/// OpenAI's API with `model`.
+pub fn for_openai(model: string, api_key: string) -> Config {
+    config.new_config(config.OPENAI, "https://api.openai.com/v1", model, api_key)
+}
+
+/// Any endpoint that speaks the OpenAI dialect, by its base URL: a local Ollama is
+/// `for_endpoint("http://127.0.0.1:11434/v1", "llama3.2", "")`.
+pub fn for_endpoint(base_url: string, model: string, api_key: string) -> Config {
+    config.new_config(config.OPENAI, base_url, model, api_key)
+}
+
+/// A known provider by name (`config.presets()` lists them), or `None`.
+pub fn for_preset(id: string, model: string, api_key: string) -> Option<Config> {
+    let p = config.find_preset(id)?;
+    Option.Some(config.new_config(p.dialect, p.base_url, model, api_key))
+}
+
+// ---------------------------------------------------------------- conversación
+
+/// A user turn.
+pub fn user(text: string) -> Message {
+    message.user(text)
+}
+
+/// The result of running a tool, answering the call with id `call_id`.
+pub fn tool_result(call_id: string, text: string) -> Message {
+    message.tool_result(call_id, text)
+}
+
+/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none).
+pub fn tool(name: string, description: string, schema: string) -> Result<Tool, string> {
+    message.tool(name, description, schema)
+}
+
+/// The tool calls a reply asks for; empty when the model is done.
+pub fn tool_calls(r: Reply) -> [ToolCall] {
+    r.message.tool_calls
+}
+
+// ---------------------------------------------------------------- errores y reintentos
+
+// Por qué falló un intento, y si merece otro.
+struct Failure {
+    message: string,
+    transient: bool,
+    // Lo que el proveedor pidió esperar, en ms; 0 si no dijo nada.
+    wait_ms: int,
+}
+
+fn fail(message: string, transient: bool) -> Failure {
+    Failure { message: message, transient: transient, wait_ms: 0 }
+}
+
+fn clip(body: string, max: int) -> string {
+    if (body.len() <= max) { body } else { body.substring(0, max) + "…" }
+}
+
+// Los fallos del transporte merecen otro intento: sin conexión, o una lectura cortada.
+fn transport(e: string) -> Failure {
+    fail(e, true)
+}
+
+fn is_retryable(status: int) -> bool {
+    status == 429 || status == 408 || (status >= 500 && status <= 599)
+}
+
+/// The message in an error body, if it has the shape either dialect uses
+/// (`{"error": {"message": …}}` or `{"error": "…"}`), and "" otherwise.
+pub fn error_message(body: string) -> string {
+    let root = match (json.parse(body)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => {
+            return "";
+        },
+    };
+    match (json.member(root, "error")) {
+        Option.Some(e) => match (json.as_string(e)) {
+            Option.Some(said) => said,
+            Option.None => json.get_string(e, "message").unwrap_or(""),
+        },
+        Option.None => json.get_string(root, "message").unwrap_or(""),
+    }
+}
+
+// Los segundos de "Please try again in 9.882s", o 0.0 si el mensaje no dice tal cosa.
+fn seconds_in_message(said: string) -> float {
+    let mark = "try again in ";
+    let at = match (said.index_of(mark)) {
+        Option.Some(i) => i,
+        Option.None => {
+            return 0.0;
+        },
+    };
+    let rest = said.substring(at + mark.len(), said.len());
+    var number = "";
+    for ch in rest.chars() {
+        let code = char_code(ch);
+        if (!((code >= 48 && code <= 57) || (ch == '.' && !number.contains(".")))) {
+            break;
+        }
+        number = number + "${ch}";
+    }
+    parse_float(number).unwrap_or(0.0)
+}
+
+/// How long the provider asked to be left alone, in milliseconds, or 0 when it asked for
+/// nothing. `Retry-After` is the header for it; both vendors also put it in words in the body
+/// ("Please try again in 9.882s"). Capped at `MAX_RATE_WAIT_MS`.
+pub fn retry_after_ms(headers: Map<string, string>, body: string) -> int {
+    var asked = "";
+    for (k, v) in headers {
+        if (k.to_lower() == "retry-after") {
+            asked = v;
+        }
+    }
+    var seconds = parse_float(asked.trim()).unwrap_or(0.0);
+    if (seconds <= 0.0) {
+        seconds = seconds_in_message(body);
+    }
+    if (seconds <= 0.0) {
+        return 0;
+    }
+    // Un pelo más de lo pedido: un límite medido por minuto no se abre en el instante exacto.
+    var ms = ((seconds * 1000.0) as int) + 500;
+    if (ms < 1000) {
+        ms = 1000;
+    }
+    if (ms > MAX_RATE_WAIT_MS) {
+        ms = MAX_RATE_WAIT_MS;
+    }
+    ms
+}
+
+// El fallo de un estado que no es 2xx.
+fn status_failure(status: int, url: string, headers: Map<string, string>, body: string) -> Failure {
+    let theirs = error_message(body);
+    let said = if (theirs == "") { clip(body.trim(), MAX_ERROR_BODY) } else { theirs };
+    Failure {
+        message: "HTTP ${status} from ${url}: ${said}",
+        transient: is_retryable(status),
+        wait_ms: retry_after_ms(headers, body)
+    }
+}
+
+// Las palabras con las que los dos dialectos dicen «ese parámetro aquí no».
+fn unsupported(error: string) -> bool {
+    error.contains("nsupported")
+        || error.contains("not supported")
+        || error.contains("does not support")
+}
+
+// Lo que una queja del proveedor sobre un PARÁMETRO cambia en la configuración: true si se
+// arregló algo y la petición merece repetirse. Los dialectos han crecido por separado bajo la
+// misma URL: los modelos nuevos de OpenAI rechazan `max_tokens` y quieren
+// `max_completion_tokens`, y los de razonamiento rechazan cualquier temperatura que no sea la
+// suya. Nada aquí puede saber qué modelo es cuál, y el proveedor lo dice claro: se le cree, se
+// corrige y se reenvía. Cada arreglo solo se aplica una vez, porque cambia lo que busca.
+fn adapt(c: Config, error: string) -> bool {
+    if (error.contains("'${config.MAX_TOKENS}'")
+        && error.contains(config.MAX_COMPLETION_TOKENS)
+        && c.max_tokens_field == config.MAX_TOKENS) {
+        c.max_tokens_field = config.MAX_COMPLETION_TOKENS;
+        return true;
+    }
+    // Y al revés: un servidor compatible más viejo no conoce el nombre nuevo. El mensaje de
+    // OpenAI NOMBRA LOS DOS ("'max_tokens' … Use 'max_completion_tokens'"): si esta regla lo
+    // tomara por suyo, las dos se turnarían para siempre.
+    if (error.contains("'${config.MAX_COMPLETION_TOKENS}'")
+        && unsupported(error)
+        && !error.contains("Use '${config.MAX_COMPLETION_TOKENS}'")
+        && c.max_tokens_field == config.MAX_COMPLETION_TOKENS) {
+        c.max_tokens_field = config.MAX_TOKENS;
+        return true;
+    }
+    if (error.contains("'temperature'") && unsupported(error) && c.temperature >= 0.0) {
+        c.temperature = 0.0 - 1.0;
+        return true;
+    }
+    false
+}
+
+// La espera entre intentos: lo que haya pedido el proveedor, y si no ha pedido nada, 1 s, 2 s,
+// 4 s. Un límite por minuto sabe mejor que nadie cuándo se abre.
+fn back_off(attempt: int, f: Failure) {
+    var wait = f.wait_ms;
+    if (wait <= 0) {
+        wait = 1000;
+        var i = 1;
+        while (i < attempt) {
+            wait = wait * 2;
+            i = i + 1;
+        }
+    }
+    time.sleep(wait);
+}
+
+// Lleva un intento a su final: repite los fallos pasajeros hasta `max_attempts`, y una vez más
+// si el proveedor se quejó de un parámetro que se pudo corregir. `started` dice si ya se
+// entregó texto a quien llama: entonces no se repite, o lo vería dos veces.
+fn with_retries(
+    c: Config,
+    once: fn() -> Result<Reply, Failure>,
+    started: fn() -> bool
+) -> Result<Reply, string> {
+    var attempt = 1;
+    while (true) {
+        match (once()) {
+            Result.Ok(r) => {
+                return Result.Ok(r);
+            },
+            Result.Err(f) => {
+                if (started()) {
+                    return Result.Err(f.message);
+                }
+                if (!f.transient && adapt(c, f.message)) {
+                    continue;
+                }
+                if (!f.transient || attempt >= c.max_attempts) {
+                    return Result.Err(
+                        if (attempt > 1) {
+                            "${f.message} (after ${attempt} attempts)"
+                        } else {
+                            f.message
+                        }
+                    );
+                }
+                back_off(attempt, f);
+                attempt = attempt + 1;
+            },
+        }
+    }
+    Result.Err("unreachable")
+}
+
+// ---------------------------------------------------------------- una ida y vuelta
+
+fn body_of(c: Config, tools: [Tool], history: [Message], streaming: bool) -> string {
+    if (c.dialect == config.ANTHROPIC) {
+        anthropic.build_body(c, tools, history, streaming)
+    } else {
+        openai.build_body(c, tools, history, streaming)
+    }
+}
+
+fn headers_of(c: Config) -> Map<string, string> {
+    if (c.dialect == config.ANTHROPIC) { anthropic.headers(c) } else { openai.headers(c) }
+}
+
+fn parse_of(c: Config, body: string) -> Result<Reply, string> {
+    if (c.dialect == config.ANTHROPIC) {
+        anthropic.parse_reply(body)
+    } else {
+        openai.parse_reply(body)
+    }
+}
+
+fn finished(c: Config, reply: Reply, started_ms: int) -> Reply {
+    reply.usage.latency_ms = time.monotonic() - started_ms;
+    if (reply.model.trim() == "") {
+        reply.model = c.model;
+    }
+    reply
+}
+
+fn send_once(c: Config, tools: [Tool], history: [Message]) -> Result<Reply, Failure> {
+    let url = config.chat_url(c);
+    let started_ms = time.monotonic();
+    let response = match (http.request_bytes(
+        "POST",
+        url,
+        body_of(c, tools, history, false).to_bytes(),
+        headers_of(c),
+        c.timeout_ms
+    )) {
+        Result.Ok(r) => r,
+        Result.Err(e) => {
+            return Result.Err(transport("cannot reach ${url}: ${e}"));
+        },
+    };
+    let body = match (http.body_text(response)) {
+        Result.Ok(b) => b,
+        Result.Err(_) => {
+            return Result.Err(fail("the reply from ${url} is not UTF-8", false));
+        },
+    };
+    if (response.status < 200 || response.status >= 300) {
+        return Result.Err(status_failure(response.status, url, response.headers, body));
+    }
+    match (parse_of(c, body)) {
+        Result.Ok(reply) => Result.Ok(finished(c, reply, started_ms)),
+        Result.Err(e) => Result.Err(fail(e, false)),
+    }
+}
+
+/// One round-trip: sends the conversation and the tools, and returns the assistant's turn.
+/// When the reply carries tool calls (`tool_calls(reply)`), run them, append the reply's
+/// `message` and one `tool_result` per call to the history, and send again.
+///
+/// A failure worth retrying (no connection, a 429, a 5xx) is retried up to `max_attempts`
+/// times, waiting what the provider asks. `Err` carries the status and the provider's message.
+pub fn send(c: Config, tools: [Tool], history: [Message]) -> Result<Reply, string> {
+    with_retries(c, fn() -> Result<Reply, Failure> { send_once(c, tools, history) }, fn() -> bool { false })
+}
+
+// ---------------------------------------------------------------- por partes
+
+// Si ya se entregó algún texto. Un struct y no una variable: lo comparten dos closures.
+struct Progress {
+    shown: bool,
+}
+
+// Lo que quede del cuerpo, para poder explicar un error del proveedor.
+fn drain(stream: http.Stream) -> string {
+    var acc: bytes = b"";
+    while (acc.len() < 4096) {
+        match (http.stream_read(stream)) {
+            Result.Ok(Option.Some(part)) => {
+                acc = acc + part;
+            },
+            _ => break,
+        }
+    }
+    http.stream_close(stream);
+    from_utf8(acc).unwrap_or("")
+}
+
+// Lee el flujo evento a evento y se lo da a `absorb`. Un evento puede llegar partido entre
+// trozos, incluso en mitad de un carácter: lo que aún no decodifica se guarda. Devuelve cuántos
+// eventos hubo y el cuerpo entero, por si el servidor contestó sin flujo.
+fn pump(
+    stream: http.Stream,
+    absorb: fn(string) -> string,
+    show: fn(string) -> unit
+) -> Result<(int, bytes), string> {
+    var acc: bytes = b"";
+    var whole: bytes = b"";
+    var events = 0;
+    while (true) {
+        while (true) {
+            match (sse.decode(acc)) {
+                Option.Some(decoded) => {
+                    acc = acc.sub_bytes(decoded.1, acc.len());
+                    events = events + 1;
+                    let piece = absorb(decoded.0.data);
+                    if (piece != "") {
+                        show(piece);
+                    }
+                },
+                Option.None => break,
+            }
+        }
+        match (http.stream_read(stream)) {
+            Result.Ok(chunk) => match (chunk) {
+                Option.Some(part) => {
+                    acc = acc + part;
+                    whole = whole + part;
+                },
+                Option.None => break,
+            },
+            Result.Err(e) => {
+                return Result.Err("error reading the stream: ${e}");
+            },
+        }
+    }
+    Result.Ok((events, whole))
+}
+
+fn stream_once(
+    c: Config,
+    tools: [Tool],
+    history: [Message],
+    show: fn(string) -> unit
+) -> Result<Reply, Failure> {
+    let url = config.chat_url(c);
+    let started_ms = time.monotonic();
+    let stream = match (http.stream_with(
+        "POST",
+        url,
+        body_of(c, tools, history, true).to_bytes(),
+        headers_of(c),
+        c.timeout_ms
+    )) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            return Result.Err(transport("cannot reach ${url}: ${e}"));
+        },
+    };
+    if (stream.status < 200 || stream.status >= 300) {
+        let status = stream.status;
+        let headers = stream.headers;
+        return Result.Err(status_failure(status, url, headers, drain(stream)));
+    }
+    var reply: Result<Reply, string> = Result.Err("no reply");
+    var events = 0;
+    var whole: bytes = b"";
+    if (c.dialect == config.ANTHROPIC) {
+        let a = anthropic.assembly();
+        match (pump(stream, fn(data: string) -> string { anthropic.absorb(a, data) }, show)) {
+            Result.Ok(read) => {
+                events = read.0;
+                whole = read.1;
+                reply = if (a.error != "") {
+                    Result.Err("provider error: ${a.error}")
+                } else {
+                    Result.Ok(anthropic.assembled(a))
+                };
+            },
+            Result.Err(e) => {
+                http.stream_close(stream);
+                return Result.Err(transport(e));
+            },
+        }
+    } else {
+        let a = openai.assembly();
+        match (pump(stream, fn(data: string) -> string { openai.absorb(a, data) }, show)) {
+            Result.Ok(read) => {
+                events = read.0;
+                whole = read.1;
+                reply = if (a.error != "") {
+                    Result.Err("provider error: ${a.error}")
+                } else {
+                    Result.Ok(openai.assembled(a))
+                };
+            },
+            Result.Err(e) => {
+                http.stream_close(stream);
+                return Result.Err(transport(e));
+            },
+        }
+    }
+    http.stream_close(stream);
+    if (events == 0) {
+        // El servidor contestó sin flujo: el cuerpo es una respuesta entera, o un error.
+        reply = match (from_utf8(whole)) {
+            Result.Ok(body) => match (parse_of(c, body)) {
+                Result.Ok(r) => {
+                    if (r.message.text != "") {
+                        show(r.message.text);
+                    }
+                    Result.Ok(r)
+                },
+                Result.Err(e) => Result.Err(e),
+            },
+            Result.Err(_) => Result.Err("the reply from ${url} is not UTF-8"),
+        };
+    }
+    match (reply) {
+        Result.Ok(r) => Result.Ok(finished(c, r, started_ms)),
+        Result.Err(e) => Result.Err(fail(e, false)),
+    }
+}
+
+/// `send`, with the text handed to `show` piece by piece as it arrives. The returned `Reply`
+/// is what `send` would have delivered: same text, same tool calls, same usage.
+///
+/// A failure is only retried while nothing has been shown: after that, a retry would make the
+/// reader see the same answer twice.
+pub fn send_stream(
+    c: Config,
+    tools: [Tool],
+    history: [Message],
+    show: fn(string) -> unit
+) -> Result<Reply, string> {
+    let progress = Progress { shown: false };
+    with_retries(c, fn() -> Result<Reply, Failure> {
+        stream_once(c, tools, history, fn(piece: string) {
+            progress.shown = true;
+            show(piece);
+        })
+    }, fn() -> bool { progress.shown })
+}
+
+// ---------------------------------------------------------------- modelos
+
+/// The model ids in a `/models` response: both dialects answer `{"data": [{"id": …}]}`.
+pub fn parse_models(body: string) -> Result<[string], string> {
+    let root = json.parse(body)?;
+    let items = match (json.get_array(root, "data")) {
+        Option.Some(a) => a,
+        Option.None => match (json.get_array(root, "models")) {
+            Option.Some(a) => a,
+            Option.None => {
+                return Result.Err("the reply has no model list");
+            },
+        },
+    };
+    var ids: [string] = [];
+    for item in items {
+        match (json.get_string(item, "id")) {
+            Option.Some(id) => ids.push(id),
+            Option.None => match (json.get_string(item, "name")) {
+                Option.Some(name) => ids.push(name),
+                Option.None => { },
+            },
+        }
+    }
+    Result.Ok(ids)
+}
+
+/// The models the endpoint serves. Also the cheapest way to test a configuration: listing
+/// needs the address right and the key accepted, and spends no tokens.
+pub fn models(c: Config) -> Result<[string], string> {
+    let url = config.models_url(c);
+    let response = match (http.request_bytes("GET", url, b"", headers_of(c), 30000)) {
+        Result.Ok(r) => r,
+        Result.Err(e) => {
+            return Result.Err("cannot reach ${url}: ${e}");
+        },
+    };
+    let body = http.body_text(response).unwrap_or("");
+    if (response.status < 200 || response.status >= 300) {
+        return Result.Err(status_failure(response.status, url, response.headers, body).message);
+    }
+    parse_models(body)
+}

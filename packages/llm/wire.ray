@@ -1,0 +1,60 @@
+// Ayudas para construir y leer el JSON de los dos dialectos. Internas del paquete.
+import std/json;
+from std/json import Json;
+
+/// A JSON string.
+pub fn jstr(s: string) -> Json {
+    Json.JStr(s)
+}
+
+/// A JSON integer.
+pub fn jint(n: int) -> Json {
+    Json.JNum(n as float)
+}
+
+/// A JSON object from parallel lists of keys and values.
+pub fn obj(keys: [string], values: [Json]) -> Json {
+    var m: Map<string, Json> = Map.new();
+    var i = 0;
+    while (i < keys.len() && i < values.len()) {
+        m.insert(keys[i], values[i]);
+        i = i + 1;
+    }
+    Json.JObject(m)
+}
+
+/// The string at `key`, or `fallback`.
+pub fn string_or(j: Json, key: string, fallback: string) -> string {
+    json.get_string(j, key).unwrap_or(fallback)
+}
+
+/// The integer at `key`, or `fallback`.
+pub fn int_or(j: Json, key: string, fallback: int) -> int {
+    json.get_int(j, key).unwrap_or(fallback)
+}
+
+/// The JSON of a tool call's arguments; an empty object if the model sent something else.
+pub fn arguments_json(raw: string) -> Json {
+    let source = if (raw.trim() == "") { "{}" } else { raw };
+    match (json.parse(source)) {
+        Result.Ok(j) => j,
+        Result.Err(_) => Json.JObject(Map.new()),
+    }
+}
+
+/// `body` with the extra top-level fields of the configuration merged in, as text.
+pub fn with_extra(body: Json, extra: Map<string, Json>) -> string {
+    match (json.as_object(body)) {
+        Option.Some(table) => {
+            var merged: Map<string, Json> = Map.new();
+            for (k, v) in table {
+                merged.insert(k, v);
+            }
+            for (k, v) in extra {
+                merged.insert(k, v);
+            }
+            json.stringify(Json.JObject(merged))
+        },
+        Option.None => json.stringify(body),
+    }
+}

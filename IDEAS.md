@@ -3910,7 +3910,7 @@ donde las API de los proveedores cambian), y `agent` deja de ser «después»: y
 |---|---|---|
 | 1 | `mcp` cliente: stdio + Streamable HTTP, herramientas, recursos, instrucciones | ✅ M336 (DESIGN §322) |
 | 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | ✅ M337 (DESIGN §323) |
-| 3 | `llm`: tipos comunes, envío y streaming, proveedores | pendiente |
+| 3 | `llm`: tipos comunes, envío y streaming, proveedores | ✅ M338 (DESIGN §324) |
 | 4 | `agent`: el bucle con presupuesto y aprobación | pendiente |
 | 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | pendiente |
 
@@ -3940,3 +3940,4 @@ quedan aquí para decidir.
 | 13 | Los patrones de `match` no admiten arreglos (`Reply.Arr([Reply.Str(a), …])` es error de sintaxis) | PROPUESTO: patrones de arreglo de longitud fija, como los de tupla |
 | 14 | Nativo: el mensaje de un índice fuera de rango capturado por `try_call` no es el de la VM. `try_call(fn() -> int { empty[3] })` da `index 3 out of range (length 0)` en la VM e `index out of bounds: the len is 0 but the index is 3` en el binario nativo (el pánico de Rust sin traducir). Rompe la identidad byte a byte en cualquier programa que muestre ese error (lo destapó el servidor MCP, que devuelve al modelo el fallo de una herramienta) | PROPUESTO: que el nativo emita el mismo texto que la VM en el acceso indexado |
 | 15 | Nativo: no compila una closure que captura un `Map` declarado con anotación y sin uso previo. `var m: Map<string, int> = Map.new(); try_call(fn() -> int { 10 / (m.len()) })` corre en la VM y en nativo falla en `rustc` con E0282 (`cannot infer type of the type parameter T` en el `RefCell` del mapa capturado) | PROPUESTO: que el transpilador emita el tipo del `Map` capturado a partir de la anotación |
+| 16 | Nativo: `==` y `!=` sobre un enum de la stdlib sin `Eq` derivado no compilan. `if (block != Json.JNull)` corre en la VM (igualdad estructural) y en nativo falla en `rustc` con E0369 (`Json` no implementa `PartialEq`). El checker lo acepta, así que el error aparece al construir el binario, con un mensaje de Rust | PROPUESTO: que el checker rechace la comparación si el tipo no tiene `Eq`, o que el transpilador derive `PartialEq` para los enums que se comparan |

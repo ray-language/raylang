@@ -16166,3 +16166,73 @@ las dependencias del proyecto, y eso es escribir en disco.
 **Hallazgos del backend nativo**, registrados en IDEAS §101 (14 y 15): el mensaje de un índice
 fuera de rango bajo `try_call` no es el de la VM, y una closure que captura un `Map` anotado y
 sin uso previo no compila. El test del servidor usa `panic("boom")` para no depender del primero.
+
+## 324. M338 — El paquete `llm` (oct 2026)
+
+Tercera fase del arco de IDEAS §100. `raycode` y `ray-sublime` hablan cada uno con los modelos a
+su manera; el paquete sale de los adaptadores de raycode (los más rodados: dos dialectos, flujo,
+reintentos) sin lo que era de la app, y de la tabla de proveedores de ray-sublime.
+
+**Diez proveedores, dos dialectos.** La «lista de diez proveedores» de ray-sublime resultó ser
+diez presets sobre los mismos dos protocolos: Anthropic (`/v1/messages`) y el de OpenAI
+(`/chat/completions`), que hablan también OpenRouter, Groq, Mistral, DeepSeek, xAI, Gemini por
+su endpoint compatible y los servidores locales. El paquete implementa los dos dialectos y lleva
+los presets como datos: añadir un proveedor es una línea, no un adaptador.
+
+**Los módulos.** `llm/message` (el modelo de conversación, que no sabe de proveedores),
+`llm/config` (con quién se habla), `llm/anthropic` y `llm/openai` (puros: construir el cuerpo,
+leer la respuesta, ensamblar un flujo) y `llm/llm` (el transporte, los reintentos y la cara que
+importa un programa). Los dialectos son puros por la misma razón que `mcp/protocol` (§322): se
+prueban con texto fijo y sin red.
+
+**Decisiones de interfaz.**
+
+- **`send` hace UNA ida y vuelta; el bucle es de quien llama.** El paquete no ejecuta
+  herramientas: devuelve las que el modelo pide. El bucle con presupuesto y aprobación es el
+  paquete `agent` de la fase siguiente, y un programa sencillo lo escribe en quince líneas.
+- **El turno del asistente es un `Message` con `raw`.** Anthropic exige recibir de vuelta los
+  bloques de razonamiento con su firma, sin cambios. El historial guarda el turno entero y el
+  dialecto reenvía `raw` tal cual; quien usa el paquete no ve la diferencia entre proveedores.
+  Al ensamblar un flujo se conservan también los bloques que el paquete no conoce (razonamiento
+  cifrado, lo que venga): perder uno invalida el historial.
+- **Los argumentos de una llamada son texto JSON**, como llegan. Es la misma forma que acepta
+  `mcp.call_json` (§322): pasar una llamada del modelo a un servidor MCP no pide conversión.
+- **`extra` y `headers` como salida de emergencia.** Las API cambian más rápido que el paquete:
+  cualquier campo del cuerpo que no esté modelado (`thinking`, `fallbacks`, `response_format`)
+  se añade en `extra`, y una cabecera beta en `headers`.
+- **Los fallos llevan su tipo por dentro.** raycode codificaba en el texto del error si merecía
+  reintento y cuánto esperar, porque el error era lo único que cruzaba el `Result`. Aquí viaja
+  una `Failure { message, transient, wait_ms }` privada, y solo el mensaje sale del paquete.
+- **La corrección de parámetros se queda.** Que un proveedor rechace `max_tokens` o la
+  temperatura no es un error del usuario ni un fallo de red: es que los dialectos han divergido
+  bajo la misma URL. El proveedor lo dice en su error, y la petición se corrige y se reenvía.
+- **Sin clave implícita.** La clave es un parámetro. Buscarla en el entorno o en el llavero es
+  decisión de la app, y un paquete que lee variables de entorno por su cuenta sorprende.
+
+**Lo que queda fuera de la 0.1.0**: la API Responses de OpenAI (raycode la tiene; es un tercer
+dialecto), el contenido que no es texto, el modo por lotes y el dialecto nativo de Gemini.
+
+**Verificación.** `tests/llm_package_cli.rs`: los dos dialectos con texto fijo, y de punta a
+punta contra un proveedor simulado en un puerto efímero (el bucle con una herramienta, entero y
+por partes; un 429 con `Retry-After`; la corrección de `max_tokens`; los errores; el listado de
+modelos). VM y nativo dan la misma salida, comprobado a mano.
+
+**Contra un modelo real**, a mano: el dialecto de OpenAI se probó contra un servidor local
+(llama.cpp con Qwen 3.8 de 27B, sin clave): listado de modelos, una petición entera, una por
+partes, y el bucle con una herramienta entero y por partes, con los tokens y la caché que
+informa el servidor. Todo correcto. Y contra la **API real de OpenAI** (`gpt-4.1-nano`): las
+mismas cuatro pruebas, más la corrección de parámetros sobre un modelo de razonamiento
+(`gpt-5-nano`), al que se le habló a propósito con `max_tokens` y una temperatura: el paquete
+corrigió las dos cosas con los errores reales del proveedor y completó la petición.
+
+**El dialecto de Anthropic no está probado contra su API real**: no había clave, y una llamada
+gasta dinero del usuario. Viene del adaptador de raycode, que sí corre en producción, pero esa
+garantía es heredada, no medida aquí.
+
+Lo que esa prueba enseñó: un modelo de razonamiento local cobra como salida los tokens que
+piensa (198 para contestar «Paris») y los entrega en un campo aparte (`reasoning_content`) que
+el paquete hoy descarta. No afecta a la respuesta; exponerlo queda anotado para una versión
+posterior.
+
+**Hallazgo del backend nativo**, registrado en IDEAS §101 (16): comparar con `==` un enum de la
+stdlib sin `Eq` derivado corre en la VM y no compila en nativo.

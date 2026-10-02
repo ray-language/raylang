@@ -1,57 +1,118 @@
-// agent-cli: ask a question about raylang from the terminal. The model answers using the tools of
-// `ray mcp` (check, run, test, format and look up raylang), so the code it shows has been compiled
-// and run first.
+// agent-cli: ask for a piece of raylang from the terminal. The model writes it, checks and runs
+// it with the tools of `ray mcp`, and can save it to a file once you agree.
 //
 //   ANTHROPIC_API_KEY=… ray run -- "write a function that reverses the words of a string"
-import std/keychain;
-import claude;
-import mcp;
-import agent;
-from claude import Config;
+import std/io;
+import std/term;
+import agent/agent;
+import mcp/mcp;
+import model;
+import files;
+from agent/agent import Agent, Decision, Event;
+from llm/message import ToolCall;
 
-// The API key: ANTHROPIC_API_KEY, or the system keychain (service "agent-cli", account
-// "anthropic"), where `keychain.set("agent-cli", "anthropic", key)` stored it once.
-fn api_key() -> Result<string, string> {
-    match (env("ANTHROPIC_API_KEY")) {
-        Option.Some(k) => return Result.Ok(k),
-        Option.None => { },
+const SYSTEM: string = `You are a raylang assistant. Check and run every piece of raylang you write
+with the tools before you show it, and fix what the compiler reports. Be brief.`;
+
+const USAGE: string = `usage: agent-cli [--autonomy ask|edits|auto] "your question"`;
+
+// Asks the user about one call. Only wired when there is a terminal to ask on.
+fn ask_user(call: ToolCall, risk: string) -> Decision {
+    eprint("");
+    let _ = io.ewrite("? run ${call.name} (${risk})? [y]es / [a]lways / [N]o ");
+    match (input()) {
+        Option.Some(answer) => {
+            let said = answer.trim().to_lower();
+            if (said == "y") {
+                Decision.Yes
+            } else if (said == "a") {
+                Decision.Always
+            } else {
+                Decision.No
+            }
+        },
+        Option.None => Decision.No,
     }
-    match (keychain.get("agent-cli", "anthropic")?) {
-        Option.Some(k) => Result.Ok(k),
-        Option.None => Result.Err("set ANTHROPIC_API_KEY or store the key in the keychain"),
+}
+
+// The answer goes to standard output as it arrives; what the agent does, to standard error.
+fn show(e: Event) {
+    match (e) {
+        Event.Text(piece) => {
+            let _ = io.write(piece);
+            let _ = io.flush();
+        },
+        Event.Calling(call, risk) => eprint("[tool] ${call.name}"),
+        Event.Returned(call, output, failed) => {
+            if (failed) {
+                eprint("[tool] ${call.name} failed");
+            }
+        },
+        Event.Declined(call, why) => eprint("[tool] ${call.name} was not run"),
+        _ => { },
     }
 }
 
 fn main() -> int {
+    var autonomy = agent.ASK;
+    var words: [string] = [];
     let argv = args();
-    if (argv.len() == 0) {
-        eprint(`usage: agent-cli "your question"`);
+    var i = 0;
+    while (i < argv.len()) {
+        if (argv[i] == "--autonomy" && i + 1 < argv.len()) {
+            autonomy = argv[i + 1];
+            i = i + 2;
+        } else {
+            words.push(argv[i]);
+            i = i + 1;
+        }
+    }
+    if (words.len() == 0
+        || (autonomy != agent.ASK && autonomy != agent.EDITS && autonomy != agent.AUTO)) {
+        eprint(USAGE);
         return 64;
     }
-    let key = match (api_key()) {
-        Result.Ok(k) => k,
+    let c = match (model.from_env()) {
+        Result.Ok(c) => c,
         Result.Err(e) => {
             eprint(e);
             return 1;
         },
     };
-    let c = Config {
-        api_key: key,
-        model: env("AGENT_MODEL").unwrap_or("claude-opus-5-5"),
-        base_url: env("ANTHROPIC_BASE_URL").unwrap_or("https://api.anthropic.com")
-    };
-    // The MCP server: raylang's own toolchain. `RAY_BIN` points at a specific `ray` binary.
-    let server = match (mcp.connect(env("RAY_BIN").unwrap_or("ray"), ["mcp"])) {
+    let a = agent.new(c);
+    a.config.system = SYSTEM;
+    a.autonomy = autonomy;
+    a.stream = true;
+    agent.on_event(a, show);
+    // Without a terminal there is nobody to ask: what needs approval simply does not run.
+    if (term.is_tty(0)) {
+        agent.on_approve(a, ask_user);
+    }
+    match (files.add_tools(a, ".")) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint(e);
+            return 1;
+        },
+    }
+    // The tools of raylang's own toolchain. `RAY_BIN` points at a specific `ray` binary.
+    let ray = match (mcp.connect_stdio(env("RAY_BIN").unwrap_or("ray"), ["mcp"])) {
         Result.Ok(s) => s,
         Result.Err(e) => {
             eprint("could not start `ray mcp`: " + e);
             return 1;
         },
     };
-    let ask = fn(body: string) -> Result<string, string> { claude.send(c, body) };
-    let code = match (agent.run(ask, server, c.model, argv.join(" "), 12)) {
-        Result.Ok(answer) => {
-            print(answer);
+    match (agent.connect(a, "ray", ray)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => eprint("ray mcp: " + e),
+    }
+    let code = match (agent.run(a, words.join(" "))) {
+        Result.Ok(outcome) => {
+            print("");
+            if (outcome.stop != agent.DONE) {
+                eprint("stopped: ${outcome.stop} after ${outcome.steps} steps");
+            }
             0
         },
         Result.Err(e) => {
@@ -59,6 +120,6 @@ fn main() -> int {
             1
         },
     };
-    mcp.close(server);
+    mcp.close(ray);
     code
 }

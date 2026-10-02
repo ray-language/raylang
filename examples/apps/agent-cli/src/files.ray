@@ -1,0 +1,66 @@
+// The agent's own tools: reading and writing files under one folder. Reading runs unasked;
+// writing is a change, so it waits for the user unless the autonomy level lets it through.
+import std/fs;
+import std/json;
+import agent/agent;
+from std/json import Json;
+from agent/agent import Agent;
+
+/// The path of `name` inside `root`, or why it is refused. The arguments come from a model, so
+/// they are checked like any other input: nothing absolute, nothing that climbs out.
+pub fn inside(root: string, name: string) -> Result<string, string> {
+    if (name.trim() == "") {
+        return Result.Err("a path is required");
+    }
+    if (name.starts_with("/") || name.contains("\\") || name.contains(":")) {
+        return Result.Err("only paths relative to the working folder are allowed");
+    }
+    for part in name.split("/") {
+        if (part == "..") {
+            return Result.Err("the path may not leave the working folder");
+        }
+    }
+    Result.Ok(root + "/" + name)
+}
+
+const READ_SCHEMA: string = `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`;
+
+fn read_file(root: string, args: Json) -> Result<string, string> {
+    fs.read_file(inside(root, json.get_string(args, "path").unwrap_or(""))?)
+}
+
+const WRITE_SCHEMA: string = `{
+    "type": "object",
+    "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+    "required": ["path", "content"]
+}`;
+
+// What the model reads back is the tool's answer: an `Err` reaches it as a failed call.
+fn write_file(root: string, args: Json) -> Result<string, string> {
+    let path = inside(root, json.get_string(args, "path").unwrap_or(""))?;
+    let content = json.get_string(args, "content").unwrap_or("");
+    fs.write_file(path, content)?;
+    Result.Ok("wrote ${content.len()} characters")
+}
+
+/// Gives the agent `read_file` and `write_file`, both confined to `root`.
+pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
+    let read = fn(args: Json) -> Result<string, string> { read_file(root, args) };
+    let write = fn(args: Json) -> Result<string, string> { write_file(root, args) };
+    agent.tool(
+        a,
+        "read_file",
+        "Reads a text file of the working folder",
+        READ_SCHEMA,
+        agent.READ,
+        read
+    )?;
+    agent.tool(
+        a,
+        "write_file",
+        "Creates or replaces a text file of the working folder",
+        WRITE_SCHEMA,
+        agent.WRITE,
+        write
+    )
+}

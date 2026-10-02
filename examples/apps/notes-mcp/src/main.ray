@@ -1,0 +1,105 @@
+// notes-mcp: your notes, offered to an assistant as MCP tools. Claude Code, Claude Desktop or
+// any agent can search them, read them and add to them.
+//
+//   claude mcp add notes -- /path/to/notes-mcp
+import std/json;
+import mcp/serve;
+import store;
+from std/json import Json;
+from mcp/serve import Provider;
+
+fn text_arg(args: Json, key: string) -> Result<string, string> {
+    match (json.get_string(args, key)) {
+        Option.Some(v) => Result.Ok(v),
+        Option.None => Result.Err("'${key}' is required"),
+    }
+}
+
+const SEARCH_SCHEMA: string = `{"type":"object","properties":{"text":{"type":"string"}}}`;
+
+const TITLE_SCHEMA: string = `{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}`;
+
+const NOTE_SCHEMA: string = `{
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+    "required": ["title", "body"]
+}`;
+
+fn search_notes(dir: string, args: Json) -> Result<string, string> {
+    let found = store.search(dir, json.get_string(args, "text").unwrap_or(""));
+    Result.Ok(if (found.len() == 0) { "no notes match" } else { found.join("\n") })
+}
+
+fn read_note(dir: string, args: Json) -> Result<string, string> {
+    store.read(dir, text_arg(args, "title")?)
+}
+
+// What the model reads back is the tool's answer: an `Err` reaches it as a failed call.
+fn add_note(dir: string, args: Json) -> Result<string, string> {
+    let title = text_arg(args, "title")?;
+    store.write(dir, title, text_arg(args, "body")?)?;
+    Result.Ok("saved '${title}'")
+}
+
+/// What the server offers over the notes in `dir`.
+pub fn provider_for(dir: string) -> Provider {
+    var p = serve.provider("notes", "0.1.0");
+    p.instructions = "The user's personal notes. Search before you add, so a note is not duplicated.";
+    let search = fn(args: Json) -> Result<string, string> { search_notes(dir, args) };
+    let read = fn(args: Json) -> Result<string, string> { read_note(dir, args) };
+    let add = fn(args: Json) -> Result<string, string> { add_note(dir, args) };
+    let index = fn() -> Result<string, string> { Result.Ok(store.titles(dir).join("\n")) };
+    // The two that only read are announced as read-only: a client may run them without asking.
+    let _ = serve.read_only_tool(
+        p,
+        "search_notes",
+        "Lists the titles of the notes that contain a text; an empty text lists them all",
+        SEARCH_SCHEMA,
+        search
+    );
+    let _ = serve.read_only_tool(
+        p,
+        "read_note",
+        "Returns the body of the note with this exact title",
+        TITLE_SCHEMA,
+        read
+    );
+    let _ = serve.tool(
+        p,
+        "add_note",
+        "Creates a note, or replaces the one with the same title",
+        NOTE_SCHEMA,
+        add
+    );
+    let _ = serve.resource(
+        p,
+        "notes://index",
+        "Index",
+        "The title of every note, one per line",
+        "text/plain",
+        index
+    );
+    p
+}
+
+// The provider over the default folder. A top-level function: the HTTP transport calls it in
+// each connection's fiber.
+fn build() -> Provider {
+    provider_for(store.default_dir())
+}
+
+fn main() -> int {
+    let argv = args();
+    // `notes-mcp --http 8765` serves over HTTP on this machine; with no arguments it speaks
+    // over standard input and output, which is how an assistant launches a local server.
+    if (argv.len() == 2 && argv[0] == "--http") {
+        return match (serve.http(build, "127.0.0.1", argv[1].parse_int().unwrap_or(0))) {
+            Result.Ok(_) => 0,
+            Result.Err(e) => {
+                eprint(e);
+                1
+            },
+        };
+    }
+    serve.stdio(build())
+}

@@ -102,8 +102,9 @@ ray add web                # adds the dependency to ray.toml and downloads it
 ```
 
 The official packages are `net` (HTTP/1.1 and 2, WebSocket, DNS, TLS, gRPC), `web` (the
-Express-style application framework), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`
-and `cron`. Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
+Express-style application framework), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`,
+`cron`, and the three for agents: `llm` (talking to a model), `mcp` (tools over the Model Context
+Protocol) and `agent` (the loop that joins them). Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
 `.ray-deps/`, which stays out of version control: after cloning a project, `ray fetch` downloads
 them again.
 
@@ -456,7 +457,7 @@ From here, each handbook guide is a complete project, with its example app:
 - a [**web API**](api.en.md) with the `web` framework and Postgres;
 - a [**site with a React frontend**](web-react.en.md) embedded in the binary;
 - a [**command-line tool**](cli.en.md);
-- an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang.
+- an [**LLM agent**](llm-mcp.en.md) with tools, and an **MCP** server of your own.
 
 Once it works, [**performance**](performance.en.md) shows how to measure it and make it fast.
 
@@ -466,4 +467,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:44a52522fa15 -->
+<!-- sync: sha256:62166a7857ee -->

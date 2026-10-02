@@ -32,6 +32,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   el agente un nivel de autonomía (`ASK`, `EDITS`, `AUTO`); lo que el nivel no deja pasar se
   pregunta con `agent.on_approve`, y sin nadie a quien preguntar no corre. Un turno tiene un
   presupuesto de pasos, se puede cancelar, y cuenta lo que pasa por `agent.on_event`.
+- **Handbook: el capítulo «LLM y MCP», reescrito sobre los paquetes.** El ejemplo `agent-cli` ya
+  no implementa los protocolos a mano: usa `llm`, `mcp` y `agent`, elige proveedor por el entorno
+  (Claude, OpenAI, un modelo local), tiene herramientas propias con su riesgo y pregunta antes de
+  escribir. El capítulo gana una tercera parte, **tu propio servidor MCP**, con el ejemplo nuevo
+  `notes-mcp`: unas notas ofrecidas como herramientas a Claude Code o a cualquier agente.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

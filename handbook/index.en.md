@@ -33,8 +33,8 @@ All the code on these pages compiles: CI runs `ray check` on every block.
    API and the notes in Redis.
 8. [Command-line tool](cli.en.md): a command-line tool with options, piped input, output for
    people and for programs, and exit codes.
-9. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, and an
-   agent written in raylang that talks to Claude and uses tools through MCP.
+9. [LLMs and MCP](llm-mcp.en.md): an assistant that writes raylang verified with `ray mcp`, an
+   agent written in raylang with the `llm`, `mcp` and `agent` packages, and an MCP server of your own.
 10. [Performance](performance.en.md): measuring, profiling with `ray profile`, fixing the
     algorithm, compiling to native and spreading work across cores, with measured figures.
 11. [Shipping](shipping.en.md): packaging and signing for each system, publishing to the mobile
@@ -45,4 +45,4 @@ All the code on these pages compiles: CI runs `ray check` on every block.
 For any function, the [reference](../REFERENCE.en.md) has its signature, and the
 [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:cf26c1567d6e -->
+<!-- sync: sha256:d0678dcc00bd -->

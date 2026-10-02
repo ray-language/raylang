@@ -1,78 +1,93 @@
-// Tests without network and without an API key. The Messages API is replaced by a scripted
-// function; the MCP server is the real `ray mcp` of the toolchain running the tests.
+// Tests without a network and without an API key. The model is replaced by a tiny server in
+// this same process that speaks the OpenAI dialect: asked a question, it requests `write_file`;
+// given the tool's result, it answers. The agent, the tools and the approval are the real ones.
+import std/fs;
 import std/json;
-import std/process;
-import claude;
-import mcp;
-import agent;
+import std/net;
+import net/webserver;
+import agent/agent;
+import llm/llm;
+import files;
+import model;
+from std/json import Json;
+from net/webserver import Request, Response;
+from agent/agent import Agent, Decision;
+from llm/message import ToolCall;
 
-// The `ray` that runs these tests (so CI and your machine use the same toolchain).
-fn ray_bin() -> string {
-    process.self_command()[0]
+// The scripted model: the first request has no tool result yet, so it asks for `write_file`;
+// once the result is there, it repeats it as its answer.
+fn scripted(req: Request) -> Response {
+    let body = webserver.request_text(req).unwrap_or("");
+    let messages = json.get_array(json.parse(body).unwrap_or(Json.JNull), "messages").unwrap_or([]);
+    let last = messages[messages.len() - 1];
+    if (json.get_string(last, "role").unwrap_or("") == "tool") {
+        let said = json.stringify(
+            Json.JStr("Done: " + json.get_string(last, "content").unwrap_or(""))
+        );
+        return webserver.json_response(
+            `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":${said}}}]}`
+        );
+    }
+    webserver.json_response(
+        `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"write_file","arguments":"{\\"path\\": \\"hello.ray\\", \\"content\\": \\"fn main() { }\\"}"}}]}}]}`
+    )
 }
 
-const TOOL_USE: string = `{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use",
-"content":[{"type":"text","text":"Let me run it."},
-{"type":"tool_use","id":"toolu_1","name":"ray_run","input":{"code":"fn main() { print(6 * 7); }"}}]}`;
-
-const END_TURN: string = `{"id":"msg_2","type":"message","role":"assistant","stop_reason":"end_turn",
-"content":[{"type":"text","text":"It prints 42."}]}`;
-
-@test
-fn a_tool_use_reply_is_parsed() {
-    let r = claude.parse_reply(TOOL_USE).unwrap();
-    assert_eq(r.stop_reason, "tool_use");
-    assert_eq(r.text, "Let me run it.");
-    assert_eq(r.calls.len(), 1);
-    assert_eq(r.calls[0].name, "ray_run");
-    assert(r.calls[0].input.contains("print(6 * 7)"));
-}
-
-@test
-fn an_api_error_is_an_error() {
-    let body = `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`;
-    assert(claude.parse_reply(body).is_err());
-}
-
-@test
-fn the_request_body_is_valid_json() {
-    let body = claude.request_body(
-        "claude-opus-5-5",
-        "sys",
-        "[]",
-        [claude.user_text(`hi "there"`)]
-    );
-    let j = json.parse(body).unwrap();
-    assert_eq(json.get_string(j, "model"), Option.Some("claude-opus-5-5"));
-    assert_eq(json.get_array(j, "messages").unwrap().len(), 1);
+// An agent that talks to the scripted model and works inside a fresh temporary folder.
+fn fixture(tag: string) -> (Agent, string) {
+    let root = fs.make_temp_dir("agent-cli-" + tag).unwrap();
+    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(listener);
+    spawn(fn() {
+        let _ = webserver.serve_on(listener, scripted);
+    });
+    let a = agent.new(llm.for_endpoint("http://127.0.0.1:${port}/v1", "scripted", ""));
+    let _ = files.add_tools(a, root).unwrap();
+    (a, root)
 }
 
 @test
-fn the_mcp_client_talks_to_ray_mcp() {
-    let server = mcp.connect(ray_bin(), ["mcp"]).unwrap();
-    let names = mcp.tools(server).unwrap().map(fn(t: mcp.Tool) -> string { t.name });
-    assert(names.contains("ray_check"));
-    assert(names.contains("ray_run"));
-    let out = mcp.call_tool(server, "ray_run", `{"code":"fn main() { print(6 * 7); }"}`).unwrap();
-    assert(out.contains("42"));
-    mcp.close(server);
+fn a_write_waits_for_the_user_and_runs_when_allowed() {
+    let (a, root) = fixture("yes");
+    agent.on_approve(a, fn(call: ToolCall, risk: string) -> Decision {
+        assert_eq(call.name, "write_file");
+        assert_eq(risk, agent.WRITE);
+        Decision.Yes
+    });
+    let outcome = agent.run(a, "save an empty program").unwrap();
+    assert_eq(outcome.stop, agent.DONE);
+    assert_eq(outcome.text, "Done: wrote 13 characters");
+    assert_eq(fs.read_file(root + "/hello.ray").unwrap(), "fn main() { }");
 }
 
 @test
-fn the_loop_runs_a_tool_and_returns_the_answer() {
-    let server = mcp.connect(ray_bin(), ["mcp"]).unwrap();
-    // The scripted API: the first request has no tool result yet, so it asks for `ray_run`;
-    // once the result (with 42 in it) comes back, it answers.
-    let seen: Channel<string> = Channel.bounded(8);
-    let ask = fn(body: string) -> Result<string, string> {
-        send(seen, body);
-        if (body.contains("tool_result")) { Result.Ok(END_TURN) } else { Result.Ok(TOOL_USE) }
-    };
-    let answer = agent.run(ask, server, "claude-opus-5-5", "what does 6 * 7 print?", 5).unwrap();
-    assert_eq(answer, "It prints 42.");
-    let _first = recv(seen).unwrap();
-    let second = recv(seen).unwrap();
-    assert(second.contains("tool_use_id"));
-    assert(second.contains("42"));
-    mcp.close(server);
+fn with_nobody_to_ask_nothing_is_written() {
+    let (a, root) = fixture("nobody");
+    let outcome = agent.run(a, "save an empty program").unwrap();
+    assert(outcome.text.contains("nobody to ask"));
+    assert(!fs.exists(root + "/hello.ray"));
+}
+
+@test
+fn at_the_edits_level_a_write_runs_unasked() {
+    let (a, root) = fixture("edits");
+    a.autonomy = agent.EDITS;
+    let outcome = agent.run(a, "save an empty program").unwrap();
+    assert_eq(outcome.steps, 2);
+    assert(fs.exists(root + "/hello.ray"));
+}
+
+@test
+fn paths_stay_inside_the_working_folder() {
+    assert_eq(files.inside("/work", "src/main.ray").unwrap(), "/work/src/main.ray");
+    assert(files.inside("/work", "/etc/passwd").is_err());
+    assert(files.inside("/work", "../secret").is_err());
+    assert(files.inside("/work", "a/../../b").is_err());
+    assert(files.inside("/work", "").is_err());
+}
+
+@test
+fn each_known_provider_has_its_default_model() {
+    assert_eq(model.default_model("anthropic"), "claude-opus-5-5");
+    assert_eq(model.default_model("ollama"), "");
 }

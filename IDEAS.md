@@ -3895,7 +3895,7 @@ contenido) — por eso `raw` passthrough como ya hace raycode, y versionado semv
 primero el patrón a mano (sin citar raycode, decisión del 1 oct 2026) y, si este arco se aprueba,
 se reescribe sobre `llm`/`mcp`. ~~**Estado: PROPUESTO, sin decidir.**~~
 
-**Estado: APROBADO (2 oct 2026), en ejecución.** Lo que cambió la decisión: ya no es «un segundo
+**Estado: ✅ EJECUTADO (2 oct 2026).** Los tres paquetes (`mcp`, `llm`, `agent`) están publicados en el índice en su 0.1.0 y el handbook se apoya en ellos. Aprobado ese mismo día: Lo que cambió la decisión: ya no es «un segundo
 agente tendría que copiar». `ray-sublime` lleva su propio agente (unas 5.600 líneas, con un cliente
 MCP de 1.342 y diez proveedores) y no comparte nada con el de `raycode` (4.900 líneas, cliente MCP
 de 1.218): los dos clientes MCP coinciden en un 4 % de sus líneas y en 4 funciones públicas de 26
@@ -3912,7 +3912,7 @@ donde las API de los proveedores cambian), y `agent` deja de ser «después»: y
 | 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | ✅ M337 (DESIGN §323) |
 | 3 | `llm`: tipos comunes, envío y streaming, proveedores | ✅ M338 (DESIGN §324) |
 | 4 | `agent`: el bucle con presupuesto y aprobación | ✅ M339 (DESIGN §325) |
-| 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | pendiente |
+| 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | ✅ hecho: `agent-cli` pasa de 380 líneas de protocolo a mano a tres módulos sobre los paquetes, y el capítulo gana una tercera parte con `notes-mcp`, un servidor MCP propio |
 
 La migración de `raycode` y `ray-sublime` a los paquetes la hace quien lleva cada repositorio: el
 arco los lee como referencia y no los toca.

@@ -1,0 +1,54 @@
+// With which model the agent talks. The provider, the model and the key come from the
+// environment, so the same binary works against Claude, OpenAI or a model on this machine.
+import std/keychain;
+import llm/llm;
+import llm/config;
+from llm/config import Config, Preset;
+
+/// The model used when AGENT_MODEL is not set, or "" when the provider has no obvious one.
+pub fn default_model(provider: string) -> string {
+    if (provider == "anthropic") {
+        return "claude-opus-5-5";
+    }
+    if (provider == "openai") {
+        return "gpt-4.1-mini";
+    }
+    ""
+}
+
+// The API key of a provider: its environment variable, or the system keychain (service
+// "agent-cli", account = the provider), where `keychain.set` stored it once. A local server
+// needs none.
+fn api_key(p: Preset) -> Result<string, string> {
+    if (p.key_env == "") {
+        return Result.Ok("");
+    }
+    match (env(p.key_env)) {
+        Option.Some(k) => return Result.Ok(k),
+        Option.None => { },
+    }
+    match (keychain.get("agent-cli", p.id)?) {
+        Option.Some(k) => Result.Ok(k),
+        Option.None => Result.Err("set ${p.key_env}, or store the key in the keychain"),
+    }
+}
+
+/// The configuration from the environment: AGENT_PROVIDER (a known provider; "anthropic" by
+/// default), AGENT_MODEL, and AGENT_BASE_URL for an endpoint of your own.
+pub fn from_env() -> Result<Config, string> {
+    let provider = env("AGENT_PROVIDER").unwrap_or("anthropic");
+    let preset = match (config.find_preset(provider)) {
+        Option.Some(p) => p,
+        Option.None => {
+            return Result.Err("unknown AGENT_PROVIDER '${provider}'");
+        },
+    };
+    let model = env("AGENT_MODEL").unwrap_or(default_model(provider));
+    if (model == "") {
+        return Result.Err("set AGENT_MODEL: '${provider}' has no default model");
+    }
+    let base_url = env("AGENT_BASE_URL").unwrap_or(preset.base_url);
+    var c = config.new_config(preset.dialect, base_url, model, api_key(preset)?);
+    c.max_tokens = 8000;
+    Result.Ok(c)
+}

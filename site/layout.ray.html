@@ -96,6 +96,9 @@ body {
     color: var(--ink);
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
+    /* Una URL o un identificador largo sin espacios se parte antes que ensanchar la página: una
+       página más ancha que la pantalla deja sin fijar los elementos flotantes en el teléfono. */
+    overflow-wrap: break-word;
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -498,6 +501,8 @@ article.doc p code, article.doc li code, article.doc td code, article.doc h2 cod
     padding: .08rem .35rem;
     border-radius: 5px;
     font-size: .88em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
 }
 article.doc table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
 article.doc td, article.doc th { text-align: left; padding: .4rem .7rem; border: 1px solid var(--line); }

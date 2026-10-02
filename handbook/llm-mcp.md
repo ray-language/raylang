@@ -279,6 +279,5 @@ copiarlos. Mientras tanto, este ejemplo es la referencia.
 
 ## Siguiente paso
 
-Los capítulos anteriores enseñan a construir. [**Distribuir**](shipping.md) cubre cómo llevar
-cada cosa a sus usuarios: firmar, notarizar y actualizar las apps de escritorio, publicar las de
-móvil y desplegar los servidores.
+[**Rendimiento**](performance.md): cómo medir un programa, encontrar dónde se va el tiempo y
+hacerlo rápido.

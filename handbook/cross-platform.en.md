@@ -312,7 +312,7 @@ together with automatic updates.
 
 ## Next step
 
-The notes leave the device: a [**server-rendered site**](ssr.en.md), and then a
-[**web API**](api.en.md) with Postgres.
+[**Windows in depth**](windows.en.md): everything else `std/ui` offers a desktop app, with a text
+editor as the example.
 
-<!-- sync: sha256:28b2af3f59d8 -->
+<!-- sync: sha256:78b02cd0c5f1 -->

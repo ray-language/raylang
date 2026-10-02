@@ -279,8 +279,7 @@ evaluation. Until then, this example is the reference.
 
 ## Next step
 
-The previous chapters teach how to build. [**Shipping**](shipping.en.md) covers how to get each
-thing to its users: signing, notarizing and updating desktop apps, publishing mobile ones and
-deploying the servers.
+[**Performance**](performance.en.md): how to measure a program, find where the time goes and make
+it fast.
 
-<!-- sync: sha256:d95cdf5a7a49 -->
+<!-- sync: sha256:da0d27ed60e3 -->

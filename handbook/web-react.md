@@ -237,5 +237,5 @@ Notes ocupa unos 3 MB. Se configura con `HOST`, `PORT`, `REDIS_HOST` y `REDIS_PO
 
 ## Siguiente paso
 
-[**LLM y MCP**](llm-mcp.md): cómo usar un asistente que escribe raylang verificado, y cómo
-construir en raylang un agente que habla con Claude y usa herramientas.
+Del navegador a la terminal: una [**herramienta de línea de comandos**](cli.md), el entregable más
+pequeño de raylang.

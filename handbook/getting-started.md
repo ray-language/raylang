@@ -389,11 +389,15 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 Desde aquí, cada guía del handbook es un proyecto completo, con su app de ejemplo:
 
 - una [**app móvil**](mobile.md) para iOS y Android con frontend React;
-- la misma app en [**escritorio**](cross-platform.md) (macOS, Linux, Windows);
+- la misma app en [**escritorio**](cross-platform.md) (macOS, Linux, Windows), y las
+  [**ventanas a fondo**](windows.md);
 - un [**sitio con plantillas**](ssr.md) renderizado en el servidor;
 - una [**API web**](api.md) con el framework `web` y Postgres;
 - un [**sitio con frontend React**](web-react.md) embebido en el binario;
+- una [**herramienta de terminal**](cli.md);
 - un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang.
+
+Cuando funcione, [**rendimiento**](performance.md) enseña a medirlo y a hacerlo rápido.
 
 Y para llevar todo eso a sus usuarios: [**distribuir**](shipping.md), con firma, tiendas
 móviles y actualizaciones automáticas.

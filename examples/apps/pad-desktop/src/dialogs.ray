@@ -25,7 +25,7 @@ pub fn ask_save(name: string) -> Choice {
 
 fn text_files() -> ui.FileDialogOptions {
     var o = ui.file_options();
-    o.filters = [ui.filter("Text", ["txt", "md"]), ui.filter("Any file", ["*"])];
+    o.filters = [ui.filter("Text", ["txt", "md"]), ui.filter("Source", ["ray", "toml", "json"])];
     o
 }
 

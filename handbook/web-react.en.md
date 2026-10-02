@@ -238,7 +238,7 @@ is configured with `HOST`, `PORT`, `REDIS_HOST` and `REDIS_PORT`.
 
 ## Next step
 
-[**LLMs and MCP**](llm-mcp.en.md): how to use an assistant that writes verified raylang, and how to
-build an agent in raylang that talks to Claude and uses tools.
+From the browser to the terminal: a [**command-line tool**](cli.en.md), the smallest thing raylang
+ships.
 
-<!-- sync: sha256:c362b3b6e8a0 -->
+<!-- sync: sha256:df54f18d085e -->

@@ -317,5 +317,5 @@ con las actualizaciones automáticas.
 
 ## Siguiente paso
 
-Las notas salen del dispositivo: un [**sitio con plantillas**](ssr.md) renderizado en el servidor,
-y después una [**API web**](api.md) con Postgres.
+[**Ventanas a fondo**](windows.md): todo lo demás que `std/ui` ofrece a una app de escritorio,
+con un editor de texto de ejemplo.

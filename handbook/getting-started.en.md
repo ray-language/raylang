@@ -389,11 +389,15 @@ exactly as with `ray run`. The server's own instructions tell it so. The details
 From here, each handbook guide is a complete project, with its example app:
 
 - a [**mobile app**](mobile.en.md) for iOS and Android with a React frontend;
-- the same app on the [**desktop**](cross-platform.en.md) (macOS, Linux, Windows);
+- the same app on the [**desktop**](cross-platform.en.md) (macOS, Linux, Windows), and
+  [**windows in depth**](windows.en.md);
 - a [**server-rendered site**](ssr.en.md) with templates;
 - a [**web API**](api.en.md) with the `web` framework and Postgres;
 - a [**site with a React frontend**](web-react.en.md) embedded in the binary;
+- a [**command-line tool**](cli.en.md);
 - an [**LLM agent**](llm-mcp.en.md) with an **MCP** client, written in raylang.
+
+Once it works, [**performance**](performance.en.md) shows how to measure it and make it fast.
 
 And to get all of that to its users: [**shipping**](shipping.en.md), with signing, the mobile
 stores and automatic updates.
@@ -401,4 +405,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:19328d078adc -->
+<!-- sync: sha256:3835e1e0ec44 -->

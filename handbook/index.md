@@ -43,6 +43,5 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
 12. [Más ejemplos](examples.md): las apps de la organización ray-language, por caso de uso, para lo
    que no cubren los capítulos.
 
-El detalle de cada API de ventanas está en el manual:
-[ventanas con `std/ui`](../MANUAL.md#ventanas-stdui) y
-[empaquetado con `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+Para cualquier función, la [referencia](../REFERENCE.md) tiene su firma, y el
+[manual](../MANUAL.md) explica el lenguaje en detalle.

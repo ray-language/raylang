@@ -66,7 +66,8 @@ fn main() -> int {
   language: the UI is HTML in the system webview (`std/ui`), the backend is your raylang web
   server, and the JS ↔ raylang bridge, native menus, dialogs, audio and baked-in assets ship with
   the toolchain. `ray bundle` produces the `.app`, `.desktop` or `.exe`; `--ios` and `--android`
-  generate the Xcode or Gradle project. Guide: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle) (Spanish).
+  generate the Xcode or Gradle project. Guides in the handbook: [mobile app](handbook/mobile.en.md),
+  [cross-platform app](handbook/cross-platform.en.md) and [windows in depth](handbook/windows.en.md).
 - **Compiles to a native binary.** `ray build --native` transpiles the program to Rust and compiles it to
   an executable with byte-identical parity (*dev = VM / deploy = native*). On the 14-program polyglot
   bench (22 Sep 2026, M3 Pro) it **beats node in 9 of the 10 compute programs** (1.1×–23×), **Go in
@@ -359,4 +360,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:178025197a83 -->
+<!-- sync: sha256:248ea8147c8b -->

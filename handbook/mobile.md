@@ -316,7 +316,9 @@ xcrun simctl launch --console-pty booted dev.raylang.notes
 ```
 
 Con `--console-pty`, lo que el programa imprime aparece en tu terminal: al arrancar verás
-`notes: app moved to the foreground`.
+`notes: app moved to the foreground`. `--ios-target sim` compila solo la librería del simulador,
+que es más rápido mientras no pruebes en un teléfono. El icono de la app sale de `[app] icon` en el
+`ray.toml`, un PNG.
 
 Para un **iPhone real**, declara tu equipo de desarrollo una vez en el `ray.toml` y abre el
 proyecto en Xcode:
@@ -373,6 +375,10 @@ teléfono**, en su VM: archivos, red y permisos son los del dispositivo, y lo qu
 programa llega a tu terminal. Un cambio que no compila no se envía: el diagnóstico sale en la
 terminal y el teléfono sigue con la versión anterior.
 
+El enlace con el teléfono se guarda en `.ray-dev`, dentro del proyecto, para emparejar una sola
+vez; ese archivo no va al control de versiones. En el escritorio, `ray dev-client <url> <carpeta>`
+hace el papel del teléfono, útil para probar el flujo en CI.
+
 Para iterar también la **interfaz** con recarga en caliente, el teléfono puede cargar el servidor
 de Vite de tu Mac:
 
@@ -398,6 +404,9 @@ Un build de release ignora esa variable siempre.
 - **Segundo plano:** los temporizadores de JavaScript se congelan cuando la app no está a la
   vista. Lo que deba seguir corriendo, como un reproductor de audio, vive en el programa raylang;
   `[ios] background_audio = true` y `[android] background_audio = true` lo mantienen sonando.
+- **La página en Android** se carga por `https://app.ray.invalid/…`, un alias de `ray://app/` que
+  nunca sale a la red. Las rutas relativas y `fetch("/api/x")` funcionan igual; solo importa si
+  escribes URLs absolutas a mano.
 - **Inspeccionar la página:** con `--devtools`, Safari (menú Develop) inspecciona el webview del
   iPhone, y `chrome://inspect` el de Android.
 - **Android de borde a borde:** desde Android 15 el sistema dibuja la app bajo las barras. El shell

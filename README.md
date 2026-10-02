@@ -67,7 +67,8 @@ fn main() -> int {
   interfaz es HTML en el webview del sistema (`std/ui`), el backend es tu servidor web en raylang,
   y el puente JS ↔ raylang, los menús nativos, los diálogos, el audio y los assets horneados vienen
   en la toolchain. `ray bundle` deja la `.app`, el `.desktop` o el `.exe`; `--ios` y `--android`
-  generan el proyecto Xcode o Gradle. Guía: [`MANUAL.md`](MANUAL.md#empaquetar-la-app-ray-bundle).
+  generan el proyecto Xcode o Gradle. Guías en el handbook: [app móvil](handbook/mobile.md),
+  [app multiplataforma](handbook/cross-platform.md) y [ventanas a fondo](handbook/windows.md).
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
   programas (22 sep 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–23×), **a Go

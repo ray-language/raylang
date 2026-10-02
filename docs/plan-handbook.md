@@ -243,8 +243,8 @@ Windows signtool, Linux), `std/update` + `ray keygen`/`ray release`, códigos de
 | 5 | **Hecha en local.** Sitio con plantillas (`notes-ssr`, archivos) y sitio con frontend React (`notes-web`: SPA embebida, API JSON, notas en Redis con scripts Lua atómicos; probado con un Redis en Docker, `ray dev` con el proxy de Vite y el binario nativo). ES + EN. | 6-7 |
 | 6 | **Hecha en local.** Capítulo LLM y MCP (`agent-cli`: Messages API por HTTP con `claude-opus-5-5`, cliente MCP por stdio contra `ray mcp`, tests sin red). No se llamó a la API real (gastaría de la cuenta del usuario). | 8 |
 | 7 | **Hecha en local.** Capítulo Distribuir: empaquetado y firma por sistema, tiendas móviles (AAB firmado verificado) y actualizaciones de escritorio con `std/update`, ensayadas de punta a punta (0.1.0 → 0.2.0, y rechazo de un manifiesto alterado). La firma y notarización de Apple no se pudo probar: no hay identidad «Developer ID Application». | 9 |
-| 8 | Poda del MANUAL: §13 se queda con io/term/fs/process/time/crypto; ventanas, bundle, hot reload, Vite, update y firma se mueven al handbook y el MANUAL los enlaza. Barrido de M-números. `llms.txt` y `ray mcp` apuntan a los capítulos (`raylang://handbook/<cap>.md`). | 10 |
-| 9 | Capítulos 8 CLI y 9 Rendimiento. | 11 |
+| 8 | **Hecha en local** (rama `docs/handbook-cli-perf-manual`). Poda del MANUAL: fuera de §13 las secciones de bundle, hot reload, ventanas, Vite y auto-actualización (568 líneas), sustituidas por una tabla que enlaza los capítulos; sin M-números ni referencias internas en todo el MANUAL. Lo que solo estaba allí pasó al capítulo nuevo **Ventanas a fondo** (`windows`, ejemplo `pad-desktop`) y al capítulo móvil. | 10 |
+| 9 | **Hecha en local.** Capítulos **Herramienta de terminal** (`cli`, ejemplo `notes-cli`) y **Rendimiento** (`performance`, ejemplo `perf-lab`, con cifras medidas en VM y nativo). ES + EN. | 11 |
 
 Cada capítulo sale **con su traducción EN en la misma PR** (decisión D2). Cada PR es solo-docs
 salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compilan en CI).
@@ -252,10 +252,10 @@ salvo la fase 1 (tests + `site.ray`) y los proyectos de `examples/apps/` (compil
 ### B.5b Orden real de los capítulos
 
 En el sitio el orden lo da `handbook/index.md`: Empezar, App móvil, App multiplataforma, Sitio con
-plantillas, API web, Sitio con frontend React, LLM y MCP, Distribuir y, como cierre, Más
-ejemplos (las apps de la organización ray-language por caso de uso). Los nombres de archivo son
-el slug de la URL (`getting-started`, `mobile`, `cross-platform`, `ssr`, `api`, `web-react`, `llm-mcp`, `shipping`,
-`examples`), siempre en inglés.
+Ventanas a fondo, Sitio con plantillas, API web, Sitio con frontend React, Herramienta de terminal,
+LLM y MCP, Rendimiento, Distribuir y, como cierre, Más ejemplos (las apps de la organización ray-language por caso de uso). Los nombres de archivo son
+el slug de la URL (`getting-started`, `mobile`, `cross-platform`, `windows`, `ssr`, `api`, `web-react`, `cli`,
+`llm-mcp`, `performance`, `shipping`, `examples`), siempre en inglés.
 Todos los ejemplos usan los paquetes del registro (`ray add`), nunca rutas al repositorio. Los hallazgos de cada capítulo van a IDEAS §101.
 
 ### B.6 Guardas de CI nuevas

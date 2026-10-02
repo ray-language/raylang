@@ -314,7 +314,9 @@ xcrun simctl launch --console-pty booted dev.raylang.notes
 ```
 
 With `--console-pty`, what the program prints shows up in your terminal: on start you will see
-`notes: app moved to the foreground`.
+`notes: app moved to the foreground`. `--ios-target sim` builds only the simulator library, which
+is quicker while you are not testing on a phone. The app icon comes from `[app] icon` in
+`ray.toml`, a PNG.
 
 For a **real iPhone**, declare your development team once in `ray.toml` and open the project in
 Xcode:
@@ -371,6 +373,10 @@ phone**, on its VM: files, network and permissions are the device's, and what th
 reaches your terminal. A change that does not compile is not sent: the diagnostic shows up in the
 terminal and the phone keeps the previous version.
 
+The link to the phone is kept in `.ray-dev`, inside the project, so you pair only once; that file
+stays out of version control. On the desktop, `ray dev-client <url> <folder>` plays the phone's
+part, useful for testing the flow in CI.
+
 To iterate on the **interface** with hot reload too, the phone can load the Vite server on your
 Mac:
 
@@ -396,6 +402,9 @@ A release build always ignores that variable.
 - **Background:** JavaScript timers freeze when the app is not visible. Whatever must keep running,
   like an audio player, lives in the raylang program; `[ios] background_audio = true` and
   `[android] background_audio = true` keep it playing.
+- **The page on Android** loads through `https://app.ray.invalid/…`, an alias of `ray://app/` that
+  never reaches the network. Relative URLs and `fetch("/api/x")` work the same; it only matters if
+  you write absolute URLs by hand.
 - **Inspecting the page:** with `--devtools`, Safari (Develop menu) inspects the iPhone's webview,
   and `chrome://inspect` the Android one.
 - **Android edge to edge:** since Android 15 the system draws the app under the bars. The shell from
@@ -408,4 +417,4 @@ A release build always ignores that variable.
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:3e8400fb74b0 -->
+<!-- sync: sha256:7503c6a895b4 -->

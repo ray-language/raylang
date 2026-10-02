@@ -42,8 +42,7 @@ All the code on these pages compiles: CI runs `ray check` on every block.
 12. [More examples](examples.en.md): the apps of the ray-language organization, by use case, for
    what the chapters do not cover.
 
-The details of every window API are in the manual (Spanish):
-[windows with `std/ui`](../MANUAL.md#ventanas-stdui) and
-[packaging with `ray bundle`](../MANUAL.md#empaquetar-la-app-ray-bundle).
+For any function, the [reference](../REFERENCE.en.md) has its signature, and the
+[manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:1965545696aa -->
+<!-- sync: sha256:cf26c1567d6e -->

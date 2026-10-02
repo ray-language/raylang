@@ -16220,9 +16220,14 @@ modelos). VM y nativo dan la misma salida, comprobado a mano.
 **Contra un modelo real**, a mano: el dialecto de OpenAI se probó contra un servidor local
 (llama.cpp con Qwen 3.8 de 27B, sin clave): listado de modelos, una petición entera, una por
 partes, y el bucle con una herramienta entero y por partes, con los tokens y la caché que
-informa el servidor. Todo correcto. **El dialecto de Anthropic no está probado contra su API
-real**: no había clave, y una llamada gasta dinero del usuario. Viene del adaptador de raycode,
-que sí corre en producción, pero esa garantía es heredada, no medida aquí.
+informa el servidor. Todo correcto. Y contra la **API real de OpenAI** (`gpt-4.1-nano`): las
+mismas cuatro pruebas, más la corrección de parámetros sobre un modelo de razonamiento
+(`gpt-5-nano`), al que se le habló a propósito con `max_tokens` y una temperatura: el paquete
+corrigió las dos cosas con los errores reales del proveedor y completó la petición.
+
+**El dialecto de Anthropic no está probado contra su API real**: no había clave, y una llamada
+gasta dinero del usuario. Viene del adaptador de raycode, que sí corre en producción, pero esa
+garantía es heredada, no medida aquí.
 
 Lo que esa prueba enseñó: un modelo de razonamiento local cobra como salida los tokens que
 piensa (198 para contestar «Paris») y los entrega en un campo aparte (`reasoning_content`) que

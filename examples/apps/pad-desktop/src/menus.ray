@@ -1,0 +1,65 @@
+// The menus. They are declared as data; choosing an item arrives in the event loop as a "menu"
+// event whose `tag` is the item's tag.
+import std/ui;
+
+/// The menu bar: the application menu, File, Edit and View.
+pub fn install() -> Result<int, string> {
+    // The application menu (macOS: the bold one). "role:about" is the native About panel.
+    ui.app_menu("Pad", [ui.item("role:about", "", ""), ui.item("settings", "Settings…", "cmd+,")])?;
+    ui.set_about("Pad", "Version 0.1", "A tiny editor written in raylang", "")?;
+    ui.menu(
+        "File",
+        [
+            ui.item("new", "New", "cmd+n"),
+            ui.item("open", "Open…", "cmd+o"),
+            ui.separator(),
+            ui.item("save", "Save", "cmd+s"),
+            ui.item("save_as", "Save As…", "cmd+shift+s"),
+            ui.separator(),
+            ui.item("reveal", "Show in Folder", ""),
+            ui.item("role:close", "", "")
+        ]
+    )?;
+    // Edit keeps the system roles (undo, clipboard, select all) and adds one item of ours.
+    ui.edit_menu(
+        [
+            ui.item("role:undo", "", ""),
+            ui.item("role:redo", "", ""),
+            ui.separator(),
+            ui.item("role:cut", "", ""),
+            ui.item("role:copy", "", ""),
+            ui.item("role:paste", "", ""),
+            ui.item("role:select_all", "", ""),
+            ui.separator(),
+            ui.item("find", "Find…", "cmd+f")
+        ]
+    )?;
+    ui.menu(
+        "View",
+        [
+            ui.item("fullscreen", "Enter Full Screen", "cmd+ctrl+f"),
+            ui.item("on_top", "Keep on Top", "")
+        ]
+    )
+}
+
+/// "Show in Folder" only makes sense once the document has a file.
+pub fn sync(has_file: bool, on_top: bool) {
+    let _ = ui.set_menu_item("reveal", has_file, false);
+    let _ = ui.set_menu_item("on_top", true, on_top);
+}
+
+/// The context menu, at the pointer, over window `w`. The choice arrives as a "menu" event.
+pub fn context(w: int, has_file: bool) -> Result<int, string> {
+    var items = [
+        ui.item("role:cut", "", ""),
+        ui.item("role:copy", "", ""),
+        ui.item("role:paste", "", "")
+    ];
+    if (has_file) {
+        items.push(ui.separator());
+        items.push(ui.item("copy_path", "Copy File Path", ""));
+        items.push(ui.item("reveal", "Show in Folder", ""));
+    }
+    ui.popup_menu(w, items)
+}

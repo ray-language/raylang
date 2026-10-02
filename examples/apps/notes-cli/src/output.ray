@@ -1,0 +1,66 @@
+// What the program prints. Two rules of a well-behaved command-line tool live here: colours only
+// when a person is looking (stdout is a terminal and NO_COLOR is not set), and a `--json` mode
+// whose output another program can parse.
+import std/term;
+import std/json;
+import store;
+from store import Note;
+from std/json import Json;
+
+/// Whether to colour the output: a terminal on stdout, and the user has not opted out.
+pub fn colours() -> bool {
+    term.is_tty(1) && env("NO_COLOR").is_none()
+}
+
+fn paint(code: string, text: string, on: bool) -> string {
+    if (on) { "\u{1B}[" + code + "m" + text + "\u{1B}[0m" } else { text }
+}
+
+/// The notes as an aligned table that fits the terminal width.
+pub fn table(notes: [Note], colour: bool) -> string {
+    let width = match (term.size()) {
+        Option.Some(size) => size.0,
+        Option.None => 80,
+    };
+    var lines: [string] = [];
+    for n in notes {
+        let id = term.fit_right(to_string(n.id), 4);
+        let tags = if (n.tags.len() == 0) {
+            ""
+        } else {
+            "  " + n.tags.map(fn(t: string) -> string { "#" + t }).join(" ")
+        };
+        // The title takes what is left of the line; a long one is cut to fit.
+        let room = width - 6 - term.width(tags);
+        let title = if (room > 8 && term.width(n.title) > room) {
+            term.fit(n.title, room)
+        } else {
+            n.title
+        };
+        lines.push(
+            paint("2", id, colour) + "  " + paint("1", title, colour) + paint("36", tags, colour)
+        );
+    }
+    lines.join("\n")
+}
+
+fn quote(s: string) -> string {
+    json.stringify(Json.JStr(s))
+}
+
+/// The notes as a JSON array, for scripts.
+pub fn as_json(notes: [Note]) -> string {
+    var items: [string] = [];
+    for n in notes {
+        let tags = json.render_arr(json.list(n.tags));
+        items.push(
+            `{"id": ${n.id}, "title": ${quote(n.title)}, "tags": ${tags}, "body": ${quote(n.body)}}`
+        );
+    }
+    "[" + items.join(", ") + "]"
+}
+
+/// One note, as its Markdown.
+pub fn full(n: Note) -> string {
+    store.render(n).trim()
+}

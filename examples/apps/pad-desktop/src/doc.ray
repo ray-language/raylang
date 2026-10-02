@@ -1,0 +1,39 @@
+// The document being edited: where it lives, its text and whether it has unsaved changes. Pure
+// data and pure functions, so the tests need no window.
+
+/// The open document. `path` is empty until it is saved for the first time.
+pub struct Doc {
+    path: string,
+    text: string,
+    dirty: bool,
+}
+
+/// A new, empty document.
+pub fn empty() -> Doc {
+    Doc { path: "", text: "", dirty: false }
+}
+
+/// The file name of a path: "/tmp/notes.txt" is "notes.txt".
+pub fn file_name(path: string) -> string {
+    let parts = path.replace("\\", "/").split("/");
+    parts[parts.len() - 1]
+}
+
+/// What to call the document: its file name, or "Untitled".
+pub fn name(d: Doc) -> string {
+    if (d.path == "") { "Untitled" } else { file_name(d.path) }
+}
+
+/// The window title for a document.
+pub fn title(d: Doc) -> string {
+    name(d) + " — Pad"
+}
+
+/// How many times `query` appears in the text (any case). Empty query: 0.
+pub fn count_matches(d: Doc, query: string) -> int {
+    let needle = query.to_lower();
+    if (needle == "") {
+        return 0;
+    }
+    d.text.to_lower().split(needle).len() - 1
+}

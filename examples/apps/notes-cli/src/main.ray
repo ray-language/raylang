@@ -1,0 +1,179 @@
+// notes: a command-line notes tool. Each command reads its arguments, does one thing, prints the
+// result to stdout and errors to stderr, and exits with a code a script can test.
+//
+//   notes add "Shopping" --tag home          body from stdin if it is piped
+//   notes list [--tag home] [--json]
+//   notes show 3
+//   notes search milk
+//   notes rm 3 [--yes]
+import std/io;
+import std/term;
+import flags;
+import store;
+import output;
+from flags import Parsed;
+
+// Exit codes: 0 done, 1 the thing asked for does not exist, 64 the command line is wrong
+// (the BSD convention, the one `ray` itself uses), 74 an I/O error.
+const NOT_FOUND: int = 1;
+
+const USAGE: int = 64;
+
+const IO_ERROR: int = 74;
+
+const HELP: string = `usage: notes <command> [arguments]
+
+  add <title> [--tag T]...     add a note; the body is read from stdin when it is piped
+  list [--tag T] [--json]      list the notes
+  show <id>                    print one note as Markdown
+  search <text> [--json]       notes whose title or body contains the text
+  rm <id> [--yes]              delete a note (asks first unless --yes)
+
+The notes live in $NOTES_DIR, or ~/.notes.`;
+
+// Why a command failed. The two kinds end differently: a wrong command line prints the help and
+// exits 64; a disk error exits 74.
+enum Failure {
+    Usage(string),
+    Io(string),
+}
+
+fn bad_usage(e: string) -> Failure {
+    Failure.Usage(e)
+}
+
+fn io_error(e: string) -> Failure {
+    Failure.Io(e)
+}
+
+// A usage error: the message and the help go to stderr; stdout stays clean for pipes.
+fn usage(message: string) -> int {
+    eprint("notes: " + message);
+    eprint(HELP);
+    USAGE
+}
+
+// Everything on stdin, when it is a pipe or a file. With a terminal on stdin there is nothing to
+// read and the program must not sit waiting.
+fn piped_input() -> string {
+    if (term.is_tty(0)) {
+        return "";
+    }
+    var lines: [string] = [];
+    while (true) {
+        match (input()) {
+            Option.Some(line) => lines.push(line),
+            Option.None => break,
+        }
+    }
+    lines.join("\n")
+}
+
+// The id argument of `show` and `rm`.
+fn id_of(p: Parsed) -> Result<int, Failure> {
+    if (p.positional.len() != 1) {
+        return Result.Err(Failure.Usage(p.command + " takes one note id"));
+    }
+    match (p.positional[0].parse_int()) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => Result.Err(Failure.Usage("'" + p.positional[0] + "' is not a note id")),
+    }
+}
+
+// Asks a yes/no question on the terminal. Without a terminal there is nobody to ask: the answer
+// is no, and the caller tells the user about --yes.
+fn confirm(question: string) -> bool {
+    if (!term.is_tty(0)) {
+        return false;
+    }
+    let _ = io.write(question + " [y/N] ");
+    let _ = io.flush();
+    match (input()) {
+        Option.Some(answer) => answer.trim().to_lower() == "y",
+        Option.None => false,
+    }
+}
+
+fn run(p: Parsed, dir: string) -> Result<int, Failure> {
+    if (p.command == "add") {
+        flags.only(p, ["tag"]).map_err(bad_usage)?;
+        if (p.positional.len() != 1) {
+            return Result.Err(Failure.Usage("add takes one title (quote it if it has spaces)"));
+        }
+        let note = store.add(dir, p.positional[0], flags.values(p, "tag"), piped_input())
+            .map_err(io_error)?;
+        print("added note " + to_string(note.id));
+        return Result.Ok(0);
+    }
+    if (p.command == "list" || p.command == "search") {
+        flags.only(p, ["tag", "json"]).map_err(bad_usage)?;
+        let text = if (p.command == "search") { p.positional.join(" ") } else { "" };
+        if (p.command == "search" && text == "") {
+            return Result.Err(Failure.Usage("search takes the text to look for"));
+        }
+        let tag = flags.values(p, "tag").join("");
+        let found = store.filter(store.all(dir), tag, text);
+        if (flags.has(p, "json")) {
+            print(output.as_json(found));
+        } else if (found.len() > 0) {
+            print(output.table(found, output.colours()));
+        }
+        // Like grep: a search that finds nothing is exit code 1, so `notes search x && …` works.
+        return Result.Ok(if (p.command == "search" && found.len() == 0) { NOT_FOUND } else { 0 });
+    }
+    if (p.command == "show") {
+        flags.only(p, []).map_err(bad_usage)?;
+        return match (store.get(dir, id_of(p)?)) {
+            Option.Some(n) => {
+                print(output.full(n));
+                Result.Ok(0)
+            },
+            Option.None => {
+                eprint("notes: no note " + p.positional[0]);
+                Result.Ok(NOT_FOUND)
+            },
+        };
+    }
+    if (p.command == "rm") {
+        flags.only(p, ["yes"]).map_err(bad_usage)?;
+        let id = id_of(p)?;
+        let n = match (store.get(dir, id)) {
+            Option.Some(n) => n,
+            Option.None => {
+                eprint("notes: no note " + to_string(id));
+                return Result.Ok(NOT_FOUND);
+            },
+        };
+        if (!flags.has(p, "yes") && !confirm("delete \"" + n.title + "\"?")) {
+            eprint("notes: not deleted (use --yes to skip the question)");
+            return Result.Ok(NOT_FOUND);
+        }
+        let _ = store.remove(dir, id).map_err(io_error)?;
+        print("deleted note " + to_string(id));
+        return Result.Ok(0);
+    }
+    if (p.command == "" || p.command == "help") {
+        print(HELP);
+        return Result.Ok(0);
+    }
+    Result.Err(Failure.Usage("unknown command '" + p.command + "'"))
+}
+
+fn main() -> int {
+    let p = match (flags.parse(args(), ["tag"])) {
+        Result.Ok(p) => p,
+        Result.Err(e) => return usage(e),
+    };
+    if (flags.has(p, "help")) {
+        print(HELP);
+        return 0;
+    }
+    match (run(p, store.default_dir())) {
+        Result.Ok(code) => code,
+        Result.Err(Failure.Usage(e)) => usage(e),
+        Result.Err(Failure.Io(e)) => {
+            eprint("notes: " + e);
+            IO_ERROR
+        },
+    }
+}

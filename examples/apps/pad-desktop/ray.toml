@@ -1,0 +1,14 @@
+[package]
+name = "pad-desktop"
+version = "0.1.0"
+
+[app]
+name = "Pad"
+id = "dev.raylang.pad"
+copyright = "(c) 2026 The raylang authors"
+
+# The page (assets/) goes inside the binary and is served from ray://app/assets/.
+[native]
+embed = ["assets"]
+
+[dependencies]

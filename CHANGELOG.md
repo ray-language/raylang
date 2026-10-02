@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un
+  botón flotante arriba a la izquierda que abre un panel desde ese lado, y el menú principal abre
+  el suyo desde la derecha. Comparten velo, botón de cierre y gestos (tocar fuera, deslizar,
+  Escape). El capítulo actual del handbook se resalta solo con el color del texto, como el enlace
+  activo del menú. Un texto largo sin espacios ya no ensancha la página en el teléfono.
+
 ## 1.27.28 — 2026-10-01
 
 - **Handbook: tres capítulos más y el MANUAL podado.** **Ventanas a fondo** (todo `std/ui` sobre un

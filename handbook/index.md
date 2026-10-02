@@ -34,8 +34,8 @@ Todo el código de estas páginas compila: el CI pasa `ray check` sobre cada blo
    y las notas en Redis.
 8. [Herramienta de terminal](cli.md): una herramienta de línea de comandos con opciones, entrada
    por tubería, salida para personas y para programas, y códigos de salida.
-9. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, y un agente
-   escrito en raylang que habla con Claude y usa herramientas por MCP.
+9. [LLM y MCP](llm-mcp.md): un asistente que escribe raylang verificado con `ray mcp`, un agente
+   escrito en raylang con los paquetes `llm`, `mcp` y `agent`, y un servidor MCP propio.
 10. [Rendimiento](performance.md): medir, perfilar con `ray profile`, arreglar el algoritmo,
     compilar a nativo y repartir el trabajo entre núcleos, con cifras medidas.
 11. [Distribuir](shipping.md): empaquetar y firmar para cada sistema, publicar en las tiendas

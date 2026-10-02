@@ -102,7 +102,9 @@ ray add web                # añade la dependencia a ray.toml y la descarga
 ```
 
 Los paquetes oficiales son `net` (HTTP/1.1 y 2, WebSocket, DNS, TLS, gRPC), `web` (el framework de
-aplicación al estilo Express), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz` y `cron`.
+aplicación al estilo Express), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`, `cron`, y
+los tres de agentes: `llm` (hablar con un modelo), `mcp` (herramientas por el Model Context
+Protocol) y `agent` (el bucle que los une).
 Las versiones quedan fijadas en `ray.lock` con su hash. Los paquetes se descargan a `.ray-deps/`,
 que no va al control de versiones: tras clonar un proyecto, `ray fetch` los vuelve a bajar.
 
@@ -457,7 +459,7 @@ Desde aquí, cada guía del handbook es un proyecto completo, con su app de ejem
 - una [**API web**](api.md) con el framework `web` y Postgres;
 - un [**sitio con frontend React**](web-react.md) embebido en el binario;
 - una [**herramienta de terminal**](cli.md);
-- un [**agente LLM**](llm-mcp.md) con un cliente **MCP**, escrito en raylang.
+- un [**agente LLM**](llm-mcp.md) con herramientas, y un servidor **MCP** propio.
 
 Cuando funcione, [**rendimiento**](performance.md) enseña a medirlo y a hacerlo rápido.
 

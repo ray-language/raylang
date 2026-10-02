@@ -1,0 +1,72 @@
+// The notes: one Markdown file per note in a folder, the title as the file name.
+import std/fs;
+
+/// Where the notes live: NOTES_DIR, or `notes` in the current folder.
+pub fn default_dir() -> string {
+    env("NOTES_DIR").unwrap_or("notes")
+}
+
+/// Whether `title` can be a file name: letters, digits, spaces, dashes and underscores. A
+/// title comes from a model, and it becomes part of a path.
+pub fn valid(title: string) -> bool {
+    if (title.trim() == "" || title.len() > 80) {
+        return false;
+    }
+    for ch in title.chars() {
+        let code = char_code(ch);
+        let letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+        let digit = code >= 48 && code <= 57;
+        if (!(letter || digit || ch == ' ' || ch == '-' || ch == '_')) {
+            return false;
+        }
+    }
+    true
+}
+
+fn path_of(dir: string, title: string) -> string {
+    dir + "/" + title + ".md"
+}
+
+/// The titles of every note, sorted.
+pub fn titles(dir: string) -> [string] {
+    var out: [string] = [];
+    for name in fs.list_dir(dir).unwrap_or([]) {
+        if (name.ends_with(".md")) {
+            out.push(name.substring(0, name.len() - 3));
+        }
+    }
+    out.sort()
+}
+
+/// The body of a note.
+pub fn read(dir: string, title: string) -> Result<string, string> {
+    if (!valid(title)) {
+        return Result.Err("'${title}' is not a valid title");
+    }
+    match (fs.read_file(path_of(dir, title))) {
+        Result.Ok(body) => Result.Ok(body),
+        Result.Err(_) => Result.Err("there is no note titled '${title}'"),
+    }
+}
+
+/// Creates or replaces a note.
+pub fn write(dir: string, title: string, body: string) -> Result<int, string> {
+    if (!valid(title)) {
+        return Result.Err("'${title}' is not a valid title: use letters, digits, spaces, - and _");
+    }
+    let _ = fs.mkdir(dir)?;
+    fs.write_file(path_of(dir, title), body)
+}
+
+/// The titles of the notes whose title or body contains `text` (any case).
+pub fn search(dir: string, text: string) -> [string] {
+    let needle = text.trim().to_lower();
+    var out: [string] = [];
+    for title in titles(dir) {
+        let body = fs.read_file(path_of(dir, title)).unwrap_or("");
+        if (needle == "" || title.to_lower().contains(needle) || body.to_lower().contains(needle)) {
+            out.push(title);
+        }
+    }
+    out
+}

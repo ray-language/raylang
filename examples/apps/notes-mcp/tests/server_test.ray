@@ -1,0 +1,76 @@
+// The server is tested one protocol message at a time: `serve.handle` takes the request line
+// and returns the reply line, with no process and no port.
+import std/fs;
+import std/json;
+import mcp/serve;
+import main;
+import store;
+from std/json import Json;
+
+// The `result` of the reply to one request, as JSON.
+fn ask(dir: string, request: string) -> Json {
+    let reply = serve.handle(main.provider_for(dir), request).unwrap();
+    json.member(json.parse(reply).unwrap(), "result").unwrap_or(Json.JNull)
+}
+
+// The text of a tool call's result, and whether the tool reported an error.
+fn call(dir: string, name: string, arguments: string) -> (string, bool) {
+    let result = ask(
+        dir,
+        `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${name}","arguments":${arguments}}}`
+    );
+    let blocks = json.get_array(result, "content").unwrap();
+    (json.get_string(blocks[0], "text").unwrap(), json.get_bool(result, "isError").unwrap())
+}
+
+@test
+fn it_introduces_itself_and_lists_its_tools() {
+    let dir = fs.make_temp_dir("notes-mcp-list").unwrap();
+    let hello = ask(dir, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`);
+    assert_eq(json.get_string(json.member(hello, "serverInfo").unwrap(), "name").unwrap(), "notes");
+    assert(json.get_string(hello, "instructions").unwrap().contains("Search before you add"));
+    let tools = json.get_array(ask(dir, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`), "tools")
+        .unwrap();
+    assert_eq(tools.len(), 3);
+    // Only the two that read are announced as read-only.
+    assert(json.member(tools[0], "annotations").is_some());
+    assert(json.member(tools[2], "annotations").is_none());
+}
+
+@test
+fn a_note_is_added_found_and_read() {
+    let dir = fs.make_temp_dir("notes-mcp-add").unwrap();
+    assert_eq(call(dir, "search_notes", "{}"), ("no notes match", false));
+    assert_eq(
+        call(dir, "add_note", `{"title": "shopping", "body": "milk, bread"}`),
+        ("saved 'shopping'", false)
+    );
+    assert_eq(call(dir, "search_notes", `{"text": "MILK"}`), ("shopping", false));
+    assert_eq(call(dir, "read_note", `{"title": "shopping"}`), ("milk, bread", false));
+}
+
+@test
+fn a_bad_call_is_an_error_the_model_can_read() {
+    let dir = fs.make_temp_dir("notes-mcp-bad").unwrap();
+    assert_eq(
+        call(dir, "read_note", `{"title": "holidays"}`),
+        ("there is no note titled 'holidays'", true)
+    );
+    assert_eq(call(dir, "read_note", "{}"), ("'title' is required", true));
+    let escape = call(dir, "add_note", `{"title": "../../etc/passwd", "body": "x"}`);
+    assert(escape.1);
+    assert(escape.0.contains("not a valid title"));
+}
+
+@test
+fn the_index_is_a_resource() {
+    let dir = fs.make_temp_dir("notes-mcp-index").unwrap();
+    let _ = store.write(dir, "todo", "call mom").unwrap();
+    let _ = store.write(dir, "shopping", "milk").unwrap();
+    let read = ask(
+        dir,
+        `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"notes://index"}}`
+    );
+    let contents = json.get_array(read, "contents").unwrap();
+    assert_eq(json.get_string(contents[0], "text").unwrap(), "shopping\ntodo");
+}

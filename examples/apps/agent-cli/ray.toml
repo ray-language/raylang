@@ -3,4 +3,7 @@ name = "agent-cli"
 version = "0.1.0"
 
 [dependencies]
+agent = "^0.1.0"
+llm = "^0.1.0"
+mcp = "^0.1.0"
 net = "^0.5.0"

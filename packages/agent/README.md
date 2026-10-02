@@ -15,8 +15,9 @@ ray add llm
 ray add mcp
 ```
 
-`llm` hace falta siempre, para decir con qué modelo se habla. `mcp` solo si el agente va a usar
-herramientas de un servidor MCP.
+Con `ray add agent` se descargan también los otros dos, porque el paquete depende de ellos.
+Añadirlos a mano deja escrito en tu `ray.toml` qué usa tu programa: `llm` siempre, para decir con
+qué modelo se habla, y `mcp` si el agente va a usar herramientas de un servidor MCP.
 
 ## Un agente con una herramienta
 

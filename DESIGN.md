@@ -16215,10 +16215,19 @@ dialecto), el contenido que no es texto, el modo por lotes y el dialecto nativo 
 **Verificación.** `tests/llm_package_cli.rs`: los dos dialectos con texto fijo, y de punta a
 punta contra un proveedor simulado en un puerto efímero (el bucle con una herramienta, entero y
 por partes; un 429 con `Retry-After`; la corrección de `max_tokens`; los errores; el listado de
-modelos). VM y nativo dan la misma salida, comprobado a mano. **No está probado contra un
-proveedor real**: en la máquina de desarrollo no había clave ni servidor local, y una llamada
-real gasta dinero del usuario. Los dialectos vienen de los adaptadores de raycode, que sí corren
-en producción, pero esa garantía es heredada, no medida aquí.
+modelos). VM y nativo dan la misma salida, comprobado a mano.
+
+**Contra un modelo real**, a mano: el dialecto de OpenAI se probó contra un servidor local
+(llama.cpp con Qwen 3.8 de 27B, sin clave): listado de modelos, una petición entera, una por
+partes, y el bucle con una herramienta entero y por partes, con los tokens y la caché que
+informa el servidor. Todo correcto. **El dialecto de Anthropic no está probado contra su API
+real**: no había clave, y una llamada gasta dinero del usuario. Viene del adaptador de raycode,
+que sí corre en producción, pero esa garantía es heredada, no medida aquí.
+
+Lo que esa prueba enseñó: un modelo de razonamiento local cobra como salida los tokens que
+piensa (198 para contestar «Paris») y los entrega en un campo aparte (`reasoning_content`) que
+el paquete hoy descarta. No afecta a la respuesta; exponerlo queda anotado para una versión
+posterior.
 
 **Hallazgo del backend nativo**, registrado en IDEAS §101 (16): comparar con `==` un enum de la
 stdlib sin `Eq` derivado corre en la VM y no compila en nativo.

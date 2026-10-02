@@ -1,0 +1,110 @@
+// El modelo de conversación, independiente del formato de cada proveedor. Los adaptadores
+// (`llm/anthropic`, `llm/openai`) traducen desde y hacia estas estructuras, así el programa que
+// conversa no sabe con quién habla.
+import std/json;
+from std/json import Json;
+
+/// A tool the model may call: what it sees (`name`, `description`) and the JSON Schema of its
+/// arguments.
+pub struct Tool {
+    name: string,
+    description: string,
+    schema: Json,
+}
+
+/// A tool invocation the model asked for. `arguments` is the raw JSON object text.
+pub struct ToolCall {
+    id: string,
+    name: string,
+    arguments: string,
+}
+
+/// One conversation entry. `role` is "user", "assistant" or "tool". An assistant turn may
+/// carry `text`, `tool_calls`, or both; a tool turn answers the call `tool_call_id`.
+pub struct Message {
+    role: string,
+    text: string,
+    tool_calls: [ToolCall],
+    tool_call_id: string,
+    /// The provider's own content blocks, verbatim, when the protocol requires replaying them
+    /// untouched (Anthropic reasoning blocks and their signatures). "" otherwise.
+    raw: string,
+}
+
+/// The tokens one round-trip was charged. `measured` is false when the provider reported
+/// nothing: absent usage is "not reported", not "zero".
+pub struct Usage {
+    input_tokens: int,
+    output_tokens: int,
+    /// Input tokens served from the provider's prompt cache.
+    cached_tokens: int,
+    latency_ms: int,
+    measured: bool,
+}
+
+/// What one round-trip produced: the assistant turn, why the model stopped, the model that
+/// answered and the tokens it charged.
+pub struct Reply {
+    message: Message,
+    usage: Usage,
+    stop_reason: string,
+    model: string,
+}
+
+/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none).
+pub fn tool(name: string, description: string, schema: string) -> Result<Tool, string> {
+    let parsed = if (schema.trim() == "") {
+        var none: Map<string, Json> = Map.new();
+        var shape: Map<string, Json> = Map.new();
+        shape.insert("type", Json.JStr("object"));
+        shape.insert("properties", Json.JObject(none));
+        Json.JObject(shape)
+    } else {
+        match (json.parse(schema)) {
+            Result.Ok(j) => j,
+            Result.Err(e) => {
+                return Result.Err("the schema of tool '${name}' is not valid JSON: ${e}");
+            },
+        }
+    };
+    Result.Ok(Tool { name: name, description: description, schema: parsed })
+}
+
+/// A user turn.
+pub fn user(text: string) -> Message {
+    let none: [ToolCall] = [];
+    Message { role: "user", text: text, tool_calls: none, tool_call_id: "", raw: "" }
+}
+
+/// An assistant turn: text and/or the tool calls it asked for.
+pub fn assistant(text: string, calls: [ToolCall]) -> Message {
+    Message { role: "assistant", text: text, tool_calls: calls, tool_call_id: "", raw: "" }
+}
+
+/// An assistant turn that also keeps the provider's content blocks verbatim (`raw`).
+pub fn assistant_raw(text: string, calls: [ToolCall], raw: string) -> Message {
+    Message { role: "assistant", text: text, tool_calls: calls, tool_call_id: "", raw: raw }
+}
+
+/// The result of running a tool, answering the call with id `call_id`.
+pub fn tool_result(call_id: string, text: string) -> Message {
+    let none: [ToolCall] = [];
+    Message { role: "tool", text: text, tool_calls: none, tool_call_id: call_id, raw: "" }
+}
+
+/// A usage with nothing reported.
+pub fn no_usage() -> Usage {
+    Usage { input_tokens: 0, output_tokens: 0, cached_tokens: 0, latency_ms: 0, measured: false }
+}
+
+/// True when the answer was cut at the token ceiling instead of the model finishing:
+/// `max_tokens` in Anthropic's API, `length` in Chat Completions.
+pub fn was_truncated(stop_reason: string) -> bool {
+    stop_reason == "length" || stop_reason == "max_tokens" || stop_reason == "max_output_tokens"
+}
+
+/// True when the model declined to answer: `refusal` in Anthropic's API, `content_filter` in
+/// Chat Completions.
+pub fn was_refused(stop_reason: string) -> bool {
+    stop_reason == "refusal" || stop_reason == "content_filter"
+}

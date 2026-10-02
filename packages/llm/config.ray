@@ -1,0 +1,165 @@
+// Con quién se habla y cómo: el dialecto, la dirección, la clave, el modelo y los parámetros
+// de la petición. Los proveedores conocidos son presets sobre dos dialectos.
+import std/json;
+from std/json import Json;
+
+/// The Anthropic Messages API (`POST /v1/messages`).
+pub const ANTHROPIC: string = "anthropic";
+
+/// The OpenAI Chat Completions dialect (`POST /chat/completions`), which most other providers
+/// and local servers also speak.
+pub const OPENAI: string = "openai";
+
+/// What the output ceiling is called in the OpenAI dialect by everyone who copied it.
+pub const MAX_TOKENS: string = "max_tokens";
+
+/// What OpenAI's newer models insist it be called.
+pub const MAX_COMPLETION_TOKENS: string = "max_completion_tokens";
+
+/// Who to talk to and how. Build one with the constructors in `llm/llm` and adjust the fields.
+pub struct Config {
+    /// `ANTHROPIC` or `OPENAI`.
+    dialect: string,
+    /// Up to and excluding the endpoint path: `https://api.anthropic.com`,
+    /// `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1`.
+    base_url: string,
+    /// "" for a local server that needs none.
+    api_key: string,
+    model: string,
+    /// The system prompt ("" = none).
+    system: string,
+    max_tokens: int,
+    /// Negative = not sent: the provider's default applies.
+    temperature: float,
+    /// How much the model reasons before answering: "low", "medium", "high"… ("" = not sent).
+    effort: string,
+    /// How long a request may take. A long answer can take minutes.
+    timeout_ms: int,
+    /// Extra request headers; they win over the ones the dialect sets.
+    headers: Map<string, string>,
+    /// Extra top-level fields of the request body, for what this package does not model.
+    extra: Map<string, Json>,
+    /// Anthropic only: mark the system prompt and the tool list for the prompt cache.
+    cache: bool,
+    /// OpenAI dialect only: the name of the output ceiling (`MAX_TOKENS` or
+    /// `MAX_COMPLETION_TOKENS`). Corrected on the fly if the provider complains.
+    max_tokens_field: string,
+    /// How many times a request is tried when the failure is worth retrying.
+    max_attempts: int,
+}
+
+/// One known provider: where it lives, which dialect it speaks and the environment variable
+/// its key usually comes from.
+pub struct Preset {
+    id: string,
+    name: string,
+    dialect: string,
+    base_url: string,
+    key_env: string,
+}
+
+/// A configuration for `dialect` at `base_url`.
+pub fn new_config(dialect: string, base_url: string, model: string, api_key: string) -> Config {
+    let headers: Map<string, string> = Map.new();
+    let extra: Map<string, Json> = Map.new();
+    Config {
+        dialect: dialect,
+        base_url: base_url,
+        api_key: api_key,
+        model: model,
+        system: "",
+        max_tokens: 4096,
+        temperature: 0.0 - 1.0,
+        effort: "",
+        timeout_ms: 600000,
+        headers: headers,
+        extra: extra,
+        cache: true,
+        max_tokens_field: if (base_url.contains("api.openai.com")) { MAX_COMPLETION_TOKENS } else { MAX_TOKENS },
+        max_attempts: 3
+    }
+}
+
+fn preset(id: string, name: string, dialect: string, base_url: string, key_env: string) -> Preset {
+    Preset { id: id, name: name, dialect: dialect, base_url: base_url, key_env: key_env }
+}
+
+/// The providers this package knows by name. Anything else that speaks one of the two
+/// dialects works too: give its address to `new_config`.
+pub fn presets() -> [Preset] {
+    [
+        preset(
+            "anthropic",
+            "Anthropic",
+            ANTHROPIC,
+            "https://api.anthropic.com",
+            "ANTHROPIC_API_KEY"
+        ),
+        preset("openai", "OpenAI", OPENAI, "https://api.openai.com/v1", "OPENAI_API_KEY"),
+        preset(
+            "openrouter",
+            "OpenRouter",
+            OPENAI,
+            "https://openrouter.ai/api/v1",
+            "OPENROUTER_API_KEY"
+        ),
+        preset("groq", "Groq", OPENAI, "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+        preset("deepseek", "DeepSeek", OPENAI, "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+        preset("mistral", "Mistral", OPENAI, "https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
+        preset("xai", "xAI", OPENAI, "https://api.x.ai/v1", "XAI_API_KEY"),
+        preset(
+            "gemini",
+            "Google Gemini",
+            OPENAI,
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "GEMINI_API_KEY"
+        ),
+        preset("ollama", "Ollama (local)", OPENAI, "http://127.0.0.1:11434/v1", ""),
+        preset("lmstudio", "LM Studio (local)", OPENAI, "http://127.0.0.1:1234/v1", "")
+    ]
+}
+
+/// The preset called `id`, if there is one.
+pub fn find_preset(id: string) -> Option<Preset> {
+    for p in presets() {
+        if (p.id == id) {
+            return Option.Some(p);
+        }
+    }
+    Option.None
+}
+
+fn trimmed(base_url: string) -> string {
+    var base = base_url;
+    while (base.ends_with("/")) {
+        base = base.substring(0, base.len() - 1);
+    }
+    base
+}
+
+/// The URL a conversation request is posted to. A `base_url` that already names the endpoint
+/// is respected as it is.
+pub fn chat_url(c: Config) -> string {
+    let base = trimmed(c.base_url);
+    if (c.dialect == ANTHROPIC) {
+        if (base.ends_with("/messages")) {
+            base
+        } else if (base.ends_with("/v1")) {
+            base + "/messages"
+        } else {
+            base + "/v1/messages"
+        }
+    } else {
+        if (base.ends_with("/chat/completions")) { base } else { base + "/chat/completions" }
+    }
+}
+
+/// The URL that lists the models the endpoint serves.
+pub fn models_url(c: Config) -> string {
+    let base = trimmed(c.base_url);
+    if (c.dialect == ANTHROPIC && !base.ends_with("/v1")) {
+        base + "/v1/models"
+    } else {
+        base + "/models"
+    }
+}

@@ -19,6 +19,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   para servirlo. Una herramienta que aborta es una llamada fallida, no un servidor caído; por
   HTTP se rechaza un `Origin` ajeno y `token` exige `Authorization: Bearer`. Comprobado con el
   inspector oficial de MCP y contra su servidor de referencia.
+- **Paquete `llm` 0.1.0: hablar con modelos de lenguaje.** `import llm/llm;` da una conversación
+  con herramientas y con respuesta por partes sobre dos dialectos: Anthropic y el de OpenAI, que
+  hablan también OpenRouter, Groq, Mistral, Gemini y los servidores locales (`llm.for_anthropic`,
+  `llm.for_openai`, `llm.for_endpoint`, `llm.for_preset`). `llm.send` hace una ida y vuelta y
+  `llm.send_stream` entrega el texto según llega. Reintenta los fallos pasajeros respetando
+  `Retry-After`, corrige solo los parámetros que el proveedor rechaza, reenvía intactos los
+  bloques de razonamiento de Anthropic y usa su caché de prompt.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

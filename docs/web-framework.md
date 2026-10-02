@@ -1,11 +1,11 @@
-# El framework web de raylang (`web/framework`, M93)
+# El framework web de raylang (`web/framework`)
 
 Framework de aplicación estilo **Express**, escrito en raylang puro sobre `net/webserver` (el
-servidor HTTP de producción, M56). Este documento es la guía de uso; el diseño y su historia viven
-en DESIGN.md (M56 §60, M93 §85).
+servidor HTTP de producción). Este documento es la guía de uso; el diseño y su historia viven
+en [DESIGN.md](../DESIGN.md).
 
-> **VM o binario nativo** (M93.3): el servidor es concurrente — cada conexión corre en su
-> propia fibra (VM: scheduler M12/M15.5; nativo: hilos con heap aislado). El mismo fuente corre
+> **VM o binario nativo**: el servidor es concurrente — cada conexión corre en su
+> propia fibra (VM: el scheduler de fibras; nativo: hilos con heap aislado). El mismo fuente corre
 > con `ray run`/`ray dev` y compila con `ray build --native`. El intérprete (`--interp`) da un
 > error limpio.
 
@@ -25,7 +25,7 @@ web = "^0.4.6"
 from web/framework import new_app, GET, listen, text, App, Ctx, Res;
 
 // La app se construye en una función TOP-LEVEL (patrón builder): la fibra de cada conexión la
-// llama UNA vez — el mismo fuente corre en la VM y compila con `ray build --native` (M93.3).
+// llama UNA vez — el mismo fuente corre en la VM y compila con `ray build --native`.
 fn build_app() -> App {
     var app = new_app();
     app.GET("/", fn(c: Ctx, r: Res) {
@@ -56,7 +56,7 @@ app.PUT("/users/:id", handler);
 app.PATCH("/users/:id", handler);
 app.DELETE("/users/:id", handler);
 app.route("OPTIONS", "/users", handler);   // cualquier método, en mayúscula
-app.ALL("/ping", handler);                 // TODOS los métodos (M93.2b)
+app.ALL("/ping", handler);                 // TODOS los métodos
 app.GET("/files/*path", handler);          // catch-all FINAL: captura el resto, "/" incluidas
 app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla tú); capturas
                                            // numeradas: c.param("1"). route_re(m, pat, h) para
@@ -70,7 +70,7 @@ app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla 
   hace `panic` al arrancar con el error del compilador de regex.
 - Método con patrón de OTRA ruta → **`405 Method Not Allowed` + `Allow`** (RFC 9110; Express
   responde 404). El `not_found` custom sigue siendo solo para 404.
-- **Sub-aplicaciones** (M93.2b): un "router" ES una `App` que no escucha —
+- **Sub-aplicaciones**: un "router" ES una `App` que no escucha —
   `app.mount("/api", api)` re-prefija sus rutas y estáticos y envuelve sus handlers con los
   middlewares del grupo (corren solo para sus rutas). Su `not_found`/`after` se ignoran; una
   ruta regex no se puede re-prefijar (panic al montar).
@@ -80,7 +80,7 @@ app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla 
 - El cuerpo llega con `c.body()` (texto UTF-8; `""` si no es texto) o crudo en `c.req.body`
   (`bytes`). El resto de la petición está en `c.req` (`webserver.Request`: `headers`, `version`…).
 
-### El contexto conecta la stdlib (M93.2c)
+### El contexto conecta la stdlib
 
 ```rust
 c.header_of("user-agent")      // cabecera ("" si falta; nombres en minúscula)
@@ -109,7 +109,7 @@ r.cookie("sid=abc; HttpOnly");            // una línea Set-Cookie por llamada
 r.redirect("/nueva");                     // 302 + Location (permanente: r.redirect(...); r.status(301);)
 ```
 
-**Streaming y archivos (M272).** Tres salidas que antes obligaban a bajar a `net/webserver`:
+**Streaming y archivos.** Tres salidas que antes obligaban a bajar a `net/webserver`:
 
 ```rust
 // SSE / cuerpo generado: los trozos de un canal, en chunked; cierra el canal para terminar.
@@ -125,7 +125,7 @@ r.sendfile(c, "media/" + nombre_seguro);
 
 ## Middleware
 
-Un middleware devuelve un **`Step`** (M93.2a): `Step.Next` sigue la cadena, `Step.Done` la corta
+Un middleware devuelve un **`Step`**: `Step.Next` sigue la cadena, `Step.Done` la corta
 y se responde lo construido en `r`.
 
 ```rust
@@ -167,7 +167,7 @@ app.static_files_cached("/assets/", "static", 3600);   // + Cache-Control: publi
 
 Monta el directorio `static/` (relativo al directorio de trabajo del servidor) bajo el prefijo de
 URL `/assets/` — los dos nombres son independientes (`/assets/app.css` → `static/app.css`). Sobre
-`webserver.static_mount` (M56.9): `Content-Type` por extensión (~26 tipos), saneo de path
+`webserver.static_mount`: `Content-Type` por extensión (~26 tipos), saneo de path
 traversal (`..` → 404), `index.html` en rutas con `/` final, **`ETag` fuerte** (tamaño+mtime) y
 **`304 Not Modified`** cuando el `If-None-Match` casa (el navegador cachea y revalida gratis).
 Los mounts se comprueban **antes que las rutas** y solo para GET/HEAD.
@@ -189,11 +189,11 @@ app.log_requests();
 ```
 
 Una línea **JSON por petición** a stdout vía `net/log`, con `method`, `path`, `status`, `ms`
-(duración) y **`trace_id`** (M93.2d: adopta el `traceparent` W3C entrante vía `net/trace`, o
+(duración) y **`trace_id`** (adopta el `traceparent` W3C entrante vía `net/trace`, o
 estrena uno — correlación detrás de un gateway gratis). Para logging propio (otros campos,
 niveles) usa `net/log` directamente en tus handlers o un middleware.
 
-## CORS y respuestas JSON tipadas (M93.2d)
+## CORS y respuestas JSON tipadas
 
 ```rust
 app.cors("*");                 // preflight OPTIONS (204) + Access-Control-Allow-Origin en todo
@@ -208,10 +208,10 @@ app.GET("/yo", fn(c: Ctx, r: Res) { r.json_of(User { id: 7, name: "Ada" }); });
 ```
 
 `json_of<T: ToJson>` despacha estático por bounds (M9.2) — sin reflexión. El trait **vive en
-`std/json`** (M93.4, con impls para los primitivos; el framework lo reexporta, así que
+`std/json`** (con impls para los primitivos; el framework lo reexporta, así que
 `from web/framework import ToJson` sigue valiendo).
 
-### Escribir JSON (M93.5): la guía de decisión
+### Escribir JSON: la guía de decisión
 
 ```rust
 // 1) El JSON espeja un struct → DERÍVALO (cero escritura, escapado garantizado):
@@ -227,8 +227,8 @@ r.json_of(obj()
     .field("motto", "di \"hola\"")               // escapado por construcción
     .field("tags", list(["admin", "dev"])));
 
-// 3) Texto libre con BACKTICKS (M95: la comilla doble es literal, multilínea) e interpolación
-//    (`${…}`, M27.3) → SOLO con valores serializados:
+// 3) Texto libre con BACKTICKS (la comilla doble es literal, multilínea) e interpolación
+//    (`${…}`) → SOLO con valores serializados:
 let linea = `{"id": ${user.id.to_json()}, "name": ${user.name.to_json()}}`;
 // ⚠ interpolar un string SIN .to_json() produce JSON inválido/inyectable si trae comillas.
 ```
@@ -282,16 +282,16 @@ strings; para estado no ligado a un usuario (config, contadores), usa `std/kv` d
 
 ## Despliegue
 
-Una **única** familia de arranque (M93.3), siempre sobre el builder top-level:
+Una **única** familia de arranque, siempre sobre el builder top-level:
 
 ```rust
 listen(build_app, "0.0.0.0", 8080);                        // keep-alive + límites por defecto
-listen_tls(build_app, "0.0.0.0", 8443, cert_pem, key_pem); // HTTPS (M56.3, rustls)
+listen_tls(build_app, "0.0.0.0", 8443, cert_pem, key_pem); // HTTPS (rustls)
 listen_graceful(build_app, "0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT → drena 5 s, sale 0
 listen_limits(build_app, "0.0.0.0", 8080, mis_limits);     // webserver.Limits explícitos
 ```
 
-**Apps de escritorio y móvil (M297).** Si la ventana carga desde un servidor local, usa
+**Apps de escritorio y móvil.** Si la ventana carga desde un servidor local, usa
 `listen_local(build_app, listener, token)` con `token = webserver.local_token()` y abre la ventana
 con `?ray_token=<token>` en la URL: cualquier otro proceso de la máquina o página web del navegador
 recibe 403 (token obligatorio + guarda de origen). Sin backend HTTP, mejor `ray://app/…`, que no
@@ -300,7 +300,7 @@ abre puerto alguno. Detalle en SECURITY.md «Servidores locales en apps de escri
 Por qué el builder y no una `App` construida: una `App` contiene **closures** (los handlers) y
 el modelo de actores de heap aislado no deja que un closure cruce hilos en el backend nativo. El
 builder cruza como función plana y la `App` se construye **dentro de la tarea de cada petición**
-(`webserver.serve_with`; cada petición corre aislada en su tarea por el panic→500 de M56.5) —
+(`webserver.serve_with`; cada petición corre aislada en su tarea y un `panic` se convierte en un 500) —
 el mismo fuente corre en la VM y compila con `ray build --native`. El registro es barato;
 construir la App una vez por conexión (reusarla en el keep-alive) queda diferido (exigiría
 `catch_unwind` en nativo o defuncionalización). Consecuencia del modelo: el estado del builder
@@ -311,7 +311,7 @@ Todas las variantes heredan de `net/webserver`: keep-alive HTTP/1.1, límites de
 (cabeceras/cuerpo/conexiones/timeout de lectura), y un handler que hace `panic` responde 500 sin
 tumbar el servidor.
 
-### Carga y descriptores de archivo (M93.6)
+### Carga y descriptores de archivo
 
 El runtime (VM y binarios nativos) **sube solo** el límite blando de fds al duro al arrancar
 (macOS hereda 256 por defecto — un `wrk -c500` lo agotaba sin culpa del programa). Y el
@@ -327,7 +327,7 @@ req/s de techo** (1.57× Go `net/http`, 92% de hyper) y el **framework** **~188k
 framework cuesta ~1%: **93% de axum, con p50/p99.9 en empate estadístico (0.48/1.05 ms contra
 0.47/1.04) y 1.51× Go+chi** (escalón `json`) — sirviendo con **14 hilos** y **~21 KB por
 conexión** (el modelo anterior de hilo-por-conexión usaba 1002 hilos y ~265 KB/conexión a
-`-c 1000`). Corridas archivadas en `benchmarks/web/results/`. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
+`-c 1000`). Corridas archivadas en `benchmarks/web/results/`. Con `ray dev` tienes watch+restart con drenado y **live-reload del
 navegador** (la página se refresca sola al reiniciar; el snippet reintenta hasta que el servidor
 vuelve). Con `--port N` además el supervisor retiene el socket (cero conexiones rechazadas al
 reiniciar) y la app puede leer el puerto con `env("RAY_LISTEN_ADDR")` (`"host:puerto"`).
@@ -336,7 +336,7 @@ Nota de diseño: raylang usa actores de heap aislado — cada conexión ve su pr
 Lo idiomático es el **handler puro** (la respuesta como función de la petición); el estado
 compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README.md`).
 
-### Estado de aplicación: `web.state` (M154)
+### Estado de aplicación: `web.state`
 
 La forma de serie de ese patrón: un store `kv` compartido por actor, con el mismo interruptor
 de persistencia que `sessions` (bajo `ray dev` persiste en `path`; en producción memoria pura;

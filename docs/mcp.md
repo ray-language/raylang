@@ -2,7 +2,7 @@
 
 Español · [English](mcp.en.md)
 
-"El LSP para agentes" (IDEAS §51, pieza B): un servidor [MCP](https://modelcontextprotocol.io)
+"El LSP para agentes": un servidor [MCP](https://modelcontextprotocol.io)
 embebido en el binario `ray` que da a un LLM el bucle **escribir → verificar → corregir**. La
 alucinación se convierte en iteración: el modelo escribe raylang, `ray_check` le devuelve los
 diagnósticos exactos (posicionados, hasta 20), y `ray_run` verifica el comportamiento.
@@ -47,13 +47,13 @@ completo de firmas módulo a módulo. Además, las **instructions** del `initial
 prompt" del servidor, que los clientes incorporan) dirigen al modelo a leerlos ANTES de asumir
 que una feature falta: la stdlib va embebida en el toolchain y una búsqueda de archivos no la
 encuentra — el antídoto del patrón "propuse lo que ya existía" (visto tres veces seguidas desde
-un proyecto real: inflate/M64, stdin_pipe/M100 v3, FFI/M41).
+un proyecto real: `std/inflate`, `stdin_pipe` y la FFI).
 
 ## Confinamiento
 
 `ray_run`/`ray_test` ejecutan código arbitrario del modelo → corren **en un subproceso** del
 propio binario (aislamiento por proceso; el stdout del invitado nunca toca el canal MCP) con
-los límites de embebido de M42:
+los límites de embebido:
 
 - **fuel**: 100 M de instrucciones de la VM (un bucle infinito muere por fuel, con error claro;
   `RAYLANG_MCP_FUEL` lo ajusta — lo usan los tests para que el corte por fuel gane siempre al

@@ -21,6 +21,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `match` sí casa literales y añade la tabla «si vienes de otro lenguaje».
 - **REFERENCE, `llms.txt` y README sin M-números** ni referencias internas (hallazgos, secciones de
   IDEAS), en español e inglés.
+- **`ray help`, el `.gitignore` de `ray new` y el README del proyecto Android generado** ya no
+  muestran M-números. Tampoco `docs/web-framework.md`, `docs/build.md` ni `docs/mcp.md`.
 
 ## 1.27.27 — 2026-10-01
 

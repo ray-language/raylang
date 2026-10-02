@@ -147,7 +147,7 @@ Project:
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it here)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c; name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing (M249): --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
+  bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -171,9 +171,9 @@ Tooling:
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
-  keygen            create the app's Ed25519 signing key (M248, std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
+  keygen            create the app's Ed25519 signing key (std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
   release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL]
-  toolchain <cmd>   Rust toolchain for `build --native` (M171): `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
+  toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
   version           the language version
   help              this help
 ",
@@ -240,7 +240,7 @@ fn cmd_new(args: &[String]) {
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
     );
     let mut main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
-    let mut gitignore = "# dependencies downloaded by the package manager (M39c)\n.ray-deps/\n# the device link of `ray dev --device` (port + token; M330)\n.ray-dev\n".to_string();
+    let mut gitignore = "# dependencies downloaded by the package manager\n.ray-deps/\n# the device link of `ray dev --device` (port + token)\n.ray-dev\n".to_string();
     if frontend.is_some() {
         manifest.push_str(FRONTEND_MANIFEST_SECTION);
         main_ray = FRONTEND_MAIN_RAY.replace("{name}", name);

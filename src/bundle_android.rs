@@ -632,16 +632,16 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
   solo-arm64 no instala en un emulador x86_64 (INSTALL_FAILED_NO_MATCHING_ABIS) — usa
   `--android-abi all`.
 - stdout/stderr del programa van a **logcat** con tag `ray`: `adb logcat -s ray`.
-- El puente IPC (M152) funciona igual que en escritorio/iOS: `window.ray.send(text)` llega
+- El puente IPC funciona igual que en escritorio/iOS: `window.ray.send(text)` llega
   como evento `"message"` (window 0). Los eventos `lifecycle` llegan en onPause/onResume.
-- `ray://app/…` (M322): `ui.open` con una URL `ray://app/…` la sirve desde el programa
+- `ray://app/…`: `ui.open` con una URL `ray://app/…` la sirve desde el programa
   (`ui.mount_embed`/`mount_dir`/`mount_bytes`), sin puerto. El WebView la carga por el alias
   `https://app.ray.invalid/…` (Chromium no admite `fetch()` hacia un esquema propio); las
   rutas relativas y `fetch("/api/x")` de la página funcionan igual, y un enlace absoluto
   `ray://app/…` se reescribe al alias al navegar.
 - `std/fs`/`std/kv`: escribe en el directorio privado de la app (el cwd no es tuyo); las
   rutas externas están restringidas (scoped storage) — también para `fs.watch`.
-- Firma: el debug keystore de Gradle basta para instalar. **Release** (M160): crea un
+- Firma: el debug keystore de Gradle basta para instalar. **Release**: crea un
   keystore y un `keystore.properties` en ESTA raíz del proyecto —
   `keytool -genkeypair -v -keystore release.jks -alias app -keyalg RSA -keysize 2048 -validity 10000`
   y luego:
@@ -656,7 +656,7 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
   Con eso, `gradle assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
   firmado. Ambos archivos se PRESERVAN al regenerar con `ray bundle --android`
   (`keystore.properties` y los `*.jks`/`*.keystore` de la raíz); no los subas al VCS.
-- Icono (M160): `ray bundle --android --icon icon.png` genera los `mipmap-*/ic_launcher.png`
+- Icono: `ray bundle --android --icon icon.png` genera los `mipmap-*/ic_launcher.png`
   multi-densidad (necesita `sips`, macOS). Es el icono legacy: en Android 8+ el sistema lo
   enmascara a círculo (el adaptive icon con capas queda para v2).
 "#;

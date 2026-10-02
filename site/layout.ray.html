@@ -302,9 +302,110 @@ section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
 .markdown-alert { border-left: 3px solid var(--accent); background: var(--bg-soft); border-radius: 0 8px 8px 0; padding: .3rem 1.1rem; margin: 1.2rem 0; }
 .markdown-alert-title { font-weight: 600; margin: .4rem 0 .2rem; }
 .handbook article.doc p.edit { color: var(--muted); font-size: .85rem; margin: 0 0 1rem; }
+.toc-fab, .toc-scrim, .handbook aside.toc .toc-close { display: none; }
+/* En pantallas estrechas el índice de capítulos sale de la página: un botón flotante arriba a la
+   izquierda lo abre como panel que entra deslizándose, sobre un velo que oscurece el artículo. */
 @media (max-width: 860px) {
     .handbook > .wrap { grid-template-columns: 1fr; gap: 0; }
-    .handbook aside.toc { position: static; padding: 1.5rem 0 0; }
+    .handbook article.doc { padding-top: 3.6rem; }
+    .toc-fab {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        z-index: 9;
+        top: calc(4.4rem + env(safe-area-inset-top, 0px));
+        left: calc(.75rem + env(safe-area-inset-left, 0px));
+        width: 2.6rem;
+        height: 2.6rem;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid var(--line);
+        background: var(--nav-bg);
+        backdrop-filter: blur(12px) saturate(1.4);
+        -webkit-backdrop-filter: blur(12px) saturate(1.4);
+        color: var(--ink);
+        opacity: .72;
+        box-shadow: 0 6px 20px rgba(8, 24, 39, .16);
+        cursor: pointer;
+        transition: opacity .2s ease, transform .2s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .toc-fab:hover, .toc-fab:focus-visible { opacity: 1; }
+    .toc-fab:active { transform: scale(.92); }
+    .toc-fab svg, .toc-close svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+    html.toc-open { overflow: hidden; }
+    html.toc-open .toc-fab { opacity: 0; pointer-events: none; }
+    .toc-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 39;
+        background: rgba(8, 24, 39, .5);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity .3s ease, visibility 0s linear .3s;
+    }
+    html.toc-open .toc-scrim { opacity: 1; visibility: visible; transition: opacity .3s ease; }
+    .handbook aside.toc {
+        position: fixed;
+        z-index: 40;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: min(20rem, 86vw);
+        padding: 0 .9rem calc(1.5rem + env(safe-area-inset-bottom, 0px)) calc(.9rem + env(safe-area-inset-left, 0px));
+        background: var(--bg);
+        border-right: 1px solid var(--line);
+        border-radius: 0 18px 18px 0;
+        box-shadow: 24px 0 60px rgba(8, 24, 39, .28);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        font-size: 1rem;
+        transform: translateX(-105%);
+        visibility: hidden;
+        transition: transform .32s cubic-bezier(.22, .8, .3, 1), visibility 0s linear .32s;
+    }
+    html.toc-open .handbook aside.toc {
+        transform: none;
+        visibility: visible;
+        transition: transform .32s cubic-bezier(.22, .8, .3, 1);
+    }
+    .handbook aside.toc .toc-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 -.9rem .6rem;
+        padding: calc(.9rem + env(safe-area-inset-top, 0px)) .9rem .8rem 1.7rem;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+    }
+    .handbook aside.toc .toc-title { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
+    .handbook aside.toc .toc-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.3rem;
+        height: 2.3rem;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: var(--bg-soft);
+        color: var(--muted);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .handbook aside.toc .toc-close:hover, .handbook aside.toc .toc-close:focus-visible { color: var(--ink); }
+    .handbook aside.toc li a { padding: .62rem .8rem; border-radius: 10px; }
+    .handbook aside.toc li a.active { color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+}
+@media (max-width: 860px) and (prefers-reduced-motion: reduce) {
+    .toc-fab, .toc-scrim, .handbook aside.toc, html.toc-open .toc-scrim, html.toc-open .handbook aside.toc { transition: none; }
 }
 
 article.doc { padding: 2.5rem 0 4rem; }
@@ -511,6 +612,52 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
             nav.classList.remove("open");
             btn.setAttribute("aria-expanded", "false");
         });
+    }
+})();
+// Handbook en pantallas estrechas: el índice de capítulos es un panel que entra desde la izquierda.
+(function () {
+    var fab = document.querySelector(".toc-fab");
+    var toc = document.getElementById("handbook-toc");
+    var scrim = document.querySelector(".toc-scrim");
+    if (!fab || !toc || !scrim) { return; }
+    var root = document.documentElement;
+    var closeBtn = toc.querySelector(".toc-close");
+    function isOpen() { return root.classList.contains("toc-open"); }
+    function set(open, focus) {
+        root.classList.toggle("toc-open", open);
+        fab.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) {
+            // El capítulo actual queda a la vista dentro del panel.
+            var active = toc.querySelector("a.active");
+            if (active) { toc.scrollTop = Math.max(0, active.offsetTop - toc.clientHeight / 2); }
+        }
+        if (focus) {
+            var target = open ? closeBtn : fab;
+            if (target) { target.focus({ preventScroll: true }); }
+        }
+    }
+    fab.addEventListener("click", function () { set(true, true); });
+    scrim.addEventListener("click", function () { set(false, true); });
+    if (closeBtn) { closeBtn.addEventListener("click", function () { set(false, true); }); }
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && isOpen()) { set(false, true); }
+    });
+    var links = toc.querySelectorAll("a");
+    for (var i = 0; i < links.length; i++) {
+        links[i].addEventListener("click", function () { set(false, false); });
+    }
+    // Deslizar el panel hacia la izquierda lo cierra.
+    var startX = null;
+    toc.addEventListener("touchstart", function (e) { startX = e.touches[0].clientX; }, { passive: true });
+    toc.addEventListener("touchend", function (e) {
+        if (startX !== null && startX - e.changedTouches[0].clientX > 60) { set(false, false); }
+        startX = null;
+    }, { passive: true });
+    // Al ensanchar la ventana el índice vuelve a la columna: el panel no debe quedar abierto.
+    if (window.matchMedia) {
+        var wide = window.matchMedia("(min-width: 861px)");
+        var onWide = function (m) { if (m.matches && isOpen()) { set(false, false); } };
+        if (wide.addEventListener) { wide.addEventListener("change", onWide); } else if (wide.addListener) { wide.addListener(onWide); }
     }
 })();
 // Scrollspy: marca en la nav la sección visible (solo en páginas con anclas espiadas).

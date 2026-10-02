@@ -1,0 +1,718 @@
+// Cliente MCP (Model Context Protocol): conecta con un servidor, descubre sus herramientas y
+// recursos, y los usa.
+//
+// UNA SESIÓN POR SERVIDOR, y la posee UNA fibra: el actor. Un servidor por stdio es un proceso
+// con su stdin abierto; cada petición es una línea JSON-RPC que espera su respuesta por `id`.
+// El resto del programa le habla por canal: una `Session` se puede copiar a cualquier fibra
+// (un handle de proceso no se copia, un canal sí apunta al mismo actor desde cualquier copia),
+// y las peticiones se atienden de una en una. Un servidor que muere o se cuelga se mata, se
+// informa del error, y se relanza en la siguiente petición.
+//
+// El otro transporte es HTTP ("Streamable HTTP" del protocolo): cada petición es un POST con
+// la línea JSON-RPC, y la respuesta llega como JSON o como flujo SSE con el evento que lleva
+// la misma `id`. La sesión la identifica la cabecera `Mcp-Session-Id` del `initialize`; un 404
+// con ella es "sesión caducada" y se vuelve a inicializar. Mismo actor, mismo canal: para
+// quien usa la sesión no hay diferencia.
+import std/json;
+import std/process;
+import std/time;
+import net/http;
+import net/sse;
+import mcp/protocol;
+from std/json import Json;
+from mcp/protocol import Tool, Resource;
+
+/// How long a server is given to start and answer `initialize`.
+pub const START_TIMEOUT_MS: int = 15000;
+
+/// How long one request may take before a stdio server is killed.
+pub const CALL_TIMEOUT_MS: int = 60000;
+
+// Cuánto se espera a que un servidor termine por las buenas tras cerrarle stdin.
+const STOP_GRACE_MS: int = 2000;
+
+// Cuánto cuerpo se guarda de una respuesta de error, para el mensaje.
+const MAX_ERROR_BODY: int = 512;
+
+// Cuánto se lee de una respuesta HTTP antes de rendirse buscando la respuesta.
+const MAX_STREAM_BYTES: int = 16777216;
+
+const SESSION_EXPIRED: string = "the server no longer knows this session";
+
+/// How to reach one MCP server. A stdio server is a `command` with its `args`; an HTTP one is
+/// a `url`. Build one with `stdio_server` or `http_server` and adjust the fields you need.
+pub struct Server {
+    /// A short name for messages and for `protocol.tool_name`.
+    name: string,
+    command: string,
+    args: [string],
+    /// The working directory of a stdio server ("" = this program's).
+    dir: string,
+    /// Extra environment for a stdio server: where its own API keys go.
+    env: Map<string, string>,
+    url: string,
+    /// Extra headers for an HTTP server: `Authorization` and the like.
+    headers: Map<string, string>,
+    /// How this client introduces itself in `initialize`.
+    client_name: string,
+    client_version: string,
+    start_timeout_ms: int,
+    call_timeout_ms: int,
+}
+
+/// A server launched as `command args…`, spoken to over its standard input and output.
+pub fn stdio_server(name: string, command: string, args: [string]) -> Server {
+    let env: Map<string, string> = Map.new();
+    let headers: Map<string, string> = Map.new();
+    Server {
+        name: name,
+        command: command,
+        args: args,
+        dir: "",
+        env: env,
+        url: "",
+        headers: headers,
+        client_name: "raylang-mcp",
+        client_version: "0.1.0",
+        start_timeout_ms: START_TIMEOUT_MS,
+        call_timeout_ms: CALL_TIMEOUT_MS
+    }
+}
+
+/// A server reached over Streamable HTTP at `url`.
+pub fn http_server(name: string, url: string) -> Server {
+    var s = stdio_server(name, "", []);
+    s.url = url;
+    s
+}
+
+/// What a session's actor is asked: a request to forward (an empty method only makes sure the
+/// server is up), or the order to stop.
+pub enum Request {
+    Ask(string, Json, int, Channel<Result<Answer, string>>),
+    Stop(Channel<int>),
+}
+
+/// A server's reply: the `result` of the request, plus what it declared when initialised.
+pub struct Answer {
+    result: Json,
+    initialized: Json,
+}
+
+/// A live connection to one server. Copy it freely between fibers: every copy talks to the
+/// same actor. `close` it from the fiber that will not use it again.
+pub struct Session {
+    server: Server,
+    link: Channel<Request>,
+    /// The `initialize` result: the server's capabilities and instructions.
+    initialized: Json,
+    open: bool,
+}
+
+// ---------------------------------------------------------------- transporte stdio
+
+// El proceso vivo, propiedad exclusiva del actor: el handle, lo leído y aún no consumido de
+// su stdout, la siguiente `id` y lo que declaró al inicializarse.
+struct Live {
+    proc: process.Proc,
+    pending: bytes,
+    next_id: int,
+    initialized: Json,
+    dead: bool,
+}
+
+// Deja pasar stderr sin guardarlo: si nadie lo lee, el canal acotado se llena y el servidor
+// se bloquea escribiendo un log.
+fn discard(channel: Channel<bytes>) {
+    while (recv(channel).is_some()) { }
+}
+
+fn exit_label(code: process.Exit) -> string {
+    match (code) {
+        process.Exit.Code(c) => "exit ${c}",
+        process.Exit.Signal(sig) => "signal ${sig}",
+    }
+}
+
+fn clip(body: string, max: int) -> string {
+    if (body.len() <= max) { body } else { body.substring(0, max) + "…" }
+}
+
+// La siguiente línea completa del búfer, si la hay. Un trozo puede partir un carácter:
+// entonces se espera al siguiente en vez de decodificar a medias.
+fn take_line(live: Live) -> Option<string> {
+    match (from_utf8(live.pending)) {
+        Result.Err(_) => Option.None,
+        Result.Ok(decoded) => match (decoded.index_of("\n")) {
+            Option.None => Option.None,
+            Option.Some(i) => {
+                live.pending = decoded.substring(i + 1, decoded.len()).to_bytes();
+                Option.Some(decoded.substring(0, i))
+            },
+        },
+    }
+}
+
+// Mata el proceso y lo da por muerto: la siguiente petición lo relanza.
+fn bury(live: Live) {
+    live.proc.kill(true);
+    live.proc.wait();
+    live.dead = true;
+}
+
+// Espera la respuesta con `id`, saltando lo que no sea (notificaciones, logs). Un plazo
+// vencido o un EOF matan la sesión: el error dice cuál de los dos.
+fn await_reply(live: Live, id: int, timeout_ms: int) -> Result<Json, string> {
+    let deadline = time.monotonic() + timeout_ms;
+    while (true) {
+        while (true) {
+            match (take_line(live)) {
+                Option.None => break,
+                Option.Some(line) => match (protocol.reply_with_id(line, id)) {
+                    Option.Some(found) => {
+                        return found;
+                    },
+                    Option.None => { },
+                },
+            }
+        }
+        let remaining = deadline - time.monotonic();
+        if (remaining <= 0) {
+            bury(live);
+            return Result.Err("no reply after ${timeout_ms}ms; the server was killed");
+        }
+        match (select_timeout([live.proc.out], remaining)) {
+            Option.None => {
+                bury(live);
+                return Result.Err("no reply after ${timeout_ms}ms; the server was killed");
+            },
+            Option.Some(_) => match (recv(live.proc.out)) {
+                Option.Some(chunk) => {
+                    live.pending = live.pending + chunk;
+                },
+                Option.None => {
+                    let status = exit_label(live.proc.wait());
+                    live.dead = true;
+                    return Result.Err("the server exited (${status}) before answering");
+                },
+            },
+        }
+    }
+    Result.Err("unreachable")
+}
+
+// Escribe una línea al stdin del servidor. `write` aparca la fibra si el pipe se llena
+// (contrapresión real) y devuelve Err si el servidor cerró su stdin o murió.
+fn write_line(live: Live, line: string) -> Result<int, string> {
+    match (live.proc.write((line + "\n").to_bytes())) {
+        Result.Ok(n) => Result.Ok(n),
+        Result.Err(e) => {
+            live.dead = true;
+            Result.Err("cannot write to the server (${e})")
+        },
+    }
+}
+
+// Lanza el proceso y hace el apretón de manos.
+fn launch(s: Server) -> Result<Live, string> {
+    var command = process.cmd(s.command, s.args).stdin_pipe();
+    if (s.dir.trim() != "") {
+        command = command.dir(s.dir);
+    }
+    for (k, v) in s.env {
+        command = command.env(k, v);
+    }
+    let p = match (command.stream()) {
+        Result.Ok(proc) => proc,
+        Result.Err(e) => {
+            return Result.Err("cannot start '${s.command}': ${e}");
+        },
+    };
+    spawn(fn() {
+        discard(p.err);
+    });
+    let live = Live {
+        proc: p,
+        pending: b"",
+        next_id: protocol.HELLO_ID + 1,
+        initialized: Json.JNull,
+        dead: false
+    };
+    let hello: Result<Json, string> = match (write_line(live, protocol.initialize(s.client_name, s.client_version))) {
+        Result.Ok(_) => await_reply(live, protocol.HELLO_ID, s.start_timeout_ms),
+        Result.Err(e) => Result.Err(e),
+    };
+    match (hello) {
+        Result.Err(e) => {
+            if (!live.dead) {
+                bury(live);
+            }
+            Result.Err("initialize failed: ${e}")
+        },
+        Result.Ok(result) => {
+            live.initialized = result;
+            write_line(live, protocol.notification("notifications/initialized"))?;
+            Result.Ok(live)
+        },
+    }
+}
+
+// Una petición sobre la sesión viva.
+fn exchange(live: Live, method: string, params: Json, timeout_ms: int) -> Result<Answer, string> {
+    let id = live.next_id;
+    live.next_id = live.next_id + 1;
+    write_line(live, protocol.request(id, method, params))?;
+    let result = await_reply(live, id, timeout_ms)?;
+    Result.Ok(Answer { result: result, initialized: live.initialized })
+}
+
+// Cierra la sesión por las buenas (EOF en stdin) y, si el servidor no se va, a la fuerza.
+fn hang_up(live: Live) {
+    if (live.dead) {
+        return;
+    }
+    live.proc.close_stdin();
+    spawn(fn() {
+        time.sleep(STOP_GRACE_MS);
+        live.proc.kill(true);
+    });
+    live.proc.wait();
+    live.dead = true;
+}
+
+// El actor: la única fibra que toca el proceso. Atiende peticiones hasta que le mandan parar;
+// un servidor caído se relanza en la siguiente petición.
+fn serve_stdio(s: Server, link: Channel<Request>) {
+    var live: Option<Live> = Option.None;
+    while (true) {
+        match (recv(link)) {
+            Option.None => break,
+            Option.Some(req) => match (req) {
+                Request.Stop(ack) => {
+                    match (live) {
+                        Option.Some(l) => hang_up(l),
+                        Option.None => { },
+                    }
+                    live = Option.None;
+                    send(ack, 1);
+                    break;
+                },
+                Request.Ask(method, params, timeout_ms, reply) => {
+                    let ready: Result<Live, string> = match (live) {
+                        Option.Some(l) => Result.Ok(l),
+                        Option.None => launch(s),
+                    };
+                    match (ready) {
+                        Result.Err(e) => {
+                            let failed: Result<Answer, string> = Result.Err(e);
+                            send(reply, failed);
+                        },
+                        Result.Ok(l) => {
+                            let outcome: Result<Answer, string> = if (method == "") {
+                                Result.Ok(Answer { result: Json.JNull, initialized: l.initialized })
+                            } else {
+                                exchange(l, method, params, timeout_ms)
+                            };
+                            live = if (l.dead) { Option.None } else { Option.Some(l) };
+                            send(reply, outcome);
+                        },
+                    }
+                },
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------- transporte HTTP
+
+// La sesión HTTP: la `id` que dio el servidor al inicializar (vacía si no usa sesiones), la
+// siguiente `id` de petición y lo que declaró.
+struct Web {
+    session_id: string,
+    next_id: int,
+    initialized: Json,
+}
+
+// Las cabeceras de cada POST: las del protocolo, la sesión si la hay, y las del usuario
+// (Authorization y similares) encima.
+fn http_headers(s: Server, session_id: string) -> Map<string, string> {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "application/json");
+    h.insert("Accept", "application/json, text/event-stream");
+    h.insert("MCP-Protocol-Version", protocol.PROTOCOL_VERSION);
+    if (session_id != "") {
+        h.insert("Mcp-Session-Id", session_id);
+    }
+    for (k, v) in s.headers {
+        h.insert(k, v);
+    }
+    h
+}
+
+// Una cabecera de la respuesta, sin distinguir mayúsculas.
+fn header_of(headers: Map<string, string>, name: string) -> string {
+    for (k, v) in headers {
+        if (k.to_lower() == name) {
+            return v;
+        }
+    }
+    ""
+}
+
+// Lo que salió por un POST: el estado, las cabeceras y el `result` con `id` (JNull para las
+// notificaciones, que no tienen respuesta).
+struct Posted {
+    status: int,
+    headers: Map<string, string>,
+    result: Result<Json, string>,
+}
+
+// Envía una línea y lee el cuerpo como JSON suelto o como flujo SSE hasta dar con el evento
+// que lleva la `id`. Una `id` negativa es una notificación: no se espera respuesta.
+fn post(
+    s: Server,
+    session_id: string,
+    line: string,
+    id: int,
+    timeout_ms: int
+) -> Result<Posted, string> {
+    let stream = match (http.stream_with(
+        "POST",
+        s.url,
+        line.to_bytes(),
+        http_headers(s, session_id),
+        timeout_ms
+    )) {
+        Result.Ok(st) => st,
+        Result.Err(e) => {
+            return Result.Err("cannot reach ${s.url}: ${e}");
+        },
+    };
+    let status = stream.status;
+    let headers = stream.headers;
+    let kind = header_of(headers, "content-type").to_lower();
+    var acc: bytes = b"";
+    var outcome: Result<Json, string> = Result.Err("the stream ended without a reply to id ${id}");
+    if (status == 202 || status == 204 || id < 0) {
+        http.stream_close(stream);
+        return Result.Ok(
+            Posted { status: status, headers: headers, result: Result.Ok(Json.JNull) }
+        );
+    }
+    // Dos bucles de los que salir cuando aparece la respuesta: el lector de trozos y el
+    // decodificador de SSE.
+    reading: while (true) {
+        match (http.stream_read(stream)) {
+            Result.Err(e) => {
+                outcome = Result.Err("reading the reply failed: ${e}");
+                break;
+            },
+            Result.Ok(chunk) => match (chunk) {
+                Option.None => break,
+                Option.Some(part) => {
+                    acc = acc + part;
+                    if (kind.contains("text/event-stream")) {
+                        // Un evento por vez; el que lleve la `id` es la respuesta.
+                        while (true) {
+                            match (sse.decode(acc)) {
+                                Option.None => break,
+                                Option.Some(decoded) => {
+                                    acc = acc.sub_bytes(decoded.1, acc.len());
+                                    match (protocol.reply_with_id(decoded.0.data, id)) {
+                                        Option.Some(found) => {
+                                            outcome = found;
+                                            break reading;
+                                        },
+                                        Option.None => { },
+                                    }
+                                },
+                            }
+                        }
+                    }
+                    if (acc.len() > MAX_STREAM_BYTES) {
+                        outcome = Result.Err("the reply exceeds ${MAX_STREAM_BYTES} bytes");
+                        break;
+                    }
+                },
+            },
+        }
+    }
+    http.stream_close(stream);
+    if (status < 200 || status >= 300) {
+        let body = match (from_utf8(acc)) {
+            Result.Ok(t) => clip(t.trim(), MAX_ERROR_BODY),
+            Result.Err(_) => "",
+        };
+        let detail = if (body == "") { "" } else { ": ${body}" };
+        return Result.Ok(
+            Posted {
+                status: status,
+                headers: headers,
+                result: Result.Err("HTTP ${status}${detail}")
+            }
+        );
+    }
+    if (!kind.contains("text/event-stream")) {
+        outcome = match (from_utf8(acc)) {
+            Result.Err(_) => Result.Err("the reply is not UTF-8"),
+            Result.Ok(body) => match (protocol.reply_with_id(body, id)) {
+                Option.Some(found) => found,
+                Option.None => Result.Err(
+                    "the reply does not answer id ${id}: ${clip(body.trim(), MAX_ERROR_BODY)}"
+                ),
+            },
+        };
+    }
+    Result.Ok(Posted { status: status, headers: headers, result: outcome })
+}
+
+// `initialize` + `initialized` por HTTP; se queda con la sesión y lo que declaró el servidor.
+fn open_http(s: Server) -> Result<Web, string> {
+    let posted = post(
+        s,
+        "",
+        protocol.initialize(s.client_name, s.client_version),
+        protocol.HELLO_ID,
+        s.start_timeout_ms
+    )?;
+    let result = match (posted.result) {
+        Result.Ok(r) => r,
+        Result.Err(e) => {
+            return Result.Err("initialize failed: ${e}");
+        },
+    };
+    let web = Web {
+        session_id: header_of(posted.headers, "mcp-session-id"),
+        next_id: protocol.HELLO_ID + 1,
+        initialized: result
+    };
+    // La notificación no tiene respuesta: un 202 (o cualquier 2xx) basta.
+    match (post(
+        s,
+        web.session_id,
+        protocol.notification("notifications/initialized"),
+        0 - 1,
+        s.start_timeout_ms
+    )) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            return Result.Err("initialized notification failed: ${e}");
+        },
+    }
+    Result.Ok(web)
+}
+
+// Una petición sobre la sesión HTTP. `Err(SESSION_EXPIRED)` si el servidor ya no reconoce la
+// sesión (404): el actor la reabre y reintenta una vez.
+fn exchange_http(
+    s: Server,
+    web: Web,
+    method: string,
+    params: Json,
+    timeout_ms: int
+) -> Result<Answer, string> {
+    let id = web.next_id;
+    web.next_id = web.next_id + 1;
+    let posted = post(s, web.session_id, protocol.request(id, method, params), id, timeout_ms)?;
+    if (posted.status == 404 && web.session_id != "") {
+        return Result.Err(SESSION_EXPIRED);
+    }
+    let result = posted.result?;
+    Result.Ok(Answer { result: result, initialized: web.initialized })
+}
+
+// Cierra la sesión HTTP: un DELETE con su id, que el servidor puede no admitir.
+fn close_http(s: Server, web: Web) {
+    if (web.session_id == "") {
+        return;
+    }
+    match (http.request_bytes(
+        "DELETE",
+        s.url,
+        b"",
+        http_headers(s, web.session_id),
+        STOP_GRACE_MS
+    )) {
+        Result.Ok(_) => { },
+        Result.Err(_) => { },
+    }
+}
+
+// El actor HTTP: igual que el de stdio, pero lo que posee es una sesión, no un proceso.
+fn serve_http(s: Server, link: Channel<Request>) {
+    var web: Option<Web> = Option.None;
+    while (true) {
+        match (recv(link)) {
+            Option.None => break,
+            Option.Some(req) => match (req) {
+                Request.Stop(ack) => {
+                    match (web) {
+                        Option.Some(w) => close_http(s, w),
+                        Option.None => { },
+                    }
+                    web = Option.None;
+                    send(ack, 1);
+                    break;
+                },
+                Request.Ask(method, params, timeout_ms, reply) => {
+                    // Dos intentos: el segundo solo si el servidor dio la sesión por caducada.
+                    var outcome: Result<Answer, string> = Result.Err("not attempted");
+                    for _ in 0..2 {
+                        let ready: Result<Web, string> = match (web) {
+                            Option.Some(w) => Result.Ok(w),
+                            Option.None => open_http(s),
+                        };
+                        match (ready) {
+                            Result.Err(e) => {
+                                outcome = Result.Err(e);
+                                break;
+                            },
+                            Result.Ok(w) => {
+                                web = Option.Some(w);
+                                if (method == "") {
+                                    outcome = Result.Ok(
+                                        Answer { result: Json.JNull, initialized: w.initialized }
+                                    );
+                                    break;
+                                }
+                                outcome = exchange_http(s, w, method, params, timeout_ms);
+                                match (outcome) {
+                                    Result.Err(e) => {
+                                        if (e != SESSION_EXPIRED) {
+                                            break;
+                                        }
+                                        web = Option.None;
+                                    },
+                                    Result.Ok(_) => break,
+                                }
+                            },
+                        }
+                    }
+                    send(reply, outcome);
+                },
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------- la sesión
+
+// Una petición al actor, desde cualquier fibra.
+fn ask(c: Session, method: string, params: Json, timeout_ms: int) -> Result<Answer, string> {
+    if (!c.open) {
+        return Result.Err("the session with '${c.server.name}' is closed");
+    }
+    let reply: Channel<Result<Answer, string>> = Channel.new();
+    send(c.link, Request.Ask(method, params, timeout_ms, reply));
+    match (recv(reply)) {
+        Option.Some(outcome) => outcome,
+        Option.None => Result.Err("the MCP server '${c.server.name}' went away"),
+    }
+}
+
+/// Connects to `server`: starts it (or opens the HTTP session) and performs the handshake.
+/// `Err` says why the server could not be reached or did not answer `initialize`.
+pub fn connect(server: Server) -> Result<Session, string> {
+    let link: Channel<Request> = Channel.new();
+    if (server.url != "") {
+        spawn(fn() {
+            serve_http(server, link);
+        });
+    } else {
+        spawn(fn() {
+            serve_stdio(server, link);
+        });
+    }
+    let c = Session { server: server, link: link, initialized: Json.JNull, open: true };
+    match (ask(c, "", protocol.empty_object(), server.start_timeout_ms)) {
+        Result.Ok(answer) => {
+            c.initialized = answer.initialized;
+            Result.Ok(c)
+        },
+        Result.Err(e) => {
+            close(c);
+            Result.Err(e)
+        },
+    }
+}
+
+/// `connect` to a program spoken to over stdio: `connect_stdio("ray", ["mcp"])`.
+pub fn connect_stdio(command: string, args: [string]) -> Result<Session, string> {
+    connect(stdio_server(command, command, args))
+}
+
+/// `connect` to a server reached over Streamable HTTP.
+pub fn connect_http(url: string) -> Result<Session, string> {
+    connect(http_server(url, url))
+}
+
+/// One raw request: the `result` of `method` with `params`. For what the functions below do
+/// not cover (`prompts/list`, a server's own methods).
+pub fn request(c: Session, method: string, params: Json) -> Result<Json, string> {
+    let answer = ask(c, method, params, c.server.call_timeout_ms)?;
+    Result.Ok(answer.result)
+}
+
+/// The tools the server offers.
+pub fn tools(c: Session) -> Result<[Tool], string> {
+    protocol.parse_tools(request(c, "tools/list", protocol.empty_object())?)
+}
+
+/// Calls `tool` (its raw, server-side name) with `arguments`, a JSON object. `Ok` is the text
+/// of the result; a tool that reports failure comes back as `Err` with what it said.
+pub fn call(c: Session, tool: string, arguments: Json) -> Result<string, string> {
+    let params = protocol.object(["name", "arguments"], [Json.JStr(tool), arguments]);
+    protocol.call_text(request(c, "tools/call", params)?)
+}
+
+/// `call` with the arguments as JSON text, the form a model's tool call arrives in.
+pub fn call_json(c: Session, tool: string, arguments: string) -> Result<string, string> {
+    let parsed = if (arguments.trim() == "") {
+        protocol.empty_object()
+    } else {
+        match (json.parse(arguments)) {
+            Result.Ok(j) => j,
+            Result.Err(e) => {
+                return Result.Err("the arguments of '${tool}' are not valid JSON: ${e}");
+            },
+        }
+    };
+    call(c, tool, parsed)
+}
+
+/// The resources the server publishes; an empty list when it declares none.
+pub fn resources(c: Session) -> Result<[Resource], string> {
+    if (!protocol.offers(c.initialized, "resources")) {
+        return Result.Ok([]);
+    }
+    protocol.parse_resources(request(c, "resources/list", protocol.empty_object())?)
+}
+
+/// Reads the resource at `uri`, as text.
+pub fn read_resource(c: Session, uri: string) -> Result<string, string> {
+    let params = protocol.object(["uri"], [Json.JStr(uri)]);
+    protocol.resource_text(request(c, "resources/read", params)?)
+}
+
+/// The instructions the server declared when it was initialised ("" if none): text for the
+/// system prompt of the model that will use its tools.
+pub fn instructions(c: Session) -> string {
+    protocol.instructions_of(c.initialized)
+}
+
+/// Whether the server declared `capability` (`"tools"`, `"resources"`, `"prompts"`).
+pub fn offers(c: Session, capability: string) -> bool {
+    protocol.offers(c.initialized, capability)
+}
+
+/// Ends the session: a stdio server gets end-of-input and is waited for (and killed if it
+/// lingers); an HTTP session is deleted. Returns once the server is gone.
+pub fn close(c: Session) {
+    if (!c.open) {
+        return;
+    }
+    c.open = false;
+    let ack: Channel<int> = Channel.new();
+    send(c.link, Request.Stop(ack));
+    recv(ack);
+}

@@ -1132,7 +1132,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
    feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
 
-3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`) — no embebidos; se declaran como dependencia (§14).
+3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema
 
@@ -2131,6 +2131,68 @@ let p = rpc.pool("127.0.0.1", 7070, 8);
 let r = rpc.pool_call(p, "consulta", params);   // desde cualquier fibra; aparca si está agotado
 rpc.pool_close(p);
 ```
+
+### Herramientas de un servidor MCP (`packages/mcp`, dependencia)
+
+El [Model Context Protocol](https://modelcontextprotocol.io) es la forma estándar de que un
+programa ofrezca herramientas a un modelo. El paquete `mcp` es el lado cliente: conecta con un
+servidor, pregunta qué herramientas tiene y las llama. Es lo que usa un agente para darle al
+modelo herramientas que no ha escrito él.
+
+```rust
+import mcp/mcp;
+
+fn main() -> int {
+    let c = match (mcp.connect_stdio("ray", ["mcp"])) {
+        Result.Ok(c) => c,
+        Result.Err(e) => {
+            eprint(e);
+            return 1;
+        },
+    };
+    for t in mcp.tools(c).unwrap_or([]) {
+        print("${t.name}: ${t.description}");
+    }
+    print(mcp.call_json(c, "ray_run", `{"code": "fn main() { print(6 * 7); }"}`));
+    mcp.close(c);
+    0
+}
+```
+
+`connect_stdio` lanza el servidor como proceso; `connect_http(url)` habla con uno remoto. Una
+`Session` se puede pasar a otras fibras: todas las copias usan el mismo servidor. Si el servidor
+muere, la petición devuelve `Err` y la siguiente lo relanza.
+
+El otro lado es `mcp/serve`: tu app ofrece sus propias herramientas a un asistente. Cada
+herramienta es una función que recibe sus argumentos como `Json` y devuelve el texto que lee el
+modelo:
+
+```rust
+import std/json;
+import mcp/serve;
+from std/json import Json;
+
+fn main() -> int {
+    var p = serve.provider("demo", "0.1.0");
+    let _ = serve.read_only_tool(
+        p,
+        "shout",
+        "Upper-cases a text",
+        `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+        fn(args: Json) -> Result<string, string> {
+            match (json.get_string(args, "text")) {
+                Option.Some(t) => Result.Ok(t.to_upper()),
+                Option.None => Result.Err("'text' is required"),
+            }
+        }
+    );
+    serve.stdio(p)
+}
+```
+
+`serve.stdio` habla por la entrada y la salida estándar, que es como un asistente lanza un
+servidor local (`claude mcp add demo -- ./demo`); `serve.http` lo sirve por HTTP. Los detalles y
+la superficie completa están en el README del paquete y en la referencia.
 
 ### Bases de datos (`packages/db`, dependencia)
 

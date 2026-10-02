@@ -1,0 +1,14 @@
+# Manifiesto del paquete-librería `mcp`. Los imports `mcp/…` se resuelven contra el directorio
+# padre (deps::dependency_roots_for); `entry` es la cara publicable que valida y carga
+# `ray registry publish`.
+[package]
+name = "mcp"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "Model Context Protocol for raylang: a client (tools, resources, server instructions; one session actor per server) and a server (expose your app's tools and resources), both over stdio and Streamable HTTP"
+keywords = ["mcp", "model-context-protocol", "llm", "agent", "tools", "json-rpc", "stdio", "sse", "client", "server"]
+entry = "mcp.ray"
+
+# El transporte HTTP usa el cliente con streaming y el decodificador SSE de `net`.
+[dependencies]
+net = "path:../net"

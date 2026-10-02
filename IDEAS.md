@@ -3893,7 +3893,29 @@ contenido) — por eso `raw` passthrough como ya hace raycode, y versionado semv
 
 **Dependencias con el handbook.** El capítulo «LLM y MCP» del handbook se escribe en dos tiempos:
 primero el patrón a mano (sin citar raycode, decisión del 1 oct 2026) y, si este arco se aprueba,
-se reescribe sobre `llm`/`mcp`. **Estado: PROPUESTO, sin decidir.**
+se reescribe sobre `llm`/`mcp`. ~~**Estado: PROPUESTO, sin decidir.**~~
+
+**Estado: APROBADO (2 oct 2026), en ejecución.** Lo que cambió la decisión: ya no es «un segundo
+agente tendría que copiar». `ray-sublime` lleva su propio agente (unas 5.600 líneas, con un cliente
+MCP de 1.342 y diez proveedores) y no comparte nada con el de `raycode` (4.900 líneas, cliente MCP
+de 1.218): los dos clientes MCP coinciden en un 4 % de sus líneas y en 4 funciones públicas de 26
+y 39. Cada uno tiene lo que al otro le falta (raycode el transporte HTTP; ray-sublime la
+comprobación de capacidades y el abanico de proveedores). La interfaz de los paquetes se diseña
+desde la **unión** de las dos, no extrayendo una.
+
+Orden acordado, distinto del propuesto arriba: **`mcp` primero** (protocolo estable; `llm` es
+donde las API de los proveedores cambian), y `agent` deja de ser «después»: ya hay dos apps.
+
+| Fase | Qué | Estado |
+|---|---|---|
+| 1 | `mcp` cliente: stdio + Streamable HTTP, herramientas, recursos, instrucciones | ✅ M336 (DESIGN §322) |
+| 2 | `mcp` servidor: que una app exponga sus herramientas, por stdio y por HTTP | ✅ M337 (DESIGN §323) |
+| 3 | `llm`: tipos comunes, envío y streaming, proveedores | pendiente |
+| 4 | `agent`: el bucle con presupuesto y aprobación | pendiente |
+| 5 | reescribir el capítulo del handbook y `agent-cli` sobre los paquetes | pendiente |
+
+La migración de `raycode` y `ray-sublime` a los paquetes la hace quien lleva cada repositorio: el
+arco los lee como referencia y no los toca.
 
 ## 101. Hallazgos del handbook (oct 2026)
 
@@ -3916,3 +3938,5 @@ quedan aquí para decidir.
 | 11 | `std/crypto` no expone una comparación en tiempo constante (la tienen dentro `net/jwt` y `net/scram`); el ejemplo de la API trae la suya para comparar el token | PROPUESTO: `crypto.constant_time_eq(a: bytes, b: bytes) -> bool` sobre `ring` |
 | 12 | Un montaje de estáticos en `/` (`static_embedded("/", dist)`) responde a TODOS los GET antes de las rutas: `/api/...` y el `not_found` nunca se alcanzan, sin aviso. Una SPA tiene que montar solo `/assets/` y servir `index.html` a mano | PROPUESTO: que un montaje deje pasar a las rutas lo que no encuentra (como Express), o un `web.spa(app, dist)` que monte los archivos y haga el respaldo a `index.html` |
 | 13 | Los patrones de `match` no admiten arreglos (`Reply.Arr([Reply.Str(a), …])` es error de sintaxis) | PROPUESTO: patrones de arreglo de longitud fija, como los de tupla |
+| 14 | Nativo: el mensaje de un índice fuera de rango capturado por `try_call` no es el de la VM. `try_call(fn() -> int { empty[3] })` da `index 3 out of range (length 0)` en la VM e `index out of bounds: the len is 0 but the index is 3` en el binario nativo (el pánico de Rust sin traducir). Rompe la identidad byte a byte en cualquier programa que muestre ese error (lo destapó el servidor MCP, que devuelve al modelo el fallo de una herramienta) | PROPUESTO: que el nativo emita el mismo texto que la VM en el acceso indexado |
+| 15 | Nativo: no compila una closure que captura un `Map` declarado con anotación y sin uso previo. `var m: Map<string, int> = Map.new(); try_call(fn() -> int { 10 / (m.len()) })` corre en la VM y en nativo falla en `rustc` con E0282 (`cannot infer type of the type parameter T` en el `RefCell` del mapa capturado) | PROPUESTO: que el transpilador emita el tipo del `Map` capturado a partir de la anotación |

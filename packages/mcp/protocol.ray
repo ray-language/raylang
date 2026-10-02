@@ -1,0 +1,300 @@
+// Las piezas PURAS del Model Context Protocol: construir los mensajes JSON-RPC 2.0 y leer lo
+// que contesta un servidor. Nada aquí lanza procesos ni abre conexiones, así que se prueba con
+// texto fijo, y lo comparten el cliente (`mcp/mcp`) y quien quiera hablar el protocolo a mano.
+import std/json;
+from std/json import Json;
+
+/// The wire version this package speaks.
+pub const PROTOCOL_VERSION: string = "2024-11-05";
+
+/// The `id` of the `initialize` request; the requests that follow count from 2.
+pub const HELLO_ID: int = 1;
+
+const NAME_PREFIX: string = "mcp__";
+
+const NAME_SEPARATOR: string = "__";
+
+/// A tool as the server declares it: its raw name, description, JSON Schema, and whether the
+/// server said it only reads (`annotations.readOnlyHint`).
+pub struct Tool {
+    name: string,
+    description: string,
+    schema: Json,
+    /// What the server CLAIMS: a hint, not a guarantee. A server that says nothing is treated
+    /// as if the tool changed things.
+    read_only: bool,
+}
+
+/// One resource a server publishes: something that can be read by URI.
+pub struct Resource {
+    uri: string,
+    name: string,
+    description: string,
+    mime: string,
+}
+
+fn text(s: string) -> Json {
+    Json.JStr(s)
+}
+
+/// A JSON object from parallel lists of keys and values.
+pub fn object(keys: [string], values: [Json]) -> Json {
+    var m: Map<string, Json> = Map.new();
+    var i = 0;
+    while (i < keys.len() && i < values.len()) {
+        m.insert(keys[i], values[i]);
+        i = i + 1;
+    }
+    Json.JObject(m)
+}
+
+/// The empty JSON object, `{}`: the `params` of a request that takes none.
+pub fn empty_object() -> Json {
+    let m: Map<string, Json> = Map.new();
+    Json.JObject(m)
+}
+
+/// One request line (no trailing newline).
+pub fn request(id: int, method: string, params: Json) -> string {
+    json.stringify(
+        object(
+            ["jsonrpc", "id", "method", "params"],
+            [text("2.0"), Json.JNum(id as float), text(method), params]
+        )
+    )
+}
+
+/// One notification line: a message with no `id`, which expects no answer.
+pub fn notification(method: string) -> string {
+    json.stringify(object(["jsonrpc", "method"], [text("2.0"), text(method)]))
+}
+
+/// The `initialize` request, announcing the client by name and version.
+pub fn initialize(client_name: string, client_version: string) -> string {
+    request(
+        HELLO_ID,
+        "initialize",
+        object(
+            ["protocolVersion", "capabilities", "clientInfo"],
+            [
+                text(PROTOCOL_VERSION),
+                empty_object(),
+                object(["name", "version"], [text(client_name), text(client_version)])
+            ]
+        )
+    )
+}
+
+/// The `result` of a reply, or the protocol `error` as `Err`.
+pub fn result_of(reply: Json) -> Result<Json, string> {
+    match (json.member(reply, "error")) {
+        Option.Some(e) => {
+            let message = match (json.get_string(e, "message")) {
+                Option.Some(m) => m,
+                Option.None => json.stringify(e),
+            };
+            let code = match (json.get_int(e, "code")) {
+                Option.Some(c) => " (code ${c})",
+                Option.None => "",
+            };
+            Result.Err("the server answered an error: ${message}${code}")
+        },
+        Option.None => match (json.member(reply, "result")) {
+            Option.Some(r) => Result.Ok(r),
+            Option.None => Result.Err("the reply has neither \"result\" nor \"error\""),
+        },
+    }
+}
+
+/// Whether `line` is the reply to request `id`: its `result`, or the protocol error. `None`
+/// for anything else (a notification, a log line, the reply to another request).
+pub fn reply_with_id(line: string, id: int) -> Option<Result<Json, string>> {
+    match (json.parse(line.trim())) {
+        Result.Err(_) => Option.None,
+        Result.Ok(reply) => match (json.get_int(reply, "id")) {
+            Option.Some(found) => if (found == id) {
+                Option.Some(result_of(reply))
+            } else {
+                Option.None
+            },
+            Option.None => Option.None,
+        },
+    }
+}
+
+/// The instructions a server declared in its `initialize` result ("" if none): text meant
+/// for the system prompt of whoever uses its tools.
+pub fn instructions_of(initialized: Json) -> string {
+    match (json.get_string(initialized, "instructions")) {
+        Option.Some(found) => found.trim(),
+        Option.None => "",
+    }
+}
+
+/// Whether the `initialize` result declares `capability` (`"tools"`, `"resources"`,
+/// `"prompts"`): what the server offers, so a client does not ask for what is not there.
+pub fn offers(initialized: Json, capability: string) -> bool {
+    match (json.member(initialized, "capabilities")) {
+        Option.Some(c) => json.member(c, capability).is_some(),
+        Option.None => false,
+    }
+}
+
+// Lo que el servidor declara en `annotations.readOnlyHint`. Ausente = no.
+fn read_only_hint(item: Json) -> bool {
+    match (json.member(item, "annotations")) {
+        Option.Some(a) => json.get_bool(a, "readOnlyHint").unwrap_or(false),
+        Option.None => false,
+    }
+}
+
+/// The tools a `tools/list` result declares. A tool without a schema gets an empty object
+/// schema, which every model provider accepts.
+pub fn parse_tools(result: Json) -> Result<[Tool], string> {
+    let items = match (json.get_array(result, "tools")) {
+        Option.Some(t) => t,
+        Option.None => {
+            return Result.Err("the reply to tools/list has no \"tools\" list");
+        },
+    };
+    var tools: [Tool] = [];
+    for item in items {
+        let name = match (json.get_string(item, "name")) {
+            Option.Some(n) => n,
+            Option.None => {
+                return Result.Err("a tool in tools/list has no name");
+            },
+        };
+        let schema = match (json.member(item, "inputSchema")) {
+            Option.Some(s) => s,
+            Option.None => object(["type", "properties"], [text("object"), empty_object()]),
+        };
+        tools.push(
+            Tool {
+                name: name,
+                description: json.get_string(item, "description").unwrap_or(""),
+                schema: schema,
+                read_only: read_only_hint(item)
+            }
+        );
+    }
+    Result.Ok(tools)
+}
+
+/// The resources a `resources/list` result declares.
+pub fn parse_resources(result: Json) -> Result<[Resource], string> {
+    let items = match (json.get_array(result, "resources")) {
+        Option.Some(r) => r,
+        Option.None => {
+            return Result.Err("the reply to resources/list has no \"resources\" list");
+        },
+    };
+    var resources: [Resource] = [];
+    for item in items {
+        let uri = match (json.get_string(item, "uri")) {
+            Option.Some(u) => u,
+            Option.None => {
+                return Result.Err("a resource in resources/list has no uri");
+            },
+        };
+        resources.push(
+            Resource {
+                uri: uri,
+                name: json.get_string(item, "name").unwrap_or(""),
+                description: json.get_string(item, "description").unwrap_or(""),
+                mime: json.get_string(item, "mimeType").unwrap_or("")
+            }
+        );
+    }
+    Result.Ok(resources)
+}
+
+/// The text of a `tools/call` result: its `content` blocks joined, text ones verbatim and
+/// the rest summarised (`[image 12 KiB]`). `isError: true` comes back as `Err`, so a failed
+/// tool takes the same path as any other error.
+pub fn call_text(result: Json) -> Result<string, string> {
+    var parts: [string] = [];
+    match (json.get_array(result, "content")) {
+        Option.Some(blocks) => {
+            for block in blocks {
+                let kind = json.get_string(block, "type").unwrap_or("unknown");
+                if (kind == "text") {
+                    match (json.get_string(block, "text")) {
+                        Option.Some(t) => parts.push(t),
+                        Option.None => { },
+                    }
+                } else {
+                    let size = match (json.get_string(block, "data")) {
+                        Option.Some(d) => " ${d.len() * 3 / 4 / 1024} KiB",
+                        Option.None => "",
+                    };
+                    parts.push("[${kind}${size}]");
+                }
+            }
+        },
+        Option.None => match (json.member(result, "structuredContent")) {
+            Option.Some(s) => parts.push(json.stringify(s)),
+            Option.None => { },
+        },
+    }
+    let joined = parts.join("\n");
+    if (json.get_bool(result, "isError").unwrap_or(false)) {
+        Result.Err(if (joined.trim() == "") { "the tool reported an error" } else { joined })
+    } else {
+        Result.Ok(joined)
+    }
+}
+
+/// The text of a `resources/read` result: its `contents` joined, text entries verbatim and
+/// binary ones summarised (`[blob 12 KiB image/png]`).
+pub fn resource_text(result: Json) -> Result<string, string> {
+    let entries = match (json.get_array(result, "contents")) {
+        Option.Some(c) => c,
+        Option.None => {
+            return Result.Err("the reply to resources/read has no \"contents\" list");
+        },
+    };
+    var parts: [string] = [];
+    for entry in entries {
+        match (json.get_string(entry, "text")) {
+            Option.Some(found) => parts.push(found),
+            Option.None => match (json.get_string(entry, "blob")) {
+                Option.Some(blob) => {
+                    let mime = match (json.get_string(entry, "mimeType")) {
+                        Option.Some(m) => " " + m,
+                        Option.None => "",
+                    };
+                    parts.push("[blob ${blob.len() * 3 / 4 / 1024} KiB${mime}]");
+                },
+                Option.None => { },
+            },
+        }
+    }
+    Result.Ok(parts.join("\n"))
+}
+
+/// The name a model sees for tool `tool` of server `server`: `mcp__<server>__<tool>`, the
+/// convention assistants use so the names of several servers never collide and the origin
+/// reads off the trace.
+pub fn tool_name(server: string, tool: string) -> string {
+    NAME_PREFIX + server + NAME_SEPARATOR + tool
+}
+
+/// True when `name` follows the `mcp__<server>__<tool>` convention.
+pub fn is_remote(name: string) -> bool {
+    name.starts_with(NAME_PREFIX)
+}
+
+/// The inverse of `tool_name`: the server and the raw tool name, or `None` when `name` does
+/// not follow the convention.
+pub fn split_name(name: string) -> Option<(string, string)> {
+    if (!is_remote(name)) {
+        return Option.None;
+    }
+    let rest = name.substring(NAME_PREFIX.len(), name.len());
+    let cut = rest.index_of(NAME_SEPARATOR).unwrap_or(-1);
+    if (cut <= 0 || cut + NAME_SEPARATOR.len() >= rest.len()) {
+        return Option.None;
+    }
+    Option.Some((rest.substring(0, cut), rest.substring(cut + NAME_SEPARATOR.len(), rest.len())))
+}

@@ -19,7 +19,7 @@ discrepancy, the SPEC rules).
 8. [The prelude](#8-the-prelude)
 9. [Iterators](#9-iterators)
 10. [The standard library `std/`](#10-the-standard-library-std)
-11. [Additional packages (`net`, `rpc`, `db`)](#11-additional-packages-net-web-rpc-db)
+11. [Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`)](#11-additional-packages-net-web-rpc-db-tz-cron-mcp)
 12. [Annotations](#12-annotations)
 13. [FFI: marshalable types](#13-ffi-marshalable-types)
 14. [The `ray` CLI](#14-the-ray-cli)
@@ -441,7 +441,7 @@ A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, time-sortable) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 |
 
-## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`)
+## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`)
 
 Tier 2: they do **not** ship in the binary; they are declared in `ray.toml` (by path or git) and
 imported the same way (`import net/http;` → `http.fetch(…)`). They live in the repo's `packages/`.
@@ -510,6 +510,10 @@ Time zones over the system's TZif files (`/usr/share/zoneinfo`; RFC 8536 v1-v3, 
 ### `packages/cron` — cron expressions and recurring timers (v0.1.0)
 
 `import cron/cron;` — `parse(expr) -> Result<Schedule, string>` (5 fields `min hour dom month dow`; `*`, ranges, steps `*/n`, lists, aliases `@hourly/@daily/@weekly/@monthly/@yearly`; vixie-cron dom OR dow quirk) · `next_after(s, ms) -> Result<int, string>` (pure; `Err` for an impossible expression) · `run(s, job)` (cooperative runner: sleeps yielding the fiber, under `spawn`). Civil time with `import cron/local;` + the `tz` dependency: `local.next_after_in(s, zone, ms)` · `local.run_in(s, zone, job)` (DST: a time in the spring gap fires when the gap ends; one in the overlap fires only the first time). Guide: [`packages/cron/README.md`](packages/cron/README.md).
+
+### `packages/mcp` — Model Context Protocol (v0.1.0)
+
+`import mcp/mcp;` — the client: `stdio_server(name, command, args)` / `http_server(name, url) -> Server` (adjustable fields: `dir`, `env`, `headers`, `client_name`, `client_version`, `start_timeout_ms`, `call_timeout_ms`) · `connect(server) -> Result<Session, string>` (launches the process or opens the HTTP session and performs `initialize`) · shortcuts `connect_stdio(command, args)` / `connect_http(url)` · `tools(c) -> Result<[Tool], string>` with `Tool { name, description, schema: Json, read_only }` · `call(c, tool, arguments: Json) -> Result<string, string>` (a failing tool is an `Err`) · `call_json(c, tool, arguments: string)` (arguments as JSON text) · `resources(c) -> Result<[Resource], string>` (`[]` if the server declares none) · `read_resource(c, uri) -> Result<string, string>` · `instructions(c) -> string` · `offers(c, capability) -> bool` · `request(c, method, params: Json) -> Result<Json, string>` · `close(c)`. Two transports: **stdio** (a process with its stdin open, one JSON-RPC message per line) and **Streamable HTTP** (POST answered with JSON or SSE, the `Mcp-Session-Id` header, reopening on 404). One session per server in its own fiber: the `Session` copies across fibers and every copy talks to the same server; a server that died is relaunched on the next request. `import mcp/protocol;` — the pure pieces: `request` · `notification` · `initialize` · `reply_with_id` · `result_of` · `parse_tools` · `parse_resources` · `call_text` · `resource_text` · `offers` · `instructions_of` · `tool_name(server, tool)` (= `mcp__<server>__<tool>`) · `is_remote` · `split_name`. `import mcp/serve;` — the server, for an app to offer its tools to an assistant: `provider(name, version) -> Provider` (fields `instructions`, `token`) · `tool(p, name, description, schema, run) -> Result<int, string>` with `run: fn(Json) -> Result<string, string>` and `schema` as JSON text (`""` = no arguments) · `read_only_tool(…)` (announced with `readOnlyHint`) · `resource(p, uri, name, description, mime, read)` · `stdio(p) -> int` (one message per line over stdin/stdout, until EOF) · `http(build, host, port)` / `http_on(build, listener)` (Streamable HTTP without sessions; `build` is a top-level function every connection calls in its own fiber) · `answer(p, req) -> Response` (to mount it on a route) · `handle(p, line) -> Option<string>` (pure). A tool that aborts is a failed call, not a dead server; over HTTP a foreign `Origin` is refused and, with `token`, `Authorization: Bearer` is required. Depends on `net`. VM and native.
 
 ## 12. Annotations
 
@@ -663,4 +667,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:6a35761bcafc -->
+<!-- sync: sha256:5c2dc62ac691 -->

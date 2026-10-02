@@ -1,0 +1,418 @@
+// El lado SERVIDOR del Model Context Protocol: una app raylang ofrece sus propias herramientas y
+// recursos a un asistente (Claude Code, Claude Desktop, un editor, o un agente escrito con
+// `mcp/mcp`).
+//
+// Un `Provider` es la lista de lo que se ofrece; `handle` contesta UN mensaje del protocolo, y
+// es puro: recibe la línea JSON-RPC y devuelve la línea de respuesta. Los dos transportes son
+// envoltorios finos sobre él. `stdio` lee de la entrada estándar y escribe en la salida, que es
+// como un asistente lanza un servidor local. `http` lo sirve por Streamable HTTP, sin sesiones:
+// cada POST lleva un mensaje y recibe su respuesta.
+//
+// La salida estándar de un servidor por stdio ES el canal del protocolo: lo que el programa
+// quiera decir de sí mismo va por `eprint`, nunca por `print`.
+import std/json;
+import std/io;
+import std/net;
+import net/webserver;
+import mcp/protocol;
+from std/json import Json;
+from net/webserver import Request, Response;
+
+/// One tool on offer: what the model sees (`name`, `description`, the JSON Schema of its
+/// arguments) and the function that runs it.
+pub struct ToolDef {
+    name: string,
+    description: string,
+    schema: Json,
+    /// Declared to clients as `annotations.readOnlyHint`: the tool changes nothing.
+    read_only: bool,
+    run: fn(Json) -> Result<string, string>,
+}
+
+/// One resource on offer: something a client reads by URI.
+pub struct ResourceDef {
+    uri: string,
+    name: string,
+    description: string,
+    mime: string,
+    read: fn() -> Result<string, string>,
+}
+
+/// What a server offers. Build one with `provider`, add to it with `tool` and `resource`, and
+/// hand it to `stdio` or `http`.
+pub struct Provider {
+    name: string,
+    version: string,
+    /// Text for the system prompt of the model that will use these tools ("" = none).
+    instructions: string,
+    tools: [ToolDef],
+    resources: [ResourceDef],
+    /// HTTP only: when not empty, every request must carry `Authorization: Bearer <token>`.
+    token: string,
+}
+
+/// An empty provider that introduces itself as `name` `version`.
+pub fn provider(name: string, version: string) -> Provider {
+    Provider { name: name, version: version, instructions: "", tools: [], resources: [], token: "" }
+}
+
+fn add_tool(
+    p: Provider,
+    name: string,
+    description: string,
+    schema: string,
+    read_only: bool,
+    run: fn(Json) -> Result<string, string>
+) -> Result<int, string> {
+    let parsed = if (schema.trim() == "") {
+        protocol.object(["type", "properties"], [Json.JStr("object"), protocol.empty_object()])
+    } else {
+        match (json.parse(schema)) {
+            Result.Ok(j) => j,
+            Result.Err(e) => {
+                return Result.Err("the schema of tool '${name}' is not valid JSON: ${e}");
+            },
+        }
+    };
+    for t in p.tools {
+        if (t.name == name) {
+            return Result.Err("tool '${name}' is already registered");
+        }
+    }
+    p.tools.push(
+        ToolDef {
+            name: name,
+            description: description,
+            schema: parsed,
+            read_only: read_only,
+            run: run
+        }
+    );
+    Result.Ok(p.tools.len())
+}
+
+/// Adds a tool. `schema` is the JSON Schema of its arguments, as text ("" = no arguments).
+/// `run` receives the arguments and returns the text the model reads; an `Err` reaches the
+/// model as a failed tool call, with its message.
+pub fn tool(
+    p: Provider,
+    name: string,
+    description: string,
+    schema: string,
+    run: fn(Json) -> Result<string, string>
+) -> Result<int, string> {
+    add_tool(p, name, description, schema, false, run)
+}
+
+/// Like `tool`, for one that only reads: clients may run it without asking the user.
+pub fn read_only_tool(
+    p: Provider,
+    name: string,
+    description: string,
+    schema: string,
+    run: fn(Json) -> Result<string, string>
+) -> Result<int, string> {
+    add_tool(p, name, description, schema, true, run)
+}
+
+/// Adds a resource: `read` returns its text each time a client asks for `uri`.
+pub fn resource(
+    p: Provider,
+    uri: string,
+    name: string,
+    description: string,
+    mime: string,
+    read: fn() -> Result<string, string>
+) -> Result<int, string> {
+    for r in p.resources {
+        if (r.uri == uri) {
+            return Result.Err("resource '${uri}' is already registered");
+        }
+    }
+    p.resources.push(
+        ResourceDef { uri: uri, name: name, description: description, mime: mime, read: read }
+    );
+    Result.Ok(p.resources.len())
+}
+
+// ---------------------------------------------------------------- el protocolo
+
+fn reply(id: Json, result: Json) -> string {
+    json.stringify(protocol.object(["jsonrpc", "id", "result"], [Json.JStr("2.0"), id, result]))
+}
+
+fn failure(id: Json, code: int, message: string) -> string {
+    json.stringify(
+        protocol.object(
+            ["jsonrpc", "id", "error"],
+            [
+                Json.JStr("2.0"),
+                id,
+                protocol.object(["code", "message"], [Json.JNum(code as float), Json.JStr(message)])
+            ]
+        )
+    )
+}
+
+fn text_block(body: string) -> Json {
+    protocol.object(["type", "text"], [Json.JStr("text"), Json.JStr(body)])
+}
+
+fn initialized(p: Provider, params: Json) -> Json {
+    var capabilities: Map<string, Json> = Map.new();
+    capabilities.insert("tools", protocol.empty_object());
+    if (p.resources.len() > 0) {
+        capabilities.insert("resources", protocol.empty_object());
+    }
+    var result: Map<string, Json> = Map.new();
+    // La versión que pide el cliente, si la dice: lo que se sirve aquí (herramientas, recursos)
+    // no ha cambiado de forma entre versiones.
+    result.insert(
+        "protocolVersion",
+        Json.JStr(json.get_string(params, "protocolVersion").unwrap_or(protocol.PROTOCOL_VERSION))
+    );
+    result.insert("capabilities", Json.JObject(capabilities));
+    result.insert(
+        "serverInfo",
+        protocol.object(["name", "version"], [Json.JStr(p.name), Json.JStr(p.version)])
+    );
+    if (p.instructions.trim() != "") {
+        result.insert("instructions", Json.JStr(p.instructions));
+    }
+    Json.JObject(result)
+}
+
+fn listed_tools(p: Provider) -> Json {
+    var items: [Json] = [];
+    for t in p.tools {
+        var item: Map<string, Json> = Map.new();
+        item.insert("name", Json.JStr(t.name));
+        item.insert("description", Json.JStr(t.description));
+        item.insert("inputSchema", t.schema);
+        if (t.read_only) {
+            item.insert("annotations", protocol.object(["readOnlyHint"], [Json.JBool(true)]));
+        }
+        items.push(Json.JObject(item));
+    }
+    protocol.object(["tools"], [Json.JArray(items)])
+}
+
+fn listed_resources(p: Provider) -> Json {
+    var items: [Json] = [];
+    for r in p.resources {
+        var item: Map<string, Json> = Map.new();
+        item.insert("uri", Json.JStr(r.uri));
+        item.insert("name", Json.JStr(r.name));
+        if (r.description != "") {
+            item.insert("description", Json.JStr(r.description));
+        }
+        if (r.mime != "") {
+            item.insert("mimeType", Json.JStr(r.mime));
+        }
+        items.push(Json.JObject(item));
+    }
+    protocol.object(["resources"], [Json.JArray(items)])
+}
+
+// El resultado de una llamada: el texto de la herramienta, o su error como `isError`. Una
+// herramienta que aborta (un `panic`, un índice fuera de rango) no tumba el servidor: también
+// es un error que el modelo lee.
+fn called(t: ToolDef, arguments: Json) -> Json {
+    let outcome: Result<string, string> = match (try_call(fn() -> Result<string, string> { t.run(arguments) })) {
+        Result.Ok(r) => r,
+        Result.Err(e) => Result.Err("the tool failed: ${e}"),
+    };
+    match (outcome) {
+        Result.Ok(body) => protocol.object(
+            ["content", "isError"],
+            [Json.JArray([text_block(body)]), Json.JBool(false)]
+        ),
+        Result.Err(e) => protocol.object(["content", "isError"], [Json.JArray([text_block(e)]), Json.JBool(true)]),
+    }
+}
+
+/// Answers one protocol message: the reply line, or `None` when the message expects none (a
+/// notification, or something that is not a request). Pure: the transports call it, and so can
+/// a test.
+pub fn handle(p: Provider, line: string) -> Option<string> {
+    let msg = match (json.parse(line.trim())) {
+        Result.Ok(m) => m,
+        Result.Err(e) => {
+            return Option.Some(failure(Json.JNull, -32700, "parse error: ${e}"));
+        },
+    };
+    let id = match (json.member(msg, "id")) {
+        Option.Some(found) => found,
+        // Sin `id` es una notificación: se acepta y no se contesta.
+        Option.None => {
+            return Option.None;
+        },
+    };
+    let method = match (json.get_string(msg, "method")) {
+        Option.Some(m) => m,
+        Option.None => {
+            // Con `id` y sin `method` es la respuesta a algo que este servidor no preguntó.
+            if (json.member(msg, "result").is_some() || json.member(msg, "error").is_some()) {
+                return Option.None;
+            }
+            return Option.Some(failure(id, -32600, "invalid request: no method"));
+        },
+    };
+    let params = json.member(msg, "params").unwrap_or(protocol.empty_object());
+    if (method == "initialize") {
+        return Option.Some(reply(id, initialized(p, params)));
+    }
+    if (method == "ping") {
+        return Option.Some(reply(id, protocol.empty_object()));
+    }
+    if (method == "tools/list") {
+        return Option.Some(reply(id, listed_tools(p)));
+    }
+    if (method == "tools/call") {
+        let name = json.get_string(params, "name").unwrap_or("");
+        let arguments = json.member(params, "arguments").unwrap_or(protocol.empty_object());
+        for t in p.tools {
+            if (t.name == name) {
+                return Option.Some(reply(id, called(t, arguments)));
+            }
+        }
+        return Option.Some(failure(id, -32602, "unknown tool: ${name}"));
+    }
+    if (method == "resources/list") {
+        return Option.Some(reply(id, listed_resources(p)));
+    }
+    if (method == "resources/read") {
+        let uri = json.get_string(params, "uri").unwrap_or("");
+        for r in p.resources {
+            if (r.uri == uri) {
+                return Option.Some(match (r.read()) {
+                    Result.Ok(body) => {
+                        var entry: Map<string, Json> = Map.new();
+                        entry.insert("uri", Json.JStr(uri));
+                        entry.insert("text", Json.JStr(body));
+                        if (r.mime != "") {
+                            entry.insert("mimeType", Json.JStr(r.mime));
+                        }
+                        reply(
+                            id,
+                            protocol.object(["contents"], [Json.JArray([Json.JObject(entry)])])
+                        )
+                    },
+                    Result.Err(e) => failure(id, -32603, "cannot read ${uri}: ${e}"),
+                });
+            }
+        }
+        return Option.Some(failure(id, -32002, "unknown resource: ${uri}"));
+    }
+    Option.Some(failure(id, -32601, "method not found: ${method}"))
+}
+
+// ---------------------------------------------------------------- stdio
+
+/// Serves `p` over standard input and output, one message per line, until the client closes
+/// the input. This is how an assistant runs a local server: `ray run` or the native binary is
+/// the command it launches. Returns the process exit code.
+pub fn stdio(p: Provider) -> int {
+    while (true) {
+        match (input()) {
+            Option.None => break,
+            Option.Some(line) => {
+                if (line.trim() != "") {
+                    match (handle(p, line)) {
+                        Option.Some(out) => {
+                            let _ = io.write(out + "\n");
+                            // Sin vaciar el búfer, el cliente esperaría una respuesta ya escrita.
+                            let _ = io.flush();
+                        },
+                        Option.None => { },
+                    }
+                }
+            },
+        }
+    }
+    0
+}
+
+// ---------------------------------------------------------------- HTTP
+
+// La parte de host de una cabecera Origin: "https://app.example:8443" → "app.example:8443".
+fn origin_host(origin: string) -> string {
+    match (origin.index_of("://")) {
+        Option.Some(i) => origin.substring(i + 3, origin.len()).to_lower(),
+        Option.None => "",
+    }
+}
+
+// Igualdad en tiempo que depende solo de las longitudes: comparar el token octeto a octeto y
+// parar en la primera diferencia dejaría adivinarlo midiendo las respuestas.
+fn same(a: string, b: string) -> bool {
+    let x = a.to_bytes();
+    let y = b.to_bytes();
+    if (x.len() != y.len()) {
+        return false;
+    }
+    var diff = 0;
+    var i = 0;
+    while (i < x.len()) {
+        diff = diff | (x[i] ^ y[i]);
+        i = i + 1;
+    }
+    diff == 0
+}
+
+fn with_json(status: int, body: string) -> Response {
+    let r = webserver.json_response(body);
+    r.status = status;
+    r
+}
+
+/// Answers one HTTP request for `p`: what `http` and `http_on` do for every request. Use it to
+/// mount the protocol on a route of a larger server.
+pub fn answer(p: Provider, req: Request) -> Response {
+    if (req.method != "POST") {
+        // Sin flujo del servidor al cliente ni sesiones que borrar: solo POST.
+        let r = webserver.text(405, "use POST");
+        r.headers.insert("Allow", "POST");
+        return r;
+    }
+    // Una página web de otro origen no debe poder hablar con un servidor local (DNS rebinding):
+    // el navegador siempre dice de dónde viene.
+    let origin = req.headers.get("origin").unwrap_or("");
+    if (origin != "" && origin_host(origin) != req.headers.get("host").unwrap_or("").to_lower()) {
+        return webserver.text(403, "cross-origin request refused");
+    }
+    if (p.token != ""
+        && !same(req.headers.get("authorization").unwrap_or(""), "Bearer " + p.token)) {
+        return webserver.text(401, "missing or wrong bearer token");
+    }
+    let body = match (webserver.request_text(req)) {
+        Result.Ok(b) => b,
+        Result.Err(_) => {
+            return with_json(
+                400,
+                failure(Json.JNull, -32700, "parse error: the body is not UTF-8")
+            );
+        },
+    };
+    match (handle(p, body)) {
+        Option.Some(out) => webserver.json_response(out),
+        // Una notificación: aceptada, sin cuerpo.
+        Option.None => webserver.text(202, ""),
+    }
+}
+
+/// Serves over Streamable HTTP on a listener opened with `net.tcp_listen` (bind to port 0 and
+/// read `net.local_port` to pick a free port). `build` is a TOP-LEVEL function that returns the
+/// provider: every connection runs in its own fiber and builds its own copy, so state shared
+/// between requests lives in a database or behind a channel, never in a captured variable.
+/// Blocks; `Err` only on a broken listener.
+pub fn http_on(build: fn() -> Provider, listener: int) -> Result<int, string> {
+    webserver.serve_on(listener, fn(req: Request) -> Response { answer(build(), req) })
+}
+
+/// `http_on` after binding `host:port`. Use `127.0.0.1` unless the server must be reachable
+/// from other machines, and set `token` on the provider when it is.
+pub fn http(build: fn() -> Provider, host: string, port: int) -> Result<int, string> {
+    let listener = net.tcp_listen(host, port)?;
+    http_on(build, listener)
+}

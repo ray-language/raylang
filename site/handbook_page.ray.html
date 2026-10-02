@@ -1,10 +1,20 @@
 {% params title: string, body: string, nav: string, page: string, lang: string, root: string %}
 {% extends layout %}
 {% block content %}
+{% let chapters = if (lang == "en") { "Chapters" } else { "Capítulos" } %}
+{% let close = if (lang == "en") { "Close" } else { "Cerrar" } %}
 <div class="handbook">
+    <button class="toc-fab" type="button" aria-controls="handbook-toc" aria-expanded="false" aria-label="{{ chapters }}" title="{{ chapters }}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>
+    </button>
     <div class="wrap">
-        <aside class="toc" aria-label="Handbook">
-            <p class="toc-title"><a href="index.html">Handbook</a></p>
+        <aside class="toc" id="handbook-toc" aria-label="Handbook">
+            <div class="toc-head">
+                <p class="toc-title"><a href="index.html">Handbook</a></p>
+                <button class="toc-close drawer-close" type="button" aria-label="{{ close }}" title="{{ close }}">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+            </div>
             {{& nav }}
         </aside>
         <article class="doc">

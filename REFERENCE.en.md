@@ -19,7 +19,7 @@ discrepancy, the SPEC rules).
 8. [The prelude](#8-the-prelude)
 9. [Iterators](#9-iterators)
 10. [The standard library `std/`](#10-the-standard-library-std)
-11. [Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`)](#11-additional-packages-net-web-rpc-db-tz-cron-mcp-llm)
+11. [Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`)](#11-additional-packages-net-web-rpc-db-tz-cron-mcp-llm-agent)
 12. [Annotations](#12-annotations)
 13. [FFI: marshalable types](#13-ffi-marshalable-types)
 14. [The `ray` CLI](#14-the-ray-cli)
@@ -441,7 +441,7 @@ A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, time-sortable) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 |
 
-## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`)
+## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`)
 
 Tier 2: they do **not** ship in the binary; they are declared in `ray.toml` (by path or git) and
 imported the same way (`import net/http;` → `http.fetch(…)`). They live in the repo's `packages/`.
@@ -518,6 +518,10 @@ Time zones over the system's TZif files (`/usr/share/zoneinfo`; RFC 8536 v1-v3, 
 ### `packages/llm` — talking to language models (v0.1.0)
 
 `import llm/llm;` — `for_anthropic(model, api_key)` / `for_openai(model, api_key)` / `for_endpoint(base_url, model, api_key) -> Config` (any endpoint that speaks the OpenAI dialect: Ollama, LM Studio, OpenRouter…) / `for_preset(id, model, api_key) -> Option<Config>` (`anthropic openai openrouter groq deepseek mistral xai gemini ollama lmstudio`) · `send(c, tools, history) -> Result<Reply, string>` (one round-trip) · `send_stream(c, tools, history, show) -> Result<Reply, string>` (the text reaches `show` piece by piece; returns what `send` would) · `user(text)` / `tool_result(call_id, text) -> Message` · `tool(name, description, schema) -> Result<Tool, string>` (`schema` as JSON text) · `tool_calls(reply) -> [ToolCall]` · `models(c) -> Result<[string], string>` · `retry_after_ms` · `error_message`. `Reply { message, usage, stop_reason, model }`, `Message { role, text, tool_calls, tool_call_id, raw }`, `ToolCall { id, name, arguments }` (arguments as JSON text), `Usage { input_tokens, output_tokens, cached_tokens, latency_ms, measured }`. Adjustable `Config`: `system`, `max_tokens`, `temperature` (negative = not sent), `effort`, `timeout_ms`, `headers`, `extra` (extra body fields), `cache`, `max_attempts`. Two dialects, **Anthropic** (`/v1/messages`) and **OpenAI** (`/chat/completions`), pure in `llm/anthropic` and `llm/openai` (`build_body` · `headers` · `parse_reply` · `assembly`/`absorb`/`assembled` for a stream); `llm/message` holds the types and `was_truncated`/`was_refused`; `llm/config`, the presets and the URLs. Retries transient failures (no connection, 429, 408, 5xx) honouring `Retry-After`; a stream is only retried while it has delivered no text; fixes `max_tokens`/`max_completion_tokens` and the temperature by itself when the provider rejects them. On Anthropic it replays the assistant's blocks verbatim (`raw`: signed reasoning) and marks the prompt and the tools for the cache. Depends on `net`. VM and native.
+
+### `packages/agent` — an agent loop (v0.1.0)
+
+`import agent/agent;` — `new(config) -> Agent` (the model from `llm`; starts at `ASK`, 20 steps per turn) · `tool(a, name, description, schema, risk, run) -> Result<int, string>` (a local tool: `schema` as JSON text, `risk` = `READ`/`WRITE`/`EXEC`, `run` takes `Json` and returns `Result<string, string>`) · `connect(a, name, session) -> Result<int, string>` (the tools of an `mcp` session, seen by the model as `mcp__<name>__<tool>`: read-only = `READ`, the rest = `EXEC`; its instructions join the prompt) · `on_approve(a, f)` with `f` from `(ToolCall, risk)` to `Decision` (`Yes`/`Always`/`No`) · `on_event(a, f)` with `Event` = `Thinking(step)` / `Text(piece)` / `Said(text)` / `Calling(call, risk)` / `Returned(call, output, failed)` / `Declined(call, why)` · `run(a, prompt) -> Result<Outcome, string>` (one turn to completion) · `run_cancellable(a, prompt, cancel)` (abandons the wait for the model if anything arrives on the channel) · `reset(a)` · `offered(a)` · `risk_of(a, name)` · `unattended(autonomy, risk) -> bool` · `autonomy_note(autonomy)`. `Outcome { text, stop, steps, usage }` with `stop` = `DONE`/`MAX_STEPS`/`TRUNCATED`/`REFUSED`/`CANCELLED`. Adjustable `Agent` fields: `config`, `autonomy` (`ASK`/`EDITS`/`AUTO`), `max_steps`, `stream`, `history`, `usage`, `allowed`. Runs unasked: `READ` always, `WRITE` from `EDITS`, `EXEC` only at `AUTO`; the rest is asked about, and without `on_approve` it does not run. A call that does not run, fails, aborts or does not exist still gets its result (`error: …`): `run` only returns `Err` when talking to the model fails. Depends on `llm` and `mcp`. VM and native.
 
 ## 12. Annotations
 
@@ -671,4 +675,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:5186135f1a06 -->
+<!-- sync: sha256:89c687f3c1ef -->

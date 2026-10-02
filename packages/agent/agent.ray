@@ -1,0 +1,563 @@
+// El bucle de un agente: manda la conversación al modelo, ejecuta las herramientas que pida,
+// le devuelve los resultados y repite hasta que conteste sin pedir ninguna, o hasta agotar el
+// presupuesto de pasos.
+//
+// Las herramientas son de dos clases y el bucle no las distingue: las LOCALES, funciones de tu
+// programa, y las de servidores MCP, descubiertas al conectar una sesión del paquete `mcp`.
+//
+// Nada que cambie cosas corre sin permiso. Cada herramienta declara su riesgo (`READ`, `WRITE`
+// o `EXEC`) y el agente tiene un nivel de autonomía (`ASK`, `EDITS` o `AUTO`): lo que el nivel
+// no deja pasar solo se le pregunta a quien use el agente, por la función `approve`. Un «no»
+// no rompe la conversación: se le contesta al modelo como resultado de la llamada, porque una
+// llamada sin respuesta invalida el historial.
+//
+// El paquete no sabe de terminales ni de ventanas: lo que pasa en un turno llega por `observe`
+// como eventos, y quien lo usa decide cómo pintarlo.
+import std/json;
+import llm/llm;
+import llm/message;
+import mcp/mcp;
+import mcp/protocol;
+from std/json import Json;
+from llm/config import Config;
+from llm/message import Message, ToolCall, Reply, Usage;
+
+/// A tool that only reads. It runs at every autonomy level.
+pub const READ: string = "read";
+
+/// A tool that changes something that can be taken back: an edit, a new file.
+pub const WRITE: string = "write";
+
+/// A tool that does something that cannot be taken back: running a command, deleting.
+pub const EXEC: string = "exec";
+
+/// Nothing that changes things runs until it is agreed to.
+pub const ASK: string = "ask";
+
+/// `WRITE` tools run by themselves; `EXEC` tools still ask.
+pub const EDITS: string = "edits";
+
+/// Everything runs without asking.
+pub const AUTO: string = "auto";
+
+/// The turn ended because the model answered without asking for tools.
+pub const DONE: string = "done";
+
+/// The turn stopped at the step budget; the model wanted to go on.
+pub const MAX_STEPS: string = "max_steps";
+
+/// The answer was cut at the token ceiling.
+pub const TRUNCATED: string = "truncated";
+
+/// The model declined to answer.
+pub const REFUSED: string = "refused";
+
+/// The turn was cancelled while waiting for the model.
+pub const CANCELLED: string = "cancelled";
+
+/// What `approve` answers when asked about a call.
+pub enum Decision {
+    /// Run it this once.
+    Yes,
+    /// Run it, and do not ask about this tool again while the agent lives.
+    Always,
+    /// Do not run it: the model is told the user said no.
+    No,
+}
+
+/// What happens during a turn, for whoever shows it.
+pub enum Event {
+    /// The model is about to be asked; the step number, from 1.
+    Thinking(int),
+    /// A piece of the answer, as it arrives (only when `stream` is on).
+    Text(string),
+    /// The text the model said in this step, whole.
+    Said(string),
+    /// A tool is about to run: the call and its risk.
+    Calling(ToolCall, string),
+    /// A tool finished: the call, what it returned, and whether it failed.
+    Returned(ToolCall, string, bool),
+    /// A tool did not run: the call and what the model is told instead.
+    Declined(ToolCall, string),
+}
+
+// Una herramienta local: lo que ve el modelo, su riesgo y la función que la ejecuta.
+struct LocalTool {
+    name: string,
+    description: string,
+    schema: Json,
+    risk: string,
+    run: fn(Json) -> Result<string, string>,
+}
+
+// Una herramienta de un servidor MCP: el nombre con el que la ve el modelo
+// (`mcp__<servidor>__<herramienta>`), el suyo en el servidor y la sesión por la que se llama.
+struct RemoteTool {
+    exposed: string,
+    name: string,
+    description: string,
+    schema: Json,
+    risk: string,
+    session: mcp.Session,
+}
+
+/// An agent: a model, its tools, the conversation so far and the rules of what runs unasked.
+/// Build one with `new`, add tools with `tool` and `connect`, and run turns with `run`.
+pub struct Agent {
+    /// The model. Its `system` is the agent's own prompt; server instructions are added to it.
+    config: Config,
+    /// `ASK`, `EDITS` or `AUTO`.
+    autonomy: string,
+    /// How many times the model may be asked in one turn.
+    max_steps: int,
+    /// Deliver the answer piece by piece as `Event.Text`.
+    stream: bool,
+    /// The conversation, including tool calls and their results.
+    history: [Message],
+    /// What every turn so far was charged, added up.
+    usage: Usage,
+    /// Tools the user allowed for the rest of the agent's life (`Decision.Always`).
+    allowed: [string],
+    local: [LocalTool],
+    remote: [RemoteTool],
+    // Las instrucciones que declararon los servidores MCP, para el prompt de sistema.
+    instructions: [string],
+    approver: [fn(ToolCall, string) -> Decision],
+    observer: [fn(Event) -> unit],
+}
+
+/// What a turn produced.
+pub struct Outcome {
+    /// The model's last answer.
+    text: string,
+    /// Why the turn ended: `DONE`, `MAX_STEPS`, `TRUNCATED`, `REFUSED` or `CANCELLED`.
+    stop: string,
+    /// How many times the model was asked.
+    steps: int,
+    /// What this turn was charged.
+    usage: Usage,
+}
+
+/// An agent that talks to the model in `config`, with no tools yet. It starts at `ASK`, with
+/// a budget of 20 steps per turn.
+pub fn new(config: Config) -> Agent {
+    Agent {
+        config: config,
+        autonomy: ASK,
+        max_steps: 20,
+        stream: false,
+        history: [],
+        usage: message.no_usage(),
+        allowed: [],
+        local: [],
+        remote: [],
+        instructions: [],
+        approver: [],
+        observer: []
+    }
+}
+
+fn taken(a: Agent, name: string) -> bool {
+    for t in a.local {
+        if (t.name == name) {
+            return true;
+        }
+    }
+    for t in a.remote {
+        if (t.exposed == name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Adds a tool of your own. `schema` is the JSON Schema of its arguments, as text ("" =
+/// none); `risk` is `READ`, `WRITE` or `EXEC`. `run` receives the arguments and returns the
+/// text the model reads; an `Err` reaches the model as a failed call, with its message.
+pub fn tool(
+    a: Agent,
+    name: string,
+    description: string,
+    schema: string,
+    risk: string,
+    run: fn(Json) -> Result<string, string>
+) -> Result<int, string> {
+    if (risk != READ && risk != WRITE && risk != EXEC) {
+        return Result.Err("the risk of tool '${name}' must be read, write or exec, not '${risk}'");
+    }
+    if (taken(a, name)) {
+        return Result.Err("tool '${name}' is already registered");
+    }
+    let declared = message.tool(name, description, schema)?;
+    a.local.push(
+        LocalTool {
+            name: name,
+            description: description,
+            schema: declared.schema,
+            risk: risk,
+            run: run
+        }
+    );
+    Result.Ok(a.local.len())
+}
+
+/// Offers the model the tools of an MCP server: `session` is a connection made with the `mcp`
+/// package, and `name` is how the server is called in the tool names the model sees
+/// (`mcp__<name>__<tool>`). A tool the server declares read-only is `READ`; any other is
+/// `EXEC`, because a server that says nothing is treated as if it changed everything. The
+/// server's instructions join the system prompt. Returns how many tools were added.
+pub fn connect(a: Agent, name: string, session: mcp.Session) -> Result<int, string> {
+    let found = mcp.tools(session)?;
+    var added = 0;
+    for t in found {
+        let exposed = protocol.tool_name(name, t.name);
+        if (taken(a, exposed)) {
+            return Result.Err("tool '${exposed}' is already registered");
+        }
+        a.remote.push(
+            RemoteTool {
+                exposed: exposed,
+                name: t.name,
+                description: t.description,
+                schema: t.schema,
+                risk: if (t.read_only) { READ } else { EXEC },
+                session: session
+            }
+        );
+        added = added + 1;
+    }
+    let said = mcp.instructions(session);
+    if (said != "") {
+        a.instructions.push("Instructions from the '${name}' tools:\n${said}");
+    }
+    Result.Ok(added)
+}
+
+/// Sets who is asked before a tool runs that the autonomy level does not let through: the
+/// call and its risk go in, a `Decision` comes out. Without one, such a tool does not run and
+/// the model is told nobody could be asked.
+pub fn on_approve(a: Agent, approve: fn(ToolCall, string) -> Decision) {
+    a.approver = [approve];
+}
+
+/// Sets who is told what happens during a turn.
+pub fn on_event(a: Agent, observe: fn(Event) -> unit) {
+    a.observer = [observe];
+}
+
+/// The tools the model is offered, local ones first.
+pub fn offered(a: Agent) -> [message.Tool] {
+    var out: [message.Tool] = [];
+    for t in a.local {
+        out.push(message.Tool { name: t.name, description: t.description, schema: t.schema });
+    }
+    for t in a.remote {
+        out.push(message.Tool { name: t.exposed, description: t.description, schema: t.schema });
+    }
+    out
+}
+
+/// The risk of the tool called `name`, or "" if there is no such tool.
+pub fn risk_of(a: Agent, name: string) -> string {
+    for t in a.local {
+        if (t.name == name) {
+            return t.risk;
+        }
+    }
+    for t in a.remote {
+        if (t.exposed == name) {
+            return t.risk;
+        }
+    }
+    ""
+}
+
+/// Whether a tool of this risk runs without being asked about at this autonomy level.
+pub fn unattended(autonomy: string, risk: string) -> bool {
+    if (risk == READ || autonomy == AUTO) {
+        return true;
+    }
+    autonomy == EDITS && risk == WRITE
+}
+
+/// What the model is told about the autonomy level. Nothing at `ASK`: it proposes and the
+/// user decides, which is the conversation it already knows. The other two are worth saying,
+/// because a model that thinks its changes wait for a yes writes differently.
+pub fn autonomy_note(autonomy: string) -> string {
+    if (autonomy == EDITS) {
+        return "The changes you make through tools that edit are applied at once, so make them one at a time and check before changing the same thing again. Anything that cannot be taken back still waits for the user.";
+    }
+    if (autonomy == AUTO) {
+        return "Your tool calls run without waiting for the user, so be exact and go in small steps: read before you write, do the narrowest thing that answers the question, and say what you did. Stop and ask when something is destructive or when a result surprises you.";
+    }
+    ""
+}
+
+/// Forgets the conversation; the tools and the settings stay.
+pub fn reset(a: Agent) {
+    a.history = [];
+}
+
+// ---------------------------------------------------------------- el turno
+
+fn tell(a: Agent, e: Event) {
+    for observe in a.observer {
+        observe(e);
+    }
+}
+
+// La configuración con la que se pregunta: el prompt del agente, la nota del nivel de
+// autonomía y las instrucciones de los servidores. Una copia: el prompt del agente no crece
+// en cada turno.
+fn effective(a: Agent) -> Config {
+    var parts: [string] = [];
+    if (a.config.system.trim() != "") {
+        parts.push(a.config.system.trim());
+    }
+    let note = autonomy_note(a.autonomy);
+    if (note != "") {
+        parts.push(note);
+    }
+    for said in a.instructions {
+        parts.push(said);
+    }
+    Config {
+        dialect: a.config.dialect,
+        base_url: a.config.base_url,
+        api_key: a.config.api_key,
+        model: a.config.model,
+        system: parts.join("\n\n"),
+        max_tokens: a.config.max_tokens,
+        temperature: a.config.temperature,
+        effort: a.config.effort,
+        timeout_ms: a.config.timeout_ms,
+        headers: a.config.headers,
+        extra: a.config.extra,
+        cache: a.config.cache,
+        max_tokens_field: a.config.max_tokens_field,
+        max_attempts: a.config.max_attempts
+    }
+}
+
+// Lo que la petición aprendió del proveedor (cómo se llama el tope, que no quiere
+// temperatura) se guarda en la configuración del agente: sin esto, cada petición pagaría el
+// mismo rechazo otra vez.
+fn learn(a: Agent, used: Config) {
+    a.config.max_tokens_field = used.max_tokens_field;
+    a.config.temperature = used.temperature;
+}
+
+fn add_usage(total: Usage, u: Usage) {
+    total.input_tokens = total.input_tokens + u.input_tokens;
+    total.output_tokens = total.output_tokens + u.output_tokens;
+    total.cached_tokens = total.cached_tokens + u.cached_tokens;
+    total.latency_ms = total.latency_ms + u.latency_ms;
+    total.measured = total.measured || u.measured;
+}
+
+// Una petición al modelo en esta misma fibra.
+fn ask_model(a: Agent) -> Result<Reply, string> {
+    let c = effective(a);
+    let outcome = if (a.stream) {
+        llm.send_stream(c, offered(a), a.history, fn(piece: string) {
+            tell(a, Event.Text(piece));
+        })
+    } else {
+        llm.send(c, offered(a), a.history)
+    };
+    learn(a, c);
+    outcome
+}
+
+// Lo que cruza de la fibra que pregunta a la que espera.
+enum Signal {
+    Piece(string),
+    Finished(Result<Reply, string>, string, float),
+}
+
+// Una petición al modelo que se puede abandonar: corre en su propia fibra y esta espera por
+// canal, así puede dejar de esperar si llega algo por `cancel`. La fibra trabajadora recibe una
+// COPIA del agente (las fibras no comparten memoria), así que solo lee; el texto se entrega a
+// `observe` en ESTA fibra, y al cancelar deja de llegar en el acto. `None` = cancelado.
+fn ask_model_cancellable(a: Agent, cancel: Channel<int>) -> Option<Result<Reply, string>> {
+    let signals: Channel<Signal> = Channel.new();
+    let c = effective(a);
+    let tools = offered(a);
+    let history = a.history;
+    let streaming = a.stream;
+    spawn(fn() {
+        // Bajo `try_call`: si esta fibra muriera, nadie avisaría al canal y el turno esperaría
+        // para siempre. Un fallo tiene que ser un valor.
+        let guarded = try_call(fn() -> Result<Reply, string> {
+            if (streaming) {
+                llm.send_stream(c, tools, history, fn(piece: string) {
+                    send(signals, Signal.Piece(piece));
+                })
+            } else {
+                llm.send(c, tools, history)
+            }
+        });
+        let outcome: Result<Reply, string> = match (guarded) {
+            Result.Ok(sent) => sent,
+            Result.Err(e) => Result.Err("the request failed: ${e}"),
+        };
+        send(signals, Signal.Finished(outcome, c.max_tokens_field, c.temperature));
+    });
+    while (true) {
+        match (try_recv(cancel)) {
+            Received.Got(_) => {
+                return Option.None;
+            },
+            _ => { },
+        }
+        match (select_timeout([signals], 50)) {
+            Option.None => { },
+            Option.Some(_) => match (recv(signals)) {
+                Option.None => {
+                    return Option.Some(Result.Err("the request fiber produced nothing"));
+                },
+                Option.Some(signal) => match (signal) {
+                    Signal.Piece(piece) => tell(a, Event.Text(piece)),
+                    Signal.Finished(outcome, field, temperature) => {
+                        a.config.max_tokens_field = field;
+                        a.config.temperature = temperature;
+                        return Option.Some(outcome);
+                    },
+                },
+            },
+        }
+    }
+    Option.None
+}
+
+// ¿Puede correr esta llamada? "" = adelante; cualquier otra cosa es lo que se le contesta al
+// modelo en lugar de ejecutarla. Primero lo que el nivel deja pasar solo, luego lo que el
+// usuario ya permitió, y solo entonces se pregunta.
+fn consent(a: Agent, call: ToolCall, risk: string) -> string {
+    if (unattended(a.autonomy, risk) || a.allowed.contains(call.name)) {
+        return "";
+    }
+    if (a.approver.len() == 0) {
+        return "not run: this tool needs the user's approval and there is nobody to ask here.";
+    }
+    let approve = a.approver[0];
+    match (approve(call, risk)) {
+        Decision.Yes => "",
+        Decision.Always => {
+            a.allowed.push(call.name);
+            ""
+        },
+        Decision.No => "the user did not allow this call. Do not try it again; say what you needed it for.",
+    }
+}
+
+// Ejecuta una llamada: (lo que lee el modelo, si falló). Una herramienta que aborta no tumba
+// el turno: su fallo también es un resultado.
+fn execute(a: Agent, call: ToolCall) -> (string, bool) {
+    let arguments = match (json.parse(if (call.arguments.trim() == "") { "{}" } else { call.arguments })) {
+        Result.Ok(j) => j,
+        Result.Err(e) => {
+            return ("error: the arguments are not valid JSON: ${e}", true);
+        },
+    };
+    for t in a.local {
+        if (t.name == call.name) {
+            let guarded = try_call(fn() -> Result<string, string> { t.run(arguments) });
+            return match (guarded) {
+                Result.Ok(Result.Ok(output)) => (output, false),
+                Result.Ok(Result.Err(e)) => ("error: ${e}", true),
+                Result.Err(e) => ("error: the tool failed: ${e}", true),
+            };
+        }
+    }
+    for t in a.remote {
+        if (t.exposed == call.name) {
+            return match (mcp.call(t.session, t.name, arguments)) {
+                Result.Ok(output) => (output, false),
+                Result.Err(e) => ("error: ${e}", true),
+            };
+        }
+    }
+    ("error: there is no tool called '${call.name}'", true)
+}
+
+fn turn(a: Agent, prompt: string, cancel: [Channel<int>]) -> Result<Outcome, string> {
+    a.history.push(message.user(prompt));
+    let spent = message.no_usage();
+    var step = 0;
+    var last = "";
+    while (step < a.max_steps) {
+        step = step + 1;
+        tell(a, Event.Thinking(step));
+        let asked: Result<Reply, string> = if (cancel.len() == 0) {
+            ask_model(a)
+        } else {
+            match (ask_model_cancellable(a, cancel[0])) {
+                Option.Some(outcome) => outcome,
+                Option.None => {
+                    // Cancelado antes de que pasara nada: la pregunta sin contestar no se queda
+                    // en el historial. Más adelante el historial acaba en resultados de
+                    // herramientas, que es un estado válido, y se conserva.
+                    if (step == 1) {
+                        let _ = a.history.pop();
+                    }
+                    return Result.Ok(
+                        Outcome { text: last, stop: CANCELLED, steps: step, usage: spent }
+                    );
+                },
+            }
+        };
+        let reply = asked?;
+        add_usage(spent, reply.usage);
+        add_usage(a.usage, reply.usage);
+        // El turno del asistente entra en el historial TAL COMO LLEGÓ.
+        a.history.push(reply.message);
+        if (reply.message.text.trim() != "") {
+            last = reply.message.text;
+            tell(a, Event.Said(reply.message.text));
+        }
+        let calls = reply.message.tool_calls;
+        if (calls.len() == 0) {
+            let stop = if (message.was_refused(reply.stop_reason)) {
+                REFUSED
+            } else if (message.was_truncated(reply.stop_reason)) {
+                TRUNCATED
+            } else {
+                DONE
+            };
+            return Result.Ok(Outcome { text: last, stop: stop, steps: step, usage: spent });
+        }
+        // Cada llamada recibe su resultado, corra o no: una llamada sin responder invalida el
+        // historial para el turno siguiente.
+        for call in calls {
+            let risk = risk_of(a, call.name);
+            let refusal = if (risk == "") { "" } else { consent(a, call, risk) };
+            if (refusal != "") {
+                tell(a, Event.Declined(call, refusal));
+                a.history.push(message.tool_result(call.id, refusal));
+            } else {
+                tell(a, Event.Calling(call, risk));
+                let done = execute(a, call);
+                tell(a, Event.Returned(call, done.0, done.1));
+                a.history.push(message.tool_result(call.id, done.0));
+            }
+        }
+    }
+    Result.Ok(Outcome { text: last, stop: MAX_STEPS, steps: step, usage: spent })
+}
+
+/// Runs one user turn to completion: the model is asked, the tools it calls are run (or
+/// declined), their results go back, and so on until it answers without calling any, or the
+/// step budget runs out. `Err` is a failure talking to the model; everything else, including a
+/// tool that failed or was not allowed, is part of the conversation and comes back as `Ok`.
+pub fn run(a: Agent, prompt: string) -> Result<Outcome, string> {
+    turn(a, prompt, [])
+}
+
+/// `run`, but the wait for the model can be abandoned: send anything on `cancel` and the turn
+/// ends with `stop == CANCELLED`. The request in flight is left to finish on its own and its
+/// answer is discarded. Tools are not interrupted: they run to the end. A turn cancelled before
+/// the model answered at all leaves the conversation as it was.
+pub fn run_cancellable(a: Agent, prompt: string, cancel: Channel<int>) -> Result<Outcome, string> {
+    turn(a, prompt, [cancel])
+}

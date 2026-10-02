@@ -19,7 +19,7 @@ discrepancia, manda la SPEC).
 8. [El prelude](#8-el-prelude)
 9. [Iteradores](#9-iteradores)
 10. [La biblioteca estándar `std/`](#10-la-biblioteca-estándar-std)
-11. [Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`)](#11-paquetes-adicionales-net-web-rpc-db-tz-cron-mcp-llm)
+11. [Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`)](#11-paquetes-adicionales-net-web-rpc-db-tz-cron-mcp-llm-agent)
 12. [Anotaciones](#12-anotaciones)
 13. [FFI: tipos marshalables](#13-ffi-tipos-marshalables)
 14. [El CLI `ray`](#14-el-cli-ray)
@@ -443,7 +443,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 |
 
-## 11. Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`)
+## 11. Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`)
 
 Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y se importan igual
 (`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
@@ -515,6 +515,10 @@ Zonas horarias sobre los TZif del sistema (`/usr/share/zoneinfo`; RFC 8536 v1-v3
 ### `packages/llm` — hablar con modelos de lenguaje (v0.1.0)
 
 `import llm/llm;` — `for_anthropic(model, api_key)` / `for_openai(model, api_key)` / `for_endpoint(base_url, model, api_key) -> Config` (cualquier endpoint que hable el dialecto de OpenAI: Ollama, LM Studio, OpenRouter…) / `for_preset(id, model, api_key) -> Option<Config>` (`anthropic openai openrouter groq deepseek mistral xai gemini ollama lmstudio`) · `send(c, tools, history) -> Result<Reply, string>` (una ida y vuelta) · `send_stream(c, tools, history, show) -> Result<Reply, string>` (el texto llega a `show` por partes; devuelve lo mismo que `send`) · `user(text)` / `tool_result(call_id, text) -> Message` · `tool(name, description, schema) -> Result<Tool, string>` (`schema` como texto JSON) · `tool_calls(reply) -> [ToolCall]` · `models(c) -> Result<[string], string>` · `retry_after_ms` · `error_message`. `Reply { message, usage, stop_reason, model }`, `Message { role, text, tool_calls, tool_call_id, raw }`, `ToolCall { id, name, arguments }` (argumentos como texto JSON), `Usage { input_tokens, output_tokens, cached_tokens, latency_ms, measured }`. `Config` ajustable: `system`, `max_tokens`, `temperature` (negativa = no se envía), `effort`, `timeout_ms`, `headers`, `extra` (campos extra del cuerpo), `cache`, `max_attempts`. Dos dialectos, **Anthropic** (`/v1/messages`) y **OpenAI** (`/chat/completions`), puros en `llm/anthropic` y `llm/openai` (`build_body` · `headers` · `parse_reply` · `assembly`/`absorb`/`assembled` para un flujo); `llm/message` lleva los tipos y `was_truncated`/`was_refused`; `llm/config`, los presets y las URLs. Reintenta los fallos pasajeros (sin conexión, 429, 408, 5xx) respetando `Retry-After`; un flujo solo se reintenta si aún no entregó texto; corrige solo `max_tokens`/`max_completion_tokens` y la temperatura cuando el proveedor los rechaza. En Anthropic reenvía los bloques del asistente tal cual (`raw`: razonamiento firmado) y marca el prompt y las herramientas para la caché. Depende de `net`. VM y nativo.
+
+### `packages/agent` — el bucle de un agente (v0.1.0)
+
+`import agent/agent;` — `new(config) -> Agent` (el modelo de `llm`; empieza en `ASK`, 20 pasos por turno) · `tool(a, name, description, schema, risk, run) -> Result<int, string>` (herramienta local: `schema` como texto JSON, `risk` = `READ`/`WRITE`/`EXEC`, `run` recibe `Json` y devuelve `Result<string, string>`) · `connect(a, name, session) -> Result<int, string>` (las herramientas de una sesión de `mcp`, vistas por el modelo como `mcp__<name>__<tool>`: de solo lectura = `READ`, las demás = `EXEC`; sus instrucciones se suman al prompt) · `on_approve(a, f)` con `f` de `(ToolCall, risk)` a `Decision` (`Yes`/`Always`/`No`) · `on_event(a, f)` con `Event` = `Thinking(step)` / `Text(piece)` / `Said(text)` / `Calling(call, risk)` / `Returned(call, output, failed)` / `Declined(call, why)` · `run(a, prompt) -> Result<Outcome, string>` (un turno hasta el final) · `run_cancellable(a, prompt, cancel)` (abandona la espera al modelo si llega algo por el canal) · `reset(a)` · `offered(a)` · `risk_of(a, name)` · `unattended(autonomy, risk) -> bool` · `autonomy_note(autonomy)`. `Outcome { text, stop, steps, usage }` con `stop` = `DONE`/`MAX_STEPS`/`TRUNCATED`/`REFUSED`/`CANCELLED`. Campos ajustables del `Agent`: `config`, `autonomy` (`ASK`/`EDITS`/`AUTO`), `max_steps`, `stream`, `history`, `usage`, `allowed`. Corre solo: `READ` siempre, `WRITE` desde `EDITS`, `EXEC` solo en `AUTO`; lo demás se pregunta, y sin `on_approve` no corre. Una llamada que no corre, falla, aborta o no existe recibe igualmente su resultado (`error: …`): `run` solo da `Err` si falla hablar con el modelo. Depende de `llm` y `mcp`. VM y nativo.
 
 ## 12. Anotaciones
 

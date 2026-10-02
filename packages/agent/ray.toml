@@ -1,0 +1,15 @@
+# Manifiesto del paquete-librería `agent`. Los imports `agent/…` se resuelven contra el
+# directorio padre (deps::dependency_roots_for); `entry` es la cara publicable que valida y carga
+# `ray registry publish`.
+[package]
+name = "agent"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "An agent loop for raylang: a model, your tools and the tools of MCP servers, with a step budget, autonomy levels and an approval hook before anything that changes things"
+keywords = ["agent", "llm", "ai", "tools", "mcp", "loop", "approval", "autonomy", "claude", "openai"]
+entry = "agent.ray"
+
+# El modelo llega por `llm`; las herramientas de servidores externos, por `mcp`.
+[dependencies]
+llm = "path:../llm"
+mcp = "path:../mcp"

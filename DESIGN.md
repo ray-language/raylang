@@ -16298,6 +16298,13 @@ modelo pidió la nota con dos títulos equivocados, leyó los dos `error: there 
 …` y acertó al tercero. Que un fallo sea un resultado que el modelo lee, y no un error del
 turno, es lo que le deja corregirse solo.
 
+Y contra la **API real de OpenAI** (`gpt-4.1-nano`), lo que el modelo local no ejercitó: dos
+llamadas a herramientas en una misma respuesta (el historial queda `user assistant+2 tool tool
+assistant`); y que la conversación sigue siendo válida, y el proveedor la acepta, después de un
+«no», después de agotar el presupuesto de pasos y después de cancelar a mitad de una respuesta
+por partes. Con `gpt-5-nano` hablado a propósito con `max_tokens` y una temperatura, el agente
+conservó la corrección en su configuración. Todo correcto.
+
 Una limitación que la prueba hizo visible: al cancelar, la petición abandonada sigue generando
 en el servidor hasta que termina. Cerrar esa conexión desde la fibra que cancela no es posible
 hoy; queda anotado.

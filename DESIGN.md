@@ -16061,3 +16061,55 @@ corría con `schedule` y dejaba a sus dependientes omitidos). Ahora son un job p
 `main-guards`, fuera del gate, en cada push a main y en el nocturno; y el gate corre también en
 el nocturno con `skip=false`, de modo que la noche ejecuta el CI entero sobre main: la señal de
 «main sigue verde con el Rust estable de hoy» que §319 dejaba en el aire.
+
+## 322. M336 — El paquete `mcp`: el cliente (oct 2026)
+
+Primera fase del arco de IDEAS §100, aprobado cuando dejó de ser hipotético: `raycode` y
+`ray-sublime` llevan cada uno su cliente MCP, unas 2.500 líneas entre los dos que hacen lo mismo
+de dos maneras y no comparten casi nada. El paquete sale de la **unión** de ambos: el transporte
+y el modelo de sesión de raycode (el más completo: stdio y Streamable HTTP), sin lo que era de
+la app (el archivo de configuración, las rutas del espacio de trabajo, la interfaz), más la
+comprobación de capacidades de ray-sublime (no pedir `resources/list` a quien no declara
+recursos, en vez de pedirlo y tragarse el error).
+
+**Dos módulos.** `mcp/protocol` son las piezas puras —construir los mensajes JSON-RPC y leer lo
+que contesta un servidor— y se prueban con texto fijo. `mcp/mcp` es el transporte y la sesión.
+La separación no es estética: el servidor de la fase 2 reutiliza `protocol` tal cual.
+
+**La sesión es un actor.** Un handle de proceso no se copia entre fibras y un canal sí, así que
+el proceso (o la sesión HTTP) lo posee UNA fibra y el resto habla con ella por canal. De ahí sale
+que una `Session` se pueda pasar a cualquier fibra, que las peticiones se serialicen solas, y que
+un servidor caído se relance en la siguiente petición sin que el llamador haga nada. Es el patrón
+ya probado en raycode; aquí solo cambia quién crea el canal (`connect`, no la app).
+
+**Decisiones de interfaz.**
+
+- **`connect` devuelve `Result` y hace el apretón de manos.** En raycode el proceso se lanzaba en
+  la primera petición; para una librería es mejor que «no pude arrancar el servidor» salga en
+  el sitio donde se pide conectar. Por dentro es una petición con método vacío: «asegúrate de
+  estar arriba».
+- **Los plazos van en el `Server`, no en cada llamada.** El lenguaje no tiene sobrecarga ni
+  argumentos por defecto: o cada función pedía su plazo, o se configuraba una vez. Dos campos,
+  `start_timeout_ms` y `call_timeout_ms`.
+- **`call` con `Json` y `call_json` con texto.** Un modelo entrega los argumentos de una
+  herramienta como texto JSON; obligar a parsearlo antes era ruido en todo agente.
+- **Una herramienta que falla es `Err`**, como en raycode: toma el mismo camino que cualquier
+  otro error y el agente se lo devuelve al modelo.
+- **El módulo se llama `mcp/mcp`**, no `mcp/client`: el calificador es el último segmento, y
+  `client` choca con el módulo que casi toda app ya tiene (raycode, sin ir más lejos).
+
+**Lo que queda fuera de la 0.1.0**: *prompts* como funciones propias (se llega con `request`),
+las peticiones del servidor al cliente (*sampling*, *roots*) y la reanudación de un flujo SSE
+cortado. Ninguna de las dos apps las usa.
+
+**Verificación.** `tests/mcp_package_cli.rs`: el protocolo con texto fijo; stdio contra el
+servidor real de la toolchain (`ray mcp`), con sus tres modos de fallo al conectar (el programa
+no existe, el programa no habla MCP, el programa no contesta y se le mata al vencer el plazo) y
+una copia de la sesión usada desde otra fibra; y HTTP contra un servidor mínimo dentro del propio
+test, en un puerto efímero, que responde `tools/list` como flujo SSE y da por caducada la sesión
+una vez para ejercitar la reapertura. Salida idéntica en VM y nativo, comprobada a mano (el test
+corre sobre la VM, como los de `rpc` y `cron`).
+
+**Hallazgo lateral.** Las herramientas de `ray mcp` no declaran `readOnlyHint`, aunque
+`ray_check`, `ray_doc` y `ray_fmt` solo leen: un agente que respete la pista las trata como si
+escribieran. Se anota para la fase 2.

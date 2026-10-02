@@ -253,7 +253,8 @@ std/base64 std/url std/regex std/csv std/toml std/template std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
 std/keychain std/bigint std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
-`tz`, `cron`.
+`tz`, `cron`, `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
+`mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`).
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
 `std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration

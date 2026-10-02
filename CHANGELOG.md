@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `mcp` 0.1.0: un cliente del Model Context Protocol.** `import mcp/mcp;` conecta con un
+  servidor MCP por stdio (`connect_stdio("ray", ["mcp"])`) o por Streamable HTTP
+  (`connect_http(url)`), descubre sus herramientas y recursos (`tools`, `resources`) y los usa
+  (`call`, `call_json`, `read_resource`, `instructions`). Una sesión por servidor en su propia
+  fibra: la `Session` se copia entre fibras, un servidor caído se relanza en la siguiente
+  petición y una sesión HTTP caducada se reabre sola. `mcp/protocol` lleva las piezas puras del
+  protocolo. Es la primera fase del arco de agentes; siguen el servidor, `llm` y `agent`.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un
   botón flotante arriba a la izquierda que abre un panel desde ese lado, y el menú principal abre
   el suyo desde la derecha. Comparten velo, botón de cierre y gestos (tocar fuera, deslizar,

@@ -877,14 +877,25 @@ mod tests;
 /// heredan de sus elementos (`HashMap`/`Vec` bajo `RefCell`/`Rc` implementan `PartialEq` si ellos).
 fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
-    fn type_ok(t: &Type, ok: &HashSet<String>) -> bool {
+    // Los tipos de las DECLARACIONES llegan sin normalizar por el checker (que resuelve en su tabla,
+    // no en el AST): `Map<K, V>` es `Struct("Map", [K, V])`, `Channel<T>`/`Task<T>` ídem, y un
+    // parámetro de tipo del propio struct/enum es `Struct("T")`. Se reproduce aquí esa lectura
+    // (hallazgo 16 de IDEAS §101: `Json` quedaba fuera por su `JObject(Map<string, Json>)`, y con él
+    // cualquier `==` sobre un enum de la stdlib con un Map dentro fallaba en rustc con E0369).
+    fn type_ok(t: &Type, ok: &HashSet<String>, tparams: &[String]) -> bool {
         match t {
-            Type::Fn(_, _) | Type::Dyn(_) => false,
-            Type::Struct(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
-            Type::Enum(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok)),
-            Type::Array(e) => type_ok(e, ok),
-            Type::Map(k, v) => type_ok(k, ok) && type_ok(v, ok),
-            Type::Tuple(ts) => ts.iter().all(|x| type_ok(x, ok)),
+            Type::Fn(_, _) | Type::Dyn(_) | Type::Channel(_) | Type::Task(_) => false,
+            Type::Struct(n, args) if n == "Map" && args.len() == 2 => args.iter().all(|a| type_ok(a, ok, tparams)),
+            Type::Struct(n, args) if (n == "Channel" || n == "Task") && args.len() == 1 => false,
+            Type::Struct(n, args) if n == "unit" && args.is_empty() => true,
+            // Un parámetro de tipo: `derive(PartialEq)` añade el bound `T: PartialEq` solo al impl, así
+            // que una instancia con un `T` incomparable sigue compilando mientras no se compare.
+            Type::Struct(n, args) if args.is_empty() && tparams.contains(n) => true,
+            Type::Struct(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok, tparams)),
+            Type::Enum(n, args) => (n == "Option" || n == "Result" || ok.contains(n)) && args.iter().all(|a| type_ok(a, ok, tparams)),
+            Type::Array(e) => type_ok(e, ok, tparams),
+            Type::Map(k, v) => type_ok(k, ok, tparams) && type_ok(v, ok, tparams),
+            Type::Tuple(ts) => ts.iter().all(|x| type_ok(x, ok, tparams)),
             _ => true,
         }
     }
@@ -894,10 +905,10 @@ fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
     loop {
         let before = ok.len();
         let drop: Vec<String> = prog.structs.iter()
-            .filter(|s| ok.contains(&s.name) && !s.fields.iter().all(|(_, t)| type_ok(t, &ok)))
+            .filter(|s| ok.contains(&s.name) && !s.fields.iter().all(|(_, t)| type_ok(t, &ok, &s.type_params)))
             .map(|s| s.name.clone())
             .chain(prog.enums.iter()
-                .filter(|e| ok.contains(&e.name) && !e.variants.iter().all(|v| v.payload.iter().all(|t| type_ok(t, &ok))))
+                .filter(|e| ok.contains(&e.name) && !e.variants.iter().all(|v| v.payload.iter().all(|t| type_ok(t, &ok, &e.type_params))))
                 .map(|e| e.name.clone()))
             .collect();
         for d in drop {

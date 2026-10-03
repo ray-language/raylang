@@ -577,7 +577,13 @@ impl Transpiler {
                 // Var-celda (B1): capturada+mutada por una closure → `let n = Rc::new(RefCell::new(init))`
                 // (el Rc es inmutable; la mutación va por el RefCell). Las lecturas/escrituras la desenvuelven.
                 if *mutable && self.cells.contains(name) {
-                    write!(out, "let {} = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap();
+                    // §101 #15: la anotación se emite también en la celda (`Rc<RefCell<T>>`): sin ella
+                    // una colección vacía capturada y no usada antes (`var m: Map<string, int> =
+                    // Map.new()`) dejaba a rustc sin inferir K/V (E0282).
+                    match &ann {
+                        Some(a) => write!(out, "let {}: Rc<std::cell::RefCell<{a}>> = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap(),
+                        None => write!(out, "let {} = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap(),
+                    }
                     self.emit_typed(out, value, &vty)?;
                     out.push_str("));\n");
                     self.declare_cell(name, vty);
@@ -654,7 +660,7 @@ impl Transpiler {
                         self.emit_expr(out, index)?;
                         out.push_str("; let __rt_rhs = ");
                         self.emit_expr(out, value)?;
-                        out.push_str("; __rt_arr.borrow_mut()[__rt_idx as usize] = __rt_rhs; }\n");
+                        out.push_str("; let mut __rt_b = __rt_arr.borrow_mut(); let __rt_k = __ray_idx(__rt_idx, __rt_b.len()); __rt_b[__rt_k] = __rt_rhs; }\n");
                     }
                     ExprKind::Field { object, name } => {
                         // Orden de la VM (SetField consume objeto, valor): objeto ANTES que el valor.
@@ -1414,20 +1420,22 @@ impl Transpiler {
                     // M223: vía `__ray_char_at` (caché por cadena: O(1) amortizado, ver runtime.rs);
                     // fuera de rango → el mismo pánico del `unwrap` de antes.
                     Type::String => {
-                        out.push_str("__ray_char_at(&(");
+                        // §101 #14: fuera de rango → el error de la VM (la longitud en caracteres, que
+                        // solo se cuenta en el camino frío).
+                        out.push_str("{ let __rt_s = &(");
                         self.emit_expr(out, array)?;
-                        out.push_str("), ");
+                        out.push_str("); let __rt_i: i64 = ");
                         self.emit_expr(out, index)?;
-                        out.push_str(").unwrap()");
+                        out.push_str("; __ray_char_at(__rt_s, __rt_i).unwrap_or_else(|| __ray_index_err(__rt_i, __rt_s.chars().count())) }");
                     }
                     // bytes: `b[i]` → el octeto como int (Rc<[u8]>, sin borrow); OOB = pánico (~error de la VM).
                     // Paréntesis: el `as i64` no puede ir seguido de un método (p. ej. `.ray_show()`).
                     Type::Bytes => {
-                        out.push('(');
+                        out.push_str("({ let __rt_a = ");
                         self.emit_expr(out, array)?;
-                        out.push('[');
+                        out.push_str("; let __rt_i: i64 = ");
                         self.emit_expr(out, index)?;
-                        out.push_str(" as usize] as i64)");
+                        out.push_str("; __rt_a[__ray_idx(__rt_i, __rt_a.len())] as i64 })");
                     }
                     // arreglo/Map: `a[i]` → el elemento (clon al leer; a través del RefCell).
                     _ => {
@@ -1438,35 +1446,42 @@ impl Transpiler {
                         {
                             write!(
                                 out,
-                                "{p}_{k}.clone().unwrap_or_else(|| panic!(\"index out of bounds: the len is {{}} but the index is {{}}\", {p}_len, {k}usize))",
+                                "{p}_{k}.clone().unwrap_or_else(|| __ray_index_err({k}i64, {p}_len as usize))",
                                 p = prefix,
                                 k = k
                             )
                             .unwrap();
                             return Ok(());
                         }
+                        // §101 #14: el índice se comprueba con `__ray_idx` (texto de la VM al fallar) y se
+                        // evalúa ANTES del préstamo, por si lee o muta el mismo arreglo (`a[a.len()-1]`).
                         match &array.kind {
                             // N6b: dentro de un loop puro-escalar el préstamo está IZADO → se indexa el
                             // guard directamente (sin borrow por elemento; LLVM puede vectorizar).
                             ExprKind::Ident(name) if self.hoisted_borrows.contains_key(name) => {
-                                out.push_str(&self.hoisted_borrows[name]);
+                                let guard = self.hoisted_borrows[name].clone();
+                                write!(out, "{guard}[__ray_idx(").unwrap();
+                                self.emit_expr(out, index)?;
+                                write!(out, ", {guard}.len())].clone()").unwrap();
                             }
                             // N6a: receptor = variable local (no celda) → `x.borrow()` directo, sin el
                             // `Rc::clone` intermedio (`borrow` toma &self; el clon solo movía refcounts).
                             ExprKind::Ident(name)
                                 if !self.is_cell(name) && self.lookup(name).is_some() =>
                             {
-                                out.push_str(&mangle(name));
-                                out.push_str(".borrow()");
+                                out.push_str("{ let __rt_i: i64 = ");
+                                self.emit_expr(out, index)?;
+                                write!(out, "; let __rt_b = {}.borrow(); __rt_b[__ray_idx(__rt_i, __rt_b.len())].clone() }}", mangle(name)).unwrap();
                             }
                             _ => {
+                                // Orden de la VM: arreglo, luego índice.
+                                out.push_str("{ let __rt_a = ");
                                 self.emit_expr(out, array)?;
-                                out.push_str(".borrow()");
+                                out.push_str("; let __rt_i: i64 = ");
+                                self.emit_expr(out, index)?;
+                                out.push_str("; let __rt_b = __rt_a.borrow(); __rt_b[__ray_idx(__rt_i, __rt_b.len())].clone() }");
                             }
                         }
-                        out.push('[');
-                        self.emit_expr(out, index)?;
-                        out.push_str(" as usize].clone()");
                     }
                 }
             }

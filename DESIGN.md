@@ -16358,3 +16358,46 @@ toolchains.
 
 Descartado: que `bundle` instale el target por su cuenta al detectarlo ausente. Descargar ~100 MB
 dentro de un build es una sorpresa que no queremos dar; la pista exacta basta.
+
+## 328. M342 — Tres divergencias VM/nativo del arco de agentes (oct 2026)
+
+Escribir `mcp`, `llm` y `agent` dejó en IDEAS §101 tres hallazgos del backend nativo. Los tres
+rompen el contrato «binario byte-idéntico a la VM» (PRODUCTION.md), y se cierran juntos.
+
+**#16 — `==` sobre un enum de la stdlib con un `Map` dentro.** `if (block != Json.JNull)` corría en
+la VM y en nativo fallaba en rustc (E0369: `Json` sin `PartialEq`). M270 ya derivaba `PartialEq`
+para todo tipo cuyos campos lo admiten, con punto fijo; `Json` quedaba fuera porque los tipos de las
+DECLARACIONES llegan al transpilador sin normalizar por el checker (que resuelve en su tabla, no en
+el AST): `JObject(Map<string, Json>)` es `Struct("Map", [String, Struct("Json")])`, y `"Map"` no es
+un tipo del programa → se descartaba. `eq_derivable_types` lee ahora las declaraciones como las lee
+`resolve_type`: `Struct("Map")` como Map, `Channel`/`Task` incomparables, `unit` comparable y un
+parámetro de tipo del propio struct/enum comparable (`derive` pone el bound `T: PartialEq` solo en el
+impl, así que una instancia con un `T` incomparable sigue compilando mientras no se compare). Al
+probarlo apareció la otra mitad: la VM daba `false` para dos `JObject` iguales porque `values_equal`
+no tenía rama de Map (caía en `_ => false`), mientras el intérprete —el oráculo— y el nativo
+(`HashMap: PartialEq`) comparaban estructuralmente. La VM gana la rama: misma longitud y cada clave
+con valor igual, sin orden. Descartada la alternativa de que el checker rechace `==` sobre tipos sin
+`Eq`: rompería programas que hoy corren, y la igualdad estructural de enums es decisión tomada (M270).
+
+**#14 — el texto del índice fuera de rango.** El nativo dejaba el bounds check de Rust («index out of
+bounds: the len is 0 but the index is 3») donde la VM dice «index 3 out of range (length 0)»; un
+índice negativo salía además como `18446744073709551615` por el `as usize`. Era la divergencia de
+texto que `try_call` toleraba a sabiendas (runtime.rs lo documentaba). Lo destapó el servidor MCP,
+que devuelve al modelo el fallo de una herramienta. Ahora todo indexado pasa por
+`__ray_idx(i, len) -> usize`: UNA comparación sin signo (`(i as u64) < (len as u64)`, que atrapa
+también el negativo) en el camino caliente y un emisor `#[cold] #[inline(never)]` con el texto de
+la VM fuera. Seis sitios: lectura de arreglo (los tres caminos: préstamo izado N6b, variable local
+N6a y general), string (la longitud en caracteres se cuenta solo al fallar), bytes, escritura
+indexada y el split fusionado (N-D4b). El índice se evalúa ANTES de tomar el préstamo, por si lee o
+muta el mismo arreglo. Medido (sieve 5M + 25M lecturas + 20M lecturas de bytes, release): sin
+diferencia frente al bounds check pelado; LLVM funde las dos comprobaciones. El fallo sin capturar
+sigue sin posición en nativo (`runtime error: index 3 out of range (length 0)`): el binario no lleva
+línea y columna, y eso no cambia aquí.
+
+**#15 — colección vacía anotada, capturada antes de usarse.** `var m: Map<string, int> = Map.new();
+try_call(fn() -> int { 10 / m.len() })` fallaba en rustc con E0282: la `var` capturada se emite como
+celda `let m = Rc::new(RefCell::new(__RayMap::default()))` y, sin un uso previo que fije K/V, Rust no
+puede inferirlos. El `let` ordinario ya emitía la anotación (`let x: T = …`) precisamente para las
+colecciones vacías; la celda no. Ahora la lleva: `let m: Rc<RefCell<T>> = …`.
+
+Un test por hallazgo en `tests/findings_batch_cli.rs`, los tres motores con la misma salida.

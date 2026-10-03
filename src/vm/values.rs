@@ -54,6 +54,13 @@ pub(super) fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
             }
             // Closures: identidad (mismo handle).
             (Obj::Closure(_), Obj::Closure(_)) => x == y,
+            // Mapas: igualdad estructural, independiente del orden — como el intérprete (`Value`) y
+            // el nativo (`HashMap: PartialEq`). El checker no admite `==` sobre un Map suelto, pero
+            // sí sobre un enum/struct que lo contenga (`Json.JObject`, IDEAS §101 hallazgo 16): sin
+            // esta rama dos objetos JSON iguales eran `false` solo en la VM.
+            (Obj::Map(ma), Obj::Map(mb)) => {
+                ma.len() == mb.len() && ma.iter().all(|(k, v)| mb.get(k).is_some_and(|w| values_equal(heap, v, w)))
+            }
             // M270 (raystream [11]): dos enums son iguales si son la misma variante del mismo enum y
             // sus payloads lo son elemento a elemento (el intérprete ya lo hacía así).
             (Obj::Enum(ea), Obj::Enum(eb)) => {

@@ -49,6 +49,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   en la toolchain privada de `ray toolchain install`, que no está en el PATH y a la que un `rustup
   target add` a mano no llegaba. `ray toolchain status` lista los targets extra; las pistas de
   `bundle` y el capítulo móvil del handbook apuntan a la orden nueva.
+- **Binario nativo: tres divergencias con la VM cerradas (IDEAS §101 #14–#16).** `==`/`!=` sobre
+  `Json` (y cualquier enum o struct con un `Map` dentro) compila en nativo, y la VM compara esos
+  mapas de forma estructural, como ya hacían el intérprete y el nativo. Un índice fuera de rango da
+  en nativo el mismo texto que la VM (`index 3 out of range (length 0)`, también con índice
+  negativo). Una colección vacía anotada (`var m: Map<string, int> = Map.new()`) capturada por una
+  closure antes de usarse ya compila en nativo.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

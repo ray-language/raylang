@@ -190,7 +190,7 @@ fn hoists_borrows_out_of_pure_scalar_range_loops() {
     );
     assert!(rust.contains("let __rt_bh_0 = a.borrow();"), "{}", rust);
     assert!(rust.contains("let __rt_bh_1 = b.borrow();"), "{}", rust);
-    assert!(rust.contains("__rt_bh_0[k as usize]"), "{}", rust);
+    assert!(rust.contains("__rt_bh_0[__ray_idx(k, __rt_bh_0.len())]"), "{}", rust);
     // los extremos del rango van a temporales ANTES de crear los guards (orden de efectos)
     assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = n;"), "{}", rust);
     // y dentro del cuerpo NO queda ningún borrow por elemento
@@ -265,7 +265,7 @@ fn fuses_split_consumed_by_constant_indexes() {
          }",
     );
     assert!(rust.contains("__rt_sp0_len"), "{}", rust);
-    assert!(rust.contains("index out of bounds: the len is {} but the index is {}"), "{}", rust);
+    assert!(rust.contains("__ray_index_err(1i64, __rt_sp0_len as usize)"), "OOB con el texto de la VM: {}", rust);
     assert!(!rust.contains("__ray_split(&"), "{}", rust); // el Vec intermedio no se emite
 }
 
@@ -380,7 +380,7 @@ fn indexed_reads_borrow_without_cloning_the_rc() {
              while (i < 2) { print(a[i]); i = i + 1; }\n\
          }",
     );
-    assert!(rust.contains("a.borrow()["), "{}", rust);
+    assert!(rust.contains("let __rt_b = a.borrow(); __rt_b[__ray_idx(__rt_i, __rt_b.len())]"), "{}", rust);
     assert!(!rust.contains("a.clone().borrow()"), "{}", rust);
 }
 
@@ -556,7 +556,7 @@ fn var_captured_and_mutated_by_closure_goes_in_a_cell() {
         "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }\n\
          fn main() { let c = counter(); print(c()); }",
     );
-    assert!(rust.contains("let n = Rc::new(std::cell::RefCell::new("), "n es una celda: {}", rust);
+    assert!(rust.contains("let n: Rc<std::cell::RefCell<i64>> = Rc::new(std::cell::RefCell::new("), "n es una celda con su anotación (§101 #15): {}", rust);
     assert!(rust.contains("*n.borrow_mut() ="), "escritura por borrow_mut: {}", rust);
     assert!(rust.contains("n.borrow().clone()"), "lectura por borrow: {}", rust);
     assert!(rust.contains("let n = n.clone();"), "pre-clon al capturar: {}", rust);
@@ -841,7 +841,7 @@ fn native_devtools_are_baked_only_when_the_build_asks() {
 #[test]
 fn string_index_goes_through_the_char_cache() {
     let rust = transpile_src("fn main() { let s = \"añb\"; print(s[1]); }");
-    assert!(rust.contains("__ray_char_at(&(s.clone()), 1i64).unwrap()"), "s[i] por la caché: {}", rust);
+    assert!(rust.contains("__ray_char_at(__rt_s, __rt_i).unwrap_or_else(|| __ray_index_err(__rt_i, __rt_s.chars().count()))"), "s[i] por la caché, OOB con el texto de la VM: {}", rust);
     assert!(!rust.contains(".chars().nth("), "sin chars().nth: {}", rust);
     assert!(rust.contains("fn __ray_char_at(s: &Rc<str>, i: i64) -> Option<char>"), "helper: {}", rust);
     assert!(rust.contains("Rc::ptr_eq(&e.s, s)"), "identidad por Rc: {}", rust);
@@ -1116,7 +1116,7 @@ fn transpiles_byte_indexing() {
     let rust = transpile_src(
         "fn main() -> int { let b = \"Hi\".to_bytes(); print(to_string(b[0])); b[1] }",
     );
-    assert!(rust.contains("[0i64 as usize] as i64)"), "b[i] → octeto int con paréntesis: {}", rust);
+    assert!(rust.contains("__rt_a[__ray_idx(__rt_i, __rt_a.len())] as i64 })"), "b[i] → octeto int con paréntesis: {}", rust);
     assert!(!rust.contains("b.clone().borrow()"), "bytes no lleva borrow: {}", rust);
 }
 
@@ -1609,4 +1609,5 @@ fn tuple_and_literal_patterns_transpile() {
     assert!(rust.contains("S::C(0)"), "{rust}");
     assert!(rust.contains("_ => unreachable!("), "{rust}");
 }
+
 

@@ -805,3 +805,102 @@ fn main() -> int { print(run(mk(2))); 0 }
     assert!(err.contains("a function value computed here") && err.contains("write the closure inline"), "{err}");
     assert!(!err.contains("E0277"), "sin errores de rustc: {err}");
 }
+
+/// §101 #16: `==`/`!=` sobre un enum de la stdlib con un `Map` dentro (`Json.JObject`). El nativo
+/// no derivaba `PartialEq` para `Json` (sus payloads llegan sin normalizar: `Struct("Map", …)`) y
+/// la VM comparaba los mapas por `false` fijo (el intérprete y el nativo ya eran estructurales).
+#[test]
+fn stdlib_enums_with_maps_compare_structurally_on_all_engines() {
+    let d = tmp("json_eq");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/json;
+from std/json import Json;
+
+fn parsed(text: string) -> Json {
+    json.parse(text).unwrap_or(Json.JNull)
+}
+
+fn main() -> int {
+    let block = parsed("null");
+    print(block != Json.JNull);
+    print(parsed("{\"a\": [1, 2], \"b\": {\"c\": true}}") == parsed("{\"b\": {\"c\": true}, \"a\": [1, 2]}"));
+    print(parsed("{\"a\": 1}") == parsed("{\"a\": 2}"));
+    print(parsed("{\"a\": 1}") == parsed("{\"a\": 1, \"b\": 1}"));
+    print(parsed("[1, \"x\"]") == parsed("[1, \"x\"]"));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "false\ntrue\nfalse\nfalse\ntrue\n");
+}
+
+/// §101 #14: un índice fuera de rango capturado por `try_call` lleva el texto de la VM en el nativo
+/// (antes: el bounds check de Rust, «index out of bounds: the len is 0 but the index is 3»). Cubre
+/// arreglo, string (longitud en caracteres), bytes, escritura, índice negativo y split fusionado.
+#[test]
+fn index_out_of_range_has_the_vm_message_on_all_engines() {
+    let d = tmp("index_msg");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn show(r: Result<string, string>) {
+    match (r) {
+        Result.Ok(v) => print(v),
+        Result.Err(e) => print(e),
+    }
+}
+
+fn main() -> int {
+    let empty: [int] = [];
+    let s = "añb";
+    let b = "xyz".to_bytes();
+    var arr = [1, 2, 3];
+    show(try_call(fn() -> string { "${empty[3]}" }));
+    show(try_call(fn() -> string { "${s[5]}" }));
+    show(try_call(fn() -> string { "${b[7]}" }));
+    show(try_call(fn() -> string { arr[3] = 9; "ok" }));
+    show(try_call(fn() -> string { let i = 0 - 2; "${arr[i]}" }));
+    let parts = "a,b".split(",");
+    show(try_call(fn() -> string { parts[2] }));
+    show(try_call(fn() -> string { "${arr[arr.len() - 1]}${s[2]}${b[0]}" }));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "index 3 out of range (length 0)\nindex 5 out of range (length 3)\nindex 7 out of range (length 3)\nindex 3 out of range (length 3)\nindex -2 out of range (length 3)\nindex 2 out of range (length 2)\n3b120\n",
+    );
+}
+
+/// §101 #15: una colección vacía anotada, capturada por una closure sin ningún uso previo. El
+/// nativo emitía la celda `Rc<RefCell<_>>` sin tipo y rustc no infería K/V del `Map` (E0282).
+#[test]
+fn an_annotated_empty_collection_captured_before_any_use_compiles_natively() {
+    let d = tmp("captured_empty");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() -> int {
+    var m: Map<string, int> = Map.new();
+    var xs: [string] = [];
+    var pairs: [(int, string)] = [];
+    match (try_call(fn() -> int { 10 / m.len() })) {
+        Result.Ok(v) => print(v),
+        Result.Err(e) => print(e),
+    }
+    let fill = fn() {
+        m.insert("a", 1);
+        xs.push("x");
+        pairs.push((2, "y"));
+    };
+    fill();
+    print("${m.len()} ${xs[0]} ${pairs[0].0}");
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "integer division by zero\n1 x 2\n");
+}

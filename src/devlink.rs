@@ -982,20 +982,32 @@ pub(crate) fn paint(code: &str, text: &str) -> String {
     }
 }
 
-/// El nombre con el que el usuario ve la app de desarrollo. La librería es la misma para todos
-/// los proyectos (un asset por release), así que el nombre se toma del entorno: `RAY_DEV_APP_NAME`
-/// si el shell lo pone, o en iOS el nombre del ejecutable del bundle (`Notes-dev.app/Notes-dev`)
-/// sin el sufijo `-dev`. `None` = no se sabe (Android: el proceso es `app_process`).
+/// El nombre con el que el usuario ve la app de desarrollo, sin el sufijo `-dev` que `ray bundle
+/// --dev` añade. La librería es la misma para todos los proyectos (un asset por release), así que
+/// el nombre lo pone el shell en `RAY_DEV_APP_NAME` (la etiqueta de la app en Android,
+/// `CFBundleDisplayName`/`CFBundleName` en iOS); como respaldo en iOS, el nombre del ejecutable
+/// del bundle (`Notes-dev.app/Notes-dev`). `None` = no se sabe.
 fn shell_app_name() -> Option<String> {
-    if let Some(n) = std::env::var("RAY_DEV_APP_NAME").ok().filter(|s| !s.trim().is_empty()) {
-        return Some(n);
+    let raw = std::env::var("RAY_DEV_APP_NAME").ok().filter(|s| !s.trim().is_empty()).or_else(|| {
+        if !cfg!(target_os = "ios") {
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        Some(exe.file_stem()?.to_string_lossy().into_owned())
+    })?;
+    Some(strip_dev_suffix(raw.trim()))
+}
+
+/// `Notes-dev` → `Notes` (también `Notes Dev`/`Notes dev`, por si el shell capitaliza).
+pub fn strip_dev_suffix(label: &str) -> String {
+    for suffix in ["-dev", " Dev", " dev"] {
+        if let Some(base) = label.strip_suffix(suffix)
+            && !base.is_empty()
+        {
+            return base.to_string();
+        }
     }
-    if !cfg!(target_os = "ios") {
-        return None;
-    }
-    let exe = std::env::current_exe().ok()?;
-    let stem = exe.file_stem()?.to_string_lossy().into_owned();
-    Some(stem.strip_suffix("-dev").unwrap_or(&stem).to_string())
+    label.to_string()
 }
 
 /// La página de emparejamiento, servida por `ray://app` con el mismo puente que usan los
@@ -1139,6 +1151,14 @@ mod tests {
         assert!(parse_url("ray-dev://host:1/").is_err());
         assert!(parse_url("no scheme").is_err());
         assert!(parse_url("bad scheme://h:1/t").is_err());
+    }
+
+    #[test]
+    fn the_dev_suffix_is_stripped_from_the_app_label() {
+        assert_eq!(strip_dev_suffix("Notes-dev"), "Notes");
+        assert_eq!(strip_dev_suffix("Notes Dev"), "Notes");
+        assert_eq!(strip_dev_suffix("Notes"), "Notes");
+        assert_eq!(strip_dev_suffix("-dev"), "-dev");
     }
 
     #[test]

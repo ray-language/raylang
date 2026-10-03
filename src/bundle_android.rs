@@ -144,6 +144,9 @@ public class MainActivity extends Activity {
         try {
             android.system.Os.setenv("HOME", getFilesDir().getAbsolutePath(), true);
             android.system.Os.setenv("TMPDIR", getCacheDir().getAbsolutePath(), true);
+            // El nombre visible de la app, para la pantalla de emparejamiento de la librería de
+            // desarrollo (la misma para todos los proyectos).
+            android.system.Os.setenv("RAY_DEV_APP_NAME", getApplicationInfo().loadLabel(getPackageManager()).toString(), true);
         } catch (Exception e) { }
         WebView web = new WebView(this);
         web.getSettings().setJavaScriptEnabled(true);
@@ -748,6 +751,7 @@ mod tests {
         assert!(RAY_BRIDGE_JAVA
             .contains("public static native void pushEvent(String kind, long window, String tag)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("window.ray={send:function(t){q(e(t))}"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("Os.setenv(\"RAY_DEV_APP_NAME\", getApplicationInfo().loadLabel(getPackageManager()).toString(), true)"), "M343: the app label reaches the dev library");
         assert!(MAIN_ACTIVITY_JAVA.contains("request:function(t)"), "M157: request in the shim");
         // M323 (ray808 #12): el shim como script de inicio de documento, con fallback a onPageStarted.
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));

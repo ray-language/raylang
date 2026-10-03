@@ -16422,7 +16422,10 @@ raylang en SVG en línea, tipografía del sistema, sin dependencias: la misma p�
 librería de desarrollo por `ray://app`. El nombre de la app lo pone `shell_app_name`: la librería es
 un asset por release, igual para todos los proyectos, así que lo toma de `RAY_DEV_APP_NAME` o, en
 iOS, del nombre del ejecutable del bundle sin `-dev`; en Android, donde el proceso es `app_process`,
-cae al nombre del dispositivo. `pair_html` es pura y se testea.
+caía al nombre del dispositivo. Por eso los dos shells exportan `RAY_DEV_APP_NAME` al arrancar (la
+etiqueta de la app en Java, `CFBundleDisplayName`/`CFBundleName` en Objective-C) y la librería le
+quita el sufijo `-dev`; el ejecutable queda como respaldo en iOS para apps de desarrollo
+instaladas antes de este cambio. `pair_html` es pura y se testea.
 
 **La terminal** (`dev_device_banner`, `cli.rs`) imprime, solo cuando stderr es una terminal, la
 manta en ASCII (seis líneas, azul) con «raylang dev · Notes», los tres pasos con el QR y el enlace

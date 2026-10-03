@@ -3,7 +3,7 @@
 # `ray registry publish`.
 [package]
 name = "llm"
-version = "0.1.0"
+version = "0.2.0"
 license = "Apache-2.0"
 description = "Talk to language models from raylang: one conversation model over the Anthropic Messages API and the OpenAI Chat Completions dialect (OpenAI, Ollama, OpenRouter, Groq, Mistral, Gemini…), with tool calls, streaming, retries and prompt caching"
 keywords = ["llm", "ai", "anthropic", "claude", "openai", "ollama", "openrouter", "chat", "streaming", "tools", "agent", "sse"]

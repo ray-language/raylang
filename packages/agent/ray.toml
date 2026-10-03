@@ -3,7 +3,7 @@
 # `ray registry publish`.
 [package]
 name = "agent"
-version = "0.1.0"
+version = "0.2.0"
 license = "Apache-2.0"
 description = "An agent loop for raylang: a model, your tools and the tools of MCP servers, with a step budget, autonomy levels and an approval hook before anything that changes things"
 keywords = ["agent", "llm", "ai", "tools", "mcp", "loop", "approval", "autonomy", "claude", "openai"]

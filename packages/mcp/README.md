@@ -129,7 +129,7 @@ from mcp/serve import Provider;
 fn build() -> Provider {
     var p = serve.provider("notes", "0.1.0");
     p.instructions = "Notes of the current user. Search before you add.";
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "shout",
         "Upper-cases a text",
@@ -141,7 +141,7 @@ fn build() -> Provider {
             }
         }
     );
-    let _ = serve.resource(
+    serve.resource(
         p,
         "notes://greeting",
         "Greeting",
@@ -174,9 +174,9 @@ Por HTTP, el mismo `build` se sirve con `serve.http(build, "127.0.0.1", 8765)`.
 | Función | Qué hace |
 |---|---|
 | `provider(name, version) -> Provider` | un proveedor vacío; `instructions` y `token` son campos |
-| `tool(p, name, description, schema, run) -> Result<int, string>` | añade una herramienta; `schema` es el JSON Schema de sus argumentos como texto, `""` si no tiene |
+| `tool(p, name, description, schema, run)` | añade una herramienta; `schema` es el JSON Schema de sus argumentos como texto, `""` si no tiene |
 | `read_only_tool(…)` | lo mismo, declarada como de solo lectura |
-| `resource(p, uri, name, description, mime, read) -> Result<int, string>` | añade un recurso |
+| `resource(p, uri, name, description, mime, read)` | añade un recurso |
 | `stdio(p) -> int` | sirve por la entrada y la salida estándar hasta que el cliente cierra |
 | `http(build, host, port) -> Result<int, string>` | sirve por Streamable HTTP |
 | `http_on(build, listener)` | lo mismo sobre un listener ya abierto, para elegir un puerto libre |
@@ -190,8 +190,9 @@ el texto que lee el modelo, y el `Err` le llega como llamada fallida, con su men
 
 - **Una herramienta que aborta no tumba el servidor.** Un `panic` o un índice fuera de rango se
   convierten en una llamada fallida que el modelo lee.
-- **Registrar dos veces el mismo nombre, o un esquema que no es JSON, es un `Err`** al arrancar,
-  no un fallo en la primera llamada.
+- **Registrar dos veces el mismo nombre, o un esquema que no es JSON, aborta el programa** al
+  arrancar, con un mensaje que dice qué herramienta. Son errores de programación, no situaciones
+  de ejecución, y es mejor verlos antes de servir nada que en la primera llamada del modelo.
 - **Por stdio, la salida estándar es el canal del protocolo.** Lo que el programa quiera decir de
   sí mismo va por `eprint`, nunca por `print`.
 - **Por HTTP no hay sesiones:** cada POST lleva un mensaje y recibe su respuesta. Cada conexión

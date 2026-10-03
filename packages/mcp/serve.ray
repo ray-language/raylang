@@ -56,6 +56,8 @@ pub fn provider(name: string, version: string) -> Provider {
     Provider { name: name, version: version, instructions: "", tools: [], resources: [], token: "" }
 }
 
+// Un nombre repetido o un esquema que no es JSON son errores del programa, no situaciones de
+// ejecución: el servidor aborta al arrancar, antes de servir nada, con un mensaje que dice cuál.
 fn add_tool(
     p: Provider,
     name: string,
@@ -63,20 +65,18 @@ fn add_tool(
     schema: string,
     read_only: bool,
     run: fn(Json) -> Result<string, string>
-) -> Result<int, string> {
+) {
     let parsed = if (schema.trim() == "") {
         protocol.object(["type", "properties"], [Json.JStr("object"), protocol.empty_object()])
     } else {
         match (json.parse(schema)) {
             Result.Ok(j) => j,
-            Result.Err(e) => {
-                return Result.Err("the schema of tool '${name}' is not valid JSON: ${e}");
-            },
+            Result.Err(e) => panic("mcp/serve: the schema of tool '${name}' is not valid JSON: ${e}"),
         }
     };
     for t in p.tools {
         if (t.name == name) {
-            return Result.Err("tool '${name}' is already registered");
+            panic("mcp/serve: tool '${name}' is already registered");
         }
     }
     p.tools.push(
@@ -88,20 +88,20 @@ fn add_tool(
             run: run
         }
     );
-    Result.Ok(p.tools.len())
 }
 
 /// Adds a tool. `schema` is the JSON Schema of its arguments, as text ("" = no arguments).
 /// `run` receives the arguments and returns the text the model reads; an `Err` reaches the
-/// model as a failed tool call, with its message.
+/// model as a failed tool call, with its message. A schema that is not valid JSON, or a name
+/// already taken, is a programming error: the program aborts at startup saying which.
 pub fn tool(
     p: Provider,
     name: string,
     description: string,
     schema: string,
     run: fn(Json) -> Result<string, string>
-) -> Result<int, string> {
-    add_tool(p, name, description, schema, false, run)
+) {
+    add_tool(p, name, description, schema, false, run);
 }
 
 /// Like `tool`, for one that only reads: clients may run it without asking the user.
@@ -111,11 +111,12 @@ pub fn read_only_tool(
     description: string,
     schema: string,
     run: fn(Json) -> Result<string, string>
-) -> Result<int, string> {
-    add_tool(p, name, description, schema, true, run)
+) {
+    add_tool(p, name, description, schema, true, run);
 }
 
-/// Adds a resource: `read` returns its text each time a client asks for `uri`.
+/// Adds a resource: `read` returns its text each time a client asks for `uri`. A URI already
+/// taken is a programming error: the program aborts at startup.
 pub fn resource(
     p: Provider,
     uri: string,
@@ -123,16 +124,15 @@ pub fn resource(
     description: string,
     mime: string,
     read: fn() -> Result<string, string>
-) -> Result<int, string> {
+) {
     for r in p.resources {
         if (r.uri == uri) {
-            return Result.Err("resource '${uri}' is already registered");
+            panic("mcp/serve: resource '${uri}' is already registered");
         }
     }
     p.resources.push(
         ResourceDef { uri: uri, name: name, description: description, mime: mime, read: read }
     );
-    Result.Ok(p.resources.len())
 }
 
 // ---------------------------------------------------------------- el protocolo

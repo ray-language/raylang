@@ -37,6 +37,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (Claude, OpenAI, un modelo local), tiene herramientas propias con su riesgo y pregunta antes de
   escribir. El capítulo gana una tercera parte, **tu propio servidor MCP**, con el ejemplo nuevo
   `notes-mcp`: unas notas ofrecidas como herramientas a Claude Code o a cualquier agente.
+- **Paquetes `mcp`, `llm` y `agent` 0.2.0: registrar una herramienta ya no devuelve `Result`.**
+  `serve.tool`, `serve.read_only_tool`, `serve.resource`, `llm.tool` y `agent.tool` fallaban por
+  errores de programación (un nombre repetido, un esquema que no es JSON) y devolvían un `Result`
+  que el código acababa descartando con `let _ =`. Ahora abortan el programa al arrancar con un
+  mensaje que dice qué herramienta, y las llamadas quedan limpias. Cambio de firma: 0.2.0.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

@@ -397,7 +397,7 @@ from mcp/serve import Provider;
 fn build() -> Provider {
     var p = serve.provider("demo", "1.0.0");
     p.instructions = "A demo server.";
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "shout",
         "Upper-cases a text",
@@ -409,11 +409,11 @@ fn build() -> Provider {
             }
         }
     );
-    let _ = serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
+    serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
         panic("boom");
         Result.Ok("unreachable")
     });
-    let _ = serve.resource(
+    serve.resource(
         p,
         "demo://greeting",
         "Greeting",
@@ -421,7 +421,7 @@ fn build() -> Provider {
         "text/plain",
         fn() -> Result<string, string> { Result.Ok("hello") }
     );
-    let _ = serve.resource(
+    serve.resource(
         p,
         "demo://broken",
         "Broken",
@@ -441,10 +441,11 @@ fn show(p: Provider, line: string) {
 
 fn main() -> int {
     let p = build();
-    // Registrar dos veces lo mismo, o con un esquema que no es JSON, es un error al arrancar.
-    print(serve.tool(p, "shout", "again", "", fn(args: Json) -> Result<string, string> { Result.Ok("") }));
-    print(serve.tool(p, "bad", "bad schema", "{not json", fn(args: Json) -> Result<string, string> { Result.Ok("") }));
-    print(serve.resource(p, "demo://greeting", "again", "", "", fn() -> Result<string, string> { Result.Ok("") }));
+    // Registrar dos veces lo mismo, o con un esquema que no es JSON, aborta el programa al
+    // arrancar: son errores de programación, y el mensaje dice cuál.
+    print(try_call(fn() { serve.tool(p, "shout", "again", "", fn(args: Json) -> Result<string, string> { Result.Ok("") }) }));
+    print(try_call(fn() { serve.tool(p, "bad", "bad schema", "{not json", fn(args: Json) -> Result<string, string> { Result.Ok("") }) }));
+    print(try_call(fn() { serve.resource(p, "demo://greeting", "again", "", "", fn() -> Result<string, string> { Result.Ok("") }) }));
     show(p, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`);
     show(p, `{"jsonrpc":"2.0","id":"a","method":"initialize","params":{}}`);
     show(p, `{"jsonrpc":"2.0","method":"notifications/initialized"}`);
@@ -468,9 +469,9 @@ fn main() -> int {
 }
 "##;
 
-const HANDLE_EXPECTED: &str = r##"Result.Err(tool 'shout' is already registered)
-Result.Err(the schema of tool 'bad' is not valid JSON: expected a string key)
-Result.Err(resource 'demo://greeting' is already registered)
+const HANDLE_EXPECTED: &str = r##"Result.Err(mcp/serve: tool 'shout' is already registered)
+Result.Err(mcp/serve: the schema of tool 'bad' is not valid JSON: expected a string key)
+Result.Err(mcp/serve: resource 'demo://greeting' is already registered)
 {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2025-06-18","serverInfo":{"name":"demo","version":"1.0.0"}}}
 {"id":"a","jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2024-11-05","serverInfo":{"name":"demo","version":"1.0.0"}}}
 (no reply)
@@ -519,7 +520,7 @@ fn number(args: Json, key: string) -> Result<int, string> {
 fn build() -> Provider {
     var p = serve.provider("demo", "1.0.0");
     p.instructions = "A demo server.";
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "add",
         "Adds two integers",
@@ -530,11 +531,11 @@ fn build() -> Provider {
             Result.Ok(to_string(a + b))
         }
     );
-    let _ = serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
+    serve.tool(p, "crash", "Always aborts", "", fn(args: Json) -> Result<string, string> {
         panic("boom");
         Result.Ok("unreachable")
     });
-    let _ = serve.resource(
+    serve.resource(
         p,
         "demo://greeting",
         "Greeting",

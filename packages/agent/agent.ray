@@ -173,7 +173,9 @@ fn taken(a: Agent, name: string) -> bool {
 
 /// Adds a tool of your own. `schema` is the JSON Schema of its arguments, as text ("" =
 /// none); `risk` is `READ`, `WRITE` or `EXEC`. `run` receives the arguments and returns the
-/// text the model reads; an `Err` reaches the model as a failed call, with its message.
+/// text the model reads; an `Err` reaches the model as a failed call, with its message. An
+/// unknown risk, a name already taken or a schema that is not valid JSON are programming
+/// errors: the program aborts at startup saying which.
 pub fn tool(
     a: Agent,
     name: string,
@@ -181,14 +183,14 @@ pub fn tool(
     schema: string,
     risk: string,
     run: fn(Json) -> Result<string, string>
-) -> Result<int, string> {
+) {
     if (risk != READ && risk != WRITE && risk != EXEC) {
-        return Result.Err("the risk of tool '${name}' must be read, write or exec, not '${risk}'");
+        panic("agent: the risk of tool '${name}' must be read, write or exec, not '${risk}'");
     }
     if (taken(a, name)) {
-        return Result.Err("tool '${name}' is already registered");
+        panic("agent: tool '${name}' is already registered");
     }
-    let declared = message.tool(name, description, schema)?;
+    let declared = message.tool(name, description, schema);
     a.local.push(
         LocalTool {
             name: name,
@@ -198,7 +200,6 @@ pub fn tool(
             run: run
         }
     );
-    Result.Ok(a.local.len())
 }
 
 /// Offers the model the tools of an MCP server: `session` is a connection made with the `mcp`

@@ -42,7 +42,7 @@ fn fixture(tag: string) -> (Agent, string) {
         let _ = webserver.serve_on(listener, scripted);
     });
     let a = agent.new(llm.for_endpoint("http://127.0.0.1:${port}/v1", "scripted", ""));
-    let _ = files.add_tools(a, root).unwrap();
+    files.add_tools(a, root);
     (a, root)
 }
 

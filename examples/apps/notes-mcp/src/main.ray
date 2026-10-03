@@ -50,28 +50,28 @@ pub fn provider_for(dir: string) -> Provider {
     let add = fn(args: Json) -> Result<string, string> { add_note(dir, args) };
     let index = fn() -> Result<string, string> { Result.Ok(store.titles(dir).join("\n")) };
     // The two that only read are announced as read-only: a client may run them without asking.
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "search_notes",
         "Lists the titles of the notes that contain a text; an empty text lists them all",
         SEARCH_SCHEMA,
         search
     );
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "read_note",
         "Returns the body of the note with this exact title",
         TITLE_SCHEMA,
         read
     );
-    let _ = serve.tool(
+    serve.tool(
         p,
         "add_note",
         "Creates a note, or replaces the one with the same title",
         NOTE_SCHEMA,
         add
     );
-    let _ = serve.resource(
+    serve.resource(
         p,
         "notes://index",
         "Index",

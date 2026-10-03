@@ -171,7 +171,7 @@ and the JSON Schema of its arguments), its risk, and the function that runs it:
 <!-- check: project=examples/apps/agent-cli -->
 ```rust
 /// Gives the agent `read_file` and `write_file`, both confined to `root`.
-pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
+pub fn add_tools(a: Agent, root: string) {
     let read = fn(args: Json) -> Result<string, string> { read_file(root, args) };
     let write = fn(args: Json) -> Result<string, string> { write_file(root, args) };
     agent.tool(
@@ -181,7 +181,7 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         READ_SCHEMA,
         agent.READ,
         read
-    )?;
+    );
     agent.tool(
         a,
         "write_file",
@@ -189,7 +189,7 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         WRITE_SCHEMA,
         agent.WRITE,
         write
-    )
+    );
 }
 ```
 
@@ -215,6 +215,10 @@ fn write_file(root: string, args: Json) -> Result<string, string> {
 The `Ok` is the text the model reads; the `Err` reaches it as a failed call, with its message,
 and it decides what to do. A tool that aborts does not bring the turn down either. Tools run in
 the same fiber that called `agent.run`, so they can keep state like any other function.
+
+Registering a tool returns nothing. The only thing that can go wrong there is a programming
+error, a repeated name or a schema that is not JSON, and that aborts at startup with a message
+saying which, before the model gets to ask for anything.
 
 The arguments are written by a model, which may have read text from a third party. They are
 checked like those of a form:
@@ -490,28 +494,28 @@ pub fn provider_for(dir: string) -> Provider {
     let add = fn(args: Json) -> Result<string, string> { add_note(dir, args) };
     let index = fn() -> Result<string, string> { Result.Ok(store.titles(dir).join("\n")) };
     // The two that only read are announced as read-only: a client may run them without asking.
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "search_notes",
         "Lists the titles of the notes that contain a text; an empty text lists them all",
         SEARCH_SCHEMA,
         search
     );
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "read_note",
         "Returns the body of the note with this exact title",
         TITLE_SCHEMA,
         read
     );
-    let _ = serve.tool(
+    serve.tool(
         p,
         "add_note",
         "Creates a note, or replaces the one with the same title",
         NOTE_SCHEMA,
         add
     );
-    let _ = serve.resource(
+    serve.resource(
         p,
         "notes://index",
         "Index",
@@ -648,4 +652,4 @@ in front of users, it helps to know what is missing:
 [**Performance**](performance.en.md): how to measure a program, find where the time goes and make
 it fast.
 
-<!-- sync: sha256:9942d9c7794d -->
+<!-- sync: sha256:25fa4866007e -->

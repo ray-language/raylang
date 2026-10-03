@@ -185,6 +185,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // con el hook de Rust.
     out.push_str("struct __RayErr(String);\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM
+    // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
+    // sin signo (un índice negativo cae también) en el camino caliente y llama al emisor frío fuera.
+    out.push_str("#[cold] #[inline(never)] fn __ray_index_err(i: i64, len: usize) -> ! { __ray_rt_err(&format!(\"index {i} out of range (length {len})\")) }\n");
+    out.push_str("#[inline(always)] fn __ray_idx(i: i64, len: usize) -> usize { if (i as u64) < (len as u64) { i as usize } else { __ray_index_err(i, len) } }\n");
     // M295: profundidad de llamadas raylang — el binario nativo corta la recursión en el MISMO
     // límite y con el MISMO mensaje que la VM (`RAYLANG_MAX_DEPTH`, 1024 por defecto), en vez de
     // reventar la pila (hilo principal: aborto con el mensaje de Rust; fibra: SIGBUS mudo). Cada
@@ -225,14 +230,12 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // idéntico para los tres motores.
     //
     // Captura CUALQUIER panic, no solo los `__RayErr`, y esto es deliberado: no todos los fallos de
-    // runtime del nativo pasan por `__ray_rt_err`. Un índice fuera de rango, por ejemplo, es el
-    // bounds check de Rust (el indexado se emite sin comprobación propia, para no pagarla en el
-    // camino caliente). Si aquí solo se capturasen los `__RayErr`, la VM recuperaría ese caso y el
-    // nativo no → los dos motores DIVERGIRÍAN en el flujo de control, que es la línea que el
-    // proyecto no cruza. Capturando todo, `try_call` recupera el mismo conjunto de fallos en los
-    // tres motores; lo único que difiere es el TEXTO del mensaje en esa clase de errores, y esa
-    // divergencia es preexistente (también se ve hoy en un fallo sin capturar: la VM dice
-    // "index 7 out of range (length 2)" y el nativo el texto de Rust).
+    // runtime del nativo pasan por `__ray_rt_err`. Si aquí solo se capturasen los `__RayErr`, un
+    // pánico de Rust que se escapase (un `unwrap` interno) lo recuperaría la VM y no el nativo → los
+    // dos motores DIVERGIRÍAN en el flujo de control, que es la línea que el proyecto no cruza.
+    // Capturando todo, `try_call` recupera el mismo conjunto de fallos en los tres motores. (El
+    // índice fuera de rango fue durante un tiempo el caso visible de texto distinto —el bounds check
+    // de Rust—; desde §101 #14 el indexado pasa por `__ray_idx` y da el texto de la VM.)
     // Profundidad de `try_call` en vuelo EN ESTE HILO. El hook de panic la consulta para callarse:
     // un fallo que se va a recuperar no debe escupir "thread panicked at …" ni la nota del
     // backtrace (la VM no imprime nada al recuperar, y los dos motores deben verse igual). Es

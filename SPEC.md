@@ -440,8 +440,11 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   implemente `Add/Sub/Mul/Div/Neg` (`fn add(self, otro: Self) -> Self`, etc.), ambos operandos
   del mismo tipo. `==`/`<` no son sobrecargables (usar `igual`/`menor` de `Eq`/`Ord`).
 - **Igualdad `==`/`!=`**: primitivos, `string`, `char`, `bytes`, `u*` (mismo ancho) y
-  **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
-  Eq`, vía `igual` (no `==`). Una **tupla** satisface los bounds `Eq` y `Show` cuando todos
+  **estructural** para arreglos, tuplas, structs (mismo tipo, campo a campo) y enums (misma
+  variante, payload a payload). Un `Map` suelto no se compara con `==`; dentro de un struct/enum
+  (`Json.JObject`) se compara estructuralmente, sin orden. Un tipo con funciones dentro no es
+  comparable. `@derive(Eq)`/`impl Eq` sirven para los *bounds* (`T: Eq`), vía `igual`. Una
+  **tupla** satisface los bounds `Eq` y `Show` cuando todos
   sus elementos los satisfacen (M302: `assert_eq(f(), ("h", 81))`; `show` da `(h, 81)`); no
   tiene impl propio ni satisface otros traits. **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.

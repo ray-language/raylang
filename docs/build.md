@@ -119,7 +119,8 @@ ray build --native prog.ray --target x86_64-unknown-linux-gnu   # cross-compile 
 ```
 
 **Cross-compilation** (`--target <triple>`). El triple se pasa tal cual a `rustc`/`cargo`;
-el target debe estar instalado (`rustup target add <triple>`) y, para targets con
+el target debe estar instalado (`ray toolchain add-target <triple>`, que es `rustup target add`
+sobre la toolchain que `ray` usa) y, para targets con
 linker cruzado (p. ej. Linux desde macOS), el linker configurado (`~/.cargo/config.toml`).
 Con `--target`, `--release` omite `target-cpu=native` (release **portable** al target).
 
@@ -191,14 +192,20 @@ recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario in
   → `PATH` → toolchain privada `~/.ray/toolchain` (`RAY_TOOLCHAIN_HOME` la mueve). El Rust del
   usuario, si existe, siempre gana. Si falta, el error nombra las tres fuentes y sugiere `ray
   toolchain install` (y, cuando solo faltan las features siempre-on, la vía `--without`).
-- **`ray toolchain install [--rust <canal>] [--force] [--no-vendor]`**: descarga `rustup-init`
+- **`ray toolchain install [--rust <canal>] [--targets ios,android,<triple>…] [--force] [--no-vendor]`**: descarga `rustup-init`
   del canal oficial (`sh.rustup.rs` / `win.rustup.rs`) y lo instala con perfil `minimal`
   (`stable` por defecto) bajo `RUSTUP_HOME=~/.ray/toolchain/rustup` y
   `CARGO_HOME=~/.ray/toolchain/cargo`: no toca `~/.cargo`, `~/.rustup` ni el PATH. Las
   herramientas privadas se lanzan siempre con esas dos variables (los proxies de rustup buscan
   la toolchain en `RUSTUP_HOME`). Con `cargo` ya en el PATH no instala nada salvo `--force`
   (pero sí baja el vendor). Verifica `cargo --version` antes de declarar éxito. Medido (macOS
-  arm64, 3 sep 2026): ~450 MB en disco.
+  arm64, 3 sep 2026): ~450 MB en disco. `--targets` añade la std de esos targets al terminar.
+- **`ray toolchain add-target <ios|android|triple>…`**: `rustup target add` con el `rustup` que
+  acompaña al `cargo` resuelto, así alcanza también a la toolchain privada (que no está en el PATH,
+  y a la que un `rustup target add` a mano no llega). `ios` = `aarch64-apple-ios` +
+  `aarch64-apple-ios-sim`, `android` = `aarch64-linux-android` + `x86_64-linux-android` (dispositivo
+  y emulador). Sin `rustup` (Rust de Homebrew/distro) no hay cómo: exit 69 con la pista de instalar
+  la privada con `--targets`.
 - **Vendor de `ray-runtime`** (asset `ray-runtime-vendor.tar.gz` de cada release, producido por
   `tools/vendor-runtime.sh`: `cargo vendor` con TODAS las features + su `Cargo.lock`): `install`
   lo deja en `~/.ray/toolchain/vendor/<versión de ray>/`; si está, el proyecto Cargo generado
@@ -209,7 +216,8 @@ recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario in
   tiene vendor: `install` lo dice y el build tira de crates.io como antes.
 - **`ray toolchain status`**: qué usaría el build y de dónde, versiones, el **triple efectivo**
   (el que reporta `rustc -vV`, no la arquitectura del proceso `ray`), el linker del sistema
-  (`xcode-select -p` / `cc` / `link.exe`), el compilador de C y el vendor; exit 1 si falta `cargo`
+  (`xcode-select -p` / `cc` / `link.exe`), el compilador de C, los targets extra instalados
+  (`rustup target list --installed`) y el vendor; exit 1 si falta `cargo`
   o `rustc`.
 
 Lo que NO resuelve, a propósito y con mensaje: el **enlazador del sistema** (Xcode Command Line

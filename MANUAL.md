@@ -65,7 +65,9 @@ binarios instalados; `--check` solo informa, `ray upgrade v1.2.0` fija un tag co
 Para compilar programas a binario nativo (`ray build --native`) hace falta Rust. Si el equipo no
 lo tiene, `ray toolchain install` instala una toolchain privada bajo `~/.ray/toolchain` (no toca
 tu PATH ni un Rust que ya tengas) junto con las dependencias del runtime de esta versión, de modo
-que el primer build no necesita red; `ray toolchain status` dice qué usaría el build y si falta
+que el primer build no necesita red. Para `ray bundle --ios`/`--android` hacen falta además los
+targets móviles: `ray toolchain add-target ios` o `android` los añade a esa toolchain (o
+`ray toolchain install --targets ios,android` de una vez); `ray toolchain status` dice qué usaría el build y si falta
 el enlazador del sistema (Xcode Command Line Tools, `build-essential` o las Build Tools de
 Visual Studio, que ninguna toolchain de Rust sustituye).
 

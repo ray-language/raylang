@@ -324,12 +324,13 @@ pub fn augment_build_path(cmd: &mut Command, needs_clang: bool) -> Option<PathBu
     }
 }
 
-const USAGE: &str = "usage: ray toolchain install [--rust <channel>] [--force] [--no-vendor] | status";
+const USAGE: &str = "usage: ray toolchain install [--rust <channel>] [--targets ios,android,<triple>...] [--force] [--no-vendor]\n       ray toolchain add-target <ios|android|triple>...\n       ray toolchain status";
 
 /// Punto de entrada del subcomando `ray toolchain`.
 pub fn run(args: &[String]) {
     match args.first().map(String::as_str) {
         Some("install") => install(&args[1..]),
+        Some("add-target") => add_target(&args[1..]),
         Some("status") => status(),
         _ => {
             eprintln!("{USAGE}");
@@ -385,6 +386,17 @@ fn status() {
             Err(how) => println!("clang (ring on ARM64 Windows): not found — {how}"),
         }
     }
+    match installed_targets() {
+        Some(t) => {
+            let extra: Vec<&String> = t.iter().filter(|x| x.as_str() != host).collect();
+            if extra.is_empty() {
+                println!("extra targets: none (`ray toolchain add-target ios|android` for mobile builds)");
+            } else {
+                println!("extra targets: {}", extra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "));
+            }
+        }
+        None => println!("extra targets: unknown (no rustup — targets cannot be added to this toolchain)"),
+    }
     match installed_vendor() {
         Some(v) => println!("ray-runtime vendor ({}): {}", env!("CARGO_PKG_VERSION"), v.display()),
         None => println!(
@@ -405,11 +417,28 @@ fn install(args: &[String]) {
     let mut channel = "stable".to_string();
     let mut force = false;
     let mut vendor = true;
+    let mut targets: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--force" => force = true,
             "--no-vendor" => vendor = false,
+            "--targets" => {
+                i += 1;
+                match args.get(i) {
+                    Some(list) if !list.starts_with('-') => match expand_targets(list.split(',')) {
+                        Ok(t) => targets.extend(t),
+                        Err(e) => {
+                            eprintln!("{e}");
+                            process::exit(64);
+                        }
+                    },
+                    _ => {
+                        eprintln!("{USAGE}");
+                        process::exit(64);
+                    }
+                }
+            }
             "--rust" => {
                 i += 1;
                 match args.get(i) {
@@ -436,6 +465,9 @@ fn install(args: &[String]) {
         if vendor {
             install_vendor(&h);
         }
+        if !targets.is_empty() {
+            install_targets(&targets);
+        }
         return;
     }
     if let Err(e) = fs::create_dir_all(&h) {
@@ -456,6 +488,9 @@ fn install(args: &[String]) {
     if vendor {
         install_vendor(&h);
     }
+    if !targets.is_empty() {
+        install_targets(&targets);
+    }
     match system_linker() {
         Ok(_) => {}
         Err(how) => {
@@ -463,6 +498,111 @@ fn install(args: &[String]) {
         }
     }
     println!("ray build --native will use this toolchain when cargo/rustc are not on PATH (see `ray toolchain status`)");
+}
+
+// ── Targets de compilación cruzada (iOS/Android) ─────────────────────────────────────────────
+
+/// Los triples que `ray bundle --ios` compila: dispositivo y simulador.
+pub const IOS_TARGETS: [&str; 2] = ["aarch64-apple-ios", "aarch64-apple-ios-sim"];
+/// Los triples que `ray bundle --android` compila: dispositivos ARM64 y el emulador x86_64.
+pub const ANDROID_TARGETS: [&str; 2] = ["aarch64-linux-android", "x86_64-linux-android"];
+
+/// Expande los nombres que acepta `--targets`/`add-target`: los alias `ios` y `android` a sus
+/// triples, y cualquier otro nombre con la forma de un triple (`<arch>-<vendor>-<os>[-<abi>]`) tal
+/// cual. Sin duplicados y en el orden dado. Un nombre que no es ni alias ni triple es un error de
+/// uso, con la pista de lo que sí se acepta.
+pub fn expand_targets<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let expanded: Vec<&str> = match name {
+            "ios" => IOS_TARGETS.to_vec(),
+            "android" => ANDROID_TARGETS.to_vec(),
+            t if t.split('-').count() >= 3 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+                vec![t]
+            }
+            other => {
+                return Err(format!(
+                    "unknown target '{other}': use `ios`, `android` or a Rust target triple such as aarch64-linux-android"
+                ))
+            }
+        };
+        for t in expanded {
+            if !out.iter().any(|o| o == t) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `ray toolchain add-target <ios|android|triple>...`: instala la biblioteca estándar de esos
+/// targets en la toolchain que `ray build --native` usa (`rustup target add` con el `rustup`
+/// resuelto como las demás herramientas, así funciona también con la toolchain privada, que no
+/// está en el PATH). Idempotente: rustup no reinstala un target ya presente.
+fn add_target(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("{USAGE}");
+        process::exit(64);
+    }
+    let targets = match expand_targets(args.iter().map(String::as_str)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(64);
+        }
+    };
+    install_targets(&targets);
+}
+
+/// `rustup target add <targets>` con el `rustup` que acompaña al `cargo` resuelto. Sin `rustup`
+/// (un Rust de Homebrew o de la distro) no hay forma de añadir targets: se dice qué hacer.
+fn install_targets(targets: &[String]) {
+    let Some(mut cmd) = command("rustup") else {
+        let list = targets.join(",");
+        if resolve("cargo").is_some() {
+            eprintln!(
+                "rustup not found (RAY_RUSTUP, PATH, {}): the Rust in use is not managed by rustup, so ray cannot add targets to it",
+                home().display()
+            );
+            eprintln!("hint: `ray toolchain install --force --targets {list}` installs a private toolchain that includes them");
+        } else {
+            eprintln!("no Rust toolchain found (RAY_CARGO, PATH, {})", home().display());
+            eprintln!("hint: `ray toolchain install --targets {list}` installs a private toolchain with those targets");
+        }
+        process::exit(69);
+    };
+    eprintln!("adding targets: {}", targets.join(" "));
+    match cmd.args(["target", "add"]).args(targets).status() {
+        Ok(s) if s.success() => println!("targets installed: {}", targets.join(" ")),
+        Ok(s) => {
+            eprintln!("rustup target add failed (code {})", s.code().unwrap_or(-1));
+            process::exit(70);
+        }
+        Err(e) => {
+            eprintln!("could not run rustup: {e}");
+            process::exit(70);
+        }
+    }
+}
+
+/// Los targets instalados en la toolchain en uso (`rustup target list --installed`), o `None` si
+/// no hay `rustup` o no responde.
+pub fn installed_targets() -> Option<Vec<String>> {
+    let out = command("rustup")?.args(["target", "list", "--installed"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+}
+
+/// La orden que instala los targets que faltan para `kind` (`ios`/`android`), para las pistas de
+/// `ray bundle`: la vía `ray` funciona con cualquiera de las toolchains (la privada incluida).
+pub fn target_hint(kind: &str) -> String {
+    format!("`ray toolchain add-target {kind}`")
 }
 
 /// Descarga y ejecuta `rustup-init` del canal oficial sobre el `RUSTUP_HOME`/`CARGO_HOME`
@@ -685,6 +825,19 @@ mod tests {
         // rustc no instalado en la privada → None aunque cargo sí.
         assert!(resolve_in("rustc", None, Some(&path_var), &d).is_none());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn target_aliases_expand_and_dedupe() {
+        let t = expand_targets(["ios", "android", "aarch64-apple-ios", " "]).unwrap();
+        assert_eq!(
+            t,
+            vec!["aarch64-apple-ios", "aarch64-apple-ios-sim", "aarch64-linux-android", "x86_64-linux-android"]
+        );
+        assert_eq!(expand_targets(["x86_64-unknown-linux-gnu"]).unwrap(), vec!["x86_64-unknown-linux-gnu"]);
+        let e = expand_targets(["bogus"]).unwrap_err();
+        assert!(e.contains("unknown target 'bogus'") && e.contains("`ios`, `android`"), "{e}");
+        assert!(expand_targets(["a-b"]).is_err(), "dos piezas no son un triple");
     }
 
     #[test]

@@ -17,8 +17,13 @@ block on this page is copied from that project, and CI checks that it still is.
 |---|---|
 | Any target | raylang and Node.js with npm, for the frontend |
 | Compiling to native | a Rust toolchain (`ray toolchain install` installs a private one) |
-| iOS | a Mac with Xcode, and the targets `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` |
-| Android | the Android SDK and NDK (Android Studio installs them), Gradle 9 with JDK 17 or later, and `rustup target add aarch64-linux-android` (add `x86_64-linux-android` if your emulator is x86) |
+| iOS | a Mac with Xcode, and the iOS targets: `ray toolchain add-target ios` |
+| Android | the Android SDK and NDK (Android Studio installs them), Gradle 9 with JDK 17 or later, and the Android targets: `ray toolchain add-target android` |
+
+`ray toolchain add-target` installs the Rust standard library for those targets into the toolchain
+`ray` uses, whether your own or the private one `ray toolchain install` sets up (which is not on the
+PATH, so a manual `rustup target add` does not reach it). Installing the private one from scratch is
+one step: `ray toolchain install --targets ios,android`.
 
 None of that is needed to start: up to section 7 the app is developed and tested on the desktop,
 with just raylang and Node.js.
@@ -483,4 +488,4 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:8c15e350be5e -->
+<!-- sync: sha256:ab1671b6c82c -->

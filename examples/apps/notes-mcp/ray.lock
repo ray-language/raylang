@@ -3,9 +3,9 @@
 
 [mcp]
 url = "https://github.com/ray-language/mcp"
-ref = "v0.1.0"
-commit = "edacc4e6fba1b81ef24a220f9632f49078510ae0"
-hash = "sha256:ec5ecde49590a1527e2149e201438fd68ace58b44e124837ae096023ef64448c"
+ref = "v0.2.0"
+commit = "ca49547238ac55e665c4703ebec5ed77bf407ff2"
+hash = "sha256:51d7d59709a46e2e03152719d13e94b5fce72d82e377efca5f83b87e7bc9857e"
 
 [net]
 url = "https://github.com/ray-language/net"

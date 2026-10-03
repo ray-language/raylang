@@ -3,4 +3,4 @@ name = "notes-mcp"
 version = "0.1.0"
 
 [dependencies]
-mcp = "^0.1.0"
+mcp = "^0.2.0"

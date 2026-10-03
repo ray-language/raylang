@@ -88,13 +88,7 @@ fn main() -> int {
     if (term.is_tty(0)) {
         agent.on_approve(a, ask_user);
     }
-    match (files.add_tools(a, ".")) {
-        Result.Ok(_) => { },
-        Result.Err(e) => {
-            eprint(e);
-            return 1;
-        },
-    }
+    files.add_tools(a, ".");
     // The tools of raylang's own toolchain. `RAY_BIN` points at a specific `ray` binary.
     let ray = match (mcp.connect_stdio(env("RAY_BIN").unwrap_or("ray"), ["mcp"])) {
         Result.Ok(s) => s,

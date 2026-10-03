@@ -42,6 +42,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   errores de programación (un nombre repetido, un esquema que no es JSON) y devolvían un `Result`
   que el código acababa descartando con `let _ =`. Ahora abortan el programa al arrancar con un
   mensaje que dice qué herramienta, y las llamadas quedan limpias. Cambio de firma: 0.2.0.
+  Los ejemplos del handbook (`agent-cli`, `notes-mcp`) usan ya la 0.2.0 y el capítulo «LLM y MCP»
+  queda sin un solo `let _ =`.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

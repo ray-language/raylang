@@ -44,7 +44,7 @@ fn write_file(root: string, args: Json) -> Result<string, string> {
 }
 
 /// Gives the agent `read_file` and `write_file`, both confined to `root`.
-pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
+pub fn add_tools(a: Agent, root: string) {
     let read = fn(args: Json) -> Result<string, string> { read_file(root, args) };
     let write = fn(args: Json) -> Result<string, string> { write_file(root, args) };
     agent.tool(
@@ -54,7 +54,7 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         READ_SCHEMA,
         agent.READ,
         read
-    )?;
+    );
     agent.tool(
         a,
         "write_file",
@@ -62,5 +62,5 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         WRITE_SCHEMA,
         agent.WRITE,
         write
-    )
+    );
 }

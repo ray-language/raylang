@@ -171,7 +171,7 @@ descripción y el JSON Schema de sus argumentos), su riesgo, y la función que l
 <!-- check: project=examples/apps/agent-cli -->
 ```rust
 /// Gives the agent `read_file` and `write_file`, both confined to `root`.
-pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
+pub fn add_tools(a: Agent, root: string) {
     let read = fn(args: Json) -> Result<string, string> { read_file(root, args) };
     let write = fn(args: Json) -> Result<string, string> { write_file(root, args) };
     agent.tool(
@@ -181,7 +181,7 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         READ_SCHEMA,
         agent.READ,
         read
-    )?;
+    );
     agent.tool(
         a,
         "write_file",
@@ -189,7 +189,7 @@ pub fn add_tools(a: Agent, root: string) -> Result<int, string> {
         WRITE_SCHEMA,
         agent.WRITE,
         write
-    )
+    );
 }
 ```
 
@@ -215,6 +215,10 @@ fn write_file(root: string, args: Json) -> Result<string, string> {
 El `Ok` es el texto que lee el modelo; el `Err` le llega como llamada fallida, con su mensaje, y
 él decide qué hacer. Una herramienta que aborta tampoco tumba el turno. Las herramientas corren
 en la misma fibra que llamó a `agent.run`, así que pueden guardar estado como cualquier función.
+
+Registrar una herramienta no devuelve nada. Lo único que puede salir mal ahí es un error del
+programa, un nombre repetido o un esquema que no es JSON, y eso aborta al arrancar con un mensaje
+que dice cuál, antes de que el modelo llegue a pedir nada.
 
 Los argumentos los escribe un modelo, que puede haber leído texto de un tercero. Se comprueban
 como los de un formulario:
@@ -490,28 +494,28 @@ pub fn provider_for(dir: string) -> Provider {
     let add = fn(args: Json) -> Result<string, string> { add_note(dir, args) };
     let index = fn() -> Result<string, string> { Result.Ok(store.titles(dir).join("\n")) };
     // The two that only read are announced as read-only: a client may run them without asking.
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "search_notes",
         "Lists the titles of the notes that contain a text; an empty text lists them all",
         SEARCH_SCHEMA,
         search
     );
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "read_note",
         "Returns the body of the note with this exact title",
         TITLE_SCHEMA,
         read
     );
-    let _ = serve.tool(
+    serve.tool(
         p,
         "add_note",
         "Creates a note, or replaces the one with the same title",
         NOTE_SCHEMA,
         add
     );
-    let _ = serve.resource(
+    serve.resource(
         p,
         "notes://index",
         "Index",

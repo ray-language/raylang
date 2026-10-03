@@ -82,10 +82,11 @@ fn conversation() -> [Message] {
 
 fn main() -> int {
     let tools = [
-        message.tool("add", "Adds two integers", `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}}}`).unwrap(),
-        message.tool("now", "The time", "").unwrap()
+        message.tool("add", "Adds two integers", `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}}}`),
+        message.tool("now", "The time", "")
     ];
-    print(message.tool("bad", "", "{nope").is_err());
+    // Un esquema que no es JSON aborta el programa: es un error de programación.
+    print(try_call(fn() -> Tool { message.tool("bad", "", "{nope") }));
 
     // ---- Anthropic: el cuerpo de la petición.
     var a = llm.for_anthropic("claude-opus-5-5", "k-ant");
@@ -226,7 +227,7 @@ fn main() -> int {
 }
 "##;
 
-const DIALECTS_EXPECTED: &str = r##"true
+const DIALECTS_EXPECTED: &str = r##"Result.Err(llm: the schema of tool 'bad' is not valid JSON: expected a string key)
 https://api.anthropic.com/v1/messages
 https://api.anthropic.com/v1/models
 {"fallbacks":"default","max_tokens":1000,"messages":[{"content":[{"text":"What is 19 + 23?","type":"text"}],"role":"user"},{"content":[{"text":"Let me add.","type":"text"},{"id":"call_1","input":{"a":19,"b":23},"name":"add","type":"tool_use"},{"id":"call_2","input":{},"name":"now","type":"tool_use"}],"role":"assistant"},{"content":[{"content":"42","tool_use_id":"call_1","type":"tool_result"},{"content":"noon","tool_use_id":"call_2","type":"tool_result"}],"role":"user"},{"content":[{"text":"Thanks.","type":"text"}],"role":"user"}],"model":"claude-opus-5-5","output_config":{"effort":"medium"},"system":[{"cache_control":{"type":"ephemeral"},"text":"Be brief.","type":"text"}],"tools":[{"description":"Adds two integers","input_schema":{"properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"type":"object"},"name":"add"},{"cache_control":{"type":"ephemeral"},"description":"The time","input_schema":{"properties":{},"type":"object"},"name":"now"}]}
@@ -506,7 +507,7 @@ fn main() -> int {
         let _ = webserver.serve_on(listener, fn(req: Request) -> Response { provider(req, busy) });
     });
     let base = "http://127.0.0.1:${port}";
-    let tools = [llm.tool("add", "Adds two integers", `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}}}`).unwrap()];
+    let tools = [llm.tool("add", "Adds two integers", `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}}}`)];
 
     var a = llm.for_anthropic("claude-test", "k-ant");
     a.base_url = base + "/ant";

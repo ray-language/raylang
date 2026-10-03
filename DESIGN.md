@@ -16308,3 +16308,26 @@ conservó la corrección en su configuración. Todo correcto.
 Una limitación que la prueba hizo visible: al cancelar, la petición abandonada sigue generando
 en el servidor hasta que termina. Cerrar esa conexión desde la fibra que cancela no es posible
 hoy; queda anotado.
+
+## 326. M340 — Registrar una herramienta no devuelve `Result` (oct 2026)
+
+Un lector del handbook preguntó por qué cada herramienta de `notes-mcp` se registraba con un
+`let _ =` delante. La respuesta descubrió un error de diseño en los tres paquetes del arco de
+agentes (§322–§325): `serve.tool`, `serve.read_only_tool`, `serve.resource`, `llm.tool` y
+`agent.tool` devolvían `Result<_, string>`, y como lo único que podía fallar era un error de
+programación —un nombre repetido, un esquema escrito mal—, todo el código de ejemplo lo
+descartaba. Un `Result` que todo el mundo descarta no es un error como valor: es ruido que
+además tapa el fallo, porque un servidor con un esquema inválido arrancaba igual y fallaba en
+la primera llamada del modelo, con un mensaje peor.
+
+**La regla que sale de aquí.** «Errores como valores» es para lo que puede pasar en producción:
+la red, el disco, un modelo que declina. Lo que solo puede pasar porque el programa está mal
+escrito —y se detecta al arrancar— es un `panic` con un mensaje que diga qué y dónde: aborta
+antes de servir nada, y el programador lo ve en la primera ejecución. Es la misma frontera que
+traza `std/image` entre «input corrupto = `Err`» y «bug = crash», aplicada a la construcción.
+
+Las cinco funciones devuelven ahora unit (o el `Tool`, en `llm.tool`) y abortan con un mensaje
+prefijado por el paquete (`mcp/serve: tool 'x' is already registered`). El lenguaje permite usar
+una función como sentencia sin ligar su valor, así que las llamadas quedan `serve.tool(p, …);`.
+Cambio de firma: los tres paquetes pasan a 0.2.0. Las 0.1.0 publicadas son inmutables y quedan
+como versiones anteriores en el índice.

@@ -3,7 +3,7 @@
 # `ray registry publish`.
 [package]
 name = "mcp"
-version = "0.1.0"
+version = "0.2.0"
 license = "Apache-2.0"
 description = "Model Context Protocol for raylang: a client (tools, resources, server instructions; one session actor per server) and a server (expose your app's tools and resources), both over stdio and Streamable HTTP"
 keywords = ["mcp", "model-context-protocol", "llm", "agent", "tools", "json-rpc", "stdio", "sse", "client", "server"]

@@ -226,19 +226,19 @@ fn describe(e: Event) -> string {
 fn tooled(base: string) -> Agent {
     let a = agent.new(llm.for_endpoint(base, "fake", ""));
     a.config.system = "You are a test agent.";
-    let _ = agent.tool(a, "read_note", "Reads a note", `{"type":"object","properties":{"id":{"type":"integer"}}}`, agent.READ, fn(args: Json) -> Result<string, string> {
+    agent.tool(a, "read_note", "Reads a note", `{"type":"object","properties":{"id":{"type":"integer"}}}`, agent.READ, fn(args: Json) -> Result<string, string> {
         Result.Ok("note ${json.get_int(args, "id").unwrap_or(0)}")
     });
-    let _ = agent.tool(a, "write_note", "Writes a note", "", agent.WRITE, fn(args: Json) -> Result<string, string> {
+    agent.tool(a, "write_note", "Writes a note", "", agent.WRITE, fn(args: Json) -> Result<string, string> {
         Result.Ok("written")
     });
-    let _ = agent.tool(a, "run_command", "Runs a command", "", agent.EXEC, fn(args: Json) -> Result<string, string> {
+    agent.tool(a, "run_command", "Runs a command", "", agent.EXEC, fn(args: Json) -> Result<string, string> {
         Result.Ok("ran")
     });
-    let _ = agent.tool(a, "fails", "Always fails", "", agent.READ, fn(args: Json) -> Result<string, string> {
+    agent.tool(a, "fails", "Always fails", "", agent.READ, fn(args: Json) -> Result<string, string> {
         Result.Err("disk on fire")
     });
-    let _ = agent.tool(a, "crashes", "Always aborts", "", agent.READ, fn(args: Json) -> Result<string, string> {
+    agent.tool(a, "crashes", "Always aborts", "", agent.READ, fn(args: Json) -> Result<string, string> {
         panic("boom");
         Result.Ok("unreachable")
     });
@@ -262,9 +262,11 @@ fn main() -> int {
 
     print("== registering tools");
     let a = tooled(base);
-    print(agent.tool(a, "read_note", "again", "", agent.READ, fn(args: Json) -> Result<string, string> { Result.Ok("") }));
-    print(agent.tool(a, "odd", "bad risk", "", "maybe", fn(args: Json) -> Result<string, string> { Result.Ok("") }));
-    print(agent.tool(a, "bad", "bad schema", "{nope", agent.READ, fn(args: Json) -> Result<string, string> { Result.Ok("") }));
+    // Un nombre repetido, un riesgo desconocido o un esquema que no es JSON abortan el programa
+    // al arrancar: son errores de programación.
+    print(try_call(fn() { agent.tool(a, "read_note", "again", "", agent.READ, fn(args: Json) -> Result<string, string> { Result.Ok("") }) }));
+    print(try_call(fn() { agent.tool(a, "odd", "bad risk", "", "maybe", fn(args: Json) -> Result<string, string> { Result.Ok("") }) }));
+    print(try_call(fn() { agent.tool(a, "bad", "bad schema", "{nope", agent.READ, fn(args: Json) -> Result<string, string> { Result.Ok("") }) }));
     var names: [string] = [];
     for t in agent.offered(a) {
         names.push("${t.name}:${agent.risk_of(a, t.name)}");
@@ -375,9 +377,9 @@ fn main() -> int {
 "##;
 
 const LOOP_EXPECTED: &str = r##"== registering tools
-Result.Err(tool 'read_note' is already registered)
-Result.Err(the risk of tool 'odd' must be read, write or exec, not 'maybe')
-Result.Err(the schema of tool 'bad' is not valid JSON: expected a string key)
+Result.Err(agent: tool 'read_note' is already registered)
+Result.Err(agent: the risk of tool 'odd' must be read, write or exec, not 'maybe')
+Result.Err(llm: the schema of tool 'bad' is not valid JSON: expected a string key)
 read_note:read write_note:write run_command:exec fails:read crashes:read
 true false true false true
 == a plain turn, with events

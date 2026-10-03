@@ -2174,7 +2174,7 @@ from std/json import Json;
 
 fn main() -> int {
     var p = serve.provider("demo", "0.1.0");
-    let _ = serve.read_only_tool(
+    serve.read_only_tool(
         p,
         "shout",
         "Upper-cases a text",
@@ -2239,7 +2239,7 @@ from std/json import Json;
 
 fn main() -> int {
     let a = agent.new(llm.for_anthropic("claude-opus-5-5", env("ANTHROPIC_API_KEY").unwrap_or("")));
-    let _ = agent.tool(
+    agent.tool(
         a,
         "add",
         "Adds two integers",

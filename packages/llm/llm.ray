@@ -63,8 +63,9 @@ pub fn tool_result(call_id: string, text: string) -> Message {
     message.tool_result(call_id, text)
 }
 
-/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none).
-pub fn tool(name: string, description: string, schema: string) -> Result<Tool, string> {
+/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none). A
+/// schema that is not valid JSON aborts the program: it is a programming error.
+pub fn tool(name: string, description: string, schema: string) -> Tool {
     message.tool(name, description, schema)
 }
 

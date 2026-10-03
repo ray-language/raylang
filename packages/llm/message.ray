@@ -51,8 +51,9 @@ pub struct Reply {
     model: string,
 }
 
-/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none).
-pub fn tool(name: string, description: string, schema: string) -> Result<Tool, string> {
+/// A tool declaration. `schema` is the JSON Schema of its arguments, as text ("" = none). A
+/// schema that is not valid JSON is a programming error: the program aborts saying which tool.
+pub fn tool(name: string, description: string, schema: string) -> Tool {
     let parsed = if (schema.trim() == "") {
         var none: Map<string, Json> = Map.new();
         var shape: Map<string, Json> = Map.new();
@@ -62,12 +63,10 @@ pub fn tool(name: string, description: string, schema: string) -> Result<Tool, s
     } else {
         match (json.parse(schema)) {
             Result.Ok(j) => j,
-            Result.Err(e) => {
-                return Result.Err("the schema of tool '${name}' is not valid JSON: ${e}");
-            },
+            Result.Err(e) => panic("llm: the schema of tool '${name}' is not valid JSON: ${e}"),
         }
     };
-    Result.Ok(Tool { name: name, description: description, schema: parsed })
+    Tool { name: name, description: description, schema: parsed }
 }
 
 /// A user turn.

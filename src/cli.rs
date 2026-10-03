@@ -1474,6 +1474,7 @@ fn cmd_dev_device(args: &[String]) {
     // el teléfono se empareja una vez. D5: el esquema del enlace es el id del shell de desarrollo
     // (`<app id>.dev`, la misma regla que `ray bundle --dev`) — el QR abre exactamente esa app.
     let scheme = format!("{}.dev", dev_app_id(&root));
+    let paired_before = root.join(".ray-dev").is_file();
     let host = match crate::devlink::Host::start_with_state(Some(&root.join(".ray-dev")), &scheme) {
         Ok(h) => h,
         Err(e) => {
@@ -1481,17 +1482,24 @@ fn cmd_dev_device(args: &[String]) {
             process::exit(70);
         }
     };
-    eprintln!("[dev] device link: {}", host.url);
-    if std::io::IsTerminal::is_terminal(&std::io::stderr())
-        && let Some(qr) = crate::devlink::qr_text(&host.url)
-    {
-        eprintln!("[dev] scan it with the phone's camera (the development shell opens):\n{qr}");
+    // En una terminal: la pancarta con el logo, los tres pasos y el QR (M343). En una tubería (los
+    // tests leen `device link:` de ahí) la forma plana de siempre.
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    match crate::devlink::qr_text(&host.url).filter(|_| tty) {
+        Some(qr) => {
+            let color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+            let app = dev_app_name(&root);
+            eprint!("{}", dev_device_banner(&app, &host.url, &host.generic_url(), &root.display().to_string(), paired_before, &qr, color));
+        }
+        None => {
+            eprintln!("[dev] device link: {}", host.url);
+            eprintln!("[dev] on this machine: ray dev-client {} <dir>", host.generic_url());
+            eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml, .ray-deps + embedded assets); Ctrl-C to exit", root.display());
+        }
     }
-    eprintln!("[dev] on this machine: ray dev-client {} <dir>", host.generic_url());
-    eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml, .ray-deps + embedded assets); Ctrl-C to exit", root.display());
     let publish = |host: &crate::devlink::Host, what: &str| {
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
-            eprintln!("[dev] {what}: does not compile — devices keep the previous program:");
+            eprintln!("[dev] {}", crate::devlink::paint("33", &format!("{what}: does not compile — devices keep the previous program:")));
             eprint!("{diag}");
             return;
         }
@@ -1531,6 +1539,64 @@ fn cmd_dev_device(args: &[String]) {
 
 /// M330 D5: el id de la app del proyecto en `root` — `[app] id` del ray.toml, o el derivado del
 /// nombre de la app/paquete con la misma regla que `ray bundle` (`org.raylang.<slug>`).
+/// El nombre con el que el usuario conoce la app: `[app] name` del manifiesto, si no el nombre
+/// del proyecto, si no el de la carpeta.
+fn dev_app_name(root: &Path) -> String {
+    let manifest = Manifest::load(root).ok().flatten();
+    manifest
+        .as_ref()
+        .and_then(|m| m.app_name.clone().or_else(|| Some(m.name.clone())))
+        .unwrap_or_else(|| root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "app".to_string()))
+}
+
+/// M343: la pancarta de `ray dev --device` en una terminal: la manta de raylang, el nombre de la
+/// app, los tres pasos (instalar una vez, emparejar una vez por proyecto con el QR, guardar) y el
+/// pie con el enlace de respaldo. `color` = códigos ANSI (azul para el logo y los números, atenuado
+/// para las aclaraciones); sin él, el mismo texto limpio. Pura, para su test.
+pub(crate) fn dev_device_banner(app: &str, url: &str, generic_url: &str, root: &str, paired_before: bool, qr: &str, color: bool) -> String {
+    let (b, bb, w, d, r) = if color { ("\x1b[34m", "\x1b[1;34m", "\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
+    let logo = [
+        "          \\  /",
+        "     _.--'`()`'--._",
+        "   <'              '>",
+        "     `-.._      _..-'",
+        "          `-..-'",
+        "            |",
+    ];
+    let mut out = String::new();
+    out.push('\n');
+    for (i, line) in logo.iter().enumerate() {
+        let tail = match i {
+            1 => format!("        {bb}raylang dev{r} {d}·{r} {w}{app}{r}"),
+            2 => format!("      {d}live reload on your phone{r}"),
+            _ => String::new(),
+        };
+        out.push_str(&format!("{b}{line}{r}{tail}\n"));
+    }
+    out.push('\n');
+    out.push_str(&format!("  {bb}1{r}  {w}Install the development app{r}  {d}(once){r}\n"));
+    out.push_str(&format!("     ray bundle --ios --dev          {d}# or: ray bundle --android --dev{r}\n\n"));
+    if paired_before {
+        out.push_str(&format!("  {bb}2{r}  {w}Already paired{r}  {d}(the link is saved in .ray-dev){r}\n"));
+        out.push_str(&format!("     Just open {app}-dev on the phone. To pair another phone, scan this code with its camera:\n\n"));
+    } else {
+        out.push_str(&format!("  {bb}2{r}  {w}Pair the phone{r}  {d}(once per project){r}\n"));
+        out.push_str("     Open the camera, point it at the code and tap the link.\n");
+        out.push_str(&format!("     {d}{app}-dev opens already paired.{r}\n\n"));
+    }
+    for line in qr.lines() {
+        out.push_str(&format!("     {line}\n"));
+    }
+    out.push('\n');
+    out.push_str(&format!("     {d}Can't scan? Open {app}-dev and paste this link:{r}\n"));
+    out.push_str(&format!("     {url}\n\n"));
+    out.push_str(&format!("  {bb}3{r}  {w}Save a file{r}  {d}— the phone reloads in about a second{r}\n"));
+    out.push_str(&format!("     {d}Watching{r} {root} {d}(.ray, .ray.html, ray.toml, .ray-deps, embedded assets) · Ctrl-C to stop{r}\n\n"));
+    out.push_str(&format!("  {d}Desktop stand-in: ray dev-client {generic_url} <dir>{r}\n"));
+    out.push_str(&format!("  {d}{}{r}\n", "─".repeat(76)));
+    out
+}
+
 fn dev_app_id(root: &Path) -> String {
     let manifest = Manifest::load(root).ok().flatten();
     if let Some(id) = manifest.as_ref().and_then(|m| m.app_id.clone()) {
@@ -5862,6 +5928,22 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_device_banner_orders_the_three_steps_and_degrades_without_color() {
+        let qr = "█▀█\n▀▀▀";
+        let plain = super::dev_device_banner("Notes", "org.raylang.notes.dev://10.0.0.2:5000/tok", "ray-dev://10.0.0.2:5000/tok", "/p", false, qr, false);
+        assert!(!plain.contains("\x1b["), "sin ANSI:\n{plain}");
+        let (i1, i2, i3) = (plain.find("1  Install").unwrap(), plain.find("2  Pair the phone").unwrap(), plain.find("3  Save a file").unwrap());
+        assert!(i1 < i2 && i2 < i3, "{plain}");
+        let qr_at = plain.find("█▀█").unwrap();
+        assert!(i2 < qr_at && qr_at < plain.find("paste this link").unwrap(), "el QR va dentro del paso 2:\n{plain}");
+        assert!(plain.contains("     org.raylang.notes.dev://10.0.0.2:5000/tok\n"), "{plain}");
+        assert!(plain.contains("Notes-dev opens already paired"), "{plain}");
+        assert!(plain.contains("ray dev-client ray-dev://10.0.0.2:5000/tok <dir>"), "{plain}");
+        let paired = super::dev_device_banner("Notes", "u://x", "ray-dev://x", "/p", true, qr, true);
+        assert!(paired.contains("Already paired") && paired.contains("\x1b[1;34mraylang dev\x1b[0m"), "{paired}");
+    }
+
     /// M330 D3b: el cdylib de Android debe definir ÉL MISMO los símbolos JNI que el shell resuelve
     /// por nombre (M156); el staticlib de iOS solo `ray_start` (los `ray_ui_*` llegan del rlib).
     #[test]

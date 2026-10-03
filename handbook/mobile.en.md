@@ -390,19 +390,65 @@ Rebuilding and installing the app for every change takes minutes. `ray dev --dev
 to seconds: you install a **development app** once and, from then on, every time you save a `.ray`
 file the new program is sent to the phone and restarts there.
 
+| Step | How often |
+|---|---|
+| `ray bundle --ios --dev` (or `--android --dev`) and install the resulting app | once per phone |
+| `ray dev --device` and scan the QR code | once per project |
+| Save a file | every change |
+
+### Install the development app
+
 ```sh
-ray bundle --ios --dev        # or --android --dev: the development app, once
-ray dev --device              # prints a QR code: scan it with the phone's camera
+ray bundle --ios --dev        # or --android --dev
 ```
 
-The development app is called `Notes-dev` and lives next to the real one. The code runs **on the
-phone**, on its VM: files, network and permissions are the device's, and what the program prints
-reaches your terminal. A change that does not compile is not sent: the diagnostic shows up in the
-terminal and the phone keeps the previous version.
+The app is called `Notes-dev` and lives next to the real one. It does not carry your program: it
+carries the raylang VM and a pairing screen. Install it like the normal app (Xcode or `adb
+install`), and from then on you never touch it again, however much the code changes.
 
-The link to the phone is kept in `.ray-dev`, inside the project, so you pair only once; that file
-stays out of version control. On the desktop, `ray dev-client <url> <folder>` plays the phone's
-part, useful for testing the flow in CI.
+### Pair the phone with the QR code
+
+```sh
+ray dev --device
+```
+
+The terminal prints the three steps and a **QR code**. Open the phone's camera, point it at the
+code and tap the link that appears: `Notes-dev` opens already paired and receives the program. You
+do not open the app first or type anything; the QR encodes your Mac's address on the local network,
+the port and a token.
+
+If you open `Notes-dev` by hand without scanning, it shows a screen with the same three steps and
+asks you to use the camera. Below, folded, there is a field to **paste the link** the terminal
+prints under the QR, for when the camera cannot read it (a low-contrast terminal, an emulator
+without a camera).
+
+The pairing is remembered on both sides: the app keeps the link, and the project keeps the port and
+the token in `.ray-dev` (a hidden file that `ray new` already leaves out of git). Next time, run
+`ray dev --device` and open `Notes-dev`; the terminal says "Already paired". The QR is still
+printed, to pair a second phone.
+
+### Save and see the change
+
+The code runs **on the phone**, on its VM: files, network and permissions are the device's, and what
+the program prints reaches your terminal. Every file you save is sent and the program restarts in
+about a second. A change that does not compile is not sent: the diagnostic shows up in the terminal,
+in amber, and the phone keeps the previous version.
+
+On the desktop, `ray dev-client <url> <folder>` plays the phone's part, useful for testing the flow
+in CI; the terminal prints the exact command at the foot of the banner.
+
+### If something does not connect
+
+- **The phone opens nothing when scanning.** Phone and Mac must be on the same Wi-Fi network, and
+  the link is for *this* project's development app: `Notes-dev`, not another one.
+- **"The computer stopped answering".** The app kept a link from an earlier session and `ray dev
+  --device` is no longer running, or runs on another port (if the one in `.ray-dev` was busy, the
+  terminal warns and asks you to pair again). Scan the new QR.
+- **Version warning.** If the development app comes from a different raylang version than your
+  Mac's, the terminal says so; the phone's toolchain compiles the program. Reinstall the app after
+  updating raylang.
+
+### The interface with hot reload
 
 To iterate on the **interface** with hot reload too, the phone can load the Vite server on your
 Mac:
@@ -488,4 +534,4 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:ab1671b6c82c -->
+<!-- sync: sha256:f78382ac02b9 -->

@@ -391,19 +391,65 @@ Recompilar e instalar la app por cada cambio es un ciclo de minutos. `ray dev --
 a segundos: instalas una vez una **app de desarrollo** y, desde entonces, cada vez que guardas un
 `.ray` el programa nuevo se envía al teléfono y se reinicia allí.
 
+| Paso | Cuántas veces |
+|---|---|
+| `ray bundle --ios --dev` (o `--android --dev`) e instalar la app resultante | una vez por teléfono |
+| `ray dev --device` y escanear el QR | una vez por proyecto |
+| Guardar un archivo | cada cambio |
+
+### Instalar la app de desarrollo
+
 ```sh
-ray bundle --ios --dev        # o --android --dev: la app de desarrollo, una sola vez
-ray dev --device              # imprime un QR: escanéalo con la cámara del teléfono
+ray bundle --ios --dev        # o --android --dev
 ```
 
-La app de desarrollo se llama `Notes-dev` y convive con la app real. El código corre **en el
-teléfono**, en su VM: archivos, red y permisos son los del dispositivo, y lo que imprime el
-programa llega a tu terminal. Un cambio que no compila no se envía: el diagnóstico sale en la
-terminal y el teléfono sigue con la versión anterior.
+La app se llama `Notes-dev` y convive con la app real. No lleva tu programa dentro: lleva la VM de
+raylang y una pantalla de emparejamiento. Se instala igual que la app normal (Xcode o `adb
+install`), y de ahí en adelante no vuelves a tocarla aunque cambies todo el código.
 
-El enlace con el teléfono se guarda en `.ray-dev`, dentro del proyecto, para emparejar una sola
-vez; ese archivo no va al control de versiones. En el escritorio, `ray dev-client <url> <carpeta>`
-hace el papel del teléfono, útil para probar el flujo en CI.
+### Emparejar el teléfono con el QR
+
+```sh
+ray dev --device
+```
+
+La terminal imprime los tres pasos y un **código QR**. Abre la cámara del teléfono, apúntala al
+código y toca el enlace que aparece: `Notes-dev` se abre ya emparejada y recibe el programa. No
+hace falta abrir la app antes ni escribir nada; el QR codifica la dirección de tu Mac en la red
+local, el puerto y un token.
+
+Si abres `Notes-dev` a mano sin haber escaneado nada, muestra una pantalla con los mismos tres
+pasos e invita a usar la cámara. Debajo, plegado, hay un campo para **pegar el enlace** que la
+terminal imprime bajo el QR, por si la cámara no consigue leerlo (una terminal con poco contraste,
+un emulador sin cámara).
+
+El emparejamiento se recuerda en los dos lados: la app guarda el enlace, y el proyecto guarda el
+puerto y el token en `.ray-dev` (un archivo oculto que `ray new` ya deja fuera de git). La próxima
+vez basta con lanzar `ray dev --device` y abrir `Notes-dev`; la terminal lo indica con «Already
+paired». El QR se imprime igual, para emparejar un segundo teléfono.
+
+### Guardar y ver el cambio
+
+El código corre **en el teléfono**, en su VM: archivos, red y permisos son los del dispositivo, y lo
+que imprime el programa llega a tu terminal. Cada archivo que guardas se envía y el programa se
+reinicia en alrededor de un segundo. Un cambio que no compila no se envía: el diagnóstico sale en la
+terminal, en ámbar, y el teléfono sigue con la versión anterior.
+
+En el escritorio, `ray dev-client <url> <carpeta>` hace el papel del teléfono, útil para probar el
+flujo en CI; la terminal imprime la orden exacta al pie de la pancarta.
+
+### Si algo no conecta
+
+- **El teléfono no abre nada al escanear.** Teléfono y Mac tienen que estar en la misma red
+  Wi-Fi, y el enlace es para la app de desarrollo de *este* proyecto: `Notes-dev`, no otra.
+- **«The computer stopped answering».** La app guardó un enlace de una sesión anterior y `ray dev
+  --device` ya no corre, o corre en otro puerto (si el de `.ray-dev` estaba ocupado, la terminal
+  avisa y pide emparejar de nuevo). Escanea el QR nuevo.
+- **Aviso de versiones.** Si la app de desarrollo es de una versión de raylang distinta a la de tu
+  Mac, la terminal lo dice; el programa lo compila la toolchain del teléfono. Reinstala la app
+  tras actualizar raylang.
+
+### La interfaz con recarga en caliente
 
 Para iterar también la **interfaz** con recarga en caliente, el teléfono puede cargar el servidor
 de Vite de tu Mac:

@@ -597,12 +597,12 @@ fn serve_device(mut stream: TcpStream, token: &str, own_scheme: &str, devices: A
         return;
     }
     if !used_scheme.is_empty() && used_scheme != GENERIC_SCHEME && used_scheme != own_scheme {
-        eprintln!("[dev] warning: {name} linked with the scheme '{used_scheme}' but this project's development shell is '{own_scheme}' — is it the right app?");
+        eprintln!("[dev] {}", paint("33", &format!("warning: {name} linked with the scheme '{used_scheme}' but this project's development shell is '{own_scheme}' — is it the right app?")));
     }
     let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-    eprintln!("[dev] device connected: {name} ({peer}, raylang {version})");
+    eprintln!("[dev] {}", paint("32", &format!("device connected: {name} ({peer}, raylang {version})")));
     if version != env!("CARGO_PKG_VERSION") {
-        eprintln!("[dev] warning: the device runs raylang {version} and this host {}; the program is compiled by the device's toolchain", env!("CARGO_PKG_VERSION"));
+        eprintln!("[dev] {}", paint("33", &format!("warning: the device runs raylang {version} and this host {}; the program is compiled by the device's toolchain", env!("CARGO_PKG_VERSION"))));
     }
     // D4: lo que el dispositivo ya tiene, para mandarle solo el delta.
     let have = match read_frame(&mut stream) {
@@ -971,35 +971,124 @@ fn shell_loop(explicit: Option<String>, dir: &Path, name: &str) {
     }
 }
 
+/// M343: `text` con el color ANSI `code` (verde 32 para conexiones, ámbar 33 para avisos) solo
+/// cuando stderr es una terminal y no hay `NO_COLOR`; en una tubería, el texto tal cual.
+pub(crate) fn paint(code: &str, text: &str) -> String {
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    if tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()) {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+/// El nombre con el que el usuario ve la app de desarrollo, sin el sufijo `-dev` que `ray bundle
+/// --dev` añade. La librería es la misma para todos los proyectos (un asset por release), así que
+/// el nombre lo pone el shell en `RAY_DEV_APP_NAME` (la etiqueta de la app en Android,
+/// `CFBundleDisplayName`/`CFBundleName` en iOS); como respaldo en iOS, el nombre del ejecutable
+/// del bundle (`Notes-dev.app/Notes-dev`). `None` = no se sabe.
+fn shell_app_name() -> Option<String> {
+    let raw = std::env::var("RAY_DEV_APP_NAME").ok().filter(|s| !s.trim().is_empty()).or_else(|| {
+        if !cfg!(target_os = "ios") {
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        Some(exe.file_stem()?.to_string_lossy().into_owned())
+    })?;
+    Some(strip_dev_suffix(raw.trim()))
+}
+
+/// `Notes-dev` → `Notes` (también `Notes Dev`/`Notes dev`, por si el shell capitaliza).
+pub fn strip_dev_suffix(label: &str) -> String {
+    for suffix in ["-dev", " Dev", " dev"] {
+        if let Some(base) = label.strip_suffix(suffix)
+            && !base.is_empty()
+        {
+            return base.to_string();
+        }
+    }
+    label.to_string()
+}
+
 /// La página de emparejamiento, servida por `ray://app` con el mismo puente que usan los
 /// programas: la sirve la librería de desarrollo, así que el shell no necesita nada nuevo.
-const PAIR_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-8">
+const PAIR_HTML: &str = r##"<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>raylang dev</title>
 <style>
-body{margin:0;padding:max(24px,env(safe-area-inset-top)) 24px 24px;font:17px -apple-system,system-ui,sans-serif;background:#111;color:#eee}
-h1{font-size:22px;margin:24px 0 8px}p{color:#aaa;margin:0 0 20px;line-height:1.4}
-input{width:100%;box-sizing:border-box;font:16px ui-monospace,monospace;padding:12px;border-radius:10px;border:1px solid #444;background:#1c1c1c;color:#fff}
-button{margin-top:14px;width:100%;padding:14px;font-size:17px;border:0;border-radius:10px;background:#3b82f6;color:#fff}
-#msg{margin-top:16px;color:#f87171;min-height:1.4em}
+:root{--bg:#0b1f33;--soft:#0e2947;--line:#1e3a57;--ink:#eaf4fb;--muted:#8fb0cc;--sky:#4ba3f5;--aqua:#34d2c6;--amber:#f2c66d;--green:#5ad1a0;--red:#f08080}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;padding:max(28px,env(safe-area-inset-top)) 24px max(28px,env(safe-area-inset-bottom));font:16px/1.45 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;gap:20px}
+.brand{display:flex;align-items:center;gap:12px}.brand svg{width:44px;height:40px;flex:none}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--sky);font-weight:600}
+h1{margin:2px 0 0;font-size:24px;line-height:1.1}
+.pill{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);background:var(--soft);border:1px solid var(--line);padding:6px 12px;border-radius:999px;width:fit-content}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(242,198,109,.18)}
+.pill.ok i{background:var(--green);box-shadow:0 0 0 4px rgba(90,209,160,.18)}.pill.err i{background:var(--red);box-shadow:0 0 0 4px rgba(240,128,128,.18)}
+.steps{display:grid;gap:14px}.step{display:grid;grid-template-columns:30px 1fr;gap:12px;align-items:start}
+.n{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font:600 14px ui-monospace,monospace;color:var(--bg);background:var(--sky)}
+.done .n{background:var(--line);color:var(--muted)}
+h2{margin:4px 0 2px;font-size:16px}.step p{margin:0;color:var(--muted);font-size:14px}
+code{font:13px ui-monospace,monospace;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+.focus{background:linear-gradient(160deg,rgba(75,163,245,.16),rgba(52,210,198,.08));border:1px solid rgba(75,163,245,.35);border-radius:18px;padding:16px;display:grid;gap:8px}
+.cam{display:flex;gap:12px;align-items:center}.cam svg{width:34px;height:34px;flex:none}.focus h2{margin:0;font-size:17px}.focus p{margin:0;color:var(--muted);font-size:14px}
+details{border-top:1px solid var(--line);padding-top:14px}summary{cursor:pointer;color:var(--muted);font-size:14px;list-style:none;display:flex;justify-content:space-between}summary::-webkit-details-marker{display:none}summary::after{content:"\25BE"}
+.manual{display:grid;gap:10px;margin-top:12px}
+input{width:100%;font:15px ui-monospace,monospace;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--soft);color:var(--ink)}
+button{padding:13px;font:600 16px -apple-system,system-ui,sans-serif;border:0;border-radius:12px;background:var(--sky);color:var(--bg)}
+#msg{color:var(--red);font-size:14px;min-height:1.4em}
+.foot{margin-top:auto;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:12px}
 </style></head><body>
-<h1>raylang dev — /*NAME*/</h1>
-<p>Run <code>ray dev --device</code> on your Mac and scan its QR with the camera, or enter the link it prints.</p>
-<input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autofocus autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
-<button id="go">Link</button>
+<div class="brand">
+<svg viewBox="0 20 200 184" aria-hidden="true"><path d="M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z" fill="#4ba3f5"/><path d="M93 55 C90 45 88 38 87 30" stroke="#4ba3f5" stroke-width="7" stroke-linecap="round" fill="none"/><path d="M107 55 C110 45 112 38 113 30" stroke="#4ba3f5" stroke-width="7" stroke-linecap="round" fill="none"/><path d="M100 160 C100 175 100 185 99 196" stroke="#4ba3f5" stroke-width="6" stroke-linecap="round" fill="none"/></svg>
+<div><div class="eyebrow">raylang &middot; development app</div><h1>/*NAME*/</h1></div>
+</div>
+<span class="pill /*STATE*/" id="state"><i></i><span id="statetext">/*STATUS*/</span></span>
+<div class="steps">
+<div class="step done"><span class="n">1</span><div><h2>Install this app</h2><p>Done. You install it once; the program you are writing arrives over Wi-Fi.</p></div></div>
+<div class="step"><span class="n">2</span><div><h2>Pair with your computer</h2><p>In the project folder run <code>ray dev --device</code>. It prints a QR code.</p></div></div>
+</div>
+<div class="focus">
+<div class="cam"><svg viewBox="0 0 24 24" fill="none" stroke="#4ba3f5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="4" height="4"/><rect x="13" y="7" width="4" height="4"/><rect x="7" y="13" width="4" height="4"/><path d="M13 13h4v4"/></svg><h2>Scan the QR with your camera</h2></div>
+<p>Point the phone's camera at the terminal and tap the link that appears. This app opens already paired, and from then on every file you save reloads here. The pairing is remembered: next time just open the app.</p>
+</div>
+<div class="steps"><div class="step"><span class="n">3</span><div><h2>Save a file</h2><p>The phone restarts the program in about a second. What it prints shows up in your terminal.</p></div></div></div>
+<details /*OPEN*/><summary>Can't scan? Paste the link instead</summary>
+<div class="manual">
+<input id="u" placeholder="ray-dev://192.168.1.20:52731/token" autocapitalize="none" autocorrect="off" spellcheck="false" value="/*PREFILL*/">
+<button id="go">Pair</button>
 <div id="msg">/*MSG*/</div>
+</div></details>
+<div class="foot"><span>raylang /*VERSION*/</span><span>paired once &middot; remembered by this app</span></div>
 <script>
-const u=document.getElementById('u');
-document.getElementById('go').onclick=()=>{const v=u.value.trim();if(!v.includes('://')){document.getElementById('msg').textContent='Paste the link that ray dev --device prints (or scan its QR with the camera).';return;}document.getElementById('msg').textContent='Linking…';window.ray.send(v);};
+const u=document.getElementById('u'),msg=document.getElementById('msg'),st=document.getElementById('state'),stt=document.getElementById('statetext');
+document.getElementById('go').onclick=()=>{const v=u.value.trim();if(!v.includes('://')){msg.textContent='Paste the link that ray dev --device prints under the QR code.';return;}msg.textContent='';st.className='pill ok';stt.textContent='Pairing…';window.ray.send(v);};
 u.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('go').click();});
-</script></body></html>"#;
+</script></body></html>"##;
 
 /// Muestra la página de emparejamiento y espera la URL (un `window.ray.send` que empiece por
 /// `ray-dev://`). Deja la UI limpia al volver (la ventana del programa la abre el programa).
 /// Pública para su test (headless + `RAY_UI_MSG`); el shell entra por [`start_from_shell`].
+/// El HTML de la página para `name` (el nombre de la app). Con un enlace anterior que dejó de
+/// responder, abre directamente el campo del enlace (prefijado) con el indicador en rojo; sin
+/// enlace, el indicador en ámbar y el campo plegado: el camino principal es la cámara. Pura.
+pub fn pair_html(prefill: Option<&str>, name: &str) -> String {
+    let (state, status, msg, open) = match prefill {
+        Some(_) => ("err", "The computer stopped answering", "Is `ray dev --device` still running there? Scan its new QR, or check the link.", "open"),
+        None => ("", "Not paired yet", "", ""),
+    };
+    PAIR_HTML
+        .replace("/*NAME*/", name)
+        .replace("/*STATE*/", state)
+        .replace("/*STATUS*/", status)
+        .replace("/*OPEN*/", open)
+        .replace("/*PREFILL*/", prefill.unwrap_or(""))
+        .replace("/*MSG*/", msg)
+        .replace("/*VERSION*/", env!("CARGO_PKG_VERSION"))
+}
+
 pub fn pair(prefill: Option<&str>, name: &str) -> String {
-    let msg = if prefill.is_some() { "The host stopped answering: is `ray dev --device` running? Check the link." } else { "" };
-    let html = PAIR_HTML.replace("/*NAME*/", name).replace("/*PREFILL*/", prefill.unwrap_or("")).replace("/*MSG*/", msg);
+    let html = pair_html(prefill, &shell_app_name().unwrap_or_else(|| name.to_string()));
     #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
     {
         use ray_runtime::ui;
@@ -1013,7 +1102,7 @@ pub fn pair(prefill: Option<&str>, name: &str) -> String {
             center: true,
             autosave: String::new(),
             titlebar_color: String::new(),
-            background: "#111111".to_string(),
+            background: "#0b1f33".to_string(),
             minimizable: true,
             kind: "document".to_string(),
             always_on_top: false,
@@ -1062,6 +1151,25 @@ mod tests {
         assert!(parse_url("ray-dev://host:1/").is_err());
         assert!(parse_url("no scheme").is_err());
         assert!(parse_url("bad scheme://h:1/t").is_err());
+    }
+
+    #[test]
+    fn the_dev_suffix_is_stripped_from_the_app_label() {
+        assert_eq!(strip_dev_suffix("Notes-dev"), "Notes");
+        assert_eq!(strip_dev_suffix("Notes Dev"), "Notes");
+        assert_eq!(strip_dev_suffix("Notes"), "Notes");
+        assert_eq!(strip_dev_suffix("-dev"), "-dev");
+    }
+
+    #[test]
+    fn the_pairing_page_leads_with_the_camera_and_opens_the_link_field_on_failure() {
+        let fresh = pair_html(None, "Notes");
+        assert!(fresh.contains("<h1>Notes</h1>") && fresh.contains("Scan the QR with your camera"), "{fresh}");
+        assert!(fresh.contains("Not paired yet") && fresh.contains("<details >"), "campo plegado:\n{fresh}");
+        assert!(!fresh.contains("/*"), "sin marcadores sin rellenar");
+        let again = pair_html(Some("ray-dev://10.0.0.2:5000/tok"), "Notes");
+        assert!(again.contains("<details open>") && again.contains("value=\"ray-dev://10.0.0.2:5000/tok\""), "{again}");
+        assert!(again.contains("pill err") && again.contains("The computer stopped answering"), "{again}");
     }
 
     #[test]

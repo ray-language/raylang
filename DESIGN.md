@@ -16401,3 +16401,43 @@ puede inferirlos. El `let` ordinario ya emitía la anotación (`let x: T = …`)
 colecciones vacías; la celda no. Ahora la lleva: `let m: Rc<RefCell<T>> = …`.
 
 Un test por hallazgo en `tests/findings_batch_cli.rs`, los tres motores con la misma salida.
+
+## 329. M343 — Emparejar el teléfono: la pantalla de la app y la pancarta de la terminal (oct 2026)
+
+Releyendo el capítulo móvil del handbook, el usuario señaló tres cosas de `ray dev --device`: la
+sección 10 no contaba cómo se conecta el teléfono con el QR ni qué es de una sola vez; la pantalla
+de emparejamiento de la app de desarrollo era un fondo gris con un campo y un botón azul genérico;
+y la terminal soltaba el QR entre líneas `[dev]` sin jerarquía. Los tres se arreglan juntos, con la
+misma estructura de **tres pasos** en los tres sitios, para que el usuario lea lo mismo mire donde
+mire: 1 instalar la app de desarrollo (una vez por teléfono), 2 emparejar con el QR (una vez por
+proyecto), 3 guardar (cada cambio).
+
+**La pantalla del teléfono** (`PAIR_HTML`, `devlink.rs`) solo aparece si se abre la app a mano:
+con la cámara, el sistema abre la app ya enlazada por su esquema URL (D5) y la pantalla no llega a
+verse. Por eso tiene un único mensaje principal, el bloque destacado «Scan the QR with your camera»,
+y el campo para pegar el enlace queda plegado en un `<details>`. Se despliega solo cuando el enlace
+guardado dejó de responder, con el enlace anterior prefijado y el indicador en rojo («The computer
+stopped answering»). Paleta del sitio (marino `#0b1f33`, cielo `#4ba3f5`, aqua), la manta de
+raylang en SVG en línea, tipografía del sistema, sin dependencias: la misma página la sirve la
+librería de desarrollo por `ray://app`. El nombre de la app lo pone `shell_app_name`: la librería es
+un asset por release, igual para todos los proyectos, así que lo toma de `RAY_DEV_APP_NAME` o, en
+iOS, del nombre del ejecutable del bundle sin `-dev`; en Android, donde el proceso es `app_process`,
+caía al nombre del dispositivo. Por eso los dos shells exportan `RAY_DEV_APP_NAME` al arrancar (la
+etiqueta de la app en Java, `CFBundleDisplayName`/`CFBundleName` en Objective-C) y la librería le
+quita el sufijo `-dev`; el ejecutable queda como respaldo en iOS para apps de desarrollo
+instaladas antes de este cambio. `pair_html` es pura y se testea.
+
+**La terminal** (`dev_device_banner`, `cli.rs`) imprime, solo cuando stderr es una terminal, la
+manta en ASCII (seis líneas, azul) con «raylang dev · Notes», los tres pasos con el QR y el enlace
+de respaldo dentro del paso 2, la carpeta vigilada en el 3, y un pie atenuado con la orden de
+`ray dev-client` y un separador; a partir de ahí siguen las líneas `[dev]` de siempre, que son las
+que se leen durante la sesión, con la conexión de un dispositivo en verde y los avisos (versiones,
+esquema ajeno, «does not compile») en ámbar (`paint`, que respeta `NO_COLOR`). Con `.ray-dev` ya
+presente el paso 2 dice «Already paired: just open Notes-dev» y el QR se imprime igual, para un
+segundo teléfono. En una tubería no cambia nada: la forma plana `[dev] device link: …`, de la que
+los tests de `devlink_cli` leen la URL. Se descartó la variante sin logo: seis líneas una sola vez
+al arrancar, a cambio de que la terminal diga de un vistazo qué herramienta es.
+
+**El handbook** reescribe la sección 10 con la tabla «cuántas veces», el emparejamiento paso a
+paso (terminal, cámara, app abierta a mano, enlace pegado), qué recuerda cada lado y dónde, y los
+tres fallos típicos (otra red, «stopped answering», aviso de versiones).

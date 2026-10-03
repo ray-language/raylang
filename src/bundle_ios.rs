@@ -248,6 +248,10 @@ static void ray_eval(const char *js) {
     }
     static dispatch_once_t rayOnce;
     dispatch_once(&rayOnce, ^{
+      // El nombre visible de la app, para la pantalla de emparejamiento de la librería de desarrollo.
+      NSString *rayLabel = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"]
+          ?: [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
+      if (rayLabel != nil) { setenv("RAY_DEV_APP_NAME", [rayLabel UTF8String], 1); }
       ray_ui_set_handlers(ray_open, ray_eval);
       ray_ui_shell_capabilities(1);
       ray_start();
@@ -663,6 +667,7 @@ mod tests {
         // Una tarea parada por WebKit no recibe más datos ni didFinish.
         assert!(SCENE_DELEGATE_M.contains("stopURLSchemeTask:"));
         assert!(SCENE_DELEGATE_M.contains("ray_ui_shell_capabilities(1);\n      ray_start();"), "capabilities before ray_start");
+        assert!(SCENE_DELEGATE_M.contains("setenv(\"RAY_DEV_APP_NAME\""), "M343: the app label reaches the dev library");
         assert!(SCENE_DELEGATE_M.contains("if (![self->_stopped containsObject:key]) {\n            [task didFinish];"));
     }
 

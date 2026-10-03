@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.30 — 2026-10-03
 
 - **`ray dev --device` explica cómo emparejar el teléfono.** La terminal arranca con el logo de
   raylang, el nombre de la app y tres pasos (instalar la app de desarrollo una vez, emparejar con

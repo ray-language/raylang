@@ -609,8 +609,9 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray registry verify [dir]` | audits the signatures of an index against its owners (the index repo's CI) |
 | `ray registry yank <name>@<ver> [--undo]` | withdraws/restores a published version |
 | `ray upgrade [tag] [--check]` | updates `ray`/`raylang` to the latest release (or the tag); `--check` only reports (0 = up to date, 1 = a newer one exists) |
-| `ray toolchain install [--rust <channel>] [--force] [--no-vendor]` | installs a PRIVATE Rust toolchain for `build --native` under `~/.ray/toolchain` (rustup `minimal` profile, without touching the user's Rust or PATH) and the release's `ray-runtime` vendor (first build offline). With `cargo` already on the PATH it installs nothing (unless `--force`) |
-| `ray toolchain status` | which `cargo`/`rustc` `build --native` would use and from where (`RAY_CARGO`/`RAY_RUSTC` → PATH → private), their version, the system linker and the installed vendor; exit 1 if any is missing |
+| `ray toolchain install [--rust <channel>] [--targets ios,android,<triple>…] [--force] [--no-vendor]` | installs a PRIVATE Rust toolchain for `build --native` under `~/.ray/toolchain` (rustup `minimal` profile, without touching the user's Rust or PATH) and the release's `ray-runtime` vendor (first build offline). With `cargo` already on the PATH it installs nothing (unless `--force`). `--targets` also adds the std of those targets |
+| `ray toolchain add-target <ios\|android\|triple>…` | installs the Rust standard library of those targets into the toolchain `build --native` uses (`ios` = `aarch64-apple-ios` + `aarch64-apple-ios-sim`; `android` = `aarch64-linux-android` + `x86_64-linux-android`), the private one included, which is not on the PATH. What `bundle --ios`/`--android` need. Exit 69 without `rustup` |
+| `ray toolchain status` | which `cargo`/`rustc` `build --native` would use and from where (`RAY_CARGO`/`RAY_RUSTC` → PATH → private), their version, the system linker, the installed extra targets and the vendor; exit 1 if any is missing |
 | `ray version` | version — `X.Y.Z` on a release; `X.Y.Z+dev.<sha>` when built from the repo HEAD (HEAD and release accept different code; `[package] raylang = "X.Y.Z"` in `ray.toml` requires a toolchain ≥ that version and warns when the toolchain is a development build) |
 | `ray help` | the help: every subcommand with its flags (also without arguments). **`ray <subcommand> --help`** (or `-h`, as the first argument) prints that subcommand's usage (before, `ray dev --help` started dev mode and `ray new --help` created a project called `--help`) |
 
@@ -675,4 +676,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:951b0cc5de34 -->
+<!-- sync: sha256:b9396df7ad68 -->

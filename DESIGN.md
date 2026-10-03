@@ -16331,3 +16331,30 @@ prefijado por el paquete (`mcp/serve: tool 'x' is already registered`). El lengu
 una función como sentencia sin ligar su valor, así que las llamadas quedan `serve.tool(p, …);`.
 Cambio de firma: los tres paquetes pasan a 0.2.0. Las 0.1.0 publicadas son inmutables y quedan
 como versiones anteriores en el índice.
+
+## 327. M341 — `ray toolchain add-target`: los targets móviles de la toolchain privada (oct 2026)
+
+`ray toolchain install` (§163) instala rustc, cargo y la std del host con perfil `minimal`, y nada
+más. `ray bundle --ios`/`--android` compilan Rust para `aarch64-apple-ios(-sim)` y
+`aarch64-linux-android`, y sin la std de esos targets la compilación en frío de ring/mimalloc falla
+en `rustc`. La pista del CLI y el capítulo móvil del handbook decían «`rustup target add …`»: cierto
+para quien instaló Rust con rustup y falso para quien eligió la toolchain privada, que es
+precisamente quien no sabe que su `rustup` vive en `~/.ray/toolchain/cargo/bin` y solo funciona con
+`RUSTUP_HOME`/`CARGO_HOME` puestos. El usuario que siguió la vía autocontenida llegaba a un
+callejón.
+
+**Decisión**: la toolchain resuelve los targets como resuelve las herramientas. `ray toolchain
+add-target <ios|android|triple>…` ejecuta `rustup target add` con el `rustup` que acompaña al
+`cargo` resuelto (`RAY_RUSTUP` → PATH → privada), con las variables que la privada necesita;
+`install --targets …` hace lo mismo al terminar de instalar, así la vía autocontenida para móvil es
+una sola orden: `ray toolchain install --targets ios,android`. Los alias se expanden a los triples
+que `bundle` compila (`ios` = dispositivo + simulador; `android` = ARM64 + emulador x86_64: dos std
+más a cambio de que el emulador funcione sin leer nada). Cualquier otro nombre con forma de triple
+pasa tal cual; lo demás es error de uso (64). Sin `rustup` (Rust de Homebrew o de la distro) no hay
+forma de añadir targets: exit 69 y la pista de instalar la privada con `--targets` (o, sin Rust
+alguno, `install --targets` directamente). `status` lista los targets extra instalados. Las pistas de
+`bundle` y el handbook apuntan a `ray toolchain add-target`, que funciona con cualquiera de las dos
+toolchains.
+
+Descartado: que `bundle` instale el target por su cuenta al detectarlo ausente. Descargar ~100 MB
+dentro de un build es una sorpresa que no queremos dar; la pista exacta basta.

@@ -17,8 +17,13 @@ raylang de esta página está copiado de ese proyecto, y el CI comprueba que sig
 |---|---|
 | Cualquier destino | raylang y Node.js con npm, para el frontend |
 | Compilar a nativo | una toolchain de Rust (`ray toolchain install` instala una privada) |
-| iOS | un Mac con Xcode, y los targets `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` |
-| Android | el SDK y el NDK de Android (Android Studio los instala), Gradle 9 con JDK 17 o posterior, y `rustup target add aarch64-linux-android` (añade `x86_64-linux-android` si tu emulador es x86) |
+| iOS | un Mac con Xcode, y los targets de iOS: `ray toolchain add-target ios` |
+| Android | el SDK y el NDK de Android (Android Studio los instala), Gradle 9 con JDK 17 o posterior, y los targets de Android: `ray toolchain add-target android` |
+
+`ray toolchain add-target` instala la biblioteca estándar de Rust de esos destinos en la toolchain
+que use `ray`, sea la tuya o la privada que instala `ray toolchain install` (que no está en el PATH,
+así que `rustup target add` a mano no la alcanza). Si instalas la privada desde cero, un solo paso:
+`ray toolchain install --targets ios,android`.
 
 Nada de eso hace falta para empezar: hasta la sección 7 la app se desarrolla y se prueba en el
 escritorio, solo con raylang y Node.js.

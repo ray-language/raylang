@@ -44,6 +44,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   mensaje que dice qué herramienta, y las llamadas quedan limpias. Cambio de firma: 0.2.0.
   Los ejemplos del handbook (`agent-cli`, `notes-mcp`) usan ya la 0.2.0 y el capítulo «LLM y MCP»
   queda sin un solo `let _ =`.
+- **`ray toolchain add-target ios|android|<triple>` y `ray toolchain install --targets …`.** Instalan
+  la biblioteca estándar de Rust de los targets que `ray bundle --ios`/`--android` compilan, también
+  en la toolchain privada de `ray toolchain install`, que no está en el PATH y a la que un `rustup
+  target add` a mano no llegaba. `ray toolchain status` lista los targets extra; las pistas de
+  `bundle` y el capítulo móvil del handbook apuntan a la orden nueva.
 - **`ray mcp` declara `ray_fmt` y `ray_doc` como de solo lectura** (`readOnlyHint`), para que un
   cliente pueda ejecutarlas sin pedir permiso.
 - **Sitio: menús como paneles deslizantes en pantallas estrechas.** El índice del handbook pasa a un

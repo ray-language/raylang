@@ -43,6 +43,32 @@ fn toolchain_usage_errors() {
     assert_eq!(code, 64, "--rust sin canal = uso\n{err}");
     let (_o, err, code) = ray(&["toolchain", "install", "--what"], &[]);
     assert_eq!(code, 64, "{err}");
+    let (_o, err, code) = ray(&["toolchain", "install", "--targets"], &[]);
+    assert_eq!(code, 64, "--targets sin lista = uso\n{err}");
+    let (_o, err, code) = ray(&["toolchain", "add-target"], &[]);
+    assert_eq!(code, 64, "add-target sin nombres = uso\n{err}");
+    let (_o, err, code) = ray(&["toolchain", "add-target", "bogus"], &[]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("unknown target 'bogus'") && err.contains("`ios`, `android`"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn add_target_without_rustup_explains_how_to_get_one() {
+    // Sin Rust: la pista es instalar la toolchain privada con los targets ya incluidos.
+    let home = temp_dir("targets_norust");
+    let envs = [("PATH", "/usr/bin:/bin"), ("RAY_TOOLCHAIN_HOME", home.to_str().unwrap())];
+    let (_o, err, code) = ray(&["toolchain", "add-target", "android"], &envs);
+    assert_eq!(code, 69, "{err}");
+    assert!(err.contains("no Rust toolchain found"), "{err}");
+    assert!(
+        err.contains("ray toolchain install --targets aarch64-linux-android,x86_64-linux-android"),
+        "el alias se expande en la pista:\n{err}"
+    );
+    // `status` dice que los targets no se conocen.
+    let (out, _e, _c) = ray(&["toolchain", "status"], &envs);
+    assert!(out.contains("extra targets: unknown"), "{out}");
+    let _ = fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -55,6 +81,7 @@ fn status_reports_home_and_tools() {
     assert!(out.contains("cargo: ") && out.contains("[PATH]"), "cargo del PATH:\n{out}");
     assert!(out.contains("rustc: "), "{out}");
     assert!(out.contains("system linker:"), "{out}");
+    assert!(out.contains("extra targets:"), "{out}");
     assert!(out.contains(&format!("ray-runtime vendor ({VERSION}): not installed")), "{out}");
     let _ = fs::remove_dir_all(&home);
 }

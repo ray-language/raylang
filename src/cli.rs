@@ -173,7 +173,7 @@ Tooling:
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
   keygen            create the app's Ed25519 signing key (std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
   release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL]
-  toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
+  toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--targets ios,android] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `add-target ios|android|<triple>` installs the std of extra targets for `bundle --ios/--android` (works with the private toolchain too); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker, the extra targets and the vendor
   version           the language version
   help              this help
 ",
@@ -2314,7 +2314,7 @@ fn cmd_bundle(args: &[String]) {
                     format!("org.raylang.{}", slug.trim_matches('.'))
                 })
         });
-        eprintln!("[bundle] Android shared libraries — abi: {abi} (a cold build compiles ring/mimalloc per target; needs the NDK and `rustup target add aarch64-linux-android`)");
+        eprintln!("[bundle] Android shared libraries — abi: {abi} (a cold build compiles ring/mimalloc per target; needs the NDK and the Android targets: {})", crate::toolchain::target_hint("android"));
         let arm_so = work.join("arm64.so");
         let x86_so = work.join("x86_64.so");
         if build_arm {
@@ -2449,7 +2449,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let build_dev = ios_target != "sim";
         let build_sim = ios_target != "device";
-        eprintln!("[bundle] iOS static libraries — target: {ios_target} (a cold build compiles ring/mimalloc per target; needs `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`)");
+        eprintln!("[bundle] iOS static libraries — target: {ios_target} (a cold build compiles ring/mimalloc per target; needs the iOS targets: {})", crate::toolchain::target_hint("ios"));
         let dev_a = work.join("dev.a");
         let sim_a = work.join("sim.a");
         if build_dev {

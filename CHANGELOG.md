@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.34 — 2026-10-05
+
+Correo saliente y sesiones en PostgreSQL: lo último del arco de rayauth.
 
 - **`net/smtp`**: cliente SMTP de envío — STARTTLS (587), TLS implícito (465), AUTH PLAIN,
   mensajes de texto y HTML (multipart/alternative) con los helpers de `net/mail`, `send_raw` para

@@ -20,7 +20,10 @@ La suite lo verifica por oráculo cruzado en las tres direcciones. Las excepcion
 y listadas: la concurrencia (§9) y la E/S asíncrona **no existen en el intérprete** (da un error
 limpio "requires the VM"), y los subsistemas que un binario nativo excluye a propósito
 (`--without …`, ver [REFERENCE.md](REFERENCE.md) §14) responden con un error de ejecución
-explícito en vez de silencio.
+explícito en vez de silencio. Una función que el transpilador **no sabe traducir** no rompe la
+paridad en silencio: en un build de desarrollo se emite como *stub* que falla al llamarse (con
+aviso al compilar) y en **`--release`** —y en `ray bundle`— es un **error de compilación** (M346;
+`--no-stubs` fuerza el error en dev, `--allow-stubs` admite los stubs en release).
 
 Notación de gramática: EBNF con `{ x }` = cero o más, `[ x ]` = opcional, `|` = alternativa,
 `'x'` = literal. Las producciones léxicas (§1) operan sobre caracteres; las sintácticas (§2, §4–

@@ -145,8 +145,10 @@ defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compil
 máquina); `--without mimalloc,ahash,fibers` recupera el `rustc` pelado (sin Cargo/red).
 `--without bigint` deja `std/bigint` devolviendo `Err` en vez de enlazar `num-bigint`.
 `--without keychain` deja `std/keychain` devolviendo `Err` (sin Security/libsecret/advapi32).
-`--no-stubs` convierte el aviso "N function(s) not supported in the native subset — emitted as
-stubs" en un error de build (65): sin minas en runtime.
+El aviso "N function(s) not supported in the native subset — emitted as stubs" es solo eso, un
+aviso, en un build de desarrollo; en **`--release`** (y en todo `ray bundle`) es un **error** (65):
+un binario de producción no lleva minas en runtime. `--no-stubs` fuerza el error también en dev
+(útil en CI); `--allow-stubs` recupera los stubs en release.
 `--without deflate` deja `std/deflate`/`std/inflate` con su algoritmo en raylang (mismo
 resultado descomprimido, otro stream comprimido, mucho más lento) en vez de enlazar `miniz_oxide`.
 

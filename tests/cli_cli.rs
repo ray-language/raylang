@@ -2246,6 +2246,18 @@ fn build_native_warns_about_stubbed_functions() {
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 65, "--no-stubs rechaza el stub\n{err}");
     assert!(err.contains("--no-stubs: refusing to emit stubs") && err.contains("g:"), "{err}");
+    // M346 (rayauth R20): en `--release` el stub es error POR DEFECTO (un binario de producción no
+    // lleva minas), con la salida explicada; `--allow-stubs` recupera el comportamiento de dev.
+    // (Se corta antes de compilar nada, así que no cuesta un build de release.)
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "--release", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 65, "--release rechaza el stub\n{err}");
+    assert!(
+        err.contains("a release build does not ship stubs (pass --allow-stubs to accept the runtime panic): refusing to emit stubs"),
+        "{err}"
+    );
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "--release", "--allow-stubs", "--without", "mimalloc,ahash,fibers", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "--allow-stubs compila el release con el stub\n{err}");
+    assert!(err.contains("not supported in the native subset") && !err.contains("refusing"), "{err}");
 }
 
 #[test]

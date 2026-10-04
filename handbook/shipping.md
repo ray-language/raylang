@@ -268,6 +268,10 @@ y los recursos embebidos, y se configura con variables de entorno, como en los c
   un Mac, si la toolchain de Rust tiene ese target.
 - `--without crypto,tls,sqlite,…` deja fuera lo que el servicio no usa, para un binario y una
   imagen de contenedor más pequeños.
+- Si una función del programa cae fuera de lo que el compilador nativo sabe traducir, el build de
+  `--release` se detiene y la nombra: un binario de producción no lleva funciones que fallan al
+  llamarse. En un build sin `--release` solo avisa; `ray build --native --no-stubs` te da el error
+  también en desarrollo, para enterarte pronto.
 - Detrás de un proxy como nginx o Caddy, que pone el HTTPS, el binario está listo para producción.
 
 En un contenedor, la imagen solo necesita el binario, compilado para Linux:

@@ -570,7 +570,9 @@ pub fn cookie(res: Res, line: string) -> Res {
 // del archivo al boot y se guarda tras cada escritura → el estado sobrevive al restart del
 // supervisor. En producción arranca vacío y NUNCA toca disco.
 /// The session layer: a shared `kv` store owned by an actor fiber, plus the persistence
-/// switch. Create it ONCE in `main` with `sessions(path)` and let the handlers capture it.
+/// switch. Create it ONCE in `main` with `sessions(path)` and let the handlers capture it —
+/// through the App builder written inline in `listen` (`listen(fn() -> App { routes(sess) }, …)`;
+/// see `listen` for why the closure must be inline in the native binary).
 /// Under `ray dev` (`RAY_DEV_RELOAD` set) session state is loaded from `path` at boot and
 /// persisted on every write — you edit a handler and stay logged in. In production the
 /// store starts empty and never touches disk.
@@ -1016,14 +1018,25 @@ fn finish(app: App, req: webserver.Request, resp: webserver.Response) -> webserv
 // hilos (actores de heap aislado): el mismo fuente corre en la VM y compila con `ray build
 // --native`. Consecuencia: el estado del builder es POR PETICIÓN; el estado compartido va por
 // canales a una fibra dueña (o a `net/pool`). M326 (findings #102): la doc decía «por conexión».
-/// Starts the server: `listen(build_app, "0.0.0.0", 8080)` with a TOP-LEVEL `fn build_app() ->
-/// App`. EVERY REQUEST builds its own App by calling `build_app()` inside its own task (the
-/// panic→500 isolation runs each request — keep-alive ones included — in a fresh task), so no
-/// function value crosses a thread boundary and the same source runs on the VM and compiles with
-/// `ray build --native` (M93.3). Keep the builder cheap and side-effect free: open connections
-/// and clients in an owner fiber (channels) or a `net/pool`, never inside it. Keep-alive, safety
-/// limits and panic→500 are inherited from `net/webserver`. Blocks forever (`Err` only if the
-/// socket cannot bind).
+/// Starts the server. `build` is the App builder: EVERY REQUEST builds its own App by calling
+/// it inside its own task (the panic→500 isolation runs each request — keep-alive ones included —
+/// in a fresh task), so the same source runs on the VM and compiles with `ray build --native`.
+/// The canonical shape is a closure WRITTEN INLINE in the call that captures the shared handles
+/// created once in `main` (a `Sessions`, a `State`, a `net/pool`, a config struct):
+///
+/// ```raylang
+/// let sess = framework.sessions("sessions.kv");
+/// framework.listen(fn() -> App { routes(sess, cfg) }, "0.0.0.0", 8080)
+/// ```
+///
+/// A top-level `fn build_app() -> App` works too when there is nothing to capture. What does NOT
+/// work in the native binary is a closure stored in a variable (`let build = fn() -> App {…};
+/// listen(build, …)`): this parameter crosses to other fibers and `ray build --native` rejects it
+/// with "a closure stored in a variable cannot be passed here" — write it inline or name a
+/// top-level function (the VM accepts both, so test with `--native` early). Keep the builder cheap
+/// and side-effect free: open connections and clients in an owner fiber (channels) or a `net/pool`,
+/// never inside it. Keep-alive, safety limits and panic→500 are inherited from `net/webserver`.
+/// Blocks forever (`Err` only if the socket cannot bind).
 pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string> {
     webserver.serve_with(host, port, fn() -> fn(webserver.Request) -> webserver.Response {
         let app: App = build();

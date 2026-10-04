@@ -1,0 +1,187 @@
+// net/session_store — M350 (IDEAS §102 R9): el ALMACÉN de sesiones de `web` como un actor con un
+// protocolo pequeño, para que el backend sea enchufable: memoria (aquí, con la persistencia RKV1 de
+// desarrollo) o una base de datos (`db/sessions`: SQLite). Vive en `net` porque `web` y `db` dependen
+// de `net` y ninguno del otro.
+//
+// Modelo: una fibra dueña del backend atiende `Msg` por un canal (FIFO: un `get` ve todo `set`
+// anterior en el mismo handle). Cada valor es `(sid, key) → value` con una caducidad de la SESIÓN en
+// segundos UNIX (`expires_at`, 0 = nunca); `get` ignora lo caducado y `sweep` lo borra. El TTL es
+// deslizante: cada `set` renueva la caducidad de la sesión entera.
+import std/kv;
+import std/time;
+
+/// A request to a session store. Public only because it travels through the store's channel.
+pub enum Msg {
+    Get(string, string, Channel<Option<string>>),
+    Set(string, string, string, int),
+    Delete(string, string),
+    Drop(string),
+    Sweep(int, Channel<int>),
+}
+
+/// A session store handle: the channel of its owner fiber plus the TTL in seconds (`0` = sessions
+/// never expire). Build one with `memory(...)` here or `sessions.sqlite(...)` in `db`, and hand it
+/// to `web.sessions_with`.
+pub struct SessionStore {
+    ch: Channel<Msg>,
+    ttl_s: int,
+}
+
+/// A handle over a channel you serve yourself (a custom backend): answer `Msg` in a fiber.
+pub fn from_channel(ch: Channel<Msg>, ttl_s: int) -> SessionStore {
+    SessionStore { ch: ch, ttl_s: ttl_s }
+}
+
+/// The current UNIX time in seconds.
+pub fn now_s() -> int { time.now() / 1000 }
+
+/// The expiry a write made now should carry: `now + ttl`, or `0` when the store never expires.
+pub fn expiry(st: SessionStore) -> int {
+    if (st.ttl_s <= 0) { 0 } else { now_s() + st.ttl_s }
+}
+
+/// One value of a session; `None` if absent or expired.
+pub fn get(st: SessionStore, sid: string, key: string) -> Option<string> {
+    let reply: Channel<Option<string>> = Channel.new();
+    send(st.ch, Msg.Get(sid, key, reply));
+    match (recv(reply)) {
+        Option.Some(v) => v,
+        Option.None => Option.None,
+    }
+}
+
+/// Writes one value of a session, renewing the whole session's expiry (sliding TTL).
+pub fn set(st: SessionStore, sid: string, key: string, value: string) {
+    send(st.ch, Msg.Set(sid, key, value, expiry(st)));
+}
+
+/// Deletes one value of a session.
+pub fn delete(st: SessionStore, sid: string, key: string) {
+    send(st.ch, Msg.Delete(sid, key));
+}
+
+/// Deletes a whole session (logout).
+pub fn drop_session(st: SessionStore, sid: string) {
+    send(st.ch, Msg.Drop(sid));
+}
+
+/// Deletes every expired session; returns how many values went. The memory and SQLite stores run it
+/// on their own every minute when the TTL is set; call it yourself for a custom backend.
+pub fn sweep(st: SessionStore) -> int {
+    let reply: Channel<int> = Channel.new();
+    send(st.ch, Msg.Sweep(now_s(), reply));
+    match (recv(reply)) {
+        Option.Some(n) => n,
+        Option.None => 0,
+    }
+}
+
+/// Starts a fiber that calls `sweep` every `every_s` seconds. Backends call it when the TTL is set.
+pub fn start_sweeper(st: SessionStore, every_s: int) {
+    spawn(fn() {
+        while (true) {
+            time.sleep(every_s * 1000);
+            let _ = sweep(st);
+        }
+    });
+}
+
+// --- Backend en memoria (con la persistencia RKV1 de desarrollo) ---
+//
+// Un `kv.Store` con dos claves por valor: `sid/key` → valor y `@exp/sid` → caducidad de la sesión.
+// `persist` = guardar en `path` tras cada escritura (lo que `ray dev` quiere para sobrevivir al
+// restart); en producción, memoria pura.
+
+/// An in-memory session store. With `persist`, every write is saved to the RKV1 file `path` and the
+/// store is loaded from it at start (what `web.sessions` does under `ray dev`); otherwise `path` is
+/// only a label. `ttl_s` seconds of inactivity expire a session (`0` = never).
+pub fn memory(path: string, persist: bool, ttl_s: int) -> Result<SessionStore, string> {
+    let store = if (persist) { kv.open(path)? } else { kv.empty(path) };
+    let ch: Channel<Msg> = Channel.new();
+    spawn(fn() {
+        memory_actor(store, persist, ch);
+    });
+    let st = SessionStore { ch: ch, ttl_s: ttl_s };
+    if (ttl_s > 0) {
+        start_sweeper(st, 60);
+    }
+    Result.Ok(st)
+}
+
+fn exp_of(store: kv.Store, sid: string) -> int {
+    match (store.get_string("@exp/" + sid)) {
+        Option.Some(s) => parse_int(s).unwrap_or(0),
+        Option.None => 0,
+    }
+}
+
+fn alive(store: kv.Store, sid: string, now: int) -> bool {
+    let e = exp_of(store, sid);
+    e == 0 || e > now
+}
+
+fn drop_all(store: kv.Store, sid: string) -> int {
+    var n = 0;
+    for k in store.keys() {
+        if (k.starts_with(sid + "/")) {
+            let _ = store.delete(k);
+            n = n + 1;
+        }
+    }
+    let _ = store.delete("@exp/" + sid);
+    n
+}
+
+fn memory_actor(store: kv.Store, persist: bool, ch: Channel<Msg>) {
+    var running = true;
+    while (running) {
+        match (recv(ch)) {
+            Option.Some(msg) => {
+                var dirty = false;
+                match (msg) {
+                    Msg.Get(sid, key, reply) => {
+                        let v = if (alive(store, sid, now_s())) {
+                            store.get_string(sid + "/" + key)
+                        } else {
+                            Option.None
+                        };
+                        send(reply, v);
+                    },
+                    Msg.Set(sid, key, value, expires_at) => {
+                        store.set_string(sid + "/" + key, value);
+                        store.set_string("@exp/" + sid, to_string(expires_at));
+                        dirty = true;
+                    },
+                    Msg.Delete(sid, key) => {
+                        dirty = store.delete(sid + "/" + key);
+                    },
+                    Msg.Drop(sid) => {
+                        dirty = drop_all(store, sid) > 0;
+                    },
+                    Msg.Sweep(now, reply) => {
+                        var n = 0;
+                        for k in store.keys() {
+                            if (k.starts_with("@exp/")) {
+                                let sid = k.substring(5, k.len());
+                                if (!alive(store, sid, now)) {
+                                    n = n + drop_all(store, sid);
+                                    dirty = true;
+                                }
+                            }
+                        }
+                        send(reply, n);
+                    },
+                }
+                if (dirty && persist) {
+                    match (store.save()) {
+                        Result.Ok(_) => { },
+                        Result.Err(e) => eprint("sessions: save failed: " + e),
+                    }
+                }
+            },
+            Option.None => {
+                running = false;
+            },
+        }
+    }
+}

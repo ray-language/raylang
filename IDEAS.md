@@ -3961,7 +3961,7 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R6 | D/E | `sqlite.connect` no dice si un `Conn` sirve desde varias fibras; `query` convierte `NULL` en `""` | ✅ **M346** la doc (serialización por handle, una conexión por transacción, pool); ✅ **M347** `query_opt -> [[Option<string>]]` |
 | R7 | E | No hay cliente SMTP (`net/mail` solo formatea) | PROPUESTO: `smtp.send` sobre `std/net` (rayauth tiene 130 líneas de base); STARTTLS sin probar |
 | R8 | E | No hay `std/xml` (bloquea SAML) | PROPUESTO: arco propio; empezar por parse/serialize |
-| R9 | E | Sesiones/estado de `web` sin backend persistente en producción | PROPUESTO: diseño aparte (sqlite) |
+| R9 | E | Sesiones/estado de `web` sin backend persistente en producción | ✅ **M350**: `net/session_store` (protocolo + memoria con TTL), `db/sessions.sqlite`, `web.sessions_with`, `session_clear` |
 | R10 | B | Nativo: indexar con literal el resultado de `split()` no compilaba (también en `std/template`) | ✅ **M342** (v1.27.29) |
 | R11 | D | `for (a, b) in [(string, int)]` → «cannot iterate over …»: el patrón de tupla solo vale para `Map` | ✅ **M345**: el patrón de tupla destructura arreglos de tuplas (bajada a `let (a, b)`); errores que dicen qué no encaja |
 | R12 | E | `bytes_of([])` no toma el tipo del parámetro como contexto | ✅ **M345**: los builtins de parámetro fijo (`bytes_of`, `join`) dan contexto al `[]`, en checker y nativo |

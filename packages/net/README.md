@@ -60,6 +60,9 @@ fn main() -> int {
 - **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.
 - **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `net/crypto` +
   `std/base64`.
+- **`net/session_store`** — el almacén de sesiones de `web` como actor con protocolo (`Msg`:
+  get/set/delete/drop/sweep), `memory(path, persist, ttl_s)` (RKV1 opcional) y `from_channel` para
+  backends propios; el SQLite vive en `db/sessions` (M350). Sobre `std/kv`.
 - **`net/cookie`** — parseo y serialización de cookies HTTP (`with_path`/`with_domain`/`with_max_age`/
   `with_http_only`/`with_secure`/`with_same_site`). Sobre `std/url`.
 

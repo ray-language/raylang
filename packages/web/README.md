@@ -42,6 +42,10 @@ fn main() -> int {
   ordenado con SIGTERM/SIGINT, M88.1b), `listen_limits(webserver.Limits)` y, para combinarlas,
   `listen_with(build, host, port, options().with_limits(l).with_drain(ms).with_tls(cert, key))`
   (M347).
+- **Sesiones** (`sessions`, `session_get/put/delete/clear`, cookie `ray_session` de 128 bits): el
+  almacén es enchufable (`net/session_store`). `sessions(path)` = desarrollo (RKV1 bajo `ray dev`,
+  memoria en producción); `sessions_with(sessions.sqlite(conn, ttl_s))` de `db` = persistentes
+  entre reinicios y réplicas, con TTL deslizante y barrido (M350).
   ⚠️ El **builder corre por PETICIÓN**: `listen(build_app, …)` llama a `build_app()` en la tarea de
   cada petición (también las keep-alive de una misma conexión: el aislamiento panic→500 corre cada
   una en una tarea nueva). No abras recursos dentro del builder —una conexión SQLite, un archivo,

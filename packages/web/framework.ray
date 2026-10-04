@@ -19,6 +19,7 @@ import std/json as jsonlib;
 import net/cookie as cookielib;
 // Sesiones (G.2): store compartido por actor (std/kv) + ids de sesión del CSPRNG (M289).
 import std/kv;
+import net/session_store;
 import std/crypto;
 import std/hex;
 // Reexport (M11.6a): el trait vive en std/json (M93.4); los consumidores pueden seguir haciendo
@@ -569,28 +570,36 @@ pub fn cookie(res: Res, line: string) -> Res {
 // persistencia RKV1 de std/kv. Bajo `ray dev` (RAY_DEV_RELOAD presente) el store se carga
 // del archivo al boot y se guarda tras cada escritura → el estado sobrevive al restart del
 // supervisor. En producción arranca vacío y NUNCA toca disco.
-/// The session layer: a shared `kv` store owned by an actor fiber, plus the persistence
-/// switch. Create it ONCE in `main` with `sessions(path)` and let the handlers capture it —
+/// The session layer: a `SessionStore` (`net/session_store`) — an actor fiber owning the backend —
+/// plus the request-side cookie logic. Create it ONCE in `main` and let the handlers capture it
 /// through the App builder written inline in `listen` (`listen(fn() -> App { routes(sess) }, …)`;
 /// see `listen` for why the closure must be inline in the native binary).
-/// Under `ray dev` (`RAY_DEV_RELOAD` set) session state is loaded from `path` at boot and
-/// persisted on every write — you edit a handler and stay logged in. In production the
-/// store starts empty and never touches disk.
+///
+/// `sessions(path)` is the development default: under `ray dev` (`RAY_DEV_RELOAD` set) session
+/// state is loaded from `path` at boot and persisted on every write — you edit a handler and stay
+/// logged in; in production it is in-memory and never touches disk. For sessions that survive a
+/// restart in production use `sessions_with(store)` with a persistent backend (M350:
+/// `db/sessions.sqlite(conn, ttl_s)`).
 pub struct Sessions {
-    store: kv.SharedStore,
-    persist: bool,
+    store: session_store.SessionStore,
 }
 
-/// Opens the session layer (see `Sessions`). The file at `path` is only ever read or
-/// written in dev mode; a corrupt state file is an error (delete it to start over).
 pub fn sessions(path: string) -> Result<Sessions, string> {
-    match (env("RAY_DEV_RELOAD")) {
-        Option.Some(hub) => {
-            let sh = kv.open_shared(path)?;
-            Result.Ok(Sessions { store: sh, persist: true })
-        },
-        Option.None => Result.Ok(Sessions { store: kv.share(kv.empty(path)), persist: false }),
-    }
+    let persist = match (env("RAY_DEV_RELOAD")) {
+        Option.Some(_) => true,
+        Option.None => false,
+    };
+    let st = session_store.memory(path, persist, 0)?;
+    Result.Ok(Sessions { store: st })
+}
+
+// M350 (rayauth R9): el backend es enchufable. `web` solo conoce el protocolo de `net/session_store`;
+// la implementación SQLite vive en `db/sessions` (y `net/session_store.memory` para memoria con TTL).
+/// The session layer over any `SessionStore`: `sessions_with(sessions.sqlite(conn, 86400)?)` keeps
+/// sessions across restarts (and across replicas on the same database) and expires them after a day
+/// of inactivity; `sessions_with(session_store.memory("", false, 3600)?)` is memory with a TTL.
+pub fn sessions_with(store: session_store.SessionStore) -> Sessions {
+    Sessions { store: store }
 }
 
 // M289 (endurecimiento): el id de sesión son 128 bits del CSPRNG del SO en hex (32 chars).
@@ -645,39 +654,32 @@ pub fn session_of(ctx: Ctx, res: Res) -> string {
 /// Reads a value of the request's session; `""` if absent (framework convention).
 pub fn session_get(s: Sessions, ctx: Ctx, res: Res, key: string) -> string {
     let sid = session_of(ctx, res);
-    match (s.store.get_string(sid + "/" + key)) {
+    match (session_store.get(s.store, sid, key)) {
         Option.Some(v) => v,
         Option.None => "",
     }
 }
 
-/// Writes a value in the request's session (creating the session cookie if needed).
-/// Under `ray dev` the state is persisted immediately (best-effort: a disk error is
+/// Writes a value in the request's session (creating the session cookie if needed) and renews
+/// the session's expiry (sliding TTL, when the store has one). Persistence is the store's job:
+/// `ray dev` saves to disk right away; SQLite writes the row (best-effort: a storage error is
 /// logged to stderr, never breaks the request).
 pub fn session_put(s: Sessions, ctx: Ctx, res: Res, key: string, value: string) {
     let sid = session_of(ctx, res);
-    s.store.set_string(sid + "/" + key, value);
-    persist_now(s);
+    session_store.set(s.store, sid, key, value);
 }
 
 /// Deletes one value of the request's session.
 pub fn session_delete(s: Sessions, ctx: Ctx, res: Res, key: string) {
     let sid = session_of(ctx, res);
-    s.store.delete(sid + "/" + key);
-    persist_now(s);
+    session_store.delete(s.store, sid, key);
 }
 
-// Persiste tras una escritura si toca (solo dev). Best-effort: el disco no rompe el request.
-fn persist_now(s: Sessions) {
-    if (s.persist) {
-        match (s.store.save()) {
-            Result.Ok(n) => 0,
-            Result.Err(e) => {
-                eprint("sessions: save failed: " + e);
-                0
-            },
-        };
-    }
+/// Ends the request's session: deletes every value stored under its id (logout). The cookie may
+/// stay in the browser; the next request gets an empty session under the same id until it writes.
+pub fn session_clear(s: Sessions, ctx: Ctx, res: Res) {
+    let sid = session_of(ctx, res);
+    session_store.drop_session(s.store, sid);
 }
 
 // M154 (raydesk ROADMAP #8, IDEAS §81.5): el estado DE APLICACIÓN — mismo actor kv que las

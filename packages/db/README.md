@@ -125,6 +125,13 @@ fn main() -> int {
 - **Diferido**: parámetros binarios/tipados, sentencias preparadas con estado, COPY, `sslmode`
   negociable.
 
+### `db/sessions` (M350)
+
+El backend SQLite del almacén de sesiones de `web` (`net/session_store`): `sessions.sqlite(conn,
+ttl_s) -> Result<SessionStore, string>` crea la tabla `ray_sessions(sid, key, value, expires_at)`
+y la sirve desde una fibra dueña de la conexión; `web.sessions_with(store)` la enchufa. TTL
+deslizante, barrido cada minuto. Varias réplicas sobre el mismo archivo comparten las sesiones.
+
 ### `db/sqlite` (M53.4)
 
 Base de datos **embebida**: sin servidor ni socket. A diferencia de mysql/postgres (protocolo wire

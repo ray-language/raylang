@@ -327,3 +327,128 @@ fn expr_breaks(expr: &Expr, label: Option<&str>, depth: usize) -> bool {
         _ => false,
     }
 }
+
+// ----- M345 (rayauth R16): plegado de constantes -----
+
+/// Pliega el valor de cada `const` de nivel superior (M345, rayauth R16): `8 * 3600 * 1000`,
+/// `-LIMIT`, `"v" + MAJOR`, `ops::VERSION`… se reducen a su literal ANTES de la verificación, en
+/// orden de declaración (una constante solo ve las declaradas antes, como `is_const_literal`). Lo
+/// que no se puede plegar se deja tal cual y lo juzga `is_const_literal` después. Los tres motores
+/// siguen viendo un literal inyectado; el plegado es puro front-end. Errores con posición: división
+/// por cero y desbordamiento en una constante entera.
+pub(super) fn fold_consts(program: &mut Program) -> Result<(), TypeError> {
+    // Punto fijo: en el programa FUSIONADO las constantes de un módulo importado pueden venir
+    // después de las que las usan (`const W: string = "v" + ops.VERSION;`), así que se repite
+    // mientras alguna se pliegue. Un ciclo simplemente no se pliega (y lo rechaza el checker).
+    let mut table: HashMap<String, Expr> = HashMap::new();
+    for c in &program.consts {
+        if is_scalar_literal(&c.value) {
+            table.insert(c.name.clone(), c.value.clone());
+        }
+    }
+    loop {
+        let mut changed = false;
+        for c in &mut program.consts {
+            if table.contains_key(&c.name) {
+                continue;
+            }
+            if let Some(v) = fold_const_expr(&c.value, &table).map_err(|msg| TypeError {
+                msg: format!("constant '{}': {}", c.name, msg),
+                line: c.value.line,
+                col: c.value.col,
+                len: 1,
+            })? {
+                c.value = v;
+                if is_scalar_literal(&c.value) {
+                    table.insert(c.name.clone(), c.value.clone());
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
+}
+
+fn is_scalar_literal(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_))
+}
+
+/// `Some(literal)` si `e` se pliega entero a un literal escalar (o a un arreglo/tupla con sus
+/// elementos plegados); `None` si no es plegable (se deja al checker). `Err` en una operación
+/// entera inválida.
+fn fold_const_expr(e: &Expr, table: &HashMap<String, Expr>) -> Result<Option<Expr>, String> {
+    use crate::token::Radix;
+    let at = |kind: ExprKind| Expr { kind, line: e.line, col: e.col };
+    Ok(match &e.kind {
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) => Some(e.clone()),
+        ExprKind::Ident(n) => table.get(n).map(|lit| at(lit.kind.clone())),
+        ExprKind::Unary { op, expr } => match (op, fold_const_expr(expr, table)?) {
+            (UnaryOp::Neg, Some(Expr { kind: ExprKind::Int(v, _), .. })) => {
+                Some(at(ExprKind::Int(v.checked_neg().ok_or("integer overflow")?, Radix::DEC)))
+            }
+            (UnaryOp::Neg, Some(Expr { kind: ExprKind::Float(v), .. })) => Some(at(ExprKind::Float(-v))),
+            (UnaryOp::Not, Some(Expr { kind: ExprKind::Bool(b), .. })) => Some(at(ExprKind::Bool(!b))),
+            (UnaryOp::BitNot, Some(Expr { kind: ExprKind::Int(v, _), .. })) => Some(at(ExprKind::Int(!v, Radix::DEC))),
+            _ => None,
+        },
+        ExprKind::Binary { op, left, right } => {
+            let (Some(l), Some(r)) = (fold_const_expr(left, table)?, fold_const_expr(right, table)?) else {
+                return Ok(None);
+            };
+            match (&l.kind, &r.kind) {
+                (ExprKind::Int(a, _), ExprKind::Int(b, _)) => {
+                    let v = match op {
+                        BinaryOp::Add => a.checked_add(*b).ok_or("integer overflow")?,
+                        BinaryOp::Sub => a.checked_sub(*b).ok_or("integer overflow")?,
+                        BinaryOp::Mul => a.checked_mul(*b).ok_or("integer overflow")?,
+                        BinaryOp::Div => {
+                            if *b == 0 { return Err("integer division by zero".into()); }
+                            a.checked_div(*b).ok_or("integer overflow")?
+                        }
+                        BinaryOp::Rem => {
+                            if *b == 0 { return Err("integer division by zero".into()); }
+                            a.checked_rem(*b).ok_or("integer overflow")?
+                        }
+                        BinaryOp::BitAnd => a & b,
+                        BinaryOp::BitOr => a | b,
+                        BinaryOp::BitXor => a ^ b,
+                        BinaryOp::Shl => a.checked_shl(u32::try_from(*b).map_err(|_| "shift out of range")?).ok_or("shift out of range")?,
+                        BinaryOp::Shr => a.checked_shr(u32::try_from(*b).map_err(|_| "shift out of range")?).ok_or("shift out of range")?,
+                        _ => return Ok(None),
+                    };
+                    Some(at(ExprKind::Int(v, Radix::DEC)))
+                }
+                (ExprKind::Float(a), ExprKind::Float(b)) => {
+                    let v = match op {
+                        BinaryOp::Add => a + b,
+                        BinaryOp::Sub => a - b,
+                        BinaryOp::Mul => a * b,
+                        BinaryOp::Div => a / b,
+                        BinaryOp::Rem => a % b,
+                        _ => return Ok(None),
+                    };
+                    Some(at(ExprKind::Float(v)))
+                }
+                (ExprKind::Str(a), ExprKind::Str(b)) if matches!(op, BinaryOp::Add) => {
+                    Some(at(ExprKind::Str(format!("{a}{b}"))))
+                }
+                _ => None,
+            }
+        }
+        // Arreglos y tuplas de constantes: se pliegan los elementos que se dejen; el literal
+        // compuesto sigue siendo una expresión inyectada (M274/M307).
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            let mut folded = Vec::with_capacity(elems.len());
+            for el in elems {
+                folded.push(fold_const_expr(el, table)?.unwrap_or_else(|| el.clone()));
+            }
+            Some(at(match &e.kind {
+                ExprKind::ArrayLit(_) => ExprKind::ArrayLit(folded),
+                _ => ExprKind::TupleLit(folded),
+            }))
+        }
+        _ => None,
+    })
+}

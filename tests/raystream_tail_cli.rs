@@ -61,10 +61,11 @@ fn main() -> int {
     )
     .unwrap();
     three_engines(&d, "true\n256\n-1\n3\n2\n768\n");
-    std::fs::write(d.join("bad.ray"), "const XS: [int] = [1, 2 + 3];\nfn main() -> int { 0 }\n").unwrap();
+    // M345: `2 + 3` dentro del arreglo se pliega; lo que no es constante sigue siendo error.
+    std::fs::write(d.join("bad.ray"), "const XS: [int] = [1, len(\"ab\")];\nfn main() -> int { 0 }\n").unwrap();
     let (_o, err, code) = ray(&d, &["run", "bad.ray"]);
     assert_eq!(code, 65);
-    assert!(err.contains("the value of constant 'XS' must be a literal"), "{err}");
+    assert!(err.contains("the value of constant 'XS' must be a constant expression"), "{err}");
 }
 
 /// [16] `@derive(Show)` con campos `[T]` (y anidados) en los tres motores.

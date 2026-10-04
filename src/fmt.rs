@@ -34,7 +34,18 @@ pub fn format_source(src: &str) -> Result<String, String> {
     let tokens = crate::lexer::lex(src).map_err(|e| e.to_string())?;
     let program = crate::parser::parse(tokens).map_err(|e| e.to_string())?;
     let mut cur = Cur::new(src, &program);
-    Ok(format_program(&program, &mut cur))
+    let out = format_program(&program, &mut cur);
+    // M345 (rayauth R21): la salida tiene que parsear. Un formateador que escribe código inválido es
+    // peor que uno que se niega; aquí se niega, con el error del parser sobre SU salida.
+    let reparsed = crate::lexer::lex(&out)
+        .map_err(|e| e.to_string())
+        .and_then(|t| crate::parser::parse(t).map(|_| ()).map_err(|e| e.to_string()));
+    if let Err(e) = reparsed {
+        return Err(format!(
+            "internal error: the formatted output does not parse ({e}); the source was left untouched — please report it"
+        ));
+    }
+    Ok(out)
 }
 
 /// Como [`format_source`], pero con la **unidad de indentación** dada (`"  "` para 2 espacios, `"\t"`
@@ -198,6 +209,12 @@ struct Cur {
     /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
     interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
     pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+    /// M345 (rayauth R21): la forma con bloque (if/match/while/bloque) que ARRANCA la sentencia o el
+    /// tail que se está emitiendo y no es toda la sentencia (`(if (c) { a } else { b }) + "x"`). En
+    /// posición de sentencia el parser la leería como sentencia y el `+` quedaría suelto, así que sus
+    /// paréntesis son obligatorios aunque su precedencia diga lo contrario. Identidad por puntero: la
+    /// posición no sirve (el `+` exterior hereda la del operando izquierdo y el `(` reposiciona).
+    paren_leaf: Option<*const Expr>,
     /// Paréntesis de agrupación escritos por el usuario (M189, `Program::paren_sites`): se conservan.
     parens: std::collections::HashSet<(usize, usize)>,
     /// `if let` del usuario (M201, `Program::if_let_sites`): el `match` desazucarado se reemite como `if let`.
@@ -255,6 +272,7 @@ impl Cur {
             blanks,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
+            paren_leaf: None,
             parens: program.paren_sites.clone(),
             if_lets: program.if_let_sites.clone(),
             return_exprs: program.return_expr_sites.clone(),
@@ -673,6 +691,43 @@ fn fmt_params_at(params: &[Param], base: usize, prefix: &str, suffix: &str) -> S
     s
 }
 
+/// M345 (rayauth R26): la lista de parámetros cuando hay COMENTARIOS dentro de ella (entre la línea
+/// de la cabecera y la del `{`/`;` que la cierra, en `(head_line, end_line]`). Antes el reflujo a una
+/// línea no tenía dónde dejarlos y caían como primera línea del cuerpo, lejos del parámetro que
+/// documentaban. Se emite un parámetro por línea, cada comentario suelto encima del suyo (con la
+/// sangría de la lista) y el trailing de un parámetro pegado a su línea. `None` si no hay comentarios
+/// dentro: entonces decide `fmt_params_at` como siempre.
+fn fmt_params_commented(cur: &mut Cur, params: &[Param], base: usize, prefix: &str, suffix: &str, head_line: usize, end_line: usize) -> Option<String> {
+    let first = params.first()?;
+    let last_param_line = params.last().map(|p| p.line).unwrap_or(head_line);
+    // Comentarios aún no emitidos que caen dentro de la lista: tras la cabecera y antes del cierre
+    // (o en la línea del último parámetro, como trailing).
+    let inside = cur.items[cur.i..].iter().any(|c| {
+        c.line > head_line && (c.line < end_line || (c.line == last_param_line && c.trailing && c.line > first.line.min(head_line)))
+    });
+    if !inside {
+        return None;
+    }
+    let inner = INDENT.repeat(base + 1);
+    let mut s = format!("{}(\n", prefix);
+    for (i, p) in params.iter().enumerate() {
+        s.push_str(&cur.flush_before(p.line, &inner));
+        s.push_str(&inner);
+        s.push_str(&fmt_param(p));
+        if i + 1 < params.len() {
+            s.push(',');
+        }
+        s.push_str(&cur.trailing_on(p.line));
+        s.push('\n');
+    }
+    // Comentarios entre el último parámetro y el `)`: se quedan dentro de la lista.
+    s.push_str(&cur.flush_before(end_line, &inner));
+    s.push_str(&INDENT.repeat(base));
+    s.push(')');
+    s.push_str(suffix);
+    Some(s)
+}
+
 /// Un parámetro: `nombre: tipo`, o `self` pelado si es el receptor de un método.
 fn fmt_param(p: &Param) -> String {
     if p.name == "self" && matches!(p.ty, Type::SelfType) {
@@ -777,7 +832,11 @@ fn fmt_method_sig(cur: &mut Cur, m: &MethodSig) -> String {
     let gens = fmt_generics(&m.type_params, &m.bounds);
     // La firma vive dentro del `trait`/`impl` → base 1: la sangría de la cabecera la antepone el
     // emisor del bloque, pero los parámetros repartidos y su `)` sí la llevan.
-    let head = fmt_params_at(&m.params, 1, &format!("fn {}{}", m.name, gens), &fmt_return(&m.return_type));
+    let prefix = format!("fn {}{}", m.name, gens);
+    let suffix = fmt_return(&m.return_type);
+    let end_line = m.default_body.as_ref().map(|b| b.line).unwrap_or(m.line);
+    let head = fmt_params_commented(cur, &m.params, 1, &prefix, &suffix, m.line, end_line)
+        .unwrap_or_else(|| fmt_params_at(&m.params, 1, &prefix, &suffix));
     match &m.default_body {
         Some(body) => {
             cur.expand_block = head.contains('\n');
@@ -817,12 +876,10 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
     let mut s = fmt_annotations(&f.annotations);
     let pref = if f.is_pub { "pub " } else { "" };
     let gens = fmt_generics(&f.type_params, &f.bounds);
-    let head = fmt_params_at(
-        &f.params,
-        0,
-        &format!("{}fn {}{}", pref, f.name, gens),
-        &fmt_return(&f.return_type),
-    );
+    let prefix = format!("{}fn {}{}", pref, f.name, gens);
+    let suffix = fmt_return(&f.return_type);
+    let head = fmt_params_commented(cur, &f.params, 0, &prefix, &suffix, f.line, f.body.line)
+        .unwrap_or_else(|| fmt_params_at(&f.params, 0, &prefix, &suffix));
     cur.expand_block = head.contains('\n'); // firma repartida → cuerpo expandido
     s.push_str(&format!("{} {}", head, fmt_block(cur, &f.body, 0)));
     s
@@ -879,7 +936,9 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     let mut s = String::from("{\n");
     for (idx, st) in b.statements.iter().enumerate() {
         // Preserva una línea en blanco entre sentencias (agrupación visual), salvo antes de la primera.
-        if idx > 0 && cur.blank_before(st.line) {
+        // M345: solo si la sentencia empieza en OTRA línea que la anterior — en un cuerpo de una sola
+        // línea (`{ a(); b(); 0 }`) el blanco de encima del `fn` no separa sus sentencias.
+        if idx > 0 && st.line > b.statements[idx - 1].line && cur.blank_before(st.line) {
             s.push('\n');
         }
         s.push_str(&cur.flush_before(st.line, &inner));
@@ -909,14 +968,20 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         s.push('\n');
     }
     if let Some(tail) = &b.tail {
-        if !b.statements.is_empty() && cur.blank_before(tail.line) {
+        if let Some(prev) = b.statements.last()
+            && tail.line > prev.line
+            && cur.blank_before(tail.line)
+        {
             s.push('\n');
         }
         s.push_str(&cur.flush_before(tail.line, &inner));
         // El tail no pasa por `fmt_stmt`, así que su reintento va aquí (es el único otro punto de
         // entrada de una expresión a nivel de línea).
         let last = cur.end_line(tail);
-        let text = retry_wrapped(cur, base + 1, Some((tail.line, last)), |c| fmt_value(c, tail, base + 1));
+        let text = retry_wrapped(cur, base + 1, Some((tail.line, last)), |c| {
+            c.mark_statement_leaf(tail); // M345 (R21): el tail también se parsea en posición de sentencia
+            fmt_value(c, tail, base + 1)
+        });
         s.push_str(&inner);
         s.push_str(&text);
         let end = if text.contains('\n') || last > tail.line { last } else { tail.line };
@@ -1070,6 +1135,7 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
                 // de un argumento), igual que `fmt_value`.
                 let saved = cur.base;
                 cur.base = indent;
+                cur.mark_statement_leaf(e);
                 let s = format!("{};", fmt_expr(cur, e, 0));
                 cur.base = saved;
                 s
@@ -1107,6 +1173,29 @@ fn label_suffix(label: &Option<String>) -> String {
 
 fn is_block_form(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Match { .. } | ExprKind::Block(_))
+}
+
+/// La hoja más a la izquierda de `e` siguiendo lo que el parser lee como CONTINUACIÓN de un operando
+/// (operando izquierdo de una binaria, callee, objeto de campo/índice, operando de `as`/`?`). Si esa
+/// hoja es una forma con bloque y no es `e` entero, en posición de sentencia necesita paréntesis (M345).
+fn leftmost_leaf(e: &Expr) -> &Expr {
+    match &e.kind {
+        ExprKind::Binary { left, .. } => leftmost_leaf(left),
+        ExprKind::Call { callee, .. } => leftmost_leaf(callee),
+        ExprKind::Field { object, .. } => leftmost_leaf(object),
+        ExprKind::Index { array, .. } => leftmost_leaf(array),
+        ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => leftmost_leaf(expr),
+        _ => e,
+    }
+}
+
+impl Cur {
+    /// Anota la forma con bloque que arranca la sentencia/tail `e` (si la hay y no es `e` entero) para
+    /// que `fmt_expr` la emita entre paréntesis (M345, rayauth R21).
+    fn mark_statement_leaf(&mut self, e: &Expr) {
+        let leaf = leftmost_leaf(e);
+        self.paren_leaf = (!std::ptr::eq(leaf, e) && is_block_form(leaf)).then_some(leaf as *const Expr);
+    }
 }
 
 /// Formatea una expresión en **posición de valor** (tail de bloque, inicializador de `let`, valor de
@@ -1161,6 +1250,12 @@ fn expr_prec(e: &Expr) -> u8 {
 
 /// Formatea `e`; si su precedencia es menor que `min_prec`, lo envuelve en paréntesis.
 fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
+    // M345 (R21): la forma con bloque que arranca la sentencia va entre paréntesis, sin excepción.
+    if cur.paren_leaf.is_some_and(|p| std::ptr::eq(p, e)) {
+        cur.paren_leaf = None;
+        let s = fmt_expr_raw(cur, e);
+        return format!("({})", s);
+    }
     // M29.3: azúcar preservado. Si esta posición es la raíz de una interpolación o un pipeline
     // desazucarado, se reemite la forma de superficie. Se **quita** la entrada de la tabla mientras se
     // formatea y se restaura: el nodo raíz desazucarado y una de sus sub-expresiones comparten posición

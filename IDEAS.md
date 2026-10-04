@@ -3963,21 +3963,21 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R8 | E | No hay `std/xml` (bloquea SAML) | PROPUESTO: arco propio; empezar por parse/serialize |
 | R9 | E | Sesiones/estado de `web` sin backend persistente en producción | PROPUESTO: diseño aparte (sqlite) |
 | R10 | B | Nativo: indexar con literal el resultado de `split()` no compilaba (también en `std/template`) | ✅ **M342** (v1.27.29) |
-| R11 | D | `for (a, b) in [(string, int)]` → «cannot iterate over …»: el patrón de tupla solo vale para `Map` | PROPUESTO (M345): extenderlo a arreglos e iteradores de tuplas (bajada a `let (a, b)`), o al menos el mensaje |
-| R12 | E | `bytes_of([])` no toma el tipo del parámetro como contexto | PROPUESTO (M345): tipo esperado para los builtins de parámetro fijo |
+| R11 | D | `for (a, b) in [(string, int)]` → «cannot iterate over …»: el patrón de tupla solo vale para `Map` | ✅ **M345**: el patrón de tupla destructura arreglos de tuplas (bajada a `let (a, b)`); errores que dicen qué no encaja |
+| R12 | E | `bytes_of([])` no toma el tipo del parámetro como contexto | ✅ **M345**: los builtins de parámetro fijo (`bytes_of`, `join`) dan contexto al `[]`, en checker y nativo |
 | R13 | B | Una función del módulo de entrada se colaba en el UFCS de otro módulo (`fn text(n: int)` en main.ray capturaba `r.text("x")` sobre `fw::Res`) | ✅ **M344**: el nombre pelado solo es visible fuera del raíz si es prelude/builtin |
 | R14 | E | `net/http`: `Response.headers` es un `Map` y pierde cabeceras repetidas (`Set-Cookie`) | PROPUESTO (M347): `raw_headers`/`header_all` |
 | R15 | E | `std/template` sin valores estructurados (`{{ u.name }}` imposible) | PROPUESTO: `VMap`/objetos en `TVal` |
-| R16 | E | `const` no admite expresiones (`8 * 3600 * 1000`) ni la `const` de otro módulo | PROPUESTO (M345): plegado de constantes en el checker |
+| R16 | E | `const` no admite expresiones (`8 * 3600 * 1000`) ni la `const` de otro módulo | ✅ **M345**: expresiones constantes plegadas en el checker (aritmética, bits, strings, otras `const` de cualquier módulo) |
 | R17 | B/D | Un parámetro `status: int` tapaba el método UFCS `r.status(n)` («cannot call a value of type int») | ✅ **M344**: un local solo tapa si es función (el sitio baja al alias `nombre#free`); el error nombra al local cuando no hay función |
 | R18 | E | `[string]` no implementa `ToJson` | PROPUESTO (M347): `impl<T: ToJson> ToJson for [T]` en `std/json` |
 | R19 | B | Nativo: `if (…) { Option.None } else { otro_modulo.f()? }` perdía el tipo y la función caía a stub | ✅ **M344**: el `then` con placeholder cede el tipo al `else` |
 | R20 | E | Los stubs nativos que entran en pánico van por defecto; `--no-stubs` existe pero no está documentado | PROPUESTO (M346): `--no-stubs` por defecto en `--release`; documentar |
-| R21 | B | `ray fmt` quita los paréntesis de `(if …) + "b"` y deja código que no parsea | PROPUESTO (M345): paréntesis obligatorios para una forma con bloque como operando izquierdo + reparseo de la salida antes de `-w` |
+| R21 | B | `ray fmt` quita los paréntesis de `(if …) + "b"` y deja código que no parsea | ✅ **M345**: paréntesis obligatorios para la forma con bloque que arranca una sentencia; `ray fmt` reparsea su salida y se niega si no parsea |
 | R22 | E | `net/cookie` sin `with_domain` | PROPUESTO (M347) |
 | R23 | E | No hay generador de QR (TOTP) | PROPUESTO (M347): `std/qr` sobre el crate `qrcode` ya presente |
 | R24 | E | `web`: no se combinan límites y apagado ordenado | PROPUESTO (M347): `listen_with(build, host, port, options)` |
 | R25 | E | Una asignación no podía ser brazo de `match` | ✅ **M344**: `patrón => lugar = valor,` azúcar de `{ lugar = valor; }`; `ray fmt` la conserva |
-| R26 | B | `ray fmt` saca los comentarios de una lista de parámetros al cuerpo | PROPUESTO (M345): lista multilínea cuando hay comentarios dentro |
+| R26 | B | `ray fmt` saca los comentarios de una lista de parámetros al cuerpo | ✅ **M345**: con comentarios dentro, un parámetro por línea y cada comentario con el suyo |
 | R27 | D | `n as float` / `x as int` no están en `llms.txt` | PROPUESTO (M346) |
 | R28 | B | Nativo: `let _ = try_send(ch, v)` convertía la función en stub («unknown return type of 'try_send'») | ✅ **M344**: filas `try_send`/`try_recv`/`send`/`close` en la tabla de tipos |

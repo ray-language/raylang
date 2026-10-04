@@ -982,6 +982,11 @@ pub(super) fn inline_forwarders_expr(expr: &mut Expr, fwd: &HashMap<String, Stri
 /// M40.2: baja `for x in it` (sobre un iterador) reescribiendo `ForIter::In` a `ForIter::Iter` con
 /// el nombre manglado de `next`, en cada `for` cuya `(línea, col)` esté en `sites`. Recorre todo el
 /// AST (bloques anidados en if/while/match/fn) para alcanzar cualquier `for`.
+/// M345 (rayauth R11): marca en `for_iter_sites` de un `for (a, b) in <arreglo de tuplas>`: no hay
+/// `next` que llamar; el `for` se reescribe a un binding único más un `let (a, b) = __ft` al frente
+/// del cuerpo, y los tres motores lo ejecutan como un `for` corriente sobre el arreglo.
+pub(super) const FOR_TUPLE_ARRAY: &str = "#for-tuple-array";
+
 pub(super) fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usize), String>) {
     if sites.is_empty() {
         return;
@@ -995,12 +1000,28 @@ pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, u
     for stmt in &mut block.statements {
         let pos = (stmt.line, stmt.col);
         match &mut stmt.kind {
-            StmtKind::For { iter, body, .. } => {
-                if let (Some(next_fn), ForIter::In(_)) = (sites.get(&pos), &*iter) {
-                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0, crate::token::Radix::DEC), line: 0, col: 0 }));
-                    if let ForIter::In(e) = old {
-                        *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
+            StmtKind::For { pat, iter, body, .. } => {
+                match (sites.get(&pos), &*iter) {
+                    (Some(mark), ForIter::In(_)) if mark == FOR_TUPLE_ARRAY => {
+                        // M345: `for (a, b) in xs` sobre `[(A, B)]` → `for __ft in xs { let (a, b) = __ft; … }`.
+                        if let ForPat::Tuple(names) = std::mem::replace(pat, ForPat::Single(String::new())) {
+                            let tmp = format!("__ft#{}_{}", stmt.line, stmt.col);
+                            let value = Expr { kind: ExprKind::Ident(tmp.clone()), line: stmt.line, col: stmt.col };
+                            body.statements.insert(0, Stmt {
+                                kind: StmtKind::LetTuple { names, value, mutable: false },
+                                line: stmt.line,
+                                col: stmt.col,
+                            });
+                            *pat = ForPat::Single(tmp);
+                        }
                     }
+                    (Some(next_fn), ForIter::In(_)) => {
+                        let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0, crate::token::Radix::DEC), line: 0, col: 0 }));
+                        if let ForIter::In(e) = old {
+                            *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
+                        }
+                    }
+                    _ => {}
                 }
                 match iter {
                     ForIter::Range { start, end } => { lower_for_iters_expr(start, sites); lower_for_iters_expr(end, sites); }

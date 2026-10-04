@@ -17,6 +17,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   dejar la función como stub (M344, rayauth R19 y R28).
 - **Brazo de asignación en `match`**: `Option.Some(w) => x = w,` equivale a `=> { x = w; },`; `ray
   fmt` lo conserva (M344, rayauth R25).
+- **`ray fmt` ya no rompe `(if …) + "b"`** ni saca los comentarios de una lista de parámetros al
+  cuerpo; además reparsea su salida y se niega a escribir código que no parsea. Un cuerpo de una
+  línea tras una línea en blanco ya no gana blancos entre sus sentencias (M345, rayauth R21/R26).
+- **`const` con expresiones constantes**: `const IDLE_MS: int = 8 * 3600 * 1000;`, `"v" +
+  ops.VERSION`, `(1 << 4) | 3`, otras `const` de cualquier módulo; se pliegan al compilar y la
+  división por cero es error con posición (M345, rayauth R16).
+- **`for (a, b) in xs`** también sobre un arreglo de tuplas (M345, rayauth R11).
+- **`bytes_of([])` y `join([], sep)`** infieren el `[]` del parámetro (M345, rayauth R12).
 
 ## 1.27.30 — 2026-10-03
 

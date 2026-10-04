@@ -3953,7 +3953,7 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 
 | # | Sev. | Hallazgo | Estado |
 |---|---|---|---|
-| R1 | E | No hay RSA ni ECDSA en `std/crypto` (RS256 obligatorio en OIDC; ES256 en WebAuthn); tampoco ASN.1/DER/PEM. rayauth hace RSA y P-256 a mano sobre `std/bigint` | ✅ **M347**: `p256_*` completo, `rsa_pkcs1_*`/`rsa_pss_*` (firma y verificación, PKCS#8), `rsa_public_key(n, e)`/`rsa_public_components`, `std/pem`. **ABIERTO**: generar claves RSA (ring no lo hace) — crate `rsa` (RustCrypto) o PKCS#8 desde `std/bigint` |
+| R1 | E | No hay RSA ni ECDSA en `std/crypto` (RS256 obligatorio en OIDC; ES256 en WebAuthn); tampoco ASN.1/DER/PEM. rayauth hace RSA y P-256 a mano sobre `std/bigint` | ✅ **M347**: `p256_*` completo, `rsa_pkcs1_*`/`rsa_pss_*` (firma y verificación, PKCS#8), `rsa_public_key(n, e)`/`rsa_public_components`, `std/pem`. ✅ **M348** `rsa_generate(bits)` sin dependencias nuevas (num-bigint + CSPRNG de ring → PKCS#8) |
 | R2 | E | `bigint.modpow` no es de tiempo constante y se presenta como la primitiva de RSA | ✅ **M347**: la doc remite a `std/crypto` para firmar y reserva `modpow` a exponentes públicos |
 | R3 | E | Solo `hmac_sha256`; TOTP necesita HMAC-SHA1 | ✅ **M347**: `hmac_sha1`/`hmac_sha384`/`hmac_sha512` y `hmac(alg, key, msg)` |
 | R4 | E | `net/jwt`/`net/jwt_eddsa` no admiten cabeceras propias (`kid`) ni verifican `aud`/`iss` | ✅ **M347**: `jwt_sign_kid`/`jwt_eddsa_sign_kid`, `jwt_header`/`jwt_kid`, `jwt_check_claims(payload, iss, aud)` |

@@ -334,3 +334,45 @@ fn main() -> int {
     .unwrap();
     three_engines(&d, "[[, 1], [, 2], [x, ]]\nNULL | '1'\n'' | '2'\n'x' | NULL\ntrue\n");
 }
+
+/// M348 (IDEAS §102 R1, la parte abierta): `rsa_generate` produce PKCS#8 que ring importa, firma y
+/// verifica; `std/pem` lo escribe y, si hay `openssl` en el PATH, OpenSSL valida la clave y la firma.
+#[test]
+fn rsa_generate_produces_a_key_ring_and_openssl_accept() {
+    let d = tmp("rsa_generate");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/crypto;
+import std/pem;
+import std/fs;
+fn main() -> int {
+    let k = crypto.rsa_generate(2048).unwrap();
+    fs.write_file("gen.pem", pem.encode("PRIVATE KEY", k)).unwrap();
+    let msg = "hello".to_bytes();
+    let sig = crypto.rsa_pkcs1_sign(k, msg).unwrap();
+    fs.write_file_bytes("gen_sig.bin", sig).unwrap();
+    let pk = crypto.rsa_public_key_of(k).unwrap();
+    print(crypto.rsa_pkcs1_verify(pk, msg, sig));
+    let (n, e) = crypto.rsa_public_components(pk).unwrap();
+    print("${n.len() * 8} ${e.len()}");
+    print(crypto.rsa_generate(1000));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "true\n2048 3\nResult.Err(rsa_generate: bits must be a multiple of 64 between 2048 and 4096 (got 1000))\n");
+    if Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let check = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-check", "-noout"]).current_dir(&d).output().unwrap();
+        assert!(check.status.success(), "openssl pkey -check: {}", String::from_utf8_lossy(&check.stderr));
+        std::fs::write(d.join("m.txt"), "hello").unwrap();
+        let pubout = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-pubout", "-out", "gen_pub.pem"]).current_dir(&d).output().unwrap();
+        assert!(pubout.status.success());
+        let verify = Command::new("openssl")
+            .args(["dgst", "-sha256", "-verify", "gen_pub.pem", "-signature", "gen_sig.bin", "m.txt"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&verify.stdout).contains("Verified OK"), "{}", String::from_utf8_lossy(&verify.stderr));
+    }
+}

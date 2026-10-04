@@ -16621,3 +16621,20 @@ compila en nativo.
 Versiones: `net` 0.6.0, `web` 0.5.0, `db` 0.3.0 (se publican tras fusionar). Tests: ocho casos en
 `tests/rayauth_packages_cli.rs` (stdlib en tres motores; paquetes desde un proyecto consumidor con
 path-deps), con la clave RSA de prueba en `tests/fixtures/rsa_test_key.pem`.
+
+## 334. M348 — Generar claves RSA sin dependencias nuevas (oct 2026)
+
+La única parte de R1 que M347 dejó abierta: ring firma y verifica RSA pero no genera claves. Las
+opciones eran el crate `rsa` (RustCrypto, una dependencia nueva con su propia aritmética de tiempo
+constante) o escribir la generación sobre `num-bigint`, que ya está en el runtime por `std/bigint`.
+El usuario eligió lo segundo, y la razón que lo hace correcto es que **generar una clave no es una
+operación de tiempo constante que haga falta proteger**: ocurre una vez, en el setup, sin que un
+atacante remoto pueda cronometrarla por petición; la clave resultante solo se usa después a través
+de ring. `rsa_keygen.rs` sigue el esquema de OpenSSL/FIPS 186-4: primos de `bits/2` con los dos bits
+altos a 1 (así `n` tiene exactamente `bits`), criba de primos pequeños y Miller-Rabin con 64 bases del
+CSPRNG, `e = 65537`, `d = e⁻¹ mod lcm(p−1, q−1)`, los parámetros CRT que ring exige y `p > q`. Escribe
+PKCS#8 DER (RSAPrivateKey dentro de PrivateKeyInfo) y, antes de devolverlo, **ring lo importa**: si
+alguna vez la aritmética produjera algo inválido, el error sería de generación, no una clave rota en
+disco. Una clave de 2048 bits tarda ~130 ms en Apple Silicon; OpenSSL valida la clave (`pkey -check`)
+y las firmas que raylang hace con ella. En el nativo, cualquier uso de `__pk_op` enlaza también
+`bigint` (es pequeña) salvo `--without bigint`, donde `rsa_generate` devuelve su `Err`.

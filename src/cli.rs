@@ -3838,6 +3838,7 @@ const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); 
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
+const RT_RSA_KEYGEN_RS: &str = include_str!("../crates/ray-runtime/src/rsa_keygen.rs"); // M348
 const RT_TLS_RS: &str = include_str!("../crates/ray-runtime/src/tls.rs");
 const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 const RT_REGEX_RS: &str = include_str!("../crates/ray-runtime/src/regex.rs");
@@ -3972,6 +3973,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),
+        ("ray-runtime/src/rsa_keygen.rs", RT_RSA_KEYGEN_RS),
         ("ray-runtime/src/tls.rs", RT_TLS_RS),
         ("ray-runtime/src/sqlite.rs", RT_SQLITE_RS),
         ("ray-runtime/src/regex.rs", RT_REGEX_RS),

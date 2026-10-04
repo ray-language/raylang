@@ -17,7 +17,7 @@ pub fn generate_pkcs8(bits: u32) -> Result<Vec<u8>, String> {
     use num_bigint::BigUint;
     use num_integer::Integer;
     use num_traits::{One, Zero};
-    if !(2048..=4096).contains(&bits) || bits % 64 != 0 {
+    if !(2048..=4096).contains(&bits) || !bits.is_multiple_of(64) {
         return Err(format!("rsa_generate: bits must be a multiple of 64 between 2048 and 4096 (got {bits})"));
     }
     let rng = ring::rand::SystemRandom::new();

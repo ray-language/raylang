@@ -4,7 +4,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.31 — 2026-10-04
+
+El arco de rayauth (IDEAS §102): 24 de los 28 hallazgos de un proveedor de identidad escrito en
+raylang, en cuatro oleadas (M344–M347).
+
 
 - **Un local que no es función ya no tapa a un método UFCS.** `fn fail(r: Res, status: int) {
   r.status(status) }` llama a `status(Res, int)` en los tres motores (antes: «cannot call a value

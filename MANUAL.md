@@ -147,13 +147,18 @@ Los **parámetros son inmutables**. Las **firmas de función se anotan siempre**
 La asignación es una **sentencia**, no una expresión (`x = y = 5` no existe). Para descartar un valor:
 `let _ = f();`.
 
-Constantes globales con `const` (su valor debe ser un **literal**, o un **arreglo de literales**
-que se evalúa de nuevo en cada uso: un arreglo fresco por evaluación, sin estado compartido;
-en un bucle caliente ízalo a un local):
+Constantes globales con `const`: su valor es una **expresión constante** — un literal, aritmética
+sobre literales y otras constantes (también de otro módulo: `ops.VERSION`), o un **arreglo de
+constantes** (que se evalúa de nuevo en cada uso: un arreglo fresco por evaluación, sin estado
+compartido; en un bucle caliente ízalo a un local). El compilador la pliega a un literal; una
+llamada o una variable no valen.
 
 ```rust
 const GRAVEDAD: float = 9.81;     // para π/e usa `math.PI`/`math.E` (import std/math), no una const
 const MAX_INTENTOS: int = 3;
+const IDLE_MS: int = 8 * 3600 * 1000;           // aritmética constante: se pliega a 28800000
+const MASK: int = (1 << 4) | 3;
+const AGENT: string = "rayauth/" + VERSION;      // otra const (declarada donde sea; sin ciclos)
 const EXTENSIONES: [string] = ["srt", "vtt"];   // tabla de consulta con nombre
 const BITRATES: [[int]] = [[32, 64, 96], [128, 192, 256]];
 ```
@@ -333,6 +338,7 @@ while (i < 5) { print(i); i = i + 1; }
 for x in [10, 20, 30] { print(x); }
 for i in 0..5 { print(i); }                   // rango semiabierto: 0,1,2,3,4
 for (k, v) in edades { print("${k}: ${v}"); } // Map, en orden de clave
+for (name, n) in [("a", 1), ("b", 2)] { print("${name}=${n}"); } // arreglo de tuplas: se destructura
 ```
 
 ### Salir temprano: `break`, `continue` y sus alternativas

@@ -636,7 +636,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `--lib` | builds the program as a static/dynamic library (`.a`/`.so`/`.lib`) for the iOS/Android shells and other hosts |
 | `--embed <dirs>` | directories baked into the binary (`std/embed`, `static_embedded`); merged with `[native] embed` from `ray.toml` |
 | `--devtools` | keeps the webview inspector available in the binary (without the flag the call does not exist) |
-| `--no-stubs` | turns the warning about functions outside the native subset into an error (instead of emitting a stub that fails at run time) |
+| `--no-stubs` / `--allow-stubs` | policy for a function outside the native subset: by default a development build emits it as a stub that fails when called (with a warning) and **`--release` rejects it** (exit 65), as does `ray bundle`; `--no-stubs` forces the error in dev builds too and `--allow-stubs` brings the stubs back in release |
 | `--without <list>` | excludes subsystems: `crypto,tls,sqlite,regex,bigint` (they fall back to a *stub* with a clear error or to the raylang implementation) and `mimalloc,ahash,fibers,process` (which are on by default). Merged with `[native] without` of `ray.toml` |
 
 The subsystems backed by production crates (TLS/`rustls`, crypto/`ring`, SQLite/`rusqlite`, accelerated
@@ -676,4 +676,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:b9396df7ad68 -->
+<!-- sync: sha256:aa580cc701a7 -->

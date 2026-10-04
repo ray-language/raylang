@@ -1048,8 +1048,10 @@ fn constants_accept_tuples_and_earlier_constants() {
     let ok = "const ID_A: int = 1;\nconst ID_B: int = 2;\nconst IDS: [int] = [ID_A, ID_B];\nconst TABLE: [(int, string)] = [(ID_A, \"a\"), (2, \"b\")];\nconst NEG: [int] = [0 - 0, -1];\nfn main() -> int { let (i, s) = TABLE[0]; i + IDS.len() + s.len() }";
     let r = check_src(ok.replace("0 - 0", "0").as_str());
     assert!(r.is_ok(), "{r:?}");
-    err_contains("const X: [int] = [Y];\nconst Y: int = 1;\nfn main() -> int { 0 }", "must be a literal");
-    err_contains("const X: int = len(\"a\");\nfn main() -> int { 0 }", "must be a literal");
+    // M345: una referencia hacia ADELANTE se pliega (punto fijo); un ciclo, no.
+    assert!(check_src("const X: [int] = [Y];\nconst Y: int = 1;\nfn main() -> int { 0 }").is_ok());
+    err_contains("const X: int = Y;\nconst Y: int = X;\nfn main() -> int { 0 }", "must be a constant expression");
+    err_contains("const X: int = len(\"a\");\nfn main() -> int { 0 }", "must be a constant expression");
     err_contains("const T: (int, string) = (1, 2);\nfn main() -> int { 0 }", "constant 'T' is declared as (int, string) but its value is (int, int)");
 }
 

@@ -380,6 +380,8 @@ pub(super) struct PreludeOrigin {
 }
 
 fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
+    // M345 (rayauth R16): plegar las expresiones constantes de los `const` antes de todo lo demás.
+    fold_consts(program)?;
     // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
     // anteponen, así forman parte del AST que también ven el intérprete y la VM.
     if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {

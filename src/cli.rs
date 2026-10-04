@@ -146,9 +146,9 @@ Project:
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it here)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
-  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release]]
+  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release] [--no-stubs | --allow-stubs]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
   serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
@@ -2166,12 +2166,14 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
 [--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--dev] [--devtools] \
-[--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
+[--allow-stubs] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
 Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
+  --allow-stubs: a bundle is a release build, so a function outside the native subset is an error; this flag \
+ships it as a stub that panics when called instead (what `ray build --native` does without --release).\n\
   --dev (with --ios/--android): the DEVELOPMENT shell — same app, id `<id>.dev`, with the raylang toolchain + VM inside \
 instead of the compiled program; install it once, pair it with the link `ray dev --device` prints, and every saved \
 change reloads the program on the phone (files, keychain, network and audio are the phone's).\n\
@@ -2204,6 +2206,7 @@ fn cmd_bundle(args: &[String]) {
     let mut android_abi_arg: Option<String> = None;
     // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
     let mut devtools = false;
+    let mut stubs = StubPolicy::Auto;
     let mut dev = false;
     let mut file: Option<String> = None;
     let mut i = 0;
@@ -2247,6 +2250,11 @@ fn cmd_bundle(args: &[String]) {
             "--devtools" => {
                 devtools = true;
                 crate::transpile::set_native_devtools(true); // el binario de escritorio también
+                i += 1;
+            }
+            // M346 (rayauth R20): un bundle es un build de release → sin stubs salvo que se pidan.
+            "--allow-stubs" => {
+                stubs = StubPolicy::Allow;
                 i += 1;
             }
             // M330 D3: el shell de DESARROLLO — la misma app, con la librería de desarrollo
@@ -2388,7 +2396,7 @@ fn cmd_bundle(args: &[String]) {
             if dev {
                 build_dev_lib("aarch64-linux-android", &arm_so);
             } else {
-                build_native(&path, arm_so.to_str(), true, &exclude, Some("aarch64-linux-android"), false, false, fibers, &embed, true);
+                build_native(&path, arm_so.to_str(), true, &exclude, Some("aarch64-linux-android"), false, stubs, fibers, &embed, true);
             }
         }
         if build_x86 {
@@ -2396,7 +2404,7 @@ fn cmd_bundle(args: &[String]) {
             if dev {
                 build_dev_lib("x86_64-linux-android", &x86_so);
             } else {
-                build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, false, fibers, &embed, true);
+                build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, stubs, fibers, &embed, true);
             }
         }
         let proj = out_dir.join(format!("{name}-android"));
@@ -2523,7 +2531,7 @@ fn cmd_bundle(args: &[String]) {
             if dev {
                 build_dev_lib("aarch64-apple-ios", &dev_a);
             } else {
-                build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, false, fibers, &embed, true);
+                build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, stubs, fibers, &embed, true);
             }
         }
         if build_sim {
@@ -2531,7 +2539,7 @@ fn cmd_bundle(args: &[String]) {
             if dev {
                 build_dev_lib("aarch64-apple-ios-sim", &sim_a);
             } else {
-                build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, false, fibers, &embed, true);
+                build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, stubs, fibers, &embed, true);
             }
         }
         let proj = out_dir.join(format!("{name}-ios"));
@@ -2662,7 +2670,7 @@ fn cmd_bundle(args: &[String]) {
     // M186: el binario que empaquetamos es el que el build ESCRIBIÓ (en Windows, `bin.exe`), no el
     // nombre que le pedimos.
     configure_native_app_info(&path); // M247
-    let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, false, fibers, &embed, false));
+    let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, stubs, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {
         // M209: claves extra del Info.plist ([app.plist]) y el permiso de red local por defecto
@@ -3094,7 +3102,8 @@ fn cmd_build(args: &[String]) {
     let fast = args.iter().any(|a| a == "--fast");
     // M273 (raystream [13]): `--no-stubs` convierte el aviso de funciones fuera del subconjunto nativo
     // (stubs que panican al llamarse) en un ERROR de build: para quien no quiera minas en runtime.
-    let no_stubs = args.iter().any(|a| a == "--no-stubs");
+    // M346 (rayauth R20): en `--release` el aviso es error salvo `--allow-stubs`.
+    let stubs = StubPolicy::from_args(args);
     // Fibras (arco de concurrencia nativa, jul 2026): la concurrencia del binario nativo corre sobre
     // el scheduler M:N de fibras (corosensei + reactor kqueue/epoll) POR DEFECTO — decisión tomada
     // tras F5 (banco en red real: techo +16 % sobre hilo-por-tarea, 14 hilos / 8 MB donde el modelo
@@ -3197,7 +3206,7 @@ fn cmd_build(args: &[String]) {
         run_frontend_build(&path); // M263
         let embed = collect_embed(&path, embed_arg.as_deref());
         configure_native_app_info(&path); // M247
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, no_stubs, fibers, &embed, lib_mode);
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, stubs, fibers, &embed, lib_mode);
         return;
     }
     if lib_mode {
@@ -3300,7 +3309,7 @@ fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
 
 /// Devuelve la ruta del artefacto REALMENTE escrito: en Windows no coincide con lo pedido (M186 le
 /// añade la extensión que el SO exige), y `ray bundle` necesita el nombre de verdad para empaquetar.
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, stubs: StubPolicy, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
     // M309 (findings #55): `-o dir/app` con `dir` inexistente fallaba AL FINAL, tras compilar entero,
     // con «could not copy the binary» (parecía de permisos). El directorio se crea antes de nada.
     if let Some(out) = output
@@ -3314,14 +3323,14 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     }
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    build_native_checked(&program, path, output, release, exclude, target, fast, no_stubs, fibers, embed, lib_mode)
+    build_native_checked(&program, path, output, release, exclude, target, fast, stubs, fibers, embed, lib_mode)
 }
 
 /// M312 (findings #66): la mitad de `build_native` que parte de un programa YA cargado y chequeado —
 /// compartida con `ray test --native`, que sintetiza el `main` de cada suite como AST (no hay
 /// archivo que cargar). Devuelve la ruta del binario; sale del proceso si el build falla.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, no_stubs: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
+pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, stubs: StubPolicy, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> String {
     let transpiled = match crate::transpile::transpile_entry(program, exclude, fast, fibers, embed, lib_mode) {
         Ok(t) => t,
         Err(e) => {
@@ -3341,8 +3350,13 @@ pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, ou
         for (name, reason) in &transpiled.stubbed {
             eprintln!("  · {name}: {reason}");
         }
-        if no_stubs {
-            eprintln!("native build: --no-stubs: refusing to emit stubs (fix or avoid the functions above)");
+        if stubs.forbids(release) {
+            let why = if stubs == StubPolicy::Forbid {
+                "--no-stubs".to_string()
+            } else {
+                "a release build does not ship stubs (pass --allow-stubs to accept the runtime panic)".to_string()
+            };
+            eprintln!("native build: {why}: refusing to emit stubs (fix or avoid the functions above)");
             process::exit(65);
         }
     }
@@ -3399,6 +3413,39 @@ pub(crate) fn build_native_checked(program: &crate::ast::Program, path: &str, ou
     out_bin
 }
 
+/// M346 (rayauth R20): qué hacer con las funciones que caen fuera del subconjunto nativo. `Auto` es
+/// la política por defecto: en un build de desarrollo se emiten stubs que panican al llamarse (con el
+/// aviso); en `--release` —y en todo `ray bundle`, que es release— el aviso es un ERROR: un servidor
+/// en producción no debe llevar una mina en una ruta poco usada. `--no-stubs` fuerza el error también
+/// en dev; `--allow-stubs` recupera los stubs en release.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StubPolicy {
+    Auto,
+    Forbid,
+    Allow,
+}
+
+impl StubPolicy {
+    /// Lee `--no-stubs` / `--allow-stubs` de los argumentos (`Auto` si no hay ninguno).
+    pub(crate) fn from_args(args: &[String]) -> StubPolicy {
+        if args.iter().any(|a| a == "--no-stubs") {
+            StubPolicy::Forbid
+        } else if args.iter().any(|a| a == "--allow-stubs") {
+            StubPolicy::Allow
+        } else {
+            StubPolicy::Auto
+        }
+    }
+
+    fn forbids(self, release: bool) -> bool {
+        match self {
+            StubPolicy::Forbid => true,
+            StubPolicy::Allow => false,
+            StubPolicy::Auto => release,
+        }
+    }
+}
+
 /// M312 (findings #66): opciones del build nativo de `ray test --native`: la política estable del
 /// proyecto (`[native] without` del ray.toml) y el modo fibras que le corresponde; sin `--target`
 /// (las suites corren en el host) y con el perfil dev salvo `--release`.
@@ -3406,13 +3453,14 @@ pub(crate) struct NativeTestOptions {
     pub release: bool,
     exclude: Vec<String>,
     fibers: bool,
+    stubs: StubPolicy,
 }
 
-pub(crate) fn native_test_options(release: bool) -> NativeTestOptions {
+pub(crate) fn native_test_options(release: bool, stubs: StubPolicy) -> NativeTestOptions {
     let exclude: Vec<String> = load_manifest().map(|m| m.native_without).unwrap_or_default();
     let without_fibers = exclude.iter().any(|d| d == "fibers");
     let fibers = fibers_for_target(None, without_fibers);
-    NativeTestOptions { release, exclude, fibers }
+    NativeTestOptions { release, exclude, fibers, stubs }
 }
 
 /// M312: compila el programa de una suite (con su `main` sintético de despacho) a un binario en
@@ -3420,7 +3468,7 @@ pub(crate) fn native_test_options(release: bool) -> NativeTestOptions {
 pub(crate) fn build_native_test_binary(program: &crate::ast::Program, suite_path: &str, out_bin: &str, opts: &NativeTestOptions) -> String {
     let embed = collect_embed(suite_path, None);
     configure_native_app_info(suite_path);
-    build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, false, opts.fibers, &embed, false)
+    build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, opts.stubs, opts.fibers, &embed, false)
 }
 
 /// M186: la extensión que Windows EXIGE en el nombre de salida — `.exe` para un binario, `.lib` para
@@ -4161,9 +4209,13 @@ fn cmd_test_sub(args: &[String]) {
     // despacho) y corre cada prueba como proceso; `--release` elige el perfil optimizado.
     let (native, args) = take_flag_bool(&args, "--native");
     let (release, args) = take_flag_bool(&args, "--release");
+    // M346 (rayauth R20): la misma política de stubs que `ray build --native`.
+    let (no_stubs, args) = take_flag_bool(&args, "--no-stubs");
+    let (allow_stubs, args) = take_flag_bool(&args, "--allow-stubs");
+    let stubs = if no_stubs { StubPolicy::Forbid } else if allow_stubs { StubPolicy::Allow } else { StubPolicy::Auto };
     let (explicit, filter) = split_test_args(&args);
     let (suites, roots) = test_suites_and_roots(&explicit);
-    let mode = if native { Some(native_test_options(release)) } else { None };
+    let mode = if native { Some(native_test_options(release, stubs)) } else { None };
     process::exit(test_runner::run_with(&suites, &roots, filter.as_deref(), mode));
 }
 

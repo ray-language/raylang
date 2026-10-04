@@ -17,6 +17,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   dejar la función como stub (M344, rayauth R19 y R28).
 - **Brazo de asignación en `match`**: `Option.Some(w) => x = w,` equivale a `=> { x = w; },`; `ray
   fmt` lo conserva (M344, rayauth R25).
+- **`ray fmt` ya no rompe `(if …) + "b"`** ni saca los comentarios de una lista de parámetros al
+  cuerpo; además reparsea su salida y se niega a escribir código que no parsea. Un cuerpo de una
+  línea tras una línea en blanco ya no gana blancos entre sus sentencias (M345, rayauth R21/R26).
+- **`const` con expresiones constantes**: `const IDLE_MS: int = 8 * 3600 * 1000;`, `"v" +
+  ops.VERSION`, `(1 << 4) | 3`, otras `const` de cualquier módulo; se pliegan al compilar y la
+  división por cero es error con posición (M345, rayauth R16).
+- **`for (a, b) in xs`** también sobre un arreglo de tuplas (M345, rayauth R11).
+- **`bytes_of([])` y `join([], sep)`** infieren el `[]` del parámetro (M345, rayauth R12).
+- **Un build nativo de `--release` (y `ray bundle`) ya no lleva stubs.** Una función fuera del
+  subconjunto nativo era un aviso y un `panic` en runtime; ahora en release es un error que la
+  nombra, y `--allow-stubs` recupera el comportamiento anterior. En desarrollo sigue siendo un
+  aviso, y `--no-stubs` lo convierte en error (M346, rayauth R20).
+- **Docs**: `web.listen`/`Sessions` enseñan el patrón de closure inline y la restricción nativa de
+  las closures guardadas en `let`; `db/sqlite` explica el uso desde varias fibras y el `NULL` → `""`;
+  `llms.txt` documenta `as` entre `int` y `float` (M346, rayauth R5/R6/R27).
 
 ## 1.27.30 — 2026-10-03
 

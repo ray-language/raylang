@@ -1465,9 +1465,16 @@ impl Transpiler {
             }
             // bytes_of([int]) -> bytes: construye bytes de un arreglo de octetos (cada 0–255, `as u8`).
             "bytes_of" => {
-                out.push_str("Rc::<[u8]>::from(");
-                self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>())");
+                // M345 (R12): `bytes_of([])` — el `Vec::new()` vacío necesita su tipo para que rustc
+                // infiera el `*__rt_x as u8`.
+                let empty = matches!(&eff[0].kind, ExprKind::ArrayLit(es) if es.is_empty());
+                if empty {
+                    out.push_str("Rc::<[u8]>::from(Vec::<u8>::new())");
+                } else {
+                    out.push_str("Rc::<[u8]>::from(");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>())");
+                }
             }
             // Más builtins de string (→ métodos de `str`/`String` de Rust, misma semántica que la VM).
             "trim" => {
@@ -1661,7 +1668,8 @@ impl Transpiler {
             }
             // join(t) → t.join() (Task, structured concurrency); join(arr, sep) → __ray_join (string). El
             // `join` es ad-hoc: se distingue por el tipo del primer arg (Task vs arreglo).
-            "join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
+            // (M345: sin `?` — `join([], ",")` no tipa su `[]` y aun así es el `join` de strings.)
+            "join" if matches!(self.type_of(eff[0]), Ok(Type::Task(_))) => {
                 // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc;
                 // compuestos → desde el árbol __RaySend, N5a).
                 let elem = match self.type_of(eff[0])? {
@@ -3218,7 +3226,15 @@ impl Transpiler {
                     let table_name = if n.contains('#') { method } else { n };
                     if let Some(b) = crate::builtins::lookup(table_name) {
                         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
-                        if let Ok(ats) = eff.iter().map(|a| self.type_of(a)).collect::<Result<Vec<_>, _>>()
+                        // M345 (rayauth R12): un `[]` en un parámetro de tipo FIJO (`bytes_of([])`,
+                        // `join([], ",")`) toma ese tipo, como en el checker (`builtin_fixed_param`).
+                        let typed = eff.iter().enumerate().map(|(i, a)| {
+                            match (&a.kind, builtin_fixed_param(table_name, i)) {
+                                (ExprKind::ArrayLit(es), Some(t)) if es.is_empty() => Ok(t),
+                                _ => self.type_of(a),
+                            }
+                        });
+                        if let Ok(ats) = typed.collect::<Result<Vec<_>, _>>()
                             && let Ok(ret) = (b.check)(&ats)
                         {
                             return Ok(self.classify(&ret));
@@ -3237,7 +3253,7 @@ impl Transpiler {
                     "parse_int" => opt_of(Type::Int),
                     "parse_float" => opt_of(Type::Float),
                     // Bytes: to_bytes → bytes; sub_bytes → bytes; from_utf8 → Result<string,string>.
-                    "to_bytes" | "sub_bytes" => Type::Bytes,
+                    "to_bytes" | "sub_bytes" | "bytes_of" => Type::Bytes, // M345: `bytes_of` como valor de `let`
                     "from_utf8" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                     // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>;
                     // env → Option<string> (variable de entorno).
@@ -3549,4 +3565,15 @@ impl Transpiler {
         })
     }
 
+}
+
+/// M345 (rayauth R12): el tipo FIJO del parámetro `i` de un builtin cuya firma no depende de los
+/// argumentos — espejo de `builtin_fixed_param` del checker (mismas filas): el contexto que un `[]`
+/// necesita para tiparse.
+fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
+    match (name, i) {
+        ("bytes_of", 0) => Some(Type::Array(Box::new(Type::Int))),
+        ("join", 0) => Some(Type::Array(Box::new(Type::String))),
+        _ => None,
+    }
 }

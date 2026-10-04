@@ -268,6 +268,10 @@ and [React site](web-react.en.md) chapters.
   Mac, if the Rust toolchain has that target.
 - `--without crypto,tls,sqlite,…` leaves out what the service does not use, for a smaller binary
   and container image.
+- If a function in the program falls outside what the native compiler can translate, a `--release`
+  build stops and names it: a production binary does not ship functions that fail when called. A
+  build without `--release` only warns; `ray build --native --no-stubs` gives you the error in
+  development too, so you find out early.
 - Behind a proxy such as nginx or Caddy, which handles HTTPS, the binary is ready for production.
 
 In a container, the image only needs the binary, built for Linux:
@@ -296,4 +300,4 @@ CMD ["notes-api"]
 That is the end of the chapters. For other use cases, [**More examples**](examples.en.md) gathers
 the apps of the ray-language organization, with their full source.
 
-<!-- sync: sha256:b1a0b6f95039 -->
+<!-- sync: sha256:c18c89811acc -->

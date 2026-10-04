@@ -356,6 +356,27 @@ fn main() -> int {
     let (n, e) = crypto.rsa_public_components(pk).unwrap();
     print("${n.len() * 8} ${e.len()}");
     print(crypto.rsa_generate(1000));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "true\n2048 3\nResult.Err(rsa_generate: bits must be a multiple of 64 between 2048 and 4096 (got 1000))\n");
+    if Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let check = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-check", "-noout"]).current_dir(&d).output().unwrap();
+        assert!(check.status.success(), "openssl pkey -check: {}", String::from_utf8_lossy(&check.stderr));
+        std::fs::write(d.join("m.txt"), "hello").unwrap();
+        let pubout = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-pubout", "-out", "gen_pub.pem"]).current_dir(&d).output().unwrap();
+        assert!(pubout.status.success());
+        let verify = Command::new("openssl")
+            .args(["dgst", "-sha256", "-verify", "gen_pub.pem", "-signature", "gen_sig.bin", "m.txt"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&verify.stdout).contains("Verified OK"), "{}", String::from_utf8_lossy(&verify.stderr));
+    }
+}
+
 /// M349 (IDEAS §102 R15): `std/template` con objetos — `VMap`, rutas con punto en `{{ }}`, `{% if %}`
 /// y `{% for %}`, índices en listas (`items.0`), `from_json`. Misma salida en los tres motores.
 #[test]
@@ -381,20 +402,6 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    three_engines(&d, "true\n2048 3\nResult.Err(rsa_generate: bits must be a multiple of 64 between 2048 and 4096 (got 1000))\n");
-    if Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
-        let check = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-check", "-noout"]).current_dir(&d).output().unwrap();
-        assert!(check.status.success(), "openssl pkey -check: {}", String::from_utf8_lossy(&check.stderr));
-        std::fs::write(d.join("m.txt"), "hello").unwrap();
-        let pubout = Command::new("openssl").args(["pkey", "-in", "gen.pem", "-pubout", "-out", "gen_pub.pem"]).current_dir(&d).output().unwrap();
-        assert!(pubout.status.success());
-        let verify = Command::new("openssl")
-            .args(["dgst", "-sha256", "-verify", "gen_pub.pem", "-signature", "gen_sig.bin", "m.txt"])
-            .current_dir(&d)
-            .output()
-            .unwrap();
-        assert!(String::from_utf8_lossy(&verify.stdout).contains("Verified OK"), "{}", String::from_utf8_lossy(&verify.stderr));
-    }
     three_engines(
         &d,
         "<tr><td>Ada &lt;3</td><td>yes</td><td>[ops][dev]</td></tr>\n<tr><td>Bob</td><td>no</td><td></td></tr>\nfirst=Ada &lt;3 missing=|rayauth|a@b.c\n1:2.5:x n=[] ok=true all=items=id=1, price=2.5, tags=x, n=, ok=true\n",

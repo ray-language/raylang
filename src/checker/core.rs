@@ -3186,8 +3186,10 @@ impl Checker {
         // su nombre pelado (el ámbito es léxico): `fn text(n: int)` en main.ray no debe capturar el
         // `r.text("x")` que otro módulo hace sobre un `fw::Res`. Solo el prelude (y sus alias
         // `#prelude`) resuelve pelado desde un módulo; lo demás sigue por alias/tipo del receptor.
+        // (Si la raíz REDEFINIÓ una función del prelude, el nombre sigue visible desde los módulos:
+        // resuelve al alias `nombre#prelude`, M298.)
         let bare_visible = self.functions.contains_key(name)
-            && (self.current_fn_is_root || !self.is_root_user_fn(name));
+            && (self.current_fn_is_root || !self.is_root_user_fn(name) || self.overridden_prelude.contains(name));
         let target = if crate::builtins::is_builtin(name) || local_is_fn {
             name.to_string()
         } else if let Some(local) = self.module_local_fn(name, line, recv_ty) {

@@ -96,6 +96,28 @@ struct VarInfo {
     def: (usize, usize),
 }
 
+/// M344 (rayauth R17): inyecta `nombre#free` como clon de cada función libre que un sitio UFCS
+/// necesitó llamar por debajo de un local homónimo que no es función. Idempotente (un alias ya
+/// presente no se duplica); las bajadas posteriores recorren el clon como a cualquier función.
+fn inject_free_fn_aliases(program: &mut Program, names: &HashSet<String>) {
+    if names.is_empty() {
+        return;
+    }
+    let present: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
+    let mut aliases = Vec::new();
+    for f in &program.functions {
+        if names.contains(&f.name) {
+            let alias = format!("{}#free", f.name);
+            if !present.contains(&alias) {
+                let mut c = f.clone();
+                c.name = alias;
+                aliases.push(c);
+            }
+        }
+    }
+    program.functions.extend(aliases);
+}
+
 /// Punto de entrada de la fase: verifica un programa completo.
 ///
 /// Recibe el programa por **referencia mutable** porque, antes de verificar,
@@ -177,6 +199,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Pasos 2–3: pre-pasada y verificación.
     let mut checker = Checker::new();
     checker.check_program(program)?;
+    inject_free_fn_aliases(program, &checker.shadowed_free_fns);
     // Paso 3.0 (M311): expandir los alias de tipo en TODAS las posiciones de tipo del AST. El
     // checker ya los resolvió al vuelo (`resolve_type`); los clientes que leen tipos del AST
     // después (el transpilador nativo, con su propio `type_of`) no deben verlos.
@@ -678,6 +701,13 @@ struct Checker {
     /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
     /// M267: el cuarto campo es la profundidad en una cadena del mismo método (`lowering::ufcs_chain_depth`).
     ufcs_sites: HashMap<(usize, usize, String, usize), String>,
+    /// M344 (rayauth R17): funciones libres a las que un sitio UFCS llegó pese a que un LOCAL
+    /// homónimo que no es función (`fn fail(r: Res, status: int) { r.status(status) }`) las tapa
+    /// en los motores (resuelven el `Ident` por ámbito: local primero). El sitio se baja al alias
+    /// `nombre#free`, y `check` inyecta ese alias como clon de la función tras la verificación.
+    shadowed_free_fns: HashSet<String>,
+    /// M344 (rayauth R13): funciones del usuario definidas en el módulo de entrada (nombre pelado).
+    root_user_fns: HashSet<String>,
     /// M40.2: `for x in it` sobre un iterador → posición del `for` (línea, col) → nombre manglado de
     /// su método `next`. Un pase lo baja reescribiendo `ForIter::In` a `ForIter::Iter`.
     for_iter_sites: HashMap<(usize, usize), String>,

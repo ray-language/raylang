@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Un local que no es función ya no tapa a un método UFCS.** `fn fail(r: Res, status: int) {
+  r.status(status) }` llama a `status(Res, int)` en los tres motores (antes: «cannot call a value
+  of type int»); si no hay función a la que ir, el error dice que el local no cuenta (M344, rayauth R17).
+- **Una función del archivo de entrada ya no se cuela en el UFCS de otros módulos.** Definir
+  `fn text(n: int)` en `main.ray` no rompe el `r.text("x")` que un módulo hace sobre el tipo de
+  otro (M344, rayauth R13).
+- **Nativo**: `let c = if (…) { Option.None } else { m.f()? }` con el struct en otro módulo, y
+  `let _ = try_send(ch, v)` (también `try_recv`/`send`/`close` como valor) ya compilan en vez de
+  dejar la función como stub (M344, rayauth R19 y R28).
+- **Brazo de asignación en `match`**: `Option.Some(w) => x = w,` equivale a `=> { x = w; },`; `ray
+  fmt` lo conserva (M344, rayauth R25).
+
 ## 1.27.30 — 2026-10-03
 
 - **`ray dev --device` explica cómo emparejar el teléfono.** La terminal arranca con el logo de

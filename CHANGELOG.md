@@ -4,11 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.32 — 2026-10-04
+
+La cola del arco de rayauth: generar claves RSA y objetos en las plantillas.
 
 - **`crypto.rsa_generate(bits)`**: claves RSA de 2048–4096 bits en PKCS#8, sin dependencias nuevas
   (`num-bigint` + el CSPRNG de ring; ~0,1–1 s); encadena con `rsa_pkcs1_sign`, `std/pem` y OpenSSL
   (M348, rayauth R1).
+- **`std/template` con objetos**: `{{ user.name }}`, `{% if user.admin %}`, `{% for r in
+  user.roles %}`, `{{ items.0 }}`; se construyen con `val_map([field("name", v)…])`/`ctx_map` o desde
+  un JSON entero con `from_json` (M349, rayauth R15).
 
 ## 1.27.31 — 2026-10-04
 

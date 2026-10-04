@@ -15,7 +15,10 @@
 // de aquí: este módulo es también su librería de soporte.
 //
 // El contexto son variables tipadas (`enum TVal`): raylang es estáticamente tipado, así que los valores
-// heterogéneos van en un enum y el contexto es una lista de `(nombre, valor)`.
+// heterogéneos van en un enum y el contexto es una lista de `(nombre, valor)`. M349 (rayauth R15):
+// `VMap` (objetos) y rutas con punto `{{ user.name }}` / `{% for r in user.roles %}` / `items.0`.
+from std/json import Json;
+
 //
 // Rendimiento (la lección de la optimización): NADA se acumula con `s = s + trozo` en bucle (eso es
 // O(n²): cada `+` copia el string entero). El tokenizador extrae los tramos con `substring` (un corte
@@ -29,6 +32,9 @@ pub enum TVal {
     VInt(int),
     VBool(bool),
     VList([TVal]),
+    /// An object: named fields, reached with dotted paths (`{{ user.name }}`, `{% for r in
+    /// user.roles %}`). M349 (rayauth R15).
+    VMap([Bind]),
 }
 
 // Una asociación nombre → valor en el contexto.
@@ -80,6 +86,69 @@ pub fn val_str(s: string) -> TVal { TVal.VStr(s) }
 
 /// Wraps an int as a `TVal` (for building list elements).
 pub fn val_int(n: int) -> TVal { TVal.VInt(n) }
+
+/// Wraps a bool as a `TVal`.
+pub fn val_bool(b: bool) -> TVal { TVal.VBool(b) }
+
+/// Wraps a list as a `TVal` (a list of lists, or a list inside an object).
+pub fn val_list(xs: [TVal]) -> TVal { TVal.VList(xs) }
+
+// M349 (rayauth R15): objetos. `{% for u in users %}{{ u.name }}{% endfor %}` — antes había que
+// montar la tabla en código con `escape_html`.
+/// An object value from its fields: `val_map([field("name", val_str("Ada")), field("admin",
+/// val_bool(true))])`. Reached with dotted paths in the template (`{{ u.name }}`).
+pub fn val_map(fields: [Bind]) -> TVal { TVal.VMap(fields) }
+
+/// A field of an object (or any binding): `field(name, value)`.
+pub fn field(name: string, value: TVal) -> Bind { Bind { name: name, value: value } }
+
+/// Creates an object binding for the template context (`{{ user.name }}`).
+pub fn ctx_map(name: string, fields: [Bind]) -> Bind { Bind { name: name, value: TVal.VMap(fields) } }
+
+/// Creates a binding for any value.
+pub fn ctx_val(name: string, value: TVal) -> Bind { Bind { name: name, value: value } }
+
+/// Converts a parsed JSON document into a template value: objects become `VMap` (fields in key
+/// order), arrays `VList`, strings/bools themselves, integral numbers `VInt`, other numbers their
+/// decimal text, `null` the empty string. The shortest path from an API response to a template.
+pub fn from_json(j: Json) -> TVal {
+    match (j) {
+        Json.JStr(s) => TVal.VStr(s),
+        // Sin `as` (el parser auto-alojado no lo tiene): un número que imprime como entero lo es.
+        Json.JNum(f) => {
+            let txt = to_string(f);
+            match (parse_int(txt)) {
+                Option.Some(n) => TVal.VInt(n),
+                Option.None => TVal.VStr(txt),
+            }
+        },
+        Json.JBool(b) => TVal.VBool(b),
+        Json.JNull => TVal.VStr(""),
+        // Bucles `while` (como el resto del módulo): el parser auto-alojado no tiene `for`.
+        Json.JArray(xs) => {
+            var out: [TVal] = [];
+            var i = 0;
+            while (i < xs.len()) {
+                out.push(from_json(xs[i]));
+                i = i + 1;
+            }
+            TVal.VList(out)
+        },
+        Json.JObject(m) => {
+            var fields: [Bind] = [];
+            let ks = m.keys();
+            var i = 0;
+            while (i < ks.len()) {
+                match (m.get(ks[i])) {
+                    Option.Some(v) => fields.push(Bind { name: ks[i], value: from_json(v) }),
+                    Option.None => { },
+                }
+                i = i + 1;
+            }
+            TVal.VMap(fields)
+        },
+    }
+}
 
 // ---- Tokenizador ----
 //
@@ -275,7 +344,7 @@ pub fn escape_html(s: string) -> string {
         .replace("'", "&#39;")
 }
 
-fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
+fn lookup_flat(ctx: [Bind], name: string) -> Option<TVal> {
     var i = 0;
     while (i < ctx.len()) {
         if (ctx[i].name == name) {
@@ -286,12 +355,46 @@ fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
     Option.None
 }
 
+// M349: una ruta con puntos baja por objetos (`user.name`) y por listas con un índice (`items.0`).
+// El primer segmento se busca en el contexto; los demás, en el valor anterior. Cualquier eslabón que
+// falte da `None` (y el hueco se renderiza como "", como una variable ausente).
+fn lookup(ctx: [Bind], path: string) -> Option<TVal> {
+    if (!path.contains(".")) {
+        return lookup_flat(ctx, path);
+    }
+    let segs = path.split(".");
+    var cur = match (lookup_flat(ctx, segs[0])) {
+        Option.Some(v) => v,
+        Option.None => return Option.None,
+    };
+    var i = 1;
+    while (i < segs.len()) {
+        let seg = segs[i];
+        cur = match (cur) {
+            TVal.VMap(fields) => match (lookup_flat(fields, seg)) {
+                Option.Some(v) => v,
+                Option.None => return Option.None,
+            },
+            TVal.VList(xs) => match (parse_int(seg)) {
+                Option.Some(k) => if (k >= 0 && k < xs.len()) { xs[k] } else {
+                    return Option.None;
+                },
+                Option.None => return Option.None,
+            },
+            _ => return Option.None,
+        };
+        i = i + 1;
+    }
+    Option.Some(cur)
+}
+
 fn truthy(v: TVal) -> bool {
     match (v) {
         TVal.VBool(b) => b,
         TVal.VInt(n) => n != 0,
         TVal.VStr(s) => s != "",
         TVal.VList(xs) => xs.len() > 0,
+        TVal.VMap(fields) => fields.len() > 0,
     }
 }
 
@@ -308,6 +411,19 @@ fn render_val(v: TVal) -> string {
                     out.push(", ");
                 }
                 out.push(render_val(xs[i]));
+                i = i + 1;
+            }
+            out.join("")
+        },
+        // Un objeto interpolado entero (raro): `clave=valor` separados por coma, como su lista.
+        TVal.VMap(fields) => {
+            var out: [string] = [];
+            var i = 0;
+            while (i < fields.len()) {
+                if (i > 0) {
+                    out.push(", ");
+                }
+                out.push(fields[i].name + "=" + render_val(fields[i].value));
                 i = i + 1;
             }
             out.join("")

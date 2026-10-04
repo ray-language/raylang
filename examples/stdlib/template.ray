@@ -114,24 +114,36 @@ pub fn ctx_val(name: string, value: TVal) -> Bind { Bind { name: name, value: va
 pub fn from_json(j: Json) -> TVal {
     match (j) {
         Json.JStr(s) => TVal.VStr(s),
-        Json.JNum(f) => if (f == (f as int) as float) {
-            TVal.VInt(f as int)
-        } else {
-            TVal.VStr(to_string(f))
+        // Sin `as` (el parser auto-alojado no lo tiene): un número que imprime como entero lo es.
+        Json.JNum(f) => {
+            let txt = to_string(f);
+            match (parse_int(txt)) {
+                Option.Some(n) => TVal.VInt(n),
+                Option.None => TVal.VStr(txt),
+            }
         },
         Json.JBool(b) => TVal.VBool(b),
         Json.JNull => TVal.VStr(""),
+        // Bucles `while` (como el resto del módulo): el parser auto-alojado no tiene `for`.
         Json.JArray(xs) => {
             var out: [TVal] = [];
-            for x in xs {
-                out.push(from_json(x));
+            var i = 0;
+            while (i < xs.len()) {
+                out.push(from_json(xs[i]));
+                i = i + 1;
             }
             TVal.VList(out)
         },
         Json.JObject(m) => {
             var fields: [Bind] = [];
-            for (k, v) in m {
-                fields.push(Bind { name: k, value: from_json(v) });
+            let ks = m.keys();
+            var i = 0;
+            while (i < ks.len()) {
+                match (m.get(ks[i])) {
+                    Option.Some(v) => fields.push(Bind { name: ks[i], value: from_json(v) }),
+                    Option.None => { },
+                }
+                i = i + 1;
             }
             TVal.VMap(fields)
         },

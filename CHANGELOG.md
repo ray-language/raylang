@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`crypto.rsa_generate(bits)`**: claves RSA de 2048–4096 bits en PKCS#8, sin dependencias nuevas
+  (`num-bigint` + el CSPRNG de ring; ~0,1–1 s); encadena con `rsa_pkcs1_sign`, `std/pem` y OpenSSL
+  (M348, rayauth R1).
+
 ## 1.27.31 — 2026-10-04
 
 El arco de rayauth (IDEAS §102): 24 de los 28 hallazgos de un proveedor de identidad escrito en

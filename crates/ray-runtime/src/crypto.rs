@@ -345,6 +345,14 @@ pub fn pk_op(op: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> 
         }
         "p256_verify" => verdict(signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_FIXED, a).verify(b, c).is_ok()),
         "p256_verify_asn1" => verdict(signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_ASN1, a).verify(b, c).is_ok()),
+        // M348: generación sin dependencias nuevas (num-bigint + CSPRNG de ring) → PKCS#8 que ring importa.
+        // `a` = los bits en decimal ASCII. El resultado se valida pasándolo por ring antes de devolverlo.
+        "rsa_generate" => {
+            let bits: u32 = std::str::from_utf8(a).ok().and_then(|s| s.trim().parse().ok()).ok_or("rsa_generate: bits must be a number")?;
+            let der = crate::rsa_keygen::generate_pkcs8(bits)?;
+            signature::RsaKeyPair::from_pkcs8(&der).map_err(|e| format!("rsa_generate: internal error, ring rejects the key ({e})"))?;
+            Ok(der)
+        }
         "rsa_public" => {
             let kp = signature::RsaKeyPair::from_pkcs8(a).map_err(|e| format!("rsa: invalid PKCS#8 key ({e})"))?;
             Ok(kp.public().as_ref().to_vec())

@@ -2398,6 +2398,11 @@ impl Transpiler {
                     out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"public-key crypto is not available in this build (feature 'crypto')\"[..])]))");
                 } else {
                     self.needs_rt_crypto = true;
+                    // M348: `rsa_generate` usa num-bigint (feature `bigint`); se enlaza con cualquier uso de
+                    // clave pública (es pequeña) salvo `--without bigint`, donde devuelve su Err.
+                    if !self.exclude.contains("bigint") {
+                        self.needs_rt_bigint = true;
+                    }
                     out.push_str("{ match ray_runtime::crypto::pk_op(&");
                     self.emit_expr(out, eff[0])?;
                     out.push_str(", &");

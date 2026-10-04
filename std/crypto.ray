@@ -76,6 +76,23 @@ pub fn hash_final(h: int) -> Result<bytes, string> {
 /// HMAC-SHA-256 of `msg` under `key` (32 bytes).
 pub fn hmac_sha256(key: bytes, msg: bytes) -> bytes { __hmac_sha256(key, msg) }
 
+/// HMAC with the hash chosen by name: `"sha1"`, `"sha256"`, `"sha384"` or `"sha512"`. `None` for
+/// any other name. The fixed-hash forms below are the usual way to call it.
+pub fn hmac(alg: string, key: bytes, msg: bytes) -> Option<bytes> {
+    let r = __hmac(alg, key, msg);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// HMAC-SHA-1 (20 bytes): what TOTP/HOTP (RFC 6238/4226) use by default and what most
+/// authenticator apps support. Legacy hash — fine inside an HMAC, not for new signatures.
+pub fn hmac_sha1(key: bytes, msg: bytes) -> bytes { hmac("sha1", key, msg).unwrap() }
+
+/// HMAC-SHA-384 (48 bytes).
+pub fn hmac_sha384(key: bytes, msg: bytes) -> bytes { hmac("sha384", key, msg).unwrap() }
+
+/// HMAC-SHA-512 (64 bytes).
+pub fn hmac_sha512(key: bytes, msg: bytes) -> bytes { hmac("sha512", key, msg).unwrap() }
+
 /// Derives the Ed25519 public key (32 bytes) from a 32-byte private seed; `None` if the seed is not
 /// exactly 32 bytes.
 pub fn ed25519_public_key(seed: bytes) -> Option<bytes> {
@@ -239,3 +256,152 @@ pub fn password_verify(password: string, encoded: string) -> bool {
 /// session tokens and any secret, because `==` stops at the first differing byte and leaks the correct
 /// value one byte at a time.
 pub fn constant_time_eq(a: bytes, b: bytes) -> bool { __constant_time_eq(a, b) }
+
+// --- M347 (rayauth R1): clave pública — ECDSA P-256 y RSA ---
+//
+// Un primitivo (`__pk_op`, ring) y wrappers finos. Claves privadas en PKCS#8 DER (lo que produce
+// `openssl genpkey` o `p256_generate`; de un PEM se sacan con `std/pem`), públicas en SEC1 sin
+// comprimir (P-256) o PKCS#1 `RSAPublicKey` DER (RSA; `rsa_public_key(n, e)` lo arma desde un JWK).
+// ring no GENERA claves RSA: se importan.
+
+fn pk(op: string, a: bytes, b: bytes, c: bytes) -> Result<bytes, string> {
+    let r = __pk_op(op, a, b, c);
+    if (r[0] == "ok".to_bytes()) {
+        Result.Ok(r[1])
+    } else {
+        Result.Err(from_utf8(r[1]).unwrap_or("public-key error"))
+    }
+}
+
+fn pk_verdict(op: string, a: bytes, b: bytes, c: bytes) -> bool {
+    match (pk(op, a, b, c)) {
+        Result.Ok(v) => v.len() == 1 && v[0] == 1,
+        Result.Err(_) => false,
+    }
+}
+
+/// Generates a fresh ECDSA P-256 private key as PKCS#8 DER (the format `openssl genpkey` uses
+/// and `std/pem` encodes). ES256 in JWT/JWS; the curve WebAuthn authenticators use.
+pub fn p256_generate() -> Result<bytes, string> { pk("p256_generate", b"", b"", b"") }
+
+/// The public key of a PKCS#8 P-256 private key, as the 65-byte uncompressed SEC1 point
+/// `04 || x || y` (what a JWK's `x`/`y` or a COSE key encode).
+pub fn p256_public_key(pkcs8: bytes) -> Result<bytes, string> { pk("p256_public", pkcs8, b"", b"") }
+
+/// Signs `msg` (SHA-256) with a PKCS#8 P-256 key: the 64-byte fixed `r || s` signature of JWS/JWT
+/// (ES256). Randomized per RFC 6979-compatible rules: two signatures of the same message differ.
+pub fn p256_sign(pkcs8: bytes, msg: bytes) -> Result<bytes, string> { pk("p256_sign", pkcs8, msg, b"") }
+
+/// Verifies a 64-byte `r || s` P-256 signature (JWS ES256) of `msg` under the SEC1 public key.
+/// Total: `false` for any invalid key, signature or message.
+pub fn p256_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verdict("p256_verify", pubkey, msg, sig) }
+
+/// Like `p256_verify`, for a DER-encoded (ASN.1 `SEQUENCE { r, s }`) signature: what WebAuthn
+/// authenticators and OpenSSL produce.
+pub fn p256_verify_asn1(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verdict("p256_verify_asn1", pubkey, msg, sig) }
+
+/// The public key of a PKCS#8 RSA private key, as PKCS#1 `RSAPublicKey` DER (the form the
+/// `rsa_*_verify` functions take). To publish it as a JWK, split it with `rsa_public_components`.
+pub fn rsa_public_key_of(pkcs8: bytes) -> Result<bytes, string> { pk("rsa_public", pkcs8, b"", b"") }
+
+/// Signs `msg` with RSASSA-PKCS1-v1_5 and SHA-256 (RS256 in JWT) using a PKCS#8 RSA key of
+/// 2048–8192 bits. Deterministic.
+pub fn rsa_pkcs1_sign(pkcs8: bytes, msg: bytes) -> Result<bytes, string> { pk("rsa_pkcs1_sign", pkcs8, msg, b"") }
+
+/// Signs `msg` with RSASSA-PSS and SHA-256 (PS256 in JWT). Randomized salt: signatures differ.
+pub fn rsa_pss_sign(pkcs8: bytes, msg: bytes) -> Result<bytes, string> { pk("rsa_pss_sign", pkcs8, msg, b"") }
+
+/// Verifies an RS256 signature under a PKCS#1 `RSAPublicKey` DER (2048–8192 bits). Total: `false`
+/// for anything invalid.
+pub fn rsa_pkcs1_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verdict("rsa_pkcs1_verify", pubkey, msg, sig) }
+
+/// Verifies a PS256 signature under a PKCS#1 `RSAPublicKey` DER. Total.
+pub fn rsa_pss_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verdict("rsa_pss_verify", pubkey, msg, sig) }
+
+// DER mínimo para `RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }`: lo que un
+// JWK (`n`, `e` en base64url, magnitudes big-endian sin signo) necesita para verificar con ring.
+fn der_len(n: int) -> bytes {
+    if (n < 128) {
+        return bytes_of([n]);
+    }
+    var digits: [int] = [];
+    var v = n;
+    while (v > 0) {
+        digits.push(v % 256);
+        v = v / 256;
+    }
+    var out: [int] = [128 + digits.len()];
+    var i = digits.len() - 1;
+    while (i >= 0) {
+        out.push(digits[i]);
+        i = i - 1;
+    }
+    bytes_of(out)
+}
+
+fn der_uint(mag: bytes) -> bytes {
+    // Sin ceros a la izquierda; un 0x00 delante si el primer octeto tiene el bit alto (INTEGER con signo).
+    var start = 0;
+    while (start < mag.len() - 1 && mag[start] == 0) {
+        start = start + 1;
+    }
+    let body = mag.sub_bytes(start, mag.len());
+    let padded = if (body.len() == 0) {
+        b"\x00"
+    } else if (body[0] >= 128) {
+        b"\x00" + body
+    } else {
+        body
+    };
+    b"\x02" + der_len(padded.len()) + padded
+}
+
+/// Builds the PKCS#1 `RSAPublicKey` DER from the modulus `n` and exponent `e` (big-endian
+/// magnitudes, as a JWK's `n`/`e` decode): the key `rsa_pkcs1_verify`/`rsa_pss_verify` take.
+pub fn rsa_public_key(n: bytes, e: bytes) -> bytes {
+    let body = der_uint(n) + der_uint(e);
+    b"0" + der_len(body.len()) + body
+}
+
+/// Splits a PKCS#1 `RSAPublicKey` DER into `(n, e)` big-endian magnitudes without leading zeros —
+/// what a JWKS document publishes (base64url them). `Err` if the DER is not that structure.
+pub fn rsa_public_components(der: bytes) -> Result<(bytes, bytes), string> {
+    let seq = der_read(der, 0, 48)?;  // 0x30 SEQUENCE
+    let n = der_read(der, seq.0, 2)?;  // 0x02 INTEGER
+    let e = der_read(der, n.1, 2)?;
+    Result.Ok((der_strip(der.sub_bytes(n.0, n.1)), der_strip(der.sub_bytes(e.0, e.1))))
+}
+
+// Lee un elemento DER con la etiqueta `tag` en `at`; devuelve (inicio del contenido, fin).
+fn der_read(d: bytes, at: int, tag: int) -> Result<(int, int), string> {
+    if (at + 2 > d.len() || d[at] != tag) {
+        return Result.Err("rsa: not an RSAPublicKey DER");
+    }
+    var len = d[at + 1];
+    var p = at + 2;
+    if (len >= 128) {
+        let k = len - 128;
+        if (k == 0 || k > 4 || p + k > d.len()) {
+            return Result.Err("rsa: not an RSAPublicKey DER");
+        }
+        len = 0;
+        var i = 0;
+        while (i < k) {
+            len = len * 256 + d[p + i];
+            i = i + 1;
+        }
+        p = p + k;
+    }
+    if (p + len > d.len()) {
+        return Result.Err("rsa: not an RSAPublicKey DER");
+    }
+    Result.Ok((p, p + len))
+}
+
+fn der_strip(m: bytes) -> bytes {
+    var start = 0;
+    while (start < m.len() - 1 && m[start] == 0) {
+        start = start + 1;
+    }
+    m.sub_bytes(start, m.len())
+}

@@ -130,8 +130,11 @@ pub fn rem(a: bytes, b: bytes) -> Result<bytes, string> {
     call("rem", a, b, b"")
 }
 
-/// `base ^ exp mod modulus` — the primitive behind Diffie-Hellman and RSA. Errors on a zero
-/// modulus. Not constant-time.
+/// `base ^ exp mod modulus` — the arithmetic behind Diffie-Hellman and RSA. Errors on a zero
+/// modulus. **Not constant-time**: its duration depends on the exponent, so using it with a
+/// PRIVATE exponent (an RSA private operation, a DH secret) leaks that secret through timing
+/// unless you blind the input. For signatures use `std/crypto` (`rsa_pkcs1_sign`, `p256_sign`:
+/// constant-time, audited); keep `modpow` for public exponents, protocol experiments and tests.
 pub fn modpow(base: bytes, exp: bytes, modulus: bytes) -> Result<bytes, string> {
     call("modpow", base, exp, modulus)
 }

@@ -8,7 +8,7 @@
 // (las *claims*) se pasa y se devuelve como string JSON crudo (como en HS256). Importable:
 //   from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
 from std/base64 import base64url, base64url_decode;
-from std/json import parse, Json;
+from std/json import parse, stringify, Json;
 import std/crypto;
 
 // El header canónico de EdDSA, ya codificado en base64url.
@@ -21,7 +21,19 @@ fn header_b64() -> string {
 /// returns the compact JWT `header.payload.signature` (RFC 8037, alg fixed to EdDSA).
 /// An invalid seed (wrong length) yields an empty signature segment (honest degradation).
 pub fn jwt_eddsa_sign(seed: bytes, payload_json: string) -> string {
-    let h = header_b64();
+    sign_with_header(seed, header_b64(), payload_json)
+}
+
+// M347 (rayauth R4): cabecera con `kid` para rotación de claves (JWKS); se lee con `jwt.jwt_kid`.
+/// Like `jwt_eddsa_sign`, with a `kid` (key id) in the header: `{"alg":"EdDSA","typ":"JWT","kid":"…"}`.
+/// The verifier reads it with `jwt.jwt_kid(token)` to pick the public key; `jwt.jwt_check_claims`
+/// checks `iss`/`aud` on the verified payload.
+pub fn jwt_eddsa_sign_kid(seed: bytes, kid: string, payload_json: string) -> string {
+    let header = "{\"alg\":\"EdDSA\",\"typ\":\"JWT\",\"kid\":" + stringify(Json.JStr(kid)) + "}";
+    sign_with_header(seed, base64url(header.to_bytes()), payload_json)
+}
+
+fn sign_with_header(seed: bytes, h: string, payload_json: string) -> string {
     let p = base64url(payload_json.to_bytes());
     let signing_input = h + "." + p;
     // `ring` deriva la clave pública de la semilla al firmar (a diferencia del Ed25519 pedagógico de 3

@@ -333,6 +333,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "sha512" => "Computes the SHA-512 digest of a bytes value; returns 64 bytes.",
         "sha1" => "Computes the SHA-1 digest of a bytes value; returns 20 bytes. Legacy algorithm: needed by some protocols (e.g. WebSocket), avoid for new designs.",
         "hmac_sha256" => "Computes the HMAC-SHA-256 of a message with the given key: `hmac_sha256(key: bytes, msg: bytes) -> bytes` (32 bytes).",
+        "hmac" => "HMAC with the hash chosen by name (`\"sha1\"`, `\"sha256\"`, `\"sha384\"`, `\"sha512\"`): `hmac(alg: string, key: bytes, msg: bytes) -> Option<bytes>`; `None` for an unknown algorithm. `hmac_sha1`/`hmac_sha384`/`hmac_sha512` are the fixed-hash forms.",
         "ed25519_verify" => "Verifies an Ed25519 signature: `ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool`.",
         // --- Map ---
         "insert" => "Inserts or updates a key/value pair in a Map, in place.",
@@ -688,6 +689,11 @@ pub fn sha1(_data: &[u8]) -> Vec<u8> { Vec::new() }
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> { ray_runtime::crypto::hmac_sha256(key, msg) }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn hmac_sha256(_key: &[u8], _msg: &[u8]) -> Vec<u8> { Vec::new() }
+/// M347 (rayauth R3): HMAC con el hash elegido por nombre (`sha1`/`sha256`/`sha384`/`sha512`).
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn hmac(alg: &str, key: &[u8], msg: &[u8]) -> Option<Vec<u8>> { ray_runtime::crypto::hmac(alg, key, msg) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn hmac(_alg: &str, _key: &[u8], _msg: &[u8]) -> Option<Vec<u8>> { None }
 
 // --- Ed25519 (firma de curva elíptica, M43.3) ---
 //
@@ -2143,6 +2149,12 @@ pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, Strin
 /// (el envoltorio raylang reconstruye el `[[string]]`) (M53.3).
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
+    let (ncols, cells) = sqlite_query_nulls(h, sql, params)?;
+    Ok((ncols, cells.into_iter().map(|c| c.unwrap_or_default()).collect()))
+}
+/// M347 (rayauth R6): como `sqlite_query`, con `None` por cada celda `NULL`.
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
+pub fn sqlite_query_nulls(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
@@ -2155,7 +2167,8 @@ pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<
                 // Copiar cada celda ANTES de avanzar: el texto de un ValueRef solo vive hasta el
                 // siguiente paso del statement.
                 for i in 0..ncols {
-                    out.push(sqlite_value_str(row.get_ref(i).map_err(|e| e.to_string())?));
+                    let v = row.get_ref(i).map_err(|e| e.to_string())?;
+                    out.push(if matches!(v, rusqlite::types::ValueRef::Null) { None } else { Some(sqlite_value_str(v)) });
                 }
             }
             Ok(None) => break,
@@ -2166,6 +2179,8 @@ pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_query_nulls(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<Option<String>>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
 // --- Cliente TCP (M15.2) ---
 //
@@ -2231,6 +2246,16 @@ pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
 pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
     ray_runtime::crypto::hasher_final(h)
 }
+/// M347 (rayauth R1): clave pública (ECDSA P-256, RSA) — ver ray_runtime::crypto::pk_op.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn pk_op(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> {
+    ray_runtime::crypto::pk_op(name, a, b, c)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn pk_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>, String> {
+    Err("public-key crypto is not available in this build (feature 'crypto')".to_string())
+}
+
 /// M195: la primitiva de `std/bigint` (magnitudes big-endian en `bytes`; ver ray_runtime::bigint).
 #[cfg(all(feature = "bigint", not(target_arch = "wasm32")))]
 pub fn bigint_op(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> {
@@ -2259,6 +2284,31 @@ pub fn deflate_op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
 }
 #[cfg(any(not(feature = "deflate"), target_arch = "wasm32"))]
 pub fn deflate_op(_name: &str, _data: &[u8], _n: i64) -> Option<Vec<u8>> {
+    None
+}
+
+/// M347 (rayauth R6): el arreglo etiquetado de `__sqlite_query_nulls`: `["ok", ncols, mask, celdas…]`
+/// (NULL → `""` en su celda y `'n'` en la máscara) o `["err", msg]`. Compartido por VM e intérprete.
+pub fn sqlite_query_nulls_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
+    match sqlite_query_nulls(h, sql, params) {
+        Ok((ncols, cells)) => {
+            let mask: String = cells.iter().map(|c| if c.is_none() { 'n' } else { 'v' }).collect();
+            let mut v = vec!["ok".to_string(), ncols.to_string(), mask];
+            v.extend(cells.into_iter().map(|c| c.unwrap_or_default()));
+            v
+        }
+        Err(e) => vec!["err".to_string(), e],
+    }
+}
+
+/// M347 (rayauth R23): la matriz de un código QR (ver ray_runtime::qr). `None` = texto que no cabe, nivel
+/// desconocido, o build sin la feature `qr` (std/qr devuelve `Err`).
+#[cfg(all(feature = "qr", not(target_arch = "wasm32")))]
+pub fn qr_matrix(text: &str, ecl: &str) -> Option<Vec<String>> {
+    ray_runtime::qr::matrix(text, ecl)
+}
+#[cfg(any(not(feature = "qr"), target_arch = "wasm32"))]
+pub fn qr_matrix(_text: &str, _ecl: &str) -> Option<Vec<String>> {
     None
 }
 
@@ -3734,6 +3784,16 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // M347 (rayauth R1): __pk_op(op, a, b, c) -> [bytes]: ["ok", resultado] | ["err", mensaje]. Clave
+    // pública (ECDSA P-256, RSA PKCS#1 v1.5/PSS) sobre ring; std/crypto lo envuelve en `p256_*`/`rsa_*`.
+    Builtin { name: "__pk_op", opcode: OpCode::PkOp, check: |a| {
+        arity(a, 4, "__pk_op", " (op, a, b, c)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__pk_op expects a string (the operation), not {}", a[0]))); }
+        for (i, t) in a.iter().enumerate().skip(1) {
+            if *t != Type::Bytes { return Err((Some(i), format!("__pk_op expects bytes, not {}", t))); }
+        }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     // M266: __keychain(op, service, account, secret) -> [string]: ["ok", …] | ["none"] | ["err", msg].
     // Primitivo interno de std/keychain (get/set/delete sobre el llavero del sistema).
     Builtin { name: "__keychain", opcode: OpCode::Keychain, check: |a| {
@@ -3752,6 +3812,14 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("__deflate_op expects bytes, not {}", a[1]))); }
         if a[2] != Type::Int { return Err((Some(2), format!("__deflate_op expects an int, not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M347 (rayauth R23): __qr_matrix(text, ecl) -> [string]: las filas de '1'/'0' del QR, o [] si el texto
+    // no cabe / nivel desconocido / build sin `qr`. std/qr lo envuelve en `encode -> Result<Code, string>`.
+    Builtin { name: "__qr_matrix", opcode: OpCode::QrMatrix, check: |a| {
+        arity(a, 2, "__qr_matrix", " (text, error correction level)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__qr_matrix expects a string (the text), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__qr_matrix expects a string (the level), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__hasher_new", opcode: OpCode::HasherNew, check: |a| {
         arity(a, 1, "__hasher_new", " (algorithm)")?;
@@ -3796,6 +3864,16 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__ed25519_public_key", opcode: OpCode::Ed25519PublicKey, check: |a| {
         arity(a, 1, "__ed25519_public_key", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_public_key expects bytes (seed), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M347 (rayauth R3): HMAC genérico por nombre de hash → `[bytes]` etiquetado (vacío si el
+    // algoritmo no existe); std/crypto lo envuelve en `hmac(alg, key, msg) -> Option<bytes>` y en
+    // `hmac_sha1`/`hmac_sha384`/`hmac_sha512`.
+    Builtin { name: "__hmac", opcode: OpCode::Hmac, check: |a| {
+        arity(a, 3, "__hmac", " (algorithm, key, message)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("hmac expects a string (algorithm), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("hmac expects bytes (key), not {}", a[1]))); }
+        if a[2] != Type::Bytes { return Err((Some(2), format!("hmac expects bytes (message), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__ed25519_sign", opcode: OpCode::Ed25519Sign, check: |a| {
@@ -3903,6 +3981,15 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_query expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__sqlite_query expects a string (the SQL), not {}", a[1]))); }
         if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_query expects a [string] (the parameters), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M347 (rayauth R6): __sqlite_query_nulls(h, sql, params) -> [string]: ["ok", ncols, mask, celdas…] o
+    // ["err", msg]; `mask` tiene un carácter por celda: 'n' = NULL, 'v' = valor. db/sqlite → query_opt.
+    Builtin { name: "__sqlite_query_nulls", opcode: OpCode::SqliteQueryNulls, check: |a| {
+        arity(a, 3, "__sqlite_query_nulls", " (handle, sql, params)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_query_nulls expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_query_nulls expects a string (the SQL), not {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_query_nulls expects a [string] (the parameters), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.

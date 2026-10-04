@@ -61,8 +61,7 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
 
 /// Runs a query with positional parameters and returns all rows as text cells
 /// (NULL becomes `""`, BLOB becomes hex). A `NULL` is therefore indistinguishable from an empty
-/// string: when the difference matters, `SELECT col IS NULL` next to the column, or `COALESCE`
-/// to a sentinel of your choice.
+/// string here: use `query_opt` when the difference matters.
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
     let r = __sqlite_query(c.handle, sql, params);
     if (r[0] != "ok") {
@@ -86,6 +85,43 @@ pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], strin
         while (j < ncols) {
             row.push(r[i + j]);
             j = j + 1;
+        }
+        rows.push(row);
+        i = i + ncols;
+    }
+    Result.Ok(rows)
+}
+
+// M347 (rayauth R6): la misma consulta, pero distinguiendo NULL — el primitivo añade una máscara de
+// 'n'/'v' por celda delante de las celdas.
+/// Like `query`, but every cell is an `Option<string>`: `None` for SQL `NULL`, `Some(text)`
+/// otherwise (same text conversion as `query`). The way to tell a NULL from an empty string.
+pub fn query_opt(c: Conn, sql: string, params: [string]) -> Result<[[Option<string>]], string> {
+    let r = __sqlite_query_nulls(c.handle, sql, params);
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    // r = ["ok", ncols, mask, celda0, celda1, …]; mask[k] == 'n' ⇔ la celda k era NULL.
+    let ncols = match (parse_int(r[1])) {
+        Option.Some(n) => n,
+        Option.None => {
+            return Result.Err("corrupt SQLite response: " + r[1]);
+        },
+    };
+    let mask = r[2];
+    var rows: [[Option<string>]] = [];
+    if (ncols == 0) {
+        return Result.Ok(rows);
+    }
+    var i = 3;
+    var k = 0;
+    while (i < r.len()) {
+        var row: [Option<string>] = [];
+        var j = 0;
+        while (j < ncols) {
+            row.push(if (mask[k] == 'n') { Option.None } else { Option.Some(r[i + j]) });
+            j = j + 1;
+            k = k + 1;
         }
         rows.push(row);
         i = i + ncols;

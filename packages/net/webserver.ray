@@ -2578,6 +2578,71 @@ pub fn serve_with_graceful(
     })
 }
 
+// M347 (rayauth R24): las tres cosas que un servidor de producción quiere a la vez —límites,
+// apagado ordenado y TLS— no se podían combinar (`serve_graceful` iba con `default_limits()`,
+// `serve_tls_limits` no drenaba). Un solo struct de opciones y una sola función.
+/// Everything a production server configures, in one value: the safety `limits`, graceful
+/// shutdown (`drain_ms >= 0`: on SIGTERM/SIGINT stop accepting, drain in-flight connections for
+/// up to that many ms and return 0; `< 0` = run forever) and TLS (`tls_cert`/`tls_key`: PEM
+/// contents; both `""` = plain HTTP). Start from `options()` and set what you need.
+pub struct ServeOptions {
+    limits: Limits,
+    drain_ms: int,
+    tls_cert: string,
+    tls_key: string,
+}
+
+/// The defaults: `default_limits()`, no graceful shutdown, plain HTTP.
+pub fn options() -> ServeOptions {
+    ServeOptions { limits: default_limits(), drain_ms: 0 - 1, tls_cert: "", tls_key: "" }
+}
+
+/// Sets the safety limits. Chainable (`options().with_limits(l)`).
+pub fn with_limits(o: ServeOptions, limits: Limits) -> ServeOptions {
+    o.limits = limits;
+    o
+}
+
+/// Enables graceful shutdown: on SIGTERM/SIGINT stop accepting and drain in-flight connections
+/// for up to `drain_ms`. Chainable.
+pub fn with_drain(o: ServeOptions, drain_ms: int) -> ServeOptions {
+    o.drain_ms = drain_ms;
+    o
+}
+
+/// Serves HTTPS with the PEM certificate chain and private key (contents, not paths). Chainable.
+pub fn with_tls(o: ServeOptions, cert: string, key: string) -> ServeOptions {
+    o.tls_cert = cert;
+    o.tls_key = key;
+    o
+}
+
+/// Serves with `ServeOptions`: the one entry point that combines limits, graceful shutdown and
+/// TLS. `make_handler` builds the handler per request (the `serve_with` factory shape, so the
+/// same source runs on the VM and compiles natively). Returns 0 after a drained shutdown, or
+/// `Err` if the socket cannot bind.
+pub fn serve_options(
+    host: string,
+    port: int,
+    opts: ServeOptions,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
+    let limits = opts.limits;
+    let tls = opts.tls_cert != "" || opts.tls_key != "";
+    let cert = opts.tls_cert;
+    let key = opts.tls_key;
+    // Sin drenaje: un canal de parada que nunca habla (el bucle corre para siempre, como `serve`).
+    let stop: Channel<int> = if (opts.drain_ms >= 0) { shutdown_signals() } else { Channel.new() };
+    loop_iter_server_drainable(host, port, limits, stop, opts.drain_ms, fn(c: int) -> Result<int, string> {
+        if (tls) { net.tls_accept(c, cert, key) } else { Result.Ok(c) }
+    }, fn(c: int) {
+        handle_http(c, fn(req: Request) -> Response {
+            let h: fn(Request) -> Response = make_handler();
+            h(req)
+        }, limits);
+    })
+}
+
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
 // Cierra el hueco "tls_accept existe pero serve_raw no deja insertarlo": el upgrade TLS es el
 // paso `prepare` del bucle compartido, dentro de la fibra de cada conexión. `cert`/`key` son los

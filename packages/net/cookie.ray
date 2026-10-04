@@ -45,9 +45,10 @@ struct Cookie {
     http_only: bool,
     secure: bool,
     same_site: string,
+    domain: string,
 }
 
-// < 0 = sin Max-Age; same_site "" = sin el atributo
+// < 0 = sin Max-Age; same_site "" = sin el atributo; domain "" = sin el atributo (M347, rayauth R22)
 // M71: quita los caracteres que permitirían inyectar cabeceras (CR, LF) o romper el
 // framing del Set-Cookie (`;`), como el saneo silencioso de `net/http` de Go. El VALOR se
 // protege aparte con url_encode; el nombre y el Path no se codifican, así que se sanean aquí.
@@ -76,7 +77,8 @@ pub fn cookie(name: string, value: string) -> Cookie {
         max_age: 0 - 1,
         http_only: false,
         secure: false,
-        same_site: ""
+        same_site: "",
+        domain: ""
     }
 }
 
@@ -85,6 +87,15 @@ pub fn cookie(name: string, value: string) -> Cookie {
 /// Sets the cookie's `Path` attribute. Chainable: mutates the cookie by reference and returns it.
 pub fn with_path(c: Cookie, p: string) -> Cookie {
     c.path = p;
+    c
+}
+
+/// Sets the cookie's `Domain` attribute, so the browser also sends it to subdomains
+/// (`with_domain("example.com")` covers `app.example.com` and `auth.example.com`: the
+/// forward-auth / single-sign-on pattern). Without it the cookie belongs to the exact host only.
+/// Chainable.
+pub fn with_domain(c: Cookie, d: string) -> Cookie {
+    c.domain = d;
     c
 }
 
@@ -122,11 +133,15 @@ pub fn with_same_site(c: Cookie, v: string) -> Cookie {
 
 // Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica; el nombre y
 // el Path se sanean (M71: sin CR/LF/`;` → no se pueden inyectar cabeceras).
-/// Serializes the cookie to a `Set-Cookie` header value ("name=value; Path=...; Max-Age=...;
-/// HttpOnly; Secure; SameSite=..."). The value is URL-encoded and the name/Path are sanitized
-/// (CR/LF/`;` stripped, preventing header injection); only attributes that were set are emitted.
+/// Serializes the cookie to a `Set-Cookie` header value ("name=value; Domain=...; Path=...;
+/// Max-Age=...; HttpOnly; Secure; SameSite=..."). The value is URL-encoded and the name/Domain/
+/// Path are sanitized (CR/LF/`;` stripped, preventing header injection); only attributes that
+/// were set are emitted.
 pub fn set_cookie(c: Cookie) -> string {
     var s = sanitize(c.name) + "=" + url_encode(c.value);
+    if (c.domain.len() > 0) {
+        s = s + "; Domain=" + sanitize(c.domain);
+    }
     if (c.path.len() > 0) {
         s = s + "; Path=" + sanitize(c.path);
     }

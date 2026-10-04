@@ -58,6 +58,24 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
 #[cfg(not(feature = "crypto"))]
 pub fn hmac_sha256(_key: &[u8], _msg: &[u8]) -> Vec<u8> { Vec::new() }
 
+/// M347 (rayauth R3): HMAC con el hash elegido por nombre — `"sha1"` (TOTP, RFC 6238), `"sha256"`,
+/// `"sha384"`, `"sha512"`. `None` si el algoritmo no es uno de esos cuatro (un dato inválido, no un
+/// ICE: el wrapper de std/crypto lo convierte en `Option`).
+#[cfg(feature = "crypto")]
+pub fn hmac(alg: &str, key: &[u8], msg: &[u8]) -> Option<Vec<u8>> {
+    let a = match alg {
+        "sha1" => ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY,
+        "sha256" => ring::hmac::HMAC_SHA256,
+        "sha384" => ring::hmac::HMAC_SHA384,
+        "sha512" => ring::hmac::HMAC_SHA512,
+        _ => return None,
+    };
+    let k = ring::hmac::Key::new(a, key);
+    Some(ring::hmac::sign(&k, msg).as_ref().to_vec())
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hmac(_alg: &str, _key: &[u8], _msg: &[u8]) -> Option<Vec<u8>> { None }
+
 // --- Ed25519 (firma de curva elíptica, M43.3) ---
 //
 // La semilla privada es de **exactamente 32 octetos**; `ring` falla si no. Devolvemos `Option` (→ el
@@ -297,3 +315,53 @@ pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
 }
 #[cfg(not(feature = "crypto"))]
 pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> { Err("crypto is not compiled in".to_string()) }
+
+// --- M347 (rayauth R1): clave pública — ECDSA P-256 y RSA (PKCS#1 v1.5 y PSS), sobre ring ---
+//
+// Un solo primitivo `pk_op(op, a, b, c) -> Result<Vec<u8>, String>` (como `bigint::op`): las claves
+// privadas viajan como PKCS#8 DER (lo que `openssl genpkey` y la propia `p256_generate` producen), las
+// públicas como SEC1 sin comprimir (P-256, 65 octetos `04||x||y`) o PKCS#1 `RSAPublicKey` DER (RSA).
+// Las verificaciones devuelven UN octeto (`1`/`0`) y nunca fallan por una firma mala: solo por un
+// argumento imposible (clave que no parsea, operación desconocida). ring NO genera claves RSA: se
+// importan (openssl, o `std/bigint` + DER); la generación está en IDEAS §102 R1 como decisión abierta.
+#[cfg(feature = "crypto")]
+pub fn pk_op(op: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> {
+    use ring::signature::{self, KeyPair};
+    let rng = ring::rand::SystemRandom::new();
+    let verdict = |ok: bool| Ok(vec![u8::from(ok)]);
+    match op {
+        "p256_generate" => signature::EcdsaKeyPair::generate_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
+            .map(|d| d.as_ref().to_vec())
+            .map_err(|_| "p256: key generation failed".to_string()),
+        "p256_public" => {
+            let kp = signature::EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, a, &rng)
+                .map_err(|e| format!("p256: invalid PKCS#8 key ({e})"))?;
+            Ok(kp.public_key().as_ref().to_vec())
+        }
+        "p256_sign" => {
+            let kp = signature::EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, a, &rng)
+                .map_err(|e| format!("p256: invalid PKCS#8 key ({e})"))?;
+            kp.sign(&rng, b).map(|s| s.as_ref().to_vec()).map_err(|_| "p256: signing failed".to_string())
+        }
+        "p256_verify" => verdict(signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_FIXED, a).verify(b, c).is_ok()),
+        "p256_verify_asn1" => verdict(signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_ASN1, a).verify(b, c).is_ok()),
+        "rsa_public" => {
+            let kp = signature::RsaKeyPair::from_pkcs8(a).map_err(|e| format!("rsa: invalid PKCS#8 key ({e})"))?;
+            Ok(kp.public().as_ref().to_vec())
+        }
+        "rsa_pkcs1_sign" | "rsa_pss_sign" => {
+            let kp = signature::RsaKeyPair::from_pkcs8(a).map_err(|e| format!("rsa: invalid PKCS#8 key ({e})"))?;
+            let padding: &dyn signature::RsaEncoding = if op == "rsa_pss_sign" { &signature::RSA_PSS_SHA256 } else { &signature::RSA_PKCS1_SHA256 };
+            let mut sig = vec![0u8; kp.public().modulus_len()];
+            kp.sign(padding, &rng, b, &mut sig).map_err(|_| "rsa: signing failed".to_string())?;
+            Ok(sig)
+        }
+        "rsa_pkcs1_verify" => verdict(signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, a).verify(b, c).is_ok()),
+        "rsa_pss_verify" => verdict(signature::UnparsedPublicKey::new(&signature::RSA_PSS_2048_8192_SHA256, a).verify(b, c).is_ok()),
+        _ => Err(format!("unknown public-key operation '{op}'")),
+    }
+}
+#[cfg(not(feature = "crypto"))]
+pub fn pk_op(_op: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>, String> {
+    Err("public-key crypto is not available in this build (feature 'crypto')".to_string())
+}

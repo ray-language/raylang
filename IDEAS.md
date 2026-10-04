@@ -3967,7 +3967,7 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R12 | E | `bytes_of([])` no toma el tipo del parámetro como contexto | ✅ **M345**: los builtins de parámetro fijo (`bytes_of`, `join`) dan contexto al `[]`, en checker y nativo |
 | R13 | B | Una función del módulo de entrada se colaba en el UFCS de otro módulo (`fn text(n: int)` en main.ray capturaba `r.text("x")` sobre `fw::Res`) | ✅ **M344**: el nombre pelado solo es visible fuera del raíz si es prelude/builtin |
 | R14 | E | `net/http`: `Response.headers` es un `Map` y pierde cabeceras repetidas (`Set-Cookie`) | ✅ **M347**: `Response.raw_headers`, `header_all(r, name)`, `set_cookies(r)` |
-| R15 | E | `std/template` sin valores estructurados (`{{ u.name }}` imposible) | PROPUESTO: `VMap`/objetos en `TVal` |
+| R15 | E | `std/template` sin valores estructurados (`{{ u.name }}` imposible) | ✅ **M349**: `VMap` + rutas con punto (`u.name`, `u.roles`, `items.0`), `val_map`/`field`/`ctx_map`, `from_json` |
 | R16 | E | `const` no admite expresiones (`8 * 3600 * 1000`) ni la `const` de otro módulo | ✅ **M345**: expresiones constantes plegadas en el checker (aritmética, bits, strings, otras `const` de cualquier módulo) |
 | R17 | B/D | Un parámetro `status: int` tapaba el método UFCS `r.status(n)` («cannot call a value of type int») | ✅ **M344**: un local solo tapa si es función (el sitio baja al alias `nombre#free`); el error nombra al local cuando no hay función |
 | R18 | E | `[string]` no implementa `ToJson` | ✅ **M347**: `impl<T: ToJson> ToJson for [T]` (y el mangling nativo de `[]#método`, que faltaba) |

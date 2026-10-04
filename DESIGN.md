@@ -16638,3 +16638,15 @@ alguna vez la aritmética produjera algo inválido, el error sería de generaci�
 disco. Una clave de 2048 bits tarda ~130 ms en Apple Silicon; OpenSSL valida la clave (`pkey -check`)
 y las firmas que raylang hace con ella. En el nativo, cualquier uso de `__pk_op` enlaza también
 `bigint` (es pequeña) salvo `--without bigint`, donde `rsa_generate` devuelve su `Err`.
+## 335. M349 — Objetos en `std/template` (oct 2026)
+
+R15 de rayauth: `TVal` solo tenía string, int, bool y lista, así que una tabla de usuarios era
+imposible en la plantilla y se montaba en código con `escape_html`. Se añade `VMap([Bind])` — un
+objeto es la misma lista de `(nombre, valor)` que el contexto, así el enum sigue siendo recursivo sin
+un `Map<string, TVal>` que complicara el nativo — y la resolución de nombres acepta **rutas con
+punto**: el primer segmento se busca en el contexto y los siguientes bajan por objetos (`user.name`)
+o por listas con un índice (`items.0`); un eslabón ausente da `""`, como una variable ausente. Vale en
+`{{ }}`, `{{& }}`, `{% if %}` y la lista de `{% for %}`. Constructores `val_map`/`field`/`ctx_map`/
+`ctx_val`, y `from_json(Json)` convierte una respuesta de API entera (números enteros → `VInt`, el
+resto a texto, `null` → `""`). Los templates compilados `.ray.html` (`ray build --templates-only`)
+no cambian: son funciones tipadas y ya accedían a campos; esto cubre las plantillas dinámicas.

@@ -356,6 +356,26 @@ fn main() -> int {
     let (n, e) = crypto.rsa_public_components(pk).unwrap();
     print("${n.len() * 8} ${e.len()}");
     print(crypto.rsa_generate(1000));
+/// M349 (IDEAS §102 R15): `std/template` con objetos — `VMap`, rutas con punto en `{{ }}`, `{% if %}`
+/// y `{% for %}`, índices en listas (`items.0`), `from_json`. Misma salida en los tres motores.
+#[test]
+fn templates_render_objects_with_dotted_paths_on_all_engines() {
+    let d = tmp("template_objects");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/template;
+import std/json;
+from std/template import val_str, val_int, val_bool, val_map, val_list, field;
+fn main() -> int {
+    let users = [
+        val_map([field("name", val_str("Ada <3")), field("admin", val_bool(true)), field("roles", val_list([val_str("ops"), val_str("dev")]))]),
+        val_map([field("name", val_str("Bob")), field("admin", val_bool(false)), field("roles", val_list([]))]),
+    ];
+    let tpl = "{% for u in users %}<tr><td>{{ u.name }}</td><td>{% if u.admin %}yes{% else %}no{% endif %}</td><td>{% for r in u.roles %}[{{ r }}]{% endfor %}</td></tr>\n{% endfor %}first={{ users.0.name }} missing={{ users.5.name }}|{{ site.title }}|{{ site.owner.email }}";
+    let ctx = [template.ctx_list("users", users), template.ctx_map("site", [field("title", val_str("rayauth")), field("owner", val_map([field("email", val_str("a@b.c"))]))])];
+    print(template.render_template(tpl, ctx).unwrap());
+    let j = json.parse("{\"items\":[{\"id\":1,\"price\":2.5,\"tags\":[\"x\"]}],\"n\":null,\"ok\":true}").unwrap();
+    print(template.render_template("{% for i in data.items %}{{ i.id }}:{{ i.price }}:{{ i.tags.0 }}{% endfor %} n=[{{ data.n }}] ok={{ data.ok }} all={{& data }}", [template.ctx_val("data", template.from_json(j))]).unwrap());
     0
 }
 "#,
@@ -375,4 +395,8 @@ fn main() -> int {
             .unwrap();
         assert!(String::from_utf8_lossy(&verify.stdout).contains("Verified OK"), "{}", String::from_utf8_lossy(&verify.stderr));
     }
+    three_engines(
+        &d,
+        "<tr><td>Ada &lt;3</td><td>yes</td><td>[ops][dev]</td></tr>\n<tr><td>Bob</td><td>no</td><td></td></tr>\nfirst=Ada &lt;3 missing=|rayauth|a@b.c\n1:2.5:x n=[] ok=true all=items=id=1, price=2.5, tags=x, n=, ok=true\n",
+    );
 }

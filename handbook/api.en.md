@@ -19,8 +19,8 @@ ray add db
 
 ```toml
 [dependencies]
-web = "^0.4.6"
-db = "^0.2.1"
+web = "^0.5.0"
+db = "^0.3.0"
 ```
 
 `web` brings the HTTP server of the `net` package; `db` brings the Postgres client. The exact
@@ -301,6 +301,9 @@ fn main() -> int {
 - `listen_graceful` handles SIGTERM and Ctrl-C: it stops accepting connections, waits up to 5
   seconds for the ones in flight and returns. Then `main` closes the pool. That is what Kubernetes,
   systemd and any orchestrator expect.
+- When you also want your own limits (a request body of a few KiB for an API) or HTTPS without a
+  proxy, `listen_with` combines everything in one call:
+  `listen_with(fn() -> App { routes(db, token) }, host, port, options().with_limits(limits).with_drain(5000))`.
 
 All the configuration comes from environment variables:
 
@@ -418,4 +421,4 @@ What a production environment expects from a service, and how this one meets it:
 A [**site with a React frontend**](web-react.en.md) embedded in the binary and a JSON API behind it,
 with the notes in Redis.
 
-<!-- sync: sha256:53f9c2f5b319 -->
+<!-- sync: sha256:7fbfd98b1f0a -->

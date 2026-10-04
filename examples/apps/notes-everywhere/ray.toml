@@ -9,7 +9,7 @@ name = "Notes"
 id = "dev.raylang.notes"
 
 [dependencies]
-db = "^0.2.1"
+db = "^0.3.0"
 
 # The web frontend (Vite). `ray dev` runs `dev` and points app:// at `url`;
 # `ray build --native` / `ray bundle` run `build` and embed `dist`.

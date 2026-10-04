@@ -21,8 +21,8 @@ npm --prefix frontend install
 
 ```toml
 [dependencies]
-web = "^0.4.6"
-net = "^0.5.0"
+web = "^0.5.0"
+net = "^0.6.0"
 
 [frontend]
 dev = "npm --prefix frontend run dev -- --strictPort --clearScreen false"

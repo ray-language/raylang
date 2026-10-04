@@ -19,8 +19,8 @@ ray add db
 
 ```toml
 [dependencies]
-web = "^0.4.6"
-db = "^0.2.1"
+web = "^0.5.0"
+db = "^0.3.0"
 ```
 
 `web` trae el servidor HTTP del paquete `net`; `db` trae el cliente de Postgres. Las versiones
@@ -301,6 +301,9 @@ fn main() -> int {
 - `listen_graceful` atiende SIGTERM y Ctrl-C: deja de aceptar conexiones, espera hasta 5 segundos a
   las que están en curso y vuelve. Entonces `main` cierra el pool. Es lo que esperan Kubernetes,
   systemd y cualquier orquestador.
+- Si además quieres límites propios (un cuerpo máximo de pocos KiB para una API) o HTTPS sin proxy,
+  `listen_with` lo combina todo en una llamada:
+  `listen_with(fn() -> App { routes(db, token) }, host, port, options().with_limits(limits).with_drain(5000))`.
 
 Toda la configuración llega por variables de entorno:
 

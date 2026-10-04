@@ -584,6 +584,9 @@ pub struct Sessions {
     store: session_store.SessionStore,
 }
 
+/// The development session layer: in-memory, saved to `path` (RKV1) under `ray dev` so you stay
+/// logged in across reloads; never touches disk in production. `Err` if the file is corrupt
+/// (delete it). For production persistence use `sessions_with`.
 pub fn sessions(path: string) -> Result<Sessions, string> {
     let persist = match (env("RAY_DEV_RELOAD")) {
         Option.Some(_) => true,

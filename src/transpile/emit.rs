@@ -2351,6 +2351,19 @@ pub(super) fn opt_of(t: Type) -> Type {
     Type::Enum("Option".to_string(), vec![t])
 }
 
+/// ¿Lleva `t` un hueco de inferencia? (M344) Los literales `Option.None` / `Result.Ok(x)` /
+/// `Result.Err(e)` se tipan con `unit` en el argumento que no se conoce (placeholder que debe fijar el
+/// contexto), así que un `unit` dentro de los args de un enum/array/tupla delata un tipo incompleto.
+pub(super) fn has_placeholder(t: &Type) -> bool {
+    match t {
+        Type::Enum(_, args) | Type::Struct(_, args) | Type::Tuple(args) => {
+            args.iter().any(|a| matches!(a, Type::Unit) || has_placeholder(a))
+        }
+        Type::Array(inner) => matches!(**inner, Type::Unit) || has_placeholder(inner),
+        _ => false,
+    }
+}
+
 /// Desenvuelve `Option<T>`/`Result<T,E>` → `T` (para `unwrap_or`/`unwrap`/`?`); otro tipo se deja igual.
 pub(super) fn unwrapped(t: &Type) -> Type {
     match normalize_type(t) {

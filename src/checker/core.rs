@@ -63,6 +63,8 @@ impl Checker {
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
             module_bands: Vec::new(),
+            shadowed_free_fns: HashSet::new(),
+            root_user_fns: HashSet::new(),
             require_main: true,
             completing: false,
             member_hits: Vec::new(),
@@ -279,6 +281,11 @@ impl Checker {
             self.functions.insert(f.name.clone(), sig);
             if f.is_pub {
                 self.pub_functions.insert(f.name.clone());
+            }
+            // M344 (R13): las funciones del usuario en el módulo de ENTRADA (peladas y antes de la
+            // banda del prelude), para que no sean visibles por su nombre pelado desde otro módulo.
+            if !f.name.contains("::") && !f.name.contains('#') && f.line < crate::prelude::LINE_BASE {
+                self.root_user_fns.insert(f.name.clone());
             }
             // M10.2b: posición de declaración (para ir-a-definición). Solo al recolectar.
             if self.gather {
@@ -3172,11 +3179,22 @@ impl Checker {
         // (entrada/prelude); (4) el global de una función `from`-importada (UFCS cross-module,
         // M11.3b). Si no resuelve a nada, el error habla de UFCS (no es ni campo del receptor ni
         // función), mencionando el tipo.
-        let target = if crate::builtins::is_builtin(name) || self.lookup(name).is_some() {
+        // M344 (rayauth R17): un local solo tapa al método si ES una función (`let f = fn…; r.f()`);
+        // un parámetro `status: int` no convierte `r.status(n)` en "cannot call a value of type int".
+        let local_is_fn = matches!(self.lookup(name), Some(VarInfo { ty: Type::Fn(..), .. }));
+        // M344 (rayauth R13): fuera del módulo de entrada, una función de la RAÍZ no es visible por
+        // su nombre pelado (el ámbito es léxico): `fn text(n: int)` en main.ray no debe capturar el
+        // `r.text("x")` que otro módulo hace sobre un `fw::Res`. Solo el prelude (y sus alias
+        // `#prelude`) resuelve pelado desde un módulo; lo demás sigue por alias/tipo del receptor.
+        // (Si la raíz REDEFINIÓ una función del prelude, el nombre sigue visible desde los módulos:
+        // resuelve al alias `nombre#prelude`, M298.)
+        let bare_visible = self.functions.contains_key(name)
+            && (self.current_fn_is_root || !self.is_root_user_fn(name) || self.overridden_prelude.contains(name));
+        let target = if crate::builtins::is_builtin(name) || local_is_fn {
             name.to_string()
         } else if let Some(local) = self.module_local_fn(name, line, recv_ty) {
             local
-        } else if self.functions.contains_key(name) {
+        } else if bare_visible {
             // M298 (findings 1.27.11 #36): el override de la raíz es LÉXICO también aquí — un
             // `headers.get(k)` en un módulo/paquete va al alias `get#prelude`, como la llamada
             // directa en `check_named_call_renamed`. Antes solo el camino directo lo aplicaba y
@@ -3199,8 +3217,15 @@ impl Checker {
                 ),
                 None => String::new(),
             };
+            // M344 (R17): si hay un local homónimo que no es función, se dice que no cuenta.
+            let shadow = match self.lookup(name).map(|v| &v.ty) {
+                Some(t) if !matches!(t, Type::Fn(..)) => format!(
+                    " (the local '{name}' is of type {t}, not a function, so it does not take part in method calls)"
+                ),
+                _ => String::new(),
+            };
             return Err(self.err(line, col, format!(
-                "no field or function '{}' applicable to {}{}", name, recv_ty, hint
+                "no field or function '{}' applicable to {}{}{}", name, recv_ty, hint, shadow
             )));
         };
         let mut all_args = Vec::with_capacity(args.len() + 1);
@@ -3216,8 +3241,16 @@ impl Checker {
             self.record_field_hover(object.line, object.col, name, &mty, def);
         }
         // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
+        // M344 (R17): si un local homónimo que no es función tapa a la libre en los motores, el sitio
+        // baja al alias `nombre#free` (clon inyectado por `inject_free_fn_aliases`).
+        let lowered = if target == name && !local_is_fn && self.lookup(name).is_some() {
+            self.shadowed_free_fns.insert(target.clone());
+            format!("{target}#free")
+        } else {
+            target
+        };
         let depth = super::lowering::ufcs_chain_depth(object, name, line, col);
-        self.ufcs_sites.insert((line, col, name.to_string(), depth), target);
+        self.ufcs_sites.insert((line, col, name.to_string(), depth), lowered);
         Ok(ty)
     }
 
@@ -3270,6 +3303,13 @@ impl Checker {
     /// Es lo que hace que un builder (`json.obj().field(a).field(b)`, `conn.set_encodings(x)?`)
     /// encadene con solo `import M;`, como un método inherente. Los tipos del prelude y los
     /// primitivos no tienen prefijo → no aplica; las privadas de `M` no se alcanzan.
+    /// ¿Es `name` una función que el usuario definió en el módulo de ENTRADA? (M344) Pelada (sin
+    /// `::` ni `#`) y declarada antes de la banda del prelude. Las del prelude son pelada pero
+    /// viven en `LINE_BASE+`; las de los módulos llevan prefijo.
+    fn is_root_user_fn(&self, name: &str) -> bool {
+        self.root_user_fns.contains(name)
+    }
+
     fn type_module_fn(&self, name: &str, recv_ty: &Type) -> Option<String> {
         let tname = match recv_ty {
             Type::Struct(n, _) | Type::Enum(n, _) => n,
@@ -3418,8 +3458,12 @@ impl Checker {
         }
 
         // Una variable local que guarda una función: llamada indirecta (M4.1).
-        // (Tapa a una función global con el mismo nombre.)
-        if let Some(v) = self.lookup(name) {
+        // (Tapa a una función global con el mismo nombre.) M344 (R17): en posición de MÉTODO
+        // (`recv` presente) solo tapa si es una función; `r.status(status)` con `status: int` va
+        // a la función libre `status(Res, int)`.
+        if let Some(v) = self.lookup(name)
+            && (recv.is_none() || matches!(v.ty, Type::Fn(..)))
+        {
             let ty = v.ty.clone();
             return self.call_type_recv(ty, args, false, line, col, recv);
         }

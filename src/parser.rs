@@ -1803,6 +1803,29 @@ impl Parser {
         };
         self.expect(&TokenKind::FatArrow, "'=>' after the pattern")?;
         let body = self.expression()?;
+        // M344 (rayauth R25): `patrón => lugar = valor,` — una asignación como brazo. Azúcar: baja a
+        // un bloque `{ lugar = valor; }` (valor `unit`) que comparte la posición del lugar, para que
+        // el formateador la reconozca y la reemita en su forma corta (`assign_arm_sugar`).
+        let body = if self.eat(&TokenKind::Eq) {
+            if !is_lvalue(&body) {
+                return Err(self.error_here("the left-hand side of '=' is not assignable".into()));
+            }
+            let (bl, bc) = (body.line, body.col);
+            let value = self.expression()?;
+            Expr {
+                kind: ExprKind::Block(Block {
+                    statements: vec![Stmt { kind: StmtKind::Assign { target: body, value }, line: bl, col: bc }],
+                    tail: None,
+                    line: bl,
+                    col: bc,
+                    end_line: bl,
+                }),
+                line: bl,
+                col: bc,
+            }
+        } else {
+            body
+        };
         Ok(MatchArm { pattern, guard, body, line, col })
     }
 

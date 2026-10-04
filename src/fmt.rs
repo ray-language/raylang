@@ -1898,7 +1898,10 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
                 // no-valor del cuerpo (`A => print(match …)`) debe indentarse desde aquí.
                 let saved = cur.base;
                 cur.base = base + 1;
-                let body = if is_block_form(&arm.body) {
+                let body = if let Some((target, value)) = assign_arm_sugar(&arm.body) {
+                    // M344: `patrón => lugar = valor,` se reemite como la escribió el usuario.
+                    format!("{} = {}", fmt_expr(cur, target, 0), fmt_expr(cur, value, 0))
+                } else if is_block_form(&arm.body) {
                     fmt_expr_indented(cur, &arm.body, base + 1)
                 } else {
                     fmt_expr(cur, &arm.body, 0)
@@ -1922,6 +1925,20 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
         }
         _ => fmt_expr(cur, e, 0),
     }
+}
+
+/// El cuerpo de un brazo `patrón => lugar = valor` (M344): el parser lo baja a un bloque con una
+/// sola asignación, sin cola y con la POSICIÓN del lugar (un `{` escrito por el usuario nunca
+/// comparte columna con su primera sentencia). Devuelve `(lugar, valor)` si es ese azúcar.
+fn assign_arm_sugar(body: &Expr) -> Option<(&Expr, &Expr)> {
+    let ExprKind::Block(b) = &body.kind else { return None };
+    if b.tail.is_some() || b.statements.len() != 1 {
+        return None;
+    }
+    let st = &b.statements[0];
+    let StmtKind::Assign { target, value } = &st.kind else { return None };
+    (st.line == b.line && st.col == b.col && target.line == b.line && target.col == b.col)
+        .then_some((target, value))
 }
 
 fn fmt_pattern(p: &Pattern) -> String {

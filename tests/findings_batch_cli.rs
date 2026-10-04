@@ -904,3 +904,139 @@ fn an_annotated_empty_collection_captured_before_any_use_compiles_natively() {
     .unwrap();
     three_engines(&d, "integer division by zero\n1 x 2\n");
 }
+
+// ── M344: hallazgos de rayauth (docs/RAYLANG-FINDINGS.md de la app) ─────────────────────────────
+
+/// rayauth R13 (M344): una función del módulo de ENTRADA no es visible por su nombre pelado desde
+/// otro módulo — `fn text(n: int)` en main.ray no debe capturar el `r.text("hello")` que `lib`
+/// hace sobre un `fw::Res` (resolvía al raíz y moría con "'text' expects 1 argument(s)").
+#[test]
+fn a_root_function_does_not_leak_into_the_ufcs_of_other_modules() {
+    let d = tmp("root_ufcs_leak");
+    std::fs::write(d.join("fw.ray"), "pub struct Res { body: string, }\npub fn text(r: Res, s: string) { r.body = s; }\n").unwrap();
+    std::fs::write(d.join("lib.ray"), "import fw;\nfrom fw import Res;\npub fn fill(r: Res) { r.text(\"hello\"); }\n").unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        "import fw;\nimport lib;\nfrom fw import Res;\nfn text(n: int) -> int { n }\nfn main() -> int { let r = Res { body: \"\" }; lib.fill(r); print(r.body); text(0) }\n",
+    )
+    .unwrap();
+    three_engines(&d, "hello\n");
+}
+
+/// rayauth R17 (M344): un parámetro o local que NO es función no tapa al método UFCS homónimo:
+/// `r.status(status)` con `status: int` llama a `status(Res, int)` en los tres motores (el sitio
+/// baja al alias `status#free`, porque los motores resuelven el `Ident` por ámbito). Y cuando no
+/// hay función a la que ir, el error nombra al local.
+#[test]
+fn a_non_function_local_does_not_shadow_a_ufcs_method() {
+    let d = tmp("local_shadows_method");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"struct Res { code: int, }
+fn status(r: Res, n: int) -> Res { r.code = n; r }
+fn fail(r: Res, status: int) -> int { let r2 = r.status(status); r2.code }
+fn main() -> int { print(fail(Res { code: 0 }, 7)); 0 }
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "7\n");
+    std::fs::write(
+        d.join("bad.ray"),
+        "struct Res { code: int, }\nfn fail(r: Res, status: int) { r.status(status); }\nfn main() -> int { fail(Res { code: 0 }, 1); 0 }\n",
+    )
+    .unwrap();
+    let (_o, err, code) = ray(&d, &["run", "bad.ray"]);
+    assert_ne!(code, 0);
+    assert!(
+        err.contains("no field or function 'status' applicable to Res (the local 'status' is of type int, not a function, so it does not take part in method calls)"),
+        "{err}"
+    );
+}
+
+/// rayauth R19 (M344): `let c = if (…) { Option.None } else { store.find(id)? }` con el struct en
+/// OTRO módulo. El transpilador tipaba el `if` por el `then` (`Option<unit>`, un placeholder) y la
+/// función caía a stub ("field access on Unit is not supported").
+#[test]
+fn an_option_none_then_branch_takes_its_type_from_the_else_branch_natively() {
+    let d = tmp("none_then_else_type");
+    std::fs::write(
+        d.join("store.ray"),
+        "pub struct C { name: string, uris: [string], }\npub fn find(id: string) -> Result<Option<C>, string> {\n    if (id == \"x\") { Result.Ok(Option.Some(C { name: \"found\", uris: [\"a\"] })) } else { Result.Ok(Option.None) }\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import store;
+fn run(id: string, target: string) -> Result<string, string> {
+    let c = if (id == "") { Option.None } else { store.find(id)? };
+    let ok = match (c) { Option.Some(v) => target != "" && v.uris.contains(target), Option.None => false, };
+    let name = match (c) { Option.Some(v) => v.name, Option.None => "", };
+    Result.Ok("${name} ${ok}")
+}
+fn main() -> int { print(run("x", "a").unwrap()); print(run("", "a").unwrap()); 0 }
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "found true\n false\n");
+}
+
+/// rayauth R28 (M344): `let _ = try_send(ch, v)` tipa el valor del envío; el transpilador no tenía
+/// fila para `try_send`/`try_recv`/`send` y la función entera caía a stub.
+#[test]
+fn try_send_as_a_let_value_compiles_natively() {
+    let d = tmp("try_send_let");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"enum Msg { Hit(string, int), Stop, }
+struct T { ch: Channel<Msg>, }
+fn record(t: T, name: string, n: int) {
+    let _ = try_send(t.ch, Msg.Hit(name, n));
+    let pending = try_recv(t.ch);
+    match (pending) {
+        Received.Got(m) => match (m) { Msg.Hit(s, k) => print("${s} ${k}"), Msg.Stop => print("stop"), },
+        Received.Empty => print("empty"),
+        Received.Closed => print("closed"),
+    }
+}
+fn main() -> int { record(T { ch: Channel.new() }, "a", 1); 0 }
+"#,
+    )
+    .unwrap();
+    vm_and_native(&d, "a 1\n");
+}
+
+/// rayauth R25 (M344): una asignación como brazo de `match` (`Option.Some(w) => x = w,`) es azúcar
+/// de `{ x = w; }`; `ray fmt` la reemite en su forma corta y es idempotente.
+#[test]
+fn an_assignment_can_be_a_match_arm_on_all_engines_and_survives_fmt() {
+    let d = tmp("assign_arm");
+    let src = r#"fn main() -> int {
+    var x = 0;
+    var label = "";
+    let o: Option<int> = Option.Some(3);
+    match (o) {
+        Option.Some(w) => x = w * 2,
+        Option.None => x = 1,
+    }
+    match (o) {
+        Option.Some(w) if w > 5 => label = "big",
+        Option.Some(_) => {
+            label = "small";
+        },
+        Option.None => label = "none",
+    }
+    print("${x} ${label}");
+    0
+}
+"#;
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    three_engines(&d, "6 small\n");
+    let (out, err, code) = ray(&d, &["fmt", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, src, "fmt reemite el azúcar tal cual");
+    // Un lado izquierdo no asignable sigue siendo error de sintaxis, con el mensaje de la asignación.
+    std::fs::write(d.join("bad.ray"), "fn main() -> int { var x = 0; match (x) { 0 => 1 = 2, _ => x = 3, } 0 }\n").unwrap();
+    let (_o, err, code) = ray(&d, &["run", "bad.ray"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("the left-hand side of '=' is not assignable"), "{err}");
+}

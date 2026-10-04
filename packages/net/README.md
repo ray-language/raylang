@@ -60,6 +60,12 @@ fn main() -> int {
 - **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.
 - **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `net/crypto` +
   `std/base64`.
+- **`net/smtp`** — cliente SMTP de envío (M351): `server(host, port)` (587 → STARTTLS, 465 → TLS;
+  `with_login` AUTH PLAIN, `with_security`, `with_timeout`, `with_ehlo`), `message(from, to, subject,
+  text)` + `with_html` (multipart/alternative) / `with_reply_to` / `with_header`, `render` (los bytes
+  tras DATA, con los helpers de `net/mail`), `send(server, message)` y `send_raw(server, from, to,
+  data)` (MIME propio, BCC). Un servidor que no ofrece STARTTLS cuando se exige es error, nunca una
+  degradación. Sobre `std/net` + `net/mail`.
 - **`net/session_store`** — el almacén de sesiones de `web` como actor con protocolo (`Msg`:
   get/set/delete/drop/sweep), `memory(path, persist, ttl_s)` (RKV1 opcional) y `from_channel` para
   backends propios; el SQLite vive en `db/sessions` (M350). Sobre `std/kv`.

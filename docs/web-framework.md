@@ -294,8 +294,10 @@ let sess = sessions_with(sessions.sqlite(db, 86400)?);   // TTL: un día sin act
 
 El TTL es deslizante (cada `session_put` renueva la sesión), lo caducado no se lee y una fibra lo
 barre cada minuto; `session_clear(sess, c, r)` cierra la sesión (logout). Para memoria con TTL sin
-base de datos: `sessions_with(session_store.memory("", false, 3600)?)`. Un backend propio (Redis,
-Postgres…) es una fibra que atiende `session_store.Msg` y `session_store.from_channel(ch, ttl)`.
+base de datos: `sessions_with(session_store.memory("", false, 3600)?)`. En PostgreSQL (M352), igual
+con `sessions.postgres(conn, ttl)` o `sessions.postgres_pool(pool, ttl)` — el mismo esquema, y
+varias réplicas sobre la misma base comparten las sesiones. Un backend propio (Redis…) es una fibra
+que atiende `session_store.Msg` y `session_store.from_channel(ch, ttl)`.
 
 ## Despliegue
 

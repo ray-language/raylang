@@ -2401,6 +2401,11 @@ fn socket_clone(h: i64) -> Result<std::net::TcpStream, String> {
 /// `""` indica EOF (el otro extremo cerró). Bloquea hasta que haya datos (M15.2).
 pub fn socket_read(h: i64) -> Result<String, String> {
     use std::io::Read;
+    // M351: un handle TLS (tls_connect/tls_upgrade) se lee por la bomba TLS, como `socket_read_bytes`
+    // — antes `socket_read` (string) decía "handle N is not a socket" tras un STARTTLS.
+    if is_tls_handle(h) {
+        return socket_read_bytes_blocking(h).map(|b| String::from_utf8_lossy(&b).into_owned());
+    }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
@@ -2465,6 +2470,11 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
 /// (el scheduler aparca la fibra con interés de escritura, M19.4b post — cesión en `socket_write`).
 pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
+    // M351: handle TLS → la bomba TLS (como `socket_write_bytes`); `socket_write` (string) fallaba
+    // con "handle N is not a socket" tras un STARTTLS.
+    if is_tls_handle(h) {
+        return tls_write_nb(h, bytes);
+    }
     // M100 v3: stdin de un hijo → escritura parcial sobre el pipe; el resto lo re-intenta la VM
     // tras aparcar la fibra por interés de escritura (`park_write`/`finish_parked_write`, que
     // llaman aquí de nuevo). Mismo contrato que el socket: `Ok(n)` con `n < len` = se llenó.
@@ -3240,6 +3250,10 @@ pub fn socket_read_nb(h: i64) -> Result<Option<String>, String> {
     // M56.4: la espera de esta lectura venció (marcada por el scheduler) → error de timeout.
     if take_read_expired(h) {
         return Err(READ_TIMEOUT_MSG.to_string());
+    }
+    // M351: handle TLS → la misma bomba que `socket_read_bytes_nb` (paridad string/bytes).
+    if is_tls_handle(h) {
+        return tls_read_nb(h).map(|o| o.map(|b| String::from_utf8_lossy(&b).into_owned()));
     }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];

@@ -22,7 +22,8 @@ pub(super) fn mangle(name: &str) -> String {
     }
     // `$` lo usan los temporales sintéticos del checker (p. ej. el bind del `?` con From-conversion,
     // `$to`/`$te`) → no es identificador Rust válido.
-    let base = name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_");
+    // M347 (rayauth R18): la clave de un `impl Trait for [T]` es `[]` (`type_key_of`) → `[]#to_json`.
+    let base = name.replace("[]", "_ARR_").replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_");
     // Un identificador LEGAL de raylang puede ser palabra RESERVADA de Rust (`type`, `loop`, `mod`,
     // `move`, `ref`, `where`, `use`, `unsafe`, `async`, …) → generaría Rust inválido. Se emite como raw
     // identifier `r#type`, válido en posición de variable/param/función/campo. Las cuatro que NO admiten

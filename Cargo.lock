@@ -558,6 +558,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "qrcode",
  "regex",
  "ring",
  "rusqlite",
@@ -574,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "raylang"
-version = "1.27.30"
+version = "1.27.31"
 dependencies = [
  "ahash",
  "libloading",

@@ -3155,7 +3155,7 @@ fn cmd_build(args: &[String]) {
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
     // M146: `audio` faltaba desde M145 (el help/docs lo anunciaban y la validación lo rechazaba
     // con exit 64) — entra junto a `ui`.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode", "audio", "ui", "bigint", "deflate", "keychain"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode", "audio", "ui", "bigint", "deflate", "keychain", "qr"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -3837,6 +3837,7 @@ const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); // M195
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
+const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
 const RT_TLS_RS: &str = include_str!("../crates/ray-runtime/src/tls.rs");
 const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 const RT_REGEX_RS: &str = include_str!("../crates/ray-runtime/src/regex.rs");
@@ -3970,6 +3971,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/bigint.rs", RT_BIGINT_RS),
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
+        ("ray-runtime/src/qr.rs", RT_QR_RS),
         ("ray-runtime/src/tls.rs", RT_TLS_RS),
         ("ray-runtime/src/sqlite.rs", RT_SQLITE_RS),
         ("ray-runtime/src/regex.rs", RT_REGEX_RS),

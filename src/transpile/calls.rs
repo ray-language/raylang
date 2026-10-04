@@ -2376,8 +2376,39 @@ impl Transpiler {
                     out.push_str(") { Some(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(__rt_r)])), None => Rc::new(std::cell::RefCell::new(Vec::<Rc<[u8]>>::new())) } }");
                 }
             }
+            // M347 (rayauth R23): __qr_matrix(text, ecl) -> [string] ([filas] | []). Con `--without qr` el
+            // sitio emite `[]` y std/qr devuelve su Err.
+            "qr_matrix" if name.starts_with("__") => {
+                if self.exclude.contains("qr") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(Vec::<Rc<str>>::new()))");
+                } else {
+                    self.needs_rt_qr = true;
+                    out.push_str("{ match ray_runtime::qr::matrix(&");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(") { Some(__rt_r) => Rc::new(std::cell::RefCell::new(__rt_r.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>())), None => Rc::new(std::cell::RefCell::new(Vec::<Rc<str>>::new())) } }");
+                }
+            }
             // M195: __bigint_op(op, a, b, c) -> [bytes] (["ok", r] | ["err", msg]). Con `--without
             // bigint` no hay crate detrás: el sitio emite el Err-valor directamente.
+            // M347 (rayauth R1): __pk_op(op, a, b, c) -> [bytes] (["ok", r] | ["err", msg]) sobre ring.
+            "pk_op" if name.starts_with("__") => {
+                if self.exclude.contains("crypto") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"public-key crypto is not available in this build (feature 'crypto')\"[..])]))");
+                } else {
+                    self.needs_rt_crypto = true;
+                    out.push_str("{ match ray_runtime::crypto::pk_op(&");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[2])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[3])?;
+                    out.push_str(") { Ok(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(__rt_r)])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__rt_e.into_bytes())])) } }");
+                }
+            }
             "bigint_op" if name.starts_with("__") => {
                 if self.exclude.contains("bigint") {
                     out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"bigint is not available in this build (feature 'bigint')\"[..])]))");
@@ -2499,13 +2530,14 @@ impl Transpiler {
                 out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
             }
             "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal" | "chacha20poly1305_open"
-            | "x25519_public_key" | "x25519_shared_secret"
+            | "x25519_public_key" | "x25519_shared_secret" | "hmac"
                 if name.starts_with("__") && !self.exclude.contains("crypto") =>
             {
                 self.needs_rt_crypto = true;
                 let argc = match method {
                     "ed25519_public_key" | "x25519_public_key" => 1,
                     "ed25519_sign" | "x25519_shared_secret" => 2,
+                    "hmac" => 3, // M347: (alg: &str, key, msg) — el `&` sobre un `Rc<str>` deref-coerce a `&str`
                     _ => 4, // chacha seal/open: clave, nonce, aad, dato
                 };
                 write!(out, "{{ let __rt_r = ray_runtime::crypto::{}(", method).unwrap();
@@ -2566,7 +2598,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            "sqlite_exec" | "sqlite_query" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
+            "sqlite_exec" | "sqlite_query" | "sqlite_query_nulls" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
                 self.needs_rt_sqlite = true;
                 write!(out, "__ray_{}(", method).unwrap();
                 self.emit_expr(out, eff[0])?;

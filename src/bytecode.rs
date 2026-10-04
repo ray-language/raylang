@@ -293,6 +293,8 @@ pub enum OpCode {
     BigIntOp,
     /// M253: `__deflate_op(op, data, n)` → `[bytes]` (`[r]` / `[]` = no disponible). Solo VM.
     DeflateOp,
+    /// M347 (rayauth R23): `__qr_matrix(text, ecl)` → `[string]` (filas de '1'/'0'; vacío si no cabe).
+    QrMatrix,
     /// M266: `__keychain(op, service, account, secret)` → `[string]` (llavero del sistema). Solo VM.
     Keychain,
     HasherNew,
@@ -303,6 +305,10 @@ pub enum OpCode {
     Sha1,
     /// M43.2: HMAC-SHA256. Saca `msg` y `key` (bytes); empuja la etiqueta de 32 octetos.
     HmacSha256,
+    /// M347 (rayauth R3): `__hmac(alg, key, msg)` → `[bytes]` (vacío si `alg` no existe).
+    Hmac,
+    /// M347 (rayauth R1): `__pk_op(op, a, b, c)` → `[bytes]` etiquetado (clave pública: P-256, RSA).
+    PkOp,
     /// M43.3: Ed25519. Los dos primeros empujan `[bytes]` etiquetado (`[]`/`[valor]`; el prelude →
     /// `Option<bytes>`); `verify` empuja un `bool` (total).
     /// M88.1: signals() — el canal de señales del SO (singleton; solo VM).
@@ -357,6 +363,8 @@ pub enum OpCode {
     /// Como `SqliteExec` pero para consultas con filas: empuja `["ok", ncols, v0, v1, …]` (las celdas
     /// aplanadas por fila; NULL = "") o `["err", msg]`. Primitivo `__sqlite_query`.
     SqliteQuery,
+    /// M347 (rayauth R6): `__sqlite_query_nulls` — como SqliteQuery con máscara de NULL.
+    SqliteQueryNulls,
 
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).

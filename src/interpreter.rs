@@ -1025,7 +1025,7 @@ impl<'a> Interpreter<'a> {
                         && matches!(name.as_str(),
                             "__crypto_random_bytes" | "__sha256" | "__sha512" | "__sha1"
                             | "__hasher_new" | "__hasher_update" | "__hasher_final"
-                            | "__hmac_sha256" | "__ed25519_public_key" | "__ed25519_sign"
+                            | "__hmac_sha256" | "__hmac" | "__pk_op" | "__ed25519_public_key" | "__ed25519_sign"
                             | "__ed25519_verify" | "__chacha20poly1305_seal"
                             | "__chacha20poly1305_open" | "__x25519_public_key"
                             | "__x25519_shared_secret" | "__hkdf_sha256"
@@ -1282,6 +1282,16 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an int"),
             },
+            "__pk_op" => match (&values[0], &values[1], &values[2], &values[3]) {
+                (Value::Str(op), Value::Bytes(a), Value::Bytes(b), Value::Bytes(c)) => {
+                    let elems = match crate::builtins::pk_op(op, a, b, c) {
+                        Ok(r) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(r))],
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
+            },
             "__bigint_op" => match (&values[0], &values[1], &values[2], &values[3]) {
                 (Value::Str(op), Value::Bytes(a), Value::Bytes(b), Value::Bytes(c)) => {
                     let elems = match crate::builtins::bigint_op(op, a, b, c) {
@@ -1298,6 +1308,16 @@ impl<'a> Interpreter<'a> {
                     Value::Array(Rc::new(std::cell::RefCell::new(elems)))
                 }
                 _ => unreachable!("the checker guarantees four strings"),
+            },
+            "__qr_matrix" => match (&values[0], &values[1]) {
+                (Value::Str(text), Value::Str(ecl)) => {
+                    let elems = match crate::builtins::qr_matrix(text, ecl) {
+                        Some(rows) => rows.into_iter().map(Value::Str).collect(),
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees (string, string)"),
             },
             "__deflate_op" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(op), Value::Bytes(data), Value::Int(n)) => {
@@ -1335,6 +1355,16 @@ impl<'a> Interpreter<'a> {
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
                 _ => unreachable!("the checker guarantees bytes"),
+            },
+            "__hmac" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(alg), Value::Bytes(k), Value::Bytes(m)) => {
+                    let elems = match crate::builtins::hmac(alg, k, m) {
+                        Some(mac) => vec![Value::Bytes(Rc::new(mac))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees string, bytes, bytes"),
             },
             "__ed25519_sign" => match (&values[0], &values[1]) {
                 (Value::Bytes(seed), Value::Bytes(msg)) => {
@@ -2580,7 +2610,7 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            "__sqlite_exec" | "__sqlite_query" => {
+            "__sqlite_exec" | "__sqlite_query" | "__sqlite_query_nulls" => {
                 let (Value::Int(h), Value::Str(sql), Value::Array(ps)) = (&values[0], &values[1], &values[2]) else {
                     unreachable!("the checker guarantees int, string, [string]");
                 };
@@ -2593,6 +2623,8 @@ impl<'a> Interpreter<'a> {
                         Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     }
+                } else if name == "__sqlite_query_nulls" {
+                    crate::builtins::sqlite_query_nulls_tagged(*h, sql, &params).into_iter().map(Value::Str).collect()
                 } else {
                     match crate::builtins::sqlite_query(*h, sql, &params) {
                         Ok((ncols, cells)) => {

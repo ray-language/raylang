@@ -1,0 +1,78 @@
+// std/pem — M347 (rayauth R1): el envoltorio PEM (RFC 7468) de las claves y certificados DER:
+// `-----BEGIN label-----`, base64 a 64 columnas, `-----END label-----`. Solo el envoltorio; el DER
+// que lleva dentro lo consumen `std/crypto` (PKCS#8, RSAPublicKey) y `net.tls_*` (que ya aceptan PEM).
+from std/base64 import base64, base64_decode;
+
+/// One PEM block: its label (`"PRIVATE KEY"`, `"PUBLIC KEY"`, `"CERTIFICATE"`, …) and the DER bytes.
+pub struct Block {
+    label: string,
+    der: bytes,
+}
+
+/// Parses every PEM block in `text`, in order (a file may hold a certificate chain). Text outside
+/// the blocks is ignored. `Err` if a block is unterminated or its base64 is invalid.
+pub fn decode_all(text: string) -> Result<[Block], string> {
+    var blocks: [Block] = [];
+    var rest = text;
+    while (true) {
+        let begin = match (rest.index_of("-----BEGIN ")) {
+            Option.Some(i) => i,
+            Option.None => return Result.Ok(blocks),
+        };
+        let after = rest.substring(begin + 11, rest.len());
+        let label_end = match (after.index_of("-----")) {
+            Option.Some(i) => i,
+            Option.None => return Result.Err("pem: unterminated BEGIN line"),
+        };
+        let label = after.substring(0, label_end);
+        let body_start = label_end + 5;
+        let footer = "-----END " + label + "-----";
+        let body_end = match (after.substring(body_start, after.len()).index_of(footer)) {
+            Option.Some(i) => body_start + i,
+            Option.None => return Result.Err("pem: missing '" + footer + "'"),
+        };
+        var b64 = "";
+        for c in after.substring(body_start, body_end) {
+            if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+                b64 = b64 + to_string(c);
+            }
+        }
+        let der = base64_decode(b64)?;
+        blocks.push(Block { label: label, der: der });
+        rest = after.substring(body_end + footer.len(), after.len());
+    }
+    Result.Ok(blocks)
+}
+
+/// The first PEM block of `text`. `Err` if there is none or it is malformed.
+pub fn decode(text: string) -> Result<Block, string> {
+    let all = decode_all(text)?;
+    if (all.len() == 0) {
+        return Result.Err("pem: no PEM block found");
+    }
+    Result.Ok(all[0])
+}
+
+/// The DER of the first block whose label is `label` (e.g. `"PRIVATE KEY"` for PKCS#8). `Err` if
+/// absent.
+pub fn decode_label(text: string, label: string) -> Result<bytes, string> {
+    for b in decode_all(text)? {
+        if (b.label == label) {
+            return Result.Ok(b.der);
+        }
+    }
+    Result.Err("pem: no '" + label + "' block found")
+}
+
+/// Encodes `der` as a PEM block with `label`: base64 in 64-column lines, trailing newline.
+pub fn encode(label: string, der: bytes) -> string {
+    let b64 = base64(der);
+    var out = "-----BEGIN " + label + "-----\n";
+    var i = 0;
+    while (i < b64.len()) {
+        let end = if (i + 64 < b64.len()) { i + 64 } else { b64.len() };
+        out = out + b64.substring(i, end) + "\n";
+        i = end;
+    }
+    out + "-----END " + label + "-----\n"
+}

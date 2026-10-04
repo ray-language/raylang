@@ -149,6 +149,7 @@ El aviso "N function(s) not supported in the native subset — emitted as stubs"
 aviso, en un build de desarrollo; en **`--release`** (y en todo `ray bundle`) es un **error** (65):
 un binario de producción no lleva minas en runtime. `--no-stubs` fuerza el error también en dev
 (útil en CI); `--allow-stubs` recupera los stubs en release.
+`--without qr` deja `std/qr` devolviendo `Err` (sin el crate `qrcode`).
 `--without deflate` deja `std/deflate`/`std/inflate` con su algoritmo en raylang (mismo
 resultado descomprimido, otro stream comprimido, mucho más lento) en vez de enlazar `miniz_oxide`.
 

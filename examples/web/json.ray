@@ -880,3 +880,9 @@ impl ToJson for Obj {
 impl ToJson for Arr {
     fn to_json(self) -> string { render_arr(self) }
 }
+
+// M347 (rayauth R18): un arreglo de valores `ToJson` es `ToJson` — `json.obj().field("amr", ["pwd"])`
+// sin envolverlo en `json.list(...)`.
+impl<T: ToJson> ToJson for [T] {
+    fn to_json(self) -> string { render_arr(list(self)) }
+}

@@ -4,7 +4,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.31 — 2026-10-04
+
+El arco de rayauth (IDEAS §102): 24 de los 28 hallazgos de un proveedor de identidad escrito en
+raylang, en cuatro oleadas (M344–M347).
+
 
 - **Un local que no es función ya no tapa a un método UFCS.** `fn fail(r: Res, status: int) {
   r.status(status) }` llama a `status(Res, int)` en los tres motores (antes: «cannot call a value
@@ -32,6 +36,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Docs**: `web.listen`/`Sessions` enseñan el patrón de closure inline y la restricción nativa de
   las closures guardadas en `let`; `db/sqlite` explica el uso desde varias fibras y el `NULL` → `""`;
   `llms.txt` documenta `as` entre `int` y `float` (M346, rayauth R5/R6/R27).
+- **`std/crypto` con clave pública**: ECDSA P-256 completo (`p256_generate`, `p256_public_key`,
+  `p256_sign`, `p256_verify`, `p256_verify_asn1`) y RSA firma/verificación PKCS#1 v1.5 y PSS
+  (`rsa_pkcs1_sign`/`rsa_pss_sign`, `rsa_pkcs1_verify`/`rsa_pss_verify`, `rsa_public_key_of`,
+  `rsa_public_key(n, e)`, `rsa_public_components`) sobre claves PKCS#8; **`std/pem`** nuevo. HMAC
+  con otro hash: `hmac_sha1` (TOTP), `hmac_sha384`, `hmac_sha512`, `hmac(alg, key, msg)`
+  (M347, rayauth R1/R2/R3).
+- **`std/qr`** nuevo: `encode`, `to_text`, `to_svg`, `to_png` (feature `qr` del runtime;
+  `--without qr` la excluye) (M347, rayauth R23).
+- **`[T]` es `ToJson`** cuando `T` lo es; cualquier `impl Trait for [T]` compila ya en nativo
+  (M347, rayauth R18).
+- **Paquetes** (`net` 0.6.0, `web` 0.5.0, `db` 0.3.0): `jwt_sign_kid`/`jwt_eddsa_sign_kid`,
+  `jwt_header`/`jwt_kid`, `jwt_check_claims(payload, iss, aud)`; `cookie.with_domain`;
+  `http.Response.raw_headers` + `header_all`/`set_cookies` (cabeceras repetidas);
+  `webserver.serve_options` y `framework.listen_with(…, options().with_limits().with_drain().with_tls())`;
+  `sqlite.query_opt` distingue `NULL` (M347, rayauth R4/R6/R14/R22/R24).
 
 ## 1.27.30 — 2026-10-03
 

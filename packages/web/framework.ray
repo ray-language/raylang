@@ -1096,6 +1096,37 @@ pub fn listen_graceful(
     })
 }
 
+// M347 (rayauth R24): límites + drenaje + TLS en una llamada. Reexporta el struct de `webserver`
+// para que el usuario no tenga que importar los dos módulos.
+/// The options of `listen_with`: safety limits, graceful shutdown and TLS together. Build them
+/// with `options()` and the chainable `with_limits`/`with_drain`/`with_tls` (they live in
+/// `net/webserver` and resolve by the type, no import needed):
+///
+/// ```raylang
+/// let opts = framework.options().with_limits(small).with_drain(5000).with_tls(cert, key);
+/// framework.listen_with(fn() -> App { routes(db) }, host, port, opts)
+/// ```
+pub type ListenOptions = webserver.ServeOptions;
+
+/// The default `ListenOptions`: `webserver.default_limits()`, no graceful shutdown, plain HTTP.
+pub fn options() -> ListenOptions {
+    webserver.options()
+}
+
+/// Like `listen`, with `ListenOptions`: the one call that combines safety limits, graceful
+/// shutdown and TLS (`listen_graceful` used the default limits and `listen_limits` did not drain).
+pub fn listen_with(
+    build: fn() -> App,
+    host: string,
+    port: int,
+    opts: ListenOptions
+) -> Result<int, string> {
+    webserver.serve_options(host, port, opts, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}
+
 /// Like `listen`, with explicit safety limits (`webserver.Limits`: max header/body bytes, max
 /// connections, read timeout) instead of `webserver.default_limits()`.
 pub fn listen_limits(

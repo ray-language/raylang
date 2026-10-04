@@ -1976,7 +1976,7 @@ impl<'a> Vm<'a> {
                 // feature activa el guard es false constante y el compilador elimina el brazo.
                 OpCode::CryptoRandomBytes | OpCode::Sha256 | OpCode::Sha512 | OpCode::Sha1
                 | OpCode::HasherNew | OpCode::HasherUpdate | OpCode::HasherFinal
-                | OpCode::HmacSha256 | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
+                | OpCode::HmacSha256 | OpCode::Hmac | OpCode::PkOp | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
                 | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
                 | OpCode::X25519PublicKey | OpCode::X25519SharedSecret | OpCode::HkdfSha256
                 | OpCode::Pbkdf2HmacSha256 | OpCode::ConstantTimeEq
@@ -1997,6 +1997,24 @@ impl<'a> Vm<'a> {
                 },
                 // M126: hasher incremental — el estado vive en ray_runtime::crypto (compartido con
                 // el nativo). Arreglos etiquetados; std/crypto los envuelve en Result.
+                OpCode::PkOp => {
+                    // M347: pop en orden inverso (c, b, a, op), misma etiqueta que bigint.
+                    let c = self.pop();
+                    let b = self.pop();
+                    let a = self.pop();
+                    let op = self.pop();
+                    let elems = match (&op, &a, &b, &c) {
+                        (HeapValue::Str(op), HeapValue::Bytes(a), HeapValue::Bytes(b), HeapValue::Bytes(c)) => {
+                            match crate::builtins::pk_op(op, a, b, c) {
+                                Ok(r) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(r)],
+                                Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                            }
+                        }
+                        _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::BigIntOp => {
                     // M195: pop en orden inverso (c, b, a, op).
                     let c = self.pop();
@@ -2042,6 +2060,20 @@ impl<'a> Vm<'a> {
                             None => vec![],
                         },
                         _ => unreachable!("the checker guarantees (string, bytes, int)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::QrMatrix => {
+                    // M347: pop en orden inverso (ecl, text). `[]` = no cabe / sin runtime.
+                    let ecl = self.pop();
+                    let text = self.pop();
+                    let elems = match (&text, &ecl) {
+                        (HeapValue::Str(text), HeapValue::Str(ecl)) => match crate::builtins::qr_matrix(text, ecl) {
+                            Some(rows) => rows.into_iter().map(|r| HeapValue::Str(r.into())).collect(),
+                            None => vec![],
+                        },
+                        _ => unreachable!("the checker guarantees (string, string)"),
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -2096,6 +2128,21 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees bytes, bytes");
                     };
                     self.push(HeapValue::bytes(crate::builtins::hmac_sha256(&k, &m)));
+                }
+                // M347 (rayauth R3): HMAC por nombre de hash → `[bytes]` etiquetado.
+                OpCode::Hmac => {
+                    let m = self.pop();
+                    let k = self.pop();
+                    let alg = self.pop();
+                    let (HeapValue::Str(alg), HeapValue::Bytes(k), HeapValue::Bytes(m)) = (alg, k, m) else {
+                        unreachable!("the checker guarantees string, bytes, bytes");
+                    };
+                    let elems = match crate::builtins::hmac(&alg, &k, &m) {
+                        Some(mac) => vec![HeapValue::bytes(mac)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
                 }
                 // M43.3: Ed25519. Los fallibles empujan `[bytes]` etiquetado; `verify` empuja un bool.
                 OpCode::Ed25519PublicKey => {
@@ -2829,7 +2876,7 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
-                OpCode::SqliteExec | OpCode::SqliteQuery => {
+                OpCode::SqliteExec | OpCode::SqliteQuery | OpCode::SqliteQueryNulls => {
                     // Orden en la pila: handle, sql, params → se saca params primero.
                     let ps = self.pop();
                     let sql = self.pop();
@@ -2846,6 +2893,8 @@ impl<'a> Vm<'a> {
                             Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
                             Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         }
+                    } else if matches!(instr, OpCode::SqliteQueryNulls) {
+                        crate::builtins::sqlite_query_nulls_tagged(handle, &sql, &params).into_iter().map(|c| HeapValue::Str(c.into())).collect()
                     } else {
                         match crate::builtins::sqlite_query(handle, &sql, &params) {
                             Ok((ncols, cells)) => {

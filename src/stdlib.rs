@@ -57,6 +57,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/embed", include_str!("../std/embed.ray")),
     // M144: decodificación de imágenes (PNG sobre std/inflate).
     ("std/image", include_str!("../std/image.ray")),
+    ("std/qr", include_str!("../std/qr.ray")), // M347 (rayauth R23)
+    ("std/pem", include_str!("../std/pem.ray")), // M347 (rayauth R1)
     // Revisión FFI jul 2026: helpers de la frontera C (errno).
     ("std/ffi", include_str!("../std/ffi.ray")),
     // IDEAS §55: constructores de unidades (tamaños en bytes, convención binaria 1024ⁿ).

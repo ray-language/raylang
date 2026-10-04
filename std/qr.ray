@@ -1,0 +1,129 @@
+// std/qr — M347 (rayauth R23): códigos QR. La MATRIZ la calcula el runtime (`__qr_matrix`, crate
+// `qrcode`: el mismo que usa `ray dev --device`); el render —texto para la terminal, SVG, PNG— está
+// aquí, en raylang, para que valga igual en la VM y en el binario nativo. El caso de uso que lo
+// pidió: el alta de TOTP (`otpauth://…`) que el usuario escanea con su app autenticadora.
+import std/image;
+from std/image import Image;
+
+/// A QR code: `size` modules per side and the modules row by row (`true` = dark), without the
+/// quiet zone. Build one with `encode`/`encode_level`; render it with `to_text`, `to_svg`, `to_png`
+/// or read it module by module with `dark(code, x, y)`.
+pub struct Code {
+    size: int,
+    modules: [bool],
+}
+
+/// Encodes `text` with error correction level M (the usual choice: ~15% of the symbol may be
+/// damaged). `Err` if the text does not fit (about 2,300 bytes at level M) or the build has no
+/// QR support (`--without qr`).
+pub fn encode(text: string) -> Result<Code, string> {
+    encode_level(text, "M")
+}
+
+/// Encodes `text` with an explicit error correction level: `"L"` (~7%, largest capacity), `"M"`
+/// (~15%), `"Q"` (~25%) or `"H"` (~30%, smallest capacity). `Err` for another level, a text that
+/// does not fit, or a build without QR support.
+pub fn encode_level(text: string, level: string) -> Result<Code, string> {
+    if (level != "L" && level != "M" && level != "Q" && level != "H") {
+        return Result.Err("qr: unknown error correction level '${level}' (use L, M, Q or H)");
+    }
+    let rows = __qr_matrix(text, level);
+    if (rows.len() == 0) {
+        return Result.Err(
+            "qr: the text does not fit in a QR code at level ${level} (or this build has no QR support)"
+        );
+    }
+    var modules: [bool] = [];
+    for row in rows {
+        for c in row {
+            modules.push(c == '1');
+        }
+    }
+    Result.Ok(Code { size: rows.len(), modules: modules })
+}
+
+/// Whether the module at column `x`, row `y` is dark. Out of range is light.
+pub fn dark(code: Code, x: int, y: int) -> bool {
+    if (x < 0 || y < 0 || x >= code.size || y >= code.size) {
+        return false;
+    }
+    code.modules[y * code.size + x]
+}
+
+/// The code as text for a terminal: two rows per line with the Unicode half-block characters
+/// (`█`, `▀`, `▄`, space), a one-module quiet zone around it, and a trailing newline per line.
+/// Dark modules are drawn with the foreground color, so it scans on a dark background too.
+pub fn to_text(code: Code) -> string {
+    let n = code.size + 2;  // zona de silencio de un módulo
+    var out = "";
+    var y = 0 - 1;
+    while (y < code.size + 1) {
+        var line = "";
+        var x = 0 - 1;
+        while (x < code.size + 1) {
+            let top = dark(code, x, y);
+            let bottom = dark(code, x, y + 1);
+            line = line + if (top && bottom) {
+                "█"
+            } else if (top) {
+                "▀"
+            } else if (bottom) {
+                "▄"
+            } else {
+                " "
+            };
+            x = x + 1;
+        }
+        out = out + line + "\n";
+        y = y + 2;
+    }
+    let _ = n;
+    out
+}
+
+/// The code as an SVG document: `module` pixels per module and a quiet zone of `margin`
+/// modules (the standard asks for 4). Dark modules are one `<path>` in `#000` over a white
+/// background, so it stays crisp at any size and embeds in a page or an email as-is.
+pub fn to_svg(code: Code, module: int, margin: int) -> string {
+    let m = if (margin < 0) { 0 } else { margin };
+    let px = if (module <= 0) { 1 } else { module };
+    let total = (code.size + 2 * m) * px;
+    var path = "";
+    var y = 0;
+    while (y < code.size) {
+        var x = 0;
+        while (x < code.size) {
+            if (dark(code, x, y)) {
+                path = path + "M${(x + m) * px} ${(y + m) * px}h${px}v${px}h-${px}z";
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ${total} ${total}\" width=\"${total}\" height=\"${total}\" shape-rendering=\"crispEdges\">"
+        + "<rect width=\"${total}\" height=\"${total}\" fill=\"#fff\"/>"
+        + "<path d=\"${path}\" fill=\"#000\"/></svg>"
+}
+
+/// The code as a PNG (black on white, RGBA8): `module` pixels per module and a quiet zone of
+/// `margin` modules. Built with `std/image`, so it works wherever the program runs.
+pub fn to_png(code: Code, module: int, margin: int) -> Result<bytes, string> {
+    let m = if (margin < 0) { 0 } else { margin };
+    let px = if (module <= 0) { 1 } else { module };
+    let total = (code.size + 2 * m) * px;
+    var pixels: [int] = [];
+    var y = 0;
+    while (y < total) {
+        var x = 0;
+        while (x < total) {
+            let v = if (dark(code, x / px - m, y / px - m)) { 0 } else { 255 };
+            pixels.push(v);
+            pixels.push(v);
+            pixels.push(v);
+            pixels.push(255);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    image.encode_png(Image { width: total, height: total, pixels: bytes_of(pixels) })
+}

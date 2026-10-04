@@ -42,6 +42,13 @@ mod imp {
         /// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
         /// (el consumidor reconstruye el `[[string]]`).
         pub fn query(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
+            let (ncols, cells) = self.query_nulls(sql, params)?;
+            Ok((ncols, cells.into_iter().map(|c| c.unwrap_or_default()).collect()))
+        }
+
+        /// M347 (rayauth R6): como `query`, pero cada celda es `None` si era `NULL` (el `""` de `query`
+        /// no distingue un NULL de una cadena vacía).
+        pub fn query_nulls(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
             let mut stmt = self.inner.prepare(sql).map_err(|e| e.to_string())?;
             let ncols = stmt.column_count();
             let mut rows =
@@ -53,7 +60,8 @@ mod imp {
                         // Copiar cada celda ANTES de avanzar: el texto de un ValueRef solo vive hasta el
                         // siguiente paso del statement.
                         for i in 0..ncols {
-                            out.push(value_str(row.get_ref(i).map_err(|e| e.to_string())?));
+                            let v = row.get_ref(i).map_err(|e| e.to_string())?;
+                            out.push(if matches!(v, rusqlite::types::ValueRef::Null) { None } else { Some(value_str(v)) });
                         }
                     }
                     Ok(None) => break,
@@ -82,6 +90,9 @@ mod stub {
             match self.0 {}
         }
         pub fn query(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> {
+            match self.0 {}
+        }
+        pub fn query_nulls(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
             match self.0 {}
         }
     }

@@ -50,12 +50,18 @@ fn main() -> int {
 ### Autenticación y firma (deterministas)
 
 - **`net/jwt`** — JSON Web Tokens HS256: `jwt_sign(secret: bytes, payload_json) -> string`,
-  `jwt_verify(secret: bytes, token) -> Result<string, string>`. Sobre `net/crypto` + `std/base64`.
-- **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA). Sobre `net/crypto` + `std/base64`.
+  `jwt_verify(secret: bytes, token) -> Result<string, string>`. M347: `jwt_sign_kid(secret, kid,
+  payload)` pone el `kid` en la cabecera (rotación de claves vía JWKS), `jwt_header(token)` /
+  `jwt_kid(token)` la leen SIN verificar (para elegir la clave) y `jwt_check_claims(payload, iss,
+  aud)` comprueba emisor y audiencia (string o lista) del payload ya verificado — sirve también para
+  EdDSA. Sobre `net/crypto` + `std/base64`.
+- **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA); `jwt_eddsa_sign_kid` para el `kid`. Sobre
+  `net/crypto` + `std/base64`.
 - **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.
 - **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `net/crypto` +
   `std/base64`.
-- **`net/cookie`** — parseo y serialización de cookies HTTP. Sobre `std/url`.
+- **`net/cookie`** — parseo y serialización de cookies HTTP (`with_path`/`with_domain`/`with_max_age`/
+  `with_http_only`/`with_secure`/`with_same_site`). Sobre `std/url`.
 
 ### HTTP y HTTP/2
 
@@ -68,7 +74,9 @@ fn main() -> int {
   `stream`/`stream_with` devuelven status y cabeceras en cuanto llegan y `stream_read` entrega el
   cuerpo a trozos según llegan (des-chunkeado incremental; plazo de OCIO por lectura, no total;
   `Ok(None)` = fin limpio, truncado = `Err`). Para respuestas que se generan en vivo (tokens de un
-  LLM, logs) pintando cada trozo al llegar.
+  LLM, logs) pintando cada trozo al llegar. M347: `Response.raw_headers` guarda TODAS las líneas de
+  cabecera en orden (también las repetidas, que el `Map` `headers` no puede) — `header_all(r, name)`
+  y `set_cookies(r)` las leen.
 - **`net/sse`** — cliente **Server-Sent Events** (`text/event-stream`) sobre `net/http.stream`:
   `open(url, headers)` suscribe (sin plazo de ocio: un stream sano puede callar minutos) y
   `next(es)` entrega cada `Event { data, event, id }` (data multilínea unida con `\n`; los

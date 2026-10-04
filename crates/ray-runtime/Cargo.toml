@@ -43,6 +43,9 @@ keychain = []
 # `unsafe`): el LZ77 escrito en raylang queda como respaldo (sin feature, wasm32, `--without deflate`).
 # Motivo: `ray release` comprimía el bundle en la VM a ~2 KB/s. CRC-32/Adler-32 a mano en el mismo módulo.
 deflate = ["dep:miniz_oxide"]
+# M347 (rayauth R23) — códigos QR (`std/qr`) sobre `qrcode` (Rust puro; el mismo crate que `ray dev --device`
+# ya usa en la toolchain). Determinista → oráculo VM↔nativo. Sin feature, `[]` (std/qr devuelve `Err`).
+qr = ["dep:qrcode"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
@@ -113,6 +116,8 @@ x509-parser = { version = "0.17", optional = true }
 num-bigint = { version = "0.4", optional = true }
 # M253 — miniz_oxide 0.8: DEFLATE/INFLATE en Rust puro (el backend de flate2), determinista → oráculo VM↔nativo.
 miniz_oxide = { version = "0.8", optional = true }
+# M347 — qrcode 0.14 sin features (sin `image`): solo la matriz de módulos; el render es de std/qr.
+qrcode = { version = "0.14", default-features = false, optional = true }
 num-traits = { version = "0.2", optional = true }
 num-integer = { version = "0.1", optional = true }
 webpki-roots = { version = "0.26", optional = true }

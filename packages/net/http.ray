@@ -29,6 +29,10 @@ pub struct Response {
     status: int,
     headers: Map<string, string>,
     body: bytes,
+    /// Every header line in wire order as `(name, value)`, the name lowercased — including the
+    /// REPEATED ones that `headers` (a Map keyed by name, last one wins) cannot hold: several
+    /// `Set-Cookie`, `WWW-Authenticate`, `Link`… Read them with `header_all(r, name)` (M347).
+    raw_headers: [(string, string)],
 }
 
 struct Url {
@@ -276,7 +280,7 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
 
 // Parsea la CABEZA de una respuesta (línea de estado + cabeceras, SIN el "\r\n\r\n" final):
 // (status, cabeceras con nombre en minúsculas). Compartido por parse_response y el streaming (M108).
-fn parse_head(head: bytes) -> Result<(int, Map<string, string>), string> {
+fn parse_head(head: bytes) -> Result<(int, Map<string, string>, [(string, string)]), string> {
     match (from_utf8(head)) {
         Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
@@ -299,6 +303,7 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>), string> {
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
+            var raw: [(string, string)] = [];
             var i: int = 1;
             while (i < lines.len()) {
                 let line: string = lines[i];
@@ -307,12 +312,13 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>), string> {
                         let name: string = line.substring(0, c).trim().to_lower();
                         let value: string = line.substring(c + 1, line.len()).trim();
                         headers.insert(name, value);
+                        raw.push((name, value));  // M347 (rayauth R14): también las repetidas
                     },
                     Option.None => { },
                 }
                 i = i + 1;
             }
-            Result.Ok((status, headers))
+            Result.Ok((status, headers, raw))
         },
     }
 }
@@ -329,6 +335,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
         Result.Ok(head) => {
             let status: int = head.0;
             let headers: Map<string, string> = head.1;
+            let raw_headers: [(string, string)] = head.2;
             // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
             // algunos servidores siempre chunked aunque pidamos Connection: close).
             var body_final: bytes = body;
@@ -397,7 +404,14 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 },
                 Option.None => { },
             }
-            Result.Ok(Response { status: status, headers: headers, body: body_final })
+            Result.Ok(
+                Response {
+                    status: status,
+                    headers: headers,
+                    body: body_final,
+                    raw_headers: raw_headers
+                }
+            )
         },
     }
 }
@@ -407,6 +421,25 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
 /// Returns None if the header is not present.
 pub fn header(r: Response, name: string) -> Option<string> {
     get(r.headers, name.to_lower())
+}
+
+// M347 (rayauth R14): un servidor manda dos `Set-Cookie` y `headers` (Map) solo guarda el último.
+/// Every value of the header `name` (case-insensitive), in wire order — the only way to read a
+/// repeated header such as `Set-Cookie`, `WWW-Authenticate` or `Link`. Empty if absent.
+pub fn header_all(r: Response, name: string) -> [string] {
+    let want = name.to_lower();
+    var out: [string] = [];
+    for (n, v) in r.raw_headers {
+        if (n == want) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The `Set-Cookie` header values of the response, one per cookie (each one a `Set-Cookie` line, as `cookie.set_cookie` produces it).
+pub fn set_cookies(r: Response) -> [string] {
+    header_all(r, "set-cookie")
 }
 
 // El cuerpo de la respuesta decodificado como texto UTF-8 (para respuestas de texto/JSON). Para datos

@@ -1545,6 +1545,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
             "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
             "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
+            // M347 (rayauth R6): la variante con máscara de NULL ('n'/'v' por celda), misma etiqueta que la VM.
+            "fn __ray_sqlite_query_nulls(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
+            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.query_nulls(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
+            "    match r { Ok((ncols, cells)) => { let mask: String = cells.iter().map(|c| if c.is_none() { 'n' } else { 'v' }).collect(); let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ncols.to_string()), Rc::<str>::from(mask)]; for cell in cells { v.push(Rc::<str>::from(cell.unwrap_or_default())); } __ray_sqlite_tag(v) } Err(e) => __ray_sqlite_err(e) } }\n",
             "fn __ray_sqlite_query(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
             "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.query(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",

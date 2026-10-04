@@ -7,7 +7,7 @@
 // se pasa y se devuelve como **string JSON** crudo: raylang es estáticamente tipado y las claims son
 // heterogéneas → dejar el JSON al usuario (que puede armarlo con la librería `json`) es lo idiomático.
 from std/base64 import base64url, base64url_decode;
-from std/json import parse, Json;
+from std/json import parse, stringify, Json;
 import std/crypto;
 
 // El header canónico de HS256, ya codificado en base64url (constante).
@@ -24,11 +24,99 @@ fn sign_input(secret: bytes, signing_input: string) -> string {
 /// Signs the claims (raw JSON string) with HMAC-SHA256 and returns the compact JWT
 /// `header.payload.signature` (RFC 7519, alg fixed to HS256).
 pub fn jwt_sign(secret: bytes, payload_json: string) -> string {
-    let h = header_b64();
+    sign_with_header(secret, header_b64(), payload_json)
+}
+
+// M347 (rayauth R4): la cabecera con `kid`, para rotar claves vía JWKS — el verificador lee el
+// `kid` con `jwt_kid` y elige el secreto. `alg`/`typ` siguen fijos; el `kid` se escapa como JSON.
+/// Like `jwt_sign`, with a `kid` (key id) in the header: `{"alg":"HS256","typ":"JWT","kid":"…"}`.
+/// The verifier reads it back with `jwt_kid(token)` to pick the right secret (key rotation).
+pub fn jwt_sign_kid(secret: bytes, kid: string, payload_json: string) -> string {
+    let header = "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":" + stringify(Json.JStr(kid)) + "}";
+    sign_with_header(secret, base64url(header.to_bytes()), payload_json)
+}
+
+fn sign_with_header(secret: bytes, h: string, payload_json: string) -> string {
     let p = base64url(payload_json.to_bytes());
     let signing_input = h + "." + p;
     let s = sign_input(secret, signing_input);
     signing_input + "." + s
+}
+
+/// The decoded header of a compact JWT (any algorithm) as JSON text, WITHOUT verifying anything:
+/// what a verifier reads first to choose the key. `Err` on a malformed token.
+pub fn jwt_header(token: string) -> Result<string, string> {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
+        return Result.Err("malformed token: expected 3 segments");
+    }
+    let raw = base64url_decode(parts[0])?;
+    from_utf8(raw)
+}
+
+/// The `kid` (key id) declared in the header, if any. Reads the header without verifying the
+/// token: use it only to CHOOSE the key, then verify with that key.
+pub fn jwt_kid(token: string) -> Option<string> {
+    let txt = match (jwt_header(token)) {
+        Result.Ok(t) => t,
+        Result.Err(_) => return Option.None,
+    };
+    match (parse(txt)) {
+        Result.Ok(j) => match (j) {
+            Json.JObject(m) => match (m.get("kid")) {
+                Option.Some(v) => match (v) {
+                    Json.JStr(k) => Option.Some(k),
+                    _ => Option.None,
+                },
+                Option.None => Option.None,
+            },
+            _ => Option.None,
+        },
+        Result.Err(_) => Option.None,
+    }
+}
+
+/// Checks the issuer and audience of a VERIFIED payload (the JSON `jwt_verify*` returned):
+/// `iss` must equal `issuer` and `aud` (a string or an array of strings, RFC 7519 §4.1.3) must
+/// contain `audience`. Pass `""` to skip either check. Works for HS256 and EdDSA tokens alike.
+/// Returns the payload on success.
+pub fn jwt_check_claims(
+    payload_json: string,
+    issuer: string,
+    audience: string
+) -> Result<string, string> {
+    let j = parse(payload_json)?;
+    let m = match (j) {
+        Json.JObject(m) => m,
+        _ => return Result.Err("the payload is not a JSON object"),
+    };
+    if (issuer != "") {
+        match (m.get("iss")) {
+            Option.Some(v) => match (v) {
+                Json.JStr(i) => {
+                    if (i != issuer) {
+                        return Result.Err("wrong issuer");
+                    }
+                },
+                _ => return Result.Err("'iss' is not a string"),
+            },
+            Option.None => return Result.Err("missing 'iss'"),
+        }
+    }
+    if (audience != "") {
+        let ok = match (m.get("aud")) {
+            Option.Some(v) => match (v) {
+                Json.JStr(a) => a == audience,
+                Json.JArray(xs) => xs.contains(Json.JStr(audience)),
+                _ => false,
+            },
+            Option.None => false,
+        };
+        if (!ok) {
+            return Result.Err("audience mismatch");
+        }
+    }
+    Result.Ok(payload_json)
 }
 
 // Comparación de strings en tiempo (casi) constante: recorre SIEMPRE toda la longitud, acumulando

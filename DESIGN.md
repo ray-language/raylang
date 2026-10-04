@@ -16570,3 +16570,54 @@ ni `to_float()`).
 
 Las docs `///` de `web` y `db` llegan a `ray_doc` con la siguiente publicación de los paquetes
 (M347); hasta entonces se leen en el repo.
+
+## 333. M347 — Los hallazgos de rayauth, cuarta oleada: lo que a un IdP le faltaba en la stdlib y los paquetes (oct 2026)
+
+Cuarta oleada de IDEAS §102. Hasta aquí, bugs y docs; esto son los **huecos de API** que rayauth
+rellenó a mano (RSA y P-256 sobre `std/bigint`, HMAC-SHA1 sobre `sha1`, un cliente HTTP mínimo para
+leer dos `Set-Cookie`, `; Domain=` pegado a mano). El criterio para meterlos en la stdlib o en los
+paquetes es el de siempre: producción real, y la mejor ingeniería disponible — aquí, casi siempre,
+ring.
+
+**Clave pública (R1, R2).** Un solo primitivo `__pk_op(op, a, b, c) -> [bytes]` etiquetado, calcado
+de `__bigint_op`, y wrappers finos en `std/crypto`: ECDSA P-256 completo (`p256_generate` →
+PKCS#8, `p256_public_key` → SEC1, `p256_sign` → `r‖s` de JWS, `p256_verify` y `p256_verify_asn1`
+para la firma DER de WebAuthn/OpenSSL) y RSA firma/verificación PKCS#1 v1.5 y PSS con SHA-256
+(RS256/PS256) sobre claves PKCS#8 de 2048–8192 bits. **ring no genera claves RSA**: se importan
+(`openssl genpkey`, o `std/bigint` + DER), y la generación queda como decisión abierta en IDEAS
+§102 (añadir el crate `rsa` o escribir PKCS#8 desde los primos de bigint). El DER de
+`RSAPublicKey` (`SEQUENCE { n, e }`) va en raylang — `rsa_public_key(n, e)` para verificar con un
+JWK ajeno, `rsa_public_components` para publicar el JWKS propio — y `std/pem` (RFC 7468, también
+raylang) saca el DER de un PEM y lo envuelve. Verificado contra OpenSSL en las dos direcciones. Para
+R2 basta decirlo en la doc de `bigint.modpow`: no es de tiempo constante, y la firma va por
+`std/crypto`.
+
+**HMAC por nombre de hash (R3).** `__hmac(alg, key, msg)` con `sha1`/`sha256`/`sha384`/`sha512` y
+los wrappers `hmac_sha1` (TOTP), `hmac_sha384`, `hmac_sha512`, `hmac(alg, …) -> Option<bytes>`;
+`hmac_sha256` sigue igual. Vectores de RFC 2202/4231.
+
+**Paquetes.** `net/jwt`: `jwt_sign_kid` (cabecera con `kid`), `jwt_header`/`jwt_kid` (leer la
+cabecera SIN verificar, para elegir la clave) y `jwt_check_claims(payload, iss, aud)` (emisor y
+audiencia, string o lista) sobre el payload ya verificado — sirve para HS256 y EdDSA (R4).
+`net/cookie.with_domain` (R22). `net/http`: `Response.raw_headers` conserva todas las líneas en
+orden y `header_all`/`set_cookies` leen las repetidas que el `Map` perdía (R14; los literales de
+`Response` solo existen dentro del módulo, así que el campo nuevo no rompe a nadie).
+`webserver.serve_options` + `ServeOptions` (límites, drenaje, TLS) y en `web`
+`listen_with(build, host, port, options().with_limits(l).with_drain(ms).with_tls(c, k))` (R24); los
+`with_*` viven junto al struct en `webserver` porque la resolución por tipo del receptor (SPEC §6.3
+paso 5) busca en el módulo del TIPO, no en el que reexporta. `db/sqlite.query_opt` distingue
+`NULL` (`None`) de `""` con un primitivo hermano de `__sqlite_query` que antepone una máscara
+`n`/`v` por celda (R6).
+
+**`std/qr` (R23).** La matriz la da el runtime (`__qr_matrix`, crate `qrcode`, el mismo de `ray dev
+--device`; feature `qr` por defecto, `--without qr` → `Err`); el render —texto con medios bloques,
+SVG, PNG vía `std/image`— es raylang, idéntico en los tres motores.
+
+**`[T]: ToJson` (R18)** era un `impl<T: ToJson> ToJson for [T]` en `std/json`… y un bug nativo
+latente: la clave de un `impl Trait for [T]` es `[]` (`type_key_of`) y `mangle` no la traducía, así
+que `[]#to_json` salía como Rust inválido. Ahora `[]` → `_ARR_` y cualquier impl sobre arreglos
+compila en nativo.
+
+Versiones: `net` 0.6.0, `web` 0.5.0, `db` 0.3.0 (se publican tras fusionar). Tests: ocho casos en
+`tests/rayauth_packages_cli.rs` (stdlib en tres motores; paquetes desde un proyecto consumidor con
+path-deps), con la clave RSA de prueba en `tests/fixtures/rsa_test_key.pem`.

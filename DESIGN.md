@@ -16650,3 +16650,28 @@ o por listas con un índice (`items.0`); un eslabón ausente da `""`, como una v
 `ctx_val`, y `from_json(Json)` convierte una respuesta de API entera (números enteros → `VInt`, el
 resto a texto, `null` → `""`). Los templates compilados `.ray.html` (`ray build --templates-only`)
 no cambian: son funciones tipadas y ya accedían a campos; esto cubre las plantillas dinámicas.
+
+## 336. M350 — Sesiones persistentes: el almacén de `web` como actor enchufable (oct 2026)
+
+R9 de rayauth: `Sessions` guardaba todo en un `kv.SharedStore` y solo tocaba disco bajo `ray dev`;
+cualquier app con login real reimplementaba las sesiones para que sobrevivieran a un despliegue. La
+pieza buena ya existía —el actor: una fibra dueña del estado a la que los handlers hablan por canal,
+coherente por FIFO— y lo que faltaba era separar el **protocolo** del **backend**.
+
+`net/session_store` define los cinco mensajes (`Get`, `Set`, `Delete`, `Drop`, `Sweep`) y el handle
+(`SessionStore { ch, ttl_s }`). Vive en `net` porque `web` y `db` dependen de `net` y ninguno del
+otro: `web` solo conoce el protocolo; `db/sessions` implementa el backend SQLite (tabla
+`ray_sessions(sid, key, value, expires_at)` servida desde una fibra dueña de la `Conn`, así la
+conexión no se comparte y SQLite, que serializa de todos modos, no se convierte en cuello); el
+backend de memoria con la persistencia RKV1 de desarrollo pasa a `session_store.memory`. Un backend
+propio (Redis, Postgres con el mismo esquema) es una fibra que atiende `Msg` y `from_channel`.
+
+**Caducidad.** Lo que convierte «persistente» en «de producción»: cada escritura renueva
+`expires_at` de la sesión entera (TTL deslizante), `get` ignora lo caducado y una fibra barre cada
+minuto cuando hay TTL; sin TTL (0) nada caduca, que es lo que `sessions(path)` hacía y sigue
+haciendo. `session_clear` es el logout que faltaba. La cookie, el id de 128 bits y la API de los
+handlers no cambian: una app pasa de desarrollo a producción cambiando la línea de `main`.
+
+Decisiones con el usuario: el backend en `db` y el protocolo en `net` (no `web` dependiendo de
+`db`); Postgres queda para después con el mismo esquema. Versiones: `net` 0.7.0, `web` 0.6.0,
+`db` 0.4.0.

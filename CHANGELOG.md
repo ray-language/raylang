@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.33 — 2026-10-04
+
+Sesiones persistentes para `web` (rayauth R9).
+
+- **Sesiones persistentes en `web`**: el almacén es enchufable (`net/session_store`) y `db/sessions`
+  trae el backend SQLite — `sessions_with(sessions.sqlite(conn, 86400)?)` sobrevive a reinicios y
+  réplicas, con TTL deslizante, barrido y `session_clear` (logout); `sessions(path)` sigue igual
+  (M350, rayauth R9). Paquetes `net` 0.7.0, `web` 0.6.0, `db` 0.4.0.
+
 ## 1.27.32 — 2026-10-04
 
 La cola del arco de rayauth: generar claves RSA y objetos en las plantillas.

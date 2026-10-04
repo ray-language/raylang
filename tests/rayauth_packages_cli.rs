@@ -407,3 +407,83 @@ fn main() -> int {
         "<tr><td>Ada &lt;3</td><td>yes</td><td>[ops][dev]</td></tr>\n<tr><td>Bob</td><td>no</td><td></td></tr>\nfirst=Ada &lt;3 missing=|rayauth|a@b.c\n1:2.5:x n=[] ok=true all=items=id=1, price=2.5, tags=x, n=, ok=true\n",
     );
 }
+
+/// M350 (IDEAS §102 R9): sesiones persistentes — `web.sessions_with` sobre `db/sessions.sqlite`
+/// (la sesión sobrevive a otro servidor sobre la misma base de datos, `session_clear` la cierra) y el
+/// backend de memoria con TTL (caduca y `sweep` la barre). VM y nativo.
+#[test]
+fn sessions_persist_in_sqlite_and_expire_with_a_ttl() {
+    let d = project("sessions_sqlite");
+    std::fs::write(d.join("prog.ray"), r#"import web/framework;
+from web/framework import App;
+import net/http;
+import net/session_store;
+import db/sqlite;
+import db/sessions;
+import std/net;
+import std/time;
+fn routes(sess: framework.Sessions) -> App {
+    var app = framework.new_app();
+    app.GET("/set", fn(c: framework.Ctx, r: framework.Res) { framework.session_put(sess, c, r, "user", "ada"); r.text("ok"); });
+    app.GET("/get", fn(c: framework.Ctx, r: framework.Res) { r.text("user=" + framework.session_get(sess, c, r, "user")); });
+    app.GET("/out", fn(c: framework.Ctx, r: framework.Res) { framework.session_clear(sess, c, r); r.text("bye"); });
+    app
+}
+fn serve(sess: framework.Sessions) -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    spawn(fn() { let _ = framework.listen_on(fn() -> App { routes(sess) }, l); });
+    port
+}
+fn cookie_of(r: http.Response) -> string {
+    let sc = http.set_cookies(r);
+    if (sc.len() == 0) { return ""; }
+    sc[0].split(";")[0]
+}
+fn get(port: int, path: string, cookie: string) -> http.Response {
+    var h: Map<string, string> = Map.new();
+    if (cookie != "") { h.insert("Cookie", cookie); }
+    http.request_with("GET", "http://127.0.0.1:${port}" + path, "", h).unwrap()
+}
+fn main() -> int {
+    let db = sqlite.connect("sess.db").unwrap();
+    let store = sessions.sqlite(db, 3600).unwrap();
+    let port = serve(framework.sessions_with(store));
+    time.sleep(200);
+    let r1 = get(port, "/set", "");
+    let ck = cookie_of(r1);
+    print(ck.starts_with("ray_session=") && ck.len() == 44);
+    print(http.body_text(get(port, "/get", ck)).unwrap());
+    print(http.body_text(get(port, "/get", "")).unwrap());
+    // Persistencia: un segundo servidor sobre la misma base de datos ve la sesión.
+    let db2 = sqlite.connect("sess.db").unwrap();
+    let port2 = serve(framework.sessions_with(sessions.sqlite(db2, 3600).unwrap()));
+    time.sleep(200);
+    print(http.body_text(get(port2, "/get", ck)).unwrap());
+    print(sqlite.query(db2, "SELECT count(*) FROM ray_sessions", []).unwrap()[0][0]);
+    let _ = get(port2, "/out", ck);
+    time.sleep(100);
+    print(http.body_text(get(port, "/get", ck)).unwrap());
+    // Memoria con TTL de 1 s: la sesión caduca y el barrido la borra.
+    let mem = session_store.memory("", false, 1).unwrap();
+    session_store.set(mem, "s1", "k", "v");
+    print(session_store.get(mem, "s1", "k").unwrap_or("-"));
+    time.sleep(1200);
+    print(session_store.get(mem, "s1", "k").unwrap_or("-"));
+    print(session_store.sweep(mem));
+    0
+}
+"#).unwrap();
+    vm_and_native(&d, "true
+user=ada
+user=
+user=ada
+1
+user=
+v
+-
+1
+");
+    // El nativo arranca con la base de datos que dejó la VM: el programa cierra su sesión al final,
+    // y la cuenta de filas sigue valiendo 1 porque cada ejecución escribe una sesión nueva.
+}

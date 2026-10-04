@@ -280,9 +280,27 @@ nadie puede fijarle a un usuario un id elegido. Los valores son
 strings; para estado no ligado a un usuario (config, contadores), usa `std/kv` directamente
 (`kv.open_shared(path)` — misma API `StoreOps` que el store local).
 
+**Persistentes en producción (M350).** El almacén es enchufable (`net/session_store`: un actor con
+un protocolo de cinco mensajes). `sessions(path)` es el de desarrollo; para que las sesiones
+sobrevivan a un reinicio —y se compartan entre réplicas sobre la misma base de datos— usa
+`sessions_with` con el backend SQLite de `db`:
+
+```rust
+import db/sqlite;
+import db/sessions;
+let db = sqlite.connect("app.db")?;
+let sess = sessions_with(sessions.sqlite(db, 86400)?);   // TTL: un día sin actividad
+```
+
+El TTL es deslizante (cada `session_put` renueva la sesión), lo caducado no se lee y una fibra lo
+barre cada minuto; `session_clear(sess, c, r)` cierra la sesión (logout). Para memoria con TTL sin
+base de datos: `sessions_with(session_store.memory("", false, 3600)?)`. Un backend propio (Redis,
+Postgres…) es una fibra que atiende `session_store.Msg` y `session_store.from_channel(ch, ttl)`.
+
 ## Despliegue
 
-Una **única** familia de arranque, siempre sobre el builder top-level:
+Una **única** familia de arranque, sobre el builder (una closure inline que captura lo creado en
+`main`, o una función top-level si no hay nada que capturar; ver `listen`):
 
 ```rust
 listen(build_app, "0.0.0.0", 8080);                        // keep-alive + límites por defecto

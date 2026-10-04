@@ -899,6 +899,19 @@ return 0 - 1,` equivale a `Option.None => { return 0 - 1; }` — diverge, así q
 Y dentro de un bucle, **`break` y `continue`** son expresión igual: `Result.Err(e) => break,`
 en el brazo de un `match`, `let w = if (v < 0) { continue } else { v };`.
 
+Un brazo también puede ser una **asignación** sin llaves: `Option.Some(w) => link = w.user.id,`
+equivale a `Option.Some(w) => { link = w.user.id; },` (el brazo vale `unit`; `ray fmt` conserva la
+forma corta).
+
+```rust
+var label = "";
+match (who) {
+    Option.Some(w) if w.admin => label = "admin",
+    Option.Some(w) => label = w.name,
+    Option.None => label = "anonymous",
+}
+```
+
 **Bucles etiquetados**: para salir de (o reanudar) un bucle EXTERIOR desde uno interior,
 etiquétalo — `nombre:` delante del `while`/`for` — y nombra la etiqueta en el `break`/`continue`.
 Sin la bandera que raycode arrastraba para salir de dos bucles:

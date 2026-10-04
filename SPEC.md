@@ -374,6 +374,8 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
   bindings del patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. **Patrón de struct**
   (M40.1d): `Nombre { campo [: sub-patrón], … }` destructura un struct (forma corta `{ x, y }` =
   `{ x: x, y: y }`), anidado o como patrón de primer nivel sobre un escrutinio struct (M310).
+  **Brazo de asignación** (M344): `patrón => lugar = valor,` es azúcar de `patrón => { lugar =
+  valor; },` (valor `unit`; `lugar` debe ser asignable). `ray fmt` lo conserva en su forma corta.
   **Exhaustividad por matriz** (M310): los brazos sin guarda deben agotar el tipo del escrutinio,
   **recursivamente** por variantes y posiciones — `Ok(Some(v)) / Ok(None) / Err(e)` es exhaustivo
   sin `_`; `Some(Some(_)) / None` no lo es (falta `Some(None)`). Un `int`/`string`/`char` solo lo
@@ -397,6 +399,14 @@ parámetro admite el receptor, la llamada es `M.f(recv, args)` — sin importar 
 prelude (`Option`, `Result`, `Map`…) ni a primitivos, ni alcanza funciones privadas de `M`; una
 función libre en el ámbito con ese nombre (paso 4) sigue ganando. Todo se resuelve
 **estáticamente** en el checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
+
+Dos precisiones sobre el paso 4 (M344): **un local solo tapa al método si es una función** —
+`fn fail(r: Res, status: int) { r.status(status) }` llama a la función libre `status(Res, int)`,
+porque un `int` no puede ser el callee de `r.status(…)` (en una llamada directa `status(…)` el
+local sí tapa, como siempre); y **el ámbito de las funciones del módulo de entrada es léxico**:
+desde otro módulo, `recv.f(args)` nunca resuelve a una `f` definida en el archivo de entrada por su
+nombre pelado (solo el prelude y los builtins son visibles pelados desde un módulo; lo demás va
+por `from M import`, por el módulo propio o por el tipo del receptor, paso 5).
 
 ### 6.4 Pipelines
 

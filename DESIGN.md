@@ -16441,3 +16441,47 @@ al arrancar, a cambio de que la terminal diga de un vistazo qué herramienta es.
 **El handbook** reescribe la sección 10 con la tabla «cuántas veces», el emparejamiento paso a
 paso (terminal, cámara, app abierta a mano, enlace pegado), qué recuerda cada lado y dónde, y los
 tres fallos típicos (otra red, «stopped answering», aviso de versiones).
+
+## 330. M344 — Los bugs de rayauth: resolución de nombres, dos stubs nativos y el brazo de asignación (oct 2026)
+
+rayauth (IDEAS §102) es la app que más lejos ha llevado al lenguaje en terreno de producción: un
+proveedor OIDC con TOTP, WebAuthn y forward-auth, 107 tests en VM y nativo, y un RP en Python que
+valida el flujo contra el binario de release. De sus 28 hallazgos, cinco son bugs que no admiten
+rodeo razonable y se arreglan juntos aquí; el resto queda clasificado en IDEAS §102.
+
+**R13 y R17 son el mismo problema visto desde dos lados: `check_ufcs` no distinguía lo que es
+visible de lo que simplemente existe.** El paso 1 aceptaba cualquier local homónimo (`self.lookup`),
+así que `fn fail(r: Res, status: int) { r.status(status) }` intentaba llamar al `int`. Y el paso 3
+aceptaba cualquier función por su nombre pelado, incluidas las del módulo de entrada: un test que
+definía `fn text(n: int)` rompía el `r.text("hello")` que `lib` hacía sobre un `fw::Res`, porque el
+nombre del raíz ganaba a la resolución por tipo del receptor (paso 5). Las dos reglas nuevas están
+en SPEC §6.3: un local solo tapa al método si es una función, y el ámbito del raíz es léxico (desde
+un módulo, pelado solo se ve el prelude). La segunda es la misma decisión de M298 para el override
+del prelude, llevada a su conclusión.
+
+R17 tiene una segunda mitad en los motores: el checker ya podía resolver bien, pero la bajada
+emite `status(r, status)` y la VM, el intérprete y el transpilador resuelven el `Ident` por ámbito —
+local primero —, con lo que la VM moría en un `panic` interno. No hay en el AST una forma de decir
+«esta es la función global»; en vez de inventarla, el sitio baja al alias `status#free` y `check`
+inyecta ese alias como clon de la función tras la verificación (`inject_free_fn_aliases`), igual
+que M270 inyecta `x#prelude`. Cuesta un clon por función tapada, solo cuando ocurre.
+
+**Los dos stubs nativos eran agujeros en `type_of`.** `try_send`, `try_recv`, `send` y `close`
+no tenían fila: un `let _ = try_send(…)` que fuerza a tipar el valor convertía la función entera
+en stub (R28; con `if (try_send(…))` no se tipa y por eso el rodeo funcionaba). Y el brazo `If`
+tomaba el tipo del `then` sin mirar si llevaba un placeholder: `Option.None` se tipa como
+`Option<unit>` «a falta de contexto», y el contexto estaba en el `else` (`store.find(id)?`,
+`Option<store::C>`), que nunca se consultaba (R19). `has_placeholder` detecta el `unit` dentro de
+los argumentos de un enum/struct/tupla/arreglo y el `else` manda cuando él sí tipa sin huecos. El
+checker ya razona así (M204: el brazo que no fija el tipo lo toma de los demás); el transpilador se
+alinea.
+
+**El brazo de asignación (R25)** es un azúcar pequeño que rayauth pidió dos veces: `Option.Some(w)
+=> link = w.user.id,` baja en el parser a `{ link = w.user.id; }` (valor `unit`). El bloque
+sintético comparte posición con el lugar asignado; `ray fmt` lo reconoce por eso
+(`assign_arm_sugar`: un `{` escrito nunca comparte columna con su primera sentencia) y lo reemite
+en la forma corta, idempotente. El espejo `selfhost/parser.ray` es un subconjunto congelado (no
+tiene ni guardas) y no se toca.
+
+Tests: cinco casos en `tests/findings_batch_cli.rs`, con el programa mínimo de cada hallazgo en los
+tres motores (el de canales en VM y nativo).

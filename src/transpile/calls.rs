@@ -3250,6 +3250,14 @@ impl Transpiler {
                     },
                     // M116.1: select_timeout([chs], ms) -> Option<int>.
                     "select_timeout" => opt_of(Type::Int),
+                    // M344 (rayauth R28): `let _ = try_send(ch, v)` tipa el valor del envío; sin estas
+                    // filas la función entera caía a stub ("unknown return type of 'try_send'").
+                    "try_send" => Type::Bool,
+                    "send" | "close" => Type::Unit,
+                    "try_recv" => match self.type_of(recv0.ok_or("try_recv without a channel")?)? {
+                        Type::Channel(t) => Type::Enum("Received".into(), vec![*t]),
+                        other => return Err(format!("try_recv on {:?} is not supported", other)),
+                    },
                     "push" | "insert" | "assert" | "assert_eq" => Type::Unit,
                     "char_from_code" => opt_of(Type::Char),
                     // Más string builtins como métodos manglados (`string#trim` → "trim"; sus filas de
@@ -3344,9 +3352,18 @@ impl Transpiler {
             }
             // M316 (findings #78): si la rama `then` no se deja tipar sola (`[]` sin anotación), el
             // tipo lo da la rama `else` — como infiere el checker.
+            // M344 (rayauth R19): y si el `then` tipa con un HUECO (`Option.None` → `Option<unit>`,
+            // placeholder que debía fijar el contexto), el `else` manda cuando él sí tipa sin huecos:
+            // `let c = if (x) { Option.None } else { store.find(id)? }` ⇒ `Option<store::C>`.
             ExprKind::If { then_branch, else_branch, .. } => match &then_branch.tail {
                 Some(t) => match self.type_of(t) {
-                    Ok(ty) => ty,
+                    Ok(ty) => match else_branch.as_deref() {
+                        Some(el) if has_placeholder(&ty) => match self.type_of(el) {
+                            Ok(ety) if !has_placeholder(&ety) => ety,
+                            _ => ty,
+                        },
+                        _ => ty,
+                    },
                     Err(e) => match else_branch.as_deref() {
                         Some(el) => self.type_of(el)?,
                         None => return Err(e),

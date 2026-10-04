@@ -3941,3 +3941,43 @@ quedan aquí para decidir.
 | 14 | Nativo: el mensaje de un índice fuera de rango capturado por `try_call` no es el de la VM. `try_call(fn() -> int { empty[3] })` da `index 3 out of range (length 0)` en la VM e `index out of bounds: the len is 0 but the index is 3` en el binario nativo (el pánico de Rust sin traducir). Rompe la identidad byte a byte en cualquier programa que muestre ese error (lo destapó el servidor MCP, que devuelve al modelo el fallo de una herramienta) | ✅ **M342**: todo indexado nativo (arreglo, string, bytes, escritura, split fusionado) pasa por `__ray_idx` y da el texto de la VM |
 | 15 | Nativo: no compila una closure que captura un `Map` declarado con anotación y sin uso previo. `var m: Map<string, int> = Map.new(); try_call(fn() -> int { 10 / (m.len()) })` corre en la VM y en nativo falla en `rustc` con E0282 (`cannot infer type of the type parameter T` en el `RefCell` del mapa capturado) | ✅ **M342**: la celda `Rc<RefCell<T>>` de una `var` capturada lleva la anotación |
 | 16 | Nativo: `==` y `!=` sobre un enum de la stdlib sin `Eq` derivado no compilan. `if (block != Json.JNull)` corre en la VM (igualdad estructural) y en nativo falla en `rustc` con E0369 (`Json` no implementa `PartialEq`). El checker lo acepta, así que el error aparece al construir el binario, con un mensaje de Rust | ✅ **M342**: `Json` (y todo tipo con `Map<K, V>` en una declaración) deriva `PartialEq`; de paso la VM comparaba los Map por `false` fijo y ahora es estructural como el intérprete |
+
+## 102. Hallazgos de rayauth — un IdP (OIDC, TOTP, WebAuthn, forward-auth) en raylang (oct 2026)
+
+rayauth (`ray-apps/rayauth`, `docs/RAYLANG-FINDINGS.md`) se diseñó solo con las herramientas MCP
+de raylang y el toolchain; sus 28 hallazgos (R1–R28) se revisaron contra 1.27.30: R10 ya estaba
+cerrado (M342) y los 27 restantes se reprodujeron uno a uno. Severidad: **B** bug · **D**
+documentación · **E** hueco de API. El plan va en cuatro oleadas: M344 (bugs de front-end y
+nativo), M345 (formateador y diagnósticos), M346 (docs y política del nativo), M347 (paquetes y
+stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML) se deciden aparte.
+
+| # | Sev. | Hallazgo | Estado |
+|---|---|---|---|
+| R1 | E | No hay RSA ni ECDSA en `std/crypto` (RS256 obligatorio en OIDC; ES256 en WebAuthn); tampoco ASN.1/DER/PEM. rayauth hace RSA y P-256 a mano sobre `std/bigint` | PROPUESTO (M347): ring trae ECDSA P-256 y RSA PKCS#1 v1.5/PSS (firma y verificación) pero no genera claves RSA → decidir `rsa` crate vs. solo importar PKCS#8; PEM/DER mínimo |
+| R2 | E | `bigint.modpow` no es de tiempo constante y se presenta como la primitiva de RSA | PROPUESTO: nota en la doc que remita a blinding / a `crypto.rsa_*` |
+| R3 | E | Solo `hmac_sha256`; TOTP necesita HMAC-SHA1 | PROPUESTO (M347): `hmac_sha1`/`hmac_sha512` vía ring |
+| R4 | E | `net/jwt`/`net/jwt_eddsa` no admiten cabeceras propias (`kid`) ni verifican `aud`/`iss` | PROPUESTO (M347): `*_sign_with_header`, verificación con `kid` → clave, `aud`/`iss` |
+| R5 | D | La doc de `framework.listen` pide un builder top-level y la de `Sessions` pide capturar en handlers; el patrón real es la closure inline con captura, y la closure guardada en `let` no cruza a otra fibra en nativo | PROPUESTO (M346): documentar el patrón y la restricción |
+| R6 | D/E | `sqlite.connect` no dice si un `Conn` sirve desde varias fibras; `query` convierte `NULL` en `""` | PROPUESTO: documentar fibras/pool (M346); `NULL` distinguible (M347) |
+| R7 | E | No hay cliente SMTP (`net/mail` solo formatea) | PROPUESTO: `smtp.send` sobre `std/net` (rayauth tiene 130 líneas de base); STARTTLS sin probar |
+| R8 | E | No hay `std/xml` (bloquea SAML) | PROPUESTO: arco propio; empezar por parse/serialize |
+| R9 | E | Sesiones/estado de `web` sin backend persistente en producción | PROPUESTO: diseño aparte (sqlite) |
+| R10 | B | Nativo: indexar con literal el resultado de `split()` no compilaba (también en `std/template`) | ✅ **M342** (v1.27.29) |
+| R11 | D | `for (a, b) in [(string, int)]` → «cannot iterate over …»: el patrón de tupla solo vale para `Map` | PROPUESTO (M345): extenderlo a arreglos e iteradores de tuplas (bajada a `let (a, b)`), o al menos el mensaje |
+| R12 | E | `bytes_of([])` no toma el tipo del parámetro como contexto | PROPUESTO (M345): tipo esperado para los builtins de parámetro fijo |
+| R13 | B | Una función del módulo de entrada se colaba en el UFCS de otro módulo (`fn text(n: int)` en main.ray capturaba `r.text("x")` sobre `fw::Res`) | ✅ **M344**: el nombre pelado solo es visible fuera del raíz si es prelude/builtin |
+| R14 | E | `net/http`: `Response.headers` es un `Map` y pierde cabeceras repetidas (`Set-Cookie`) | PROPUESTO (M347): `raw_headers`/`header_all` |
+| R15 | E | `std/template` sin valores estructurados (`{{ u.name }}` imposible) | PROPUESTO: `VMap`/objetos en `TVal` |
+| R16 | E | `const` no admite expresiones (`8 * 3600 * 1000`) ni la `const` de otro módulo | PROPUESTO (M345): plegado de constantes en el checker |
+| R17 | B/D | Un parámetro `status: int` tapaba el método UFCS `r.status(n)` («cannot call a value of type int») | ✅ **M344**: un local solo tapa si es función (el sitio baja al alias `nombre#free`); el error nombra al local cuando no hay función |
+| R18 | E | `[string]` no implementa `ToJson` | PROPUESTO (M347): `impl<T: ToJson> ToJson for [T]` en `std/json` |
+| R19 | B | Nativo: `if (…) { Option.None } else { otro_modulo.f()? }` perdía el tipo y la función caía a stub | ✅ **M344**: el `then` con placeholder cede el tipo al `else` |
+| R20 | E | Los stubs nativos que entran en pánico van por defecto; `--no-stubs` existe pero no está documentado | PROPUESTO (M346): `--no-stubs` por defecto en `--release`; documentar |
+| R21 | B | `ray fmt` quita los paréntesis de `(if …) + "b"` y deja código que no parsea | PROPUESTO (M345): paréntesis obligatorios para una forma con bloque como operando izquierdo + reparseo de la salida antes de `-w` |
+| R22 | E | `net/cookie` sin `with_domain` | PROPUESTO (M347) |
+| R23 | E | No hay generador de QR (TOTP) | PROPUESTO (M347): `std/qr` sobre el crate `qrcode` ya presente |
+| R24 | E | `web`: no se combinan límites y apagado ordenado | PROPUESTO (M347): `listen_with(build, host, port, options)` |
+| R25 | E | Una asignación no podía ser brazo de `match` | ✅ **M344**: `patrón => lugar = valor,` azúcar de `{ lugar = valor; }`; `ray fmt` la conserva |
+| R26 | B | `ray fmt` saca los comentarios de una lista de parámetros al cuerpo | PROPUESTO (M345): lista multilínea cuando hay comentarios dentro |
+| R27 | D | `n as float` / `x as int` no están en `llms.txt` | PROPUESTO (M346) |
+| R28 | B | Nativo: `let _ = try_send(ch, v)` convertía la función en stub («unknown return type of 'try_send'») | ✅ **M344**: filas `try_send`/`try_recv`/`send`/`close` en la tabla de tipos |

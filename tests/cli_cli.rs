@@ -4073,7 +4073,7 @@ fn module_constants_may_reference_sibling_constants() {
     std::fs::write(dir.join("src/main.ray"), "import tables;\n\nfn main() {\n    print(tables.X);\n}\n").unwrap();
     let (_o, err, code) = ray(&dir, &["run"]);
     assert_eq!(code, 65);
-    assert!(err.contains("must be a literal"), "{err}");
+    assert!(err.contains("must be a constant expression"), "{err}");
 }
 
 /// M326 (findings #105): `assert_eq_msg` dice QUÉ se comparaba.

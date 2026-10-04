@@ -1040,3 +1040,154 @@ fn an_assignment_can_be_a_match_arm_on_all_engines_and_survives_fmt() {
     assert_ne!(code, 0);
     assert!(err.contains("the left-hand side of '=' is not assignable"), "{err}");
 }
+
+// ── M345: hallazgos de rayauth, segunda oleada (formateador y diagnósticos) ─────────────────────
+
+/// rayauth R21 (M345): `ray fmt` quitaba los paréntesis de `(if …) + "b"` — en posición de sentencia
+/// el `if` se lee como sentencia y el `+` quedaba suelto. Ahora la forma con bloque que ARRANCA una
+/// sentencia o el tail va entre paréntesis siempre, y la salida del formateador se reparsea antes de
+/// darse por buena.
+#[test]
+fn fmt_keeps_the_parentheses_of_a_block_form_that_starts_a_statement() {
+    let d = tmp("fmt_block_leaf");
+    let src = r#"fn f(p: string) -> string {
+    (if (p == "") { "a" } else { p }) + "b"
+}
+
+fn g(p: string) -> int {
+    let x = if (p == "") { "a" } else { p } + "c";
+    (match (p) {
+        "" => "m",
+        _ => p,
+    }).to_upper() + x;
+    (if (p == "") { 1 } else { 2 }) * 10
+}
+
+fn main() -> int {
+    print(f(""));
+    print(g("x"));
+    0
+}
+"#;
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let (out, err, code) = ray(&d, &["fmt", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, src, "idempotente y con los paréntesis necesarios");
+    three_engines(&d, "ab\n20\n");
+}
+
+/// rayauth R26 (M345): un comentario dentro de la lista de parámetros se quedaba como primera línea
+/// del cuerpo. Con comentarios dentro, la lista va un parámetro por línea y cada comentario con el
+/// suyo (suelto encima, trailing en su línea). Y un cuerpo de UNA línea tras una línea en blanco ya no
+/// gana blancos entre sus sentencias.
+#[test]
+fn fmt_keeps_parameter_comments_with_their_parameter() {
+    let d = tmp("fmt_param_comments");
+    let src = r#"// The login page.
+pub fn login(
+    error: string,  // "" when there is nothing to show
+    // HTML after the form; "" for none.
+    after: string
+) -> string {
+    // body comment
+    error + after
+}
+
+fn plain(a: int, b: int) -> int { a + b }
+
+fn main() -> int {
+    print(login("a", "b"));
+    print(plain(1, 2));
+    0
+}
+"#;
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let (out, err, code) = ray(&d, &["fmt", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, src);
+    std::fs::write(d.join("one_line.ray"), "fn plain(a: int, b: int) -> int { a + b }\n\nfn main() -> int { print(plain(1, 2)); print(2); 0 }\n").unwrap();
+    let (out, _e, _c) = ray(&d, &["fmt", "one_line.ray"]);
+    assert_eq!(out, "fn plain(a: int, b: int) -> int { a + b }\n\nfn main() -> int {\n    print(plain(1, 2));\n    print(2);\n    0\n}\n");
+}
+
+/// rayauth R11 (M345): `for (s, n) in [(string, int)]` destructura el elemento-tupla (baja a `let (s,
+/// n) = __ft`, los motores no cambian). Los errores dicen qué no encaja.
+#[test]
+fn a_tuple_pattern_iterates_an_array_of_tuples_on_all_engines() {
+    let d = tmp("for_tuple_array");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() -> int {
+    let cases = [("a", 1), ("b", 2)];
+    var total = 0;
+    for (s, n) in cases {
+        print("${s}=${n}");
+        total = total + n;
+    }
+    for (_, n) in cases { total = total + n; }
+    let triples: [(int, int, int)] = [(1, 2, 3)];
+    for (a, b, c) in triples { print(a + b + c); }
+    print(total);
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "a=1\nb=2\n6\n6\n");
+    std::fs::write(d.join("bad1.ray"), "fn main() -> int { let xs = [1, 2]; for (a, b) in xs { print(a); } 0 }\n").unwrap();
+    let (_o, err, _c) = ray(&d, &["run", "bad1.ray"]);
+    assert!(err.contains("cannot destructure int in a `for`: a tuple pattern needs an array of tuples (or a Map)"), "{err}");
+    std::fs::write(d.join("bad2.ray"), "fn main() -> int { let xs = [(1, 2)]; for (a, b, c) in xs { print(a); } 0 }\n").unwrap();
+    let (_o, err, _c) = ray(&d, &["run", "bad2.ray"]);
+    assert!(err.contains("the 3-variable pattern does not match the element (int, int) of the array (2 positions)"), "{err}");
+}
+
+/// rayauth R12 (M345): `bytes_of([])` y `join([], ",")` toman el tipo fijo del parámetro como contexto
+/// del `[]` (checker y transpilador).
+#[test]
+fn an_empty_array_takes_the_type_of_a_fixed_builtin_parameter() {
+    let d = tmp("empty_array_builtin");
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn main() -> int { let b = bytes_of([]); print(b.len()); print(\"[\" + join([], \",\") + \"]\"); 0 }\n",
+    )
+    .unwrap();
+    three_engines(&d, "0\n[]\n");
+}
+
+/// rayauth R16 (M345): las `const` admiten expresiones constantes (aritmética entera y flotante,
+/// bits, negación, concatenación de strings, otras `const` — también de otro módulo). Se pliegan a
+/// un literal antes de la verificación; la división por cero es error con posición.
+#[test]
+fn constants_fold_arithmetic_and_cross_module_references_on_all_engines() {
+    let d = tmp("const_fold");
+    std::fs::write(d.join("ops.ray"), "pub const VERSION: string = \"1.0\";\npub const LIMIT: int = 4 * 2;\n").unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import ops;
+const HOUR_MS: int = 3600 * 1000;
+const IDLE_MS: int = 8 * HOUR_MS;
+const NEG: int = -IDLE_MS / 2 + 1;
+const MASK: int = (1 << 4) | 3;
+const RATE: float = 1.5 * 2.0;
+const NAME: string = "ray" + "auth";
+const FLAGS: [int] = [HOUR_MS, 2 * 3];
+const PAIR: (string, int) = (NAME, IDLE_MS);
+const W: string = "v" + ops.VERSION;
+const L2: int = ops.LIMIT * 2;
+fn main() -> int {
+    print("${IDLE_MS} ${NEG} ${MASK} ${RATE} ${NAME} ${FLAGS[1]} ${PAIR.1} ${W} ${L2}");
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "28800000 -14399999 19 3 rayauth 6 28800000 v1.0 16\n");
+    std::fs::write(d.join("bad.ray"), "const Z: int = 10 / 0;\nfn main() -> int { print(Z); 0 }\n").unwrap();
+    let (_o, err, code) = ray(&d, &["run", "bad.ray"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("type error at 1:16: constant 'Z': integer division by zero"), "{err}");
+    std::fs::write(d.join("bad2.ray"), "fn f() -> int { 1 }\nconst Z: int = f() + 1;\nfn main() -> int { print(Z); 0 }\n").unwrap();
+    let (_o, err, _c) = ray(&d, &["run", "bad2.ray"]);
+    assert!(err.contains("the value of constant 'Z' must be a constant expression"), "{err}");
+}

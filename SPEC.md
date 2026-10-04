@@ -188,7 +188,7 @@ firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | blo
 impl     = 'impl' [ genericos ] nombre_trait [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
 alias_tipo = 'type' IDENT [ '<' IDENT { ',' IDENT } '>' ] '=' tipo ';' ;   (* 'type' es contextual: solo abre ítem (M311) *)
-const_valor = literal | '[' [ const_valor { ',' const_valor } ] ']' ;
+const_valor = expresion_constante ;   (* literal, aritmética/bits/concatenación sobre literales y otras const, arreglo/tupla de ellas; M345 *)
 extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
 firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 ```
@@ -217,10 +217,16 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   un ítem seguido de un nombre; en cualquier otra posición es un identificador (campo `type`,
   variable `type`). La construcción va por el nombre real (`Enum.Variante`, `Struct { … }`), no
   por el alias.
-- `const` de nivel superior: el valor es un **literal** (o literal negado), un **arreglo o una
-  tupla de valores constantes** (anidable; M274/M307) o el **nombre de otra constante declarada
-  antes** (M307: `const IDS: [int] = [ID_A, ID_B];`, `const TABLE: [(int, string)] = [(ID_A,
-  "a")]`). Un `const` arreglo tiene semántica de **literal inyectado**: cada uso del nombre
+- `const` de nivel superior: el valor es una **expresión constante** (M345): un literal; `+ - * /
+  % & | ^ << >>` y la negación sobre `int`, `+ - * / %` sobre `float`, `+` sobre `string`, `!`
+  sobre `bool`, con operandos literales u **otras constantes** (de cualquier módulo, también
+  declaradas después; un ciclo es error); o un **arreglo o una tupla de valores constantes**
+  (anidable; M274/M307: `const IDS: [int] = [ID_A, ID_B];`, `const TABLE: [(int, string)] =
+  [(ID_A, "a")]`). El checker **pliega** la expresión a su literal antes de verificar (`8 * 3600 *
+  1000` es el literal `28800000` para los tres motores); una división por cero o un
+  desbordamiento entero en el plegado es error de compilación con posición. Lo que no se pliega
+  (una llamada, una variable) es error: «must be a constant expression». Un `const` arreglo tiene
+  semántica de **literal inyectado**: cada uso del nombre
   evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo a través de un
   alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
 - **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
@@ -264,7 +270,7 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | expresion_con_bloque ;                   (* if/match/bloque como sentencia, sin ';' *)
 expresion_con_bloque = expresion_if | expresion_while | expresion_match | bloque ;
 destino   = IDENT | expresion_postfija '.' IDENT | expresion_postfija '[' expresion ']' ;
-patron_for= IDENT | '(' IDENT ',' IDENT ')' ;
+patron_for= IDENT | '(' ( IDENT | '_' ) { ',' ( IDENT | '_' ) } ')' ;   (* la tupla, sobre Map, [(…)] o un Iterator de tuplas; M345 *)
 iterable  = expresion [ '..' expresion ] ;
 ```
 
@@ -278,7 +284,10 @@ iterable  = expresion [ '..' expresion ] ;
 - **`for`** itera: arreglo (elemento), rango `a..b` (enteros, `a` inclusivo, `b` exclusivo; el
   rango solo existe en la cabecera del `for`), string (`char`), `Map` (tupla `(clave, valor)`
   en orden de clave — determinista) y cualquier tipo que implemente **`Iterator<T>`** (§7): el
-  bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
+  bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento. El **patrón de
+  tupla** `for (a, b) in xs` destructura el elemento cuando `xs` es un `Map`, un **arreglo de
+  tuplas** `[(A, B)]` (M345; equivale a `for t in xs { let (a, b) = t; … }`) o un `Iterator` de
+  tuplas (`enumerate()`); `_` descarta una posición y la aridad debe coincidir.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
   también puede *caer* del bloque (retorno implícito: la expresión final sin `;`). Además de
   sentencia, **`return [e]` es expresión** (M220): en un brazo de `match`, en el valor de un

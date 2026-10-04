@@ -16485,3 +16485,48 @@ tiene ni guardas) y no se toca.
 
 Tests: cinco casos en `tests/findings_batch_cli.rs`, con el programa mínimo de cada hallazgo en los
 tres motores (el de canales en VM y nativo).
+
+## 331. M345 — Los hallazgos de rayauth, segunda oleada: el formateador y cuatro diagnósticos (oct 2026)
+
+Segunda oleada de IDEAS §102. Dos bugs de `ray fmt` y tres asperezas del checker que rayauth
+documentó como «rodeo aplicado» y que, sumadas, hacen que el código de producción se escriba peor
+de lo necesario.
+
+**El formateador escribía código que no parsea (R21).** `(if (p == "") { "a" } else { p }) + "b"`
+perdía los paréntesis porque `expr_prec` trata al `if` como primaria y nunca lo envuelve. Pero la
+precedencia no es el único motivo para un paréntesis: en posición de **sentencia** el parser lee
+`if` como sentencia (DESIGN §6: las formas con bloque no llevan `;`), así que el `+` queda suelto.
+La regla nueva es posicional: la forma con bloque que ARRANCA una sentencia o el tail de un bloque
+y no es toda la sentencia va entre paréntesis siempre (`mark_statement_leaf` → `paren_leaf`,
+identidad por puntero porque la posición no identifica al nodo: el `+` exterior hereda la del
+operando izquierdo y el `(` reposiciona). Y la garantía que faltaba: `format_source` **reparsea su
+salida** y, si no parsea, se niega con un error que lo dice en vez de escribir un archivo roto con
+`-w`. rayauth perdió tres parches por este bug y por el siguiente.
+
+**Los comentarios de la lista de parámetros caían al cuerpo (R26).** El reflujo a una línea no tenía
+dónde dejarlos y el cursor de comentarios los volcaba en el siguiente punto de inserción. Con
+comentarios dentro de la lista (`fmt_params_commented`: entre la línea de la cabecera y la del `{`),
+la lista va un parámetro por línea, cada comentario suelto encima del suyo y el trailing pegado a su
+línea. De paso, un cuerpo de UNA línea tras una línea en blanco (`fn main() -> int { a(); b(); 0 }`)
+ya no gana blancos entre sus sentencias: el blanco de encima del `fn` no separa sentencias que
+comparten línea.
+
+**`for (a, b)` sobre un arreglo de tuplas (R11)** se resuelve como bajada en el checker: el patrón
+pasa a un binding único y el cuerpo gana un `let (a, b) = __ft` al frente (`lower_for_iters`, sitio
+marcado con `FOR_TUPLE_ARRAY`). Los tres motores ya sabían hacer las dos cosas; no se toca ninguno.
+El mensaje antiguo («cannot iterate over [(string, int)]») mentía: el valor sí se iteraba, lo que no
+se admitía era el patrón.
+
+**`bytes_of([])` (R12)**: un builtin de parámetro fijo da contexto a su `[]`
+(`builtin_fixed_param`, en el checker y en el transpilador, mismas filas). El nativo destapó dos
+agujeros más de `type_of` en el mismo camino (`bytes_of` sin fila, `join` que propagaba el error de
+tipar su primer argumento) y van en el mismo lote.
+
+**Las `const` admiten expresiones constantes (R16).** `fold_consts` corre en `prepare_program`, antes
+de todo: aritmética y bits sobre `int`, aritmética sobre `float`, `+` de strings, negación, y
+referencias a otras constantes **de cualquier módulo y en cualquier orden** (punto fijo: en el
+programa fusionado las de un módulo importado pueden venir detrás de quien las usa; esto cierra
+también la nota «const entre módulos» de rayauth). Lo plegado es un literal para los tres motores
+—no hay runtime nuevo— y la división por cero o el desbordamiento son errores de compilación con
+posición. El mensaje para lo que no se pliega deja de hablar de «literal» y dice lo que es: «must be
+a constant expression».

@@ -123,7 +123,7 @@ impl Checker {
             let declared = self.resolve_type(&c.ty);
             if !is_const_literal(&c.value, &self.consts) {
                 return Err(self.err(c.value.line, c.value.col,
-                    format!("the value of constant '{}' must be a literal (or an array/tuple of literals and constants declared above)", c.name)));
+                    format!("the value of constant '{}' must be a constant expression: a literal, arithmetic on literals and other constants, or an array/tuple of them", c.name)));
             }
             let vt = self.check_expr(&c.value)?;
             if vt != declared {
@@ -931,6 +931,23 @@ impl Checker {
                         let it = self.check_expr(e)?;
                         match (&it, pat) {
                             (Type::Array(elem), ForPat::Single(n)) => vec![(n.clone(), (**elem).clone())],
+                            // M345 (rayauth R11): `for (a, b) in [(A, B)]` — cada nombre liga una posición
+                            // del elemento-tupla. Baja a `for __ft in xs { let (a, b) = __ft; … }`
+                            // (`lower_for_iters`, sitio marcado con FOR_TUPLE_ARRAY): los motores no cambian.
+                            (Type::Array(elem), ForPat::Tuple(names)) => {
+                                let comps = match &**elem {
+                                    Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
+                                    Type::Tuple(ts) => return Err(self.err(stmt.line, stmt.col, format!(
+                                        "the {}-variable pattern does not match the element {} of the array ({} positions)",
+                                        names.len(), elem, ts.len()))),
+                                    _ => return Err(self.err(stmt.line, stmt.col, format!(
+                                        "cannot destructure {} in a `for`: a tuple pattern needs an array of tuples (or a Map)", elem))),
+                                };
+                                self.for_iter_sites.insert((stmt.line, stmt.col), super::traits::FOR_TUPLE_ARRAY.to_string());
+                                names.iter().zip(comps)
+                                    .filter_map(|(name, ty)| name.as_ref().map(|n| (n.clone(), ty)))
+                                    .collect()
+                            }
                             (Type::String, ForPat::Single(n)) => vec![(n.clone(), Type::Char)],
                             (Type::Map(k, v), ForPat::Tuple(names)) => {
                                 if names.len() != 2 {
@@ -3428,7 +3445,12 @@ impl Checker {
                 // M214 (ray-sublime #17): el contenedor del primer argumento fija el tipo ESPERADO
                 // de los demás — `out.push(Option.None)` con `out: [Option<string>]` infiere `T`
                 // del elemento, como ya hacía una función de usuario con `Option<int>` en la firma.
-                let expected_arg = arg_types.first().and_then(|t0| builtin_arg_expected(name, t0, i));
+                // M345 (rayauth R12): y un builtin de parámetro FIJO (`bytes_of([int])`, `join([string],
+                // string)`) da contexto a su primer argumento: `bytes_of([])` ya no pide anotación.
+                let expected_arg = arg_types
+                    .first()
+                    .and_then(|t0| builtin_arg_expected(name, t0, i))
+                    .or_else(|| builtin_fixed_param(name, i));
                 let ty = match expected_arg {
                     Some(exp) if !type_has_var(&exp) => self.check_expr_expected(a, &exp)?,
                     _ => self.check_expr(a)?,
@@ -4029,6 +4051,16 @@ fn builtin_arg_expected(name: &str, first: &Type, i: usize) -> Option<Type> {
         ("insert", Type::Map(_, v), 2) => Some((**v).clone()),
         ("get" | "remove" | "contains_key", Type::Map(k, _), 1) => Some((**k).clone()),
         ("send" | "try_send", Type::Channel(t), 1) => Some((**t).clone()),
+        _ => None,
+    }
+}
+
+/// M345 (rayauth R12): el tipo FIJO del parámetro `i` de un builtin cuya firma no depende de los
+/// argumentos — el contexto que un literal `[]` necesita para tiparse (`bytes_of([])` → `[int]`).
+fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
+    match (name, i) {
+        ("bytes_of", 0) => Some(Type::Array(Box::new(Type::Int))),
+        ("join", 0) => Some(Type::Array(Box::new(Type::String))),
         _ => None,
     }
 }

@@ -34,7 +34,7 @@ version = "0.1.0"
 embed = ["static"]
 
 [dependencies]
-web = "^0.5.0"
+web = "^0.6.0"
 ```
 
 ```
@@ -430,4 +430,4 @@ WantedBy=multi-user.target
 The same kind of server, without pages: a [**web API**](api.en.md) that answers JSON, with
 Postgres and a connection pool.
 
-<!-- sync: sha256:d39edd2830e0 -->
+<!-- sync: sha256:649199af7f81 -->

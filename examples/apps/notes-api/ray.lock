@@ -3,18 +3,18 @@
 
 [db]
 url = "https://github.com/ray-language/db"
-ref = "v0.3.0"
-commit = "fab7ffed8d65e488b56aa07c8189c39aa366520f"
-hash = "sha256:959272e28d7ae150ca0c4d5c82d7f4aeaba97ceb0613556fe2d013076d8df92e"
+ref = "v0.4.0"
+commit = "99f8782c77d9cc374ef144df08e19a2af1c0d845"
+hash = "sha256:ba49ff2da72476510c7e0dde26130cefeaace33dc6f606d1bd0b8c6a9f0f61da"
 
 [net]
 url = "https://github.com/ray-language/net"
-ref = "v0.6.0"
-commit = "a7b1d4d3e582da04ddbe4611f08eabd38094bc87"
-hash = "sha256:a909f82a3aafc3a94b7cb4d67e82b5c669e68659c44bd30631da7467cac22ff2"
+ref = "v0.7.0"
+commit = "0452a6d26244d6156785351761a8bf047339e441"
+hash = "sha256:80c7df15c674d8fb01b52e48f97520f80a90b84591f6f488a8c3a515d5557a77"
 
 [web]
 url = "https://github.com/ray-language/web"
-ref = "v0.5.0"
-commit = "8ee9212be2a3aa2bbd4ea54b3d6303632771c6e7"
-hash = "sha256:b34ddaba5ee5a46e40818c5c02091517801dae76b6357bd7d5b8545758672379"
+ref = "v0.6.0"
+commit = "1d8329c88ac8052b4e7e3f2b8981e91d40915da6"
+hash = "sha256:793daa54742fb3bb562aa568079e4ac3b6d93e452d774959533fecfd20f3fa7b"

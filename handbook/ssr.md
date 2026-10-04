@@ -35,7 +35,7 @@ version = "0.1.0"
 embed = ["static"]
 
 [dependencies]
-web = "^0.5.0"
+web = "^0.6.0"
 ```
 
 ```

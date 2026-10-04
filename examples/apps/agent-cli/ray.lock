@@ -21,6 +21,6 @@ hash = "sha256:51d7d59709a46e2e03152719d13e94b5fce72d82e377efca5f83b87e7bc9857e"
 
 [net]
 url = "https://github.com/ray-language/net"
-ref = "v0.6.0"
-commit = "a7b1d4d3e582da04ddbe4611f08eabd38094bc87"
-hash = "sha256:a909f82a3aafc3a94b7cb4d67e82b5c669e68659c44bd30631da7467cac22ff2"
+ref = "v0.7.0"
+commit = "0452a6d26244d6156785351761a8bf047339e441"
+hash = "sha256:80c7df15c674d8fb01b52e48f97520f80a90b84591f6f488a8c3a515d5557a77"

@@ -12,6 +12,16 @@
 // `"ROLLBACK"`. Las celdas llegan como texto (INTEGER/REAL → repr decimal, NULL → "", BLOB → hex).
 /// An open SQLite database. The handle lives in the host's process registry (like file handles);
 /// `disconnect` closes it. `":memory:"` opens an in-memory database.
+///
+/// **Fibers and threads.** A `Conn` may be used from any fiber or task, VM and native alike: the
+/// runtime serializes every `exec`/`query` on the handle (each call holds the registry lock for
+/// its whole prepare→bind→step→finalize cycle; no statement outlives a call). Two consequences:
+/// a single `Conn` shared by many fibers is SAFE but gives no parallelism (calls queue up), and a
+/// multi-statement transaction (`BEGIN` … `COMMIT`) is only yours if no other fiber touches the
+/// same `Conn` in between — give each transaction its own connection. For concurrent fibers use
+/// `net/pool` (`pool.new<Conn>(n)` + `pool.run`, one `Conn` per slot, dialed with `connect`);
+/// SQLite itself locks the file per write, so reads scale and writes serialize. The bundled
+/// SQLite runs in its serialized threading mode.
 pub struct Conn {
     handle: int,
 }
@@ -50,7 +60,9 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
 }
 
 /// Runs a query with positional parameters and returns all rows as text cells
-/// (NULL becomes `""`, BLOB becomes hex).
+/// (NULL becomes `""`, BLOB becomes hex). A `NULL` is therefore indistinguishable from an empty
+/// string: when the difference matters, `SELECT col IS NULL` next to the column, or `COALESCE`
+/// to a sentinel of your choice.
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
     let r = __sqlite_query(c.handle, sql, params);
     if (r[0] != "ok") {

@@ -3957,8 +3957,8 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R2 | E | `bigint.modpow` no es de tiempo constante y se presenta como la primitiva de RSA | PROPUESTO: nota en la doc que remita a blinding / a `crypto.rsa_*` |
 | R3 | E | Solo `hmac_sha256`; TOTP necesita HMAC-SHA1 | PROPUESTO (M347): `hmac_sha1`/`hmac_sha512` vía ring |
 | R4 | E | `net/jwt`/`net/jwt_eddsa` no admiten cabeceras propias (`kid`) ni verifican `aud`/`iss` | PROPUESTO (M347): `*_sign_with_header`, verificación con `kid` → clave, `aud`/`iss` |
-| R5 | D | La doc de `framework.listen` pide un builder top-level y la de `Sessions` pide capturar en handlers; el patrón real es la closure inline con captura, y la closure guardada en `let` no cruza a otra fibra en nativo | PROPUESTO (M346): documentar el patrón y la restricción |
-| R6 | D/E | `sqlite.connect` no dice si un `Conn` sirve desde varias fibras; `query` convierte `NULL` en `""` | PROPUESTO: documentar fibras/pool (M346); `NULL` distinguible (M347) |
+| R5 | D | La doc de `framework.listen` pide un builder top-level y la de `Sessions` pide capturar en handlers; el patrón real es la closure inline con captura, y la closure guardada en `let` no cruza a otra fibra en nativo | ✅ **M346**: `listen`/`Sessions` documentan la closure inline y la restricción nativa (llega a `ray_doc` con la publicación de `web`) |
+| R6 | D/E | `sqlite.connect` no dice si un `Conn` sirve desde varias fibras; `query` convierte `NULL` en `""` | ✅ **M346** la doc (serialización por handle, una conexión por transacción, pool); PROPUESTO (M347): `NULL` distinguible |
 | R7 | E | No hay cliente SMTP (`net/mail` solo formatea) | PROPUESTO: `smtp.send` sobre `std/net` (rayauth tiene 130 líneas de base); STARTTLS sin probar |
 | R8 | E | No hay `std/xml` (bloquea SAML) | PROPUESTO: arco propio; empezar por parse/serialize |
 | R9 | E | Sesiones/estado de `web` sin backend persistente en producción | PROPUESTO: diseño aparte (sqlite) |
@@ -3972,12 +3972,12 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R17 | B/D | Un parámetro `status: int` tapaba el método UFCS `r.status(n)` («cannot call a value of type int») | ✅ **M344**: un local solo tapa si es función (el sitio baja al alias `nombre#free`); el error nombra al local cuando no hay función |
 | R18 | E | `[string]` no implementa `ToJson` | PROPUESTO (M347): `impl<T: ToJson> ToJson for [T]` en `std/json` |
 | R19 | B | Nativo: `if (…) { Option.None } else { otro_modulo.f()? }` perdía el tipo y la función caía a stub | ✅ **M344**: el `then` con placeholder cede el tipo al `else` |
-| R20 | E | Los stubs nativos que entran en pánico van por defecto; `--no-stubs` existe pero no está documentado | PROPUESTO (M346): `--no-stubs` por defecto en `--release`; documentar |
+| R20 | E | Los stubs nativos que entran en pánico van por defecto; `--no-stubs` existe pero no está documentado | ✅ **M346**: `--release` y `ray bundle` rechazan los stubs (`--allow-stubs` los recupera); documentado en SPEC §1, REFERENCE, llms.txt y el handbook |
 | R21 | B | `ray fmt` quita los paréntesis de `(if …) + "b"` y deja código que no parsea | ✅ **M345**: paréntesis obligatorios para la forma con bloque que arranca una sentencia; `ray fmt` reparsea su salida y se niega si no parsea |
 | R22 | E | `net/cookie` sin `with_domain` | PROPUESTO (M347) |
 | R23 | E | No hay generador de QR (TOTP) | PROPUESTO (M347): `std/qr` sobre el crate `qrcode` ya presente |
 | R24 | E | `web`: no se combinan límites y apagado ordenado | PROPUESTO (M347): `listen_with(build, host, port, options)` |
 | R25 | E | Una asignación no podía ser brazo de `match` | ✅ **M344**: `patrón => lugar = valor,` azúcar de `{ lugar = valor; }`; `ray fmt` la conserva |
 | R26 | B | `ray fmt` saca los comentarios de una lista de parámetros al cuerpo | ✅ **M345**: con comentarios dentro, un parámetro por línea y cada comentario con el suyo |
-| R27 | D | `n as float` / `x as int` no están en `llms.txt` | PROPUESTO (M346) |
+| R27 | D | `n as float` / `x as int` no están en `llms.txt` | ✅ **M346**: en «The delta» de `llms.txt` |
 | R28 | B | Nativo: `let _ = try_send(ch, v)` convertía la función en stub («unknown return type of 'try_send'») | ✅ **M344**: filas `try_send`/`try_recv`/`send`/`close` en la tabla de tipos |

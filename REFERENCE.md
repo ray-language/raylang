@@ -632,7 +632,7 @@ Flags de `build --native`:
 | `--lib` | compila el programa como librería estática/dinámica (`.a`/`.so`/`.lib`) para los shells iOS/Android y otros anfitriones |
 | `--embed <dirs>` | directorios horneados en el binario (`std/embed`, `static_embedded`); se une a `[native] embed` del `ray.toml` |
 | `--devtools` | deja el inspector del webview disponible en el binario (sin el flag la llamada no existe) |
-| `--no-stubs` | convierte en error el aviso de funciones fuera del subconjunto nativo (en vez de emitir un stub que falla en ejecución) |
+| `--no-stubs` / `--allow-stubs` | política ante una función fuera del subconjunto nativo: por defecto un build de desarrollo la emite como *stub* que falla al llamarse (con aviso) y **`--release` la rechaza** (error 65), igual que `ray bundle`; `--no-stubs` fuerza el error también en dev y `--allow-stubs` recupera los stubs en release |
 | `--without <lista>` | excluye subsistemas: `crypto,tls,sqlite,regex,bigint` (caen en un *stub* con error claro o en la implementación en raylang) y `mimalloc,ahash,fibers,process` (que van por defecto). Se une a `[native] without` del `ray.toml` |
 
 Los subsistemas con crate de producción (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, regex acelerada)

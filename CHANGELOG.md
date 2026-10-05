@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.35 — 2026-10-05
+
+`std/xml`: el último hallazgo de rayauth; los 28 de IDEAS §102 quedan cerrados.
 
 - **`std/xml`**: parser a árbol (namespaces resueltos, entidades predefinidas y numéricas, CDATA,
   comentarios, PI; `DOCTYPE` rechazado a propósito), consulta (`child`, `find`, `find_all`, `find_ns`,

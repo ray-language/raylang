@@ -240,6 +240,7 @@ que también existen como llamada libre (`metodo(recv, args)`).
 | `s.replace(de, a)` | `string` | reemplaza todas |
 | `s.chars()` | `[char]` | caracteres |
 | `s.starts_with(p)` / `s.ends_with(p)` | `bool` | prefijo/sufijo |
+| `s.strip_prefix(p)` / `s.strip_suffix(p)` | `Option<string>` | el resto sin el prefijo/sufijo, o `None` si no lo tiene (`auth.strip_prefix("Bearer ")`; para quitarlo solo si está, `s.strip_suffix("/").unwrap_or(s)`) |
 | `s.to_upper()` / `s.to_lower()` | `string` | mayúsculas/minúsculas |
 | `s.substring(i, j)` | `string` | `[i, j)` por carácter, con *clamp* (nunca falla) |
 | `s.repeat(n)` | `string` | repetida (`n <= 0` → `""`) |
@@ -340,7 +341,7 @@ definiendo el mismo nombre).
 
 | Trait | Método(s) | Notas |
 |---|---|---|
-| `Eq` | `eq(self, other: Self) -> bool` | habilita `==`/`!=` en tipos de usuario; `Option<T>`/`Result<T, E>` lo implementan si sus parámetros lo hacen (`assert_eq(o, Option.Some(1))`), igual que `Show` (`Option.Some(1)`); derivable |
+| `Eq` | `eq(self, other: Self) -> bool` | habilita `==`/`!=` en tipos de usuario; `Option<T>`/`Result<T, E>` lo implementan si sus parámetros lo hacen (`assert_eq(o, Option.Some(1))`), igual que `Show` (`Option.Some(1)`); derivable. Los primitivos lo traen, también `u8`/`u32`/`u64` (con `Show`, `Ord` y `Hash`) |
 | `Show` | `show(self) -> string` | habilita `print`/`to_string`; derivable |
 | `Ord` | `less(self, other: Self) -> bool` | habilita `sort`/`min`/`max`; impls para int/float/string/char |
 | `Hash` | `hash(self) -> int` | claves de `Set`; derivable |

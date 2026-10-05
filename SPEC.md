@@ -155,7 +155,7 @@ nombre_trait = IDENT [ '.' IDENT ] ;                (* trait local o calificado 
   tipo, igual que `Map`/`Channel`/`Task`, y **sombrea** cualquier struct/enum del usuario que se
   llame así).
 - **Enteros sin signo** `u8`/`u32`/`u64`: aritmética, comparación y bits **con wrapping** al
-  ancho (por diseño). Solo operan con su mismo ancho, salvo la **cuenta de un desplazamiento**
+  ancho (por diseño). Implementan `Eq`/`Show`/`Ord`/`Hash` como `int` (M356). Solo operan con su mismo ancho, salvo la **cuenta de un desplazamiento**
   (`<<`/`>>`), que puede ser `int` o el mismo ancho (es un conteo, no un valor del dominio; el
   resultado es el tipo del operando izquierdo, y una cuenta fuera de rango envuelve). La
   conversión es explícita con `as`. Un **literal entero** sin sufijo adopta el ancho del contexto
@@ -228,7 +228,9 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   [(ID_A, "a")]`). El checker **pliega** la expresión a su literal antes de verificar (`8 * 3600 *
   1000` es el literal `28800000` para los tres motores); una división por cero o un
   desbordamiento entero en el plegado es error de compilación con posición. Lo que no se pliega
-  (una llamada, una variable) es error: «must be a constant expression». Un `const` arreglo tiene
+  (una llamada, una variable) es error: «must be a constant expression». El **tipo declarado es
+  el contexto** del valor, como en un `let` tipado (M356): `const A: u64 = 5;` coerciona el
+  literal a `u64` (y `const T: [u8] = [1, 2];` cada elemento), con el rango comprobado. Un `const` arreglo tiene
   semántica de **literal inyectado**: cada uso del nombre
   evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo a través de un
   alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
@@ -285,7 +287,8 @@ iterable  = expresion [ '..' expresion ] ;
   referenciado (§8); `var` gobierna la *ligadura*, no el objeto. `s[i] = c` sobre string es
   error (inmutable).
 - **`for`** itera: arreglo (elemento), rango `a..b` (enteros, `a` inclusivo, `b` exclusivo; el
-  rango solo existe en la cabecera del `for`), string (`char`), `Map` (tupla `(clave, valor)`
+  rango solo existe en la cabecera del `for`), string (`char`), `bytes` (cada octeto como `int`,
+  igual que `b[i]`; M356), `Map` (tupla `(clave, valor)`
   en orden de clave — determinista) y cualquier tipo que implemente **`Iterator<T>`** (§7): el
   bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento. El **patrón de
   tupla** `for (a, b) in xs` destructura el elemento cuando `xs` es un `Map`, un **arreglo de

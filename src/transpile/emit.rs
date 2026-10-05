@@ -986,7 +986,16 @@ impl Transpiler {
         // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
         let mut refd = std::collections::HashSet::new();
         idents_of_block(&fnexpr.body, &mut refd);
-        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c) && self.is_cell(c)).cloned().collect();
+        // M356 (raylb L12): `cells` va por NOMBRE en toda la función. Un parámetro de la closure
+        // que se llame como una `var` declarada MÁS ABAJO (otro ámbito) no es una captura — el
+        // parámetro la sombrea, y la celda ni siquiera existe aún (`let i = i.clone();` → E0425).
+        let own_params: std::collections::HashSet<&str> = fnexpr.params.iter().map(|p| p.name.as_str()).collect();
+        let mut captured: Vec<String> = self
+            .cells
+            .iter()
+            .filter(|c| refd.contains(*c) && self.is_cell(c) && !own_params.contains(c.as_str()) && self.lookup(c).is_some())
+            .cloned()
+            .collect();
         // Toda captura de HEAP (no solo las celdas) se PRE-CLONA antes del `move`: dos closures
         // hermanos que capturan la misma local no-Copy (p. ej. los dos de `cors(origin)`) movían
         // la primera y el segundo veía E0382. Clonar un Rc comparte el valor inmutable — misma
@@ -1307,7 +1316,7 @@ impl Transpiler {
                 // posición) se emiten con el estado de cola apagado.
                 if self.depth_active && self.tail_sites.contains(&(e.line, e.col)) {
                     self.depth_active = false;
-                    out.push_str("{ drop(_f); ");
+                    out.push_str("{ std::mem::drop(_f); "); // M356 (raylb L9): calificado — una local `drop` lo tapaba
                     let r = self.emit_call(out, callee, args);
                     self.depth_active = true;
                     r?;

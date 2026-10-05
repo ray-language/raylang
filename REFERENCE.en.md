@@ -239,6 +239,7 @@ also exist as free calls (`method(recv, args)`).
 | `s.replace(from, to)` | `string` | replaces all |
 | `s.chars()` | `[char]` | characters |
 | `s.starts_with(p)` / `s.ends_with(p)` | `bool` | prefix/suffix |
+| `s.strip_prefix(p)` / `s.strip_suffix(p)` | `Option<string>` | the rest without the prefix/suffix, or `None` when absent (`auth.strip_prefix("Bearer ")`; to drop it only when present, `s.strip_suffix("/").unwrap_or(s)`) |
 | `s.to_upper()` / `s.to_lower()` | `string` | uppercase/lowercase |
 | `s.substring(i, j)` | `string` | `[i, j)` by character, *clamped* (never fails) |
 | `s.repeat(n)` | `string` | repeated (`n <= 0` → `""`) |
@@ -679,4 +680,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:a0703908f770 -->
+<!-- sync: sha256:858db3294da7 -->

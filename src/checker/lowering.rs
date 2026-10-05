@@ -213,6 +213,11 @@ pub(super) fn lower_uint_literals(program: &mut Program, sites: &UIntLitMap) {
     for f in &mut program.functions {
         lower_uintlit_block(&mut f.body, sites);
     }
+    // M356 (raylb L2): también el valor de las CONSTANTES — cada uso inyecta esa expresión, y sin el
+    // `as uN` el runtime veía un `int` donde el checker había tipado `u64` (ICE en la VM, E0308 en nativo).
+    for c in &mut program.consts {
+        lower_uintlit_expr(&mut c.value, sites);
+    }
 }
 
 pub(super) fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {

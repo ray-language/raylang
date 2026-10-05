@@ -213,6 +213,7 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
 2. **Method builtins** (RECEIVER form ONLY — the free form is `function 'x' not
    declared`): strings `s.len() s.trim() s.split(",") s.chars() s.contains(x)
    s.replace(a, b) s.starts_with(p) s.ends_with(p) s.to_upper() s.to_lower()
+   s.strip_prefix(p) s.strip_suffix(p) (-> Option<string>; `.unwrap_or(s)` to drop it if present)
    s.substring(i, j) s.repeat(n) s.index_of(x) s.to_bytes()` · arrays `xs.len()
    xs.push(v) xs.pop() xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
@@ -220,7 +221,8 @@ giving it to ONE owner fiber (an actor) and talking to it via channels.
    m.values()`; reading is `m.get(k) -> Option<V>` (also the free `get(m, k)`) and
    `m.get_or(k, default) -> V` · bytes `b[i] -> int` (octet 0–255, O(1) — THE primitive of every
    binary parser; never `from_utf8(b.sub_bytes(i, i+1))`), `b.len() b.sub_bytes(i, j) -> bytes
-   b.index_of(needle) -> Option<int> b.starts_with(prefix) -> bool` (octet index, no allocation).
+   b.index_of(needle) -> Option<int> b.starts_with(prefix) -> bool` (octet index, no allocation);
+   `for b in bs { … }` iterates the octets as `int`.
    (`sort(xs)` is free, so `xs.sort()` also works.)
    Return types that surprise: `s.index_of(x) -> Option<int>`, `xs.position(v) -> Option<int>`,
    `xs.pop() -> Option<T>`, `parse_int(s) -> Option<int>`, `parse_float(s) -> Option<float>`,

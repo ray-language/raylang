@@ -14,6 +14,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (`request_bytes`, `stream_with`, el pool); `connect` usa `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) y
   `connect_timeout(base_url, ms)` lo elige. Un host sin ruta falla con «could not connect: connect
   timeout» en vez de colgar 75 s (M355, raylb L5).
+- **Un `const` sin signo conserva su ancho**: `const A: u64 = 5;` compila (el tipo declarado es el
+  contexto del literal) y `const K: u64 = 0xcbf29ce484222325;` ya no llega al runtime como `int`
+  (antes: valor negativo al imprimir, error interno en la VM al operarlo y build nativo roto)
+  (M356, raylb L2).
+- **`u8`/`u32`/`u64` implementan `Eq`/`Show`/`Ord`/`Hash`**: `assert_eq` sobre un `u64`,
+  `@derive(Eq, Show, Hash, ToJson)` en un struct con campos sin signo, `sort([u32])` (M356, raylb L3).
+- **`for b in bs`** recorre los octetos de un `bytes` como `int`, y **`s.strip_prefix(p)` /
+  `s.strip_suffix(p)`** devuelven `Option<string>` (M356, rayauth R34).
+- **Nativo**: una local llamada `drop` junto a una closure ya no rompe el build; el parámetro de una
+  closure no se confunde con una `var` homónima declarada más abajo; `let r = scope(fn() ->
+  Result<T, E> { … })` infiere su tipo sin anotar; y lo que captura un `scope` se puede seguir
+  usando después (M356, raylb L9/L12/L16/L17).
 
 ## 1.27.36 — 2026-10-05
 

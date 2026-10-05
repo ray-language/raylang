@@ -23,7 +23,7 @@ npm --prefix frontend install
 ```toml
 [dependencies]
 web = "^0.6.0"
-net = "^0.8.0"
+net = "^0.9.0"
 
 [frontend]
 dev = "npm --prefix frontend run dev -- --strictPort --clearScreen false"
@@ -314,4 +314,4 @@ the API are never left on different versions.
 From the browser to the terminal: a [**command-line tool**](cli.en.md), the smallest thing raylang
 ships.
 
-<!-- sync: sha256:0052d30a255c -->
+<!-- sync: sha256:c52f319c0803 -->

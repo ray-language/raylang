@@ -48,7 +48,7 @@ ray add db
 
 ```toml
 [dependencies]
-db = "^0.5.0"
+db = "^0.5.1"
 ```
 
 The exact version and its hash are pinned in `ray.lock`, which goes into version control. The
@@ -399,4 +399,4 @@ together with automatic updates.
 [**Windows in depth**](windows.en.md): everything else `std/ui` offers a desktop app, with a text
 editor as the example.
 
-<!-- sync: sha256:7cae806e7387 -->
+<!-- sync: sha256:b5a37280a835 -->

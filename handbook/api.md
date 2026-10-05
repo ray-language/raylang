@@ -20,7 +20,7 @@ ray add db
 ```toml
 [dependencies]
 web = "^0.6.0"
-db = "^0.5.0"
+db = "^0.5.1"
 ```
 
 `web` trae el servidor HTTP del paquete `net`; `db` trae el cliente de Postgres. Las versiones

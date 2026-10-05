@@ -3,9 +3,9 @@
 
 [net]
 url = "https://github.com/ray-language/net"
-ref = "v0.8.0"
-commit = "ee5e3a1d336ee77d2bae810c83345c5953c0ec3f"
-hash = "sha256:3f2f70ad976ebe70fc6663f604cda94abc88e6c99840a5433d7917b3f0d81199"
+ref = "v0.9.0"
+commit = "286fac8efa9b62d175665209d447971d6e71a251"
+hash = "sha256:219fbfad787bcf62c16c3d5dce82c1d58b3257bd26e5d1cbb7b72aedf6b06860"
 
 [web]
 url = "https://github.com/ray-language/web"

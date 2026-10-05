@@ -774,3 +774,66 @@ fn main() -> int {
         assert_eq!(strip(String::from_utf8_lossy(&out.stdout).into_owned()), want, "nativo");
     }
 }
+
+/// M353 (IDEAS §102 R8): `std/xml` — parse (prolog, comentarios, PI, namespaces resueltos, entidades
+/// predefinidas y numéricas, CDATA, contenido mixto), consulta (`child`, `children_named`, `find`,
+/// `find_all`, `find_ns`, `attr`, `text`, `text_of`), construcción y serialización (`serialize`,
+/// `serialize_doc`, `pretty`, `escape`), ida y vuelta, y los errores con línea (cierre descuadrado,
+/// DOCTYPE rechazado, entidad desconocida, dos raíces). Misma salida en los tres motores.
+#[test]
+fn xml_parses_queries_and_serializes_on_all_engines() {
+    let d = tmp("xml");
+    std::fs::write(d.join("prog.ray"), r#"import std/xml;
+fn main() -> int {
+    let src = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- a feed -->\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n  <title type=\"text\">Ray &amp; friends &#x2713; &#169;</title>\n  <entry>\n    <title>First</title>\n    <dc:creator>Ada</dc:creator>\n    <link href=\"https://x.y/1?a=1&amp;b=2\" rel='alternate'/>\n    <content><![CDATA[<b>raw</b> & more]]></content>\n  </entry>\n  <entry><title>Second</title><summary>mixed <em>text</em> here</summary></entry>\n  <?php echo 1 ?>\n</feed>";
+    let doc = xml.parse(src).unwrap();
+    print("${doc.name} ns=${doc.ns} children=${doc.elements().len()}");
+    print(doc.text_of("title"));
+    print(doc.child("title").unwrap().attr("type").unwrap_or("-"));
+    let entries = doc.children_named("entry");
+    print(entries.len());
+    print(entries[0].text_of("creator") + " / " + entries[0].text_of("dc:creator"));
+    print(entries[0].find("link").unwrap().attr("href").unwrap_or("-"));
+    print(entries[0].text_of("content"));
+    print(xml.find_ns(doc, "http://purl.org/dc/elements/1.1/", "creator").len());
+    print(xml.find_all(doc, "title").len());
+    print(xml.serialize(entries[1]));
+    print(xml.pretty(entries[0], 2));
+    let built = xml.element("rpc").with_attr("v", "1 < 2 \"q\"").with_child(xml.element("name").with_text("a & b")).with_node(xml.Node.CData("<x/>"));
+    print(xml.serialize_doc(built));
+    print(xml.parse(xml.serialize(built)).unwrap().text_of("name"));
+    print(xml.parse("<a><b></a>"));
+    print(xml.parse("<!DOCTYPE foo [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><a>&x;</a>"));
+    print(xml.parse("<a>&nope;</a>"));
+    print(xml.parse("<a>x</a><b/>"));
+    print(xml.unescape("&lt;p&gt; &#65;&#x42;"));
+    0
+}
+"#).unwrap();
+    three_engines(&d, r#"feed ns=http://www.w3.org/2005/Atom children=3
+Ray & friends ✓ ©
+text
+2
+Ada / Ada
+https://x.y/1?a=1&b=2
+<b>raw</b> & more
+1
+3
+<entry><title>Second</title><summary>mixed <em>text</em> here</summary></entry>
+<entry>
+  <title>First</title>
+  <dc:creator>Ada</dc:creator>
+  <link href="https://x.y/1?a=1&amp;b=2" rel="alternate"/>
+  <content><![CDATA[<b>raw</b> & more]]></content>
+</entry>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc v="1 &lt; 2 &quot;q&quot;"><name>a &amp; b</name><![CDATA[<x/>]]></rpc>
+a & b
+Result.Err(xml: line 1: mismatched closing tag </a> for <b>)
+Result.Err(xml: line 1: DOCTYPE is not supported (no DTD or external entities, by design))
+Result.Err(xml: unknown entity '&nope;' (no DTD support))
+Result.Err(xml: line 1: more than one root element)
+Result.Ok(<p> AB)
+"#);
+}

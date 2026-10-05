@@ -1,0 +1,701 @@
+// std/xml — M353 (IDEAS §102 R8): XML BÁSICO en raylang puro, del tamaño de std/csv: un parser a
+// árbol y un serializador con escape. Lo que una app necesita para leer un feed, un sitemap, un
+// manifiesto o la respuesta de un servicio SOAP y para producir XML correcto; nada más.
+//
+// Alcance a propósito: elementos, atributos, texto, CDATA, comentarios e instrucciones de proceso;
+// entidades predefinidas (`&lt; &gt; &amp; &quot; &apos;`) y numéricas (`&#NN;`, `&#xHH;`);
+// namespaces RESUELTOS (cada elemento sabe la URI de su prefijo). Fuera: DTD y entidades
+// externas/parametrizadas — se RECHAZAN (son la puerta de XXE y de las bombas de entidades), y la
+// canonicalización/firma (C14N, XML-DSig): eso es un paquete (`net/saml`), no la stdlib.
+//
+// Rendimiento: el tokenizador recorre los chars UNA vez y corta con `substring`; el serializador
+// emite partes en un `[string]` y hace un solo `join`.
+
+/// An XML element: `name` as written (`prefix:local`), the resolved `ns` URI of its prefix (`""`
+/// when none), `attrs` as written in order, and `children` in order.
+pub struct Elem {
+    name: string,
+    local: string,
+    ns: string,
+    attrs: [(string, string)],
+    children: [Node],
+}
+
+/// A node of the tree: an element, text (entities already decoded), a CDATA section (verbatim),
+/// a comment or a processing instruction (`target`, `data`).
+pub enum Node {
+    Element(Elem),
+    Text(string),
+    CData(string),
+    Comment(string),
+    PI(string, string),
+}
+
+// ---- Construcción (para producir XML) ----
+
+/// A new element with no attributes or children: `xml.element("item")`.
+pub fn element(name: string) -> Elem {
+    Elem { name: name, local: local_of(name), ns: "", attrs: [], children: [] }
+}
+
+/// Adds an attribute (kept in order; escaped when serialized). Chainable.
+pub fn with_attr(e: Elem, name: string, value: string) -> Elem {
+    e.attrs.push((name, value));
+    e
+}
+
+/// Appends a text child (escaped when serialized). Chainable.
+pub fn with_text(e: Elem, text: string) -> Elem {
+    e.children.push(Node.Text(text));
+    e
+}
+
+/// Appends a child element. Chainable.
+pub fn with_child(e: Elem, child: Elem) -> Elem {
+    e.children.push(Node.Element(child));
+    e
+}
+
+/// Appends any node (CDATA, comment, PI…). Chainable.
+pub fn with_node(e: Elem, n: Node) -> Elem {
+    e.children.push(n);
+    e
+}
+
+// ---- Consulta ----
+
+/// The value of attribute `name` (as written, e.g. `"xmlns:x"` or `"href"`); `None` if absent.
+pub fn attr(e: Elem, name: string) -> Option<string> {
+    for (k, v) in e.attrs {
+        if (k == name) {
+            return Option.Some(v);
+        }
+    }
+    Option.None
+}
+
+/// The concatenated text of the element and its descendants (text and CDATA, in document order),
+/// with entities decoded; the usual way to read `<title>…</title>`.
+pub fn text(e: Elem) -> string {
+    var parts: [string] = [];
+    collect_text(e, parts);
+    join(parts, "")
+}
+
+fn collect_text(e: Elem, parts: [string]) {
+    for n in e.children {
+        match (n) {
+            Node.Text(t) => parts.push(t),
+            Node.CData(t) => parts.push(t),
+            Node.Element(c) => collect_text(c, parts),
+            _ => { },
+        }
+    }
+}
+
+/// The child elements, in order.
+pub fn elements(e: Elem) -> [Elem] {
+    var out: [Elem] = [];
+    for n in e.children {
+        match (n) {
+            Node.Element(c) => out.push(c),
+            _ => { },
+        }
+    }
+    out
+}
+
+// ¿Casa `e` con `name`? Por nombre completo (`atom:link`) o por nombre local (`link`), sin
+// importar el prefijo que usara el documento.
+fn matches(e: Elem, name: string) -> bool {
+    e.name == name || e.local == name
+}
+
+/// The first child element called `name` (`"item"` matches `<item>` and `<rss:item>`; `"rss:item"`
+/// matches only that spelling). `None` if there is none.
+pub fn child(e: Elem, name: string) -> Option<Elem> {
+    for c in elements(e) {
+        if (matches(c, name)) {
+            return Option.Some(c);
+        }
+    }
+    Option.None
+}
+
+/// Every child element called `name`, in order. (`children` is the field with every node; this is
+/// the filtered view, like `child` for one.)
+pub fn children_named(e: Elem, name: string) -> [Elem] {
+    var out: [Elem] = [];
+    for c in elements(e) {
+        if (matches(c, name)) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The first descendant element called `name` (depth-first, document order); `None` if there is none.
+pub fn find(e: Elem, name: string) -> Option<Elem> {
+    let all = find_all(e, name);
+    if (all.len() == 0) { Option.None } else { Option.Some(all[0]) }
+}
+
+/// Every descendant element called `name`, depth-first in document order (`e` itself excluded).
+pub fn find_all(e: Elem, name: string) -> [Elem] {
+    var out: [Elem] = [];
+    walk(e, name, "", false, out);
+    out
+}
+
+/// Every descendant whose resolved namespace is `ns` and local name is `local` — the
+/// prefix-independent lookup (`find_ns(doc, "http://www.w3.org/2005/Atom", "entry")`).
+pub fn find_ns(e: Elem, ns: string, local: string) -> [Elem] {
+    var out: [Elem] = [];
+    walk(e, local, ns, true, out);
+    out
+}
+
+fn walk(e: Elem, name: string, ns: string, by_ns: bool, out: [Elem]) {
+    for c in elements(e) {
+        let hit = if (by_ns) { c.local == name && c.ns == ns } else { matches(c, name) };
+        if (hit) {
+            out.push(c);
+        }
+        walk(c, name, ns, by_ns, out);
+    }
+}
+
+/// The text of the first descendant called `name`, or `""` (`item.text_of("title")`).
+pub fn text_of(e: Elem, name: string) -> string {
+    match (find(e, name)) {
+        Option.Some(c) => text(c),
+        Option.None => "",
+    }
+}
+
+// ---- Escape y serialización ----
+
+/// Escapes text content: `& < >` (and `"` `'`, so the same function serves attributes).
+pub fn escape(s: string) -> string {
+    if (!s.contains("&")
+        && !s.contains("<")
+        && !s.contains(">")
+        && !s.contains("\"")
+        && !s.contains("'")) {
+        return s;
+    }
+    s
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+}
+
+/// The element as compact XML (no declaration, no added whitespace): what goes in a request body.
+pub fn serialize(e: Elem) -> string {
+    var out: [string] = [];
+    emit(e, out, 0 - 1, 0);
+    join(out, "")
+}
+
+/// The element as a document: `<?xml version="1.0" encoding="UTF-8"?>` plus `serialize(e)`.
+pub fn serialize_doc(e: Elem) -> string {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + serialize(e)
+}
+
+/// The element indented with `indent` spaces per level and one element per line; an element whose
+/// only children are text stays on one line. For humans and diffs — whitespace changes meaning
+/// only for mixed content, which keeps its text as-is.
+pub fn pretty(e: Elem, indent: int) -> string {
+    var out: [string] = [];
+    emit(e, out, if (indent < 0) { 0 } else { indent }, 0);
+    join(out, "")
+}
+
+fn emit(e: Elem, out: [string], indent: int, depth: int) {
+    let pad = if (indent < 0) { "" } else { " ".repeat(indent * depth) };
+    out.push(pad + "<" + e.name);
+    for (k, v) in e.attrs {
+        out.push(" " + k + "=\"" + escape(v) + "\"");
+    }
+    if (e.children.len() == 0) {
+        out.push("/>");
+        if (indent >= 0) {
+            out.push("\n");
+        }
+        return;
+    }
+    out.push(">");
+    var only_text = true;
+    for n in e.children {
+        match (n) {
+            Node.Text(_) => { },
+            Node.CData(_) => { },
+            _ => {
+                only_text = false;
+            },
+        }
+    }
+    let nested = indent >= 0 && !only_text;
+    if (nested) {
+        out.push("\n");
+    }
+    for n in e.children {
+        match (n) {
+            Node.Text(t) => out.push(escape(t)),
+            Node.CData(t) => out.push("<![CDATA[" + t + "]]>"),
+            Node.Comment(t) => {
+                if (nested) {
+                    out.push(" ".repeat(indent * (depth + 1)));
+                }
+                out.push("<!--" + t + "-->");
+                if (nested) {
+                    out.push("\n");
+                }
+            },
+            Node.PI(target, data) => {
+                if (nested) {
+                    out.push(" ".repeat(indent * (depth + 1)));
+                }
+                out.push("<?" + target + if (data == "") { "" } else { " " + data } + "?>");
+                if (nested) {
+                    out.push("\n");
+                }
+            },
+            Node.Element(c) => emit(c, out, if (nested) { indent } else { 0 - 1 }, depth + 1),
+        }
+    }
+    if (nested) {
+        out.push(pad);
+    }
+    out.push("</" + e.name + ">");
+    if (indent >= 0) {
+        out.push("\n");
+    }
+}
+
+// ---- Parser ----
+
+fn local_of(name: string) -> string {
+    match (name.index_of(":")) {
+        Option.Some(i) => name.substring(i + 1, name.len()),
+        Option.None => name,
+    }
+}
+
+fn prefix_of(name: string) -> string {
+    match (name.index_of(":")) {
+        Option.Some(i) => name.substring(0, i),
+        Option.None => "",
+    }
+}
+
+// Sobre OCTETOS, no chars: todo delimitador XML es ASCII y en UTF-8 ningún octeto >= 0x80 coincide con
+// uno ASCII, así que escanear bytes es seguro, y `sub_bytes` + `from_utf8` cortan en O(longitud) —
+// `substring` sobre un string indexa por char y haría el parser cuadrático.
+struct P {
+    cs: bytes,
+    pos: int,
+}
+
+// Códigos ASCII de los delimitadores.
+const LT: int = 60;
+
+const GT: int = 62;
+
+const SLASH: int = 47;
+
+const EQ: int = 61;
+
+const DQ: int = 34;
+
+const SQ: int = 39;
+
+const QMARK: int = 63;
+
+const BANG: int = 33;
+
+fn err(p: P, msg: string) -> string {
+    var line = 1;
+    var i = 0;
+    while (i < p.pos && i < p.cs.len()) {
+        if (p.cs[i] == 10) {
+            line = line + 1;
+        }
+        i = i + 1;
+    }
+    "xml: line ${line}: ${msg}"
+}
+
+fn at_end(p: P) -> bool { p.pos >= p.cs.len() }
+
+fn peek(p: P) -> int {
+    if (at_end(p)) { 0 } else { p.cs[p.pos] }
+}
+
+fn starts_with_at(p: P, s: string) -> bool {
+    let sc = s.to_bytes();
+    if (p.pos + sc.len() > p.cs.len()) {
+        return false;
+    }
+    var i = 0;
+    while (i < sc.len()) {
+        if (p.cs[p.pos + i] != sc[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn skip_ws(p: P) {
+    while (!at_end(p) && is_ws(peek(p))) {
+        p.pos = p.pos + 1;
+    }
+}
+
+fn is_ws(c: int) -> bool { c == 32 || c == 10 || c == 13 || c == 9 }
+
+fn is_name_char(c: int) -> bool {
+    !(is_ws(c)
+        || c == LT
+        || c == GT
+        || c == SLASH
+        || c == EQ
+        || c == DQ
+        || c == SQ
+        || c == QMARK
+        || c == BANG
+        || c == 0)
+}
+
+// Texto entre `p.pos` y la primera aparición de `end` (que se consume); Err si no aparece.
+fn until(p: P, end: string, what: string) -> Result<string, string> {
+    // La búsqueda la hace el builtin `index_of_from` (Rust): un parser que avanzara octeto a octeto
+    // en la VM iría 10× más lento en los tramos largos (texto, CDATA, comentarios).
+    let ec = end.to_bytes();
+    match (p.cs.index_of_from(ec, p.pos)) {
+        Option.Some(i) => {
+            let s = slice(p, p.pos, i);
+            p.pos = i + ec.len();
+            Result.Ok(s)
+        },
+        Option.None => {
+            p.pos = p.cs.len();
+            Result.Err(err(p, "unterminated " + what))
+        },
+    }
+}
+
+// Un corte: los límites caen siempre en un delimitador ASCII, así que el tramo es UTF-8 válido.
+fn slice(p: P, from: int, to: int) -> string {
+    match (from_utf8(p.cs.sub_bytes(from, to))) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
+}
+
+fn name_at(p: P) -> Result<string, string> {
+    let start = p.pos;
+    while (!at_end(p) && is_name_char(peek(p))) {
+        p.pos = p.pos + 1;
+    }
+    if (p.pos == start) {
+        return Result.Err(err(p, "expected a name"));
+    }
+    Result.Ok(slice(p, start, p.pos))
+}
+
+/// Decodes the predefined (`&lt; &gt; &amp; &quot; &apos;`) and numeric (`&#NN;`, `&#xHH;`)
+/// entities of `s`. Any other entity is an error: there is no DTD to define it.
+pub fn unescape(s: string) -> Result<string, string> {
+    if (!s.contains("&")) {
+        return Result.Ok(s);
+    }
+    var out: [string] = [];
+    var rest = s;
+    while (true) {
+        match (rest.index_of("&")) {
+            Option.Some(i) => {
+                out.push(rest.substring(0, i));
+                let after = rest.substring(i + 1, rest.len());
+                let semi = match (after.index_of(";")) {
+                    Option.Some(j) => j,
+                    Option.None => return Result.Err("xml: unterminated entity"),
+                };
+                let ent = after.substring(0, semi);
+                out.push(decode_entity(ent)?);
+                rest = after.substring(semi + 1, after.len());
+            },
+            Option.None => {
+                out.push(rest);
+                return Result.Ok(join(out, ""));
+            },
+        }
+    }
+    Result.Ok(join(out, ""))
+}
+
+fn decode_entity(ent: string) -> Result<string, string> {
+    if (ent == "lt") {
+        return Result.Ok("<");
+    }
+    if (ent == "gt") {
+        return Result.Ok(">");
+    }
+    if (ent == "amp") {
+        return Result.Ok("&");
+    }
+    if (ent == "quot") {
+        return Result.Ok("\"");
+    }
+    if (ent == "apos") {
+        return Result.Ok("'");
+    }
+    if (ent.starts_with("#x") || ent.starts_with("#X")) {
+        return code_point(parse_hex(ent.substring(2, ent.len())), ent);
+    }
+    if (ent.starts_with("#")) {
+        return code_point(parse_int(ent.substring(1, ent.len())), ent);
+    }
+    Result.Err("xml: unknown entity '&" + ent + ";' (no DTD support)")
+}
+
+fn code_point(n: Option<int>, ent: string) -> Result<string, string> {
+    match (n) {
+        Option.Some(v) => match (char_from_code(v)) {
+            Option.Some(c) => Result.Ok(to_string(c)),
+            Option.None => Result.Err("xml: invalid character reference '&" + ent + ";'"),
+        },
+        Option.None => Result.Err("xml: invalid character reference '&" + ent + ";'"),
+    }
+}
+
+fn parse_hex(s: string) -> Option<int> {
+    if (s.len() == 0) {
+        return Option.None;
+    }
+    var v = 0;
+    for c in s.chars() {
+        let code = char_code(c);
+        let d = if (code >= 48 && code <= 57) {
+            code - 48
+        } else if (code >= 97 && code <= 102) {
+            code - 87
+        } else if (code >= 65 && code <= 70) {
+            code - 55
+        } else {
+            return Option.None;
+        };
+        v = v * 16 + d;
+    }
+    Option.Some(v)
+}
+
+/// Parses an XML document and returns its root element. The prolog (`<?xml …?>`), comments and
+/// processing instructions before the root are skipped; a `<!DOCTYPE …>` is an error (no DTD,
+/// no external entities: by design). `Err` names the line of the first problem.
+pub fn parse(text: string) -> Result<Elem, string> {
+    let p = P { cs: text.to_bytes(), pos: 0 };
+    // BOM (EF BB BF)
+    if (starts_with_at(p, "﻿")) {
+        p.pos = p.pos + 3;
+    }
+    skip_ws(p);
+    var root: Option<Elem> = Option.None;
+    while (!at_end(p)) {
+        if (starts_with_at(p, "<?")) {
+            p.pos = p.pos + 2;
+            let _ = until(p, "?>", "processing instruction")?;
+        } else if (starts_with_at(p, "<!--")) {
+            p.pos = p.pos + 4;
+            let _ = until(p, "-->", "comment")?;
+        } else if (starts_with_at(p, "<!DOCTYPE") || starts_with_at(p, "<!doctype")) {
+            return Result.Err(
+                err(p, "DOCTYPE is not supported (no DTD or external entities, by design)")
+            );
+        } else if (peek(p) == LT) {
+            match (root) {
+                Option.Some(_) => return Result.Err(err(p, "more than one root element")),
+                Option.None => { },
+            }
+            let ns: [(string, string)] = [("xml", "http://www.w3.org/XML/1998/namespace")];
+            root = Option.Some(parse_element(p, ns)?);
+        } else {
+            return Result.Err(err(p, "unexpected text outside the root element"));
+        }
+        skip_ws(p);
+    }
+    match (root) {
+        Option.Some(e) => Result.Ok(e),
+        Option.None => Result.Err("xml: no root element"),
+    }
+}
+
+// `p.pos` está en el `<` de una etiqueta de apertura. `scope` son las declaraciones xmlns
+// heredadas (prefijo → URI; "" = por defecto).
+fn parse_element(p: P, scope: [(string, string)]) -> Result<Elem, string> {
+    p.pos = p.pos + 1;  // '<'
+    let name = name_at(p)?;
+    var attrs: [(string, string)] = [];
+    var ns = scope;
+    var self_closing = false;
+    while (true) {
+        skip_ws(p);
+        if (at_end(p)) {
+            return Result.Err(err(p, "unterminated start tag <" + name + ">"));
+        }
+        let c = peek(p);
+        if (c == GT) {
+            p.pos = p.pos + 1;
+            break;
+        }
+        if (c == SLASH) {
+            p.pos = p.pos + 1;
+            if (peek(p) != GT) {
+                return Result.Err(err(p, "expected '>' after '/' in <" + name + ">"));
+            }
+            p.pos = p.pos + 1;
+            self_closing = true;
+            break;
+        }
+        let aname = name_at(p)?;
+        skip_ws(p);
+        if (peek(p) != EQ) {
+            return Result.Err(err(p, "expected '=' after attribute '" + aname + "'"));
+        }
+        p.pos = p.pos + 1;
+        skip_ws(p);
+        let q = peek(p);
+        if (q != DQ && q != SQ) {
+            return Result.Err(err(p, "attribute '" + aname + "' needs a quoted value"));
+        }
+        p.pos = p.pos + 1;
+        let raw = until(
+            p,
+            if (q == DQ) { "\"" } else { "'" },
+            "attribute value of '" + aname + "'"
+        )?;
+        if (raw.contains("<")) {
+            return Result.Err(err(p, "'<' in the value of attribute '" + aname + "'"));
+        }
+        let value = unescape(raw)?;
+        attrs.push((aname, value));
+        if (aname == "xmlns") {
+            ns = with_ns(ns, "", value);
+        } else if (aname.starts_with("xmlns:")) {
+            ns = with_ns(ns, aname.substring(6, aname.len()), value);
+        }
+    }
+    var e = Elem {
+        name: name,
+        local: local_of(name),
+        ns: resolve(ns, prefix_of(name)),
+        attrs: attrs,
+        children: []
+    };
+    if (self_closing) {
+        return Result.Ok(e);
+    }
+    // Contenido hasta la etiqueta de cierre. El despacho mira UNO o dos octetos (`<` y el siguiente):
+    // llamar a `starts_with_at` cinco veces por nodo convertía cada aguja a bytes y dominaba el coste
+    // en documentos densos en marcado.
+    while (true) {
+        if (at_end(p)) {
+            return Result.Err(err(p, "missing </" + name + ">"));
+        }
+        let c = peek(p);
+        let c2 = if (p.pos + 1 < p.cs.len()) { p.cs[p.pos + 1] } else { 0 };
+        if (c == LT && c2 == SLASH) {
+            p.pos = p.pos + 2;
+            let close = name_at(p)?;
+            if (close != name) {
+                return Result.Err(
+                    err(p, "mismatched closing tag </" + close + "> for <" + name + ">")
+                );
+            }
+            skip_ws(p);
+            if (peek(p) != GT) {
+                return Result.Err(err(p, "expected '>' in </" + name + ">"));
+            }
+            p.pos = p.pos + 1;
+            return Result.Ok(e);
+        } else if (c == LT && c2 == BANG) {
+            if (starts_with_at(p, "<![CDATA[")) {
+                p.pos = p.pos + 9;
+                e.children.push(Node.CData(until(p, "]]>", "CDATA section")?));
+            } else if (starts_with_at(p, "<!--")) {
+                p.pos = p.pos + 4;
+                e.children.push(Node.Comment(until(p, "-->", "comment")?));
+            } else {
+                return Result.Err(
+                    err(p, "DOCTYPE/DTD markup inside the document is not supported")
+                );
+            }
+        } else if (c == LT && c2 == QMARK) {
+            p.pos = p.pos + 2;
+            let body = until(p, "?>", "processing instruction")?;
+            let (target, data) = split_pi(body);
+            e.children.push(Node.PI(target, data));
+        } else if (c == LT) {
+            e.children.push(Node.Element(parse_element(p, ns)?));
+        } else {
+            let start = p.pos;
+            p.pos = match (p.cs.index_of_from(b"<", p.pos)) {
+                Option.Some(i) => i,
+                Option.None => p.cs.len(),
+            };
+            let raw = slice(p, start, p.pos);
+            // El blanco puro entre elementos no es contenido significativo: se descarta.
+            if (raw.trim() != "") {
+                e.children.push(Node.Text(unescape(raw)?));
+            } else if (e.children.len() > 0 && has_text(e)) {
+                e.children.push(Node.Text(raw));
+            }
+        }
+    }
+    Result.Ok(e)
+}
+
+// ¿Tiene ya texto (no blanco) el elemento? Entonces el blanco intermedio es contenido mixto y se conserva.
+fn has_text(e: Elem) -> bool {
+    for n in e.children {
+        match (n) {
+            Node.Text(t) => {
+                if (t.trim() != "") {
+                    return true;
+                }
+            },
+            _ => { },
+        }
+    }
+    false
+}
+
+fn split_pi(body: string) -> (string, string) {
+    let t = body.trim();
+    match (t.index_of(" ")) {
+        Option.Some(i) => (t.substring(0, i), t.substring(i + 1, t.len()).trim()),
+        Option.None => (t, ""),
+    }
+}
+
+fn with_ns(scope: [(string, string)], prefix: string, uri: string) -> [(string, string)] {
+    var out: [(string, string)] = [(prefix, uri)];
+    for (k, v) in scope {
+        if (k != prefix) {
+            out.push((k, v));
+        }
+    }
+    out
+}
+
+fn resolve(scope: [(string, string)], prefix: string) -> string {
+    for (k, v) in scope {
+        if (k == prefix) {
+            return v;
+        }
+    }
+    ""
+}

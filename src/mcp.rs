@@ -1099,8 +1099,10 @@ mod tests {
         assert!(d.contains("std/json") && d.contains("Result<Json, string>"), "{d}");
         let d = doc_text("regex.find_all");
         assert!(d.contains("find_all(pattern: string, text: string) -> [string]"), "{d}");
-        let d = doc_text("find_all"); // sin módulo → lo encuentra igual
-        assert!(d.contains("std/regex"), "{d}");
+        // Sin módulo → lo encuentra igual (desde M353 `find_all` existe en std/regex y std/xml: el
+        // primer match vale; lo que se prueba es la búsqueda sin calificar).
+        let d = doc_text("find_all");
+        assert!(d.contains("find_all(") && (d.contains("std/regex") || d.contains("std/xml")), "{d}");
         let d = doc_text("crypto.x25519_public_key");
         assert!(d.contains("std/crypto") && d.contains("Option<bytes>"), "{d}");
         let d = doc_text("hkdf_sha256");

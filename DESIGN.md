@@ -16714,3 +16714,30 @@ cliente `db/postgres`, que autentica solo con SCRAM-SHA-256 (PostgreSQL ≥ 10);
 un reinicio de la base. Probado contra PostgreSQL 18 real (Docker), en VM y nativo, con dos
 servidores sobre la misma base (conexión y pool), logout, TTL de un segundo y barrido; el test se
 salta sin `RAY_TEST_PGPORT`.
+
+## 339. M353 — `std/xml`: lo básico, en la stdlib; lo pesado, fuera (oct 2026)
+
+R8 de rayauth y el último hallazgo abierto. La conversación previa fijó el alcance: XML está de
+salida para diseñar APIs nuevas, pero vive donde el formato lo fija otro —SAML y SOAP en la empresa,
+facturación electrónica, feeds, sitemaps, SVG, los manifiestos—, así que un lenguaje de producción
+trae en la stdlib el **parser y el serializador** (puro cómputo, sin dependencias, y evita que cada
+app escriba uno inseguro) y deja lo de nicho —C14N, XML-DSig, SOAP— a paquetes, como Go hace con
+`encoding/xml` y como raylang ya hace con `net/jwt` fuera de `std`.
+
+**El modelo**: `Elem { name, local, ns, attrs, children }` con el namespace **resuelto** en el
+parser (la pila de `xmlns` se hereda por elemento), y `Node` para texto, CDATA, comentario y PI. La
+consulta casa por nombre completo o local (`"creator"` encuentra `<dc:creator>`), y `find_ns` por
+URI cuando el prefijo no debe importar. Las dos decisiones de seguridad: **`DOCTYPE` es error** (sin
+DTD no hay entidades externas ni «billion laughs»; una entidad desconocida es error, no texto), y
+`<` dentro de un valor de atributo también.
+
+**El rendimiento enseñó algo.** La primera versión recorría `chars()` y cortaba con `substring`:
+`substring` indexa por carácter y es O(n) por llamada, así que el parser era cuadrático (10 s para
+1,5 MB). Sobre **bytes** —todo delimitador XML es ASCII y en UTF-8 ningún octeto ≥ 0x80 coincide
+con uno ASCII— `sub_bytes` + `from_utf8` cortan en O(longitud), `index_of_from` (Rust) hace los
+escaneos largos y el despacho del contenido mira uno o dos octetos en vez de probar cinco agujas
+por nodo. Resultado: ~2 MB/s en la VM y ~20 MB/s en nativo, que es el motor de producto. La lección
+vale para cualquier parser escrito en raylang: trabajar sobre `bytes`, cortar con `sub_bytes`, buscar
+con builtins.
+
+Con M353, los 28 hallazgos de rayauth (IDEAS §102) quedan cerrados.

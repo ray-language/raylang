@@ -66,6 +66,8 @@ fn main() -> int {
   tras DATA, con los helpers de `net/mail`), `send(server, message)` y `send_raw(server, from, to,
   data)` (MIME propio, BCC). Un servidor que no ofrece STARTTLS cuando se exige es error, nunca una
   degradación. Sobre `std/net` + `net/mail`.
+- **`net/webserver`** devuelve **413** a un cuerpo mayor que `max_body_bytes`, **431** a unas cabeceras
+  mayores que `max_header_bytes` y **408** al vencer el plazo de lectura (antes todo era 400; M354).
 - **`net/session_store`** — el almacén de sesiones de `web` como actor con protocolo (`Msg`:
   get/set/delete/drop/sweep), `memory(path, persist, ttl_s)` (RKV1 opcional) y `from_channel` para
   backends propios; el SQLite vive en `db/sessions` (M350). Sobre `std/kv`.

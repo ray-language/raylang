@@ -837,3 +837,91 @@ Result.Err(xml: line 1: more than one root element)
 Result.Ok(<p> AB)
 "#);
 }
+
+/// M354 (rayauth R30): un cuerpo mayor que `max_body_bytes` recibe **413**, unas cabeceras mayores que
+/// `max_header_bytes` **431** (antes ambos 400). VM y nativo; el `request:` del servidor va a stderr.
+#[test]
+fn oversized_bodies_and_headers_get_413_and_431() {
+    let d = project("limits_status");
+    std::fs::write(d.join("prog.ray"), r#"import web/framework;
+from web/framework import App;
+import net/webserver;
+import net/http;
+import std/net;
+import std/time;
+fn routes() -> App {
+    var app = framework.new_app();
+    app.POST("/up", fn(c: framework.Ctx, r: framework.Res) { r.text("got"); });
+    app
+}
+fn main() -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    close(l);
+    var lim = webserver.default_limits();
+    lim.max_body_bytes = 1024;
+    lim.max_header_bytes = 512;
+    let opts = framework.options().with_limits(lim);
+    spawn(fn() { let _ = framework.listen_with(fn() -> App { routes() }, "127.0.0.1", port, opts); });
+    time.sleep(200);
+    let small = http.request("POST", "http://127.0.0.1:${port}/up", "x".repeat(100)).unwrap();
+    print(small.status);
+    let big = http.request("POST", "http://127.0.0.1:${port}/up", "x".repeat(5000)).unwrap();
+    print(big.status);
+    var h: Map<string, string> = Map.new();
+    h.insert("X-Big", "y".repeat(2000));
+    let hdr = http.request_with("POST", "http://127.0.0.1:${port}/up", "x", h).unwrap();
+    print(hdr.status);
+    0
+}
+"#).unwrap();
+    vm_and_native(&d, "200\n413\n431\n");
+}
+
+/// M354 (rayauth R32): las condiciones de `{% if %}` — `x`, `not x`, `a == b`, `a != b` con rutas y
+/// literales — y lo malformado como error de `compile` en vez de un falso silencioso.
+#[test]
+fn template_conditions_compare_and_reject_malformed_ones() {
+    let d = tmp("template_cond");
+    std::fs::write(d.join("prog.ray"), r#"import std/template;
+from std/template import val_str, val_bool, val_int, val_map, field;
+fn main() -> int {
+    let ctx = [template.ctx_str("stage", "password"), template.ctx_bool("flag", false), template.ctx_int("n", 3), template.ctx_map("u", [field("role", val_str("admin")), field("age", val_int(3))])];
+    let t = "[{% if stage == \"password\" %}PW{% endif %}][{% if not flag %}N{% endif %}][{% if stage != 'password' %}X{% else %}Y{% endif %}][{% if n == 3 %}3{% endif %}][{% if u.role == \"admin\" %}A{% endif %}][{% if u.age == n %}EQ{% endif %}][{% if u.age == \"3\" %}BAD{% endif %}][{% if missing %}M{% elif not missing %}NM{% endif %}][{% if missing == nope %}both-absent{% endif %}]";
+    print(template.render_template(t, ctx).unwrap());
+    print(template.compile("{% if stage = \"x\" %}{% endif %}"));
+    print(template.compile("{% if a == b == c %}{% endif %}"));
+    print(template.compile("{% if not a == b %}{% endif %}"));
+    print(template.compile("{% if x == \"unterminated %}{% endif %}"));
+    print(template.compile("{% if %}{% endif %}"));
+    0
+}
+"#).unwrap();
+    three_engines(
+        &d,
+        "[PW][N][Y][3][A][EQ][][NM][both-absent]\nResult.Err(malformed 'if' condition: unknown operator '=' in 'stage = \"x\"' (only == and !=))\nResult.Err(malformed 'if' condition: expected `a == b`, `a != b`, `a` or `not a`, got 'a == b == c')\nResult.Err(malformed 'if' condition: 'not' applies to a single value, not to a comparison: 'not a == b')\nResult.Err(malformed 'if' condition: unterminated string in 'x == \"unterminated')\nResult.Err(malformed 'if' condition: '')\n",
+    );
+}
+
+/// M354 (rayauth R33): `fs.make_temp_dir` crea el directorio en exclusiva — nunca devuelve uno que
+/// ya existía (ni su contenido), aunque el pid se haya reciclado. Tres motores.
+#[test]
+fn make_temp_dir_never_returns_an_existing_directory() {
+    let d = tmp("temp_dir_exclusive");
+    std::fs::write(d.join("prog.ray"), r#"import std/fs;
+fn main() -> int {
+    let p0 = fs.make_temp_dir("probe_reuse_").unwrap();
+    let p1 = fs.make_temp_dir("probe_reuse_").unwrap();
+    print(p0 != p1);
+    print(fs.is_dir(p0) && fs.is_dir(p1));
+    // Un directorio con el nombre que tocaría: el siguiente NO lo reutiliza (y nunca devuelve uno con contenido).
+    fs.write_file(p1 + "/old.txt", "x").unwrap();
+    let p2 = fs.make_temp_dir("probe_reuse_").unwrap();
+    print(p2 != p1 && !fs.exists(p2 + "/old.txt"));
+    print(fs.list_dir(p2).unwrap().len());
+    let _ = fs.remove_all(p0); let _ = fs.remove_all(p1); let _ = fs.remove_all(p2);
+    0
+}
+"#).unwrap();
+    three_engines(&d, "true\ntrue\ntrue\n0\n");
+}

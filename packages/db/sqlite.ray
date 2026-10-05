@@ -37,7 +37,9 @@ fn parse_handle(s: string) -> int {
 }
 
 /// Opens (or creates) the database at `path` (`":memory:"` = in-memory). Returns a connection or
-/// an error message.
+/// an error message. The `Conn` may be used from any fiber (the runtime serializes every call on
+/// it); for parallel work or transactions see the notes on `Conn` and use `net/pool` or one
+/// connection per transaction.
 pub fn connect(path: string) -> Result<Conn, string> {
     let r = __sqlite_open(path);
     if (r[0] != "ok") {

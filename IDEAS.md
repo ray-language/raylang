@@ -3947,7 +3947,7 @@ quedan aquí para decidir.
 rayauth (`ray-apps/rayauth`, `docs/RAYLANG-FINDINGS.md`) se diseñó solo con las herramientas MCP
 de raylang y el toolchain; sus 28 hallazgos (R1–R28) se revisaron contra 1.27.30: R10 ya estaba
 cerrado (M342) y los 27 restantes se reprodujeron uno a uno. Severidad: **B** bug · **D**
-documentación · **E** hueco de API. El plan va en cuatro oleadas: M344 (bugs de front-end y
+documentación · **E** hueco de API. La fase 11 de rayauth (5 oct) añadió R29–R33. El plan va en cuatro oleadas: M344 (bugs de front-end y
 nativo), M345 (formateador y diagnósticos), M346 (docs y política del nativo), M347 (paquetes y
 stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML) se deciden aparte.
 
@@ -3981,3 +3981,8 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R26 | B | `ray fmt` saca los comentarios de una lista de parámetros al cuerpo | ✅ **M345**: con comentarios dentro, un parámetro por línea y cada comentario con el suyo |
 | R27 | D | `n as float` / `x as int` no están en `llms.txt` | ✅ **M346**: en «The delta» de `llms.txt` |
 | R28 | B | Nativo: `let _ = try_send(ch, v)` convertía la función en stub («unknown return type of 'try_send'») | ✅ **M344**: filas `try_send`/`try_recv`/`send`/`close` en la tabla de tipos |
+| R29 | D | `ray_doc framework.ListenOptions` no existía: los alias de tipo públicos no eran superficie para `ray_doc` | ✅ **M354**: los alias se documentan (`type X = …` con sus `///`) y, si el destino es de otro módulo, debajo va la doc del struct destino con sus campos |
+| R30 | E | Un cuerpo mayor que `max_body_bytes` recibía 400 | ✅ **M354**: 413 Content Too Large; cabeceras grandes 431; plazo de lectura vencido 408 (`net` 0.9.0) |
+| R31 | E | No se podían generar claves RSA | ✅ **M348** (`rsa_generate`) |
+| R32 | B | `std/template` aceptaba `{% if a == "b" %}`/`{% if not x %}` y los daba por falsos en silencio | ✅ **M354**: gramática cerrada de condiciones (`x`, `not x`, `a == b`, `a != b`, rutas y literales); lo demás es error de `compile` |
+| R33 | B | `fs.make_temp_dir` devolvía un directorio ya existente (pid reciclado) con su contenido | ✅ **M354**: creación exclusiva (`create_dir`) con sal y reintento, en VM y nativo |

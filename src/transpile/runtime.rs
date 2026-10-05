@@ -443,12 +443,18 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // incluso con NaN, cosa que `total_cmp`/`sort_by` con orden no-total no garantizarían.
     // M216: fs.make_temp_dir(prefix) — `<temp>/<prefix><pid>_<n>`, único por proceso y llamada.
     out.push_str(concat!(
+        // M354 (rayauth R33): creación EXCLUSIVA (create_dir) + sal, reintentando si el nombre existe —
+        // misma forma `<prefix><pid>_<n>_<sal>` que la VM.
         "fn __ray_make_temp_dir(prefix: &str) -> Result<Rc<str>, Rc<str>> {\n",
         "    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
-        "    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
         "    let clean: String = prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.').collect();\n",
-        "    let dir = std::env::temp_dir().join(format!(\"{clean}{}_{n}\", std::process::id()));\n",
-        "    match std::fs::create_dir_all(&dir) { Ok(()) => Ok(Rc::<str>::from(dir.to_string_lossy().as_ref())), Err(e) => Err(Rc::<str>::from(e.to_string().as_str())) }\n}\n",
+        "    for _ in 0..64 {\n",
+        "        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+        "        let salt = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) ^ (n as u32).wrapping_mul(0x9E3779B9);\n",
+        "        let dir = std::env::temp_dir().join(format!(\"{clean}{}_{n}_{salt:08x}\", std::process::id()));\n",
+        "        match std::fs::create_dir(&dir) { Ok(()) => return Ok(Rc::<str>::from(dir.to_string_lossy().as_ref())), Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue, Err(e) => return Err(Rc::<str>::from(e.to_string().as_str())) }\n",
+        "    }\n",
+        "    Err(Rc::<str>::from(\"make_temp_dir: could not find a free name after 64 attempts\"))\n}\n",
     ));
     out.push_str("fn __ray_sort_float(a: &Rc<std::cell::RefCell<Vec<f64>>>) -> Rc<std::cell::RefCell<Vec<f64>>> {\n");
     out.push_str("    let mut src = a.borrow().clone(); let n = src.len(); let mut width = 1;\n");

@@ -122,14 +122,15 @@ site-serve: site ## Genera y sirve el sitio en http://127.0.0.1:8000 (ray serve)
 vscode: ## Compila la extensión de VSCode (npm install + tsc)
 	cd editors/vscode && npm install --no-fund --no-audit && npm run compile
 
-install: ## Enlaza target/release/{ray,raylang} en ~/.local/bin (compila release si falta)
+install: ## COPIA target/release/{ray,raylang} a ~/.local/bin (compila release si falta). Una copia, no un enlace: así una compilación posterior no pisa el binario instalado y `ray upgrade` lo gestiona
 	@test -x target/release/ray || cargo build --release
 	mkdir -p $(HOME)/.local/bin
-	ln -sf $(CURDIR)/target/release/ray $(HOME)/.local/bin/ray
-	ln -sf $(CURDIR)/target/release/raylang $(HOME)/.local/bin/raylang
-	@echo "enlazados: ~/.local/bin/{ray,raylang} → target/release"
+	rm -f $(HOME)/.local/bin/ray $(HOME)/.local/bin/raylang
+	cp target/release/ray $(HOME)/.local/bin/ray
+	cp target/release/raylang $(HOME)/.local/bin/raylang
+	@echo "instalados (copia): ~/.local/bin/{ray,raylang} ← target/release ($$($(HOME)/.local/bin/ray version))"
 
-clean: ## Limpia TODO target/ (⚠ rompe el symlink de `make install` y el binario PGO; suele bastar clean-cache)
+clean: ## Limpia TODO target/ (⚠ también el binario PGO; suele bastar clean-cache)
 	cargo clean
 	rm -rf target/pgo-gen
 

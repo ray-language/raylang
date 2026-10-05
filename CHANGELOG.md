@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`make install` copia** `target/release/{ray,raylang}` a `~/.local/bin` en vez de enlazarlos: una
+  compilación posterior ya no sustituye al binario instalado, y `ray upgrade` (que resuelve enlaces)
+  gestiona la copia. Quien tuviera el enlace antiguo: `make install` una vez, o `ray upgrade`.
+
 ## 1.27.35 — 2026-10-05
 
 `std/xml`: el último hallazgo de rayauth; los 28 de IDEAS §102 quedan cerrados.

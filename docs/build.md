@@ -15,8 +15,10 @@ las decisiones está en [IDEAS.md](../IDEAS.md): PGO y features slim.
 | Release PGO | `sh tools/pgo.sh` | el mismo `target/release`, optimizado por perfil |
 
 El perfil release ya lleva `strip = "symbols"` (Cargo.toml): los símbolos se quitan
-siempre, no hace falta `strip` manual. El symlink `~/.local/bin/ray` apunta a
-`target/release/ray` → **lo que dejes ahí es lo que corre el día a día**.
+siempre, no hace falta `strip` manual. `make install` **copia** `target/release/{ray,raylang}` a
+`~/.local/bin` (antes los enlazaba: cada compilación pisaba el binario instalado y `ray upgrade`,
+que resuelve enlaces, habría escrito dentro de `target/`). Lo instalado es una foto; para probar
+el árbol de trabajo, llama a `target/release/ray` por su ruta.
 
 ## 2. Features de compilación
 

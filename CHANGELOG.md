@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`net.tcp_connect` y `net.tls_connect` ya no bloquean el hilo worker**: el dial corre aparte y
+  la fibra aparca, como ya hacía `tcp_connect_timeout`. Antes, tantas fibras marcando a un host que
+  descarta paquetes como hilos tenía el programa lo congelaban entero —temporizadores incluidos—
+  hasta 75 s, y la VM no podía ni salir (M355, raylb L19/L14).
+- **`net/http`** (`net` 0.10.0): el plazo de la petición acota también la conexión
+  (`request_bytes`, `stream_with`, el pool); `connect` usa `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) y
+  `connect_timeout(base_url, ms)` lo elige. Un host sin ruta falla con «could not connect: connect
+  timeout» en vez de colgar 75 s (M355, raylb L5).
+
 ## 1.27.36 — 2026-10-05
 
 La fase 11 de rayauth (R29–R33) y `make install` por copia.

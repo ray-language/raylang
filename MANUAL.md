@@ -2004,7 +2004,9 @@ TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_
 primer día):
 
 - `net.tcp_connect_timeout(host, port, ms)` — el connect con plazo: un host que descarta los SYN
-  falla con `"connect timeout"` en `ms`, no en los ~75 s del SO.
+  falla con `"connect timeout"` en `ms`, no en los ~75 s del SO. Sin plazo, `net.tcp_connect` y
+  `net.tls_connect` esperan lo que diga el SO, pero aparcan la fibra: el resto del programa sigue.
+  El cliente `net/http` ya acota sus diales (el plazo de la petición, o 10 s; `http.connect_timeout`).
 - `net.set_read_timeout(h, ms)` — la lectura que espere más falla con `"read timeout"`. Aplica a
   TCP, TLS **y UDP** (`udp.recv_from`: un datagrama perdido ya no cuelga la fibra).
 - `net.peer_addr(h)` — `"ip:puerto"` del otro extremo (TCP o TLS): logs con origen, rate-limit

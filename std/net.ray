@@ -31,6 +31,8 @@ pub fn socket_write_bytes(h: int, data: bytes) -> Result<int, string> {
 // --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---
 // Conecta a host:port (resuelve el nombre); Ok(handle) u Err(mensaje).
 /// Opens a TCP connection to host:port (resolving the host name); `Ok(socket handle)` or `Err(message)`.
+/// On the VM and the native fiber scheduler the dial PARKS the fiber (other fibers keep running);
+/// with no deadline it waits for the OS default — use `tcp_connect_timeout` to bound it.
 pub fn tcp_connect(host: string, port: int) -> Result<int, string> {
     let r = __tcp_connect(host, port);
     if (r[0] == "ok") {
@@ -44,8 +46,8 @@ pub fn tcp_connect(host: string, port: int) -> Result<int, string> {
 }
 
 // M122: connect con PLAZO. Un host que no responde al SYN (firewall que descarta, ruta negra)
-// retenía el connect ~75 s (el timeout del SO); con `ms` el intento falla acotado. La espera es
-// acotada pero BLOQUEANTE (no cede la fibra); la resolución del nombre va aparte del plazo.
+// retenía el connect ~75 s (el timeout del SO); con `ms` el intento falla acotado. Desde M306 la
+// espera aparca la fibra (VM y nativo con fibras); la resolución del nombre va aparte del plazo.
 /// Like `tcp_connect`, with a DEADLINE: an attempt that outlives `ms` milliseconds fails with the
 /// stable error "connect timeout" instead of waiting for the OS default (~75 s against a host
 /// that drops SYNs). `ms <= 0` behaves exactly like `tcp_connect`. On the VM and the native
@@ -133,15 +135,17 @@ pub fn tls_peer_cert(h: int) -> Result<PeerCert, string> {
 // se lee/escribe con net.socket_read_bytes/net.socket_write_bytes (que desvían a TLS) y se cierra con close.
 /// Opens a TLS connection to host:port, verifying the server certificate; `Ok(handle)` or
 /// `Err(message)`. Read/write with `net.socket_read_bytes`/`net.socket_write_bytes`; close with `close`.
+/// The TCP dial parks the fiber like `tcp_connect`; the handshake runs on the first read/write.
 pub fn tls_connect(host: string, port: int) -> Result<int, string> {
-    let r = __tls_connect(host, port);
-    if (r[0] == "ok") {
-        match (parse_int(r[1])) {
-            Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("invalid handle"),
-        }
-    } else {
-        Result.Err(r[1])
+    // M355: el dial TCP va por `tcp_connect` (que aparca la fibra) y la sesión TLS se sube sobre
+    // ese socket; el handshake es perezoso (ocurre en la primera lectura/escritura, que ceden).
+    let h = tcp_connect(host, port)?;
+    match (tls_upgrade(h, host)) {
+        Result.Ok(t) => Result.Ok(t),
+        Result.Err(e) => {
+            close(h);
+            Result.Err(e)
+        },
     }
 }
 

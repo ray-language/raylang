@@ -1129,11 +1129,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
                 "            __ray_ctx(|c| { c.socks.insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
                 "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
-                // connect sigue BLOQUEANTE (acotado por el SO; el connect no-bloqueante con
-                // park_writable + SO_ERROR es de F4/cliente); el stream queda no-bloqueante para
-                // que las lecturas/escrituras posteriores aparquen la fibra.
+                // M355 (raylb L19): el connect (resolución incluida) corre en el POOL bloqueante y la
+                // fibra aparca, como ya hacía `tcp_connect_timeout` (M306). Antes era una llamada
+                // bloqueante en el hilo worker: N diales a un host que descarta los SYN con N >= hilos
+                // congelaban el programa entero —temporizadores incluidos— hasta 75 s. El stream queda
+                // no-bloqueante para que las lecturas/escrituras posteriores aparquen la fibra.
                 "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-                "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                "    let host = host.to_string();\n",
+                "    let r: Result<std::net::TcpStream, String> = ray_runtime::fibers::run_blocking(move || std::net::TcpStream::connect((host.as_str(), port as u16)).map_err(|e| e.to_string()));\n",
+                "    match r { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e)) } }\n",
                 // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
                 // el intento vencido devuelve el error estable "connect timeout".
                 // M306 (IDEAS §97 #15): la espera acotada corre en el POOL bloqueante
@@ -1463,10 +1467,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // no-bloqueante al insertarse: toda I/O posterior aparca la fibra (read_wait/write_all_wait).
         if t.fibers {
             out.push_str(concat!(
+                // M355: el dial TLS (connect + handshake bloqueantes) también en el pool bloqueante.
                 "fn __ray_tls_connect(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-                "    match ray_runtime::tls::connect(host, port) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
+                "    let host = host.to_string();\n",
+                "    match ray_runtime::fibers::run_blocking(move || ray_runtime::tls::connect(&host, port)) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
                 "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-                "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
+                "    let host = host.to_string();\n",
+                "    match ray_runtime::fibers::run_blocking(move || ray_runtime::tls::connect_h2(&host, port)) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
             ));
         } else {
             out.push_str(concat!(

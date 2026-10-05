@@ -2212,8 +2212,7 @@ pub fn sqlite_query_nulls(_h: i64, _sql: &str, _params: &[String]) -> Result<(us
 
 /// Conecta a `host:port` (resuelve el nombre vía `std::net`) y devuelve un handle (M15.2).
 pub fn tcp_connect(host: &str, port: i64) -> Result<i64, String> {
-    let stream = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
-    let _ = stream.set_nodelay(true); // Nagle+delayed-ACK = stalls fijos de 40-100 ms (M96b)
+    let stream = dial_stream(host, port, 0)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -2370,14 +2369,14 @@ pub fn shutdown_write(h: i64) -> Result<(), String> {
     }
 }
 
-/// Como [`tcp_connect`], con PLAZO (M122): un host que no responde al SYN (firewall que descarta,
-/// ruta negra) retenía la conexión ~75 s (el timeout del SO); con `ms` el intento falla con el
-/// error estable "connect timeout". `ms <= 0` = sin plazo (idéntico a `tcp_connect`). La espera es
-/// **acotada pero bloqueante** (`TcpStream::connect_timeout` del std); la resolución del nombre
-/// (getaddrinfo) va aparte y no entra en el plazo.
-pub fn tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, String> {
+/// El dial TCP sin registrar: con plazo `ms` (error estable `CONNECT_TIMEOUT_MSG`) o, con
+/// `ms <= 0`, acotado solo por el SO. Lo comparten los connects bloqueantes y el hilo auxiliar de
+/// [`tcp_connect_begin`] (M355), que registra el stream bajo el handle del waker.
+fn dial_stream(host: &str, port: i64, ms: i64) -> Result<std::net::TcpStream, String> {
     if ms <= 0 {
-        return tcp_connect(host, port);
+        let stream = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+        let _ = stream.set_nodelay(true); // Nagle+delayed-ACK = stalls fijos de 40-100 ms (M96b)
+        return Ok(stream);
     }
     use std::net::ToSocketAddrs;
     let addr = (host, port as u16)
@@ -2396,6 +2395,16 @@ pub fn tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, String
         Err(e) => return Err(e.to_string()),
     };
     let _ = stream.set_nodelay(true); // mismo trato que tcp_connect (M96b)
+    Ok(stream)
+}
+
+/// Como [`tcp_connect`], con PLAZO (M122): un host que no responde al SYN (firewall que descarta,
+/// ruta negra) retenía la conexión ~75 s (el timeout del SO); con `ms` el intento falla con el
+/// error estable "connect timeout". `ms <= 0` = sin plazo (idéntico a `tcp_connect`). La espera es
+/// **acotada pero bloqueante** (`TcpStream::connect_timeout` del std); la resolución del nombre
+/// (getaddrinfo) va aparte y no entra en el plazo.
+pub fn tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, String> {
+    let stream = dial_stream(host, port, ms)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -3474,7 +3483,7 @@ pub fn tcp_accept(h: i64) -> Result<i64, String> {
 // —kqueue/epoll/WSAPoll— lo entiende en los tres SO); al terminar, el hilo manda un datagrama y
 // la fibra despierta, recoge el resultado (`tcp_connect_finish`) y cierra el waker.
 struct PendingConnect {
-    result: std::sync::Mutex<Option<Result<i64, String>>>,
+    result: std::sync::Mutex<Option<Result<std::net::TcpStream, String>>>,
 }
 
 fn pending_connects() -> &'static std::sync::Mutex<std::collections::HashMap<i64, std::sync::Arc<PendingConnect>>> {
@@ -3501,11 +3510,8 @@ pub fn tcp_connect_begin(host: &str, port: i64, ms: i64) -> Result<i64, String> 
     pending_connects().lock().unwrap().insert(wh, slot.clone());
     let host = host.to_string();
     std::thread::spawn(move || {
-        let r = if ms > 0 { tcp_connect_timeout(&host, port, ms) } else { tcp_connect(&host, port) };
-        if let Ok(h) = &r {
-            let _ = set_nonblocking(*h); // como TcpConnect en la VM: las lecturas aparcan
-        }
-        *slot.result.lock().unwrap() = Some(r);
+        // M355: el stream NO se registra aquí — `tcp_connect_finish` lo instala bajo el id del waker.
+        *slot.result.lock().unwrap() = Some(dial_stream(&host, port, ms));
         let _ = notifier.send_to(&[1u8], addr);
     });
     Ok(wh)
@@ -3513,14 +3519,31 @@ pub fn tcp_connect_begin(host: &str, port: i64, ms: i64) -> Result<i64, String> 
 
 /// El resultado del connect arrancado con [`tcp_connect_begin`], si ya terminó (`None` = sigue
 /// en curso: la fibra vuelve a aparcar). Al entregarlo, cierra el waker.
+///
+/// M355: la conexión hereda el ID del waker (el stream sustituye al socket UDP en el registro), y
+/// un dial fallido devuelve su id si nadie reservó otro después. Así un connect consume los mismos
+/// ids que el camino bloqueante del intérprete — los handles son observables (`print(h)`, mensajes
+/// `handle N is not…`) y los motores deben coincidir.
 pub fn tcp_connect_finish(wh: i64) -> Option<Result<i64, String>> {
     let slot = pending_connects().lock().unwrap().get(&wh).cloned()?;
-    let done = slot.result.lock().unwrap().take();
-    if done.is_some() {
-        pending_connects().lock().unwrap().remove(&wh);
-        close_handle(wh);
-    }
-    done
+    let done = slot.result.lock().unwrap().take()?;
+    pending_connects().lock().unwrap().remove(&wh);
+    Some(match done {
+        Ok(stream) => {
+            let _ = stream.set_nonblocking(true); // como TcpConnect en la VM: las lecturas aparcan
+            registry().lock().unwrap().open.insert(wh, OpenHandle::Tcp(stream)); // suelta el waker
+            nonblocking_handles().lock().unwrap().insert(wh);
+            Ok(wh)
+        }
+        Err(e) => {
+            close_handle(wh);
+            let mut reg = registry().lock().unwrap();
+            if reg.next == wh + 1 {
+                reg.next = wh;
+            }
+            Err(e)
+        }
+    })
 }
 
 /// El puerto local de un socket de escucha o de conexión; `0` si el handle no es un socket o falla.

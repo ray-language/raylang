@@ -79,7 +79,9 @@ fn main() -> int {
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
   `std/inflate` (gunzip). M90.2: conexiones persistentes (keep-alive) con `connect`/`conn_request`/
   `conn_close` — reusa el socket entre peticiones al mismo servidor (delimitación por
-  Content-Length/chunked, reconexión y reintento transparente). M318: `pool(size)` +
+  Content-Length/chunked, reconexión y reintento transparente). M355: plazo de CONEXIÓN — el
+  `timeout_millis` de la petición acota también el dial, `connect` usa
+  `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) y `connect_timeout(base_url, ms)` lo elige (`<= 0` = el del SO). M318: `pool(size)` +
   `pool_fetch`/`pool_request`/`pool_request_bytes` + `pool_close` — un pool de `Conn`s keep-alive
   compartido por todas las fibras (un proxy que abre una conexión por petición agota los puertos). M108: **streaming** —
   `stream`/`stream_with` devuelven status y cabeceras en cuanto llegan y `stream_read` entrega el

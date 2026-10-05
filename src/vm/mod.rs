@@ -3966,22 +3966,50 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 // --- Cliente TCP (M15.2): arreglo etiquetado en el heap; el prelude → Result. ---
+                // M355 (raylb L19/L14): el connect SIN plazo también corre en un hilo auxiliar y la fibra
+                // aparca sobre el waker (la misma maquinaria que `tcp_connect_timeout`, M306). Antes
+                // bloqueaba al worker entero hasta que el SO se rendía (75 s contra un host que descarta
+                // los SYN): una malla de fibras se congelaba y el proceso no podía ni salir.
                 OpCode::TcpConnect => {
-                    let port = self.pop();
+                    let port = match self.pop() { HeapValue::Int(p) => p, _ => unreachable!("the checker guarantees an int") };
                     let host = self.pop();
-                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("the checker guarantees string, int");
+                    let pending: Result<i64, String> = match host {
+                        HeapValue::Int(wh) => Ok(wh), // re-ejecución tras el aparcado
+                        HeapValue::Str(host) => crate::builtins::tcp_connect_begin(&host, port, 0),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
-                    let elems = match crate::builtins::tcp_connect(&host, port) {
-                        Ok(h) => {
-                            // M15.5: la VM usa sockets NO bloqueantes → socket_read cede al scheduler.
-                            let _ = crate::builtins::set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
+                    match pending {
+                        Err(e) => {
+                            let elems = vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())];
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
                         }
-                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
-                    };
-                    let h = self.cur.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                        Ok(wh) => match crate::builtins::tcp_connect_finish(wh) {
+                            Some(r) => {
+                                let elems = match r {
+                                    Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                                    Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                                };
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            None => {
+                                // Sigue en curso: aparcar sobre el waker y re-ejecutar al despertar.
+                                self.push(HeapValue::Int(wh));
+                                self.push(HeapValue::Int(port));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
+                                {
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle: wh, deadline: None });
+                                    sh.running -= 1;
+                                }
+                                let (l, c2) = pos!();
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                            }
+                        },
+                    }
                 }
                 // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
                 // el intento vencido devuelve el error estable "connect timeout".
@@ -3997,19 +4025,8 @@ impl<'a> Vm<'a> {
                     // (resultado empujado); `Err` = fallo al arrancar.
                     let pending: Result<Option<i64>, String> = match host {
                         HeapValue::Int(wh) => Ok(Some(wh)), // re-ejecución tras el aparcado
-                        HeapValue::Str(host) if ms <= 0 => {
-                            // Sin plazo: como TcpConnect (bloqueante, rápido en la práctica).
-                            let elems = match crate::builtins::tcp_connect(&host, port) {
-                                Ok(h) => {
-                                    let _ = crate::builtins::set_nonblocking(h);
-                                    vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
-                                }
-                                Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
-                            };
-                            let h = self.cur.heap.allocate(Obj::Array(elems));
-                            self.push(HeapValue::Obj(h));
-                            Ok(None)
-                        }
+                        // M355: también sin plazo (`ms <= 0`) va por el hilo auxiliar — `tcp_connect_begin`
+                        // hace entonces un connect normal, acotado solo por el SO, sin retener al worker.
                         HeapValue::Str(host) => crate::builtins::tcp_connect_begin(&host, port, ms).map(Some),
                         _ => unreachable!("the checker guarantees a string"),
                     };

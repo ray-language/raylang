@@ -49,7 +49,7 @@ ray add db
 
 ```toml
 [dependencies]
-db = "^0.4.0"
+db = "^0.5.0"
 ```
 
 La versión exacta y su hash quedan fijados en `ray.lock`, que va al control de versiones. El

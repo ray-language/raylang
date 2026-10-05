@@ -20,7 +20,7 @@ ray add db
 ```toml
 [dependencies]
 web = "^0.6.0"
-db = "^0.4.0"
+db = "^0.5.0"
 ```
 
 `web` brings the HTTP server of the `net` package; `db` brings the Postgres client. The exact
@@ -421,4 +421,4 @@ What a production environment expects from a service, and how this one meets it:
 A [**site with a React frontend**](web-react.en.md) embedded in the binary and a JSON API behind it,
 with the notes in Redis.
 
-<!-- sync: sha256:c8cd87bacf07 -->
+<!-- sync: sha256:340cfb5c01df -->

@@ -258,7 +258,7 @@ Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
 std/base64 std/url std/regex std/csv std/toml std/template (Jinja-style; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates: `ray build --templates-only`, see MANUAL) std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
-std/keychain std/bigint std/pem std/qr std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
+std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `tz`, `cron`, `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
 `mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`; server side: `import mcp/serve;` →

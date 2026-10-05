@@ -16741,3 +16741,35 @@ vale para cualquier parser escrito en raylang: trabajar sobre `bytes`, cortar co
 con builtins.
 
 Con M353, los 28 hallazgos de rayauth (IDEAS §102) quedan cerrados.
+
+## 340. M354 — La fase 11 de rayauth: cinco cosas pequeñas que una app de producción pisa (oct 2026)
+
+Tras adoptar las APIs nuevas, rayauth volvió con cinco hallazgos más (IDEAS §102 R29–R33) y un
+recordatorio (R6). Ninguno es grande; todos son del tipo que solo aparece usando el lenguaje en
+serio.
+
+**`fs.make_temp_dir` devolvía un directorio ajeno (R33).** El nombre era `<prefix><pid>_<n>` y la
+creación `create_dir_all`, que no falla si existe: un proceso anterior con el mismo pid (los pids se
+reciclan) dejaba su directorio y el nuevo lo recibía con su base de datos dentro. Un test de rayauth
+fallaba de forma intermitente con «username already taken». Ahora la creación es **exclusiva**
+(`create_dir`) con una sal de 32 bits y reintento; la doc deja de prometer unicidad por
+construcción del nombre y la promete por la operación. VM y nativo.
+
+**`{% if %}` aceptaba lo que no sabía evaluar (R32).** La condición era «la verdad de una variable»
+y `stage == "password"` o `not flag` compilaban y salían falsos en silencio: la página de login
+perdió sus campos sin aviso. Se cierra la gramática —`x`, `not x`, `a == b`, `a != b` con rutas y
+literales— y lo que no encaja es error de `compile` con mensaje. Igualdad por tipo y valor (`"1"`
+no es `1`); una variable ausente es falsa y solo igual a otra ausente.
+
+**400 para un cuerpo demasiado grande (R30).** El servidor daba el mismo 400 a «mal formada», «muy
+grande» y «tardaste». Ahora 413, 431 (cabeceras) y 408, por `rejection(e)` sobre el mensaje
+interno que ya existía; el detalle sigue sin salir al cliente.
+
+**Los alias de tipo no eran superficie (R29).** `ray_doc framework.ListenOptions` «no existía»: el
+doc por fuente conocía fn/struct/enum/const/método de trait pero no `pub type`. Ahora el alias se
+documenta como `type X = Destino` con sus `///` y, si el destino es un tipo calificado de otro
+módulo, `doc_text_at` encadena su doc debajo: el usuario ve los campos de `ServeOptions` sin
+provocar un error de tipos para descubrirlos.
+
+Y R6: la doc de fibras estaba en `Conn`, no en `connect`, que es donde se mira; una frase en
+`connect` remite a ella. Versiones: `net` 0.9.0, `db` 0.5.1.

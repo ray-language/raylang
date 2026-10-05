@@ -1957,7 +1957,7 @@ fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
             // "connection closed" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
             if (e != "connection closed") {
                 eprint("request: " + e);
-                match (send_response(conn, text(400, "Bad Request"))) {
+                match (send_response(conn, rejection(e))) {
                     Result.Ok(_) => { },
                     Result.Err(_) => { },
                 }
@@ -1986,6 +1986,22 @@ fn wants_close(req: Request) -> bool {
 // correcto), así que el header `Connection` siempre dice la verdad. Cada petición corre su handler
 // en su PROPIO `try_call` (M56.5, cambiado en M97.2 de `spawn`+`try_join` a recuperación en la misma
 // fibra): un panic responde 500 y cierra, sin fugar nada y sin cruzar de hilo.
+// M354 (rayauth R30): el estado de una petición que no se pudo leer. Un cuerpo que supera
+// `max_body_bytes` es **413 Content Too Large** (RFC 9110 §15.5.14) y unas cabeceras que superan
+// `max_header_bytes`, **431** (RFC 6585): el cliente distingue «demasiado grande» de «mal formada»
+// (400) y de «tardaste demasiado» (408). El detalle interno sigue sin salir al cliente.
+fn rejection(e: string) -> Response {
+    if (e.starts_with("body too large")) {
+        text(413, "Content Too Large")
+    } else if (e.starts_with("headers too large")) {
+        text(431, "Request Header Fields Too Large")
+    } else if (e == "read timeout") {
+        text(408, "Request Timeout")
+    } else {
+        text(400, "Bad Request")
+    }
+}
+
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     var follow: bool = true;
     // M316 (findings #81): los octetos sobrantes de la petición anterior (pipelining HTTP/1.1).
@@ -2055,7 +2071,7 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
             Result.Err(e) => {
                 if (e != "connection closed") {
                     eprint("request: " + e);
-                    match (send_response(conn, text(400, "Bad Request"))) {
+                    match (send_response(conn, rejection(e))) {
                         Result.Ok(_) => { },
                         Result.Err(_) => { },
                     }

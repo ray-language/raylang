@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/template`**: las condiciones de `{% if %}` aceptan `not x`, `a == b` y `a != b` (rutas y
+  literales); una condición que el motor no entiende es error de `compile` en vez de un falso
+  silencioso (M354, rayauth R32).
+- **`fs.make_temp_dir`** crea el directorio en exclusiva: ya no devuelve uno existente de otra
+  ejecución con el mismo pid (M354, rayauth R33).
+- **`ray doc` / `ray_doc`** documentan los alias de tipo públicos y resuelven su destino
+  (`framework.ListenOptions` → `webserver.ServeOptions` y sus campos) (M354, rayauth R29).
+- **`net/webserver`** (0.9.0): 413 para un cuerpo mayor que el límite, 431 para cabeceras grandes,
+  408 al vencer la lectura (antes 400) (M354, rayauth R30). `db` 0.5.1: `sqlite.connect` habla de
+  fibras (R6).
 - **`make install` copia** `target/release/{ray,raylang}` a `~/.local/bin` en vez de enlazarlos: una
   compilación posterior ya no sustituye al binario instalado, y `ray upgrade` (que resuelve enlaces)
   gestiona la copia. Quien tuviera el enlace antiguo: `make install` una vez, o `ray upgrade`.

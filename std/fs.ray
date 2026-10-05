@@ -107,8 +107,10 @@ pub fn temp_dir() -> string {
     r[1]
 }
 
-/// Creates a NEW, unique temporary directory `<temp_dir>/<prefix><pid>_<n>` and returns its path;
-/// two processes (or two calls) never collide. Remove it with `remove_all` when done.
+/// Creates a NEW, unique temporary directory `<temp_dir>/<prefix><pid>_<n>_<salt>` and returns its
+/// path. The directory is created exclusively (never returned if it already existed — a recycled
+/// pid cannot hand you another run's files) so two processes, or two calls, never collide. Remove
+/// it with `remove_all` when done.
 pub fn make_temp_dir(prefix: string) -> Result<string, string> {
     let r = __make_temp_dir(prefix);
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }

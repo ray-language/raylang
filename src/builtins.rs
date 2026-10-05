@@ -441,13 +441,35 @@ pub fn real_path_display(p: &std::path::Path) -> String {
 /// por ambos motores. Devuelve el arreglo etiquetado ya montado (`["ok"(, dato)]`/`["err", msg]`) —
 /// todas las cargas son strings, así cada motor solo lo convierte a su tipo de valor.
 /// M216: crea `<temp_dir>/<prefix><pid>_<n>` (único por proceso y por llamada) y devuelve su ruta.
+/// M354 (rayauth R33): el directorio se crea en EXCLUSIVA (`create_dir`, que falla si existe) y con un
+/// sufijo aleatorio además del pid y el contador; si existe, se prueba otro nombre. Antes era
+/// `create_dir_all` sobre `<prefix><pid>_<n>`: un proceso anterior con el MISMO pid (los pids se
+/// reciclan) dejaba su directorio y el nuevo lo recibía con el contenido viejo.
 pub fn make_temp_dir(prefix: &str) -> Result<String, String> {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let clean: String = prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.').collect();
-    let dir = std::env::temp_dir().join(format!("{clean}{}_{n}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.to_string_lossy().into_owned())
+    for _ in 0..64 {
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let salt = temp_dir_salt();
+        let dir = std::env::temp_dir().join(format!("{clean}{}_{n}_{salt:08x}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir.to_string_lossy().into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("make_temp_dir: could not find a free name after 64 attempts".to_string())
+}
+
+/// 32 bits de sal para el nombre: del CSPRNG si el build lo trae, si no del reloj (lo que importa es
+/// la EXCLUSIVIDAD del `create_dir`; la sal solo evita reintentos).
+fn temp_dir_salt() -> u32 {
+    let b = crypto_random_bytes(4);
+    if b.len() == 4 {
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    } else {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0)
+    }
 }
 
 pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {

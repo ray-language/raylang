@@ -364,6 +364,30 @@ pub(crate) fn doc_text(symbol: &str) -> String {
 }
 
 fn doc_text_at(symbol: &str, path: Option<&str>) -> String {
+    let text = doc_text_raw(symbol, path);
+    // M354 (rayauth R29): un alias `type X = M.T` trae debajo la doc del tipo destino (los campos de
+    // `webserver.ServeOptions` cuando se pregunta por `framework.ListenOptions`), si se resuelve.
+    if let Some(target) = alias_target(&text)
+        && target.contains('.')
+    {
+        let target_doc = doc_text_raw(&target, path);
+        if !target_doc.contains("is not a builtin") {
+            return format!("{text}\n\nalias of {target}:\n{target_doc}");
+        }
+    }
+    text
+}
+
+/// El destino de la primera línea `modulo: type X<…> = Destino<…>` de un doc, sin genéricos.
+fn alias_target(text: &str) -> Option<String> {
+    let first = text.lines().next()?;
+    let (_, rest) = first.split_once(": type ")?;
+    let (_, target) = rest.split_once(" = ")?;
+    let target = target.split('<').next()?.trim();
+    (!target.is_empty()).then(|| target.to_string())
+}
+
+fn doc_text_raw(symbol: &str, path: Option<&str>) -> String {
     let sig = crate::builtins::signature(symbol)
         .map(|(params, ret)| format!("{}({}) -> {}", symbol, params.join(", "), ret));
     let doc = crate::builtins::doc(symbol);
@@ -445,6 +469,12 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             // M305 (IDEAS §97 #11): las CONSTANTES públicas también son superficie
             // (`crypto.PASSWORD_ITERATIONS` existía y ray_doc lo negaba).
             const_signature(c)
+        } else if let Some(a) = prog.type_aliases.iter().find(|a| a.is_pub && a.name == func) {
+            // M354 (rayauth R29): los ALIAS de tipo públicos también (`framework.ListenOptions`
+            // «no existía» y había que provocar un error de tipos para descubrir el struct).
+            // `doc_text_at` añade después la doc del tipo destino cuando es de otro módulo.
+            let tparams = if a.type_params.is_empty() { String::new() } else { format!("<{}>", a.type_params.join(", ")) };
+            format!("type {}{tparams} = {}", a.name, a.target)
         } else {
             return None;
         };
@@ -456,6 +486,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             format!("pub struct {func} "), format!("pub struct {func}<"),
             format!("pub enum {func} "), format!("pub enum {func}<"),
             format!("pub const {func}:"), format!("pub const {func} "),
+            format!("pub type {func} "), format!("pub type {func}<"),
         ];
         if let Some(i) = lines.iter().position(|l| {
             let t = l.trim_start();
@@ -1077,6 +1108,18 @@ mod tests {
         let all = doc_text("last_index_of");
         assert!(all.contains("last_index_of(s: string") && all.contains("bytes.last_index_of(self"), "{all}");
         assert!(doc_text("bytes.no_such_method").contains("is not a builtin"));
+    }
+
+    /// M354 (rayauth R29): un alias de tipo público es superficie — firma `type X = …` con sus `///`
+    /// — y `alias_target` extrae el destino calificado para encadenar su doc.
+    #[test]
+    fn ray_doc_covers_public_type_aliases() {
+        let src = "import net/webserver;\n/// The options of `listen_with`.\npub type ListenOptions = webserver.ServeOptions;\ntype Hidden = int;\n";
+        let d = source_symbol_doc("web/framework", src, "ListenOptions").expect("alias público");
+        assert_eq!(d, "web/framework: type ListenOptions = webserver.ServeOptions\nThe options of `listen_with`.");
+        assert_eq!(alias_target(&d).as_deref(), Some("webserver.ServeOptions"));
+        assert!(source_symbol_doc("web/framework", src, "Hidden").is_none(), "un alias privado no es superficie");
+        assert_eq!(alias_target("m: fn f() -> int"), None);
     }
 
     #[test]

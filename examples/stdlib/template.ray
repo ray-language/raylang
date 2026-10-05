@@ -52,12 +52,29 @@ enum Tok {
     TTag(string),
 }
 
+// La condición de un `{% if %}` (M354, rayauth R32). Antes `if` solo evaluaba la verdad de UNA
+// variable y cualquier otra cosa (`x == "a"`, `not x`) compilaba y salía siempre falsa, en silencio.
+// Ahora es una gramática pequeña y cerrada, y lo que no encaja es error de `compile`:
+//   cond    = ["not"] operand [ ("==" | "!=") operand ]
+//   operand = ruta (`user.admin`) | "literal" | 'literal' | entero | true | false
+enum Cond {
+    CTruthy(Operand),
+    CNot(Operand),
+    CEq(Operand, Operand),
+    CNe(Operand, Operand),
+}
+
+enum Operand {
+    OPath(string),
+    OLit(TVal),
+}
+
 // Un nodo del árbol de la plantilla.
 enum Node {
     NText(string),
     NVar(string),
     NRaw(string),
-    NIf(string, [Node], [Node]),
+    NIf(Cond, [Node], [Node]),
     NFor(string, string, [Node]),
 }
 
@@ -255,7 +272,105 @@ fn parse_if(pc: PC, cond: string) -> Result<Node, string> {
             elsebody = elser.nodes;
         }
     }
-    Result.Ok(Node.NIf(cond, thenr.nodes, elsebody))
+    Result.Ok(Node.NIf(parse_cond(cond)?, thenr.nodes, elsebody))
+}
+
+// cond = ["not"] operand [ ("==" | "!=") operand ]
+fn parse_cond(src: string) -> Result<Cond, string> {
+    let toks = cond_tokens(src)?;
+    var i = 0;
+    var negated = false;
+    if (i < toks.len() && toks[i] == "not") {
+        negated = true;
+        i = i + 1;
+    }
+    if (i >= toks.len()) {
+        return Result.Err("malformed 'if' condition: '" + src + "'");
+    }
+    let left = parse_operand(toks[i], src)?;
+    i = i + 1;
+    if (i == toks.len()) {
+        return Result.Ok(if (negated) { Cond.CNot(left) } else { Cond.CTruthy(left) });
+    }
+    if (negated) {
+        return Result.Err(
+            "malformed 'if' condition: 'not' applies to a single value, not to a comparison: '"
+                + src
+                + "'"
+        );
+    }
+    if (i + 2 != toks.len()) {
+        return Result.Err(
+            "malformed 'if' condition: expected `a == b`, `a != b`, `a` or `not a`, got '"
+                + src
+                + "'"
+        );
+    }
+    let right = parse_operand(toks[i + 1], src)?;
+    if (toks[i] == "==") {
+        return Result.Ok(Cond.CEq(left, right));
+    }
+    if (toks[i] == "!=") {
+        return Result.Ok(Cond.CNe(left, right));
+    }
+    Result.Err(
+        "malformed 'if' condition: unknown operator '"
+            + toks[i]
+            + "' in '"
+            + src
+            + "' (only == and !=)"
+    )
+}
+
+// Tokens separados por espacios, con los literales entre comillas como UN token (comillas incluidas).
+fn cond_tokens(src: string) -> Result<[string], string> {
+    var toks: [string] = [];
+    let cs = src.chars();
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (c == ' ' || c == '\t') {
+            i = i + 1;
+        } else if (c == '"' || c == '\'') {
+            var j = i + 1;
+            while (j < cs.len() && cs[j] != c) {
+                j = j + 1;
+            }
+            if (j >= cs.len()) {
+                return Result.Err("malformed 'if' condition: unterminated string in '" + src + "'");
+            }
+            toks.push(src.substring(i, j + 1));
+            i = j + 1;
+        } else {
+            var j = i;
+            while (j < cs.len() && cs[j] != ' ' && cs[j] != '\t') {
+                j = j + 1;
+            }
+            toks.push(src.substring(i, j));
+            i = j;
+        }
+    }
+    Result.Ok(toks)
+}
+
+fn parse_operand(tok: string, src: string) -> Result<Operand, string> {
+    if (tok.len() >= 2 && (tok[0] == '"' || tok[0] == '\'')) {
+        return Result.Ok(Operand.OLit(TVal.VStr(tok.substring(1, tok.len() - 1))));
+    }
+    if (tok == "true") {
+        return Result.Ok(Operand.OLit(TVal.VBool(true)));
+    }
+    if (tok == "false") {
+        return Result.Ok(Operand.OLit(TVal.VBool(false)));
+    }
+    match (parse_int(tok)) {
+        Option.Some(n) => return Result.Ok(Operand.OLit(TVal.VInt(n))),
+        Option.None => { },
+    }
+    if (tok == "==" || tok == "!=" || tok == "not" || tok.len() == 0) {
+        return Result.Err("malformed 'if' condition: '" + src + "'");
+    }
+    Result.Ok(Operand.OPath(tok))
 }
 
 fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
@@ -431,6 +546,57 @@ fn render_val(v: TVal) -> string {
     }
 }
 
+fn operand_value(o: Operand, ctx: [Bind]) -> Option<TVal> {
+    match (o) {
+        Operand.OLit(v) => Option.Some(v),
+        Operand.OPath(p) => lookup(ctx, p),
+    }
+}
+
+// Igualdad de valores de plantilla: mismo tipo y mismo valor; un int y un string no son iguales
+// aunque se impriman igual (`"1" == 1` es falso), y una variable ausente solo es igual a otra ausente.
+fn vals_equal(a: Option<TVal>, b: Option<TVal>) -> bool {
+    match (a) {
+        Option.None => match (b) {
+            Option.None => true,
+            Option.Some(_) => false,
+        },
+        Option.Some(x) => match (b) {
+            Option.None => false,
+            Option.Some(y) => match (x) {
+                TVal.VStr(s) => match (y) {
+                    TVal.VStr(t) => s == t,
+                    _ => false,
+                },
+                TVal.VInt(n) => match (y) {
+                    TVal.VInt(m) => n == m,
+                    _ => false,
+                },
+                TVal.VBool(p) => match (y) {
+                    TVal.VBool(q) => p == q,
+                    _ => false,
+                },
+                _ => render_val(x) == render_val(y),
+            },
+        },
+    }
+}
+
+fn eval_cond(c: Cond, ctx: [Bind]) -> bool {
+    match (c) {
+        Cond.CTruthy(o) => match (operand_value(o, ctx)) {
+            Option.Some(v) => truthy(v),
+            Option.None => false,
+        },
+        Cond.CNot(o) => match (operand_value(o, ctx)) {
+            Option.Some(v) => !truthy(v),
+            Option.None => true,
+        },
+        Cond.CEq(a, b) => vals_equal(operand_value(a, ctx), operand_value(b, ctx)),
+        Cond.CNe(a, b) => !vals_equal(operand_value(a, ctx), operand_value(b, ctx)),
+    }
+}
+
 // Emite los nodos como PARTES en `out` (compartido por referencia); el join final es del llamador.
 fn emit_nodes(nodes: [Node], ctx: [Bind], out: [string]) {
     var i = 0;
@@ -462,10 +628,7 @@ fn emit_node(node: Node, ctx: [Bind], out: [string]) {
             }
         },
         Node.NIf(cond, entonces, sino) => {
-            let t = match (lookup(ctx, cond)) {
-                Option.Some(v) => truthy(v),
-                Option.None => false,
-            };
+            let t = eval_cond(cond, ctx);
             if (t) {
                 emit_nodes(entonces, ctx, out);
             } else {
@@ -533,7 +696,10 @@ pub fn render(t: Template, ctx: [Bind]) -> string {
 // Compila y renderiza de una vez (azúcar; para render repetido usa compile + render).
 /// Renders a Jinja-style template with the given context in one shot: `{{ var }}` interpolation
 /// (HTML-autoescaped), `{{& var }}` raw, `{% if %}…{% elif %}…{% else %}…{% endif %}`, and
-/// `{% for x in list %}…{% endfor %}`. Missing variables render as ""; `Err` on syntax errors.
+/// `{% for x in list %}…{% endfor %}`. An `if`/`elif` condition is `x`, `not x`, `a == b` or
+/// `a != b`, where each side is a variable (dotted paths allowed) or a literal (`"text"`, `42`,
+/// `true`); anything else is a compile error, never a silent false. Missing variables render as
+/// "" and are falsy; `Err` on syntax errors.
 /// For repeated rendering (SSR), prefer `compile` once + `render` per request.
 pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
     let t = match (compile(tpl)) {

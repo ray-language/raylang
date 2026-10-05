@@ -4190,21 +4190,51 @@ impl<'a> Vm<'a> {
                 }
                 // M19.4b: conexión TLS de cliente. La VM pone el socket en no bloqueante para que el I/O
                 // TLS (SocketReadBytes) pueda ceder la fibra, como con un socket plano.
+                // M355: el dial TLS aparca como `TcpConnect` — el nombre se valida primero (sin red), el
+                // TCP corre en el hilo auxiliar y, al despertar, la sesión se sube sobre ese socket (el
+                // handshake de rustls ya era perezoso: ocurre en la primera lectura/escritura, que ceden).
                 OpCode::TlsConnect => {
-                    let port = self.pop();
+                    let port = match self.pop() { HeapValue::Int(p) => p, _ => unreachable!("the checker guarantees an int") };
                     let host = self.pop();
-                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("the checker guarantees string, int");
+                    let pending: Result<i64, String> = match host {
+                        HeapValue::Int(wh) => Ok(wh), // re-ejecución tras el aparcado
+                        HeapValue::Str(host) => crate::builtins::tls_check_server_name(&host)
+                            .and_then(|_| crate::builtins::tcp_connect_begin(&host, port, 0))
+                            .inspect(|wh| crate::builtins::set_pending_tls_host(*wh, &host)),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
-                    let elems = match crate::builtins::tls_connect(&host, port) {
-                        Ok(h) => {
-                            let _ = crate::builtins::tls_set_nonblocking(h);
-                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
-                        }
-                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    let done: Option<Result<i64, String>> = match pending {
+                        Err(e) => Some(Err(e)),
+                        Ok(wh) => match crate::builtins::tcp_connect_finish(wh) {
+                            Some(r) => {
+                                let host = crate::builtins::take_pending_tls_host(wh).unwrap_or_default();
+                                Some(r.and_then(|h| crate::builtins::tls_upgrade(h, &host).inspect_err(|_| crate::builtins::close_handle(h))))
+                            }
+                            None => {
+                                self.push(HeapValue::Int(wh));
+                                self.push(HeapValue::Int(port));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
+                                {
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle: wh, deadline: None });
+                                    sh.running -= 1;
+                                }
+                                let (l, c2) = pos!();
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                                None
+                            }
+                        },
                     };
-                    let h = self.cur.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    if let Some(r) = done {
+                        let elems = match r {
+                            Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    }
                 }
                 // M31.2a: conexión TLS con ALPN h2 (el handshake ya se completó de forma bloqueante en el
                 // builtin; tras él se pone no bloqueante para el framing con cesión de fibras).

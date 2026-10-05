@@ -16792,12 +16792,14 @@ reusa `tcp_connect_begin(host, port, 0)` y aparca sobre el waker (la rama `ms <=
 VM ya no retiene la salida del proceso por un dial en vuelo (L14) — el hilo auxiliar no es una
 fibra corriendo.
 
-**`tls_connect` = `tcp_connect` + `tls_upgrade`.** El handshake de rustls ya era perezoso (ocurre
-en la primera lectura/escritura, que ceden), así que lo único bloqueante del dial TLS era su TCP.
-En vez de un tercer camino, el envoltorio de `std/net` compone los dos que ya existen: los tres
-motores heredan el connect que aparca sin tocar el builtin (`__tls_connect` queda para quien lo
-llame directo, y en nativo va también por el pool bloqueante, igual que `connect_h2`, cuyo
-handshake sí es síncrono).
+**`tls_connect` sigue el mismo camino.** El handshake de rustls ya era perezoso (ocurre en la
+primera lectura/escritura, que ceden), así que lo único bloqueante del dial TLS era su TCP. En
+nativo `__tls_connect` (y `connect_h2`, cuyo handshake sí es síncrono) van por el pool bloqueante.
+En la VM el opcode valida el nombre del servidor, arranca el mismo dial aparcado y, al despertar,
+sube la sesión sobre ese socket (`tls_upgrade`). La primera versión componía `tcp_connect` +
+`tls_upgrade` en `std/net` y un test de paridad la tumbó: un nombre inválido debe fallar con
+«invalid server name for TLS» ANTES de tocar la red, no con un error de resolución. La validación
+va primero (`tls_check_server_name`) y el orden de errores es el de siempre en los tres motores.
 
 **El cliente HTTP no tenía plazo de conexión (L5).** `timeout_millis` acotaba la lectura, no el
 dial. Decisión: **el plazo que el usuario ya dio acota también el dial** (`request_bytes`,

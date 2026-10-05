@@ -2619,6 +2619,30 @@ pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_connect(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
+/// M355: la parte SIN red de [`tls_connect`] — valida el nombre del servidor. La VM la llama antes
+/// de arrancar el dial aparcado, para dar el mismo error (y en el mismo orden) que el camino bloqueante.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_check_server_name(host: &str) -> Result<(), String> {
+    rustls::pki_types::ServerName::try_from(host.to_string())
+        .map(|_| ())
+        .map_err(|_| format!("invalid server name for TLS: {host}"))
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_check_server_name(_host: &str) -> Result<(), String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+
+/// M355: el `host` de un `tls_connect` cuyo dial TCP está en vuelo (por handle del waker); el opcode
+/// re-ejecutado lo recoge para subir la sesión TLS sobre el socket recién conectado.
+fn pending_tls_hosts() -> &'static std::sync::Mutex<std::collections::HashMap<i64, String>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, String>>> = std::sync::OnceLock::new();
+    P.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+pub fn set_pending_tls_host(wh: i64, host: &str) {
+    pending_tls_hosts().lock().unwrap().insert(wh, host.to_string());
+}
+pub fn take_pending_tls_host(wh: i64) -> Option<String> {
+    pending_tls_hosts().lock().unwrap().remove(&wh)
+}
+
 /// M124: el resumen del certificado del PEER de una conexión TLS — "expira en N días" es EL check
 /// que todo operador quiere (raywatch, IDEAS §70.1). `tls_connect` deja el handshake para la
 /// primera I/O, así que aquí se CONDUCE si sigue pendiente (acotado a 10 s): en la VM el socket es

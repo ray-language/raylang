@@ -137,15 +137,14 @@ pub fn tls_peer_cert(h: int) -> Result<PeerCert, string> {
 /// `Err(message)`. Read/write with `net.socket_read_bytes`/`net.socket_write_bytes`; close with `close`.
 /// The TCP dial parks the fiber like `tcp_connect`; the handshake runs on the first read/write.
 pub fn tls_connect(host: string, port: int) -> Result<int, string> {
-    // M355: el dial TCP va por `tcp_connect` (que aparca la fibra) y la sesión TLS se sube sobre
-    // ese socket; el handshake es perezoso (ocurre en la primera lectura/escritura, que ceden).
-    let h = tcp_connect(host, port)?;
-    match (tls_upgrade(h, host)) {
-        Result.Ok(t) => Result.Ok(t),
-        Result.Err(e) => {
-            close(h);
-            Result.Err(e)
-        },
+    let r = __tls_connect(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
     }
 }
 

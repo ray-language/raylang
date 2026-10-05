@@ -26,6 +26,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   closure no se confunde con una `var` homónima declarada más abajo; `let r = scope(fn() ->
   Result<T, E> { … })` infiere su tipo sin anotar; y lo que captura un `scope` se puede seguir
   usando después (M356, raylb L9/L12/L16/L17).
+- **VM: varias fibras en `select_timeout` a la vez ya no pierden plazos.** El plazo se guardaba por
+  un identificador que coincide entre fibras y solo despertaba la última; además podía marcar como
+  vencida la lectura de un socket ajeno (M357, raylb L8).
+- **Un `scope` que devuelve `Result.Err` mata a sus procesos hijos** antes de unir las fibras; antes
+  esperaba a que el hijo terminara solo (para siempre, si era un servidor) (M357, raylb L15).
+- **`process.listen_signal(sig)`**: `SIGHUP`, `SIGQUIT`, `SIGUSR1` y `SIGUSR2` llegan por `signals()`
+  cuando el programa lo pide (`process.SIGHUP`, `process.sigusr1()`…) — recargar la configuración
+  de un daemon sin reiniciarlo (M357, raylb L1).
 
 ## 1.27.36 — 2026-10-05
 

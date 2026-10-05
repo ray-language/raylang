@@ -16860,3 +16860,40 @@ capturas siguen vivas después, y con `-> T` un `?` dentro ya tiene su tipo de e
 reprodujo en cinco variantes; el hook de M211 ya termina el proceso con 101 cuando el pánico no
 viene del worker principal. Queda sin cambio y documentado en IDEAS §103.
 
+---
+
+## 343. M357 — El scheduler de la VM y los `scope`: tres cosas que solo se ven con varias fibras (oct 2026)
+
+Tercer paso del plan de raylb (IDEAS §103: L8, L15, L1; L14 quedó resuelto en M355).
+
+**Los plazos de `select_timeout` se pisaban entre fibras (L8).** El deadline de un select con plazo
+vivía en `Shared.select_deadlines`, un mapa cuya clave era el handle del arreglo de canales. Pero
+desde M38 cada fibra tiene su **heap propio**: el arreglo de dos fibras distintas tiene, con toda
+normalidad, el mismo handle. La segunda en aparcar no insertaba su plazo (ya había uno), y al vencer
+el primero se borraba la entrada: las demás dormían para siempre. Peor: la marca de «venció» se
+ponía con `mark_read_timeout(handle)`, el mismo espacio de números que los sockets, así que un
+select podía dar por vencida la lectura de un socket ajeno con ese número. El plazo y su marca
+pasan a ser **campos de la fibra** (`select_deadline`, `select_timed_out`): no hay clave que
+colisione, no hay mapa que limpiar si la fibra se cancela, y el scheduler pregunta a las fibras
+aparcadas por el plazo más próximo.
+
+**Un `scope` que devuelve `Err` esperaba a sus procesos (L15).** El contrato decía «una hermana que
+falla mata al proceso» y «uno sin `wait()` no sobrevive al scope», pero el scope une primero sus
+fibras, y la bomba de salida del hijo es una de ellas: no acaba hasta que el hijo cierra su stdout.
+Con errores como valores, el camino de fallo real de un scope no es un pánico sino un
+`Result.Err`, y ese no contaba. Decisión: **un cuerpo que devuelve `Result.Err` es un scope
+fallido para sus procesos** — se matan y cosechan antes de unir (las bombas ven el EOF y terminan).
+No se extiende al camino de éxito: un scope que termina bien sigue esperando a que los flujos se
+cierren, porque ese es el patrón de «lanza, drena en una fibra y deja que acabe». La VM mira el
+valor en la cima de la pila en `ScopeEnd`; el nativo elige `__ray_scope_res` cuando el tipo de
+retorno del cierre es `Result`.
+
+**`SIGHUP` y `SIGUSR1/2` (L1), opt-in.** La propuesta directa era entregarlas siempre por
+`signals()`. Se descartó: instalar un handler cambia la acción por defecto, y un programa que hoy
+usa `signals()` para SIGWINCH o para el apagado ordenado —una TUI, un servidor con
+`shutdown_signals()`— dejaría de morir al cerrar su terminal y quedaría huérfano. La señal extra
+se pide: `process.listen_signal(sig)` instala el mismo handler del self-pipe para `SIGHUP`,
+`SIGQUIT`, `sigusr1()` o `sigusr2()` (funciones y no constantes: 30/31 en macOS y BSD, 10/12 en
+Linux), y desde entonces llega por el canal de siempre. Un primitivo nuevo, `__signal_listen`,
+en VM y nativo; `false` en Windows y en el intérprete.
+

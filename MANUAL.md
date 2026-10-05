@@ -1807,8 +1807,12 @@ fn main() -> int {
 - Con `.merge_output()`, todo llega por `p.out` y `p.err` nace cerrado.
 - El proceso es **hijo del scope**, como una tarea: si una hermana falla, el grupo del hijo se
   mata y cosecha con la cancelación; y un proceso al que nunca llamaste `wait()` **no sobrevive a
-  su scope** (se mata y cosecha al salir). Fuera de un `scope`, el ciclo de vida es tuyo
-  (`wait`/`kill`).
+  su scope** (se mata y cosecha al salir). Si el cuerpo del scope devuelve `Result.Err`, los
+  procesos hijos se matan **antes** de unir las fibras: un error temprano no espera a que el hijo
+  termine. Fuera de un `scope`, el ciclo de vida es tuyo (`wait`/`kill`).
+- **Señales extra**: `process.listen_signal(process.SIGHUP)` hace que `SIGHUP` llegue por
+  `signals()` (también `SIGQUIT`, `sigusr1()` y `sigusr2()`); es el patrón de «recargar la
+  configuración» de un daemon. Sin pedirlo, esas señales conservan la acción por defecto del SO.
 
 **Sesión persistente** (`.stdin_pipe()`): `.stdin(datos)` escribe y **cierra** — vale para
 alimentar a `wc` o `sort`, no para hablar con un hijo que sigue vivo. Para eso está `stdin_pipe`:

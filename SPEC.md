@@ -569,7 +569,12 @@ las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de
 - `signals() -> Channel<int>` devuelve el canal **singleton** de señales del proceso (`SIGTERM`
   = 15, `SIGINT` = 2 y `SIGWINCH` = 28 —cambio de tamaño del terminal— llegan como enteros),
   para apagado ordenado y re-maquetado de TUIs; compone con `recv`/`select`. Solo unix (VM y
-  binario nativo).
+  binario nativo). `SIGHUP`, `SIGQUIT` y `SIGUSR1`/`SIGUSR2` conservan la acción por defecto del
+  SO salvo que el programa las pida con `process.listen_signal(sig)` (`std/process`, M357): desde
+  entonces llegan por el mismo canal.
+- Un **`scope` cuyo cuerpo devuelve `Result.Err`** es un scope fallido para sus procesos hijos
+  (`std/process`, `stream()`): se matan y cosechan **antes** de unir las fibras (M357). Un scope
+  que termina bien espera, como siempre, a que los flujos del hijo se cierren.
 - El programa termina cuando **`main` retorna** (las fibras pendientes se abandonan). Si todas
   las fibras quedan bloqueadas y ninguna puede progresar: error "deadlock" (las que esperan E/S
   del exterior o el reloj no cuentan como bloqueadas).

@@ -183,25 +183,46 @@ mod imp {
         /// Como [`TlsStream::write_all`], esperando readiness en WouldBlock (sin plazo: el modelo
         /// de escritura no tiene timeout, como en TCP plano).
         pub fn write_all_wait(&mut self, data: &[u8]) -> std::io::Result<()> {
+            // M351: `write` (cifra al búfer de rustls) y `flush` (vacía al socket) se tratan POR
+            // SEPARADO. Antes iban encadenados y un `flush` con WouldBlock descartaba el `n` que
+            // `write` ya había aceptado: el reintento volvía a cifrar los mismos bytes y el peer
+            // recibía el texto DUPLICADO ("220 hi220 hi" en el primer mensaje tras el handshake).
             let mut off = 0;
+            while off < data.len() {
+                let r = match self {
+                    TlsStream::Client(s) => {
+                        use std::io::Write;
+                        s.write(&data[off..])
+                    }
+                    TlsStream::Server(s) => {
+                        use std::io::Write;
+                        s.write(&data[off..])
+                    }
+                };
+                match r {
+                    Ok(n) => off += n,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        self.wait_ready(None)?;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
             loop {
                 let r = match self {
                     TlsStream::Client(s) => {
                         use std::io::Write;
-                        s.write(&data[off..]).and_then(|n| { s.flush()?; Ok(n) })
+                        s.flush()
                     }
                     TlsStream::Server(s) => {
                         use std::io::Write;
-                        s.write(&data[off..]).and_then(|n| { s.flush()?; Ok(n) })
+                        s.flush()
                     }
                 };
                 match r {
-                    Ok(n) => {
-                        off += n;
-                        if off >= data.len() {
-                            return Ok(());
-                        }
-                    }
+                    Ok(()) => return Ok(()),
                     Err(e)
                         if e.kind() == std::io::ErrorKind::WouldBlock
                             || e.kind() == std::io::ErrorKind::Interrupted =>

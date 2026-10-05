@@ -487,3 +487,290 @@ v
     // El nativo arranca con la base de datos que dejó la VM: el programa cierra su sesión al final,
     // y la cuenta de filas sigue valiendo 1 porque cada ejecución escribe una sesión nueva.
 }
+
+/// M351 (IDEAS §102 R7): el cliente SMTP de `net/smtp` contra un servidor falso escrito en raylang:
+/// plano con AUTH PLAIN, STARTTLS (certificado de pruebas de `tests/fixtures`, confiado vía
+/// `SSL_CERT_FILE`), TLS implícito, un servidor sin STARTTLS cuando se exige (error, sin degradar) y
+/// un destinatario rechazado. También fija el bug de runtime que destapó: `socket_read`/`socket_write`
+/// (string) no sabían leer/escribir un handle TLS tras `tls_upgrade`. VM y nativo.
+#[test]
+fn smtp_sends_over_plain_starttls_and_tls() {
+    let d = project("smtp");
+    let root = env!("CARGO_MANIFEST_DIR");
+    for f in ["tls_cert.pem", "tls_key.pem", "tls_ca.pem"] {
+        std::fs::copy(format!("{root}/tests/fixtures/{f}"), d.join(f)).unwrap();
+    }
+    std::fs::write(d.join("prog.ray"), r#"import net/smtp;
+import net/mail;
+import std/net;
+import std/fs;
+import std/time;
+import std/base64;
+
+// Un servidor SMTP falso: `mode` = "plain" | "starttls" | "tls". Registra el diálogo en `log`
+// (un canal) y acepta todo salvo RCPT a "reject@…".
+fn serve(mode: string, cert: string, key: string, log: Channel<string>) -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    spawn(fn() {
+        let tcp = net.tcp_accept(l).unwrap();
+        var c = if (mode == "tls") { net.tls_accept(tcp, cert, key).unwrap() } else { tcp };
+        var buf = "";
+        let _ = net.socket_write(c, "220 fake.example ESMTP\r\n");
+        var open = true;
+        var in_data = false;
+        var secure = mode == "tls";
+        while (open) {
+            match (net.socket_read(c)) {
+                Result.Ok(chunk) => {
+                    if (chunk == "") { open = false; } else { buf = buf + chunk; }
+                },
+                Result.Err(_) => { open = false; },
+            }
+            var again = true;
+            while (again && open) {
+                match (buf.index_of("\r\n")) {
+                    Option.Some(i) => {
+                        let line = buf.substring(0, i);
+                        buf = buf.substring(i + 2, buf.len());
+                        if (in_data) {
+                            if (line == ".") {
+                                in_data = false;
+                                let _ = net.socket_write(c, "250 2.0.0 queued as 42\r\n");
+                            } else {
+                                send(log, "DATA:" + line);
+                            }
+                        } else {
+                            send(log, (if (secure) { "S:" } else { "P:" }) + line);
+                            let up = line.to_upper();
+                            if (up.starts_with("EHLO")) {
+                                let _ = net.socket_write(c, "250-fake.example\r\n250-AUTH PLAIN LOGIN\r\n" + (if (mode == "starttls" && !secure) { "250-STARTTLS\r\n" } else { "" }) + "250 SIZE 10000000\r\n");
+                            } else if (up == "STARTTLS") {
+                                let _ = net.socket_write(c, "220 go ahead\r\n");
+                                c = net.tls_accept(c, cert, key).unwrap();
+                                secure = true;
+                                buf = "";
+                            } else if (up.starts_with("AUTH PLAIN")) {
+                                let _ = net.socket_write(c, "235 2.7.0 ok\r\n");
+                            } else if (up.starts_with("RCPT TO:<REJECT@")) {
+                                let _ = net.socket_write(c, "550 5.1.1 no such user\r\n");
+                            } else if (up == "DATA") {
+                                in_data = true;
+                                let _ = net.socket_write(c, "354 go\r\n");
+                            } else if (up == "QUIT") {
+                                let _ = net.socket_write(c, "221 bye\r\n");
+                                open = false;
+                            } else {
+                                let _ = net.socket_write(c, "250 ok\r\n");
+                            }
+                        }
+                    },
+                    Option.None => { again = false; },
+                }
+            }
+        }
+        close(c);
+    });
+    port
+}
+
+fn drain(log: Channel<string>) -> [string] {
+    var out: [string] = [];
+    var more = true;
+    while (more) {
+        match (try_recv(log)) {
+            Received.Got(l) => out.push(l),
+            Received.Empty => more = false,
+            Received.Closed => more = false,
+        }
+    }
+    out
+}
+
+fn main() -> int {
+    let cert = fs.read_file("tls_cert.pem").unwrap();
+    let key = fs.read_file("tls_key.pem").unwrap();
+    let m = smtp.message(mail.address("Ray Auth", "noreply@rayauth.test"), ["ada@example.com", mail.address("Bob Ñ", "bob@example.com")], "Verifica tu correo — ✓", "Hola Ada,\r\nPulsa el enlace.\r\n.inicio con punto\r\n")
+        .with_html("<p>Hola <b>Ada</b></p>")
+        .with_reply_to("soporte@rayauth.test")
+        .with_header("X-Mailer", "rayauth");
+    let rendered = smtp.render(m);
+    print(rendered.contains("Subject: =?UTF-8?B?") && rendered.contains("multipart/alternative") && rendered.contains("\r\n..inicio con punto"));
+    print(smtp.recipients(m));
+
+    // 1. Plano, con login.
+    let log1: Channel<string> = Channel.bounded(256);
+    let p1 = serve("plain", cert, key, log1);
+    time.sleep(100);
+    let srv1 = smtp.server("127.0.0.1", p1).with_security("none").with_login("user", "pass");
+    print(smtp.send(srv1, m));
+    time.sleep(100);
+    let l1 = drain(log1);
+    print(l1[0]); print(l1[1]); print(l1[2]); print(l1[3]); print(l1[4]);
+    print(l1.contains("P:DATA") && l1.contains("DATA:..inicio con punto") && l1.contains("P:QUIT"));
+    print(base64.base64_decode(l1[1].substring(13, l1[1].len())).unwrap() == "\u{0}user\u{0}pass".to_bytes());
+
+    // 2. STARTTLS (el servidor se llama "localhost" en el certificado).
+    let log2: Channel<string> = Channel.bounded(256);
+    let p2 = serve("starttls", cert, key, log2);
+    time.sleep(100);
+    print(smtp.send(smtp.server("localhost", p2), m));
+    time.sleep(100);
+    let l2 = drain(log2);
+    print(l2);
+    print(l2.contains("S:DATA") && !l2.contains("P:DATA"));
+
+    // 3. TLS implícito.
+    let log3: Channel<string> = Channel.bounded(256);
+    let p3 = serve("tls", cert, key, log3);
+    time.sleep(100);
+    print(smtp.send(smtp.server("localhost", p3).with_security("tls"), m));
+    time.sleep(100);
+    print(drain(log3)[0]);
+
+    // 4. Un servidor plano cuando se exige STARTTLS: error, sin degradar.
+    let log4: Channel<string> = Channel.bounded(256);
+    let p4 = serve("plain", cert, key, log4);
+    time.sleep(100);
+    print(smtp.send(smtp.server("127.0.0.1", p4), m));
+
+    // 5. Destinatario rechazado.
+    let log5: Channel<string> = Channel.bounded(256);
+    let p5 = serve("plain", cert, key, log5);
+    time.sleep(100);
+    print(smtp.send(smtp.server("127.0.0.1", p5).with_security("none"), smtp.message("a@b.c", ["reject@example.com"], "x", "y")));
+    0
+}
+"#).unwrap();
+    let want = "true
+[ada@example.com, bob@example.com]
+Result.Ok(2.0.0 queued as 42)
+P:EHLO localhost
+P:AUTH PLAIN AHVzZXIAcGFzcw==
+P:MAIL FROM:<noreply@rayauth.test>
+P:RCPT TO:<ada@example.com>
+P:RCPT TO:<bob@example.com>
+true
+true
+Result.Ok(2.0.0 queued as 42)
+[P:EHLO localhost, P:STARTTLS, S:EHLO localhost, S:MAIL FROM:<noreply@rayauth.test>, S:RCPT TO:<ada@example.com>, S:RCPT TO:<bob@example.com>, S:DATA, ";
+    let ca = d.join("tls_ca.pem");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(args).env("SSL_CERT_FILE", &ca).current_dir(&d).output().unwrap();
+        (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned(), out.status.code().unwrap_or(-1))
+    };
+    let check = |out: &str, label: &str| {
+        assert!(out.starts_with(want), "{label}: inicio inesperado:
+{out}");
+        assert!(out.contains("S:QUIT]
+true
+Result.Ok(2.0.0 queued as 42)
+S:EHLO localhost
+Result.Err(smtp: the server does not offer STARTTLS"), "{label}:
+{out}");
+        assert!(out.ends_with("Result.Err(smtp: RCPT failed: 550 5.1.1 no such user)
+"), "{label}:
+{out}");
+    };
+    let (out, err, code) = run(&["run", "prog.ray"]);
+    assert_eq!(code, 0, "vm: {err}");
+    check(&out, "vm");
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = run(&["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        let out = Command::new(&bin).env("SSL_CERT_FILE", &ca).current_dir(&d).output().unwrap();
+        check(&String::from_utf8_lossy(&out.stdout), "nativo");
+    }
+}
+
+/// M352: el backend PostgreSQL de las sesiones (`sessions.postgres` y `postgres_pool`) contra un
+/// servidor REAL — solo si `RAY_TEST_PGPORT` apunta a uno (usuario `ray`, contraseña `raytest`, base
+/// `raytest`: `docker run -e POSTGRES_USER=ray -e POSTGRES_PASSWORD=raytest -e POSTGRES_DB=raytest
+/// -p 127.0.0.1:<puerto>:5432 postgres:18`); sin él, se salta. Mismo guion que el de SQLite: dos
+/// servidores (conexión y pool) sobre la misma base, logout, TTL y barrido. VM y nativo.
+#[test]
+fn sessions_persist_in_postgres_when_a_server_is_available() {
+    let Ok(port) = std::env::var("RAY_TEST_PGPORT") else {
+        eprintln!("saltando: RAY_TEST_PGPORT no definido");
+        return;
+    };
+    let d = project("sessions_pg");
+    std::fs::write(d.join("prog.ray"), r#"import web/framework;
+from web/framework import App;
+import net/http;
+import net/session_store;
+import db/postgres;
+import db/sessions;
+import std/net;
+import std/time;
+import std/crypto;
+import std/hex;
+fn routes(sess: framework.Sessions) -> App {
+    var app = framework.new_app();
+    app.GET("/set", fn(c: framework.Ctx, r: framework.Res) { framework.session_put(sess, c, r, "user", "ada"); r.text("ok"); });
+    app.GET("/get", fn(c: framework.Ctx, r: framework.Res) { r.text("user=" + framework.session_get(sess, c, r, "user")); });
+    app.GET("/out", fn(c: framework.Ctx, r: framework.Res) { framework.session_clear(sess, c, r); r.text("bye"); });
+    app
+}
+fn serve(sess: framework.Sessions) -> int {
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    spawn(fn() { let _ = framework.listen_on(fn() -> App { routes(sess) }, l); });
+    port
+}
+fn cookie_of(r: http.Response) -> string {
+    let sc = http.set_cookies(r);
+    if (sc.len() == 0) { return ""; }
+    sc[0].split(";")[0]
+}
+fn get(port: int, path: string, cookie: string) -> http.Response {
+    var h: Map<string, string> = Map.new();
+    if (cookie != "") { h.insert("Cookie", cookie); }
+    http.request_with("GET", "http://127.0.0.1:${port}" + path, "", h).unwrap()
+}
+fn main() -> int {
+    let pgport = parse_int(env("PGPORT").unwrap_or("5432")).unwrap_or(5432);
+    let nonce = hex.hex_encode(crypto.random_bytes(12));
+    let c1 = postgres.connect("127.0.0.1", pgport, "ray", "raytest", "raytest", nonce).unwrap();
+    let _ = postgres.exec(c1, "DROP TABLE IF EXISTS ray_sessions", []).unwrap();
+    let store = sessions.postgres(c1, 3600).unwrap();
+    let port = serve(framework.sessions_with(store));
+    time.sleep(200);
+    let ck = cookie_of(get(port, "/set", ""));
+    print(ck.len() == 44);
+    print(http.body_text(get(port, "/get", ck)).unwrap());
+    // Segundo servidor sobre un POOL a la misma base: ve la sesión.
+    let pool = postgres.pool("127.0.0.1", pgport, "ray", "raytest", "raytest", 4);
+    let port2 = serve(framework.sessions_with(sessions.postgres_pool(pool, 3600).unwrap()));
+    time.sleep(200);
+    print(http.body_text(get(port2, "/get", ck)).unwrap());
+    let c2 = postgres.connect("127.0.0.1", pgport, "ray", "raytest", "raytest", nonce + "b").unwrap();
+    print(postgres.query(c2, "SELECT count(*), min(expires_at) > 0 FROM ray_sessions", []).unwrap()[0]);
+    let _ = get(port2, "/out", ck);
+    time.sleep(100);
+    print(http.body_text(get(port, "/get", ck)).unwrap());
+    print(postgres.query(c2, "SELECT count(*) FROM ray_sessions", []).unwrap()[0][0]);
+    // TTL de 1 s sobre Postgres: caduca y el barrido borra.
+    let st = sessions.postgres(c2, 1).unwrap();
+    session_store.set(st, "s1", "k", "v");
+    print(session_store.get(st, "s1", "k").unwrap_or("-"));
+    time.sleep(1200);
+    print(session_store.get(st, "s1", "k").unwrap_or("-"));
+    print(session_store.sweep(st));
+    0
+}
+"#).unwrap();
+    let want = "true\nuser=ada\nuser=ada\n[1, t]\nuser=\n0\nv\n-\n1\n";
+    let strip = |s: String| s.lines().filter(|l| !l.starts_with("listening on port")).map(|l| format!("{l}\n")).collect::<String>();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).env("PGPORT", &port).current_dir(&d).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "vm: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(strip(String::from_utf8_lossy(&out.stdout).into_owned()), want, "vm");
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        let out = Command::new(&bin).env("PGPORT", &port).current_dir(&d).output().unwrap();
+        assert_eq!(strip(String::from_utf8_lossy(&out.stdout).into_owned()), want, "nativo");
+    }
+}

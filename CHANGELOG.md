@@ -4,6 +4,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.34 — 2026-10-05
+
+Correo saliente y sesiones en PostgreSQL: lo último del arco de rayauth.
+
+- **`net/smtp`**: cliente SMTP de envío — STARTTLS (587), TLS implícito (465), AUTH PLAIN,
+  mensajes de texto y HTML (multipart/alternative) con los helpers de `net/mail`, `send_raw` para
+  MIME propio. Un servidor sin STARTTLS cuando se exige es error, no una degradación (M351,
+  rayauth R7). Paquete `net` 0.8.0.
+- **Sesiones en PostgreSQL**: `sessions.postgres(conn, ttl)` y `sessions.postgres_pool(pool, ttl)`
+  con el mismo esquema y actor que SQLite; SQL portable a servidores antiguos (M352). Paquete `db`
+  0.5.0.
+- **Corregido (runtime TLS)**: `socket_read`/`socket_write` de string fallaban con «handle N is not a
+  socket» sobre un handle TLS (tras `tls_upgrade`/`tls_connect`) en VM, intérprete y nativo; y en el
+  nativo con fibras una escritura TLS cuyo `flush` devolvía `WouldBlock` se repetía y el peer recibía
+  el texto duplicado (M351).
+
 ## 1.27.33 — 2026-10-04
 
 Sesiones persistentes para `web` (rayauth R9).

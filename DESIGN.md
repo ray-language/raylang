@@ -16675,3 +16675,42 @@ handlers no cambian: una app pasa de desarrollo a producción cambiando la líne
 Decisiones con el usuario: el backend en `db` y el protocolo en `net` (no `web` dependiendo de
 `db`); Postgres queda para después con el mismo esquema. Versiones: `net` 0.7.0, `web` 0.6.0,
 `db` 0.4.0.
+
+## 337. M351 — `net/smtp`: enviar correo, y dos bugs del TLS que salieron al hacerlo (oct 2026)
+
+R7 de rayauth: un IdP necesita mandar correo (verificación, recuperación de contraseña) y `net/mail`
+solo formateaba; la app escribió 130 líneas sobre `std/net` y dejó la rama STARTTLS sin probar
+porque no tenía con qué. `net/smtp` es ese cliente hecho módulo: `server(host, port)` elige la
+seguridad por el puerto (465 TLS implícito, lo demás STARTTLS; `"none"` solo a petición, para un
+relay local), `message` + `with_html`/`with_reply_to`/`with_header`, `render` compone el MIME con los
+helpers de `net/mail` (cabeceras plegadas y codificadas, dot-stuffing, `multipart/alternative`) y
+`send` habla el diálogo (EHLO, STARTTLS, AUTH PLAIN, sobre, DATA, QUIT) exigiendo la familia de
+respuesta correcta en cada paso. Decisión de seguridad: si se pide STARTTLS y el servidor no lo
+ofrece, es error — nunca una degradación silenciosa a texto plano.
+
+La prueba es un servidor SMTP falso escrito en raylang dentro del mismo programa, en tres modos
+(plano, STARTTLS con `tls_accept`, TLS implícito) con los certificados de `tests/fixtures` confiados
+vía `SSL_CERT_FILE`, más un servidor sin STARTTLS y un destinatario rechazado. Y esa prueba destapó
+**dos bugs del runtime que ninguna app había pisado**: (1) `socket_read`/`socket_write` de *string*
+no sabían de handles TLS — decían «handle N is not a socket» tras un `tls_upgrade` — porque solo las
+variantes de *bytes* enrutaban por la bomba TLS (los clientes existentes, Postgres incluido, leen
+bytes); ahora las cuatro enrutan igual en VM, intérprete y nativo. (2) En el nativo con fibras,
+`write_all_wait` encadenaba `write` y `flush`: un `flush` con `WouldBlock` descartaba el `n` que
+`write` ya había aceptado en el búfer de rustls y el reintento cifraba los mismos bytes otra vez — el
+peer recibía «220 hi220 hi». Se separan: el `write` avanza el offset y el `flush` espera readiness por
+su cuenta. La VM ya lo hacía bien (`tls_write_nb`), de ahí que solo el nativo fallara, y de forma
+intermitente.
+
+## 338. M352 — Sesiones en PostgreSQL: el mismo actor, el dialecto como única variable (oct 2026)
+
+La extensión natural de M350. `db/sessions` pasa a tener un enum `Db { Sqlite, Pg, PgPool }` y un
+único actor: el SQL se escribe una vez con marcadores `$n` y para SQLite se traduce a `?n`. El
+esquema no cambia. Dos decisiones de portabilidad, pedidas para servidores antiguos: sin
+`ON CONFLICT` (el upsert es UPDATE y, si no tocó filas, INSERT — sin carrera, porque el actor
+serializa) y sin `IF NOT EXISTS` (se crea y un «already exists» se ignora). El techo real lo pone el
+cliente `db/postgres`, que autentica solo con SCRAM-SHA-256 (PostgreSQL ≥ 10); un servidor con
+`md5` (PostgreSQL 8/9) necesitaría ese método en el cliente, que queda fuera de este milestone.
+`postgres_pool` toma una conexión del pool por orden: el almacén no secuestra ninguna y sobrevive a
+un reinicio de la base. Probado contra PostgreSQL 18 real (Docker), en VM y nativo, con dos
+servidores sobre la misma base (conexión y pool), logout, TTL de un segundo y barrido; el test se
+salta sin `RAY_TEST_PGPORT`.

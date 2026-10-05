@@ -1,0 +1,325 @@
+// net/smtp — M351 (IDEAS §102 R7): un cliente SMTP de envío (RFC 5321) en raylang puro sobre
+// `std/net`: TCP + STARTTLS (`tls_upgrade`), o TLS implícito (`tls_connect`), AUTH PLAIN (RFC 4616),
+// EHLO, MAIL FROM / RCPT TO / DATA / QUIT, respuestas multilínea. El formato del mensaje —cabeceras
+// plegadas, encoded-words, dot-stuffing, base64— lo dan los helpers de `net/mail`; aquí se compone
+// un mensaje de texto (y HTML opcional, multipart/alternative) y se habla con el servidor.
+//
+// Lo que un IdP necesita (verificación de correo, recuperación de contraseña) y lo que rayauth
+// escribió a mano en 130 líneas. Lo que NO hace: adjuntos (un `with_header` + un cuerpo propio por
+// `send_raw` los cubren), colas, reintentos: eso es de la app.
+import std/net;
+import std/base64;
+import std/time;
+import std/crypto;
+import std/hex;
+import net/mail;
+
+/// An SMTP server to send through. `security` is `"starttls"` (plain TCP, then `STARTTLS` —
+/// port 587), `"tls"` (TLS from the first byte — port 465) or `"none"` (plain, local relays only).
+/// Build with `server(host, port)` and the `with_*` setters.
+pub struct Server {
+    host: string,
+    port: int,
+    security: string,
+    user: string,
+    password: string,
+    timeout_ms: int,
+    /// The name this client announces in `EHLO`; a hostname of yours, or `"localhost"`.
+    ehlo: string,
+}
+
+/// A server with the security the port implies: 465 → `"tls"`, 587 and anything else →
+/// `"starttls"` (a server that does not offer it is an error, never a silent downgrade; use
+/// `with_security(s, "none")` for a local relay on 25). 30 s timeout, no login.
+pub fn server(host: string, port: int) -> Server {
+    let sec = if (port == 465) { "tls" } else { "starttls" };
+    Server {
+        host: host,
+        port: port,
+        security: sec,
+        user: "",
+        password: "",
+        timeout_ms: 30000,
+        ehlo: "localhost"
+    }
+}
+
+/// Authenticates with `AUTH PLAIN` (user + password; what every provider's "app password" is).
+/// Chainable.
+pub fn with_login(s: Server, user: string, password: string) -> Server {
+    s.user = user;
+    s.password = password;
+    s
+}
+
+/// Sets the transport security: `"starttls"`, `"tls"` or `"none"`. Chainable.
+pub fn with_security(s: Server, mode: string) -> Server {
+    s.security = mode;
+    s
+}
+
+/// Sets the per-read timeout in milliseconds (default 30 000). Chainable.
+pub fn with_timeout(s: Server, ms: int) -> Server {
+    s.timeout_ms = ms;
+    s
+}
+
+/// Sets the name announced in `EHLO` (your hostname). Chainable.
+pub fn with_ehlo(s: Server, name: string) -> Server {
+    s.ehlo = name;
+    s
+}
+
+/// A message to send: envelope and content. Build with `message(...)` and the `with_*` setters;
+/// `render` shows the exact bytes that go after `DATA`.
+pub struct Message {
+    from: string,
+    to: [string],
+    subject: string,
+    text: string,
+    html: string,
+    reply_to: string,
+    /// Extra headers `(name, value)`, folded and encoded by `mail.header`.
+    headers: [(string, string)],
+}
+
+/// A plain-text message from `from` to each address in `to`. Addresses are bare
+/// (`user@example.com`) or with a display name via `mail.address(display, email)` — both go in
+/// the headers; the envelope uses the bare address.
+pub fn message(from: string, to: [string], subject: string, text: string) -> Message {
+    Message {
+        from: from,
+        to: to,
+        subject: subject,
+        text: text,
+        html: "",
+        reply_to: "",
+        headers: []
+    }
+}
+
+/// Adds an HTML alternative (the message becomes `multipart/alternative`; mail clients that
+/// render HTML show it, the others show the text). Chainable.
+pub fn with_html(m: Message, html: string) -> Message {
+    m.html = html;
+    m
+}
+
+/// Sets `Reply-To`. Chainable.
+pub fn with_reply_to(m: Message, address: string) -> Message {
+    m.reply_to = address;
+    m
+}
+
+/// Adds a header (`List-Unsubscribe`, `X-Mailer`…). Chainable.
+pub fn with_header(m: Message, name: string, value: string) -> Message {
+    m.headers.push((name, value));
+    m
+}
+
+// La dirección pelada de `Name <a@b>` / `<a@b>` / `a@b`, para el sobre (MAIL FROM / RCPT TO).
+fn bare(address: string) -> string {
+    match (address.index_of("<")) {
+        Option.Some(i) => {
+            let rest = address.substring(i + 1, address.len());
+            match (rest.index_of(">")) {
+                Option.Some(j) => rest.substring(0, j),
+                Option.None => rest,
+            }
+        },
+        Option.None => address.trim(),
+    }
+}
+
+/// The addresses of the envelope (`RCPT TO`), bare, in order.
+pub fn recipients(m: Message) -> [string] {
+    var out: [string] = [];
+    for a in m.to {
+        out.push(bare(a));
+    }
+    out
+}
+
+// Un Message-ID único: tiempo + 8 octetos del CSPRNG @ dominio del remitente.
+fn message_id(from: string) -> string {
+    let f = bare(from);
+    let domain = match (f.index_of("@")) {
+        Option.Some(i) => f.substring(i + 1, f.len()),
+        Option.None => "localhost",
+    };
+    "<" + to_string(time.now()) + "." + hex.hex_encode(crypto.random_bytes(8)) + "@" + domain + ">"
+}
+
+/// The message as the bytes sent after `DATA` (headers, blank line, body; CRLF line endings,
+/// dot-stuffed; the final `CRLF.CRLF` is NOT included). Deterministic except `Date` and
+/// `Message-ID`, which `send` fills in; here they are included too.
+pub fn render(m: Message) -> string {
+    // `mail.header` devuelve la línea YA terminada en CRLF (y plegada): se concatenan tal cual.
+    var hdr = mail.header("From", m.from)
+        + mail.header("To", join(m.to, ", "))
+        + mail.header("Subject", m.subject)
+        + mail.header("Date", time.to_rfc1123(time.now_utc()))
+        + mail.header("Message-ID", message_id(m.from))
+        + mail.header("MIME-Version", "1.0");
+    if (m.reply_to != "") {
+        hdr = hdr + mail.header("Reply-To", m.reply_to);
+    }
+    for (name, value) in m.headers {
+        hdr = hdr + mail.header(name, value);
+    }
+    var body: [string] = [];
+    if (m.html == "") {
+        hdr = hdr + mail.header(
+            "Content-Type",
+            "text/plain; charset=UTF-8"
+        ) + mail.header("Content-Transfer-Encoding", "8bit");
+        body.push(m.text);
+    } else {
+        let boundary = "=_ray_" + hex.hex_encode(crypto.random_bytes(12));
+        hdr = hdr + mail.header(
+            "Content-Type",
+            "multipart/alternative; boundary=\"" + boundary + "\""
+        );
+        body.push("--" + boundary);
+        body.push(
+            mail.header("Content-Type", "text/plain; charset=UTF-8") + mail.header("Content-Transfer-Encoding", "8bit")
+        );
+        body.push(m.text);
+        body.push("--" + boundary);
+        body.push(
+            mail.header("Content-Type", "text/html; charset=UTF-8") + mail.header("Content-Transfer-Encoding", "8bit")
+        );
+        body.push(m.html);
+        body.push("--" + boundary + "--");
+    }
+    mail.dot_stuff(hdr + "\r\n" + join(body, "\r\n"))
+}
+
+// --- El diálogo ---
+
+// Estado de la sesión: el socket y lo leído y aún no consumido.
+struct Session {
+    h: int,
+    buf: string,
+}
+
+// Una línea de respuesta (sin CRLF); Err en EOF, timeout o error de socket.
+fn read_line(s: Session) -> Result<string, string> {
+    while (true) {
+        match (s.buf.index_of("\r\n")) {
+            Option.Some(i) => {
+                let line = s.buf.substring(0, i);
+                s.buf = s.buf.substring(i + 2, s.buf.len());
+                return Result.Ok(line);
+            },
+            Option.None => { },
+        }
+        let chunk = net.socket_read(s.h)?;
+        if (chunk == "") {
+            return Result.Err("smtp: the server closed the connection");
+        }
+        s.buf = s.buf + chunk;
+    }
+    Result.Err("unreachable")
+}
+
+// Una respuesta completa (RFC 5321 §4.2: `250-línea` continúa, `250 línea` cierra): (código, texto).
+fn read_reply(s: Session) -> Result<(int, string), string> {
+    var lines: [string] = [];
+    var code = 0;
+    var done = false;
+    while (!done) {
+        let line = read_line(s)?;
+        if (line.len() < 3) {
+            return Result.Err("smtp: malformed reply '" + line + "'");
+        }
+        code = match (parse_int(line.substring(0, 3))) {
+            Option.Some(c) => c,
+            Option.None => return Result.Err("smtp: malformed reply '" + line + "'"),
+        };
+        lines.push(if (line.len() > 4) { line.substring(4, line.len()) } else { "" });
+        done = line.len() == 3 || line[3] != '-';
+    }
+    Result.Ok((code, join(lines, "\n")))
+}
+
+// Envía una orden y exige un código de la familia `want` (2xx/3xx: las primeras cifras).
+fn command(s: Session, line: string, want: int) -> Result<string, string> {
+    let _ = net.socket_write(s.h, line + "\r\n")?;
+    expect_reply(s, want, line)
+}
+
+fn expect_reply(s: Session, want: int, what: string) -> Result<string, string> {
+    let (code, text) = read_reply(s)?;
+    if (code / 100 != want) {
+        let label = if (what == "") { "greeting" } else { what.split(" ")[0] };
+        return Result.Err("smtp: " + label + " failed: " + to_string(code) + " " + text);
+    }
+    Result.Ok(text)
+}
+
+/// Sends `m` through `srv`: connects, `EHLO`, `STARTTLS` when configured (an error if the server
+/// does not offer it), `AUTH PLAIN` when there is a login, envelope, `DATA`, `QUIT`. `Ok(reply)`
+/// is the server's acceptance line (often with its queue id); `Err` names the step that failed
+/// and the server's words. One connection per call: for bulk mail keep it simple and loop.
+pub fn send(srv: Server, m: Message) -> Result<string, string> {
+    send_raw(srv, bare(m.from), recipients(m), render(m))
+}
+
+/// Like `send`, with the envelope and the DATA bytes given explicitly (your own MIME, attachments,
+/// BCC — a recipient in the envelope but not in the headers). `data` is sent as-is plus the
+/// terminator; dot-stuff it yourself (`mail.dot_stuff`) if it did not come from `render`.
+pub fn send_raw(srv: Server, from: string, to: [string], data: string) -> Result<string, string> {
+    if (to.len() == 0) {
+        return Result.Err("smtp: no recipients");
+    }
+    let h = if (srv.security == "tls") {
+        net.tls_connect(srv.host, srv.port)?
+    } else {
+        net.tcp_connect(srv.host, srv.port)?
+    };
+    net.set_read_timeout(h, srv.timeout_ms);
+    var s = Session { h: h, buf: "" };
+    let result = dialogue(srv, s, from, to, data);
+    close(h);
+    result
+}
+
+fn dialogue(
+    srv: Server,
+    s: Session,
+    from: string,
+    to: [string],
+    data: string
+) -> Result<string, string> {
+    let _ = expect_reply(s, 2, "")?;
+    var caps = command(s, "EHLO " + srv.ehlo, 2)?;
+    if (srv.security == "starttls") {
+        if (!caps.to_upper().contains("STARTTLS")) {
+            return Result.Err(
+                "smtp: the server does not offer STARTTLS (use with_security(s, \"none\") only for a trusted local relay)"
+            );
+        }
+        let _ = command(s, "STARTTLS", 2)?;
+        let _ = net.tls_upgrade(s.h, srv.host)?;
+        s.buf = "";
+        caps = command(s, "EHLO " + srv.ehlo, 2)?;
+    }
+    if (srv.user != "") {
+        if (srv.security == "none" && !caps.to_upper().contains("AUTH")) {
+            return Result.Err("smtp: the server does not offer AUTH");
+        }
+        let token = base64.base64(("\0" + srv.user + "\0" + srv.password).to_bytes());
+        let _ = command(s, "AUTH PLAIN " + token, 2)?;
+    }
+    let _ = command(s, "MAIL FROM:<" + from + ">", 2)?;
+    for rcpt in to {
+        let _ = command(s, "RCPT TO:<" + rcpt + ">", 2)?;
+    }
+    let _ = command(s, "DATA", 3)?;
+    let _ = net.socket_write(s.h, data + "\r\n.\r\n")?;
+    let accepted = expect_reply(s, 2, "DATA body")?;
+    // QUIT es cortesía: un fallo aquí no deshace el envío.
+    let _ = net.socket_write(s.h, "QUIT\r\n");
+    Result.Ok(accepted)
+}

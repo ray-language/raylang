@@ -4019,7 +4019,7 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | Paso | Qué | Hallazgos |
 |---|---|---|
 | **M355** | `connect` no bloqueante + plazo de conexión en el cliente HTTP | L19, L5 (y la mitad de L14) |
-| **M356** | Lote de correcciones de front-end y nativo | L2, L3, L9, L12, L16, L17, R34. (El cuelgue de la VM tras un ICE no se reprodujo en M356 —directo, con `spawn`, a un hilo, bajo `ray test`, con tubería—: la guarda de M211 ya termina el proceso; se reabre si aparece un programa que lo provoque) |
+| **M356** | Lote de correcciones de front-end y nativo | L2, L3, L9, L12, L16, L17, R34. (El cuelgue tras un ICE se reprodujo por fin en M359: solo con stderr en una tubería YA CERRADA —`2>&1 \| head -2`—; corregido en `with_big_stack_or_ice`) |
 | **M357** | Scheduler y `scope` de la VM | L8, L14 (resto), L15, L1 |
 | **M358** | Reactor por worker (prototipo medido antes de comprometer el diseño; no puede regresar los 188k) | la capa 1 de arriba |
 | **M359** | Paquetes | L11 (métricas con índice/handle de serie), L13 (`trace`/`hex`), L6 (`serve_options_on` + canal de parada), L7 (opción `quiet`), L4 |
@@ -4030,16 +4030,16 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | L1 | E/D | `SIGHUP` mata el proceso; `signals()` no lo entrega | ✅ **M357**: `process.listen_signal(sig)` (opt-in) para `SIGHUP`, `SIGQUIT`, `sigusr1()`, `sigusr2()`; `signals()` a secas no cambia |
 | L2 | B | Un `const` `u64` se guarda como `int`: ICE en la VM y build nativo roto | ✅ **M356**: el tipo declarado es el contexto del valor y la bajada de literales sin signo cubre las constantes |
 | L3 | E | `u8`/`u32`/`u64` no implementan `Eq`: `assert_eq` no sirve con ellos | ✅ **M356**: `Eq`/`Show`/`Ord`/`Hash` en el prelude; derivables en structs con campos sin signo |
-| L4 | D | `toml.parse_toml` dice que no soporta arrays de tablas, y sí los soporta | ⏳ M359 |
+| L4 | D | `toml.parse_toml` dice que no soporta arrays de tablas, y sí los soporta | ✅ **M359**: doc corregida; una tabla inline da un error que orienta |
 | L5 | E/D | El cliente HTTP de `net` no tenía plazo de conexión: un host sin ruta colgaba 75 s | ✅ **M355**: el plazo de la petición acota el dial; `connect_timeout(base_url, ms)`; `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) para `connect` y el pool (`net` 0.10.0) |
-| L6 | E | No hay `serve_shutdown` sobre un listener ya abierto | ⏳ M359 |
-| L7 | E | `net/webserver` escribe en stdout sin opción de silenciarlo | ⏳ M359 |
+| L6 | E | No hay `serve_shutdown` sobre un listener ya abierto | ✅ **M359**: `serve_options_on(listener, opts, make_handler)` + `options().with_stop(ch)` |
+| L7 | E | `net/webserver` escribe en stdout sin opción de silenciarlo | ✅ **M359**: `options().quiet()` (la línea por defecto se conserva para quien no lo pide) |
 | L8 | B | VM: varias fibras en `select_timeout` a la vez pierden timeouts | ✅ **M357**: el plazo y su marca viven en la fibra, no en un mapa por handle del arreglo |
 | L9 | B | Nativo: una local llamada `drop` rompe el build si la función tiene una closure | ✅ **M356**: `std::mem::drop` calificado |
 | L10 | D | Los límites del subconjunto nativo con closures solo se ven al compilar | ⏳ M360 |
-| L11 | E | `net/metrics`: cada actualización cuesta O(series) con render de etiquetas | ⏳ M359 |
+| L11 | E | `net/metrics`: cada actualización cuesta O(series) con render de etiquetas | ✅ **M359**: índices por `Map` + familia de histograma precalculada (113 → 7 µs) y handle `series(...)` O(1) |
 | L12 | B | Nativo: el parámetro de una closure se toma por captura si la función declara después una local homónima | ✅ **M356**: las capturas excluyen los parámetros propios y lo que aún no está en ámbito |
-| L13 | E | `net/trace` y `std/hex` son caros en la VM (~180 µs por `traceparent`) | ⏳ M359 |
+| L13 | E | `net/trace` y `std/hex` son caros en la VM (~180 µs por `traceparent`) | ✅ **M359**: `random_hex` por octetos y `hex_encode` en una conversión (medido sin perfilador: 8,6 → 5,0 µs y 4,7 → 2,4 µs; los 180 µs del hallazgo llevaban el sesgo del perfilador, L18) |
 | L14 | B | VM: una fibra bloqueada en `tcp_connect` retenía la salida del proceso | ✅ **M355** para el `connect` (ya no bloquea: aparca); revisado en M357: no queda otra llamada de red que retenga la salida |
 | L15 | B/D | Un `scope` que sale por error espera a sus procesos hijos en vez de matarlos | ✅ **M357**: un cuerpo que devuelve `Result.Err` mata y cosecha los procesos antes de unir las fibras (VM y nativo) |
 | L16 | B | Nativo: `let r = scope(fn() -> Result<T, E> { … })` no infiere el tipo | ✅ **M356**: el cierre de `scope` declara su retorno |

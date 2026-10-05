@@ -296,6 +296,9 @@ fn parse_value(t: TS) -> Result<TomlValue, string> {
         }
     } else if (c == '[') {
         parse_array(t)
+    } else if (c == '{') {
+        // M359 (raylb L4): antes `a = { x = 1 }` daba «invalid int: {», que no orienta.
+        Result.Err("inline tables are not supported; write a [table] header instead")
     } else {
         clasificar_escalar(read_scalar(t))
     }
@@ -360,7 +363,9 @@ fn clave_repetida(entries: [TomlEntry], key: string) -> bool {
 /// Supports `#` comments, `[a.b]` tables, bare keys, and string (basic with full escapes, or
 /// literal `'...'`) / int / float / bool / array values. Strict where it counts: duplicate
 /// keys, an empty table header, or a second entry on the same line are errors.
-/// Not supported: inline tables, arrays of tables, dates, multiline strings.
+/// Arrays of tables `[[path]]` are flattened as `path.0.key`, `path.1.key`, … (count them with
+/// `toml_array_len`). Not supported: inline tables `{ … }` (a clear error), dates, multiline
+/// strings.
 pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: src.chars(), pos: 0 };
     var entries: [TomlEntry] = [];

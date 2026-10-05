@@ -34,6 +34,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **`process.listen_signal(sig)`**: `SIGHUP`, `SIGQUIT`, `SIGUSR1` y `SIGUSR2` llegan por `signals()`
   cuando el programa lo pide (`process.SIGHUP`, `process.sigusr1()`…) — recargar la configuración
   de un daemon sin reiniciarlo (M357, raylb L1).
+- **`net/metrics`**: una búsqueda por actualización (antes recorría las series y renderizaba las
+  etiquetas por bucket: 113 µs → 7 µs por `observe_l` + `inc`), y el handle `series(reg, name,
+  labels)` con `inc`/`add`/`set`/`observe` en O(1) (M359, raylb L11).
+- **`net/webserver`**: `serve_options_on(listener, opts, make_handler)` (listener propio + límites +
+  apagado + TLS), `options().with_stop(ch)` (apagado por un canal) y `.quiet()` (nada en stdout)
+  (M359, raylb L6/L7).
+- **`net/trace`** genera los ids con un octeto aleatorio por cada dos dígitos y **`hex.hex_encode`**
+  construye el string de una vez (`new_trace` 8,6 → 5,0 µs; `hex_encode` 4,7 → 2,4 µs) (M359, raylb L13).
+- **`std/toml`**: la doc ya dice que los arreglos de tablas `[[a]]` se aplanan como `a.0.x`, y una
+  tabla inline da «inline tables are not supported» en vez de «invalid int: {» (M359, raylb L4).
+- **Intérprete**: `Map.new()` como expresión de cola de una función era un error interno (M359).
+- **El proceso ya no se cuelga tras un error interno con stderr cerrado** (`ray run x 2>&1 | head`):
+  el aviso se escribe sin poder fallar y el proceso sale con 101 (M359, raylb).
 
 ## 1.27.36 — 2026-10-05
 

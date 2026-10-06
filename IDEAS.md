@@ -4024,6 +4024,7 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | **M358** | Reactor por worker — ✅ **prototipo medido** (PERFORMANCE.md §10): `RAYLANG_REACTOR=local`, +5–8 % con 2–4 workers, ±0 con 11, p99 −15–60 %; el muestreo atribuye ~15 % de la CPU por petición a `peer_addr`/`Date`/mutex del registro (→ M361). Decisión del default pendiente (cifras delante) | la capa 1 de arriba |
 | **M359** | Paquetes | L11 (métricas con índice/handle de serie), L13 (`trace`/`hex`), L6 (`serve_options_on` + canal de parada), L7 (opción `quiet`), L4 |
 | **M360** | Documentación y tooling | L10, L18, R35, R36 |
+| **M361** | Lo que el servidor hacía por petición sin necesidad (`peer_addr`, `Date`, mutex del registro, `getenv`) — ✅ hecho: +9–15 % servidor, +8 % proxy (PERFORMANCE.md §11) | la capa 1, segunda mitad |
 
 | # | Sev. | Hallazgo | Estado |
 |---|---|---|---|

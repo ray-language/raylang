@@ -60,6 +60,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Nativo (prototipo)**: `RAYLANG_REACTOR=local` da a cada worker del scheduler su propio poller
   y temporizadores (un aparcado de E/S ya no cruza de hilo); medido +5–8 % de req/s con 2–4
   workers y p99 más corta (PERFORMANCE.md §10). El default no cambia (M358, raylb).
+- **`net/webserver` más barato por petición**: la dirección remota se pide una vez por conexión (no
+  por petición keep-alive), la cabecera `Date` se formatea a lo sumo una vez por segundo y la
+  variable del live-reload se lee al abrir la conexión; el runtime nativo ya no toma el mutex del
+  registro antes de cada aparcado de lectura. Servidor pelado +9–15 % de req/s, proxy +8 %
+  (PERFORMANCE.md §11) (M361, raylb).
 
 ## 1.27.36 — 2026-10-05
 

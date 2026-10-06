@@ -16773,3 +16773,44 @@ provocar un error de tipos para descubrirlos.
 
 Y R6: la doc de fibras estaba en `Conn`, no en `connect`, que es donde se mira; una frase en
 `connect` remite a ella. Versiones: `net` 0.9.0, `db` 0.5.1.
+
+---
+
+## 341. M355 — El `connect` aparca la fibra, y el cliente HTTP le pone plazo (oct 2026)
+
+Primer paso del plan de raylb (IDEAS §103: L19, L5, L14). El síntoma: con un backend apagado
+—un host que descarta los SYN— el balanceador entero se congelaba, temporizadores y health checks
+incluidos, hasta 75 s. La causa no era el plazo: era **dónde** se esperaba.
+
+**El `connect` sin plazo bloqueaba al hilo worker.** `tcp_connect_timeout` ya aparcaba la fibra
+desde M306 (pool bloqueante en nativo, hilo auxiliar + waker en la VM), pero el `tcp_connect`
+pelado —y con él `tls_connect` y todo el cliente HTTP— seguía siendo una llamada bloqueante en el
+worker. Con N diales colgados y N ≥ hilos, no quedaba nadie para correr nada. Ahora los dos
+caminos son el mismo: en nativo `__ray_tcp_connect` va por `run_blocking`; en la VM `TcpConnect`
+reusa `tcp_connect_begin(host, port, 0)` y aparca sobre el waker (la rama `ms <= 0` de
+`TcpConnectTimeout`, que era otro connect bloqueante, desaparece). Un efecto lateral buscado: la
+VM ya no retiene la salida del proceso por un dial en vuelo (L14) — el hilo auxiliar no es una
+fibra corriendo.
+
+**`tls_connect` sigue el mismo camino.** El handshake de rustls ya era perezoso (ocurre en la
+primera lectura/escritura, que ceden), así que lo único bloqueante del dial TLS era su TCP. En
+nativo `__tls_connect` (y `connect_h2`, cuyo handshake sí es síncrono) van por el pool bloqueante.
+En la VM el opcode valida el nombre del servidor, arranca el mismo dial aparcado y, al despertar,
+sube la sesión sobre ese socket (`tls_upgrade`). La primera versión componía `tcp_connect` +
+`tls_upgrade` en `std/net` y un test de paridad la tumbó: un nombre inválido debe fallar con
+«invalid server name for TLS» ANTES de tocar la red, no con un error de resolución. La validación
+va primero (`tls_check_server_name`) y el orden de errores es el de siempre en los tres motores.
+
+**El cliente HTTP no tenía plazo de conexión (L5).** `timeout_millis` acotaba la lectura, no el
+dial. Decisión: **el plazo que el usuario ya dio acota también el dial** (`request_bytes`,
+`stream_with`, el pool), y donde no hay plazo (`connect`, o `timeout_millis <= 0`) rige
+`DEFAULT_CONNECT_TIMEOUT_MS` = 10 s. Un cliente HTTP no debería esperar el plazo del SO salvo que
+se pida: `connect_timeout(base_url, 0)` lo recupera. `Conn` recuerda su plazo para la reconexión
+perezosa. Cambio de comportamiento aceptado: un dial que antes tardaba entre 10 y 75 s en
+establecerse ahora falla con «could not connect: connect timeout»; se considera una corrección.
+`net` 0.10.0.
+
+Lo que NO se hizo: el connect no bloqueante «de verdad» (`EINPROGRESS` + `park_writable` +
+`SO_ERROR`) sobre el reactor. Ahorraría un hilo por dial, pero la resolución de nombres seguiría
+necesitando el pool bloqueante, y el reactor se rediseña en M358: se decide allí, con medidas.
+

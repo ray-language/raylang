@@ -450,13 +450,40 @@ pub fn body_text(r: Response) -> Result<string, string> {
     from_utf8(r.body)
 }
 
+/// The connect timeout a client uses when the caller gives none: 10 s. A host that drops packets
+/// (powered off, firewalled) otherwise holds the dial for the OS default — 75 s on macOS, over two
+/// minutes on Linux.
+pub const DEFAULT_CONNECT_TIMEOUT_MS: int = 10000;
+
 // Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
-fn dial(u: Url) -> Result<int, string> {
-    if (u.tls) {
-        net.tls_connect(u.host, u.port)
-    } else {
-        net.tcp_connect(u.host, u.port)
+// M355 (raylb L5): con plazo de CONEXIÓN — `ms > 0` acota el dial (`tcp_connect_timeout`, que aparca
+// la fibra; para https, el TLS se sube después sobre ese socket); `ms <= 0` = el plazo del SO.
+fn dial(u: Url, ms: int) -> Result<int, string> {
+    if (ms <= 0) {
+        return if (u.tls) {
+            net.tls_connect(u.host, u.port)
+        } else {
+            net.tcp_connect(u.host, u.port)
+        };
     }
+    let h = net.tcp_connect_timeout(u.host, u.port, ms)?;
+    if (u.tls) {
+        match (net.tls_upgrade(h, u.host)) {
+            Result.Ok(t) => Result.Ok(t),
+            Result.Err(e) => {
+                close(h);
+                Result.Err(e)
+            },
+        }
+    } else {
+        Result.Ok(h)
+    }
+}
+
+// El plazo de conexión de una petición con `timeout_millis` de lectura: el mismo, y sin plazo de
+// lectura (`<= 0`), el de por defecto — un dial nunca espera el del SO salvo que se pida.
+fn connect_ms(timeout_millis: int) -> int {
+    if (timeout_millis > 0) { timeout_millis } else { DEFAULT_CONNECT_TIMEOUT_MS }
 }
 
 /// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
@@ -527,7 +554,7 @@ pub fn request_bytes(
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u)) {
+            match (dial(u, connect_ms(timeout_millis))) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     let deadline: int = if (timeout_millis > 0) {
@@ -644,18 +671,35 @@ pub struct Conn {
     port: int,
     tls: bool,
     open: bool,
+    connect_timeout_ms: int,
 }
 
 /// Opens a persistent connection to the server of `base_url` (scheme + host[:port]; any
-/// path in the URL is ignored — each request carries its own).
+/// path in the URL is ignored — each request carries its own). The dial is bounded by
+/// `DEFAULT_CONNECT_TIMEOUT_MS`; use `connect_timeout` to choose the deadline.
 pub fn connect(base_url: string) -> Result<Conn, string> {
+    connect_timeout(base_url, DEFAULT_CONNECT_TIMEOUT_MS)
+}
+
+/// Like `connect`, with an explicit connect deadline in ms (`<= 0` = the OS default, which can
+/// be over a minute against a host that drops packets). A dial that outlives it fails with
+/// "could not connect: connect timeout". The Conn remembers the deadline for its lazy reconnects.
+pub fn connect_timeout(base_url: string, ms: int) -> Result<Conn, string> {
     match (parse_url(base_url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u)) {
+            match (dial(u, ms)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => Result.Ok(
-                    Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }
+                    Conn {
+                        h: h,
+                        buf: b"",
+                        host: u.host,
+                        port: u.port,
+                        tls: u.tls,
+                        open: true,
+                        connect_timeout_ms: ms
+                    }
                 ),
             }
         },
@@ -674,7 +718,7 @@ pub fn conn_close(c: Conn) {
 
 // Reabre el socket de una Conn cerrada (reconexión perezosa).
 fn conn_reopen(c: Conn) -> Result<int, string> {
-    match (dial(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
+    match (dial(Url { host: c.host, port: c.port, path: "/", tls: c.tls }, c.connect_timeout_ms)) {
         Result.Err(e) => Result.Err("could not connect: " + e),
         Result.Ok(h) => {
             c.h = h;
@@ -1006,7 +1050,7 @@ pub fn stream_with(
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u)) {
+            match (dial(u, connect_ms(idle_timeout_ms))) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     // Copia de las cabeceras del llamador + identity (que el servidor no comprima):
@@ -1397,7 +1441,7 @@ pub fn pool_request_bytes(
                 c
             } else {
                 conn_close(c);
-                match (connect(base)) {
+                match (connect_timeout(base, connect_ms(timeout_millis))) {
                     Result.Ok(c2) => c2,
                     Result.Err(e) => {
                         pool.release_empty(p.slots);
@@ -1406,7 +1450,7 @@ pub fn pool_request_bytes(
                 }
             }
         },
-        pool.Slot.Empty => match (connect(base)) {
+        pool.Slot.Empty => match (connect_timeout(base, connect_ms(timeout_millis))) {
             Result.Ok(c2) => c2,
             Result.Err(e) => {
                 pool.release_empty(p.slots);

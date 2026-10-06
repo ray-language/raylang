@@ -3986,3 +3986,63 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R31 | E | No se podían generar claves RSA | ✅ **M348** (`rsa_generate`) |
 | R32 | B | `std/template` aceptaba `{% if a == "b" %}`/`{% if not x %}` y los daba por falsos en silencio | ✅ **M354**: gramática cerrada de condiciones (`x`, `not x`, `a == b`, `a != b`, rutas y literales); lo demás es error de `compile` |
 | R33 | B | `fs.make_temp_dir` devolvía un directorio ya existente (pid reciclado) con su contenido | ✅ **M354**: creación exclusiva (`create_dir`) con sal y reintento, en VM y nativo |
+| R34 | D | `bytes` no se recorre con `for`; `string` no tiene `strip_prefix`/`strip_suffix` | ⏳ **M356** (lote de correcciones, §103) |
+| R35 | D | La sintaxis de las dependencias por ruta (`net = "path:…"`) no está documentada; la tabla inline `{ path = … }` da «the value must be in double quotes» | ⏳ **M360** (§103) |
+| R36 | D | Un paquete-librería sin `entry` no se puede probar | ⏳ **M360** (§103) |
+| R37 | E | `net` no cubre el lado cliente de OpenID Connect | Paquete aparte, después de M360 |
+
+---
+
+## 103. Hallazgos de raylb — un balanceador de carga en raylang (oct 2026)
+
+raylb (`ray-apps/raylb`, `RAYLANG-FINDINGS.md`) es un proxy inverso L7 con health checks, métricas
+y recarga en caliente. Sus 19 hallazgos (L1–L19) se revisaron contra 1.27.36 y los **B** se
+reprodujeron uno a uno. Llegó con una pregunta de rendimiento: 40,7k req/s frente a nginx 132k,
+HAProxy 138k y Envoy 79k, en Docker con 2 núcleos.
+
+**La lectura de los números.** No son comparables con los ~188k de `benchmarks/web` (servidor
+puro, 11 núcleos, generador remoto): raylb es un proxy (dos conexiones y dos parseos por petición)
+en 2 núcleos. Lo que sí miden es real y tiene tres capas:
+
+1. **La pila de red de raylang rinde ≈ la mitad que nginx/HAProxy en un proxy.** El proxy nulo de
+   raylb (sin lógica) da 72,7k–96,8k frente a 138k. Causa: UN hilo reactor para todos los workers;
+   cada aparcado de E/S cuesta un mutex de buzón, una escritura al pipe de despertar, un registro
+   en el poller y una señal de condvar — unas 4 syscalls y 2 cambios de hilo que un bucle de
+   eventos por hilo no paga. Es de raylang: **M358** (reactor por worker), con prototipo medido.
+2. **El `connect` bloqueaba al worker** (L19): es de raylang y era un bug. **M355**.
+3. **El viaje de ida y vuelta a un actor por petición** (56 % del suelo de raylb) es diseño de la
+   app: el estado compartido entre fibras pasa por un canal. Queda como discusión de lenguaje
+   (¿atómicos compartidos?) para después de M358, no como bug.
+
+Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis pasos, en este orden:
+
+| Paso | Qué | Hallazgos |
+|---|---|---|
+| **M355** | `connect` no bloqueante + plazo de conexión en el cliente HTTP | L19, L5 (y la mitad de L14) |
+| **M356** | Lote de correcciones de front-end y nativo | L2, L3, L9, L12, L16, L17, R34, y la VM que se cuelga tras un ICE en un hilo worker |
+| **M357** | Scheduler y `scope` de la VM | L8, L14 (resto), L15, L1 |
+| **M358** | Reactor por worker (prototipo medido antes de comprometer el diseño; no puede regresar los 188k) | la capa 1 de arriba |
+| **M359** | Paquetes | L11 (métricas con índice/handle de serie), L13 (`trace`/`hex`), L6 (`serve_options_on` + canal de parada), L7 (opción `quiet`), L4 |
+| **M360** | Documentación y tooling | L10, L18, R35, R36 |
+
+| # | Sev. | Hallazgo | Estado |
+|---|---|---|---|
+| L1 | E/D | `SIGHUP` mata el proceso; `signals()` no lo entrega | ⏳ M357 |
+| L2 | B | Un `const` `u64` se guarda como `int`: ICE en la VM y build nativo roto | ⏳ M356 |
+| L3 | E | `u8`/`u32`/`u64` no implementan `Eq`: `assert_eq` no sirve con ellos | ⏳ M356 |
+| L4 | D | `toml.parse_toml` dice que no soporta arrays de tablas, y sí los soporta | ⏳ M359 |
+| L5 | E/D | El cliente HTTP de `net` no tenía plazo de conexión: un host sin ruta colgaba 75 s | ✅ **M355**: el plazo de la petición acota el dial; `connect_timeout(base_url, ms)`; `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) para `connect` y el pool (`net` 0.10.0) |
+| L6 | E | No hay `serve_shutdown` sobre un listener ya abierto | ⏳ M359 |
+| L7 | E | `net/webserver` escribe en stdout sin opción de silenciarlo | ⏳ M359 |
+| L8 | B | VM: varias fibras en `select_timeout` a la vez pierden timeouts | ⏳ M357 |
+| L9 | B | Nativo: una local llamada `drop` rompe el build si la función tiene una closure | ⏳ M356 |
+| L10 | D | Los límites del subconjunto nativo con closures solo se ven al compilar | ⏳ M360 |
+| L11 | E | `net/metrics`: cada actualización cuesta O(series) con render de etiquetas | ⏳ M359 |
+| L12 | B | Nativo: el parámetro de una closure se toma por captura si la función declara después una local homónima | ⏳ M356 |
+| L13 | E | `net/trace` y `std/hex` son caros en la VM (~180 µs por `traceparent`) | ⏳ M359 |
+| L14 | B | VM: una fibra bloqueada en `tcp_connect` retenía la salida del proceso | ✅ **M355** para el `connect` (ya no bloquea: aparca); el caso general de la salida con trabajo bloqueante se revisa en M357 |
+| L15 | B/D | Un `scope` que sale por error espera a sus procesos hijos en vez de matarlos | ⏳ M357 |
+| L16 | B | Nativo: `let r = scope(fn() -> Result<T, E> { … })` no infiere el tipo | ⏳ M356 |
+| L17 | B | Nativo: lo que captura la closure de un `scope` se mueve y no se puede usar después | ⏳ M356 |
+| L18 | D | El perfilador de la VM infla las funciones con muchas llamadas internas | ⏳ M360 |
+| L19 | B | Nativo: un `connect` a un host que descarta paquetes bloqueaba el hilo worker, no la fibra | ✅ **M355**: `tcp_connect`/`tls_connect` corren en el pool bloqueante (nativo) o en un hilo auxiliar con waker (VM) y la fibra aparca |

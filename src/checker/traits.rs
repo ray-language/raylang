@@ -75,6 +75,8 @@ pub(super) fn type_key_of(ty: &Type) -> Option<String> {
         Type::Bool => "bool".into(),
         Type::String => "string".into(),
         Type::Char => "char".into(),
+        // M356 (raylb L3): los enteros sin signo son objetivo de impl (`impl Eq for u64`), como `int`.
+        Type::UInt(w) => format!("u{w}"),
         Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
         // M48.4: constructores incorporados como objetivo de impl (`impl Len for [T]`/`Map<K,V>`/`bytes`).
         // La clave va por CONSTRUCTOR (como `Caja<int>`→"Caja"): `[int]`/`[bool]` comparten "[]".
@@ -246,7 +248,8 @@ pub(super) fn validate_derive(a: &Annotation, name: &str, type_params: &[String]
 /// `a` aporta la posición del `@derive` para ubicar el error.
 pub(super) fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, TypeError> {
     match ty {
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char => Ok(format!("to_string({expr})")),
+        // M356 (raylb L3): también los enteros sin signo (`to_string` ya los imprime).
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::UInt(_) => Ok(format!("to_string({expr})")),
         // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.show()")),
@@ -308,6 +311,8 @@ pub(super) fn render_to_json(a: &Annotation, expr: &str, ty: &Type) -> Result<St
     match ty {
         Type::Int | Type::Float | Type::Bool | Type::String => Ok(format!("{expr}.to_json()")),
         Type::Char => Ok(format!("to_string({expr}).to_json()")),
+        // M356: un entero sin signo es su número decimal (JSON no distingue anchos).
+        Type::UInt(_) => Ok(format!("to_string({expr})")),
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.to_json()")),
         other => Err(TypeError {
             msg: format!("cannot derive ToJson for a field of type {} (for now primitives, struct and enum)", other),
@@ -987,6 +992,11 @@ pub(super) fn inline_forwarders_expr(expr: &mut Expr, fwd: &HashMap<String, Stri
 /// del cuerpo, y los tres motores lo ejecutan como un `for` corriente sobre el arreglo.
 pub(super) const FOR_TUPLE_ARRAY: &str = "#for-tuple-array";
 
+/// M356 (rayauth R34): marca de un `for b in <bytes>`. Se reescribe a
+/// `{ let __fb = bs; for __fi in 0..__len(__fb) { let b = __fb[__fi]; … } }` — el iterable se evalúa
+/// una vez y cada octeto es un `int`, como al indexar.
+pub(super) const FOR_BYTES: &str = "#for-bytes";
+
 pub(super) fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usize), String>) {
     if sites.is_empty() {
         return;
@@ -999,6 +1009,9 @@ pub(super) fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usi
 pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, usize), String>) {
     for stmt in &mut block.statements {
         let pos = (stmt.line, stmt.col);
+        if sites.get(&pos).is_some_and(|m| m == FOR_BYTES) && matches!(&stmt.kind, StmtKind::For { iter: ForIter::In(_), .. }) {
+            lower_for_bytes(stmt);
+        }
         match &mut stmt.kind {
             StmtKind::For { pat, iter, body, .. } => {
                 match (sites.get(&pos), &*iter) {
@@ -1040,6 +1053,48 @@ pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, u
     if let Some(t) = &mut block.tail {
         lower_for_iters_expr(t, sites);
     }
+}
+
+/// M356: reescribe `for b in bs { … }` (sobre `bytes`) al bloque con índice de [`FOR_BYTES`]. La
+/// sentencia pasa a ser un bloque-expresión; el `for` de rango de dentro conserva la etiqueta.
+fn lower_for_bytes(stmt: &mut Stmt) {
+    let (line, col) = (stmt.line, stmt.col);
+    let at = |kind: ExprKind| Expr { kind, line, col };
+    let old = std::mem::replace(&mut stmt.kind, StmtKind::Break { label: None });
+    let StmtKind::For { pat: ForPat::Single(name), iter: ForIter::In(src), mut body, label } = old else {
+        crate::ice!("FOR_BYTES marks a single-variable `for … in`");
+    };
+    let buf = format!("__fb#{line}_{col}");
+    let idx = format!("__fi#{line}_{col}");
+    body.statements.insert(0, Stmt {
+        kind: StmtKind::Let {
+            name,
+            ty: Some(Type::Int),
+            value: at(ExprKind::Index {
+                array: Box::new(at(ExprKind::Ident(buf.clone()))),
+                index: Box::new(at(ExprKind::Ident(idx.clone()))),
+            }),
+            mutable: false,
+        },
+        line,
+        col,
+    });
+    let len = at(ExprKind::Call {
+        callee: Box::new(at(ExprKind::Ident("__len".to_string()))),
+        args: vec![at(ExprKind::Ident(buf.clone()))],
+    });
+    let range_for = Stmt {
+        kind: StmtKind::For {
+            pat: ForPat::Single(idx),
+            iter: ForIter::Range { start: at(ExprKind::Int(0, crate::token::Radix::DEC)), end: len },
+            body,
+            label,
+        },
+        line,
+        col,
+    };
+    let bind = Stmt { kind: StmtKind::Let { name: buf, ty: Some(Type::Bytes), value: src, mutable: false }, line, col };
+    stmt.kind = StmtKind::Expr(at(ExprKind::Block(Block { statements: vec![bind, range_for], tail: None, line, col, end_line: line })));
 }
 
 pub(super) fn lower_for_iters_expr(expr: &mut Expr, sites: &HashMap<(usize, usize), String>) {

@@ -79,8 +79,8 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
     if matches!(method, "eq" | "show" | "less") {
         return matches!(
             key,
-            "bytes" | "uint" | "u8" | "u32" | "u64" | "unit" | "[]" | "Map" | "Channel" | "Task"
-        );
+            "bytes" | "uint" | "unit" | "[]" | "Map" | "Channel" | "Task"
+        ); // M356: `u8`/`u32`/`u64` ya tienen impls en el prelude y se emiten, como `int`.
     }
     let builtin_key = matches!(
         key,

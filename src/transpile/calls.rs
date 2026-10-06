@@ -2207,7 +2207,17 @@ impl Transpiler {
                     }
                 }
                 let runtime = match method { "spawn" => "__ray_spawn", "spawn_isolated" => "__ray_spawn_isolated", _ => "__ray_scope" };
-                write!(out, "{}(move || ", runtime).unwrap();
+                if is_spawn {
+                    write!(out, "{}(move || ", runtime).unwrap();
+                } else if matches!(&eff[0].kind, ExprKind::Func(_)) {
+                    // M356 (raylb L16/L17): `scope` corre su cuerpo EN LÍNEA, en el hilo actual: el
+                    // cierre no necesita `move` (movía las capturas y el código de después ya no podía
+                    // usarlas, E0382) y declara su retorno (un `?` dentro dejaba el tipo de error sin
+                    // inferir, E0282, salvo que el `let` de fuera lo anotara).
+                    write!(out, "{}(|| -> {} ", runtime, rust_ty(&ret, &self.enums, &self.tparams)?).unwrap();
+                } else {
+                    write!(out, "{}(|| ", runtime).unwrap();
+                }
                 if !captures.is_empty() {
                     out.push_str("{ ");
                     for (i, (name, ty, is_cell)) in captures.iter().enumerate() {

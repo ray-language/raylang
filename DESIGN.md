@@ -16814,3 +16814,49 @@ Lo que NO se hizo: el connect no bloqueante «de verdad» (`EINPROGRESS` + `park
 `SO_ERROR`) sobre el reactor. Ahorraría un hilo por dial, pero la resolución de nombres seguiría
 necesitando el pool bloqueante, y el reactor se rediseña en M358: se decide allí, con medidas.
 
+---
+
+## 342. M356 — El lote de correcciones de raylb: siete cosas que el checker y el nativo daban por buenas (oct 2026)
+
+Segundo paso del plan de raylb (IDEAS §103). Ninguna es grande; casi todas son la misma lección:
+un mecanismo que existía para el caso común y no llegaba a un rincón.
+
+**Un `const` sin signo era un `int` en el runtime (L2).** El literal sin signo viaja del checker a
+los motores por una tabla de sitios (`uint_literal_sites`) que el lowering convierte en un `as uN`.
+Dos huecos: la constante se verificaba con `check_expr` —sin el tipo declarado como contexto, así
+que `const A: u64 = 5;` era error de tipos— y `lower_uint_literals` recorría las funciones pero no
+`program.consts`, cuya expresión es la que cada uso inyecta. Un literal amplio pasaba el checker
+como `u64` y llegaba pelado: negativo al imprimir, ICE en la VM al operarlo con un `u64` de verdad,
+E0308 en nativo. Ahora la constante se verifica como un `let` tipado y su valor se baja como el
+cuerpo de una función.
+
+**Los enteros sin signo no eran objetivo de `impl` (L3).** `Eq`/`Show`/`Ord`/`Hash` para `int` son
+impls corrientes del prelude; para `uN` no existían y `ensure_impl_target`/`type_key_of` no los
+admitían. Se añaden los doce impls, la clave `u{w}`, el derive (`Show`/`ToJson` de un campo sin
+signo) y el nativo deja de saltarse `uN#eq`/`show`/`less` (los saltaba porque no existían). El
+`hash` de `u64` reinterpreta los 64 bits: un `as int` directo atraparía por encima de 2^63.
+
+**`for b in bs` (R34).** Azúcar puro en el checker, como el `for (a, b)` de M345: el sitio se marca
+y el lowering lo reescribe a `{ let __fb = bs; for __fi in 0..__len(__fb) { let b = __fb[__fi]; … } }`.
+El iterable se evalúa una vez, la etiqueta se queda en el `for` de dentro (`break`/`continue`
+etiquetados funcionan) y los tres motores no cambian. El elemento es `int`, igual que `b[i]`: un
+`u8` obligaría a convertir en cada comparación con un literal.
+
+**`strip_prefix`/`strip_suffix` devuelven `Option<string>` (R34).** La alternativa era devolver el
+string tal cual cuando no hay prefijo (el `TrimPrefix` de Go). Se eligió `Option` porque el caso de
+parser —`"Bearer "`, `"sha256="`— necesita saber si estaba, y quien solo quiere quitarlo escribe
+`.unwrap_or(s)`. Son funciones del prelude en raylang, sin builtin nuevo.
+
+**Los cuatro del nativo.** (L9) El guard de profundidad se soltaba con `drop(_f)` sin calificar y
+una local `drop` lo tapaba: `std::mem::drop`. (L12) `cells` —las `var` capturadas por alguna
+closure— va por nombre en toda la función, así que el parámetro `i` de una closure pasaba por
+captura de una `var i` declarada más abajo, en otro ámbito, y se emitía un `let i = i.clone();`
+sobre un nombre que aún no existe: las capturas excluyen ahora los parámetros propios y lo que no
+está en ámbito. (L16, L17) El cierre de `scope` se emitía `move ||` sin tipo de retorno, copiando
+la forma de `spawn`; pero `scope` corre su cuerpo en línea, en el mismo hilo: sin `move` las
+capturas siguen vivas después, y con `-> T` un `?` dentro ya tiene su tipo de error.
+
+**Lo que no se arregló.** El plan anotaba «la VM se cuelga tras un ICE en un hilo worker». No se
+reprodujo en cinco variantes; el hook de M211 ya termina el proceso con 101 cuando el pánico no
+viene del worker principal. Queda sin cambio y documentado en IDEAS §103.
+

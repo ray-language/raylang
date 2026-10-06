@@ -125,7 +125,9 @@ impl Checker {
                 return Err(self.err(c.value.line, c.value.col,
                     format!("the value of constant '{}' must be a constant expression: a literal, arithmetic on literals and other constants, or an array/tuple of them", c.name)));
             }
-            let vt = self.check_expr(&c.value)?;
+            // M356 (raylb L2): el tipo declarado es el ESPERADO del valor, como en un `let` tipado —
+            // `const A: u64 = 5;` coerciona el literal (y lo registra como sitio uint).
+            let vt = self.check_expr_expected(&c.value, &declared)?;
             if vt != declared {
                 return Err(self.err(c.value.line, c.value.col, format!(
                     "constant '{}' is declared as {} but its value is {}", c.name, declared, vt)));
@@ -697,7 +699,7 @@ impl Checker {
     ///   de tipo del impl (cada uno un `Var` distinto), y cuya aridad casa con la del tipo.
     pub(super) fn ensure_impl_target(&self, target: &Type, type_params: &[String], line: usize, col: usize) -> Result<(), TypeError> {
         // Primitivos + bytes: solo como objetivo concreto (sin parámetros de tipo). M48.4 añade `bytes`.
-        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes) {
+        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_)) {
             if type_params.is_empty() {
                 return Ok(());
             }
@@ -949,6 +951,13 @@ impl Checker {
                                     .collect()
                             }
                             (Type::String, ForPat::Single(n)) => vec![(n.clone(), Type::Char)],
+                            // M356 (rayauth R34): `for b in bs` sobre `bytes` — cada octeto como `int`,
+                            // igual que `bs[i]`. Baja a un `for` de rango con índice (`lower_for_iters`,
+                            // sitio marcado con FOR_BYTES): los motores no cambian.
+                            (Type::Bytes, ForPat::Single(n)) => {
+                                self.for_iter_sites.insert((stmt.line, stmt.col), super::traits::FOR_BYTES.to_string());
+                                vec![(n.clone(), Type::Int)]
+                            }
                             (Type::Map(k, v), ForPat::Tuple(names)) => {
                                 if names.len() != 2 {
                                     return Err(self.err(stmt.line, stmt.col,
@@ -968,7 +977,7 @@ impl Checker {
                                     vec![(n.clone(), elem)]
                                 }
                                 None => return Err(self.err(stmt.line, stmt.col, format!(
-                                    "cannot iterate over {} (expected an array, string, Map or an Iterator)", other))),
+                                    "cannot iterate over {} (expected an array, string, bytes, Map or an Iterator)", other))),
                             },
                             // M40.2e: `for (a, b) in it` sobre un iterador cuyo elemento es una tupla
                             // (p. ej. `enumerate()` → `(int, T)`). Cada nombre liga una posición.
@@ -986,7 +995,7 @@ impl Checker {
                                         .collect()
                                 }
                                 None => return Err(self.err(stmt.line, stmt.col, format!(
-                                    "cannot iterate over {} (expected an array, string, Map or an Iterator)", other))),
+                                    "cannot iterate over {} (expected an array, string, bytes, Map or an Iterator)", other))),
                             },
                         }
                     }

@@ -1318,7 +1318,8 @@ fn transpiles_structured_concurrency() {
     );
     assert!(rust.contains("__RayTask<i64>"), "Task → __RayTask: {}", rust);
     assert!(rust.contains("__ray_spawn(move ||"), "spawn → __ray_spawn: {}", rust);
-    assert!(rust.contains("__ray_scope(move ||"), "scope → __ray_scope: {}", rust);
+    // M356 (raylb L16/L17): el cierre de `scope` corre en línea — sin `move` y con su retorno declarado.
+    assert!(rust.contains("__ray_scope(|| -> i64 "), "scope → __ray_scope: {}", rust);
     assert!(rust.contains(".join()"), "join(t) → .join(): {}", rust);
 }
 

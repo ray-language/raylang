@@ -758,6 +758,57 @@ impl Show for int {
     fn show(self) -> string { to_string(self) }
 }
 
+// M356 (raylb L3): los enteros sin signo implementan Eq/Show/Ord/Hash como `int` — `assert_eq`
+// sobre un `u64`, `@derive(Eq)` en un struct con un campo `u32`, `sort([u8])`, `Set<u64>`.
+impl Eq for u8 {
+    fn eq(self, other: u8) -> bool { self == other }
+}
+
+impl Eq for u32 {
+    fn eq(self, other: u32) -> bool { self == other }
+}
+
+impl Eq for u64 {
+    fn eq(self, other: u64) -> bool { self == other }
+}
+
+impl Show for u8 {
+    fn show(self) -> string { to_string(self) }
+}
+
+impl Show for u32 {
+    fn show(self) -> string { to_string(self) }
+}
+
+impl Show for u64 {
+    fn show(self) -> string { to_string(self) }
+}
+
+impl Ord for u8 {
+    fn less(self, other: u8) -> bool { self < other }
+}
+
+impl Ord for u32 {
+    fn less(self, other: u32) -> bool { self < other }
+}
+
+impl Ord for u64 {
+    fn less(self, other: u64) -> bool { self < other }
+}
+
+impl Hash for u8 {
+    fn hash(self) -> int { self as int }
+}
+
+impl Hash for u32 {
+    fn hash(self) -> int { self as int }
+}
+
+impl Hash for u64 {
+    // Los 64 bits reinterpretados (un `as int` directo atraparía por encima de 2^63).
+    fn hash(self) -> int { ((self >> 1) as int) ^ ((self & 1) as int) }
+}
+
 impl Show for float {
     fn show(self) -> string { to_string(self) }
 }
@@ -1410,6 +1461,30 @@ fn try_join<T>(t: Task<T>) -> Result<T, string> {
 fn env(name: string) -> Option<string> {
     let r = __env(name);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// M356 (rayauth R34): recorte de un prefijo/sufijo CONOCIDO. `Option` (no «el string tal cual»)
+// porque el caso de parser —`"Bearer "`, `"sha256="`— necesita saber si estaba; quien solo quiere
+// quitarlo escribe `.unwrap_or(s)`.
+/// If `s` starts with `prefix`, the rest of the string after it; otherwise `None`.
+/// `url.strip_prefix("https://")`, `auth.strip_prefix("Bearer ")`; to drop it only when present,
+/// `s.strip_prefix(p).unwrap_or(s)`.
+fn strip_prefix(s: string, prefix: string) -> Option<string> {
+    if (s.starts_with(prefix)) {
+        Option.Some(s.substring(prefix.len(), s.len()))
+    } else {
+        Option.None
+    }
+}
+
+/// If `s` ends with `suffix`, the string without it; otherwise `None`.
+/// `issuer.strip_suffix("/").unwrap_or(issuer)` drops one trailing slash.
+fn strip_suffix(s: string, suffix: string) -> Option<string> {
+    if (s.ends_with(suffix)) {
+        Option.Some(s.substring(0, s.len() - suffix.len()))
+    } else {
+        Option.None
+    }
 }
 
 // M11.7a: índice (de carácter) de la primera ocurrencia de `sub` en `s`; None si no aparece.

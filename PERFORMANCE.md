@@ -2020,3 +2020,62 @@ En Linux la condvar del hilo `main` costaba aún más que en macOS (futex + plan
 VM: 39 µs, peor que los 16 de ray-apps en Docker); como fibra, `main` paga lo que cualquier
 fibra. El tramo entre workers en esa VM (2,1–2,5 µs) dobla el de macOS: es el `sched_yield` del
 spin-then-park bajo un hipervisor, no algo de M329.
+
+## 10. M358 (oct 2026): reactor por worker — prototipo medido (raylb, IDEAS §103)
+
+Origen: raylb (un balanceador L7 en raylang) daba 40,7k req/s frente a nginx 132k y HAProxy 138k
+en Docker con 2 núcleos; su proxy nulo —servidor → pool keep-alive → respuesta— 72,7k. La
+hipótesis del análisis (IDEAS §103, capa 1): el hilo reactor ÚNICO del scheduler nativo. Cada
+aparcado de E/S pasaba por un buzón con mutex, un byte por la tubería de despertar, el registro en
+el poller y una condvar para devolver la fibra a su worker: ~4 syscalls y 2 cambios de hilo por
+E/S que un bucle de eventos por hilo no paga.
+
+**El prototipo** (`RAYLANG_REACTOR=local`, en `crates/ray-runtime/src/fibers.rs`): cada worker
+tiene su propio kqueue/epoll y sus temporizadores (`ReactorState`, compartido con el hilo reactor
+del modo `shared`); como la fibra está fijada a su worker, el aparcado es un `kevent` local y el
+despertar llega al hilo que la reanuda. Lo que cruza hilos (`spawn` a otro worker, el despertar
+de un canal, el pool bloqueante) entra por la cola del worker y, si el dueño duerme en su poller,
+le toca su tubería (Dekker sobre `pending`/`polling`). Equidad: sondeo con timeout 0 cada ~1 ms
+entre tareas, para que los plazos no esperen a que la cola se vacíe.
+
+**Medición** (macOS, M4 11 núcleos, 6 oct 2026; `oha -c 64`, 6 s, generador en la misma máquina;
+servidor = `benchmarks/web/plaintext` sobre `net/webserver`; proxy nulo = `serve_with` → `http.pool`
+→ ese servidor; binarios `--release`, mismo binario para ambos modos):
+
+| workers | modo | servidor | proxy nulo |
+|---|---|---|---|
+| 2 | shared | 142,2k (p99 0,70 ms) | 71,9k (p99 1,39 ms) |
+| 2 | **local** | **152,5k** (p99 0,59 ms) · **+7 %** | **77,6k** (p99 1,12 ms) · **+8 %** |
+| 4 | shared | 148,8k | 77,1k |
+| 4 | **local** | **156,0k** · +5 % | **79,5k** · +3 % |
+| 11 | shared | 155,5k (p99 1,30 ms) | 82,0k (p99 2,87 ms) |
+| 11 | local | 155,1k (p99 0,78 ms) · ±0 | 78,7k (p99 1,19 ms) · −4 % |
+| techo | hyper (tokio, todos los núcleos) | 181,4k (p99 0,52 ms) | — |
+
+Lectura: el reactor local ayuda donde los núcleos escasean (el caso de raylb en Docker) y
+recorta la cola de latencia (p99 −15 a −60 %), pero **no es la mitad que faltaba**: con 11
+núcleos no mueve el throughput y el generador local ya satura hacia los 180k de hyper. La
+hipótesis de los «4 syscalls por E/S» era cierta y su peso no.
+
+**Dónde se va el tiempo de un worker** (`sample` de 3 s sobre el servidor en modo local con 2
+workers; porcentaje del tiempo del worker):
+
+| qué | % | nota |
+|---|---|---|
+| `recvfrom` + `sendto` | 45 % | las syscalls de verdad; hyper las paga igual |
+| `kevent` | 10,5 % | inherente a un bucle de eventos |
+| **`peer_addr` por PETICIÓN** | **7,3 %** | `read_request_carry` lo pide en cada petición keep-alive: 2,9 % de `getpeername` + 4,4 % esperando el mutex del registro de handles |
+| mutex del registro en `__ray_handle_open` | 2,9 % | la comprobación «¿sigue abierto?» por lectura toma el mutex global |
+| `to_rfc1123` (cabecera `Date`) | 3,9 % | se formatea por respuesta; cambia una vez por segundo |
+| `yield_now` del spin ocioso | 5,3 % | CPU que no es throughput (el worker ocioso cede) |
+| `getenv` en `send_response_keep` | 0,7 % | una variable de entorno leída por respuesta |
+| asignación y copias (`mi_malloc`/`mi_free`/`memmove`/`Rc`) | ~7 % | |
+
+Lo que sí separa a raylang de hyper está ahí: unos **15 % de CPU por petición** en cosas que no
+necesitan hacerse por petición (`peer_addr` y `Date` por conexión o por segundo, la comprobación
+de handle sin mutex global) — más que lo que da el reactor local — y son cambios de paquete y de
+runtime sin riesgo de diseño. Propuesta (a decidir): (1) esos tres cambios ahora; (2) el reactor
+local como DEFAULT en unix una vez pase el CI completo en Linux, con `RAYLANG_REACTOR=shared` como
+retirada; (3) re-medir con el generador en otra máquina (Mac mini por Thunderbolt, como los 188k
+de `benchmarks/web`), que es la única medida que vale para el techo.
+

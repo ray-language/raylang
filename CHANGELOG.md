@@ -57,6 +57,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   restado por cada llamada hecha dentro de un marco) y lo dice en la cabecera; una función con
   muchas llamadas pequeñas ya no aparece inflada (M360, raylb L18).
 - **llms.txt** describe qué closures no cruzan a un binario nativo y cómo escribirlas (M360, raylb L10).
+- **Nativo (prototipo)**: `RAYLANG_REACTOR=local` da a cada worker del scheduler su propio poller
+  y temporizadores (un aparcado de E/S ya no cruza de hilo); medido +5–8 % de req/s con 2–4
+  workers y p99 más corta (PERFORMANCE.md §10). El default no cambia (M358, raylb).
 
 ## 1.27.36 — 2026-10-05
 

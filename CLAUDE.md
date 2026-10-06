@@ -101,9 +101,11 @@ de ejecución es bytecode + VM.
   - **Alcance del inglés**: aplica a `src/`, `selfhost/`, `packages/`,
     `benchmarks/`, `tools/` y `tests/` (integración) — incluidos los nombres de
     funciones de test dentro de `#[cfg(test)] mod tests` y los snippets raylang
-    embebidos ahí. `examples/` y `book/` siguen siendo flexibles (código de usuario
-    / didáctico). Lo vigila el check CI `tests/naming_policy.rs` (wordlist
-    `tests/naming_policy_es.txt`; excepción puntual con `// es-ok`).
+    embebidos ahí, **y todo módulo de la stdlib embebido desde `src/stdlib.rs`**
+    aunque viva en `examples/` (`std/uuid` ← `examples/web/uuid.ray`). El resto de
+    `examples/` y `book/` siguen siendo flexibles (código de usuario / didáctico). Lo
+    vigila el check CI `tests/naming_policy.rs` (wordlist `tests/naming_policy_es.txt`;
+    excepción puntual con `// es-ok`).
 - **Comentarios y documentación en español**, en el propio código.
 - **TODO lo que el lenguaje entrega al usuario: en INGLÉS.** Cubre: mensajes de
   diagnóstico (cabeceras `type error at L:C:`, `syntax error at`, `lex error at`), y

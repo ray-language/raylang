@@ -16942,3 +16942,41 @@ banner volvía a paniquear por EPIPE en el hilo monitor, que moría sin enviar `
 principal esperaba para siempre porque el despertador de UI retiene un `Sender` del canal. El banner
 se escribe ahora con un `write` cuyo error se ignora; test de regresión en `ice_policy`.
 
+---
+
+## 345. M360 — Documentación y herramientas: lo que raylb y rayauth tuvieron que descubrir por tanteo (oct 2026)
+
+Último paso del plan de raylb antes del reactor (IDEAS §103: L10, L18; §102: R35, R36). Cuatro
+cosas que no eran bugs del lenguaje y costaron tiempo igual.
+
+**El perfilador se medía a sí mismo (L18).** `ray profile` atribuía 124 µs a un `hex_encode` que
+fuera del perfilador cuesta 5. La causa estaba a la vista en su propia doc —«dos lecturas de reloj
+por llamada»—: ese coste queda fuera del tiempo medido de la función llamada pero DENTRO del de
+quien la llama, así que una función con muchas llamadas pequeñas carga con la instrumentación de
+todas. Ahora `enable` calibra el coste de una llamada (dos relojes y la toma del mutex, mediana de
+siete tandas) y cada marco lleva la cuenta de sus llamadas hijas directas (para el propio) y de
+todas sus descendientes (para el inclusivo); al cerrarse resta `n × coste`. La cabecera del
+informe dice cuánto se descontó, para que el lector sepa que es una estimación. La alternativa
+—muestreo sin instrumentar— sigue siendo la herramienta para el binario nativo (`sample`, `perf`).
+
+**El paquete-librería no existía como concepto (R36).** `ray test` resolvía la entrada del
+proyecto y, sin ella, moría con «nonexistent entry: src/main.ray»; `ray build` pedía un `main`.
+Definición: un proyecto **sin `entry` declarado y sin `src/main.ray`** es una librería. `ray
+check` y `ray test` recorren todos sus `.ray` (menos `tests/`, que ya se recorría, la caché de
+dependencias y los directorios ocultos) con la raíz del proyecto como raíz del loader, y `ray
+run`/`ray build` lo dicen con sus palabras en vez de hablar de un archivo que nunca existió. El
+manifiesto recuerda si `entry` venía escrito (`entry_declared`): un `entry` explícito que no
+existe sigue siendo el error de siempre.
+
+**La sintaxis de una dependencia (R35).** Las tres formas —versión del índice, `path:`, `git+`—
+existían y ninguna estaba junta en un sitio. La forma de Cargo (`{ path = … }`) daba «the value
+must be in double quotes», técnicamente cierto e inútil; ahora el error enumera las tres formas, y
+un spec que parece una ruta (`"../x"`, `"file:…"`) sugiere `path:`. Documentado en llms.txt (lo que
+lee un asistente), REFERENCE §11 y el handbook.
+
+**Qué no compila a nativo (L10).** Las tres reglas de closures que cruzan fibras (closure guardada
+en variable hacia un parámetro que cruza; valor-función capturado por `spawn`; valor cuyo tipo
+guarda funciones) ya se diagnosticaban bien en el build, pero un programa que pasa `ray check` y
+los tests en la VM las descubría al final. llms.txt las enumera con su forma correcta; es
+deliberadamente la doc del asistente la que lo cuenta, porque es ahí donde se escribe el código.
+

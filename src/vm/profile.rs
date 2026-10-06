@@ -5,6 +5,13 @@
 //! inclusivo se cuenta una vez por activación EXTERNA (no se acumula por nivel). Los builtins
 //! no son funciones: su coste cae en el propio de quien los llama. Las fibras suman en una
 //! tabla común (un mutex por retorno, solo con el perfil activo).
+//!
+//! M360 (raylb L18): el perfilador DESCUENTA su propio coste. Las dos lecturas de reloj y el
+//! mutex de cada llamada quedan fuera del tiempo medido de la función llamada pero DENTRO del de
+//! quien la llama: una función con muchas llamadas pequeñas (un `hex_encode` dígito a dígito)
+//! aparecía inflada y desplazaba el ranking (124 µs medidos frente a ~5 µs reales). Al encender
+//! se calibra el coste por llamada y cada marco resta el de sus llamadas hijas directas (propio)
+//! y el de todas sus descendientes (inclusivo). El informe dice cuánto se descontó.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -27,6 +34,27 @@ struct State {
     fibers: u64,
     config: Config,
     reported: bool,
+    /// M360: coste estimado de la instrumentación de UNA llamada (dos relojes + el mutex), en ns.
+    overhead_ns: u64,
+}
+
+/// M360: estima el coste de instrumentar una llamada repitiendo lo que hacen `enter` + `leave`
+/// (dos `Instant::now()` y una toma del mutex global) y tomando la MEDIANA de varias tandas
+/// (robusta a una interrupción del SO a mitad de la calibración).
+fn calibrate_overhead() -> u64 {
+    let mut samples: Vec<u64> = Vec::new();
+    for _ in 0..7 {
+        let n = 2000u32;
+        let t0 = Instant::now();
+        for _ in 0..n {
+            let a = Instant::now();
+            let _ = a.elapsed();
+            let _guard = state().lock().unwrap();
+        }
+        samples.push(t0.elapsed().as_nanos() as u64 / n as u64);
+    }
+    samples.sort_unstable();
+    samples[samples.len() / 2]
 }
 
 #[derive(Clone, Copy, Default)]
@@ -38,12 +66,14 @@ struct Entry {
 
 fn state() -> &'static Mutex<State> {
     static S: OnceLock<Mutex<State>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(State { names: Vec::new(), entries: Vec::new(), started: None, fibers: 0, config: Config::default(), reported: false }))
+    S.get_or_init(|| Mutex::new(State { names: Vec::new(), entries: Vec::new(), started: None, fibers: 0, config: Config::default(), reported: false, overhead_ns: 0 }))
 }
 
 /// Enciende el perfil (la CLI, antes de ejecutar). `config` decide el formato del informe.
 pub fn enable(config: Config) {
+    let overhead = calibrate_overhead();
     let mut s = state().lock().unwrap();
+    s.overhead_ns = overhead;
     s.config = config;
     s.started = Some(Instant::now());
     s.reported = false;
@@ -78,6 +108,10 @@ pub struct ProfFrame {
     pub child_ns: u64,
     /// ¿Es la activación externa de su función en esta fibra (la que cuenta el inclusivo)?
     pub outermost: bool,
+    /// M360: llamadas hijas DIRECTAS ya cerradas (su instrumentación cayó en el propio de este marco).
+    pub child_calls: u64,
+    /// M360: llamadas descendientes (a cualquier profundidad) ya cerradas, para el inclusivo.
+    pub desc_calls: u64,
 }
 
 /// La pila de marcos perfilados de una fibra.
@@ -100,7 +134,7 @@ impl FiberProfile {
         }
         let outermost = self.active[func] == 0;
         self.active[func] += 1;
-        self.frames.push(ProfFrame { func, start: Instant::now(), child_ns: 0, outermost });
+        self.frames.push(ProfFrame { func, start: Instant::now(), child_ns: 0, outermost, child_calls: 0, desc_calls: 0 });
     }
 
     /// Sale del marco superior; `depth` es `Fiber.frames.len()` ANTES de sacar el marco real.
@@ -113,18 +147,24 @@ impl FiberProfile {
         if let Some(a) = self.active.get_mut(f.func) {
             *a = a.saturating_sub(1);
         }
-        if let Some(parent) = self.frames.last_mut() {
-            parent.child_ns += elapsed;
-        }
         let mut s = state().lock().unwrap();
+        // M360: lo medido incluye la instrumentación de las llamadas de dentro; se descuenta.
+        let overhead = s.overhead_ns;
+        let inclusive = elapsed.saturating_sub(f.desc_calls * overhead);
+        let own = elapsed.saturating_sub(f.child_ns).saturating_sub(f.child_calls * overhead);
+        if let Some(parent) = self.frames.last_mut() {
+            parent.child_ns += inclusive;
+            parent.child_calls += 1;
+            parent.desc_calls += 1 + f.desc_calls;
+        }
         if f.func >= s.entries.len() {
             s.entries.resize(f.func + 1, Entry::default());
         }
         let e = &mut s.entries[f.func];
         e.calls += 1;
-        e.self_ns += elapsed.saturating_sub(f.child_ns);
+        e.self_ns += own;
         if f.outermost {
-            e.inclusive_ns += elapsed;
+            e.inclusive_ns += inclusive;
         }
     }
 }
@@ -145,7 +185,7 @@ pub fn report_if_enabled() {
     let name = |i: usize| s.names.get(i).cloned().unwrap_or_else(|| format!("fn#{i}"));
     let text = if s.config.json {
         let mut out = String::from("{");
-        out.push_str(&format!("\"wall_ns\":{wall_ns},\"fibers\":{},\"functions\":[", s.fibers));
+        out.push_str(&format!("\"wall_ns\":{wall_ns},\"fibers\":{},\"overhead_ns_per_call\":{},\"functions\":[", s.fibers, s.overhead_ns));
         for (k, (i, e)) in rows.iter().enumerate() {
             if k > 0 {
                 out.push(',');
@@ -163,12 +203,15 @@ pub fn report_if_enabled() {
     } else {
         let top = if s.config.top == 0 { 30 } else { s.config.top };
         let total_self: u64 = rows.iter().map(|(_, e)| e.self_ns).sum();
+        let total_calls: u64 = rows.iter().map(|(_, e)| e.calls).sum();
         let mut out = format!(
-            "[profile] {} function(s), {} fiber(s), {:.3} s wall, {:.3} s in raylang functions\n{:>10} {:>6} {:>10} {:>9} {:>9}  function\n",
+            "[profile] {} function(s), {} fiber(s), {:.3} s wall, {:.3} s in raylang functions (instrumentation discounted: ~{} ns × {} calls)\n{:>10} {:>6} {:>10} {:>9} {:>9}  function\n",
             rows.len(),
             s.fibers,
             wall_ns as f64 / 1e9,
             total_self as f64 / 1e9,
+            s.overhead_ns,
+            total_calls,
             "self ms",
             "self%",
             "incl ms",

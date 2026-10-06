@@ -47,6 +47,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Intérprete**: `Map.new()` como expresión de cola de una función era un error interno (M359).
 - **El proceso ya no se cuelga tras un error interno con stderr cerrado** (`ray run x 2>&1 | head`):
   el aviso se escribe sin poder fallar y el proceso sale con 101 (M359, raylb).
+- **Paquetes-librería**: un proyecto sin `entry` ni `src/main.ray` se comprueba (`ray check`) y
+  prueba (`ray test`) módulo a módulo; `ray run`/`ray build` explican que no hay programa (M360,
+  rayauth R36).
+- **`ray.toml`**: una tabla inline en `[dependencies]` (`x = { path = … }`) y un spec que parece una
+  ruta (`"../x"`) dicen las formas aceptadas (`"1.2.3"`, `"path:../dir"`, `"git+<URL>@<ref>"`);
+  documentadas en llms.txt, REFERENCE y el handbook (M360, rayauth R35).
+- **`ray profile` descuenta su propia instrumentación** (coste por llamada calibrado al arrancar,
+  restado por cada llamada hecha dentro de un marco) y lo dice en la cabecera; una función con
+  muchas llamadas pequeñas ya no aparece inflada (M360, raylb L18).
+- **llms.txt** describe qué closures no cruzan a un binario nativo y cómo escribirlas (M360, raylb L10).
 
 ## 1.27.36 — 2026-10-05
 

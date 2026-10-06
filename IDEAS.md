@@ -3987,8 +3987,8 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R32 | B | `std/template` aceptaba `{% if a == "b" %}`/`{% if not x %}` y los daba por falsos en silencio | ✅ **M354**: gramática cerrada de condiciones (`x`, `not x`, `a == b`, `a != b`, rutas y literales); lo demás es error de `compile` |
 | R33 | B | `fs.make_temp_dir` devolvía un directorio ya existente (pid reciclado) con su contenido | ✅ **M354**: creación exclusiva (`create_dir`) con sal y reintento, en VM y nativo |
 | R34 | D | `bytes` no se recorre con `for`; `string` no tiene `strip_prefix`/`strip_suffix` | ✅ **M356**: `for b in bs` (octetos como `int`) y `strip_prefix`/`strip_suffix -> Option<string>` |
-| R35 | D | La sintaxis de las dependencias por ruta (`net = "path:…"`) no está documentada; la tabla inline `{ path = … }` da «the value must be in double quotes» | ⏳ **M360** (§103) |
-| R36 | D | Un paquete-librería sin `entry` no se puede probar | ⏳ **M360** (§103) |
+| R35 | D | La sintaxis de las dependencias por ruta (`net = "path:…"`) no está documentada; la tabla inline `{ path = … }` da «the value must be in double quotes» | ✅ **M360**: documentada (llms.txt, REFERENCE, handbook); el error enseña las tres formas y `"../x"` sugiere `path:` |
+| R36 | D | Un paquete-librería sin `entry` no se puede probar | ✅ **M360**: `ray check`/`ray test` recorren sus módulos; `ray run`/`build` lo explican |
 | R37 | E | `net` no cubre el lado cliente de OpenID Connect | Paquete aparte, después de M360 |
 
 ---
@@ -4036,7 +4036,7 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | L7 | E | `net/webserver` escribe en stdout sin opción de silenciarlo | ✅ **M359**: `options().quiet()` (la línea por defecto se conserva para quien no lo pide) |
 | L8 | B | VM: varias fibras en `select_timeout` a la vez pierden timeouts | ✅ **M357**: el plazo y su marca viven en la fibra, no en un mapa por handle del arreglo |
 | L9 | B | Nativo: una local llamada `drop` rompe el build si la función tiene una closure | ✅ **M356**: `std::mem::drop` calificado |
-| L10 | D | Los límites del subconjunto nativo con closures solo se ven al compilar | ⏳ M360 |
+| L10 | D | Los límites del subconjunto nativo con closures solo se ven al compilar | ✅ **M360**: sección «What does NOT compile to a native binary» en llms.txt (las tres reglas y su forma correcta) |
 | L11 | E | `net/metrics`: cada actualización cuesta O(series) con render de etiquetas | ✅ **M359**: índices por `Map` + familia de histograma precalculada (113 → 7 µs) y handle `series(...)` O(1) |
 | L12 | B | Nativo: el parámetro de una closure se toma por captura si la función declara después una local homónima | ✅ **M356**: las capturas excluyen los parámetros propios y lo que aún no está en ámbito |
 | L13 | E | `net/trace` y `std/hex` son caros en la VM (~180 µs por `traceparent`) | ✅ **M359**: `random_hex` por octetos y `hex_encode` en una conversión (medido sin perfilador: 8,6 → 5,0 µs y 4,7 → 2,4 µs; los 180 µs del hallazgo llevaban el sesgo del perfilador, L18) |
@@ -4044,5 +4044,5 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | L15 | B/D | Un `scope` que sale por error espera a sus procesos hijos en vez de matarlos | ✅ **M357**: un cuerpo que devuelve `Result.Err` mata y cosecha los procesos antes de unir las fibras (VM y nativo) |
 | L16 | B | Nativo: `let r = scope(fn() -> Result<T, E> { … })` no infiere el tipo | ✅ **M356**: el cierre de `scope` declara su retorno |
 | L17 | B | Nativo: lo que captura la closure de un `scope` se mueve y no se puede usar después | ✅ **M356**: el cierre de `scope` no es `move` (corre en línea) |
-| L18 | D | El perfilador de la VM infla las funciones con muchas llamadas internas | ⏳ M360 |
+| L18 | D | El perfilador de la VM infla las funciones con muchas llamadas internas | ✅ **M360**: calibra su coste por llamada y lo descuenta por marco; la cabecera lo indica |
 | L19 | B | Nativo: un `connect` a un host que descarta paquetes bloqueaba el hilo worker, no la fibra | ✅ **M355**: `tcp_connect`/`tls_connect` corren en el pool bloqueante (nativo) o en un hilo auxiliar con waker (VM) y la fibra aparca |

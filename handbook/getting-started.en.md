@@ -108,6 +108,21 @@ Protocol) and `agent` (the loop that joins them). Versions are pinned in `ray.lo
 `.ray-deps/`, which stays out of version control: after cloning a project, `ray fetch` downloads
 them again.
 
+A dependency is always a string, in one of three forms:
+
+```toml
+[dependencies]
+web = "^0.6"                              # a version from the index (what `ray add` writes)
+oidc = "path:../oidc"                     # a local directory, relative to the project root
+geo = "git+https://host/geo@v1.0"         # a git repository at a tag or commit
+```
+
+A package of your own is a directory with its `ray.toml` and its modules; it is imported by
+directory and file (`import oidc/client;`). If it has no program —no `entry` in `[package]` and no
+`src/main.ray`— it is a **library package**: `ray check` and `ray test` walk it module by module
+(the `@test`s may sit next to the code or under `tests/`), and `ray run`/`ray build` say there is
+nothing to run.
+
 ## 4. The language in fifteen minutes
 
 ### Values, variables and functions
@@ -467,4 +482,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:62166a7857ee -->
+<!-- sync: sha256:17899843ad32 -->

@@ -379,7 +379,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
         "try_send" => "Sends into a channel WITHOUT blocking: `true` if the value was delivered or queued, `false` if the channel is closed or full. Never fails: the non-panicking counterpart of `send` for producers whose consumer may be gone.",
         "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
-        "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
+        "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. SIGHUP, SIGQUIT and SIGUSR1/2 keep their OS default unless you ask for them with `process.listen_signal` (std/process). A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
@@ -4656,6 +4656,12 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "signals")?;
         Ok(Type::Channel(Box::new(Type::Int)))
     } },
+    // M357 (raylb L1): __signal_listen(sig) -> bool — una señal EXTRA entra al canal de signals().
+    Builtin { name: "__signal_listen", opcode: OpCode::SignalListen, check: |a| {
+        arity(a, 1, "__signal_listen", " (signal)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__signal_listen expects an int (the signal number), not {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
     // __read_file(path) -> [string] (M11.2c): ["ok", contenido] o ["err", msg]. Prelude → Result.
     Builtin { name: "__read_file", opcode: OpCode::ReadFile, check: |a| {
         arity(a, 1, "__read_file", "")?;
@@ -6402,6 +6408,24 @@ mod signals_host {
         Ok(fds[0])
     }
 
+    /// M357 (raylb L1): instala el mismo handler para una señal EXTRA — solo las que un daemon usa
+    /// para hablar con su operador: SIGHUP (1), SIGQUIT (3) y SIGUSR1/SIGUSR2 (30/31 en macOS y
+    /// BSD, 10/12 en Linux). Opt-in: quien no la pide conserva la acción por defecto del SO (un
+    /// programa con terminal sigue muriendo al cerrarla). `false` para cualquier otro número.
+    pub fn listen(sig: i32) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+        const USR: [i32; 2] = [30, 31];
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
+        const USR: [i32; 2] = [10, 12];
+        if sig != 1 && sig != 3 && !USR.contains(&sig) {
+            return false;
+        }
+        unsafe {
+            signal(sig, on_signal as *const () as usize);
+        }
+        true
+    }
+
     /// Drena UN octeto del pipe (el número de señal), o None si no hay más.
     pub fn read_one(fd: i32) -> Option<i32> {
         let mut b = 0u8;
@@ -6495,6 +6519,15 @@ pub fn signals_install() -> Result<i32, String> {
 pub fn signals_install() -> Result<i32, String> {
     Err("signals() is not supported on this platform".into())
 }
+
+/// M357 (raylb L1): pide una señal extra por `signals()` (ver `signals_host::listen`). En Windows
+/// no hay señales POSIX: siempre `false`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn signal_listen(sig: i64) -> bool {
+    (1..=64).contains(&sig) && signals_host::listen(sig as i32)
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn signal_listen(_sig: i64) -> bool { false }
 
 /// M88.1: ¿hay señales pendientes de entregar? (bandera barata para el scheduler).
 #[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]

@@ -652,6 +652,9 @@ pub enum OpCode {
     StdinReadTimeout,
     /// M107.3 (std/term): ¿el fd (0/1/2) es una terminal? Primitivo `__term_is_tty`.
     TermIsTty,
+    /// M357 (raylb L1): pide que una señal EXTRA (SIGHUP, SIGQUIT, SIGUSR1/2) llegue también por
+    /// `signals()`; empuja si quedó instalada. Primitivo `__signal_listen`.
+    SignalListen,
     /// M107.3 (std/term): tamaño del terminal → `[cols, rows]` o `[]`. Primitivo `__term_size`.
     TermSize,
     /// M107.3 (std/term): entra al modo crudo (termios) → `["ok"]`/`["err", msg]`; la restauración

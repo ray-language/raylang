@@ -4027,21 +4027,21 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 
 | # | Sev. | Hallazgo | Estado |
 |---|---|---|---|
-| L1 | E/D | `SIGHUP` mata el proceso; `signals()` no lo entrega | ⏳ M357 |
+| L1 | E/D | `SIGHUP` mata el proceso; `signals()` no lo entrega | ✅ **M357**: `process.listen_signal(sig)` (opt-in) para `SIGHUP`, `SIGQUIT`, `sigusr1()`, `sigusr2()`; `signals()` a secas no cambia |
 | L2 | B | Un `const` `u64` se guarda como `int`: ICE en la VM y build nativo roto | ✅ **M356**: el tipo declarado es el contexto del valor y la bajada de literales sin signo cubre las constantes |
 | L3 | E | `u8`/`u32`/`u64` no implementan `Eq`: `assert_eq` no sirve con ellos | ✅ **M356**: `Eq`/`Show`/`Ord`/`Hash` en el prelude; derivables en structs con campos sin signo |
 | L4 | D | `toml.parse_toml` dice que no soporta arrays de tablas, y sí los soporta | ⏳ M359 |
 | L5 | E/D | El cliente HTTP de `net` no tenía plazo de conexión: un host sin ruta colgaba 75 s | ✅ **M355**: el plazo de la petición acota el dial; `connect_timeout(base_url, ms)`; `DEFAULT_CONNECT_TIMEOUT_MS` (10 s) para `connect` y el pool (`net` 0.10.0) |
 | L6 | E | No hay `serve_shutdown` sobre un listener ya abierto | ⏳ M359 |
 | L7 | E | `net/webserver` escribe en stdout sin opción de silenciarlo | ⏳ M359 |
-| L8 | B | VM: varias fibras en `select_timeout` a la vez pierden timeouts | ⏳ M357 |
+| L8 | B | VM: varias fibras en `select_timeout` a la vez pierden timeouts | ✅ **M357**: el plazo y su marca viven en la fibra, no en un mapa por handle del arreglo |
 | L9 | B | Nativo: una local llamada `drop` rompe el build si la función tiene una closure | ✅ **M356**: `std::mem::drop` calificado |
 | L10 | D | Los límites del subconjunto nativo con closures solo se ven al compilar | ⏳ M360 |
 | L11 | E | `net/metrics`: cada actualización cuesta O(series) con render de etiquetas | ⏳ M359 |
 | L12 | B | Nativo: el parámetro de una closure se toma por captura si la función declara después una local homónima | ✅ **M356**: las capturas excluyen los parámetros propios y lo que aún no está en ámbito |
 | L13 | E | `net/trace` y `std/hex` son caros en la VM (~180 µs por `traceparent`) | ⏳ M359 |
-| L14 | B | VM: una fibra bloqueada en `tcp_connect` retenía la salida del proceso | ✅ **M355** para el `connect` (ya no bloquea: aparca); el caso general de la salida con trabajo bloqueante se revisa en M357 |
-| L15 | B/D | Un `scope` que sale por error espera a sus procesos hijos en vez de matarlos | ⏳ M357 |
+| L14 | B | VM: una fibra bloqueada en `tcp_connect` retenía la salida del proceso | ✅ **M355** para el `connect` (ya no bloquea: aparca); revisado en M357: no queda otra llamada de red que retenga la salida |
+| L15 | B/D | Un `scope` que sale por error espera a sus procesos hijos en vez de matarlos | ✅ **M357**: un cuerpo que devuelve `Result.Err` mata y cosecha los procesos antes de unir las fibras (VM y nativo) |
 | L16 | B | Nativo: `let r = scope(fn() -> Result<T, E> { … })` no infiere el tipo | ✅ **M356**: el cierre de `scope` declara su retorno |
 | L17 | B | Nativo: lo que captura la closure de un `scope` se mueve y no se puede usar después | ✅ **M356**: el cierre de `scope` no es `move` (corre en línea) |
 | L18 | D | El perfilador de la VM infla las funciones con muchas llamadas internas | ⏳ M360 |

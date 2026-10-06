@@ -49,6 +49,16 @@ pub(super) struct Fiber {
     /// M296: dominio de handles de la fibra (0 = el principal; `spawn` hereda, `spawn_isolated`
     /// estrena). El worker lo publica en el thread-local de `builtins` al conmutar a esta fibra.
     pub(super) domain: u64,
+    /// M116.1/M357 (`select_timeout`): el deadline ABSOLUTO del select con plazo que esta fibra tiene
+    /// en curso. Persiste entre re-aparcados (un wake espurio de `wake_select_waiters` no reinicia el
+    /// plazo); lo pone el opcode en su primer aparcado y lo borra al resolver. Vive EN LA FIBRA: antes
+    /// iba en un mapa por handle del arreglo de canales, y como cada fibra tiene su propio heap dos
+    /// fibras compartían clave — una pisaba el plazo de la otra y solo despertaba la última (raylb L8).
+    pub(super) select_deadline: Option<std::time::Instant>,
+    /// M357: el plazo de ese select venció mientras la fibra estaba aparcada (lo marca
+    /// `expire_deadlines`); el opcode re-ejecutado lo consume y devuelve `None`. Antes era una marca
+    /// global por handle del arreglo, en el MISMO espacio de números que los sockets.
+    pub(super) select_timed_out: bool,
 }
 
 /// Un `try_call` en vuelo (M97.2): a dónde volver si su cuerpo falla.
@@ -185,12 +195,6 @@ pub(super) struct Shared {
     /// o termina, `running -= 1`. Un worker ocioso sólo puede declarar **deadlock** cuando `running == 0` (si
     /// alguien ejecuta, aún puede producir trabajo listo vía un canal). Con N=1 oscila 1↔0 trivialmente.
     pub(super) running: usize,
-    /// M116.1 (`select_timeout`): el deadline ABSOLUTO de cada select con plazo aparcado, por handle
-    /// del arreglo de canales (`on`). Fuente de verdad persistente entre re-parks (un wake espurio de
-    /// `wake_select_waiters` no debe reiniciar el plazo). Lo pone el opcode `SelectTimeout` en su
-    /// primer aparcado y lo borra al resolver (canal listo o timeout). Un `select_deadlines` no vacío
-    /// es señal de "esperando un plazo": impide declarar deadlock y acota el sueño del scheduler.
-    pub(super) select_deadlines: std::collections::HashMap<usize, std::time::Instant>,
     /// M254: instante del último sondeo no bloqueante de plazos/E/S hecho por un worker OCIOSO
     /// mientras otro ejecuta (`io_poll_once`). Acota ese sondeo a ~1 por ms en TOTAL (no por
     /// worker): los timers de las fibras aparcadas vencen con precisión de ~1 ms sin que N-1
@@ -387,7 +391,7 @@ impl<'a> Vm<'a> {
             if sh.running == 0 {
                 // Nadie ejecuta → nadie puede producir trabajo listo. Si hay E/S pendiente, espera readiness
                 // (un solo worker llega aquí, por `running == 0`); si no, es deadlock o fin.
-                if !sh.io_parked.is_empty() || sh.signal_chan.is_some() || !sh.select_deadlines.is_empty() {
+                if !sh.io_parked.is_empty() || sh.signal_chan.is_some() || sh.parked.iter().any(|p| p.fiber.select_deadline.is_some()) {
                     // M88.1: con la fontanería de señales instalada, "todo aparcado" no es
                     // deadlock — el exterior puede despertar el programa por el self-pipe.
                     // M116.1: un `select_timeout` pendiente tampoco es deadlock — su plazo lo
@@ -608,7 +612,7 @@ impl<'a> Vm<'a> {
     /// tras dormir. M116.1: expira también los `select_timeout` vencidos — un select aparcado
     /// (`Waiting::Select`) cuyo deadline (por `on`, el handle del arreglo) ya pasó → marca el timeout
     /// (su opcode re-ejecutado lo consume y devuelve None) y despierta la fibra. El deadline se BORRA
-    /// de `select_deadlines` aquí (ya no está pendiente); si el opcode re-escaneara y re-aparcara,
+    /// de la fibra aquí (ya no está pendiente); si el opcode re-escaneara y re-aparcara,
     /// pondría uno nuevo — pero al haber vencido devuelve None, no re-aparca.
     /// Devuelve si dejó alguna fibra en `ready`.
     fn expire_deadlines(shared: &mut Shared, now: std::time::Instant) -> bool {
@@ -628,13 +632,12 @@ impl<'a> Vm<'a> {
         }
         let mut i = 0;
         while i < shared.parked.len() {
-            let on = shared.parked[i].on;
             let due = matches!(shared.parked[i].waiting, Waiting::Select)
-                && shared.select_deadlines.get(&on).is_some_and(|d| *d <= now);
+                && shared.parked[i].fiber.select_deadline.is_some_and(|d| d <= now);
             if due {
-                shared.select_deadlines.remove(&on);
-                crate::builtins::mark_read_timeout(on as i64);
-                let p = shared.parked.remove(i);
+                let mut p = shared.parked.remove(i);
+                p.fiber.select_deadline = None;
+                p.fiber.select_timed_out = true;
                 shared.ready.push_back(p.fiber);
                 woke = true;
             } else {
@@ -745,7 +748,7 @@ impl<'a> Vm<'a> {
                 .io_parked
                 .iter()
                 .filter_map(|p| p.deadline)
-                .chain(shared.select_deadlines.values().copied())
+                .chain(shared.parked.iter().filter_map(|p| p.fiber.select_deadline))
                 .min();
             let timeout_ms: i32 = match next_deadline {
                 // +1: redondeo hacia arriba para no despertar un pelo antes del deadline (y girar).

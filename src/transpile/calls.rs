@@ -1781,6 +1781,14 @@ impl Transpiler {
                      Some(__rt_b) if __rt_b.is_empty() => vec![Rc::<[u8]>::from(&b\"eof\"[..])], \
                      Some(__rt_b) => vec![Rc::<[u8]>::from(&b\"data\"[..]), Rc::<[u8]>::from(__rt_b)] })) }");
             }
+            // M357 (raylb L1): una señal extra por `signals()` (runtime `__ray_signal_listen`).
+            "signal_listen" if name.starts_with("__") => {
+                self.needs_concurrency = true;
+                self.needs_signals = true;
+                out.push_str("__ray_signal_listen(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // std/term (M107.3): terminal (runtime `__ray_term_*`, ver runtime.rs).
             "term_is_tty" if name.starts_with("__") => {
                 self.needs_term = true;
@@ -2206,7 +2214,13 @@ impl Transpiler {
                         }
                     }
                 }
-                let runtime = match method { "spawn" => "__ray_spawn", "spawn_isolated" => "__ray_spawn_isolated", _ => "__ray_scope" };
+                let runtime = match method {
+                    "spawn" => "__ray_spawn",
+                    "spawn_isolated" => "__ray_spawn_isolated",
+                    // M357: un scope cuyo cuerpo devuelve `Result` mata a sus procesos hijos si sale por `Err`.
+                    _ if matches!(&ret, Type::Enum(n, _) | Type::Struct(n, _) if n == "Result") => "__ray_scope_res",
+                    _ => "__ray_scope",
+                };
                 if is_spawn {
                     write!(out, "{}(move || ", runtime).unwrap();
                 } else if matches!(&eff[0].kind, ExprKind::Func(_)) {

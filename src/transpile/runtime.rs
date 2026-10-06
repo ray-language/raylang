@@ -1730,6 +1730,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    fn done(&self) -> bool { true }\n",
                 "    fn cancel_task(&self) { __ray_proc_kill_reap(self.0); }\n",
                 "    fn consume(&self) { __ray_proc_kill_reap(self.0); }\n",
+                "    fn kill_proc(&self) { __ray_proc_kill_reap(self.0); }\n",
                 "}\n",
             ));
             if t.fibers {
@@ -2051,7 +2052,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}\n",
             // La cara borrada-de-tipo que un scope guarda de cada hija: sondear su estado SIN bloquear
             // (el hilo hijo escribe su resultado al terminar) y cancelarla.
-            "trait __RayScopeChild { fn failed(&self) -> Option<String>; fn done(&self) -> bool; fn cancel_task(&self); fn consume(&self); }\n",
+            "trait __RayScopeChild { fn failed(&self) -> Option<String>; fn done(&self) -> bool; fn cancel_task(&self); fn consume(&self); fn kill_proc(&self) {} }\n",
             "impl<T> __RayScopeChild for __RayTask<T> {\n",
             "    fn failed(&self) -> Option<String> { if self.consumed.load(std::sync::atomic::Ordering::SeqCst) { return None; } match &self.inner.0.lock().unwrap().result { Some(Err(m)) => Some(m.clone()), _ => None } }\n",
             "    fn done(&self) -> bool { self.inner.0.lock().unwrap().result.is_some() }\n",
@@ -2190,7 +2191,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // unión en orden de registro → un fallo podía esperar para siempre detrás de una hermana
             // bloqueada). La generación se lee ANTES de escanear: un cambio entre escaneo y espera
             // despierta al instante.
-            "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
+            // M357 (raylb L15): `__ray_scope_res` es el scope de un cuerpo que devuelve `Result` — un
+            // `Err` mata y cosecha los procesos hijos ANTES de unir las fibras (como la VM).
+            "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R { __ray_scope_impl(body, |_| false) }\n",
+            "fn __ray_scope_res<T, E, F: FnOnce() -> Result<T, E>>(body: F) -> Result<T, E> { __ray_scope_impl(body, |r| r.is_err()) }\n",
+            "fn __ray_scope_impl<R, F: FnOnce() -> R>(body: F, failed: fn(&R) -> bool) -> R {\n",
         ));
         // F2 (--fibers): la pila de scopes vive en el ctx de la fibra (body() puede aparcar y
         // reanudar en otro worker; el push/pop deben ver LA MISMA pila).
@@ -2200,6 +2205,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             out.push_str("    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n    let r = body();\n    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n");
         }
         out.push_str(concat!(
+            "    if failed(&r) { for c in &frame { c.kill_proc(); } }\n",
             "    loop {\n",
             "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
@@ -2510,6 +2516,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    1\n}\n",
             "#[cfg(windows)] fn __ray_signals() -> __RayChan<i64> {\n",
             "    __RAY_SIG_CHAN.get_or_init(|| { let ch: __RayChan<i64> = __RayChan::make(None); unsafe { SetConsoleCtrlHandler(Some(__ray_on_ctrl), 1); } ch }).clone()\n}\n",
+            // M357 (raylb L1): señal EXTRA por el mismo self-pipe — SIGHUP, SIGQUIT, SIGUSR1/2 (la
+            // misma lista que la VM, `signals_host::listen`). Windows: sin señales POSIX → false.
+            "#[cfg(windows)] fn __ray_signal_listen(_sig: i64) -> bool { false }\n",
+            "#[cfg(unix)] fn __ray_signal_listen(sig: i64) -> bool {\n",
+            "    let usr: [i64; 2] = if cfg!(any(target_os = \"macos\", target_os = \"ios\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\")) { [30, 31] } else { [10, 12] };\n",
+            "    if sig != 1 && sig != 3 && !usr.contains(&sig) { return false; }\n",
+            "    unsafe { signal(sig as i32, __ray_on_signal as *const () as usize); }\n",
+            "    true\n}\n",
             "#[cfg(unix)] fn __ray_signals() -> __RayChan<i64> {\n",
             "    static CHAN: std::sync::OnceLock<__RayChan<i64>> = std::sync::OnceLock::new();\n",
             "    CHAN.get_or_init(|| {\n",

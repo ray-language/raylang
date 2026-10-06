@@ -1,6 +1,7 @@
 //! IDEAS §103 — los hallazgos que raylb (el balanceador de ray-apps) documentó, cada uno con su
 //! programa mínimo. M355: el `connect` no retiene al worker (L19/L14) y el cliente HTTP acota el dial (L5).
 //! M356: el lote de correcciones (L2, L3, L9, L12, L16, L17) y rayauth R34.
+//! M357: el scheduler y los `scope` (L8, L15) y las señales extra (L1).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -301,4 +302,159 @@ fn main() -> int {
 "#,
         "https://id.example.com\nOption.Some(abc)\ntrue\nfalse\nandú\nx\n",
     );
+}
+
+/// L8: varias fibras en `select_timeout` a la vez. En la VM el plazo se guardaba por el handle del
+/// arreglo de canales, que colisiona entre fibras (cada una tiene su heap): solo despertaba la
+/// última. Ahora el plazo vive en la fibra: las cuatro despiertan y los nueve ticks llegan.
+#[test]
+fn concurrent_select_timeouts_all_fire() {
+    vm_and_native(
+        "select_timeouts",
+        r#"import std/time;
+fn main() -> int {
+    let out: Channel<string> = Channel.bounded(64);
+    for w in [0, 2, 9, 30] {
+        let wait = w;
+        let s: Channel<int> = Channel.bounded(1);
+        spawn(fn() {
+            match (select_timeout([s], wait)) {
+                Option.Some(i) => send(out, "stop?"),
+                Option.None => send(out, "woke after ${wait}"),
+            }
+        });
+    }
+    time.sleep(300);
+    var got: [string] = [];
+    while (true) {
+        match (try_recv(out)) { Received.Got(x) => got.push(x), _ => break, }
+    }
+    print(sort(got));
+    // Un canal compartido por 3 fibras, 3 vueltas de 20 ms cada una: 9 ticks.
+    let shared: Channel<int> = Channel.bounded(1);
+    let ticks: Channel<int> = Channel.bounded(64);
+    for k in [1, 2, 3] {
+        spawn(fn() {
+            var n = 0;
+            while (n < 3) {
+                let _ = select_timeout([shared], 20);
+                send(ticks, k);
+                n = n + 1;
+            }
+        });
+    }
+    time.sleep(400);
+    var count = 0;
+    while (true) {
+        match (try_recv(ticks)) { Received.Got(x) => count = count + 1, _ => break, }
+    }
+    print(count);
+    0
+}
+"#,
+        "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n",
+    );
+}
+
+/// L15: un `scope` cuyo cuerpo devuelve `Result.Err` mata a sus procesos hijos antes de unir las
+/// fibras (antes esperaba a la bomba de salida, es decir, a que el hijo muriera solo). Un scope que
+/// termina bien sigue esperando a que los flujos del hijo se cierren.
+#[cfg(unix)]
+#[test]
+fn a_scope_that_returns_err_kills_its_child_processes() {
+    vm_and_native(
+        "scope_err_procs",
+        r#"import std/process;
+import std/time;
+fn body() -> Result<int, string> {
+    scope(fn() -> Result<int, string> {
+        let p = process.cmd("sleep", ["3"]).stream()?;
+        let out = p.out;
+        spawn(fn() { while (recv(out).is_some()) { } });
+        Result.Err("early error")
+    })
+}
+fn unwaited() -> int {
+    scope(fn() -> int {
+        let p = process.cmd("sleep", ["3"]).stream().unwrap();
+        7
+    })
+}
+fn main() -> int {
+    let t0 = time.monotonic();
+    let r = body();
+    print("err scope quick=${time.monotonic() - t0 < 1500}: ${r.is_err()}");
+    let t1 = time.monotonic();
+    let v = unwaited();
+    print("unwaited quick=${time.monotonic() - t1 < 1500}: ${v}");
+    0
+}
+"#,
+        "err scope quick=true: true\nunwaited quick=false: 7\n",
+    );
+}
+
+/// L1: `process.listen_signal` hace llegar SIGHUP y SIGUSR1 por `signals()` (sin pedirlo, SIGHUP
+/// mata el proceso, como siempre). El test lanza el programa, espera su `ready` y le envía las dos.
+#[cfg(unix)]
+#[test]
+fn extra_signals_arrive_through_the_signals_channel() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let d = tmp("extra_signals");
+    std::fs::write(d.join("prog.ray"), r#"import std/process;
+fn main() -> int {
+    print(process.listen_signal(process.SIGHUP));
+    print(process.listen_signal(process.sigusr1()));
+    print(process.listen_signal(9));
+    print("ready");
+    let s = signals();
+    var seen: [int] = [];
+    while (seen.len() < 2) {
+        match (select_timeout([s], 5000)) {
+            Option.Some(_) => match (recv(s)) {
+                Option.Some(n) => seen.push(n),
+                Option.None => break,
+            },
+            Option.None => break,
+        }
+    }
+    print(seen.len());
+    print(seen[0] == process.SIGHUP);
+    print(seen[1] == process.sigusr1());
+    0
+}
+"#).unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let mut cmds: Vec<Command> = Vec::new();
+    let mut vm = Command::new(ray);
+    vm.args(["run", "prog.ray"]);
+    cmds.push(vm);
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let b = Command::new(ray).args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
+        cmds.push(Command::new(bin));
+    }
+    for mut cmd in cmds {
+        let mut child = cmd.current_dir(&d).stdout(Stdio::piped()).spawn().unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut seen: Vec<String> = Vec::new();
+        for line in lines.by_ref() {
+            let line = line.unwrap();
+            let ready = line == "ready";
+            seen.push(line);
+            if ready {
+                break;
+            }
+        }
+        let pid = child.id().to_string();
+        for name in ["-HUP", "-USR1"] {
+            assert!(Command::new("kill").args([name, &pid]).status().unwrap().success());
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        seen.extend(lines.map(|l| l.unwrap()));
+        assert!(child.wait().unwrap().success());
+        assert_eq!(seen, ["true", "true", "false", "ready", "2", "true", "true"]);
+    }
 }

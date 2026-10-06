@@ -261,6 +261,8 @@ impl<'a> Vm<'a> {
                 domain: 0,
                 pending_error: None,
                 prof: Default::default(),
+                select_deadline: None,
+                select_timed_out: false,
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             fuel: u64::MAX, // sin límite por defecto
@@ -1297,6 +1299,7 @@ impl<'a> Vm<'a> {
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
                             try_markers: Vec::new(), pending_error: None, prof: Default::default(), domain,
+                            select_deadline: None, select_timed_out: false,
                         });
                         if profile::enabled() {
                             profile::note_fiber();
@@ -1681,6 +1684,17 @@ impl<'a> Vm<'a> {
                     // TaskJoin: evita perder el wake si una hija completa entre el chequeo y el park).
                     let children: Vec<usize> =
                         self.cur.scopes.last().expect("ScopeEnd without ScopeBegin").children.clone();
+                    // M357 (raylb L15): un scope cuyo cuerpo devuelve `Result.Err` es un scope FALLIDO
+                    // para sus procesos del SO — se matan y cosechan ANTES de unir las fibras. Sin esto
+                    // el scope esperaba a la bomba de salida del hijo, que no acaba hasta que el hijo
+                    // muere: un error temprano colgaba el scope lo que viviera el proceso (para siempre,
+                    // si era un servidor). Las fibras no se cancelan: ven el EOF y terminan solas.
+                    // Idempotente en la re-ejecución tras aparcar (la lista se vacía).
+                    if self.scope_result_is_err()
+                        && let Some(scope) = self.cur.scopes.last_mut()
+                    {
+                        for h in std::mem::take(&mut scope.procs) { crate::builtins::proc_kill_and_reap(h); }
+                    }
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
@@ -1791,13 +1805,13 @@ impl<'a> Vm<'a> {
                 OpCode::SelectTimeout => {
                     // M116.1: select con PLAZO. Empuja `[i]` (índice listo) o `[]` (plazo vencido);
                     // el prelude lo envuelve en `Option<int>`. `ms <= 0` = poll no bloqueante. El
-                    // deadline absoluto vive en `sh.select_deadlines[arr]` (persistente entre re-parks:
+                    // deadline absoluto vive en la fibra (`select_deadline`, M357; persistente entre re-parks:
                     // un wake espurio no reinicia el plazo); `io_wait` lo expira marcando el timeout.
                     let ms = match self.pop() { HeapValue::Int(m) => m, _ => unreachable!("the checker guarantees an int") };
                     let arr = self.pop_obj();
                     let (l, c2) = pos!();
                     // ¿Marca de timeout de un aparcado anterior? (io_wait la puso al vencer el deadline.)
-                    if crate::builtins::take_read_timeout(arr as i64) {
+                    if std::mem::take(&mut self.cur.select_timed_out) {
                         let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
                         self.push(HeapValue::Obj(h));
                     } else {
@@ -1825,15 +1839,14 @@ impl<'a> Vm<'a> {
                         }
                         match ready_idx {
                             Some(i) => {
-                                sh.select_deadlines.remove(&arr); // resuelto por canal listo
                                 drop(sh);
+                                self.cur.select_deadline = None; // resuelto por canal listo
                                 let h = self.cur.heap.allocate(Obj::Array(vec![HeapValue::Int(i as i64)]));
                                 self.push(HeapValue::Obj(h));
                             }
                             None => {
                                 // El deadline absoluto: el guardado (re-park) o uno nuevo (primer aparcado).
-                                let has_deadline = sh.select_deadlines.contains_key(&arr);
-                                if !has_deadline {
+                                if self.cur.select_deadline.is_none() {
                                     if ms <= 0 {
                                         // Poll puro: plazo inmediato, sin aparcar.
                                         drop(sh);
@@ -1842,7 +1855,7 @@ impl<'a> Vm<'a> {
                                         return Ok(None);
                                     }
                                     let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
-                                    sh.select_deadlines.insert(arr, d);
+                                    self.cur.select_deadline = Some(d);
                                 }
                                 // Aparca: re-empuja arr y ms, rebobina el ip al SelectTimeout.
                                 self.cur.stack.push(HeapValue::Obj(arr));
@@ -3405,6 +3418,15 @@ impl<'a> Vm<'a> {
                         let (l, c2) = pos!();
                         if !self.poll_next(l, c2)? { self.stop = true; }
                     }
+                }
+                // M357 (raylb L1): una señal extra por el canal de `signals()`. El handler escribe en
+                // el self-pipe, así que solo tiene efecto con `signals()` ya instalado (el envoltorio
+                // de `std/process` lo llama antes).
+                OpCode::SignalListen => {
+                    let HeapValue::Int(sig) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    self.push(HeapValue::Bool(crate::builtins::signal_listen(sig)));
                 }
                 // --- std/term (M107.3): isatty / tamaño / modo crudo. ---
                 OpCode::TermIsTty => {
@@ -5224,6 +5246,17 @@ impl<'a> Vm<'a> {
 
     /// TA4 (factorizado en R7): la variante SIN payload como objeto canónico por fibra — uno solo,
     /// reusado en cada construcción (raíz del GC en `collect`). Lo usan `MakeEnum` y `RegexNative`.
+    /// M357: ¿el valor en la cima de la pila (el resultado del cuerpo de un `scope`) es un `Result.Err`?
+    fn scope_result_is_err(&self) -> bool {
+        let Some(HeapValue::Obj(h)) = self.cur.stack.last() else { return false };
+        match self.cur.heap.get(*h) {
+            Obj::Enum(e) => self.program.enums.get(e.enum_id as usize).is_some_and(|en| {
+                en.name == "Result" && en.variants.get(e.tag as usize).is_some_and(|v| v.name == "Err")
+            }),
+            _ => false,
+        }
+    }
+
     fn unit_enum(&mut self, enum_id: usize, tag: usize) -> Handle {
         let key = (enum_id as u32, tag as u32);
         match self.cur.unit_enums.get(&key) {

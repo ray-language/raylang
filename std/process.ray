@@ -56,6 +56,40 @@ pub struct Cmd {
 /// `--interp` when that engine is in use). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
 pub fn self_command() -> [string] { __self_command() }
 
+// M357 (raylb L1): señales EXTRA por `signals()`. Opt-in: `signals()` a secas sigue entregando solo
+// SIGTERM/SIGINT/SIGWINCH y dejando al SO la acción por defecto de las demás (un programa con
+// terminal muere al cerrarla). Quien quiere recargar con SIGHUP lo pide con `listen_signal`.
+/// The hang-up signal: the terminal closed — and, by convention, "reload your configuration" for a
+/// daemon. Deliver it through `signals()` with `listen_signal(SIGHUP)`.
+pub const SIGHUP: int = 1;
+
+/// The quit signal (Ctrl-\ on a terminal); a daemon may use it to dump its state.
+pub const SIGQUIT: int = 3;
+
+/// The number of the user-defined signal `SIGUSR1` on this OS (30 on macOS/BSD, 10 on Linux;
+/// `0` on Windows, which has no POSIX signals).
+pub fn sigusr1() -> int {
+    let os = platform();
+    if (os == "windows") { 0 } else if (os == "linux" || os == "android") { 10 } else { 30 }
+}
+
+/// The number of the user-defined signal `SIGUSR2` on this OS (31 on macOS/BSD, 12 on Linux;
+/// `0` on Windows).
+pub fn sigusr2() -> int {
+    let os = platform();
+    if (os == "windows") { 0 } else if (os == "linux" || os == "android") { 12 } else { 31 }
+}
+
+/// Asks the runtime to deliver one more signal through the `signals()` channel: `SIGHUP`,
+/// `SIGQUIT`, `sigusr1()` or `sigusr2()`. Without this call those keep the OS default action
+/// (the process dies). Returns `false` for any other number, on Windows, and on the interpreter.
+/// The reload-on-hang-up pattern: `process.listen_signal(process.SIGHUP);` then
+/// `match (recv(signals())) { Option.Some(1) => reload(), … }`.
+pub fn listen_signal(sig: int) -> bool {
+    let _ = signals();
+    __signal_listen(sig)
+}
+
 /// Runs `program` with `args` (no shell — a pipeline is written `run("sh", ["-c", …])`,
 /// visibly). `Ok(Output)` even when the child failed or died by signal; `Err(message)` only
 /// when it could not launch.

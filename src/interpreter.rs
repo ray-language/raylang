@@ -2189,6 +2189,8 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("the checker guarantees ints"),
             },
             // std/term (M107.3): isatty / tamaño / modo crudo.
+            // M357: el intérprete no tiene `signals()` (requiere la VM); pedir una señal extra es `false`.
+            "__signal_listen" => Value::Bool(false),
             "__term_is_tty" => match &values[0] {
                 Value::Int(fd) => Value::Bool(crate::builtins::term_is_tty(*fd)),
                 _ => unreachable!("the checker guarantees an int"),

@@ -4,7 +4,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.37 — 2026-10-05
+
+El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el
+scheduler y los `scope`, los paquetes, las herramientas, y la pila de red medida (reactor por
+worker como prototipo, un contexto por conexión en el webserver).
 
 - **`net.tcp_connect` y `net.tls_connect` ya no bloquean el hilo worker**: el dial corre aparte y
   la fibra aparca, como ya hacía `tcp_connect_timeout`. Antes, tantas fibras marcando a un host que

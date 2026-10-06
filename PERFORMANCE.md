@@ -2038,7 +2038,7 @@ de un canal, el pool bloqueante) entra por la cola del worker y, si el dueño du
 le toca su tubería (Dekker sobre `pending`/`polling`). Equidad: sondeo con timeout 0 cada ~1 ms
 entre tareas, para que los plazos no esperen a que la cola se vacíe.
 
-**Medición** (macOS, M4 11 núcleos, 6 oct 2026; `oha -c 64`, 6 s, generador en la misma máquina;
+**Medición** (macOS, M4 11 núcleos, 5 oct 2026; `oha -c 64`, 6 s, generador en la misma máquina;
 servidor = `benchmarks/web/plaintext` sobre `net/webserver`; proxy nulo = `serve_with` → `http.pool`
 → ese servidor; binarios `--release`, mismo binario para ambos modos):
 

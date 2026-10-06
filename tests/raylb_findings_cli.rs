@@ -4,6 +4,7 @@
 //! M357: el scheduler y los `scope` (L8, L15) y las señales extra (L1).
 //! M359: los paquetes (L11 `metrics.series`, L6/L7 `serve_options_on` + `with_stop` + `quiet`, L4 toml).
 //! M360: documentación y tooling (R35 sintaxis de dependencias, R36 paquete-librería, L18 perfilador).
+//! M358: el reactor por worker del scheduler nativo (`RAYLANG_REACTOR=local`), prototipo medido.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -88,6 +89,74 @@ fn native(d: &PathBuf, want: &str) {
     let out = Command::new(&bin).current_dir(d).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), want, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
 }
+
+const SERVE_OPTIONS_ON_PROG: &str = r#"import std/net;
+import std/time;
+import net/webserver;
+import net/http;
+fn main() -> int {
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(srv);
+    let stop: Channel<int> = Channel.new();
+    let done: Channel<int> = Channel.new();
+    spawn(fn() {
+        let opts = webserver.options().with_stop(stop).with_drain(500).quiet();
+        let r = webserver.serve_options_on(srv, opts, fn() -> fn(webserver.Request) -> webserver.Response {
+            fn(req: webserver.Request) -> webserver.Response { webserver.text(200, "hi") }
+        });
+        send(done, r.unwrap_or(0 - 1));
+    });
+    let r = http.fetch("http://127.0.0.1:${port}/").unwrap();
+    print(r.status);
+    let t0 = time.monotonic();
+    send(stop, 1);
+    print("serve returned " + to_string(recv(done).unwrap_or(0 - 2)) + " quick=" + to_string(time.monotonic() - t0 < 2000));
+    print(http.fetch("http://127.0.0.1:${port}/").is_err());
+    0
+}
+"#;
+
+const SELECT_TIMEOUTS_PROG: &str = r#"import std/time;
+fn main() -> int {
+    let out: Channel<string> = Channel.bounded(64);
+    for w in [0, 2, 9, 30] {
+        let wait = w;
+        let s: Channel<int> = Channel.bounded(1);
+        spawn(fn() {
+            match (select_timeout([s], wait)) {
+                Option.Some(i) => send(out, "stop?"),
+                Option.None => send(out, "woke after ${wait}"),
+            }
+        });
+    }
+    time.sleep(300);
+    var got: [string] = [];
+    while (true) {
+        match (try_recv(out)) { Received.Got(x) => got.push(x), _ => break, }
+    }
+    print(sort(got));
+    // Un canal compartido por 3 fibras, 3 vueltas de 20 ms cada una: 9 ticks.
+    let shared: Channel<int> = Channel.bounded(1);
+    let ticks: Channel<int> = Channel.bounded(64);
+    for k in [1, 2, 3] {
+        spawn(fn() {
+            var n = 0;
+            while (n < 3) {
+                let _ = select_timeout([shared], 20);
+                send(ticks, k);
+                n = n + 1;
+            }
+        });
+    }
+    time.sleep(400);
+    var count = 0;
+    while (true) {
+        match (try_recv(ticks)) { Received.Got(x) => count = count + 1, _ => break, }
+    }
+    print(count);
+    0
+}
+"#;
 
 /// L19/L14/L5: cuatro fibras marcan a un host que descarta los SYN (10.255.255.1, no enrutable) con
 /// dos hilos worker. Antes el `connect` bloqueaba al worker: los temporizadores de `main` se
@@ -313,47 +382,7 @@ fn main() -> int {
 fn concurrent_select_timeouts_all_fire() {
     vm_and_native(
         "select_timeouts",
-        r#"import std/time;
-fn main() -> int {
-    let out: Channel<string> = Channel.bounded(64);
-    for w in [0, 2, 9, 30] {
-        let wait = w;
-        let s: Channel<int> = Channel.bounded(1);
-        spawn(fn() {
-            match (select_timeout([s], wait)) {
-                Option.Some(i) => send(out, "stop?"),
-                Option.None => send(out, "woke after ${wait}"),
-            }
-        });
-    }
-    time.sleep(300);
-    var got: [string] = [];
-    while (true) {
-        match (try_recv(out)) { Received.Got(x) => got.push(x), _ => break, }
-    }
-    print(sort(got));
-    // Un canal compartido por 3 fibras, 3 vueltas de 20 ms cada una: 9 ticks.
-    let shared: Channel<int> = Channel.bounded(1);
-    let ticks: Channel<int> = Channel.bounded(64);
-    for k in [1, 2, 3] {
-        spawn(fn() {
-            var n = 0;
-            while (n < 3) {
-                let _ = select_timeout([shared], 20);
-                send(ticks, k);
-                n = n + 1;
-            }
-        });
-    }
-    time.sleep(400);
-    var count = 0;
-    while (true) {
-        match (try_recv(ticks)) { Received.Got(x) => count = count + 1, _ => break, }
-    }
-    print(count);
-    0
-}
-"#,
+        SELECT_TIMEOUTS_PROG,
         "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n",
     );
 }
@@ -561,31 +590,7 @@ lat_count 1
 #[test]
 fn serve_options_on_a_listener_with_a_stop_channel_and_quiet() {
     let d = project("serve_options_on");
-    std::fs::write(d.join("prog.ray"), r#"import std/net;
-import std/time;
-import net/webserver;
-import net/http;
-fn main() -> int {
-    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
-    let port = net.local_port(srv);
-    let stop: Channel<int> = Channel.new();
-    let done: Channel<int> = Channel.new();
-    spawn(fn() {
-        let opts = webserver.options().with_stop(stop).with_drain(500).quiet();
-        let r = webserver.serve_options_on(srv, opts, fn() -> fn(webserver.Request) -> webserver.Response {
-            fn(req: webserver.Request) -> webserver.Response { webserver.text(200, "hi") }
-        });
-        send(done, r.unwrap_or(0 - 1));
-    });
-    let r = http.fetch("http://127.0.0.1:${port}/").unwrap();
-    print(r.status);
-    let t0 = time.monotonic();
-    send(stop, 1);
-    print("serve returned " + to_string(recv(done).unwrap_or(0 - 2)) + " quick=" + to_string(time.monotonic() - t0 < 2000));
-    print(http.fetch("http://127.0.0.1:${port}/").is_err());
-    0
-}
-"#).unwrap();
+    std::fs::write(d.join("prog.ray"), SERVE_OPTIONS_ON_PROG).unwrap();
     vm_and_native_two_threads(&d, "200\nserve returned 0 quick=true\ntrue\n");
 }
 
@@ -663,4 +668,37 @@ fn the_profiler_discounts_its_own_instrumentation() {
     // `tiny` + su bucle. Se exige solo que el informe sea coherente: ambas funciones aparecen.
     assert!(report.contains("\"name\":\"tiny\",\"calls\":100000"), "{report}");
     assert!(report.contains("\"name\":\"outer\",\"calls\":50"), "{report}");
+}
+
+/// M358: el binario nativo con reactor POR WORKER (`RAYLANG_REACTOR=local`) sirve, apaga por canal y
+/// mantiene los plazos de `select_timeout`, con dos workers. Mismo programa que la prueba de
+/// `serve_options_on` y la de `select_timeout`; solo cambia el modo del scheduler.
+#[cfg(unix)]
+#[test]
+fn the_per_worker_reactor_serves_and_keeps_deadlines() {
+    if !has_rustc() {
+        return;
+    }
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let cases: [(&str, &str, &str); 2] = [
+        (
+            "local_reactor_serve",
+            SERVE_OPTIONS_ON_PROG,
+            "200\nserve returned 0 quick=true\ntrue\n",
+        ),
+        (
+            "local_reactor_select",
+            SELECT_TIMEOUTS_PROG,
+            "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n",
+        ),
+    ];
+    for (name, src, want) in cases {
+        let d = project(name);
+        std::fs::write(d.join("prog.ray"), src).unwrap();
+        let bin = d.join("prog_bin");
+        let b = Command::new(ray).args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
+        let out = Command::new(&bin).env("RAYLANG_REACTOR", "local").env("RAYLANG_THREADS", "2").current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{name}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
 }

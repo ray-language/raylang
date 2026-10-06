@@ -16980,3 +16980,42 @@ guarda funciones) ya se diagnosticaban bien en el build, pero un programa que pa
 los tests en la VM las descubría al final. llms.txt las enumera con su forma correcta; es
 deliberadamente la doc del asistente la que lo cuenta, porque es ahí donde se escribe el código.
 
+---
+
+## 346. M358 — El reactor por worker: un prototipo que midió su propia hipótesis (oct 2026)
+
+Cuarto paso del plan de raylb (IDEAS §103), el único con una decisión de diseño por delante y
+por eso hecho como prototipo medible antes de comprometer nada. La hipótesis venía del análisis
+de los números de raylb: la pila de red nativa rendía la mitad que nginx/HAProxy como proxy, y el
+scheduler tenía UN hilo reactor al que cada aparcado de E/S llegaba por buzón con mutex, tubería
+de despertar, registro en el poller y condvar de vuelta — cuatro syscalls y dos cambios de hilo
+por E/S que un bucle de eventos por hilo no paga.
+
+**El prototipo.** El estado del reactor se separa del hilo que lo conduce (`ReactorState`:
+poller, esperas por fd, sueños, pulsos de lista, plazos de E/S); el hilo reactor único lo sigue
+usando tal cual, y un `worker_loop_local` lo conduce dentro de cada worker. Como la fibra está
+fijada a su worker (la restricción de corrección que ya existía por los TLS cacheados por LLVM),
+el poller de su worker es el único que necesita conocer sus fds: aparcar es un `kevent` local y el
+despertar llega al hilo que la reanuda. Lo que de verdad cruza hilos —`spawn` hacia otro worker,
+el despertar de un canal, una tarea del pool bloqueante— sigue entrando por la cola del worker;
+si el dueño duerme en su poller, quien encola le toca su tubería (Dekker sobre `pending` y
+`polling`, los dos `SeqCst`). Equidad: con la cola llena, una vuelta de poller con timeout 0 cada
+milisegundo, para que los plazos no esperen a que la cola se vacíe. `poke()` (un `close`) toca a
+todos los workers. Se elige con `RAYLANG_REACTOR=local`; Windows conserva el modelo único.
+
+**Lo que midió** (PERFORMANCE.md §10): +7 % de req/s en servidor y +8 % en proxy nulo con dos
+workers, +5 %/+3 % con cuatro, nada con once; la cola de latencia sí mejora en todos los casos
+(p99 −15 a −60 %). La hipótesis era cierta y su peso no: el muestreo del worker bajo carga
+reparte el tiempo en las syscalls de verdad (45 %), `kevent` (10 %, inherente) y un 15 % de
+trabajo por petición que no tiene por qué ser por petición — `peer_addr` en cada petición
+keep-alive (7,3 %, la mitad esperando el mutex del registro de handles), la cabecera `Date`
+formateada por respuesta (3,9 %), la comprobación «¿sigue abierto?» con mutex global por lectura
+(2,9 %), un `getenv` por respuesta. Eso es más que lo que da el reactor local, no toca el diseño
+del scheduler y se arregla en el paquete y el runtime (M361).
+
+**La decisión que queda.** El default sigue siendo el hilo reactor único: cambiarlo es una
+decisión de diseño que se toma con las cifras delante, y la medida que vale para el techo —el
+generador en otra máquina— no se ha repetido. La propuesta registrada: hacer primero los tres
+cambios baratos, poner el reactor local como default en unix cuando el CI de Linux lo haya
+ejercitado (con `RAYLANG_REACTOR=shared` como retirada) y re-medir con el banco de carga real.
+

@@ -280,6 +280,17 @@ struct Scheduler {
     inbox: Mutex<Vec<Op>>,
     /// Extremo de escritura de la tubería de despertar del reactor.
     wake_wr: i32,
+    /// M358: ¿reactor POR WORKER? Cada worker tiene su propio poller y sus temporizadores; un
+    /// aparcado de E/S no cruza de hilo (ni buzón, ni tubería, ni condvar). Se elige al arrancar
+    /// (`RAYLANG_REACTOR=local|shared`); con `false` el modelo es el de siempre (un hilo reactor).
+    local_reactor: bool,
+    /// M358: la tubería de despertar de CADA worker (modo local): quien encola en una cola cuyo
+    /// dueño está dormido en su poller le escribe un byte.
+    worker_wake_wr: Vec<i32>,
+    /// M358: ¿está el worker dormido (o a punto) en su poller? Protocolo Dekker con `pending`:
+    /// el worker publica `polling = true` y relee `pending`; el que encola incrementa `pending`
+    /// y relee `polling`. Al menos uno de los dos ve al otro.
+    polling: Vec<std::sync::atomic::AtomicBool>,
 }
 
 impl Scheduler {
@@ -310,10 +321,18 @@ impl Scheduler {
 
     /// Encola una fibra LISTA en la cola de su worker de origen (nunca en otra).
     fn enqueue(&self, t: Task) {
-        let wq = &self.queues[t.home];
+        let home = t.home;
+        let wq = &self.queues[home];
         wq.q.lock().unwrap().push_back(t);
-        wq.pending.fetch_add(1, std::sync::atomic::Ordering::Release);
-        wq.cv.notify_one();
+        wq.pending.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.local_reactor {
+            // M358: el dueño duerme en su poller, no en la condvar.
+            if self.polling[home].load(std::sync::atomic::Ordering::SeqCst) {
+                sys::wake(self.worker_wake_wr[home], 1);
+            }
+        } else {
+            wq.cv.notify_one();
+        }
     }
 
     fn to_reactor(&self, op: Op) {
@@ -378,23 +397,45 @@ fn sched() -> &'static Scheduler {
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n >= 1)
             .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
+        // M358: reactor por worker (unix), PROTOTIPO medido (PERFORMANCE.md §M358): +5–8 % de
+        // req/s con 2–4 workers, neutro con 11. `RAYLANG_REACTOR=local` lo activa; el default sigue
+        // siendo el hilo reactor único hasta decidir el diseño con las cifras delante.
+        let local_reactor = cfg!(unix) && matches!(std::env::var("RAYLANG_REACTOR").as_deref(), Ok("local"));
+        let mut worker_wake_rd: Vec<i32> = Vec::new();
+        let mut worker_wake_wr: Vec<i32> = Vec::new();
+        if local_reactor {
+            for _ in 0..workers {
+                let (rd, wr) = sys::wake_pipe();
+                worker_wake_rd.push(rd);
+                worker_wake_wr.push(wr);
+            }
+        }
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
             queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
             wake_wr,
+            local_reactor,
+            worker_wake_wr,
+            polling: (0..workers).map(|_| std::sync::atomic::AtomicBool::new(false)).collect(),
         }));
         for i in 0..workers {
+            let rd = worker_wake_rd.get(i).copied();
             std::thread::Builder::new()
                 .name(format!("ray-fiber-worker-{i}"))
-                .spawn(move || worker_loop(s, i))
+                .spawn(move || match rd {
+                    Some(rd) => worker_loop_local(s, i, rd),
+                    None => worker_loop(s, i),
+                })
                 .expect("could not start a fiber worker");
         }
-        std::thread::Builder::new()
-            .name("ray-fiber-reactor".into())
-            .spawn(move || reactor_loop(s, wake_rd))
-            .expect("could not start the fiber reactor");
+        if !local_reactor {
+            std::thread::Builder::new()
+                .name("ray-fiber-reactor".into())
+                .spawn(move || reactor_loop(s, wake_rd))
+                .expect("could not start the fiber reactor");
+        }
         s
     })
 }
@@ -508,7 +549,15 @@ pub fn wait_readable_timeout(fd: i32, timeout_ms: i64) -> bool {
 /// error/listo → la fibra aparcada en él despierta y su syscall reporta el error real (el mismo
 /// papel que cumple el re-poll por ronda del scheduler de la VM).
 pub fn poke() {
-    sys::wake(sched().wake_wr, 2);
+    let s = sched();
+    if s.local_reactor {
+        // M358: cada worker re-arma sus intereses en su siguiente vuelta por el poller.
+        for &wr in &s.worker_wake_wr {
+            sys::wake(wr, 2);
+        }
+    } else {
+        sys::wake(s.wake_wr, 2);
+    }
 }
 
 /// Acceso al almacén FIBER-LOCAL de la fibra en ejecución: `None` si este hilo no está ejecutando
@@ -839,127 +888,162 @@ impl PartialOrd for IoDeadline {
     }
 }
 
-fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
-    use std::cmp::Reverse;
-    let mut poller = sys::Poller::new(wake_rd);
-    // Esperas por fd. F5: las entradas NO se borran al vaciarse — conservan la capacidad de sus
-    // Vec (cero asignaciones por park en régimen). El mapa queda acotado por el pico de fds
-    // concurrentes (los números de fd se REUTILIZAN), no por el total histórico.
-    let mut fds: HashMap<i32, FdWaiters> = HashMap::new();
-    // Sleeps: pocos y de vida legítima → Vec con barrido lineal basta.
-    let mut sleeps: Vec<(Instant, Task)> = Vec::new();
-    // Pulsos de cancelación de las esperas de lista (F3): barrido lineal, acotado por el número
-    // de fibras esperando condiciones (no por el caudal).
-    let mut wait_polls: Vec<(Instant, WaitList, u64)> = Vec::new();
-    // Deadlines de E/S: min-heap + cancelación explícita + compactación (ver F2: los huérfanos
-    // del read-timeout llegaban a ~1M de entradas a 100k rps con barrido O(n)).
-    let mut io_deadlines: std::collections::BinaryHeap<Reverse<IoDeadline>> = std::collections::BinaryHeap::new();
-    let mut cancelled: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut next_id: u64 = 0;
-    // Buffers reutilizados (F5): el buzón se intercambia por swap (el buffer hace ping-pong y no
-    // se libera nunca → sin churn cruzado de hilos) y los despertares se agrupan POR WORKER para
-    // tomar cada cola una sola vez por ciclo.
-    let mut ops: Vec<Op> = Vec::new();
-    let mut batches: Vec<Vec<Task>> = (0..s.queues.len()).map(|_| Vec::new()).collect();
-    loop {
-        // 1) Drena el buzón de los workers (swap: sin asignar ni liberar buffers).
-        std::mem::swap(&mut *s.inbox.lock().unwrap(), &mut ops);
-        for op in ops.drain(..) {
-            match op {
-                Op::Wait(fd, dir, deadline, t) => {
-                    next_id += 1;
-                    let w = fds.entry(fd).or_default();
-                    let has_dl = deadline.is_some();
-                    match dir {
-                        Dir::Read => w.read.push((next_id, has_dl, t)),
-                        Dir::Write => w.write.push((next_id, has_dl, t)),
-                    }
-                    if let Some(at) = deadline {
-                        io_deadlines.push(Reverse(IoDeadline { at, fd, dir_write: dir == Dir::Write, id: next_id }));
-                    }
-                    // F5: armado INCREMENTAL — solo el interés nuevo (kqueue lo presenta con el
-                    // siguiente kevent; epoll hace el ctl aquí). Si no se puede armar (fd ya
-                    // cerrado en carrera), despierta YA: su syscall verá el error real.
-                    if !poller.arm(fd, dir) {
-                        let w = fds.get_mut(&fd).unwrap();
-                        let v = match dir {
-                            Dir::Read => &mut w.read,
-                            Dir::Write => &mut w.write,
-                        };
-                        if let Some((id, had_dl, t)) = v.pop() {
-                            if had_dl {
-                                cancelled.insert(id);
-                            }
-                            batches[t.home].push(t);
+/// M358: el ESTADO de un reactor —poller, esperas por fd, sueños, pulsos de lista y plazos de
+/// E/S—, separado del hilo que lo conduce. Lo usan dos conductores: el hilo reactor único
+/// (`reactor_loop`, modo `shared`) y cada worker con reactor propio (`worker_loop_local`). Las
+/// fibras despertadas salen por `out`; quien conduce decide a qué cola van.
+struct ReactorState {
+    poller: sys::Poller,
+    wake_rd: i32,
+    /// Esperas por fd. F5: las entradas NO se borran al vaciarse — conservan la capacidad de sus
+    /// Vec (cero asignaciones por park en régimen). El mapa queda acotado por el pico de fds
+    /// concurrentes (los números de fd se REUTILIZAN), no por el total histórico.
+    fds: HashMap<i32, FdWaiters>,
+    /// Sleeps: pocos y de vida legítima → Vec con barrido lineal basta.
+    sleeps: Vec<(Instant, Task)>,
+    /// Pulsos de cancelación de las esperas de lista (F3): barrido lineal, acotado por el número
+    /// de fibras esperando condiciones (no por el caudal).
+    wait_polls: Vec<(Instant, WaitList, u64)>,
+    /// Deadlines de E/S: min-heap + cancelación explícita + compactación (ver F2: los huérfanos
+    /// del read-timeout llegaban a ~1M de entradas a 100k rps con barrido O(n)).
+    io_deadlines: std::collections::BinaryHeap<std::cmp::Reverse<IoDeadline>>,
+    cancelled: std::collections::HashSet<u64>,
+    next_id: u64,
+}
+
+impl ReactorState {
+    fn new(wake_rd: i32) -> ReactorState {
+        ReactorState {
+            poller: sys::Poller::new(wake_rd),
+            wake_rd,
+            fds: HashMap::new(),
+            sleeps: Vec::new(),
+            wait_polls: Vec::new(),
+            io_deadlines: std::collections::BinaryHeap::new(),
+            cancelled: std::collections::HashSet::new(),
+            next_id: 0,
+        }
+    }
+
+    /// ¿Hay algo que esperar (fibras aparcadas en fds o temporizadores vivos)?
+    fn is_idle(&self) -> bool {
+        self.sleeps.is_empty()
+            && self.wait_polls.is_empty()
+            && self.io_deadlines.is_empty()
+            && self.fds.values().all(|w| w.read.is_empty() && w.write.is_empty())
+    }
+
+    /// Registra una operación. Un fd que no se puede armar (ya cerrado en carrera) despierta YA
+    /// a su fibra por `out`: su syscall verá el error real.
+    fn apply(&mut self, op: Op, out: &mut Vec<Task>) {
+        use std::cmp::Reverse;
+        match op {
+            Op::Wait(fd, dir, deadline, t) => {
+                self.next_id += 1;
+                let id = self.next_id;
+                let w = self.fds.entry(fd).or_default();
+                let has_dl = deadline.is_some();
+                match dir {
+                    Dir::Read => w.read.push((id, has_dl, t)),
+                    Dir::Write => w.write.push((id, has_dl, t)),
+                }
+                if let Some(at) = deadline {
+                    self.io_deadlines.push(Reverse(IoDeadline { at, fd, dir_write: dir == Dir::Write, id }));
+                }
+                // F5: armado INCREMENTAL — solo el interés nuevo (kqueue lo presenta con el
+                // siguiente kevent; epoll hace el ctl aquí).
+                if !self.poller.arm(fd, dir) {
+                    let w = self.fds.get_mut(&fd).unwrap();
+                    let v = match dir {
+                        Dir::Read => &mut w.read,
+                        Dir::Write => &mut w.write,
+                    };
+                    if let Some((id, had_dl, t)) = v.pop() {
+                        if had_dl {
+                            self.cancelled.insert(id);
                         }
+                        out.push(t);
                     }
                 }
-                Op::Timer(at, t) => sleeps.push((at, t)),
-                Op::WaitPoll(at, wl, id) => wait_polls.push((at, wl, id)),
             }
+            Op::Timer(at, t) => self.sleeps.push((at, t)),
+            Op::WaitPoll(at, wl, id) => self.wait_polls.push((at, wl, id)),
         }
-        // 2) Despierta los vencidos y calcula el timeout hasta el siguiente plazo vivo.
-        let now = Instant::now();
+    }
+
+    /// Despierta los plazos vencidos (sueños, pulsos de lista, deadlines de E/S).
+    fn expire(&mut self, now: Instant, out: &mut Vec<Task>) {
+        use std::cmp::Reverse;
         let mut i = 0;
-        while i < sleeps.len() {
-            if sleeps[i].0 <= now {
-                let (_, t) = sleeps.swap_remove(i);
-                batches[t.home].push(t);
+        while i < self.sleeps.len() {
+            if self.sleeps[i].0 <= now {
+                let (_, t) = self.sleeps.swap_remove(i);
+                out.push(t);
             } else {
                 i += 1;
             }
         }
         let mut j = 0;
-        while j < wait_polls.len() {
-            if wait_polls[j].0 <= now {
-                let (_, wl, id) = wait_polls.swap_remove(j);
+        while j < self.wait_polls.len() {
+            if self.wait_polls[j].0 <= now {
+                let (_, wl, id) = self.wait_polls.swap_remove(j);
                 if let Some(t) = wl.remove(id) {
-                    batches[t.home].push(t); // pulso: rechequea condición/cancelación y re-espera
+                    out.push(t); // pulso: rechequea condición/cancelación y re-espera
                 }
             } else {
                 j += 1;
             }
         }
-        while let Some(Reverse(dl)) = io_deadlines.peek() {
+        while let Some(Reverse(dl)) = self.io_deadlines.peek() {
             if dl.at > now {
                 break;
             }
-            let Reverse(dl) = io_deadlines.pop().unwrap();
-            if cancelled.remove(&dl.id) {
+            let Reverse(dl) = self.io_deadlines.pop().unwrap();
+            if self.cancelled.remove(&dl.id) {
                 continue; // el readiness ganó la carrera: temporizador ya cancelado
             }
-            if let Some(w) = fds.get_mut(&dl.fd) {
+            if let Some(w) = self.fds.get_mut(&dl.fd) {
                 let v = if dl.dir_write { &mut w.write } else { &mut w.read };
                 if let Some(pos) = v.iter().position(|(wid, _, _)| *wid == dl.id) {
                     let (_, _, mut t) = v.swap_remove(pos);
                     t.timed_out = true;
-                    batches[t.home].push(t);
+                    out.push(t);
                 }
             }
         }
-        if cancelled.len() > 8192 {
-            io_deadlines.retain(|Reverse(dl)| !cancelled.contains(&dl.id));
-            cancelled.clear();
+        if self.cancelled.len() > 8192 {
+            let cancelled = &self.cancelled;
+            self.io_deadlines.retain(|Reverse(dl)| !cancelled.contains(&dl.id));
+            self.cancelled.clear();
         }
-        // 3) Entrega los despertares acumulados hasta aquí, agrupados por worker (una toma de
-        //    lock por cola y por ciclo), y espera readiness.
-        flush_batches(s, &mut batches);
-        let next_sleep = sleeps.iter().map(|(at, _)| *at).min();
-        let next_io = io_deadlines.peek().map(|Reverse(dl)| dl.at);
-        let next_poll = wait_polls.iter().map(|(at, _, _)| *at).min();
-        let timeout_ms: i32 = match [next_sleep, next_io, next_poll].into_iter().flatten().min() {
-            None => -1, // sin plazos: espera infinita; la tubería interrumpe con trabajo
+    }
+
+    /// Milisegundos hasta el plazo más próximo (`-1` = sin plazos: espera infinita).
+    fn next_timeout_ms(&self, now: Instant) -> i32 {
+        use std::cmp::Reverse;
+        let next_sleep = self.sleeps.iter().map(|(at, _)| *at).min();
+        let next_io = self.io_deadlines.peek().map(|Reverse(dl)| dl.at);
+        let next_poll = self.wait_polls.iter().map(|(at, _, _)| *at).min();
+        match [next_sleep, next_io, next_poll].into_iter().flatten().min() {
+            None => -1,
             Some(at) => at.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32,
-        };
+        }
+    }
+
+    /// Espera readiness hasta `timeout_ms` y despierta por `out` a las fibras de los fds listos.
+    /// Devuelve `true` si la tubería trajo un POKE (un `close`): ya re-armó todos los intereses
+    /// vivos (el knote/registro de un fd cerrado muere en silencio; re-armado, el fd muerto
+    /// vuelve como error/listo y su fibra despierta al error real).
+    fn wait(&mut self, timeout_ms: i32, out: &mut Vec<Task>) -> bool {
         let mut rearm_all = false;
-        for &(fd, dir) in poller.wait(timeout_ms) {
-            if fd == wake_rd {
-                if sys::drain(wake_rd) {
+        for &(fd, dir) in self.poller.wait(timeout_ms) {
+            if fd == self.wake_rd {
+                if sys::drain(self.wake_rd) {
                     rearm_all = true;
                 }
                 continue;
             }
-            if let Some(w) = fds.get_mut(&fd) {
+            if let Some(w) = self.fds.get_mut(&fd) {
                 let v = match dir {
                     Dir::Read => &mut w.read,
                     Dir::Write => &mut w.write,
@@ -967,28 +1051,183 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                 // Drena los waiters SIN liberar la capacidad del Vec (entrada persistente).
                 for (id, had_dl, t) in v.drain(..) {
                     if had_dl {
-                        cancelled.insert(id); // su temporizador ya no debe despertar a nadie
+                        self.cancelled.insert(id); // su temporizador ya no debe despertar a nadie
                     }
-                    batches[t.home].push(t);
+                    out.push(t);
                 }
             }
         }
-        // 4) Tras un POKE (un close del programa): el knote/registro de un fd cerrado muere en
-        //    silencio → re-arma TODOS los intereses vivos; el fd muerto vuelve como error/listo
-        //    en el siguiente wait y su fibra despierta al error real. O(fds aparcados), solo en
-        //    closes (coalescidos por ciclo), que es lo que el modelo de re-registro-total pagaba
-        //    en TODOS los ciclos.
         if rearm_all {
-            for (&fd, w) in fds.iter() {
+            for (&fd, w) in self.fds.iter() {
                 if !w.read.is_empty() {
-                    let _ = poller.arm(fd, Dir::Read);
+                    let _ = self.poller.arm(fd, Dir::Read);
                 }
                 if !w.write.is_empty() {
-                    let _ = poller.arm(fd, Dir::Write);
+                    let _ = self.poller.arm(fd, Dir::Write);
                 }
             }
         }
+        rearm_all
+    }
+}
+
+/// El hilo reactor único (modo `shared`): drena el buzón de los workers, conduce el estado del
+/// reactor y devuelve las fibras despertadas a la cola de su worker de origen, agrupadas por
+/// worker (una toma de lock por cola y por ciclo).
+fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
+    let mut rs = ReactorState::new(wake_rd);
+    // Buffers reutilizados (F5): el buzón se intercambia por swap (el buffer hace ping-pong y no
+    // se libera nunca → sin churn cruzado de hilos).
+    let mut ops: Vec<Op> = Vec::new();
+    let mut woken: Vec<Task> = Vec::new();
+    let mut batches: Vec<Vec<Task>> = (0..s.queues.len()).map(|_| Vec::new()).collect();
+    loop {
+        // 1) Drena el buzón de los workers (swap: sin asignar ni liberar buffers).
+        std::mem::swap(&mut *s.inbox.lock().unwrap(), &mut ops);
+        for op in ops.drain(..) {
+            rs.apply(op, &mut woken);
+        }
+        // 2) Despierta los vencidos y calcula el timeout hasta el siguiente plazo vivo.
+        let now = Instant::now();
+        rs.expire(now, &mut woken);
+        // 3) Entrega los despertares acumulados hasta aquí, agrupados por worker, y espera readiness.
+        for t in woken.drain(..) {
+            batches[t.home].push(t);
+        }
         flush_batches(s, &mut batches);
+        let timeout_ms = rs.next_timeout_ms(now);
+        rs.wait(timeout_ms, &mut woken);
+        for t in woken.drain(..) {
+            batches[t.home].push(t);
+        }
+        flush_batches(s, &mut batches);
+    }
+}
+
+/// M358: el worker con REACTOR PROPIO. La fibra está fijada a su worker, así que el poller del
+/// worker es el único que necesita conocer sus fds: un aparcado de E/S es un `kevent`/`epoll_ctl`
+/// local y el despertar llega al mismo hilo que lo va a reanudar — sin buzón, sin tubería y sin
+/// condvar por aparcado (en el modelo `shared` eran 4 syscalls y 2 cambios de hilo por E/S; medido
+/// en PERFORMANCE.md §M358). Lo que sí cruza hilos —`spawn` hacia otro worker, el despertar de un
+/// canal, el pool bloqueante— sigue entrando por la cola del worker; si el dueño duerme en su
+/// poller, el que encola le toca su tubería (`Scheduler::enqueue`).
+///
+/// Equidad: entre tarea y tarea se sondea el poller con timeout 0 cada ~1 ms, para que los
+/// temporizadores y la E/S no esperen a que la cola de listas se vacíe (una cola que no se vacía
+/// nunca es el caso de un servidor saturado: justo cuando los `select_timeout` importan).
+fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
+    let wq = &s.queues[me];
+    let spin_us: u64 = std::env::var("RAYLANG_SPIN_US").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_SPIN_US);
+    let mut rs = ReactorState::new(wake_rd);
+    // Fibras despertadas por el reactor local, listas para correr (FIFO).
+    let mut ready: VecDeque<Task> = VecDeque::new();
+    let mut woken: Vec<Task> = Vec::new();
+    let mut last_poll = Instant::now();
+    loop {
+        // Sondeo de equidad: con trabajo en la cola, una vuelta de timeout 0 cada ~1 ms.
+        if last_poll.elapsed() >= Duration::from_millis(1) {
+            let now = Instant::now();
+            rs.expire(now, &mut woken);
+            if !rs.is_idle() {
+                rs.wait(0, &mut woken);
+            } else {
+                // Sin fds ni plazos: solo drenar la tubería si alguien la tocó.
+                sys::drain(wake_rd);
+            }
+            ready.extend(woken.drain(..));
+            last_poll = now;
+        }
+        // 1) Una tarea: las despertadas por el reactor local primero, luego la cola compartida.
+        let mut task = match ready.pop_front() {
+            Some(t) => t,
+            None => {
+                let from_queue = if wq.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                    let mut q = wq.q.lock().unwrap();
+                    let t = q.pop_front();
+                    if t.is_some() {
+                        wq.pending.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    t
+                } else {
+                    None
+                };
+                match from_queue {
+                    Some(t) => t,
+                    None => {
+                        // 2) Ocioso: spin breve mirando la cola (M319), luego dormir en el poller.
+                        if spin_us > 0 {
+                            let until = Instant::now() + Duration::from_micros(spin_us);
+                            while wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < until {
+                                std::thread::yield_now();
+                            }
+                        }
+                        s.polling[me].store(true, std::sync::atomic::Ordering::SeqCst);
+                        let now = Instant::now();
+                        rs.expire(now, &mut woken);
+                        let timeout_ms = if wq.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 || !woken.is_empty() {
+                            0
+                        } else {
+                            rs.next_timeout_ms(now)
+                        };
+                        rs.wait(timeout_ms, &mut woken);
+                        s.polling[me].store(false, std::sync::atomic::Ordering::SeqCst);
+                        ready.extend(woken.drain(..));
+                        last_poll = Instant::now();
+                        continue;
+                    }
+                }
+            }
+        };
+        debug_assert_eq!(task.home, me, "una fibra solo reanuda en su worker de origen");
+        CURRENT_LOCAL.with(|c| c.set(&mut task.local as *mut _));
+        let timed_out = std::mem::replace(&mut task.timed_out, false);
+        DEPTH.with(|d| d.set(task.depth));
+        DOMAIN.with(|d| d.set(task.domain));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.co.resume(timed_out)));
+        task.depth = DEPTH.with(|d| d.replace(0));
+        task.domain = DOMAIN.with(|d| d.replace(0));
+        CURRENT.with(|c| c.set(std::ptr::null()));
+        CURRENT_LOCAL.with(|c| c.set(std::ptr::null_mut()));
+        match r {
+            Ok(CoroutineResult::Yield(park)) => match park {
+                Park::Read(fd, dl) => rs.apply(Op::Wait(fd, Dir::Read, dl, task), &mut woken),
+                Park::Write(fd, dl) => rs.apply(Op::Wait(fd, Dir::Write, dl, task), &mut woken),
+                Park::SleepUntil(at) => rs.apply(Op::Timer(at, task), &mut woken),
+                Park::WaitOn(wl, seen) => {
+                    let mut waiters = wl.0.waiters.lock().unwrap();
+                    if wl.0.generation.load(std::sync::atomic::Ordering::SeqCst) != seen {
+                        drop(waiters);
+                        ready.push_back(task);
+                    } else {
+                        let id = NEXT_WAIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        waiters.push((id, task));
+                    }
+                }
+                Park::WaitOnTimeout(wl, seen, at) => {
+                    let mut waiters = wl.0.waiters.lock().unwrap();
+                    if wl.0.generation.load(std::sync::atomic::Ordering::SeqCst) != seen {
+                        drop(waiters);
+                        ready.push_back(task);
+                    } else {
+                        let id = NEXT_WAIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        waiters.push((id, task));
+                        drop(waiters);
+                        rs.apply(Op::WaitPoll(at, wl.clone(), id), &mut woken);
+                    }
+                }
+                Park::Yield => ready.push_back(task),
+            },
+            Ok(CoroutineResult::Return(())) => {
+                s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                finish(&task.done, Ok(()));
+            }
+            Err(p) => {
+                s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                finish(&task.done, Err(panic_msg(&*p)));
+            }
+        }
+        // Un fd imposible de armar despierta de inmediato (sale por `woken`).
+        ready.extend(woken.drain(..));
     }
 }
 

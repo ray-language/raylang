@@ -4021,7 +4021,7 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | **M355** | `connect` no bloqueante + plazo de conexión en el cliente HTTP | L19, L5 (y la mitad de L14) |
 | **M356** | Lote de correcciones de front-end y nativo | L2, L3, L9, L12, L16, L17, R34. (El cuelgue tras un ICE se reprodujo por fin en M359: solo con stderr en una tubería YA CERRADA —`2>&1 \| head -2`—; corregido en `with_big_stack_or_ice`) |
 | **M357** | Scheduler y `scope` de la VM | L8, L14 (resto), L15, L1 |
-| **M358** | Reactor por worker (prototipo medido antes de comprometer el diseño; no puede regresar los 188k) | la capa 1 de arriba |
+| **M358** | Reactor por worker — ✅ **prototipo medido** (PERFORMANCE.md §10): `RAYLANG_REACTOR=local`, +5–8 % con 2–4 workers, ±0 con 11, p99 −15–60 %; el muestreo atribuye ~15 % de la CPU por petición a `peer_addr`/`Date`/mutex del registro (→ M361). Decisión del default pendiente (cifras delante) | la capa 1 de arriba |
 | **M359** | Paquetes | L11 (métricas con índice/handle de serie), L13 (`trace`/`hex`), L6 (`serve_options_on` + canal de parada), L7 (opción `quiet`), L4 |
 | **M360** | Documentación y tooling | L10, L18, R35, R36 |
 

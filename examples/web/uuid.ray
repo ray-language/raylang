@@ -11,7 +11,7 @@ import std/random;
 import std/time;
 
 // 16 octetos → el formato canónico 8-4-4-4-12.
-fn formato(b: [int]) -> string {
+fn format_uuid(b: [int]) -> string {
     let h = hex_encode(bytes_of(b));  // 32 dígitos hex
     h.substring(0, 8)
         + "-"
@@ -37,7 +37,7 @@ pub fn uuid_v4() -> string {
     }
     b[6] = b[6] & 15 | 64;  // versión 4: 0x40 en el nibble alto
     b[8] = b[8] & 63 | 128;  // variante 10xx: 0x80 en los bits altos
-    formato(b)
+    format_uuid(b)
 }
 
 /// Generates a version-7 UUID (RFC 9562): 48-bit Unix timestamp in milliseconds (big-endian) +
@@ -68,7 +68,7 @@ pub fn uuid_v7_at(ms: int) -> string {
     }
     b[6] = b[6] & 15 | 112;  // versión 7: 0x70 en el nibble alto
     b[8] = b[8] & 63 | 128;  // variante 10xx: 0x80 en los bits altos
-    formato(b)
+    format_uuid(b)
 }
 
 // ¿Es `c` un dígito hexadecimal en minúscula (0-9 a-f)?
@@ -81,14 +81,14 @@ fn is_hex_lower(c: char) -> bool {
 
 // Valida la forma canónica común (longitud, guiones, dígito de versión, bits de variante, resto
 // hexadecimal); `ver` es el dígito de versión esperado ('4' o '7').
-fn is_uuid_ver(s: string, ver: char) -> bool {
+fn is_uuid_version(s: string, version: char) -> bool {
     if (s.len() != 36) {
         return false;
     }
     if (s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') {
         return false;
     }
-    if (s[14] != ver) {
+    if (s[14] != version) {
         // primer dígito del 3.er grupo = versión
         return false;
     }
@@ -112,10 +112,10 @@ fn is_uuid_ver(s: string, ver: char) -> bool {
 /// Checks whether `s` is a canonical version-4 UUID: length 36, hyphens at 8/13/18/23,
 /// version digit `4`, variant digit in 8/9/a/b, and lowercase hex everywhere else.
 pub fn is_uuid_v4(s: string) -> bool {
-    is_uuid_ver(s, '4')
+    is_uuid_version(s, '4')
 }
 
 /// Checks whether `s` is a canonical version-7 UUID (same shape as v4, version digit `7`).
 pub fn is_uuid_v7(s: string) -> bool {
-    is_uuid_ver(s, '7')
+    is_uuid_version(s, '7')
 }

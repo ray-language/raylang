@@ -42,21 +42,21 @@ fn ts_adv(t: TS) -> char {
     c
 }
 
-fn es_espacio(c: char) -> bool { c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+fn is_space(c: char) -> bool { c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
 // Salta espacios, saltos de línea y comentarios (`#` hasta fin de línea).
 fn skip_trivia(t: TS) {
-    var seguir = true;
-    while (seguir && !ts_end(t)) {
+    var keep_going = true;
+    while (keep_going && !ts_end(t)) {
         let c = ts_peek(t);
-        if (es_espacio(c)) {
+        if (is_space(c)) {
             ts_adv(t);
         } else if (c == '#') {
             while (!ts_end(t) && ts_peek(t) != '\n') {
                 ts_adv(t);
             }
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
 }
@@ -69,7 +69,7 @@ fn skip_spaces(t: TS) {
 }
 
 // ¿Es `c` parte de una clave desnuda o de la ruta de una tabla? (letras, dígitos, `_`, `-`, `.`)
-fn es_clave(c: char) -> bool {
+fn is_key(c: char) -> bool {
     c >= 'a' && c <= 'z'
         || c >= 'A' && c <= 'Z'
         || c >= '0' && c <= '9'
@@ -80,7 +80,7 @@ fn es_clave(c: char) -> bool {
 
 fn parse_key(t: TS) -> string {
     var k = "";
-    while (!ts_end(t) && es_clave(ts_peek(t))) {
+    while (!ts_end(t) && is_key(ts_peek(t))) {
         k = k + to_string(ts_adv(t));
     }
     k
@@ -127,11 +127,11 @@ fn parse_u_escape(t: TS, n: int) -> Result<string, string> {
 fn parse_string(t: TS) -> Result<string, string> {
     ts_adv(t);  // comilla de apertura
     var s = "";
-    var cerrado = false;
-    while (!cerrado && !ts_end(t)) {
+    var closed = false;
+    while (!closed && !ts_end(t)) {
         let c = ts_adv(t);
         if (c == '"') {
-            cerrado = true;
+            closed = true;
         } else if (c == '\\') {
             if (ts_end(t)) {
                 return Result.Err("escape at end of string");
@@ -162,7 +162,7 @@ fn parse_string(t: TS) -> Result<string, string> {
             s = s + to_string(c);
         }
     }
-    if (!cerrado) {
+    if (!closed) {
         return Result.Err("unterminated string");
     }
     Result.Ok(s)
@@ -194,11 +194,11 @@ fn parse_literal_string(t: TS) -> Result<string, string> {
     Result.Err("unterminated literal string")
 }
 
-fn es_digito(c: char) -> bool { c >= '0' && c <= '9' }
+fn is_digit(c: char) -> bool { c >= '0' && c <= '9' }
 
 // M63.2: quita los separadores `_` de un número (`1_000`), validando la regla de la spec —
 // cada `_` debe ir ENTRE dígitos (`_1`, `1_`, `1__0` o `1_.5` son errores).
-fn quitar_separadores(tok: string) -> Result<string, string> {
+fn strip_separators(tok: string) -> Result<string, string> {
     if (!tok.contains("_")) {
         return Result.Ok(tok);
     }
@@ -208,9 +208,9 @@ fn quitar_separadores(tok: string) -> Result<string, string> {
     while (i < cs.len()) {
         let c = cs[i];
         if (c == '_') {
-            let antes = i > 0 && es_digito(cs[i - 1]);
-            let despues = i + 1 < cs.len() && es_digito(cs[i + 1]);
-            if (!antes || !despues) {
+            let antes = i > 0 && is_digit(cs[i - 1]);
+            let after = i + 1 < cs.len() && is_digit(cs[i + 1]);
+            if (!antes || !after) {
                 return Result.Err("misplaced '_' separator in number: " + tok);
             }
         } else {
@@ -223,7 +223,7 @@ fn quitar_separadores(tok: string) -> Result<string, string> {
 
 // Clasifica un token escalar (número o booleano) ya leído. M63.2: acepta `inf`/`nan` (con
 // signo) como flotantes de la spec y los separadores `_` de los números.
-fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
+fn classify_scalar(tok: string) -> Result<TomlValue, string> {
     if (tok == "true") {
         return Result.Ok(TomlValue.TBool(true));
     }
@@ -241,24 +241,24 @@ fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
             Option.None => Result.Err("invalid float: " + tok),
         };
     }
-    let limpio = quitar_separadores(tok)?;
+    let clean = strip_separators(tok)?;
     // ¿Flotante? (tiene '.' o 'e'/'E')
-    var es_float = false;
+    var is_float = false;
     var i = 0;
-    while (i < limpio.len()) {
-        let c = limpio[i];
+    while (i < clean.len()) {
+        let c = clean[i];
         if (c == '.' || c == 'e' || c == 'E') {
-            es_float = true;
+            is_float = true;
         }
         i = i + 1;
     }
-    if (es_float) {
-        match (parse_float(limpio)) {
+    if (is_float) {
+        match (parse_float(clean)) {
             Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
             Option.None => Result.Err("invalid float: " + tok),
         }
     } else {
-        match (parse_int(limpio)) {
+        match (parse_int(clean)) {
             Option.Some(n) => Result.Ok(TomlValue.TInt(n)),
             Option.None => Result.Err("invalid int: " + tok),
         }
@@ -270,7 +270,7 @@ fn read_scalar(t: TS) -> string {
     var tok = "";
     while (!ts_end(t)) {
         let c = ts_peek(t);
-        if (es_espacio(c) || c == ',' || c == ']' || c == '#') {
+        if (is_space(c) || c == ',' || c == ']' || c == '#') {
             return tok;
         }
         tok = tok + to_string(ts_adv(t));
@@ -300,7 +300,7 @@ fn parse_value(t: TS) -> Result<TomlValue, string> {
         // M359 (raylb L4): antes `a = { x = 1 }` daba «invalid int: {», que no orienta.
         Result.Err("inline tables are not supported; write a [table] header instead")
     } else {
-        clasificar_escalar(read_scalar(t))
+        classify_scalar(read_scalar(t))
     }
 }
 

@@ -227,6 +227,19 @@ fn find_fields(line: &str, out: &mut Vec<String>) {
     }
 }
 
+/// Los archivos que `src/stdlib.rs` embebe con `include_str!("../<ruta>")`, resueltos desde la
+/// raíz del repo.
+fn embedded_stdlib_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let src = std::fs::read_to_string(root.join("src/stdlib.rs")).expect("src/stdlib.rs");
+    let mut out = Vec::new();
+    for piece in src.split("include_str!(\"../").skip(1) {
+        if let Some(end) = piece.find('"') {
+            out.push(root.join(&piece[..end]));
+        }
+    }
+    out
+}
+
 #[test]
 fn identifiers_are_english() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -245,7 +258,13 @@ fn identifiers_are_english() {
     for dir in IN_POLICY {
         collect_files(&root.join(dir), &mut files);
     }
+    // La STDLIB EMBEBIDA entera, viva donde viva: `src/stdlib.rs` incluye módulos desde
+    // `examples/` (`std/uuid` ← `examples/web/uuid.ray`…), que por sí solo queda fuera de la
+    // política. raylb vio `std::uuid::formato` en un perfil (6 oct 2026): lo que el usuario puede
+    // ver con su nombre real —una función de la stdlib en un perfil o una traza— es superficie.
+    files.extend(embedded_stdlib_files(root));
     files.sort();
+    files.dedup();
 
     let mut violations = Vec::new();
     for file in &files {

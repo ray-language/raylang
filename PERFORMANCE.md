@@ -2079,3 +2079,28 @@ local como DEFAULT en unix una vez pase el CI completo en Linux, con `RAYLANG_RE
 retirada; (3) re-medir con el generador en otra máquina (Mac mini por Thunderbolt, como los 188k
 de `benchmarks/web`), que es la única medida que vale para el techo.
 
+## 11. M361 (oct 2026): lo que un servidor keep-alive hacía por petición sin necesidad
+
+Los tres costes que el muestreo de §10 atribuyó al worker: `peer_addr` en cada petición (7,3 %),
+la cabecera `Date` formateada por respuesta (3,9 %), la comprobación de handle con mutex global
+antes de cada aparcado de lectura (2,9 %) y un `getenv` por respuesta (0,7 %). Arreglo: un
+`ConnCtx` por conexión en `net/webserver` (dirección remota una vez; `Date` a lo sumo una vez por
+segundo; la variable del live-reload leída al abrir) y, en el runtime nativo, la comprobación
+«¿sigue abierto?» solo al EOF (`__ray_close` hace `shutdown(Both)`, así que un handle cerrado
+mientras la fibra aparca despierta con EOF y da el mismo «invalid handle»).
+
+Misma medición que §10 (mismo día, mismo banco local):
+
+| workers | modo | servidor §10 → M361 | proxy nulo §10 → M361 |
+|---|---|---|---|
+| 2 | shared | 142,2k → **164,1k** (+15 %) | 71,9k → **77,4k** (+8 %) |
+| 2 | local | 152,5k → **170,5k** (+12 %; +20 % sobre el punto de partida) | 77,6k → **83,5k** (+8 %; +16 %) |
+| 11 | shared | 155,5k → **168,8k** (+9 %) | 82,0k → **83,8k** (+2 %) |
+| 11 | local | 155,1k → 163,0k (+5 %) | 78,7k → 79,0k |
+| techo | hyper | 181,4k | — |
+
+Con dos workers y reactor local el servidor pelado queda al **94 % de hyper** en el banco local
+(partía del 78 %). El proxy nulo sigue limitado por su propio modelo: dos conexiones y dos parseos
+por petición y el `http.pool` compartido entre fibras (un canal). Lo que queda de la lista de §10:
+las asignaciones por petición (~7 %) y, para el proxy, el camino del cliente HTTP.
+

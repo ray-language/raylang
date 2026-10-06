@@ -1329,6 +1329,22 @@ pub fn read_request_carry(
     limits: Limits,
     carry: bytes
 ) -> Result<(Request, bytes), string> {
+    // M123: la dirección remota del cliente (total: "" si el SO no la reporta).
+    let remote = match (net.peer_addr(conn)) {
+        Result.Ok(a) => a,
+        Result.Err(_) => "",
+    };
+    read_request_from(conn, limits, carry, remote)
+}
+
+// M361: la lectura con la dirección remota YA conocida — el bucle keep-alive la obtiene una vez por
+// conexión (`getpeername` + el mutex del registro costaban un 7 % de la CPU del worker por petición).
+fn read_request_from(
+    conn: int,
+    limits: Limits,
+    carry: bytes,
+    remote: string
+) -> Result<(Request, bytes), string> {
     // El plazo total: instante monotónico en que la lectura de ESTA petición vence (0 = sin plazo).
     let deadline: int = if (limits.read_timeout_millis > 0) {
         time.monotonic() + limits.read_timeout_millis
@@ -1516,11 +1532,6 @@ pub fn read_request_carry(
             if (deadline > 0) {
                 net.set_read_timeout(conn, 0);
             }
-            // M123: la dirección remota del cliente (total: "" si el SO no la reporta).
-            let remote = match (net.peer_addr(conn)) {
-                Result.Ok(a) => a,
-                Result.Err(_) => "",
-            };
             let req: Request = Request {
                 method: method,
                 path: path,
@@ -1535,13 +1546,54 @@ pub fn read_request_carry(
     }
 }
 
+// M361 (raylb, PERFORMANCE.md §10): lo que una conexión keep-alive calculaba POR PETICIÓN y no hace
+// falta — la dirección remota (`getpeername` + el mutex del registro: 7 % de la CPU del worker), la
+// cabecera `Date` (3,9 %; cambia una vez por segundo) y la variable de entorno del live-reload— vive
+// aquí, una vez por conexión. Los caminos de una respuesta por conexión (`send_response`) crean el
+// suyo al vuelo: mismo coste que antes, nunca más.
+struct ConnCtx {
+    remote: string,
+    date_sec: int,
+    date_text: string,
+    reload_port: string,
+    reload_on: bool,
+}
+
+fn conn_ctx(conn: int) -> ConnCtx {
+    let remote = match (net.peer_addr(conn)) {
+        Result.Ok(a) => a,
+        Result.Err(_) => "",
+    };
+    let (reload_on, reload_port) = match (env("RAY_DEV_RELOAD")) {
+        Option.Some(p) => (true, p),
+        Option.None => (false, ""),
+    };
+    ConnCtx {
+        remote: remote,
+        date_sec: 0 - 1,
+        date_text: "",
+        reload_port: reload_port,
+        reload_on: reload_on
+    }
+}
+
+// La cabecera `Date` en RFC 1123 (SHOULD de RFC 7231), formateada a lo sumo una vez por segundo.
+fn http_date(cx: ConnCtx) -> string {
+    let sec = time.now() / 1000;
+    if (sec != cx.date_sec) {
+        cx.date_sec = sec;
+        cx.date_text = time.to_rfc1123(time.now_utc());
+    }
+    cx.date_text
+}
+
 // --- Escritura de la respuesta ---
 /// Writes response `r` to connection `conn` as an HTTP/1.1 message: status line, automatic `Content-Length`
 /// and `Connection: close`, the user headers (in sorted key order, deterministic), then the raw body bytes.
 /// Returns the underlying socket write result; Err on write failure. (The keep-alive variant is what
 /// `serve` uses internally, M56.6; raw handlers keep one-response-per-connection semantics.)
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
-    send_response_keep(conn, r, false, false)
+    send_response_keep(conn, r, false, false, conn_ctx(conn))
 }
 
 // M283 (raystream [23]): el camino crudo (`serve_raw*` + `send_response`) no sabía del método y
@@ -1552,7 +1604,7 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
 /// and file bodies (their producer is drained / never opened). Use it in raw handlers
 /// (`serve_raw`, `serve_raw_with`) whenever the request may be a HEAD.
 pub fn send_response_for(req: Request, conn: int, r: Response) -> Result<int, string> {
-    send_response_keep(conn, r, false, req.method == "HEAD")
+    send_response_keep(conn, r, false, req.method == "HEAD", conn_ctx(conn))
 }
 
 // M92.4 (live-reload): ¿la respuesta es text/html? (Content-Type, case-insensitive).
@@ -1610,60 +1662,64 @@ fn dev_notify_ready() {
     }
 }
 
-fn inject_live_reload(r: Response) -> Response {
-    return match (env("RAY_DEV_RELOAD")) {
-        Option.None => r,
-        Option.Some(port) => {
-            if (is_html_response(r)) {
-                match (from_utf8(r.body)) {
-                    Result.Ok(html) => {
-                        // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
-                        // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
-                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:"
-                            + port
-                            + "/\").onmessage=function(){location.reload()}</script>";
-                        Response {
-                            status: r.status,
-                            headers: r.headers,
-                            set_cookie: r.set_cookie,
-                            body: inject_before_body_end(html, snippet).to_bytes(),
-                            stream: [],
-                            file: []
-                        }
-                    },
-                    Result.Err(e) => r,  // cuerpo no-UTF8 → intacto
-                }
-            } else {
-                r
+fn inject_live_reload(r: Response, cx: ConnCtx) -> Response {
+    if (!cx.reload_on) {
+        return r;
+    }
+    let port = cx.reload_port;
+    if (!is_html_response(r)) {
+        return r;
+    }
+    match (from_utf8(r.body)) {
+        Result.Ok(html) => {
+            // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
+            // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
+            let snippet: string = "<script>new EventSource(\"http://127.0.0.1:"
+                + port
+                + "/\").onmessage=function(){location.reload()}</script>";
+            Response {
+                status: r.status,
+                headers: r.headers,
+                set_cookie: r.set_cookie,
+                body: inject_before_body_end(html, snippet).to_bytes(),
+                stream: [],
+                file: []
             }
         },
-    };
+        Result.Err(e) => r,  // cuerpo no-UTF8 → intacto
+    }
 }
 
 // M56.6: la escritura real, con el header `Connection` según si la conexión sigue viva (keep-alive
 // del camino `serve`) o se cierra (el default histórico y el de los handlers crudos). M56.8:
 // `omit_body` = respuesta a un HEAD — cabeceras completas (incl. el Content-Length que tendría el
 // GET) pero SIN el cuerpo (RFC 9110 §9.3.2).
-fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+fn send_response_keep(
+    conn: int,
+    r0: Response,
+    keep: bool,
+    omit_body: bool,
+    cx: ConnCtx
+) -> Result<int, string> {
     // M110: una respuesta en streaming va por su propio camino (chunked, sin Content-Length,
     // conexión SIEMPRE close). El live-reload no aplica (no hay cuerpo HTML bufferizado).
     if (r0.stream.len() > 0) {
-        return send_stream_response(conn, r0, keep, omit_body);
+        return send_stream_response(conn, r0, keep, omit_body, cx);
     }
     // M279: un cuerpo-fichero lo lee y escribe esta misma fibra, trozo a trozo.
     if (r0.file.len() > 0) {
-        return send_file_response(conn, r0, keep, omit_body);
+        return send_file_response(conn, r0, keep, omit_body, cx);
     }
     // M92.4: bajo `ray dev` inyecta el snippet de live-reload en las respuestas HTML (no-op en producción).
     // Se hace ANTES de calcular el Content-Length para que cuadre con el cuerpo ya inyectado.
-    let r: Response = inject_live_reload(r0);
+    let r: Response = inject_live_reload(r0, cx);
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
-    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
+    head = head + "Date: " + http_date(cx) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
     let ks: [string] = r.headers.keys();
     var i: int = 0;
@@ -1698,12 +1754,18 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
 // fibra de la conexión — un solo trozo vivo por conexión. El fichero se abre ANTES de escribir la
 // cabecera: si falla, el error vuelve al bucle de servicio con la conexión intacta. Un fichero
 // que se acorta entre medias deja la conexión inservible (el peer esperaría más) → error.
-fn send_file_response(conn: int, r: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+fn send_file_response(
+    conn: int,
+    r: Response,
+    keep: bool,
+    omit_body: bool,
+    cx: ConnCtx
+) -> Result<int, string> {
     let fb: FileBody = r.file[0];
     let length: int = fb.to - fb.from + 1;
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
-    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
+    head = head + "Date: " + http_date(cx) + "\r\n";
     let ks: [string] = r.headers.keys();
     var i: int = 0;
     while (i < ks.len()) {
@@ -1794,7 +1856,8 @@ fn send_stream_response(
     conn: int,
     r: Response,
     keep: bool,
-    omit_body: bool
+    omit_body: bool,
+    cx: ConnCtx
 ) -> Result<int, string> {
     let ch: Channel<bytes> = r.stream[0];
     // M271: con `Content-Length` (stream_response_len) el cuerpo va en crudo y la conexión sigue
@@ -1807,7 +1870,7 @@ fn send_stream_response(
     } else {
         head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     }
-    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
+    head = head + "Date: " + http_date(cx) + "\r\n";
     let ks: [string] = r.headers.keys();
     var i: int = 0;
     while (i < ks.len()) {
@@ -2006,8 +2069,10 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     var follow: bool = true;
     // M316 (findings #81): los octetos sobrantes de la petición anterior (pipelining HTTP/1.1).
     var carry: bytes = b"";
+    // M361: lo que se calcula una vez por conexión (dirección remota, `Date`, live-reload).
+    let cx: ConnCtx = conn_ctx(conn);
     while (follow) {
-        match (read_request_carry(conn, limits, carry)) {
+        match (read_request_from(conn, limits, carry, cx.remote)) {
             Result.Ok(pair) => {
                 let req: Request = pair.0;
                 carry = pair.1;
@@ -2042,7 +2107,7 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                         if (seed_cookie) {
                             resp.set_cookie.push(token_cookie(limits.local_token));
                         }
-                        match (send_response_keep(conn, resp, !close, is_head)) {
+                        match (send_response_keep(conn, resp, !close, is_head, cx)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
                                 eprint("response: " + e);

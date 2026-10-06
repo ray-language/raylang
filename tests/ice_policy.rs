@@ -139,3 +139,38 @@ fn a_panic_in_a_scheduler_worker_terminates_the_process() {
     assert!(err.contains("injected panic in a scheduler worker") && err.contains("ICE"), "{err}");
     assert!(!String::from_utf8_lossy(&out.stdout).contains("unreachable"));
 }
+
+/// M357 (raylb): un ICE con stderr en una tubería YA CERRADA (`ray run x 2>&1 | head -2`) dejaba el
+/// proceso colgado: el `eprintln!` del banner volvía a paniquear (EPIPE) en el hilo monitor, que
+/// moría sin avisar al hilo principal, y este esperaba para siempre. Ahora el banner se escribe sin
+/// poder fallar y el proceso sale con 101 aunque nadie lea stderr.
+#[test]
+fn central_net_exits_even_if_stderr_is_closed() {
+    use std::io::{BufRead, BufReader};
+    if std::env::var("RAYLANG_ICE_CHILD").is_ok() {
+        raylang::with_big_stack_or_ice(|| panic!("invariante rota de prueba"));
+        return;
+    }
+    let exe = std::env::current_exe().expect("path del test");
+    let mut child = std::process::Command::new(exe)
+        .arg("central_net_exits_even_if_stderr_is_closed")
+        .arg("--nocapture")
+        .env("RAYLANG_ICE_CHILD", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("lanza el subproceso");
+    // Lee UNA línea (la del hook estándar) y cierra la tubería: el banner del ICE ya no tiene lector.
+    let stderr = child.stderr.take().unwrap();
+    let mut first = String::new();
+    let _ = BufReader::new(stderr).read_line(&mut first);
+    let started = std::time::Instant::now();
+    let code = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st.code();
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "the process hung after the ICE");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(code, Some(101));
+}

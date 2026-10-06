@@ -2,7 +2,6 @@
 // `bytes` y su representación hexadecimal en minúsculas (M60: la API habla `bytes`, no `[int]`).
 // Importable: `from hex import hex_encode, hex_decode;`. Útil para digests, claves, fingerprints.
 // M59.5: hex_encode acumula en StringBuilder (O(n), no O(n²) de `s = s + …`).
-import std/collections/stringbuilder as sb;
 
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
@@ -23,14 +22,21 @@ fn hex_val(c: char) -> int {
 /// Encodes `bytes` as a lowercase hexadecimal string (RFC 4648 §8).
 /// Each byte produces exactly two hex digits.
 pub fn hex_encode(data: bytes) -> string {
-    let b = sb.new();
+    // M359 (raylb L13): los códigos de los dígitos en un arreglo de ints y UNA conversión al final
+    // (`bytes_of` + `from_utf8`), sin un string por octeto — 111 µs → unos pocos µs por id de traza.
+    let digits = b"0123456789abcdef";
+    var out: [int] = [];
     var i = 0;
     while (i < data.len()) {
         let o = data[i];
-        sb.push(b, hex_digit(o >> 4 & 15) + hex_digit(o & 15));
+        out.push(digits[o >> 4 & 15]);
+        out.push(digits[o & 15]);
         i = i + 1;
     }
-    sb.build(b)
+    match (from_utf8(bytes_of(out))) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
 }
 
 // String hexadecimal → octetos. `Err` si la longitud es impar o hay un carácter no hexadecimal.

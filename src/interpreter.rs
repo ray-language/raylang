@@ -371,6 +371,14 @@ impl<'a> Interpreter<'a> {
     fn eval_tail(&mut self, expr: &'a Expr) -> EvalResult {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
+                // M359: una función ASOCIADA (`Map.new()`) en posición de cola no es una llamada a un
+                // valor-función — el camino indirecto evaluaba el `Ident("Map")` y moría en un ICE.
+                if let ExprKind::Field { object, name } = &callee.kind
+                    && let ExprKind::Ident(tn) = &object.kind
+                    && crate::builtins::assoc_lookup(tn, name).is_some()
+                {
+                    return self.eval_call(callee, args);
+                }
                 // Camino directo por nombre (como `eval_call`), pero en cola.
                 if let ExprKind::Ident(name) = &callee.kind {
                     let is_local = self.lookup_opt(name).is_some();
@@ -657,7 +665,9 @@ impl<'a> Interpreter<'a> {
                         return self.eval_expr(e);
                     }
                     // No es una variable ni constante: un nombre de función usado como valor.
-                    let idx = *self.named_index.get(name).expect("the checker guarantees the name");
+                    let Some(idx) = self.named_index.get(name).copied() else {
+                        crate::ice!("the checker guarantees the name: '{}' is not a function", name)
+                    };
                     Ok(Value::Function(idx))
                 }
             },

@@ -16897,3 +16897,48 @@ se pide: `process.listen_signal(sig)` instala el mismo handler del self-pipe par
 Linux), y desde entonces llega por el canal de siempre. Un primitivo nuevo, `__signal_listen`,
 en VM y nativo; `false` en Windows y en el intérprete.
 
+---
+
+## 344. M359 — Los paquetes que raylb pisó: métricas en O(1), el servidor sobre un listener, ids baratos (oct 2026)
+
+Quinto paso del plan de raylb (IDEAS §103: L11, L13, L6, L7, L4), adelantado a M358 porque el
+reactor por worker exige un prototipo medido y una decisión del usuario; esto no.
+
+**`net/metrics` recorría las series por cada bucket (L11).** El registro era «arreglos paralelos +
+búsqueda lineal, suficiente para unos cientos de series», y lo era hasta que un balanceador
+observa un histograma de 13 buckets por petición: cada bucket renderizaba el `Map` de etiquetas y
+recorría la lista. Medido sin perfilador: 113 µs por `observe_l` + `inc` con 20 series. Dos
+cambios conservadores: índices por `Map` (nombre → métrica, texto → serie, y la **familia** de un
+histograma —buckets, +Inf, _sum, _count— precalculada por `nombre{labels}`), que dejan la
+actualización en una búsqueda y el render de etiquetas en uno por llamada (7 µs); y un **handle**
+`series(reg, name, labels) -> Series` con `inc`/`add`/`set`/`observe` como métodos de trait, que
+resuelve la clave una vez y actualiza en O(1). Los métodos son de trait y no funciones libres
+porque `add`/`set`/`inc`/`observe` ya existen como funciones del módulo con otra firma: el UFCS
+prefiere el método de trait y las dos superficies conviven. El orden de salida no cambia (los
+arreglos siguen siendo la fuente del orden; los mapas son solo índices).
+
+**Los ids de traza (L13).** El hallazgo medía 180 µs por `traceparent` con `ray profile`; sin
+perfilador son 8,6 µs (`new_trace`) y 4,7 µs (`hex_encode` de 16 octetos): el perfilador infla las
+funciones con muchas llamadas internas (L18, pendiente en M360). Aun así se abarataron: `random_hex`
+saca dos dígitos por octeto aleatorio y arma el string de una vez (`bytes_of` + `from_utf8`), y
+`hex_encode` hace lo mismo en vez de un string por octeto → 5,0 y 2,4 µs. Se midió también la
+variante «7 dígitos por `random.below(2^28)`» y perdía frente a la de octetos (3,6 vs 2,5 µs): en
+la VM mandan las operaciones por iteración, no las llamadas.
+
+**El servidor sobre un listener propio, con apagado y en silencio (L6, L7).** `serve_options` era
+la entrada «que combina todo» pero no aceptaba ni listener ni canal de parada, y todo `serve*`
+escribía en stdout. El bucle drenable se parte en `tcp_listen` + `drain_loop(listener, …, quiet)`,
+y `ServeOptions` gana `with_stop(ch)` (el apagado lo decide quien quiera: su despachador de
+señales, un endpoint de admin, un test; sin `with_drain`, parar es «deja de aceptar y vuelve») y
+`quiet()` (nada en stdout; los errores siguen en stderr). La línea `listening on port N` se
+conserva por defecto: es lo que `ray dev` y los ejemplos leen. El campo se llama `no_stdout` y no
+`quiet` por el gotcha de siempre: un campo tapa al método homónimo en el UFCS.
+
+**Dos bugs que salieron por el camino.** El intérprete moría con un ICE ante `Map.new()` en
+posición de cola de una función (`eval_tail` tomaba el camino del valor-función y evaluaba el
+`Ident("Map")`); corregido. Y el cuelgue «tras un ICE» que M356 no pudo reproducir apareció aquí
+con su condición exacta: stderr en una tubería ya cerrada (`2>&1 | head -2`). El `eprintln!` del
+banner volvía a paniquear por EPIPE en el hilo monitor, que moría sin enviar `Done`, y el hilo
+principal esperaba para siempre porque el despertador de UI retiene un `Sender` del canal. El banner
+se escribe ahora con un `write` cuyo error se ignora; test de regresión en `ice_policy`.
+

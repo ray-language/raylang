@@ -217,7 +217,9 @@ fn main() -> int {
   `from_headers`. El webserver adopta el trace entrante con `trace_of(req)`; el cliente http lo
   propaga con `request_traced`/`fetch_traced` (un span hijo por salto). Hoja (solo `std/random`).
 - **`net/metrics`** — métricas estilo Prometheus (counter/gauge/histogram + labels), `render` en formato
-  de exposición. Hoja.
+  de exposición. Hoja. M359: índices por `Map` (una búsqueda por actualización) y el handle
+  `series(reg, name, labels) -> Series` con `s.inc()/add(v)/set(v)/observe(v)` en O(1) para el camino
+  caliente (antes `observe_l` costaba 82 µs con 20 series; ahora ~7 µs sin handle, menos con él).
 
 Los que dependen de **sockets vivos** (http/http2/websocket/dns/udp/redis/postgres/oauth2) se prueban con
 servidores de juguete, no en el oráculo. El micro-framework web vive en **`packages/web`** (M93,

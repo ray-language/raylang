@@ -227,6 +227,18 @@ where
 /// usuario y pide el reporte) y se sale con el código **101** (la convención de Rust
 /// para pánicos). El hook estándar ya imprimió archivo:línea, que el reporte necesita.
 /// Es lo que usa el binario (`main.rs`): TODO pánico del pipeline acaba aquí.
+/// M357 (raylb, «la VM se cuelga tras un ICE»): escribe el banner de ICE en stderr SIN poder
+/// fallar. Con stderr en una tubería ya cerrada (`ray run x 2>&1 | head -2`), `eprintln!` volvía a
+/// paniquear (EPIPE) dentro del hilo monitor, que moría sin enviar `Done`; y como el despertador de
+/// UI retiene un `Sender`, el hilo principal esperaba en `recv()` para siempre: el proceso quedaba
+/// colgado en vez de salir con 101. Un `write` cuyo error se ignora no puede matar al monitor.
+fn ice_report(banner: &str) {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{banner}");
+    let _ = err.flush();
+}
+
 pub fn with_big_stack_or_ice<F, T>(f: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,
@@ -254,7 +266,7 @@ where
         if let Some(main_id) = MAIN_WORKER.get()
             && std::thread::current().id() != *main_id
         {
-            eprintln!("{}", diagnostic::ice_banner(&format!("in a runtime thread: {detail}")));
+            ice_report(&diagnostic::ice_banner(&format!("in a runtime thread: {detail}")));
             std::process::exit(101);
         }
     }));
@@ -289,7 +301,7 @@ where
             if is_broken_pipe_panic_message(&detail) {
                 std::process::exit(141);
             }
-            eprintln!("{}", diagnostic::ice_banner(&detail));
+            ice_report(&diagnostic::ice_banner(&detail));
             std::process::exit(101);
         }
     });

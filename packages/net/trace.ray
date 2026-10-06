@@ -23,24 +23,32 @@ pub struct Trace {
 }
 
 // `n` dígitos hex aleatorios en minúscula, nunca todo-ceros (el W3C los declara inválidos).
+// M359 (raylb L13): un octeto aleatorio por cada DOS dígitos (antes una llamada y un string de un
+// carácter por dígito, y un `join` al final) y una sola conversión a string.
 fn random_hex(n: int) -> string {
-    let digs = "0123456789abcdef";
-    var parts: [string] = [];
+    let digits = b"0123456789abcdef";
+    var out: [int] = [];
     var nonzero = false;
     var i = 0;
     while (i < n) {
-        var d = random.below(16);
-        // El último dígito se fuerza no-cero si todo lo anterior fue 0 (prob. ~0, pero inválido).
-        if (i == n - 1 && !nonzero && d == 0) {
-            d = 1 + random.below(15);
+        let b = random.below(256);
+        out.push(digits[b >> 4]);
+        if (i + 1 < n) {
+            out.push(digits[b & 15]);
         }
-        if (d != 0) {
+        if (b != 0) {
             nonzero = true;
         }
-        parts.push(to_string(digs[d]));
-        i = i + 1;
+        i = i + 2;
     }
-    join(parts, "")
+    if (!nonzero) {
+        // Todo ceros (prob. ~0, pero inválido): el último dígito pasa a ser `1`.
+        out[n - 1] = 49;
+    }
+    match (from_utf8(bytes_of(out))) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
 }
 
 /// Starts a new root trace: fresh random `trace_id` and `span_id`, flags "01" (sampled).

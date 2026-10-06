@@ -2,6 +2,7 @@
 //! programa mínimo. M355: el `connect` no retiene al worker (L19/L14) y el cliente HTTP acota el dial (L5).
 //! M356: el lote de correcciones (L2, L3, L9, L12, L16, L17) y rayauth R34.
 //! M357: el scheduler y los `scope` (L8, L15) y las señales extra (L1).
+//! M359: los paquetes (L11 `metrics.series`, L6/L7 `serve_options_on` + `with_stop` + `quiet`, L4 toml).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -457,4 +458,156 @@ fn main() -> int {
         assert!(child.wait().unwrap().success());
         assert_eq!(seen, ["true", "true", "false", "ready", "2", "true", "true"]);
     }
+}
+
+/// L11: el handle `metrics.series` (una búsqueda al resolver, O(1) por actualización) rinde exactamente
+/// lo mismo que las funciones libres `inc`/`add`/`set`/`observe_l`, en los tres motores. (Destapó un
+/// ICE del intérprete: `Map.new()` en posición de cola de una función.)
+#[test]
+fn metrics_series_handles_render_like_the_free_functions() {
+    let d = project("metrics_series");
+    std::fs::write(d.join("prog.ray"), r#"import net/metrics;
+fn main() -> int {
+    let a = metrics.registry();
+    let b = metrics.registry();
+    let bks = [0.01, 0.1, 1.0];
+    for reg in [a, b] {
+        metrics.register_counter(reg, "reqs", "requests");
+        metrics.register_gauge(reg, "temp", "temperature");
+        metrics.register_histogram(reg, "lat", "latency", bks);
+    }
+    let l = metrics.labels2("backend", "b1", "code", "200");
+    // Las funciones libres sobre `a`…
+    metrics.inc(a, "reqs", l);
+    metrics.inc(a, "reqs", l);
+    metrics.add(a, "reqs", metrics.labels1("backend", "b2"), 3.0);
+    metrics.set(a, "temp", metrics.no_labels(), 21.5);
+    metrics.observe_l(a, "lat", l, 0.05);
+    metrics.observe_l(a, "lat", l, 2.0);
+    metrics.observe(a, "lat", 0.001);
+    // …y los handles sobre `b` deben renderizar lo mismo.
+    let reqs = metrics.series(b, "reqs", l);
+    reqs.inc();
+    reqs.inc();
+    metrics.series(b, "reqs", metrics.labels1("backend", "b2")).add(3.0);
+    metrics.series(b, "temp", metrics.no_labels()).set(21.5);
+    let lat = metrics.series(b, "lat", l);
+    lat.observe(0.05);
+    lat.observe(2.0);
+    metrics.series(b, "lat", metrics.no_labels()).observe(0.001);
+    print(metrics.render(a) == metrics.render(b));
+    print(metrics.render(b));
+    0
+}
+"#).unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(ray).args(engine).current_dir(&d).output().unwrap();
+        assert!(out.status.success(), "{engine:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), r#"true
+# HELP reqs requests
+# TYPE reqs counter
+reqs{backend="b1",code="200"} 2
+reqs{backend="b2"} 3
+# HELP temp temperature
+# TYPE temp gauge
+temp 21.5
+# HELP lat latency
+# TYPE lat histogram
+lat_bucket{backend="b1",code="200",le="0.01"} 0
+lat_bucket{backend="b1",code="200",le="0.1"} 1
+lat_bucket{backend="b1",code="200",le="1"} 1
+lat_bucket{backend="b1",code="200",le="+Inf"} 2
+lat_sum{backend="b1",code="200"} 2.05
+lat_count{backend="b1",code="200"} 2
+lat_bucket{le="0.01"} 1
+lat_bucket{le="0.1"} 1
+lat_bucket{le="1"} 1
+lat_bucket{le="+Inf"} 1
+lat_sum 0.001
+lat_count 1
+
+"#, "{engine:?}");
+    }
+    native(&d, r#"true
+# HELP reqs requests
+# TYPE reqs counter
+reqs{backend="b1",code="200"} 2
+reqs{backend="b2"} 3
+# HELP temp temperature
+# TYPE temp gauge
+temp 21.5
+# HELP lat latency
+# TYPE lat histogram
+lat_bucket{backend="b1",code="200",le="0.01"} 0
+lat_bucket{backend="b1",code="200",le="0.1"} 1
+lat_bucket{backend="b1",code="200",le="1"} 1
+lat_bucket{backend="b1",code="200",le="+Inf"} 2
+lat_sum{backend="b1",code="200"} 2.05
+lat_count{backend="b1",code="200"} 2
+lat_bucket{le="0.01"} 1
+lat_bucket{le="0.1"} 1
+lat_bucket{le="1"} 1
+lat_bucket{le="+Inf"} 1
+lat_sum 0.001
+lat_count 1
+
+"#);
+}
+
+/// L6/L7: `serve_options_on` sobre un listener propio (puerto 0), con `with_stop` (apagado por un
+/// canal, drenado) y `quiet` (nada en stdout: ni `listening on port`, ni `shutting down`).
+#[test]
+fn serve_options_on_a_listener_with_a_stop_channel_and_quiet() {
+    let d = project("serve_options_on");
+    std::fs::write(d.join("prog.ray"), r#"import std/net;
+import std/time;
+import net/webserver;
+import net/http;
+fn main() -> int {
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(srv);
+    let stop: Channel<int> = Channel.new();
+    let done: Channel<int> = Channel.new();
+    spawn(fn() {
+        let opts = webserver.options().with_stop(stop).with_drain(500).quiet();
+        let r = webserver.serve_options_on(srv, opts, fn() -> fn(webserver.Request) -> webserver.Response {
+            fn(req: webserver.Request) -> webserver.Response { webserver.text(200, "hi") }
+        });
+        send(done, r.unwrap_or(0 - 1));
+    });
+    let r = http.fetch("http://127.0.0.1:${port}/").unwrap();
+    print(r.status);
+    let t0 = time.monotonic();
+    send(stop, 1);
+    print("serve returned " + to_string(recv(done).unwrap_or(0 - 2)) + " quick=" + to_string(time.monotonic() - t0 < 2000));
+    print(http.fetch("http://127.0.0.1:${port}/").is_err());
+    0
+}
+"#).unwrap();
+    vm_and_native_two_threads(&d, "200\nserve returned 0 quick=true\ntrue\n");
+}
+
+/// L4 y el ICE del intérprete: una tabla inline en TOML da un error que orienta, y `Map.new()` como
+/// expresión de cola de una función corre en los tres motores.
+#[test]
+fn toml_inline_tables_are_a_clear_error_and_map_new_in_tail_position_runs() {
+    three_engines(
+        "toml_inline",
+        r#"import std/toml;
+fn main() -> int {
+    match (toml.parse_toml("a = { x = 1 }\n")) {
+        Result.Ok(_) => print("ok?"),
+        Result.Err(e) => print(e),
+    }
+    0
+}
+"#,
+        "inline tables are not supported; write a [table] header instead\n",
+    );
+    three_engines(
+        "map_new_tail",
+        "fn nl() -> Map<string, string> {\n    Map.new()\n}\nfn main() -> int { print(nl().len()); 0 }\n",
+        "0\n",
+    );
 }

@@ -41,6 +41,7 @@ fn main() -> int {
   `webserver.serve`), `listen_tls(cert, key)` (HTTPS, M56.3), `listen_graceful(drain_ms)` (apagado
   ordenado con SIGTERM/SIGINT, M88.1b), `listen_limits(webserver.Limits)` y, para combinarlas,
   `listen_with(build, host, port, options().with_limits(l).with_drain(ms).with_tls(cert, key))`
+  (también `.with_stop(ch)` —apagado por un canal propio— y `.quiet()` —nada en stdout—, M359)
   (M347).
 - **Sesiones** (`sessions`, `session_get/put/delete/clear`, cookie `ray_session` de 128 bits): el
   almacén es enchufable (`net/session_store`). `sessions(path)` = desarrollo (RKV1 bajo `ray dev`,

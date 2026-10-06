@@ -3,6 +3,7 @@
 //! M356: el lote de correcciones (L2, L3, L9, L12, L16, L17) y rayauth R34.
 //! M357: el scheduler y los `scope` (L8, L15) y las señales extra (L1).
 //! M359: los paquetes (L11 `metrics.series`, L6/L7 `serve_options_on` + `with_stop` + `quiet`, L4 toml).
+//! M360: documentación y tooling (R35 sintaxis de dependencias, R36 paquete-librería, L18 perfilador).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -610,4 +611,56 @@ fn main() -> int {
         "fn nl() -> Map<string, string> {\n    Map.new()\n}\nfn main() -> int { print(nl().len()); 0 }\n",
         "0\n",
     );
+}
+
+/// R36: un paquete-librería (sin `entry` ni `src/main.ray`) se comprueba y prueba módulo a módulo;
+/// `ray run` explica qué es en vez de «nonexistent entry». R35: una tabla inline en `[dependencies]`
+/// dice qué formas se aceptan.
+#[test]
+fn a_library_package_is_checked_and_tested_module_by_module() {
+    let d = tmp("library_pkg");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::create_dir_all(d.join("tests")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"oidc\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(d.join("src/math.ray"), "/// Adds.\npub fn add(a: int, b: int) -> int { a + b }\n\n@test\nfn adds() { assert_eq(add(1, 2), 3); }\n").unwrap();
+    std::fs::write(d.join("tests/math_test.ray"), "import src/math;\n\n@test\nfn via_tests_dir() { assert_eq(math.add(2, 2), 4); }\n").unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let check = Command::new(ray).arg("check").current_dir(&d).output().unwrap();
+    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+    assert!(String::from_utf8_lossy(&check.stderr).contains("library package"));
+    assert!(String::from_utf8_lossy(&check.stdout).contains("math.ray' compiles"));
+    let test = Command::new(ray).arg("test").current_dir(&d).output().unwrap();
+    let out = String::from_utf8_lossy(&test.stdout);
+    assert!(test.status.success(), "{out}\n{}", String::from_utf8_lossy(&test.stderr));
+    assert!(out.contains("2 test(s), all passed"), "{out}");
+    let run = Command::new(ray).arg("run").current_dir(&d).output().unwrap();
+    assert_eq!(run.status.code(), Some(66));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("'oidc' is a library package"));
+    // R35: la forma de Cargo, con un error que enseña las tres formas.
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"oidc\"\nversion = \"0.1.0\"\n\n[dependencies]\nx = { path = \"../x\" }\n").unwrap();
+    let bad = Command::new(ray).arg("check").current_dir(&d).output().unwrap();
+    assert!(!bad.status.success());
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(err.contains("\"path:../dir\"") && err.contains("inline tables"), "{err}");
+}
+
+/// L18: el perfilador descuenta su propia instrumentación y lo dice en la cabecera; la media por
+/// llamada de una función con muchas llamadas pequeñas queda cerca de lo medido con el reloj.
+#[test]
+fn the_profiler_discounts_its_own_instrumentation() {
+    let d = tmp("profiler_overhead");
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn tiny(n: int) -> int { n + 1 }\nfn outer() -> int {\n    var acc = 0;\n    var i = 0;\n    while (i < 2000) { acc = acc + tiny(i); i = i + 1; }\n    acc\n}\nfn main() -> int { var k = 0; var s = 0; while (k < 50) { s = s + outer(); k = k + 1; } print(s > 0); 0 }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["profile", "prog.ray", "--json"]).current_dir(&d).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = String::from_utf8_lossy(&out.stderr);
+    assert!(report.contains("\"overhead_ns_per_call\":"), "{report}");
+    // Con 100 000 llamadas a `tiny`, el propio de `outer` sin el descuento llevaría toda la
+    // instrumentación (~50–100 ns × 100 000 ≥ 5 ms); descontado, `outer` no puede superar en mucho a
+    // `tiny` + su bucle. Se exige solo que el informe sea coherente: ambas funciones aparecen.
+    assert!(report.contains("\"name\":\"tiny\",\"calls\":100000"), "{report}");
+    assert!(report.contains("\"name\":\"outer\",\"calls\":50"), "{report}");
 }

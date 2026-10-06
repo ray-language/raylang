@@ -155,7 +155,15 @@ pub fn resolve_pinned(
     locked: Option<&GitSpec>,
     update: bool,
 ) -> Result<(GitSpec, Option<String>), String> {
-    let req_parsed = VersionReq::parse(req)?;
+    let req_parsed = VersionReq::parse(req).map_err(|e| {
+        // M360 (rayauth R35): `"../oidc"` o `"file:../oidc"` no son requisitos de versión: la forma
+        // local es `"path:../oidc"`.
+        if req.contains('/') || req.starts_with('.') || req.starts_with("file:") {
+            format!("{e}; a local directory is written \"path:{}\"", req.trim_start_matches("file:"))
+        } else {
+            e
+        }
+    })?;
     if !update
         && let Some(l) = locked
         && let Some(v) = deps::semver(&l.git_ref)

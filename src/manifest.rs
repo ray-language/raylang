@@ -37,6 +37,10 @@ pub struct Manifest {
     pub raylang: Option<String>,
     /// El archivo de entrada del programa, relativo a la raíz. Por defecto `src/main.ray`.
     pub entry: String,
+    /// M360 (rayauth R36): ¿`[package] entry` venía ESCRITO en el manifiesto? Sin él y sin
+    /// `src/main.ray` el paquete es una LIBRERÍA: `check`/`test` recorren sus módulos y
+    /// `run`/`build` lo explican en vez de «nonexistent entry».
+    pub entry_declared: bool,
     /// M268: `[package] description` — una línea que dice qué es el paquete; va al índice
     /// (`<nombre>.meta.toml`) al publicar y la muestra `ray search`.
     pub description: Option<String>,
@@ -274,7 +278,14 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 }
                 _ => {} // claves desconocidas de [package] se ignoran (extensibilidad)
             },
-            "dependencies" => dependencies.push((key.to_string(), as_string()?)),
+            // M360 (rayauth R35): una dependencia es SIEMPRE una cadena; la tabla inline de Cargo
+            // (`{ path = "../x" }`) decía «the value must be in double quotes», que no orienta.
+            "dependencies" => match unquote_string(value_raw) {
+                Some(v) => dependencies.push((key.to_string(), v)),
+                None => {
+                    return Err(err(num, "a dependency is a quoted string: \"1.2.3\" (a version from the index), \"path:../dir\" (a local directory) or \"git+<URL>@<ref>\"; inline tables like { path = \"…\" } are not supported"));
+                }
+            },
             "fmt" => match key {
                 "indent_style" => indent_style = Some(as_string()?),
                 // `indent_size = 2` (entero) o `"2"` (cadena); ambos se aceptan.
@@ -371,6 +382,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     Ok(Manifest {
         name: name.ok_or("ray.toml: missing 'name' in [package]")?,
         version: version.ok_or("ray.toml: missing 'version' in [package]")?,
+        entry_declared: entry.is_some(),
         entry: entry.unwrap_or_else(|| "src/main.ray".to_string()),
         description,
         keywords,

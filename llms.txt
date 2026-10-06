@@ -177,8 +177,13 @@ One file = one module. Types cross modules with `pub` + `from M import Type` (or
 them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a pattern). A
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve
-module-locally. Path dependencies from `ray.toml` import by dir/leaf: `import rpc/rpc;`
-(the package dir, then the module file) — NOT `import rpc;` unless it has a `mod.ray`.
+module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
+`net = "^0.10"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
+local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"`. No inline
+tables (`{ path = ... }` is Cargo, not raylang). Path dependencies import by dir/leaf:
+`import rpc/rpc;` (the package dir, then the module file) — NOT `import rpc;` unless it has a
+`mod.ray`. A LIBRARY package (no `entry` in `[package]` and no `src/main.ray`) is checked with
+`ray check` and tested with `ray test` module by module; `ray run`/`ray build` need an entry.
 
 ## Concurrency (CSP; VM and native binaries — the interpreter has no fibers)
 
@@ -203,6 +208,15 @@ match (try_recv(ch)) {                           // non-blocking receive
 
 Fibers have isolated heaps: values sent over channels are deep-copied; share state by
 giving it to ONE owner fiber (an actor) and talking to it via channels.
+
+What does NOT compile to a native binary (`ray build --native`; `ray check` and the VM accept
+it — the native backend reports it, `--release` rejects it): (1) a closure STORED IN A VARIABLE
+passed to a parameter that crosses to other fibers (`let h = fn(...) {...}; serve(host, port, h)`)
+— write the closure inline in the call, name a top-level function, or use the factory form
+(`serve_with(fn() -> handler { ... })`); (2) a function VALUE captured by `spawn` (`let f = ...;
+spawn(fn() { f() })`) — call a named function or pass data, not functions, over channels;
+(3) a value whose type holds functions (a struct with a `fn` field, a `Map<string, fn(...)>`)
+captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a named function.
 
 ## Stdlib map — three calling conventions (getting this wrong = 'not declared')
 

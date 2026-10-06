@@ -2820,7 +2820,9 @@ se va el tiempo?" que antes había que hacer a mano con `time.monotonic_nanos()`
 builtins (`split`, `to_string`, `get`…) no son funciones y su coste aparece en el propio de
 quien los llama, así que una función con mucho propio y pocas llamadas es un bucle caro, y
 una con muchas llamadas y poco propio es candidata a llamar menos. `--json --out perfil.json`
-deja el informe en un archivo para compararlo entre corridas; `--top N` acorta la tabla. Solo VM
+deja el informe en un archivo para compararlo entre corridas; `--top N` acorta la tabla. El
+perfilador **descuenta su propio coste** (dos lecturas de reloj y un mutex por llamada, calibrados
+al arrancar y restados a cada marco por sus llamadas de dentro); la cabecera dice cuánto. Solo VM
 (en el nativo usa `perf`/Instruments); el informe sale también tras `exit()` o un error. El capítulo [Rendimiento](handbook/performance.md) del handbook lo usa en un caso real, de la medición a la versión optimizada.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio

@@ -108,6 +108,21 @@ Protocol) y `agent` (el bucle que los une).
 Las versiones quedan fijadas en `ray.lock` con su hash. Los paquetes se descargan a `.ray-deps/`,
 que no va al control de versiones: tras clonar un proyecto, `ray fetch` los vuelve a bajar.
 
+Una dependencia es siempre una cadena, con tres formas:
+
+```toml
+[dependencies]
+web = "^0.6"                              # una versión del índice (lo que escribe `ray add`)
+oidc = "path:../oidc"                     # un directorio local, relativo a la raíz del proyecto
+geo = "git+https://host/geo@v1.0"         # un repositorio git en una etiqueta o commit
+```
+
+Un paquete propio es un directorio con su `ray.toml` y sus módulos; se importa por directorio y
+archivo (`import oidc/client;`). Si no tiene programa —ni `entry` en `[package]` ni
+`src/main.ray`— es un **paquete-librería**: `ray check` y `ray test` lo recorren módulo a módulo
+(los `@test` pueden ir junto al código o en `tests/`), y `ray run`/`ray build` dicen que no hay
+nada que ejecutar.
+
 ## 4. El lenguaje en quince minutos
 
 ### Valores, variables y funciones

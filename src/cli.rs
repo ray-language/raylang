@@ -3193,6 +3193,28 @@ fn cmd_build(args: &[String]) {
                 && Some(a.as_str()) != embed_arg.as_deref()
         })
         .map(String::as_str);
+    // M360 (rayauth R36): `ray check` de un paquete-librería verifica cada módulo como módulo.
+    if check_only
+        && file.is_none()
+        && let Some(m) = load_manifest()
+        && is_library_package(&m)
+    {
+        eprintln!("checking {} v{} (library package)", m.name, m.version);
+        if !m.dependencies.is_empty()
+            && let Err(e) = crate::deps::ensure(&m)
+        {
+            eprintln!("error resolving dependencies: {e}");
+            process::exit(65);
+        }
+        for module in library_modules(&m.root) {
+            let path = module.to_string_lossy().into_owned();
+            let (mut program, locate, multi) = load_and_locate(&path);
+            let has_main = program.functions.iter().any(|f| f.name == "main");
+            check_or_exit_mode(&mut program, &locate, multi, has_main);
+            println!("ok: '{path}' compiles");
+        }
+        return;
+    }
     let path = resolve_entry(file, true);
     let (mut program, locate, multi) = load_and_locate(&path);
     let require_main = !check_only || program.functions.iter().any(|f| f.name == "main");
@@ -4247,17 +4269,38 @@ fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
 /// `src/`).
 fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut suites: Vec<PathBuf> = Vec::new();
+    let mut library_root: Option<PathBuf> = None;
     if explicit.is_empty() {
-        let entry = resolve_entry(None, false);
-        suites.push(PathBuf::from(&entry));
-        let root = load_manifest().map(|m| m.root).unwrap_or_else(|| PathBuf::from("."));
-        suites.extend(discover_test_files(&root.join("tests")));
+        // M360 (rayauth R36): un paquete-librería no tiene entrada — sus suites son todos sus
+        // módulos (cada `@test` donde esté) más `tests/*.ray`, con la raíz del proyecto como raíz
+        // del loader (`import m;` resuelve contra ella).
+        if let Some(m) = load_manifest()
+            && is_library_package(&m)
+        {
+            if !m.dependencies.is_empty()
+                && let Err(e) = crate::deps::ensure(&m)
+            {
+                eprintln!("error resolving dependencies: {e}");
+                process::exit(65);
+            }
+            suites.extend(library_modules(&m.root));
+            suites.extend(discover_test_files(&m.root.join("tests")));
+            library_root = Some(m.root.clone());
+        } else {
+            let entry = resolve_entry(None, false);
+            suites.push(PathBuf::from(&entry));
+            let root = load_manifest().map(|m| m.root).unwrap_or_else(|| PathBuf::from("."));
+            suites.extend(discover_test_files(&root.join("tests")));
+        }
     } else {
         for f in explicit {
             suites.push(PathBuf::from(resolve_entry(Some(f), false)));
         }
     }
     let mut roots = dependency_roots();
+    if let Some(root) = library_root {
+        roots.push(root);
+    }
     // Solo las entradas-ANCLA aportan raíz: la del proyecto (modo implícito) o cada explícita —
     // los `tests/*.ray` descubiertos no (su raíz útil es la de la entrada, no `tests/`).
     let anchors = if explicit.is_empty() { 1 } else { suites.len() };
@@ -5568,7 +5611,14 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
     if let Some(m) = &manifest {
         let entry = m.entry_path();
         if !entry.is_file() {
-            eprintln!("the manifest '{}' points to a nonexistent entry: '{}'", m.name, entry.display());
+            if is_library_package(m) {
+                eprintln!(
+                    "'{}' is a library package (no `entry` in [package] and no src/main.ray): check it with `ray check` and test it with `ray test`; a program needs `entry = \"src/main.ray\"` (or another file with `fn main`)",
+                    m.name
+                );
+            } else {
+                eprintln!("the manifest '{}' points to a nonexistent entry: '{}'", m.name, entry.display());
+            }
             process::exit(66);
         }
         return entry.to_string_lossy().into_owned();
@@ -5580,6 +5630,35 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
         eprintln!("no file given and no project (missing 'ray.toml' or 'src/main.ray')");
         process::exit(64);
     }
+}
+
+/// M360 (rayauth R36): un paquete-LIBRERÍA es un proyecto sin `entry` declarado y sin
+/// `src/main.ray`: sus módulos son la superficie, no hay programa que correr.
+fn is_library_package(m: &Manifest) -> bool {
+    !m.entry_declared && !m.entry_path().is_file()
+}
+
+/// Los módulos de un paquete-librería: todo `.ray` bajo la raíz, menos `tests/` (van aparte),
+/// la caché `.ray-deps/` y los directorios ocultos. Ordenados, para una salida determinista.
+fn library_modules(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if p.is_dir() {
+                if !name.starts_with('.') && name != "tests" && name != "target" && name != "node_modules" {
+                    walk(&p, out);
+                }
+            } else if p.extension().is_some_and(|e| e == "ray") {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
 }
 
 /// Las raíces de dependencias para el loader (M39c): la caché `.ray-deps/` en la raíz del

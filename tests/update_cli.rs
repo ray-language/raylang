@@ -193,6 +193,15 @@ fn main() -> int {
         Result.Err(e) => { print(e); return 1; },
     };
     print(fs.exists(pkg.path));
+    // #129: con la versión fijada, la rama «al día» y la de min_version son alcanzables bajo ray run/test.
+    match (update.check_with_version(base + "/update.json", "", "2.0.0")) {
+        Result.Ok(o) => print("at 2.0.0: " + to_string(o.is_none())),
+        Result.Err(e) => print(e),
+    }
+    match (update.check_with_version(base + "/update.json", "", "0.1.0")) {
+        Result.Ok(_) => print("below min accepted?"),
+        Result.Err(e) => print("below min: " + to_string(e.contains("requires at least 0.5.0"))),
+    }
     match (update.apply_at(pkg, root)) {
         Result.Ok(p) => print("installed " + (if (p == root) { "ok" } else { p })),
         Result.Err(e) => { print(e); return 1; },
@@ -241,7 +250,7 @@ fn fresh_install(base: &Path, name: &str) -> PathBuf {
 }
 
 fn want(current: &str) -> String {
-    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ntrue\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\ntrue\n")
+    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ntrue\nat 2.0.0: true\nbelow min: true\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\ntrue\n")
 }
 
 fn normalize(s: &str) -> String {

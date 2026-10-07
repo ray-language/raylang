@@ -13,6 +13,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **`ray registry publish` acepta paquetes-librería**: sin `mod.ray` ni `entry`, la cara del paquete
   son sus módulos `.ray` de la raíz, que se validan importándolos todos como haría un consumidor
   (antes: «has no package face»). Encontrado al publicar `oidc`.
+- **`process.launch_mode()` / `under_test()` y `RAY_TEST=1`**: una forma estable de saber si el
+  programa corre como binario, bajo `ray run` o bajo `ray test` (una suite que no debe tocar la
+  configuración ni el llavero reales). La doc de `self_command` fija sus tres formas; 1.27.38 la
+  había cambiado bajo `ray test` sin avisar (ray-sublime #130).
 
 ## 1.27.38 — 2026-10-07
 

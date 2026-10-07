@@ -51,10 +51,29 @@ pub struct Cmd {
     pty_rows: int,
 }
 
-/// The command line that reproduces THIS program, honest with the engine: a native binary or a
-/// bundled app gives `[exe]`; under `ray run`/`ray dev` it gives `[ray, "run", entry]` (with
-/// `--interp` when that engine is in use). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
+/// The command line that reproduces THIS program, honest with the engine. STABLE shapes, one per
+/// launch mode (see `launch_mode`): a native binary or a bundled app gives `[exe]`; `ray run` and
+/// `ray dev` give `[ray, "run", entry]` (with `--interp` before the entry when that engine is in
+/// use); `ray test` gives `[ray, "test"]` (since 1.27.38; before it was `[ray]`, which looked like
+/// an installed binary — #114). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
 pub fn self_command() -> [string] { __self_command() }
+
+/// How this program was launched: `"native"` (a binary or bundled app), `"run"` (`ray run` /
+/// `ray dev`), `"test"` (a `@test` under `ray test`; the environment also carries `RAY_TEST=1`,
+/// inherited by the processes the suite spawns). Derived from `self_command`, which is the
+/// contract; use this to keep a test suite away from the real config, keychain or data (#130).
+pub fn launch_mode() -> string {
+    let c = self_command();
+    if (c.len() <= 1) {
+        return "native";
+    }
+    if (c[1] == "test") { "test" } else { "run" }
+}
+
+/// `launch_mode() == "test"`: the program is a test suite under `ray test`.
+pub fn under_test() -> bool {
+    launch_mode() == "test"
+}
 
 // M357 (raylb L1): señales EXTRA por `signals()`. Opt-in: `signals()` a secas sigue entregando solo
 // SIGTERM/SIGINT/SIGWINCH y dejando al SO la acción por defecto de las demás (un programa con

@@ -85,6 +85,13 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: O
     if let Some(first) = suite_paths.first() {
         crate::cli::configure_embed(&first.to_string_lossy());
     }
+    // #114 (ray-sublime): bajo el runner, `process.self_command()` debe decir «toolchain + test»
+    // y no caer al defecto de un solo elemento (el ejecutable `ray`), que `std/update` toma por
+    // un binario instalado: `install_root()` devolvía `~/.local/bin` y `apply` empezaba a
+    // trabajar sobre el directorio de la toolchain. Con esto `current()` es "dev",
+    // `install_root()` es `None` y `apply`/`cleanup` no tocan nada, como bajo `ray run`.
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "ray".into());
+    crate::runtime::set_self_command(vec![exe, "test".to_string()]);
     let mut frontend_failed = false;
     let mut compile_failures = 0;
     let mut suites: Vec<Suite> = Vec::new();

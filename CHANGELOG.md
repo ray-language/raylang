@@ -19,6 +19,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   La doc de `request_bytes`/`stream_with`/`pool_request_bytes` dice ya que el plazo acota también la
   conexión (raylb L5).
 
+## Sin publicar
+
+- **`std/update` bajo `ray test`** se comporta como bajo `ray run`: `current()` es `"dev"`,
+  `install_root()` es `None` y `apply`/`cleanup` no tocan nada. Antes tomaba el directorio del
+  ejecutable `ray` por la raíz instalada y un test podía renombrar `~/.local/bin`. Además
+  `apply_at` rechaza una raíz que contenga la toolchain (ray-sublime #114).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

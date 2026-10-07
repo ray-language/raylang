@@ -61,9 +61,11 @@ pub fn app_url(url: string) -> string {
 
 /// Opens a native window with the system webview loading `url` (point it at your embedded
 /// webserver: `http://127.0.0.1:<port>/`, or use `app://index.html` — see `app_url` — for a
-/// frontend built with Vite and served from the embedded build). Returns the window handle;
-/// `close(h)` closes it. With `RAY_UI_BACKEND=headless` in the environment, windows are
-/// in-memory rows (tests, CI).
+/// frontend built with Vite and served from the embedded build). Returns the window handle.
+/// The handle is a plain `int` like a file or socket handle: the prelude's **`close(h)` closes
+/// the window** (there is no `ui.close`), emitting `closed` for it; a handle already closed by the
+/// user is a no-op. With `RAY_UI_BACKEND=headless` in the environment, windows are in-memory rows
+/// (tests, CI).
 pub fn open(title: string, url: string, width: int, height: int) -> Result<int, string> {
     let r = __ui_open(title, resolve_app_url(url), width, height);
     if (r[0] == "ok") {

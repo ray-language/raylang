@@ -148,6 +148,27 @@ pub fn header_params(tpl: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// #131 (ray-ds): `{{ x | safe }}` (un FILTRO al estilo Jinja/Liquid) es, para el generador, el `|`
+/// binario de raylang sobre un nombre `safe` que no existe → «name 'safe' not declared», que no
+/// orienta. Se reconoce la forma `… | nombre` (un identificador, con o sin paréntesis, tras un `|`
+/// simple) y se dice lo mismo que el motor de ejecución: no hay filtros; el crudo es `{{& x }}`.
+fn reject_jinja_filter(e: &str, line: usize) -> Result<(), TplError> {
+    let Some(pos) = e.rfind('|') else { return Ok(()) };
+    if pos > 0 && e.as_bytes()[pos - 1] == b'|' {
+        return Ok(()); // `||` lógico
+    }
+    let rhs = e[pos + 1..].trim();
+    let name: String = rhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    let after = rhs[name.len()..].trim();
+    if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && (after.is_empty() || after.starts_with('(')) {
+        return Err(TplError {
+            line,
+            msg: format!("filters are not supported in '{{{{ {e} }}}}': raw output is '{{{{& x }}}}'; compute the value in raylang before rendering (a bitwise `|` goes in parentheses: '{{{{ (a | b) }}}}')"),
+        });
+    }
+    Ok(())
+}
+
 // Tokeniza el template: texto literal, `{{ expr }}`, `{{& expr }}`, `{% tag %}`. Cada token lleva
 // la línea (1-basada) del template donde empieza.
 fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
@@ -730,12 +751,14 @@ fn generate_body(
                 if e.is_empty() {
                     return Err(TplError { line: l, msg: "empty '{{ }}'".into() });
                 }
+                reject_jinja_filter(&e, l)?;
                 emit_line(&mut body, depth, l, format!("out.push(escape_html(to_string({e})));"));
             }
             Tok::Raw(e, l) => {
                 if e.is_empty() {
                     return Err(TplError { line: l, msg: "empty '{{& }}'".into() });
                 }
+                reject_jinja_filter(&e, l)?;
                 emit_line(&mut body, depth, l, format!("out.push(to_string({e}));"));
             }
             // (Los casos `import`/`include` de composición van en el match de etiquetas, abajo.)

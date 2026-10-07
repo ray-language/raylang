@@ -1795,6 +1795,11 @@ impl Parser {
     fn match_arm(&mut self) -> Result<MatchArm, ParseError> {
         let pattern = self.pattern()?;
         let (line, col) = (pattern.line, pattern.col);
+        // #128 (ray-ds): `"a" | "b" =>` (or-patterns) no existe; decirlo con su alternativa en vez de
+        // «expected '=>' after the pattern». (Mensaje en tándem con selfhost/parser.ray.)
+        if self.check(&TokenKind::Pipe) {
+            return Err(self.error_here("or-patterns ('a' | 'b' => …) are not supported: write one arm per pattern, or a guard (`x if x == \"a\" || x == \"b\" =>`)".to_string()));
+        }
         // Guarda opcional: `if <cond>` entre el patrón y el `=>`.
         let guard = if self.eat(&TokenKind::If) {
             Some(self.expression()?)

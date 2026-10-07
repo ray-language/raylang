@@ -17,6 +17,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   programa corre como binario, bajo `ray run` o bajo `ray test` (una suite que no debe tocar la
   configuración ni el llavero reales). La doc de `self_command` fija sus tres formas; 1.27.38 la
   había cambiado bajo `ray test` sin avisar (ray-sublime #130).
+- **`std/toml`**: claves entre comillas simples (`'k' = 1`), y una clave entrecomillada que no
+  podría ir desnuda (`"a.b"`, `"q k"`) conserva sus comillas en la ruta aplanada (`s."a.b"`), así
+  que ya no choca con la clave `b` de `[s.a]` (ray-ds #121).
+- **Plantillas compiladas `.ray.html`**: `{{ x | safe }}` da el mismo error claro que
+  `render_template` («filters are not supported…») en vez de «name 'safe' not declared»; un `|`
+  binario legítimo va entre paréntesis (ray-ds #131).
+- **`match` sin patrones alternativos**: `"a" | "b" =>` es un error de sintaxis que remite a un
+  brazo por patrón o a una guarda, y SPEC/llms.txt lo dicen (ray-ds #128).
+- **Documentación**: `close(h)` del prelude cierra una ventana de `std/ui` (no hay `ui.close`), en
+  `ui.open`, REFERENCE y llms.txt (ray-sublime #132).
 
 ## 1.27.38 — 2026-10-07
 

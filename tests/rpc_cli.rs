@@ -391,7 +391,7 @@ fn main() -> int {
         if (req.method == "ping") {
             Result.Ok(Json.JStr("pong"))
         } else if (req.method == "lento") {
-            time.sleep(150);
+            time.sleep(400);
             Result.Ok(Json.JStr("pong"))
         } else if (req.method == "apagar") {
             send(stop, 1);
@@ -417,15 +417,17 @@ fn main() -> int {
         Option.None => panic("bad port"),
     };
     let p = rpc.pool("127.0.0.1", port, 2);
-    // Dos llamadas CONCURRENTES a un método LENTO: la primera ocupa su conexión 150 ms, así la
+    // Dos llamadas CONCURRENTES a un método LENTO: la primera ocupa su conexión 400 ms, así la
     // segunda tiene que marcar la otra — los dos huecos quedan con conexión SEGURO. (Con `ping`,
     // en un runner lento la primera respondía antes de que la segunda eligiera hueco y reutilizaba
     // la misma conexión; tras el reinicio, `noretry` encontraba un hueco vacío, abría una conexión
-    // nueva y salía Ok en vez del Err esperado: `noretry=?`, el rojo intermitente del CI.)
+    // nueva y salía Ok en vez del Err esperado: `noretry=?`, el rojo intermitente del CI. Con
+    // 150 ms volvió a verse el 7 oct 2026 en un runner cargado; de ahí los 400 ms y que un fallo
+    // de las dos llamadas lentas se imprima en vez de ignorarse.)
     let t1 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "lento", Json.JNull) });
     let t2 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "lento", Json.JNull) });
-    let _ = join(t1);
-    let _ = join(t2);
+    match (join(t1)) { Result.Ok(_) => { }, Result.Err(e) => print("lento1 err=" + e) }
+    match (join(t2)) { Result.Ok(_) => { }, Result.Err(e) => print("lento2 err=" + e) }
     // El servidor se apaga (la llamada va por una conexión del pool y responde antes de parar).
     let _ = rpc.pool_call(p, "apagar", Json.JNull);
     print("stopped");
@@ -443,7 +445,7 @@ fn main() -> int {
     var o = rpc.pool_opts();
     o.retry = false;
     match (rpc.pool_call_with(p, "ping", Json.JNull, o)) {
-        Result.Ok(_) => print("noretry=?"),
+        Result.Ok(j) => print("noretry=? " + stringify(j)),
         Result.Err(_) => print("noretry=err"),
     }
     // 2) con reintento (default): la OTRA conexión muerta se reemplaza y la llamada sale bien.

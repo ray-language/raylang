@@ -92,6 +92,9 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: O
     // `install_root()` es `None` y `apply`/`cleanup` no tocan nada, como bajo `ray run`.
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "ray".into());
     crate::runtime::set_self_command(vec![exe, "test".to_string()]);
+    // #130: la misma señal para los procesos que la suite lance (y para quien prefiera la variable).
+    // SAFETY: antes de que arranque ninguna fibra del programa; el runner es monohilo aquí.
+    unsafe { std::env::set_var("RAY_TEST", "1") };
     let mut frontend_failed = false;
     let mut compile_failures = 0;
     let mut suites: Vec<Suite> = Vec::new();

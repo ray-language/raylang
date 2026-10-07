@@ -3,6 +3,13 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
+## Sin publicar
+
+- **`process.launch_mode()` / `under_test()` y `RAY_TEST=1`**: una forma estable de saber si el
+  programa corre como binario, bajo `ray run` o bajo `ray test` (una suite que no debe tocar la
+  configuración ni el llavero reales). La doc de `self_command` fija sus tres formas; 1.27.38 la
+  había cambiado bajo `ray test` sin avisar (ray-sublime #130).
+
 ## 1.27.38 — 2026-10-07
 
 El barrido de hallazgos de ray-ds, ray-sublime, raylb y rayauth tras 1.27.37 (ray-apps/RAYLANG-FINDINGS.md

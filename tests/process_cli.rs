@@ -222,3 +222,31 @@ fn writable_stdin_keeps_a_session_alive_on_vm_and_native() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), SESSION_EXPECTED, "nativo {flags:?}");
     }
 }
+
+/// #130 (ray-sublime): cómo saber de forma ESTABLE bajo qué modo corre el programa — `launch_mode`
+/// (`run`/`test`/`native`), `under_test` y la variable `RAY_TEST=1` del runner. `self_command` es
+/// el contrato documentado: `[ray, "run", entry]`, `[ray, "test"]` o `[exe]`.
+#[test]
+fn launch_mode_tells_run_test_and_native_apart() {
+    let d = std::env::temp_dir().join(format!("raylang_test_launch_mode_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"lm\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import std/process;\nfn line() -> string { process.launch_mode() + \" \" + to_string(process.under_test()) + \" \" + env(\"RAY_TEST\").unwrap_or(\"-\") + \" \" + to_string(process.self_command().len()) }\nfn main() -> int { print(line()); 0 }\n@test\nfn mode() { print(line()); }\n",
+    )
+    .unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let run = std::process::Command::new(ray).args(["run"]).current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "run false - 3\n", "{}", String::from_utf8_lossy(&run.stderr));
+    let test = std::process::Command::new(ray).args(["test"]).current_dir(&d).output().unwrap();
+    assert!(String::from_utf8_lossy(&test.stdout).contains("test true 1 2\n"), "{}", String::from_utf8_lossy(&test.stdout));
+    if std::process::Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = d.join("lm");
+        let b = std::process::Command::new(ray).args(["build", "src/main.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+        let out = std::process::Command::new(&bin).current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "native false - 1\n");
+    }
+}

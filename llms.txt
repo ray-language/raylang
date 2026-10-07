@@ -281,11 +281,11 @@ then `{% import site/model %}` for types of other modules (not `from … import`
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
 std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
-`oidc` (OpenID Connect CLIENT: `import oidc/provider;` `provider.discover(issuer)`; `import oidc/login;`
-`login.begin(p, client) -> Pending` (code + PKCE + nonce; redirect the browser to `pending.url`),
-`login.finish(p, client, pending, url.parse_query(req.query)) -> Result<Tokens, _>` (verified ID token
-in `t.claims`), `login.refresh`, `login.userinfo`, `login.logout_url`; resource servers:
-`import oidc/tokens;` `tokens.verify_access_token(p, bearer, ["scope"], tokens.now())` — RFC 9068),
+`oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
+then `login.begin(p, client)` gives a `Pending` (code + PKCE + nonce; redirect the browser to `pending.url`)
+and `login.finish(p, client, pending, query_map)` returns the `Tokens` with the verified ID token in
+`t.claims`; also `login.refresh`, `login.userinfo`, `login.logout_url`; resource servers:
+`import oidc/tokens;` then `tokens.verify_access_token(p, bearer, scopes, now_ms)` — RFC 9068),
 `tz`, `cron`, `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
 `mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`; server side: `import mcp/serve;` →
 `serve.provider(name, version)`, `serve.tool(p, name, description, schema_json_text, run)` where `run` takes the

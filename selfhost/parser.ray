@@ -1623,6 +1623,15 @@ fn match_arm(p: Parser) -> Result<MatchArm, ParseError> {
     let pat = pattern(p)?;
     let line = pat.line;
     let col = pat.col;
+    // #128: or-patterns no existen; mismo mensaje que src/parser.rs.
+    if (check(p, "|")) {
+        return Result.Err(
+            perr_here(
+                p,
+                "or-patterns ('a' | 'b' => …) are not supported: write one arm per pattern, or a guard (`x if x == \"a\" || x == \"b\" =>`)"
+            )
+        );
+    }
     expect(p, "=>", "'=>' after the pattern")?;
     let body = expression(p)?;
     Result.Ok(MatchArm { pat: pat, body: body, line: line, col: col })

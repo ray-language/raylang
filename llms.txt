@@ -41,6 +41,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   `Point { x, y }`. Exhaustiveness is checked recursively (`Ok(Some(v)) / Ok(None) / Err(e)`
   needs no `_`); an `int`/`string`/`char` scrutinee always needs a `_` arm. Qualified
   patterns (`json.Json.JObject(m)`) and qualified types in signatures (`regex.Regex`) work.
+  NO or-patterns: `"a" | "b" => …` is a syntax error (the message says so) — write one arm per
+  pattern, or a guard (`x if x == "a" || x == "b" =>`), or `["a", "b"].contains(x)` in an `if`.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
 - Primitive type names cannot name a function: `pub fn int(key: string)` / `fn u32(…)` are
@@ -354,7 +356,8 @@ Regex: `std/regex` has two dialects — its own linear engine (`regex.compile`,
 backreferences, `\\G`, atomic groups; `regex.group_str(m, text, i)`.
 
 Desktop apps (`import std/ui;`, a native window with the system webview; headless in
-tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h))`
+tests with `RAY_UI_BACKEND=headless`): `ui.open_with(title, url, ui.options(w, h))` (the window
+handle is an `int`; the prelude's `close(h)` closes the window — there is no `ui.close`)
 (`WindowOptions` also has `min_width min_height resizable center autosave
 titlebar_color background minimizable`; `background` (1.27.22) is what the window shows until
 the page paints — no white flash; empty = `titlebar_color`), `ui.set_titlebar_color(h, "#rrggbb")`

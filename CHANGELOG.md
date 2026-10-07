@@ -3,6 +3,19 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
+## Sin publicar
+
+- **`std/toml`**: claves entre comillas simples (`'k' = 1`), y una clave entrecomillada que no
+  podría ir desnuda (`"a.b"`, `"q k"`) conserva sus comillas en la ruta aplanada (`s."a.b"`), así
+  que ya no choca con la clave `b` de `[s.a]` (ray-ds #121).
+- **Plantillas compiladas `.ray.html`**: `{{ x | safe }}` da el mismo error claro que
+  `render_template` («filters are not supported…») en vez de «name 'safe' not declared»; un `|`
+  binario legítimo va entre paréntesis (ray-ds #131).
+- **`match` sin patrones alternativos**: `"a" | "b" =>` es un error de sintaxis que remite a un
+  brazo por patrón o a una guarda, y SPEC/llms.txt lo dicen (ray-ds #128).
+- **Documentación**: `close(h)` del prelude cierra una ventana de `std/ui` (no hay `ui.close`), en
+  `ui.open`, REFERENCE y llms.txt (ray-sublime #132).
+
 ## 1.27.38 — 2026-10-07
 
 El barrido de hallazgos de ray-ds, ray-sublime, raylb y rayauth tras 1.27.37 (ray-apps/RAYLANG-FINDINGS.md

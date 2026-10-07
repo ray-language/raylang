@@ -78,11 +78,32 @@ fn is_key(c: char) -> bool {
         || c == '.'
 }
 
+// ¿Todos los caracteres podrían ir en una clave desnuda?
+fn all_key_chars(s: string) -> bool {
+    // (sin `for`: este archivo está en el corpus del parser auto-alojado)
+    var i = 0;
+    while (i < s.len()) {
+        if (!is_key(s[i]) || s[i] == '.') {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
 fn parse_key(t: TS) -> string {
-    // #121 (ray-ds): una clave ENTRE COMILLAS (`"a.b" = 1`, `"0" = "0"`) vale tal cual, con escapes.
-    if (!ts_end(t) && ts_peek(t) == '"') {
-        return match (parse_string(t)) {
-            Result.Ok(s) => s,
+    // #121 (ray-ds): una clave ENTRE COMILLAS (`"a.b" = 1`, `'0' = "0"`) vale tal cual (básica con
+    // escapes, o literal). Si no podría escribirse desnuda (lleva `.`, espacios, está vacía…) se
+    // conserva ENTRECOMILLADA en la ruta aplanada —`s."a.b"`— para que nunca choque con la clave `b`
+    // de la tabla `[s.a]`; una que sí podría (`"0"`) se aplana como `0`.
+    if (!ts_end(t) && (ts_peek(t) == '"' || ts_peek(t) == '\'')) {
+        let quoted = if (ts_peek(t) == '"') { parse_string(t) } else { parse_literal_string(t) };
+        return match (quoted) {
+            Result.Ok(s) => if (s != "" && all_key_chars(s)) {
+                s
+            } else {
+                "\"" + s.replace("\"", "\\\"") + "\""
+            },
             Result.Err(_) => "",
         };
     }
@@ -367,7 +388,9 @@ fn clave_repetida(entries: [TomlEntry], key: string) -> bool {
 
 // Parsea un documento TOML a una lista de entradas (ruta con puntos → valor).
 /// Parses a TOML document (subset) into a flat list of entries (dotted key path → value).
-/// Supports `#` comments, `[a.b]` tables, bare and quoted keys (`"a.b" = 1`), and string (basic with full escapes, or
+/// Supports `#` comments, `[a.b]` tables, bare and quoted keys (`"a.b" = 1`, `'k' = 1`; a quoted
+/// key that could not be bare keeps its quotes in the flattened path — `s."a.b"` — so it never
+/// collides with key `b` of table `[s.a]`), and string (basic with full escapes, or
 /// literal `'...'`) / int / float / bool / array values. Strict where it counts: duplicate
 /// keys, an empty table header, or a second entry on the same line are errors.
 /// Arrays of tables `[[path]]` are flattened as `path.0.key`, `path.1.key`, … (count them with

@@ -748,3 +748,27 @@ fn main() -> int {
         "{\n  \"zeta\": 1,\n  \"alpha\": {\n    \"b\": true,\n    \"a\": \"x\\\"y, {z}\"\n  },\n  \"list\": [\n    \"q\",\n    \"r\"\n  ]\n}\n{\n  \"e\": {},\n  \"n\": [\n    1\n  ]\n}\ntrue\n",
     );
 }
+
+/// ray-ds #121 (resto), #128 y #131: claves TOML entre comillas simples o con punto conservan las
+/// comillas en la ruta aplanada (sin chocar con `[s.a]`); un or-pattern da un error que orienta; un
+/// filtro Jinja en una plantilla COMPILADA dice lo mismo que `render_template`.
+#[test]
+fn toml_quoted_keys_or_patterns_and_compiled_template_filters() {
+    three_engines(
+        "toml_quoted_keys",
+        "import std/toml;\nfn main() -> int {\n    match (toml.parse_toml(\"[s]\\n\\\"a.b\\\" = 1\\n'q k' = 2\\n\\\"0\\\" = 3\\n[s.a]\\nb = 4\\n\")) {\n        Result.Ok(es) => { var i = 0; while (i < es.len()) { print(es[i].key); i = i + 1; } },\n        Result.Err(e) => print(e),\n    }\n    0\n}\n",
+        "s.\"a.b\"\ns.\"q k\"\ns.0\ns.a.b\n",
+    );
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let d = tmp("or_pattern");
+    std::fs::write(d.join("prog.ray"), "fn main() -> int { match (\"a\") { \"a\" | \"b\" => 1, _ => 0 } }\n").unwrap();
+    let out = Command::new(ray).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("or-patterns ('a' | 'b' => …) are not supported"), "{}", String::from_utf8_lossy(&out.stderr));
+    let d = tmp("compiled_filter");
+    std::fs::write(d.join("page.ray.html"), "{% params body: string %}\n<p>{{ body | safe }}</p>\n").unwrap();
+    std::fs::write(d.join("prog.ray"), "import page;\nfn main() -> int { print(page.render(\"x\")); 0 }\n").unwrap();
+    let out = Command::new(ray).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("filters are not supported in '{{ body | safe }}'"), "{}", String::from_utf8_lossy(&out.stderr));
+}

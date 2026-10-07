@@ -383,7 +383,8 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
   unit, canal o tarea no se matchean). Patrones `Enum.Variante(sub-patrón…)` (también
   `M.Enum.Variante`), binding suelto, `_`, **tupla** `(p1, p2, …)` (M310: dos o más sub-patrones, uno
   por posición, anidables) y **literal** (M310: `int` con signo opcional, `string`, `char`, `bool`;
-  el literal debe tener el tipo del valor que casa). **Patrones anidados**
+  el literal debe tener el tipo del valor que casa). No hay **patrones alternativos** (`"a" | "b"
+  =>`): el parser lo rechaza con un error que remite a un brazo por patrón o a una guarda. **Patrones anidados**
   (M40.1c): cada posición del payload es un sub-patrón completo, recursivo (`Result.Ok(Option.Some(v))`).
   **Guardas** (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los
   bindings del patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. **Patrón de struct**

@@ -197,7 +197,7 @@ pub struct Frontend {
 pub const DEFAULT_FRONTEND_URL: &str = "http://localhost:5173";
 
 /// Parsea el subconjunto de TOML que `ray.toml` usa. `root` es el directorio del manifiesto.
-fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
+pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut section = String::new();
     let mut name = None;
     let mut version = None;

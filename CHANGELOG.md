@@ -67,6 +67,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (sha256 y tamaño) y lo firma después. Documentada la instalación de `ray` en una máquina limpia
   (install.sh/ps1 y los nombres de los assets) en llms.txt y REFERENCE (ray-sublime #118).
 
+## Sin publicar
+
+- **Dependencias**: una caché `.ray-deps/<pkg>` de otra versión (tras cambiar la versión en
+  `ray.toml` y borrar `ray.lock`) se vuelve a descargar en vez de compararse contra el hash publicado
+  de la nueva y acabar en «possible tampering» (rayauth R39).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

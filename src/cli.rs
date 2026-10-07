@@ -144,7 +144,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray) [--frontend <vite-template>]
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
-  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it here)
+  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it (the link — port + token — is kept in `.ray-dev` at the project root, git-ignored by `ray new`; delete the file to rotate it) here)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
@@ -236,8 +236,11 @@ fn cmd_new(args: &[String]) {
         eprintln!("'{name}' already exists");
         process::exit(65);
     }
+    // #125 (ray-ds): la release mínima = la del toolchain que crea el proyecto, para que quien lo
+    // abra con uno anterior lo sepa antes de tropezar con una API que no tiene.
     let mut manifest = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nraylang = \"{}\"\n\n[dependencies]\n",
+        env!("CARGO_PKG_VERSION")
     );
     let mut main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
     let mut gitignore = "# dependencies downloaded by the package manager\n.ray-deps/\n# the device link of `ray dev --device` (port + token)\n.ray-dev\n".to_string();

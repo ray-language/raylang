@@ -604,6 +604,13 @@ pub fn save_file(suggested: string) -> Result<Option<string>, string> {
 /// on macOS (and the app is activated), `gtk_window_present` on GTK, restore + foreground on
 /// Windows. Use it when a menu item targets a window that is open but behind another one;
 /// `eval_js(h, "window.focus()")` only focuses the document, not the native window.
+///
+/// A process started OUTSIDE the graphical session (an ssh shell, a CI runner, an agent's
+/// terminal) cannot be activated by the window server: the window opens but stays
+/// `document.visibilityState == "hidden"`, no `focused` event arrives, `requestAnimationFrame`
+/// never fires and WebKit throttles the page's timers to ~1 s after a few seconds. Automation
+/// of a `std/ui` app from such a shell should drive the page with `eval_js` and `MessageChannel`
+/// tasks (not `setTimeout`/rAF), or launch the app from the session (`open -a`, Terminal.app).
 pub fn focus(h: int) -> Result<int, string> {
     let r = __ui_focus(h);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
@@ -752,6 +759,8 @@ pub fn clipboard_read() -> Result<string, string> {
 /// and, since 1.27.17 (M322), by the iOS and Android shells of `ray bundle` — Android loads the
 /// page through the alias `https://app.ray.invalid/…` so `fetch()` and relative URLs work; a
 /// shell generated with an older raylang makes `open` fail with a message: regenerate it.
+/// Returns `Ok(0)` (files are read lazily, nothing is counted — unlike `mount_embed_at`, which
+/// returns how many embedded files it mounted); `Err` if `dir` does not exist.
 pub fn mount_dir(prefix: string, dir: string) -> Result<int, string> {
     let r = __ui_mount("dir", prefix, dir);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

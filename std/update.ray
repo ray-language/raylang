@@ -367,6 +367,10 @@ fn absolutize(base: string, loc: string) -> string {
 
 /// GET with up to 5 redirects; `Ok(body)` on 200, `Err` otherwise. Good enough for a manifest
 /// and an artifact on any static host or GitHub Releases (which redirects to its CDN).
+/// `http://` and `https://` only (no `file://`, no local paths): to rehearse with the `dist/`
+/// that `ray release` just produced, serve it (`ray serve dist --port 0`) and point `check` at
+/// `http://127.0.0.1:<port>/update.json` — artifact URLs resolve against the manifest's. The
+/// call blocks the fiber: in a `std/ui` app run it from a `spawn`.
 pub fn http_get(url: string) -> Result<bytes, string> {
     var current = url;
     var hops = 0;

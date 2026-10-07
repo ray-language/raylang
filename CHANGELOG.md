@@ -3,6 +3,12 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
+## Sin publicar
+
+- **`ray profile`**: el tiempo propio descontaba solo la instrumentación de las llamadas hijas
+  directas, cuando el inclusivo de las hijas ya venía descontado por todas sus descendientes; en
+  macOS (coste calibrado mayor) salía `self > inclusive`. Ahora propio = inclusivo − hijas.
+
 ## 1.27.38 — 2026-10-07
 
 El barrido de hallazgos de ray-ds, ray-sublime, raylb y rayauth tras 1.27.37 (ray-apps/RAYLANG-FINDINGS.md

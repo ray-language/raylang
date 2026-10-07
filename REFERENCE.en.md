@@ -445,7 +445,7 @@ A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, time-sortable) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 |
 
-## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`)
+## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`, `oidc`)
 
 Tier 2: they do **not** ship in the binary; they are declared in `ray.toml` —always a string:
 `net = "^0.10"` (an index version; `ray add net` writes it), `oidc = "path:../oidc"` (a local
@@ -524,6 +524,10 @@ Time zones over the system's TZif files (`/usr/share/zoneinfo`; RFC 8536 v1-v3, 
 ### `packages/llm` — talking to language models (v0.2.0)
 
 `import llm/llm;` — `for_anthropic(model, api_key)` / `for_openai(model, api_key)` / `for_endpoint(base_url, model, api_key) -> Config` (any endpoint that speaks the OpenAI dialect: Ollama, LM Studio, OpenRouter…) / `for_preset(id, model, api_key) -> Option<Config>` (`anthropic openai openrouter groq deepseek mistral xai gemini ollama lmstudio`) · `send(c, tools, history) -> Result<Reply, string>` (one round-trip) · `send_stream(c, tools, history, show) -> Result<Reply, string>` (the text reaches `show` piece by piece; returns what `send` would) · `user(text)` / `tool_result(call_id, text) -> Message` · `tool(name, description, schema) -> Tool` (`schema` as JSON text; an invalid one aborts the program) · `tool_calls(reply) -> [ToolCall]` · `models(c) -> Result<[string], string>` · `retry_after_ms` · `error_message`. `Reply { message, usage, stop_reason, model }`, `Message { role, text, tool_calls, tool_call_id, raw }`, `ToolCall { id, name, arguments }` (arguments as JSON text), `Usage { input_tokens, output_tokens, cached_tokens, latency_ms, measured }`. Adjustable `Config`: `system`, `max_tokens`, `temperature` (negative = not sent), `effort`, `timeout_ms`, `headers`, `extra` (extra body fields), `cache`, `max_attempts`. Two dialects, **Anthropic** (`/v1/messages`) and **OpenAI** (`/chat/completions`), pure in `llm/anthropic` and `llm/openai` (`build_body` · `headers` · `parse_reply` · `assembly`/`absorb`/`assembled` for a stream); `llm/message` holds the types and `was_truncated`/`was_refused`; `llm/config`, the presets and the URLs. Retries transient failures (no connection, 429, 408, 5xx) honouring `Retry-After`; a stream is only retried while it has delivered no text; fixes `max_tokens`/`max_completion_tokens` and the temperature by itself when the provider rejects them. On Anthropic it replays the assistant's blocks verbatim (`raw`: signed reasoning) and marks the prompt and the tools for the cache. Depends on `net`. VM and native.
+
+### `packages/oidc` — the client side of OpenID Connect (v0.1.0)
+
+`import oidc/provider;` — `discover(issuer) -> Result<Provider, string>` (`.well-known/openid-configuration` + JWKS; the document must name exactly that issuer) · `with_keys(issuer, authorization_endpoint, token_endpoint, jwks_uri, jwks)` (by hand, no network) · `refresh_keys(p)` · `key_of(p, kid)` · `TIMEOUT_MS` (10 s). `import oidc/login;` — `Client { client_id, client_secret ("" = public client), redirect_uri, scope }` · `begin(p, c) -> Pending { state, nonce, verifier, url }` / `begin_with(p, c, extra)` (code + PKCE S256 + nonce) · `finish(p, c, pending, query) -> Result<Tokens, string>` (`state`, `iss` RFC 9207, exchange with HTTP Basic or `client_id` in the body, ID token verified) · `refresh(p, c, refresh_token)` · `userinfo(p, access_token) -> Result<Json, string>` · `logout_url(p, id_token, after)` (RP-initiated) · `finish_at`/`refresh_at` with a clock · `challenge_of(verifier)`. `import oidc/tokens;` — `verify_id_token(p, client_id, token, nonce, now_ms) -> Result<Claims, string>` (signature against the JWKS with a refetch by `kid`, `iss`, `exp`/`nbf` with 60 s leeway, `aud`, `azp`, `nonce`) · `verify_access_token(p, token, required_scopes, now_ms)` (RFC 9068, `typ: at+jwt`) · `verify_jwt(p, token, now_ms) -> Result<Json, string>` · `Claims { sub name email preferred_username groups scope client_id exp iat raw }` · `claims_of` · `audience_has` · `now`. `import oidc/jose;` — compact JWS against a JWK: `verify(token, jwk)` (RS256/ES256/EdDSA by key type; never `none`) · `header_of` · `payload_unverified` · `key_in(jwks, kid)`. Tested against a toy provider written in raylang (`tests/oidc_cli.rs`), VM and native.
 
 ### `packages/agent` — an agent loop (v0.2.0)
 
@@ -682,4 +686,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:977ccebb5bc3 -->
+<!-- sync: sha256:c7a92cf20107 -->

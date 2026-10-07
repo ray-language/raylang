@@ -1,0 +1,245 @@
+// Iniciar sesión: el flujo de código de autorización con PKCE (RFC 7636, S256) y nonce, el canje
+// del código, el refresh (RFC 6749 §6), userinfo (OIDC Core §5.3) y el logout iniciado por el RP
+// (OIDC RP-Initiated Logout 1.0). El servidor guarda el `Pending` entre la redirección y el
+// callback (en su sesión o en una cookie firmada); `finish` lo coteja con lo que vuelve.
+import std/base64;
+import std/crypto;
+import std/json;
+import std/url;
+import net/http;
+import oidc/provider;
+import oidc/tokens;
+from oidc/provider import Provider;
+from oidc/tokens import Claims;
+
+/// This relying party as registered at the provider. `client_secret == ""` for a public client
+/// (SPA, native app): PKCE alone protects the code. `scope` is the space-separated list to
+/// request (`"openid profile email"`).
+pub struct Client {
+    client_id: string,
+    client_secret: string,
+    redirect_uri: string,
+    scope: string,
+}
+
+/// What `begin` produced and `finish` needs back: keep it server side (or in a signed cookie)
+/// between the redirect and the callback. `url` is where to send the browser.
+pub struct Pending {
+    state: string,
+    nonce: string,
+    verifier: string,
+    url: string,
+}
+
+/// What the provider issued: the verified ID token claims, the raw tokens and the access token
+/// lifetime (`expires_in`, seconds; 0 when the provider did not say).
+pub struct Tokens {
+    claims: Claims,
+    id_token: string,
+    access_token: string,
+    refresh_token: string,
+    expires_in: int,
+}
+
+fn random() -> string {
+    base64.base64url(crypto.random_bytes(32))
+}
+
+/// The PKCE S256 challenge of a verifier (RFC 7636 §4.2).
+pub fn challenge_of(verifier: string) -> string {
+    base64.base64url(crypto.sha256(verifier.to_bytes()))
+}
+
+/// Starts a sign-in: a fresh `state`, `nonce` and PKCE verifier, and the authorization URL to
+/// redirect the browser to.
+pub fn begin(p: Provider, c: Client) -> Pending {
+    begin_with(p, c, Map.new())
+}
+
+/// Like `begin`, with extra authorization parameters (`prompt`, `login_hint`, `ui_locales`,
+/// `acr_values`…) appended to the URL.
+pub fn begin_with(p: Provider, c: Client, extra: Map<string, string>) -> Pending {
+    let state = random();
+    let nonce = random();
+    let verifier = random();
+    let q: Map<string, string> = Map.new();
+    q.insert("response_type", "code");
+    q.insert("client_id", c.client_id);
+    q.insert("redirect_uri", c.redirect_uri);
+    q.insert("scope", c.scope);
+    q.insert("state", state);
+    q.insert("nonce", nonce);
+    q.insert("code_challenge", challenge_of(verifier));
+    q.insert("code_challenge_method", "S256");
+    for k in extra.keys() {
+        q.insert(k, extra.get_or(k, ""));
+    }
+    Pending {
+        state: state,
+        nonce: nonce,
+        verifier: verifier,
+        url: p.authorization_endpoint + "?" + url.build_query(q)
+    }
+}
+
+// POST x-www-form-urlencoded al token endpoint: con secreto, autenticación HTTP Basic (RFC 6749
+// §2.3.1, credenciales url-encoded); sin él, `client_id` en el cuerpo.
+fn post_form(u: string, form: Map<string, string>, c: Client) -> Result<json.Json, string> {
+    let h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "application/x-www-form-urlencoded");
+    h.insert("Accept", "application/json");
+    if (c.client_secret != "") {
+        let creds = url.url_encode(c.client_id) + ":" + url.url_encode(c.client_secret);
+        h.insert("Authorization", "Basic " + base64.base64(creds.to_bytes()));
+    } else {
+        form.insert("client_id", c.client_id);
+    }
+    let r = http.request_bytes(
+        "POST",
+        u,
+        url.build_query(form).to_bytes(),
+        h,
+        provider.TIMEOUT_MS
+    )?;
+    let body = json.parse(http.body_text(r)?)?;
+    if (r.status != 200) {
+        let code = json.get_string(body, "error").unwrap_or("HTTP " + to_string(r.status));
+        let desc = json.get_string(body, "error_description").unwrap_or("");
+        return Result.Err(
+            "token endpoint: " + code + if (desc == "") { "" } else { " (" + desc + ")" }
+        );
+    }
+    Result.Ok(body)
+}
+
+fn tokens_of(
+    p: Provider,
+    c: Client,
+    body: json.Json,
+    nonce: string,
+    now_ms: int
+) -> Result<Tokens, string> {
+    let id_token = json.get_string(body, "id_token").unwrap_or("");
+    let claims = if (id_token == "") {
+        if (nonce != "") {
+            return Result.Err("no id_token in the token response");
+        }
+        tokens.claims_of(json.parse("{}")?)
+    } else {
+        tokens.verify_id_token(p, c.client_id, id_token, nonce, now_ms)?
+    };
+    Result.Ok(
+        Tokens {
+            claims: claims,
+            id_token: id_token,
+            access_token: json.get_string(body, "access_token").unwrap_or(""),
+            refresh_token: json.get_string(body, "refresh_token").unwrap_or(""),
+            expires_in: json.get_int(body, "expires_in").unwrap_or(0)
+        }
+    )
+}
+
+/// The callback: `query` is the callback's query string parsed (`url.parse_query`). Checks
+/// `state` against `pending`, `iss` when the provider sends it (RFC 9207), redeems the code with
+/// the PKCE verifier and verifies the ID token (`aud`, `nonce`, signature against the JWKS).
+pub fn finish(
+    p: Provider,
+    c: Client,
+    pending: Pending,
+    query: Map<string, string>
+) -> Result<Tokens, string> {
+    finish_at(p, c, pending, query, tokens.now())
+}
+
+/// `finish` with the clock given (tests).
+pub fn finish_at(
+    p: Provider,
+    c: Client,
+    pending: Pending,
+    query: Map<string, string>,
+    now_ms: int
+) -> Result<Tokens, string> {
+    let err = query.get_or("error", "");
+    if (err != "") {
+        let desc = query.get_or("error_description", "");
+        return Result.Err(
+            "the provider answered " + err + if (desc == "") { "" } else { ": " + desc }
+        );
+    }
+    if (pending.state == "" || query.get_or("state", "") != pending.state) {
+        return Result.Err("state mismatch (not the sign-in this browser started)");
+    }
+    let iss = query.get_or("iss", "");
+    if (iss != "" && iss != p.issuer) {
+        return Result.Err("answer from another issuer");
+    }
+    let code = query.get_or("code", "");
+    if (code == "") {
+        return Result.Err("callback without code");
+    }
+    let form: Map<string, string> = Map.new();
+    form.insert("grant_type", "authorization_code");
+    form.insert("code", code);
+    form.insert("redirect_uri", c.redirect_uri);
+    form.insert("code_verifier", pending.verifier);
+    let body = post_form(p.token_endpoint, form, c)?;
+    tokens_of(p, c, body, pending.nonce, now_ms)
+}
+
+/// Trades a refresh token for new tokens (RFC 6749 §6). A new ID token, when the provider sends
+/// one, is verified (without nonce); `refresh_token` is the new one if rotated, else the old one.
+pub fn refresh(p: Provider, c: Client, refresh_token: string) -> Result<Tokens, string> {
+    refresh_at(p, c, refresh_token, tokens.now())
+}
+
+/// `refresh` with the clock given (tests).
+pub fn refresh_at(
+    p: Provider,
+    c: Client,
+    refresh_token: string,
+    now_ms: int
+) -> Result<Tokens, string> {
+    let form: Map<string, string> = Map.new();
+    form.insert("grant_type", "refresh_token");
+    form.insert("refresh_token", refresh_token);
+    if (c.scope != "") {
+        form.insert("scope", c.scope);
+    }
+    let body = post_form(p.token_endpoint, form, c)?;
+    var t = tokens_of(p, c, body, "", now_ms)?;
+    if (t.refresh_token == "") {
+        t.refresh_token = refresh_token;
+    }
+    Result.Ok(t)
+}
+
+/// `GET userinfo_endpoint` with the bearer access token (OIDC Core §5.3); the claims as JSON.
+/// The `sub` must equal the ID token's (the caller compares: a mismatch is an attack).
+pub fn userinfo(p: Provider, access_token: string) -> Result<json.Json, string> {
+    if (p.userinfo_endpoint == "") {
+        return Result.Err("the provider publishes no userinfo_endpoint");
+    }
+    let h: Map<string, string> = Map.new();
+    h.insert("Accept", "application/json");
+    h.insert("Authorization", "Bearer " + access_token);
+    let r = http.request_bytes("GET", p.userinfo_endpoint, "".to_bytes(), h, provider.TIMEOUT_MS)?;
+    if (r.status != 200) {
+        return Result.Err("userinfo: HTTP " + to_string(r.status));
+    }
+    json.parse(http.body_text(r)?)
+}
+
+/// Where to send the browser to sign out of the provider too (RP-initiated logout), coming back
+/// to `after` (a registered post-logout URI; "" for the provider's own page). `Err` when the
+/// provider publishes no `end_session_endpoint`.
+pub fn logout_url(p: Provider, id_token: string, after: string) -> Result<string, string> {
+    if (p.end_session_endpoint == "") {
+        return Result.Err("the provider publishes no end_session_endpoint");
+    }
+    let q: Map<string, string> = Map.new();
+    q.insert("id_token_hint", id_token);
+    if (after != "") {
+        q.insert("post_logout_redirect_uri", after);
+    }
+    Result.Ok(p.end_session_endpoint + "?" + url.build_query(q))
+}

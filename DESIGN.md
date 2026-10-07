@@ -17019,3 +17019,37 @@ generador en otra máquina— no se ha repetido. La propuesta registrada: hacer 
 cambios baratos, poner el reactor local como default en unix cuando el CI de Linux lo haya
 ejercitado (con `RAYLANG_REACTOR=shared` como retirada) y re-medir con el banco de carga real.
 
+---
+
+## 347. M362 — El paquete `oidc`: iniciar sesión con un proveedor OpenID Connect (oct 2026)
+
+Origen: rayauth R37. Para que una app raylang iniciara sesión con un proveedor OIDC había que
+escribir el cliente entero: `net/oauth2` solo tenía `client_credentials` y un `authorize_url` sin
+PKCE ni nonce, y `net/jwt` solo verificaba HMAC con secreto compartido, mientras que lo que un
+proveedor publica es un JWKS con claves RS256/ES256/EdDSA. rayauth lo escribió para sus apps de
+ejemplo (`examples/oidc`, ~450 líneas) y lo probó en un navegador real: eso es la especificación.
+
+**Un paquete, no un módulo de `net`.** `net` es la pila de transporte y protocolos; OIDC es una
+capa de identidad con su propio vocabulario (proveedor, cliente, tokens, claims) y su propio
+ritmo de cambio (DPoP, `private_key_jwt`, `form_post` llegarán o no según lo pidan las apps). Un
+paquete propio se versiona aparte y no infla `net` para quien no inicia sesión con nadie.
+
+**La superficie, en cuatro módulos.** `provider` (descubrimiento, JWKS y su refresco; `with_keys`
+para montarlo a mano y para los tests), `login` (el flujo de código con PKCE S256, nonce, `state`
+e `iss` de RFC 9207; el canje con HTTP Basic o `client_id` en el cuerpo; refresh; userinfo; logout
+iniciado por el RP), `tokens` (ID token según OIDC Core §3.1.3.7 con `aud`/`azp`/`nonce`; access
+token según RFC 9068, `typ: at+jwt`, con los scopes exigidos; `verify_jwt` como bloque común) y
+`jose` (JWS compacto contra una JWK, con el `alg` atado al tipo de clave: ni `none` ni confusión
+de algoritmos). Decisiones conservadas del original: el reloj entra como parámetro (`now_ms`),
+para que los tests fijen el tiempo; un `kid` desconocido refresca el JWKS **una vez**; una
+respuesta de error del proveedor es un `Err` legible, nunca un `unwrap` sobre el JSON.
+
+**La prueba es un proveedor.** `tests/oidc_cli.rs` levanta en el mismo programa un proveedor OIDC
+de juguete escrito en raylang (`net/webserver`, claves Ed25519, discovery, JWKS, authorize, token,
+userinfo, end_session) y recorre el flujo entero con sus caminos de error — `state` ajeno,
+denegación, scope ausente, ID token colado como access token, caducidad, otra audiencia, firma
+manipulada, secreto erróneo — en la VM y en el binario nativo. De paso enseñó una lección del
+modelo de actores que vale para cualquier servidor de pruebas: una `var` capturada por el handler
+se copia por fibra, así que el estado entre peticiones (aquí, el reto PKCE) no puede vivir en
+ella; el juguete lo lleva dentro del código de autorización.
+

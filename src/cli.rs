@@ -5231,10 +5231,14 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
     let result = (|| {
         // La cara del paquete debe existir EN EL CLON (no solo en el working tree).
         let face = if tmp.join("mod.ray").is_file() { tmp.join("mod.ray") } else { tmp.join(&m.entry) };
-        if !face.is_file() {
+        // M360/M362: un paquete-LIBRERÍA (sin `entry` declarado) no tiene cara única: su cara son
+        // sus módulos `.ray` de la raíz (`import oidc/login;`), que se lexean y parsean abajo.
+        let library_face = !m.entry_declared
+            && fs::read_dir(&tmp).map(|rd| rd.flatten().any(|e| e.path().extension().is_some_and(|x| x == "ray"))).unwrap_or(false);
+        if !face.is_file() && !library_face {
             return Err(format!(
-                "the content of '{}' has no package face: missing 'mod.ray' (or the entry '{}'); \
-                 did you forget to commit it before tagging?",
+                "the content of '{}' has no package face: missing 'mod.ray', the entry '{}' or any \
+                 .ray module at the root; did you forget to commit it before tagging?",
                 spec.git_ref, m.entry
             ));
         }
@@ -5298,13 +5302,28 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
     // función privada `send` de un módulo del paquete es legal para todo consumidor real.
     let base = tmp.parent().unwrap_or(tmp);
     let pkg_name = tmp.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let import_path = if face.file_name().is_some_and(|n| n == "mod.ray") {
-        pkg_name.clone()
+    // M362: una LIBRERÍA (sin cara única) se valida importando TODOS sus módulos de la raíz, que es
+    // lo que hace un consumidor (`import oidc/login;`, `import oidc/tokens;`…).
+    let synth = if face.is_file() {
+        let import_path = if face.file_name().is_some_and(|n| n == "mod.ray") {
+            pkg_name.clone()
+        } else {
+            let stem = face.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            format!("{pkg_name}/{stem}")
+        };
+        format!("import {import_path};\n")
     } else {
-        let stem = face.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        format!("{pkg_name}/{stem}")
+        let mut mods: Vec<String> = fs::read_dir(tmp)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "ray"))
+                    .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        mods.sort();
+        mods.iter().map(|m| format!("import {pkg_name}/{m};\n")).collect::<String>()
     };
-    let synth = format!("import {import_path};\n");
     let entry_path = base.join("__ray_publish_entry.ray");
     let mut loaded = crate::loader::load_source_module(&entry_path, &synth, base, &roots)
         .map_err(|e| format!("the package does not load: {}", e.message))?;

@@ -3,6 +3,17 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
+## Sin publicar
+
+- **Paquete `oidc` (0.1.0)**: el lado cliente de OpenID Connect — descubrimiento con JWKS y refresco
+  por `kid`, inicio de sesión con código + PKCE S256 + nonce + `iss` (RFC 9207), canje y refresh,
+  verificación de ID tokens y de access tokens RFC 9068 contra el JWKS (RS256, ES256, EdDSA),
+  userinfo y logout iniciado por el RP. Nace del paquete que rayauth escribió para sus apps
+  (rayauth R37); probado contra un proveedor de juguete en raylang, VM y nativo.
+- **`ray registry publish` acepta paquetes-librería**: sin `mod.ray` ni `entry`, la cara del paquete
+  son sus módulos `.ray` de la raíz, que se validan importándolos todos como haría un consumidor
+  (antes: «has no package face»). Encontrado al publicar `oidc`.
+
 ## 1.27.38 — 2026-10-07
 
 El barrido de hallazgos de ray-ds, ray-sublime, raylb y rayauth tras 1.27.37 (ray-apps/RAYLANG-FINDINGS.md

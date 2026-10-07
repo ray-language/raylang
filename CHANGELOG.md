@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/json`**: `render_pretty(o, indent)`, `render_arr_pretty(a, indent)` y `reindent(texto,
+  indent)` indentan respetando el orden de inserción de las claves (`stringify_pretty` las ordena
+  porque un objeto parseado es un `Map`) (ray-ds #122).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

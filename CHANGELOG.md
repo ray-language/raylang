@@ -54,6 +54,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   cómo ensayar con `ray serve dist` (ray-sublime #115); las plantillas compiladas `.ray.html` en
   llms.txt (ray-ds #126); `.ray-dev` en `ray dev --help` (rayplay #111).
 
+## Sin publicar
+
+- **`std/json`**: `render_pretty(o, indent)`, `render_arr_pretty(a, indent)` y `reindent(texto,
+  indent)` indentan respetando el orden de inserción de las claves (`stringify_pretty` las ordena
+  porque un objeto parseado es un `Map`) (ray-ds #122).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

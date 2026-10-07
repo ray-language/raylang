@@ -873,6 +873,83 @@ pub fn render_arr(a: Arr) -> string {
     "[" + join(a.items, ",") + "]"
 }
 
+// #122 (ray-ds): indentar RESPETANDO el orden del autor. `stringify_pretty` pasa por `Json`, cuyo
+// objeto es un `Map` ordenado por clave; para un artefacto que se lee a mano (tokens, manifiestos)
+// el orden de inserción del builder importa. Esto re-indenta el TEXTO compacto sin reordenar nada.
+/// `render(o)` indented with `indent` spaces per level, keeping the insertion order of the keys
+/// (`stringify_pretty` sorts them, since a parsed object is a `Map`).
+pub fn render_pretty(o: Obj, indent: int) -> string {
+    reindent(render(o), indent)
+}
+
+/// `render_arr(a)` indented with `indent` spaces per level, keeping the order of the items and of
+/// the keys of any object inside.
+pub fn render_arr_pretty(a: Arr, indent: int) -> string {
+    reindent(render_arr(a), indent)
+}
+
+/// Re-indents compact JSON text (`render`, `stringify`, a file) with `indent` spaces per level
+/// WITHOUT parsing it into a `Json`: objects keep the order of their keys. Empty `{}`/`[]` stay on
+/// one line. The text must be valid JSON; strings are copied verbatim (escapes included).
+pub fn reindent(json: string, indent: int) -> string {
+    let b = sb.new();
+    let cs = json.chars();
+    var depth = 0;
+    var i = 0;
+    var in_str = false;
+    var esc = false;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (in_str) {
+            sb.push(b, to_string(c));
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+        } else if (c == '"') {
+            in_str = true;
+            sb.push(b, "\"");
+        } else if (c == '{' || c == '[') {
+            let close = if (c == '{') { '}' } else { ']' };
+            // `{}`/`[]` vacíos (saltando espacios) quedan en una línea.
+            var k = i + 1;
+            while (k < cs.len()
+                && (cs[k] == ' ' || cs[k] == '\n' || cs[k] == '\t' || cs[k] == '\r')) {
+                k = k + 1;
+            }
+            if (k < cs.len() && cs[k] == close) {
+                sb.push(b, to_string(c));
+                sb.push(b, to_string(close));
+                i = k;
+            } else {
+                depth = depth + 1;
+                sb.push(b, to_string(c));
+                sb.push(b, "\n");
+                sb.push(b, " ".repeat(indent * depth));
+            }
+        } else if (c == '}' || c == ']') {
+            depth = depth - 1;
+            sb.push(b, "\n");
+            sb.push(b, " ".repeat(indent * depth));
+            sb.push(b, to_string(c));
+        } else if (c == ',') {
+            sb.push(b, ",\n");
+            sb.push(b, " ".repeat(indent * depth));
+        } else if (c == ':') {
+            sb.push(b, ": ");
+        } else if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+            // el blanco del original no se conserva: lo pone la indentación
+        } else {
+            sb.push(b, to_string(c));
+        }
+        i = i + 1;
+    }
+    sb.build(b)
+}
+
 impl ToJson for Obj {
     fn to_json(self) -> string { render(self) }
 }

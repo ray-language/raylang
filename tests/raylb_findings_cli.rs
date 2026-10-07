@@ -728,3 +728,23 @@ fn main() -> int {
         "localhost ok\nport1 refused=true\n",
     );
 }
+
+/// ray-ds #122: `json.render_pretty`/`render_arr_pretty`/`reindent` indentan respetando el orden de
+/// inserción (`stringify_pretty` ordena las claves porque un objeto parseado es un `Map`); los
+/// `{}`/`[]` vacíos quedan en una línea y los strings se copian tal cual, escapes incluidos.
+#[test]
+fn json_render_pretty_keeps_the_insertion_order() {
+    three_engines(
+        "json_render_pretty",
+        r#"import std/json;
+fn main() -> int {
+    let o = json.obj().field("zeta", 1).field("alpha", json.obj().field("b", true).field("a", "x\"y, {z}")).field("list", json.list(["q", "r"]));
+    print(json.render_pretty(o, 2));
+    print(json.render_pretty(json.obj().field("e", json.obj()).field("n", json.list([1])), 2));
+    print(json.reindent(json.stringify(json.parse(json.render(o)).unwrap()), 4) != "");
+    0
+}
+"#,
+        "{\n  \"zeta\": 1,\n  \"alpha\": {\n    \"b\": true,\n    \"a\": \"x\\\"y, {z}\"\n  },\n  \"list\": [\n    \"q\",\n    \"r\"\n  ]\n}\n{\n  \"e\": {},\n  \"n\": [\n    1\n  ]\n}\ntrue\n",
+    );
+}

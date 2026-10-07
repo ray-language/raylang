@@ -217,29 +217,17 @@ fn cmd_release(a: [string]) -> int {
     let base_url = a[9];
     let key = a[10];
     let expected_pk = a[11];
-    let seed = match (update.from_hex(seed_hex.trim())) {
-        Option.Some(s) => s,
-        Option.None => {
-            eprint("release: the signing key is not a hex seed");
-            return 65;
-        },
-    };
-    let pk = match (crypto.ed25519_public_key(seed)) {
-        Option.Some(p) => update.to_hex(p),
-        Option.None => {
-            eprint("release: the signing key is not a valid Ed25519 seed (32 bytes)");
-            return 65;
-        },
-    };
-    if (expected_pk != "" && expected_pk.to_lower() != pk) {
-        eprint(
-            "release: the signing key does not match [app] public_key in ray.toml ("
-                + pk
-                + " vs "
-                + expected_pk
-                + "); the app would reject this manifest"
-        );
-        return 65;
+    // #118: sin clave (`--no-sign`) se escribe el zip y el manifiesto, y la firma la pone después
+    // `ray release seal`. Con clave, se valida antes de tocar nada.
+    let signing = seed_hex.trim() != "";
+    var pk = "";
+    var seed: bytes = b"";
+    if (signing) {
+        seed = match (load_seed(seed_hex, expected_pk)) {
+            Result.Ok(s) => s,
+            Result.Err(code) => return code,
+        };
+        pk = update.to_hex(crypto.ed25519_public_key(seed).unwrap_or(b""));
     }
     // 1. El zip del bundle, con su directorio raíz.
     let top = base_name(bundle_dir);
@@ -303,20 +291,15 @@ fn cmd_release(a: [string]) -> int {
             return 73;
         },
     }
-    // 3. La firma, sobre los bytes exactos del archivo.
-    let sig = match (crypto.ed25519_sign(seed, manifest.to_bytes())) {
-        Option.Some(s) => update.to_hex(s),
-        Option.None => {
-            eprint("release: could not sign the manifest");
-            return 70;
-        },
-    };
-    match (fs.write_file(manifest_path + ".sig", sig + "\n")) {
-        Result.Ok(_) => { },
-        Result.Err(e) => {
-            eprint("release: " + e);
-            return 73;
-        },
+    // 3. La firma, sobre los bytes exactos del archivo (con `--no-sign`, una firma vieja se retira:
+    //    ya no corresponde al manifiesto nuevo).
+    if (signing) {
+        match (sign_manifest(seed, manifest_path, manifest)) {
+            Result.Ok(_) => { },
+            Result.Err(code) => return code,
+        }
+    } else {
+        let _ = fs.remove_file(manifest_path + ".sig");
     }
     print("public_key=" + pk);
     print("zip=" + dist + "/" + zip_name);
@@ -324,6 +307,135 @@ fn cmd_release(a: [string]) -> int {
     print("size=" + to_string(zip.len()));
     print("manifest=" + manifest_path);
     print("artifacts=" + to_string(arts.len()));
+    0
+}
+
+// La semilla Ed25519 desde su hex, comprobada contra la clave pública horneada en la app.
+fn load_seed(seed_hex: string, expected_pk: string) -> Result<bytes, int> {
+    let seed = match (update.from_hex(seed_hex.trim())) {
+        Option.Some(s) => s,
+        Option.None => {
+            eprint("release: the signing key is not a hex seed");
+            return Result.Err(65);
+        },
+    };
+    let pk = match (crypto.ed25519_public_key(seed)) {
+        Option.Some(p) => update.to_hex(p),
+        Option.None => {
+            eprint("release: the signing key is not a valid Ed25519 seed (32 bytes)");
+            return Result.Err(65);
+        },
+    };
+    if (expected_pk != "" && expected_pk.to_lower() != pk) {
+        eprint(
+            "release: the signing key does not match [app] public_key in ray.toml ("
+                + pk
+                + " vs "
+                + expected_pk
+                + "); the app would reject this manifest"
+        );
+        return Result.Err(65);
+    }
+    Result.Ok(seed)
+}
+
+// Firma los bytes exactos del manifiesto y escribe `update.json.sig`.
+fn sign_manifest(seed: bytes, manifest_path: string, manifest: string) -> Result<int, int> {
+    let sig = match (crypto.ed25519_sign(seed, manifest.to_bytes())) {
+        Option.Some(s) => update.to_hex(s),
+        Option.None => {
+            eprint("release: could not sign the manifest");
+            return Result.Err(70);
+        },
+    };
+    match (fs.write_file(manifest_path + ".sig", sig + "\n")) {
+        Result.Ok(_) => Result.Ok(0),
+        Result.Err(e) => {
+            eprint("release: " + e);
+            Result.Err(73)
+        },
+    }
+}
+
+// #118: `seal <dist> <seed_hex> <expected_pk> <app_id>` — comprueba que cada artefacto del
+// manifiesto está en `dist/` con su sha256 y tamaño, y firma el manifiesto tal cual está.
+fn cmd_seal(a: [string]) -> int {
+    let dist = a[1];
+    let seed = match (load_seed(a[2], a[3])) {
+        Result.Ok(s) => s,
+        Result.Err(code) => return code,
+    };
+    let manifest_path = dist + "/update.json";
+    let manifest = match (fs.read_file(manifest_path)) {
+        Result.Ok(m) => m,
+        Result.Err(e) => {
+            eprint("release seal: " + e);
+            return 66;
+        },
+    };
+    let parsed = match (json.parse(manifest)) {
+        Result.Ok(j) => j,
+        Result.Err(e) => {
+            eprint("release seal: update.json is not valid JSON: " + e);
+            return 65;
+        },
+    };
+    if (json.get_string(parsed, "app").unwrap_or("") != a[4]) {
+        eprint(
+            "release seal: update.json is for app '"
+                + json.get_string(parsed, "app").unwrap_or("")
+                + "', not '"
+                + a[4]
+                + "'"
+        );
+        return 65;
+    }
+    var count = 0;
+    match (json.get_object(parsed, "artifacts")) {
+        Option.Some(m) => {
+            for k in m.keys() {
+                let art = m.get_or(k, json.Json.JNull);
+                let url = json.get_string(art, "url").unwrap_or("");
+                let want_sha = json.get_string(art, "sha256").unwrap_or("");
+                let want_size = json.get_int(art, "size").unwrap_or(0 - 1);
+                let file = dist + "/" + base_name(url);
+                let data = match (fs.read_file_bytes(file)) {
+                    Result.Ok(d) => d,
+                    Result.Err(_) => {
+                        eprint(
+                            "release seal: artifact for "
+                                + k
+                                + " not found in "
+                                + dist
+                                + ": "
+                                + base_name(url)
+                        );
+                        return 66;
+                    },
+                };
+                let sha = update.to_hex(crypto.sha256(data));
+                if (sha != want_sha || data.len() != want_size) {
+                    eprint(
+                        "release seal: "
+                            + base_name(url)
+                            + " does not match its manifest entry (sha256/size)"
+                    );
+                    return 65;
+                }
+                count = count + 1;
+            }
+        },
+        Option.None => { },
+    }
+    if (count == 0) {
+        eprint("release seal: the manifest names no artifacts");
+        return 65;
+    }
+    match (sign_manifest(seed, manifest_path, manifest)) {
+        Result.Ok(_) => { },
+        Result.Err(code) => return code,
+    }
+    print("artifacts=" + to_string(count));
     0
 }
 
@@ -350,6 +462,9 @@ fn main() -> int {
     }
     if (a.len() >= 12 && a[0] == "release") {
         return cmd_release(a);
+    }
+    if (a.len() >= 5 && a[0] == "seal") {
+        return cmd_seal(a);
     }
     eprint("ray-release: bad arguments");
     64

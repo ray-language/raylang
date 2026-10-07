@@ -425,6 +425,11 @@ up to 20 diagnostics per run.
 ## Verify, don't guess
 
 ```
+# Installing `ray` on a clean machine (a CI runner): `curl -sSfL https://raylang.dev/install.sh | sh`
+# (macOS/Linux → ~/.local/bin) or `irm https://raylang.dev/install.ps1 | iex` (Windows); by hand, the
+# release asset https://github.com/ray-language/raylang/releases/latest/download/raylang-<triple>.tar.gz
+# (.zip on Windows; <triple> = aarch64|x86_64-apple-darwin, -unknown-linux-gnu, -pc-windows-msvc) ships
+# `ray` and `raylang`. `ray upgrade` updates an existing install.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change

@@ -172,7 +172,7 @@ Tooling:
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
   keygen            create the app's Ed25519 signing key (std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
-  release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL]
+  release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL] [--no-sign: zip + update.json without a signature, for a CI that lacks the private key; then `ray release seal <dist>` verifies every artifact in dist/ against the manifest and signs it]
   toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--targets ios,android] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `add-target ios|android|<triple>` installs the std of extra targets for `bundle --ios/--android` (works with the private toolchain too); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker, the extra targets and the vendor
   version           the language version
   help              this help
@@ -586,6 +586,13 @@ fn cmd_release(args: &[String]) {
     let (notary_arg, rest) = take_flag_value(&rest, "--notary");
     let (entitlements_arg, rest) = take_flag_value(&rest, "--entitlements");
     let (publish, rest) = take_flag_bool(&rest, "--publish");
+    // #118 (ray-sublime): `--no-sign` empaqueta y escribe el manifiesto SIN firmarlo (el CI de
+    // cada plataforma no tiene la clave privada); `ray release seal <dist>` lo firma después,
+    // en la máquina de quien publica, con los zips de todas las plataformas ya en `dist/`.
+    let (no_sign, rest) = take_flag_bool(&rest, "--no-sign");
+    if rest.len() == 2 && rest[0] == "seal" {
+        return cmd_release_seal(&rest[1], key_arg);
+    }
     if rest.len() > 1 || rest.iter().any(|a| a.starts_with("--")) {
         eprintln!("usage: ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX] [--without list] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist] [--publish] [--tag vX.Y.Z]");
         process::exit(64);
@@ -607,16 +614,21 @@ fn cmd_release(args: &[String]) {
     let version = manifest.version.clone();
     let name = manifest.app_name.clone().unwrap_or_else(|| manifest.name.clone());
     let expected_pk = manifest.app_public_key.clone().unwrap_or_default();
-    // La clave: --key, RAY_SIGNING_KEY, o el archivo de `ray keygen`.
-    let seed_hex = key_arg
-        .or_else(|| std::env::var("RAY_SIGNING_KEY").ok().filter(|s| !s.trim().is_empty()))
-        .or_else(|| fs::read_to_string(keys_dir().join(format!("{app_id}.key"))).ok())
-        .unwrap_or_else(|| {
-            eprintln!("release: no signing key for '{app_id}' — run 'ray keygen' (or pass --key / RAY_SIGNING_KEY)");
-            process::exit(64);
-        });
+    // La clave: --key, RAY_SIGNING_KEY, o el archivo de `ray keygen`. Con --no-sign no hay clave.
+    let seed_hex = if no_sign {
+        String::new()
+    } else {
+        key_arg
+            .or_else(|| std::env::var("RAY_SIGNING_KEY").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| fs::read_to_string(keys_dir().join(format!("{app_id}.key"))).ok())
+            .unwrap_or_else(|| {
+                eprintln!("release: no signing key for '{app_id}' — run 'ray keygen' (or pass --key / RAY_SIGNING_KEY), or use --no-sign and `ray release seal <dist>` later");
+                process::exit(64);
+            })
+    };
     // La clave debe ser la horneada en la app, y se comprueba ANTES de compilar el bundle.
-    if !expected_pk.is_empty()
+    if !no_sign
+        && !expected_pk.is_empty()
         && let Some(seed) = hex_decode(seed_hex.trim())
         && let Some(pk) = crate::builtins::ed25519_public_key(&seed)
     {
@@ -687,9 +699,17 @@ fn cmd_release(args: &[String]) {
     let out = out.unwrap_or_else(|code| process::exit(code));
     let zip = kv(&out, "zip").unwrap_or_default();
     println!("ok: {zip} ({} bytes, sha256 {})", kv(&out, "size").unwrap_or_default(), kv(&out, "sha256").unwrap_or_default());
-    println!("ok: {}/update.json + update.json.sig ({} artifact(s) for {version})", dist.display(), kv(&out, "artifacts").unwrap_or_default());
+    if no_sign {
+        println!("ok: {}/update.json UNSIGNED ({} artifact(s) for {version}) — sign it with `ray release seal {}` before publishing", dist.display(), kv(&out, "artifacts").unwrap_or_default(), dist.display());
+    } else {
+        println!("ok: {}/update.json + update.json.sig ({} artifact(s) for {version})", dist.display(), kv(&out, "artifacts").unwrap_or_default());
+    }
     // 3. --publish: la Release de GitHub del tag (creada si falta) recibe los tres archivos.
     if publish {
+        if no_sign {
+            eprintln!("release: --publish with --no-sign would publish a manifest the app rejects (unsigned); seal it first (`ray release seal {}`)", dist.display());
+            process::exit(65);
+        }
         let manifest_path = dist.join("update.json");
         let sig_path = dist.join("update.json.sig");
         let title = format!("{name} {version}");
@@ -717,6 +737,40 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// `owner/repo` de una URL de remoto de GitHub (ssh o https).
+/// #118: `ray release seal <dist> [--key HEX]` — firma el `update.json` que dejaron una o varias
+/// corridas de `ray release --no-sign` (una por plataforma, sobre el mismo `dist/`), tras comprobar
+/// que cada artefacto nombrado está en `dist/` con su sha256 y tamaño. La clave y su comprobación
+/// contra `[app] public_key` son las de `ray release`.
+fn cmd_release_seal(dist: &str, key_arg: Option<String>) {
+    let dist_path = PathBuf::from(dist);
+    if !dist_path.join("update.json").is_file() {
+        eprintln!("release seal: no update.json in '{dist}' (run `ray release --no-sign -o {dist}` first)");
+        process::exit(66);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let (manifest, app_id) = app_identity(&cwd).unwrap_or_else(|| {
+        eprintln!("release seal: needs the app's ray.toml in the current directory ([app] id/public_key)");
+        process::exit(64);
+    });
+    let expected_pk = manifest.app_public_key.clone().unwrap_or_default();
+    let seed_hex = key_arg
+        .or_else(|| std::env::var("RAY_SIGNING_KEY").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| fs::read_to_string(keys_dir().join(format!("{app_id}.key"))).ok())
+        .unwrap_or_else(|| {
+            eprintln!("release seal: no signing key for '{app_id}' — run 'ray keygen' (or pass --key / RAY_SIGNING_KEY)");
+            process::exit(64);
+        });
+    let out = run_release_program(vec![
+        "seal".into(),
+        dist_path.to_string_lossy().into_owned(),
+        seed_hex.trim().to_string(),
+        expected_pk,
+        app_id,
+    ]);
+    let out = out.unwrap_or_else(|code| process::exit(code));
+    println!("ok: {}/update.json.sig ({} artifact(s) verified)", dist_path.display(), kv(&out, "artifacts").unwrap_or_default());
+}
+
 fn github_slug(remote: &str) -> Option<String> {
     let rest = remote.strip_prefix("git@github.com:").or_else(|| remote.strip_prefix("https://github.com/"))?;
     Some(rest.trim_end_matches(".git").trim_end_matches('/').to_string())

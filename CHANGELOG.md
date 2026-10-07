@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray release --no-sign` y `ray release seal <dist>`**: un CI sin la clave privada empaqueta y
+  escribe el manifiesto sin firma (y `--publish` se niega); quien publica comprueba cada artefacto
+  (sha256 y tamaño) y lo firma después. Documentada la instalación de `ray` en una máquina limpia
+  (install.sh/ps1 y los nombres de los assets) en llms.txt y REFERENCE (ray-sublime #118).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

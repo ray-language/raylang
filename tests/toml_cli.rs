@@ -16,19 +16,19 @@ const EXPECTED: &[&str] = &[
     // y escape desconocido/incompleto = Err (antes: corrupción silenciosa, "cafu00E9").
     "s = \"café 😀\"",
     "p = \"C:\\ruta\\ne\"",
-    "err: unknown escape '\\q' in the string",
-    "err: non-hex digit in \\u escape",
+    "err: unknown escape '\\q' in the string (line 1)",
+    "err: non-hex digit in \\u escape (line 1)",
     // M63.2 — números conformes: separadores `_` (entre dígitos) e inf/nan.
     "n = 1000000",
     "f = 1024.5",
     "a = inf",
     "b = -inf",
     "c = NaN",
-    "err: misplaced '_' separator in number: 1__0",
+    "err: misplaced '_' separator in number: 1__0 (line 1)",
     // M63.3 — rigor del documento: lo que la spec prohíbe ya no pasa en silencio.
-    "err: duplicate key: 'a'",
-    "err: empty table header",
-    "err: expected end of line after the value of 'a'",
+    "err: duplicate key: 'a' (line 2)",
+    "err: empty table header (line 1)",
+    "err: expected end of line after the value of 'a' (line 1)",
     // M128 — arreglos de tablas [[ruta]] aplanados como ruta.N.clave + toml_array_len.
     "route.0.path = \"/a\"",
     "route.0.port = 1",
@@ -36,8 +36,8 @@ const EXPECTED: &[&str] = &[
     "server.host = \"x\"",
     "route len = 2",
     "nope len = 0",
-    "err: empty array-of-tables header",
-    "err: missing ']]' in array-of-tables header",
+    "err: empty array-of-tables header (line 1)",
+    "err: missing ']]' in array-of-tables header (line 1)",
 ];
 
 fn run(flags: &[&str]) -> (Vec<String>, bool) {

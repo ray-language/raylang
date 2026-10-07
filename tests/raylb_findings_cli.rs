@@ -609,7 +609,7 @@ fn main() -> int {
     0
 }
 "#,
-        "inline tables are not supported; write a [table] header instead\n",
+        "inline tables are not supported; write a [table] header instead (line 1)\n",
     );
     three_engines(
         "map_new_tail",

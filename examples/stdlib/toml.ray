@@ -79,6 +79,13 @@ fn is_key(c: char) -> bool {
 }
 
 fn parse_key(t: TS) -> string {
+    // #121 (ray-ds): una clave ENTRE COMILLAS (`"a.b" = 1`, `"0" = "0"`) vale tal cual, con escapes.
+    if (!ts_end(t) && ts_peek(t) == '"') {
+        return match (parse_string(t)) {
+            Result.Ok(s) => s,
+            Result.Err(_) => "",
+        };
+    }
     var k = "";
     while (!ts_end(t) && is_key(ts_peek(t))) {
         k = k + to_string(ts_adv(t));
@@ -360,7 +367,7 @@ fn clave_repetida(entries: [TomlEntry], key: string) -> bool {
 
 // Parsea un documento TOML a una lista de entradas (ruta con puntos → valor).
 /// Parses a TOML document (subset) into a flat list of entries (dotted key path → value).
-/// Supports `#` comments, `[a.b]` tables, bare keys, and string (basic with full escapes, or
+/// Supports `#` comments, `[a.b]` tables, bare and quoted keys (`"a.b" = 1`), and string (basic with full escapes, or
 /// literal `'...'`) / int / float / bool / array values. Strict where it counts: duplicate
 /// keys, an empty table header, or a second entry on the same line are errors.
 /// Arrays of tables `[[path]]` are flattened as `path.0.key`, `path.1.key`, … (count them with
@@ -368,6 +375,28 @@ fn clave_repetida(entries: [TomlEntry], key: string) -> bool {
 /// strings.
 pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: src.chars(), pos: 0 };
+    // #121 (ray-ds): todo error lleva la línea donde se detuvo el parser.
+    match (parse_document(t)) {
+        Result.Ok(es) => Result.Ok(es),
+        Result.Err(e) => Result.Err(e + " (line " + to_string(line_of(t)) + ")"),
+    }
+}
+
+// Línea (1-basada) de la posición actual del parser.
+fn line_of(t: TS) -> int {
+    var line = 1;
+    var i = 0;
+    let end = if (t.pos < t.cs.len()) { t.pos } else { t.cs.len() };
+    while (i < end) {
+        if (t.cs[i] == '\n') {
+            line = line + 1;
+        }
+        i = i + 1;
+    }
+    line
+}
+
+fn parse_document(t: TS) -> Result<[TomlEntry], string> {
     var entries: [TomlEntry] = [];
     var table = "";
     // M128: contadores de `[[ruta]]` — cuántos elementos lleva cada arreglo de tablas.
@@ -422,7 +451,16 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
         } else {
             let key = parse_key(t);
             if (key == "") {
-                return Result.Err("invalid key");
+                // #121: qué se encontró en vez de una clave (el llamador añade la línea).
+                let c = if (ts_end(t)) {
+                    "end of input"
+                } else {
+                    "'" + to_string(ts_peek(t)) + "'"
+                };
+                return Result.Err(
+                    "invalid key: expected a bare key (letters, digits, '-', '_') or a quoted key, found "
+                        + c
+                );
             }
             skip_spaces(t);
             if (ts_end(t) || ts_peek(t) != '=') {

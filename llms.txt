@@ -272,7 +272,12 @@ parameter is that type), so builders chain with just `import std/json;`:
 
 Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
-std/base64 std/url std/regex std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates: `ray build --templates-only`, see MANUAL) std/protobuf std/uuid
+std/base64 std/url std/regex std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates — a file `site/page.ray.html` is an importable module with
+`pub fn render(<params>) -> string`: FIRST directive `{% params title: string, items: [model.Item] %}`,
+then `{% import site/model %}` for types of other modules (not `from … import`), then
+`{% if flag %}`/`{% for x in items %}`/`{{ x.name }}`/`{{& raw }}`; conditions must be `bool`
+(`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
+`ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
 std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
@@ -391,7 +396,10 @@ title bar — macOS: transparent bar, hidden title, traffic lights over the page
 live geometry: `ui.set_fullscreen(h, bool)`, `ui.set_always_on_top`, `ui.set_size(h, w, hh)`,
 `ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)`;
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
-(page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch); desktop:
+(page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch —
+NOT when the process runs outside the graphical session: from ssh/CI/an agent shell the window
+stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate with `eval_js` +
+`MessageChannel`, or launch from the session); desktop:
 `ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray
 dev` the window live-reloads on asset changes and the webview devtools are on.
 

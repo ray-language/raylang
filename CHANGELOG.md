@@ -41,6 +41,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   guarda el ejecutable con modo 0755 (la comparación con la raíz del bundle nunca casaba y salía
   -rw-r--r--) (ray-sublime #119).
 
+## Sin publicar
+
+- **`std/toml`** acepta claves entre comillas (`"a.b" = 1`, `"0" = "0"`) y todo error dice la línea
+  y, en una clave inválida, qué se encontró (ray-ds #121).
+- **`std/template`**: un filtro al estilo Jinja (`{{ x | safe }}`) es error de compilación con la
+  forma raylang (`{{& x }}`) en vez de un "" silencioso; la doc explica la verdad de una lista en
+  cada motor (ray-ds #127).
+- **`ray new`** escribe `raylang = "<versión del toolchain>"` en el `ray.toml` (ray-ds #125).
+- Documentación: `ui.focus`/llms.txt sobre la ventana oculta fuera de la sesión gráfica (ray-ds
+  #123); `ui.mount_dir` devuelve siempre 0 (rayplay #110); `update.http_get` solo `http(s)://` y
+  cómo ensayar con `ray serve dist` (ray-sublime #115); las plantillas compiladas `.ray.html` en
+  llms.txt (ray-ds #126); `.ray-dev` en `ray dev --help` (rayplay #111).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

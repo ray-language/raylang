@@ -207,10 +207,32 @@ fn tokenize(tpl: string) -> Result<[Tok], string> {
             if (is_tag) {
                 toks.push(Tok.TTag(inner));
             } else {
-                if (inner.len() > 0 && inner[0] == '&') {
-                    toks.push(Tok.TRaw(inner.substring(1, inner.len()).trim()));
+                let var_name = if (inner.len() > 0 && inner[0] == '&') {
+                    inner.substring(1, inner.len()).trim()
                 } else {
-                    toks.push(Tok.TVar(inner));
+                    inner
+                };
+                // #127 (ray-ds): `{{ x | safe }}` (Jinja/Liquid) no es una variable: antes se buscaba
+                // la variable «x | safe», no existía y salía "" sin aviso. Es error de compilación,
+                // con la forma raylang del raw (`{{& x }}`).
+                if (var_name.contains("|")) {
+                    return Result.Err(
+                        "filters are not supported in '{{ "
+                            + var_name
+                            + " }}': use '{{& x }}' for raw output, or compute the value before rendering"
+                    );
+                }
+                if (var_name == "" || var_name.contains(" ")) {
+                    return Result.Err(
+                        "invalid variable name in '{{ "
+                            + var_name
+                            + " }}': a name or a dotted path (a.b.c)"
+                    );
+                }
+                if (inner.len() > 0 && inner[0] == '&') {
+                    toks.push(Tok.TRaw(var_name));
+                } else {
+                    toks.push(Tok.TVar(var_name));
                 }
             }
         } else {
@@ -699,7 +721,9 @@ pub fn render(t: Template, ctx: [Bind]) -> string {
 /// `{% for x in list %}…{% endfor %}`. An `if`/`elif` condition is `x`, `not x`, `a == b` or
 /// `a != b`, where each side is a variable (dotted paths allowed) or a literal (`"text"`, `42`,
 /// `true`); anything else is a compile error, never a silent false. Missing variables render as
-/// "" and are falsy; `Err` on syntax errors.
+/// "" and are falsy; a list is truthy when non-empty (in a COMPILED `.ray.html` template the
+/// condition must be a `bool`: pass `xs.len() > 0`). Jinja filters (`{{ x | safe }}`) are a
+/// compile error — raw output is `{{& x }}`. `Err` on syntax errors.
 /// For repeated rendering (SSR), prefer `compile` once + `render` per request.
 pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
     let t = match (compile(tpl)) {

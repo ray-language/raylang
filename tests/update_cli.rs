@@ -328,3 +328,23 @@ mod sha256_simple {
         }
     }
 }
+
+/// #114 (ray-sublime): bajo `ray test`, `std/update` tomaba el directorio del ejecutable `ray` por
+/// la raíz instalada (`process.self_command()` caía al defecto de un solo elemento) y `apply`
+/// empezaba a trabajar sobre `~/.local/bin`. Ahora el runner se presenta como «toolchain + test»:
+/// `current()` es "dev" e `install_root()` es `None`, como bajo `ray run`.
+#[test]
+fn under_ray_test_update_sees_a_dev_program() {
+    let base = std::env::temp_dir().join(format!("ray_update_under_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"upd\"\nversion = \"3.4.5\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import std/update;\nfn main() -> int { 0 }\n@test\nfn where() { let root = update.install_root().unwrap_or(\"none\"); print(\"current=\" + update.current() + \" root=\" + root); }\n",
+    )
+    .unwrap();
+    let (out, err, ok) = ray(&base, &["test"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("current=dev root=none"), "{out}");
+}

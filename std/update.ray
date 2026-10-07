@@ -51,7 +51,8 @@ pub fn app_id() -> string {
     __app_info()[0]
 }
 
-/// The running version: `[package] version` baked into the bundle, or `"dev"` under `ray run`.
+/// The running version: `[package] version` baked into the bundle, or `"dev"` under `ray run`,
+/// `ray dev` and `ray test` (anything that is not a packaged native binary).
 pub fn current() -> string {
     let v = __app_info()[1];
     if (v == "" || process.self_command().len() > 1) { "dev" } else { v }
@@ -597,7 +598,8 @@ fn file_name_of(url: string) -> string {
 // ── Instalación ────────────────────────────────────────────────────────────────────────────
 
 /// Where this app is installed, derived from the running executable: the `.app` on macOS, the
-/// bundle directory on Linux/Windows. `None` under `ray run` (nothing to replace).
+/// bundle directory on Linux/Windows. `None` under `ray run`, `ray dev` and `ray test` (nothing
+/// to replace).
 pub fn install_root() -> Option<string> {
     let c = process.self_command();
     if (c.len() != 1 || current() == "dev") {
@@ -692,12 +694,29 @@ fn extract(zip_path: string, dest: string) -> Result<string, string> {
     Result.Ok(top)
 }
 
+// ¿Es `root` el directorio donde vive la toolchain (`ray` + `raylang`), o un `.app` de la propia
+// toolchain? Una app empaquetada nunca comparte directorio con ella.
+fn looks_like_toolchain_dir(root: string) -> bool {
+    let exe = if (platform() == "windows") { "ray.exe" } else { "ray" };
+    fs.exists(root + "/" + exe)
+        && fs.exists(root + "/raylang" + if (platform() == "windows") { ".exe" } else { "" })
+}
+
 /// Installs the package over `root` (the path `install_root()` returns): extracts next to it,
 /// then swaps atomically — macOS/Linux rename the whole directory (the running app keeps its
 /// open files; the previous one stays as `<root>.old` until `cleanup()`); Windows cannot
 /// replace a running `.exe`, so files in use are renamed to `*.old` and the new ones copied in
 /// place. Returns the installed root. Call `relaunch()` afterwards.
 pub fn apply_at(p: Package, root: string) -> Result<string, string> {
+    // #114 (ray-sublime): nunca sobre el directorio de la toolchain `ray` (un `ray test` que
+    // ensaye el flujo, un `install_root()` equivocado…): sustituirlo deja la máquina sin `ray`.
+    if (looks_like_toolchain_dir(root)) {
+        return Result.Err(
+            "update: refusing to replace '"
+                + root
+                + "': it holds the `ray` toolchain, not an app bundle"
+        );
+    }
     let parent = parent_of(root);
     let staging = root + ".new";
     let _ = fs.remove_all(staging);
@@ -753,7 +772,8 @@ fn replace_tree(src: string, dst: string) -> Result<int, string> {
     Result.Ok(copied)
 }
 
-/// `apply_at(p, install_root())`; `Err` under `ray run` (nothing to replace).
+/// `apply_at(p, install_root())`; `Err` under `ray run`, `ray dev` and `ray test` (nothing to
+/// replace), and `Err` if the root holds the `ray` toolchain itself.
 pub fn apply(p: Package) -> Result<string, string> {
     match (install_root()) {
         Option.Some(root) => apply_at(p, root),

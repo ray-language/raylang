@@ -3,46 +3,34 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
-## Sin publicar
+## 1.27.38 — 2026-10-07
+
+El barrido de hallazgos de ray-ds, ray-sublime, raylb y rayauth tras 1.27.37 (ray-apps/RAYLANG-FINDINGS.md
+#110–#127, R38–R39, L5/L20).
 
 - **Stdlib en inglés**: los 14 módulos de la stdlib que se embeben desde `examples/` (`std/uuid`,
   `std/regex`, `std/toml`, `std/template`, `std/markdown`, `std/inflate`, `std/json`,
   `std/protobuf`…) conservaban identificadores en español (`std::uuid::formato`, visible en un
   perfil de raylb); renombrados, y la guarda `naming_policy` vigila ahora todo lo que
   `src/stdlib.rs` embeba, viva donde viva.
-
-## Sin publicar
-
 - **`net.tcp_connect_timeout` prueba todas las direcciones resueltas** bajo un plazo total; 1.27.37
   solo probaba la primera, y como el cliente `net/http` pasó a dialar con plazo,
   `http://localhost:…` fallaba contra un servidor que solo escucha en IPv4 (regresión, rayauth R38).
   La doc de `request_bytes`/`stream_with`/`pool_request_bytes` dice ya que el plazo acota también la
   conexión (raylb L5).
-
-## Sin publicar
-
 - **`std/update` bajo `ray test`** se comporta como bajo `ray run`: `current()` es `"dev"`,
   `install_root()` es `None` y `apply`/`cleanup` no tocan nada. Antes tomaba el directorio del
   ejecutable `ray` por la raíz instalada y un test podía renombrar `~/.local/bin`. Además
   `apply_at` rechaza una raíz que contenga la toolchain (ray-sublime #114).
-
-## Sin publicar
-
 - **`ray release --publish`** toma la URL de descarga del repo **donde `gh` publica** (`--repo
   OWNER/NAME`, `GH_REPO` o el del directorio), no del remoto `origin`: con `GH_REPO` apuntando a otro
   repo el `update.json` nombraba un zip que no existía. Avisa si el repo destino es privado
   (ray-sublime #117).
-
-## Sin publicar
-
 - **Bundles de Linux y Windows instalables en otra máquina**: `std/update` reescribe al instalar el
   `Exec=`/`Icon=` del `.desktop` y vuelve a crear el `.lnk` apuntando a la raíz real; el bundle de
   Linux trae un `install.sh` que hace lo mismo para quien descomprime a mano. El zip de `ray release`
   guarda el ejecutable con modo 0755 (la comparación con la raíz del bundle nunca casaba y salía
   -rw-r--r--) (ray-sublime #119).
-
-## Sin publicar
-
 - **`std/toml`** acepta claves entre comillas (`"a.b" = 1`, `"0" = "0"`) y todo error dice la línea
   y, en una clave inválida, qué se encontró (ray-ds #121).
 - **`std/template`**: un filtro al estilo Jinja (`{{ x | safe }}`) es error de compilación con la
@@ -53,22 +41,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   #123); `ui.mount_dir` devuelve siempre 0 (rayplay #110); `update.http_get` solo `http(s)://` y
   cómo ensayar con `ray serve dist` (ray-sublime #115); las plantillas compiladas `.ray.html` en
   llms.txt (ray-ds #126); `.ray-dev` en `ray dev --help` (rayplay #111).
-
-## Sin publicar
-
 - **`std/json`**: `render_pretty(o, indent)`, `render_arr_pretty(a, indent)` y `reindent(texto,
   indent)` indentan respetando el orden de inserción de las claves (`stringify_pretty` las ordena
   porque un objeto parseado es un `Map`) (ray-ds #122).
-
-## Sin publicar
-
 - **`ray release --no-sign` y `ray release seal <dist>`**: un CI sin la clave privada empaqueta y
   escribe el manifiesto sin firma (y `--publish` se niega); quien publica comprueba cada artefacto
   (sha256 y tamaño) y lo firma después. Documentada la instalación de `ray` en una máquina limpia
   (install.sh/ps1 y los nombres de los assets) en llms.txt y REFERENCE (ray-sublime #118).
-
-## Sin publicar
-
 - **Dependencias**: una caché `.ray-deps/<pkg>` de otra versión (tras cambiar la versión en
   `ray.toml` y borrar `ray.lock`) se vuelve a descargar en vez de compararse contra el hash publicado
   de la nueva y acabar en «possible tampering» (rayauth R39).

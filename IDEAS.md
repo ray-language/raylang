@@ -3990,6 +3990,8 @@ stdlib). Los grandes (SMTP, plantillas estructuradas, sesiones persistentes, XML
 | R35 | D | La sintaxis de las dependencias por ruta (`net = "path:…"`) no está documentada; la tabla inline `{ path = … }` da «the value must be in double quotes» | ✅ **M360**: documentada (llms.txt, REFERENCE, handbook); el error enseña las tres formas y `"../x"` sugiere `path:` |
 | R36 | D | Un paquete-librería sin `entry` no se puede probar | ✅ **M360**: `ray check`/`ray test` recorren sus módulos; `ray run`/`build` lo explican |
 | R37 | E | `net` no cubre el lado cliente de OpenID Connect | Paquete aparte, después de M360 |
+| R38 | B | net 0.10.0: el cliente HTTP no conectaba a `localhost` si el servidor solo escucha en IPv4 (el dial con plazo probaba solo la primera dirección; regresión de M355) | ✅ todas las direcciones bajo un plazo total, VM y nativo (PR tras 1.27.37) |
+| R39 | D | Un `.ray-deps` de otra versión se toma por manipulación al cambiar la versión y borrar el lock | ⏳ |
 
 ---
 

@@ -702,3 +702,29 @@ fn the_per_worker_reactor_serves_and_keeps_deadlines() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{name}\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// rayauth R38 (regresión de M355): el dial con plazo probaba solo la PRIMERA dirección resuelta —
+/// `localhost` es `::1` y `127.0.0.1`, y un servidor que solo escucha en IPv4 rechazaba la primera.
+/// Ahora recorre todas bajo un plazo total, como el connect sin plazo; en los tres motores.
+#[test]
+fn a_timed_connect_tries_every_resolved_address() {
+    three_engines(
+        "connect_all_addrs",
+        r#"import std/net;
+fn main() -> int {
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(srv);
+    match (net.tcp_connect_timeout("localhost", port, 2000)) {
+        Result.Ok(h) => { print("localhost ok"); close(h); },
+        Result.Err(e) => print("localhost err: " + e),
+    }
+    match (net.tcp_connect_timeout("localhost", 1, 500)) {
+        Result.Ok(_) => print("port1 ok?!"),
+        Result.Err(e) => print("port1 refused=" + to_string(e.to_lower().contains("refused"))),
+    }
+    0
+}
+"#,
+        "localhost ok\nport1 refused=true\n",
+    );
+}

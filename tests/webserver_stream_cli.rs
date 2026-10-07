@@ -54,6 +54,38 @@ fn main() -> int {
 }
 "#;
 
+/// Lanza `main.ray` en la VM y devuelve el puerto que anuncia por stdout; el resto de la salida se
+/// drena en un hilo para que el servidor nunca se bloquee escribiendo.
+fn spawn_and_read_port(dir: &std::path::Path) -> (std::process::Child, u16) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["--vm", "main.ray"])
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("lanza el servidor");
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    let mut port: Option<u16> = None;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while port.is_none() {
+        line.clear();
+        let n = reader.read_line(&mut line).unwrap();
+        assert!(n > 0 && Instant::now() < deadline, "el servidor no anunció su puerto");
+        if let Some(p) = line.trim().strip_prefix("listening on port ") {
+            port = p.parse().ok();
+        }
+    }
+    std::thread::spawn(move || {
+        let mut sink = String::new();
+        while reader.read_line(&mut sink).map(|n| n > 0).unwrap_or(false) {
+            sink.clear();
+        }
+    });
+    (child, port.unwrap())
+}
+
 struct Server {
     child: std::process::Child,
     port: u16,
@@ -80,27 +112,11 @@ fn start_server(name: &str) -> Server {
     // M271: un archivo por encima del umbral de streaming (1 MB): patrón conocido por posición.
     let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
     std::fs::write(dir.join("public/big.bin"), &big).unwrap();
-    // Puerto efímero: bind propio, se libera y se le pasa al servidor (carrera improbable en CI).
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = probe.local_addr().unwrap().port();
-    drop(probe);
-    std::fs::write(dir.join("main.ray"), SERVER.replace("__PORT__", &port.to_string())).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["--vm", "main.ray"])
-        .current_dir(&dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("lanza el servidor");
-    // Espera activa a que el puerto acepte.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        assert!(Instant::now() < deadline, "el servidor no llegó a escuchar");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Puerto 0: el servidor elige el suyo y lo anuncia («listening on port N»); el test lo lee de
+    // su stdout. (Antes: bind propio, soltarlo y pasárselo — con ocho tests en paralelo otro
+    // servidor podía quedarse con ese puerto: «Connection reset by peer» en CI, 7 oct 2026.)
+    std::fs::write(dir.join("main.ray"), SERVER.replace("__PORT__", "0")).unwrap();
+    let (child, port) = spawn_and_read_port(&dir);
     Server { child, port }
 }
 
@@ -146,25 +162,11 @@ fn start_raw_server(name: &str) -> Server {
     }
     let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 251) as u8).collect();
     std::fs::write(dir.join("public/big.bin"), &big).unwrap();
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = probe.local_addr().unwrap().port();
-    drop(probe);
-    std::fs::write(dir.join("main.ray"), RAW_SERVER.replace("__PORT__", &port.to_string())).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["--vm", "main.ray"])
-        .current_dir(&dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("lanza el servidor crudo");
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        assert!(Instant::now() < deadline, "el servidor crudo no llegó a escuchar");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Puerto 0: el servidor elige el suyo y lo anuncia («listening on port N»); el test lo lee de
+    // su stdout. (Antes: bind propio, soltarlo y pasárselo — con ocho tests en paralelo otro
+    // servidor podía quedarse con ese puerto: «Connection reset by peer» en CI, 7 oct 2026.)
+    std::fs::write(dir.join("main.ray"), RAW_SERVER.replace("__PORT__", "0")).unwrap();
+    let (child, port) = spawn_and_read_port(&dir);
     Server { child, port }
 }
 

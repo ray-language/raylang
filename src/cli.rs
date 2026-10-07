@@ -172,7 +172,7 @@ Tooling:
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
   keygen            create the app's Ed25519 signing key (std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
-  release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z]: gh release create + upload; base URL defaults to the release's download URL]
+  release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z] [--repo OWNER/NAME]: gh release create + upload; base URL defaults to the download URL of the repo gh publishes to (--repo, GH_REPO or the directory's repo); warns if it is private]
   toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--targets ios,android] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `add-target ios|android|<triple>` installs the std of extra targets for `bundle --ios/--android` (works with the private toolchain too); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker, the extra targets and the vendor
   version           the language version
   help              this help
@@ -573,7 +573,7 @@ fn write_public_key(path: &Path, public_key: &str) -> Result<(), String> {
 }
 
 /// M248: `ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX]
-/// [--without list] [--publish [--tag vX]]` — bundle + zip + manifiesto firmado, listos para subir.
+/// [--without list] [--publish [--tag vX] [--repo OWNER/NAME]]` — bundle + zip + manifiesto firmado, listos para subir.
 fn cmd_release(args: &[String]) {
     let (out_arg, rest) = take_flag_value(args, "-o");
     let (notes, rest) = take_flag_value(&rest, "--notes");
@@ -586,6 +586,8 @@ fn cmd_release(args: &[String]) {
     let (notary_arg, rest) = take_flag_value(&rest, "--notary");
     let (entitlements_arg, rest) = take_flag_value(&rest, "--entitlements");
     let (publish, rest) = take_flag_bool(&rest, "--publish");
+    // #117 (ray-sublime): a qué repo publica `gh` (`--repo OWNER/NAME`, como `gh -R`).
+    let (repo_arg, rest) = take_flag_value(&rest, "--repo");
     if rest.len() > 1 || rest.iter().any(|a| a.starts_with("--")) {
         eprintln!("usage: ray release [file] [-o dist] [--notes URL] [--min-version V] [--base-url URL] [--key HEX] [--without list] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist] [--publish] [--tag vX.Y.Z]");
         process::exit(64);
@@ -628,13 +630,44 @@ fn cmd_release(args: &[String]) {
     }
     let dist = out_arg.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("dist"));
     let tag = tag_arg.unwrap_or_else(|| format!("v{version}"));
-    // Con --publish y sin --base-url, los artefactos apuntan a la Release de GitHub del repo.
+    // Con --publish y sin --base-url, los artefactos apuntan a la Release de GitHub del repo DONDE
+    // `gh` VA A PUBLICAR. #117 (ray-sublime): antes se tomaba el remoto `origin` del directorio, y
+    // con `GH_REPO` (o `--repo`) apuntando a otro repo —el caso normal de una app de código privado,
+    // cuyas releases van a un repo público— el `update.json` nombraba un zip que no existía (404).
+    // Se pregunta a `gh` por el repo efectivo; sin `gh` o fuera de GitHub, el remoto como antes.
+    let gh_repo: Option<String> = if publish {
+        let mut argv = vec!["repo", "view", "--json", "nameWithOwner,isPrivate"];
+        if let Some(r) = &repo_arg {
+            argv.extend(["-R", r.as_str()]);
+        }
+        match sh_capture("gh", &argv, Some(&manifest.root)) {
+            Ok(json) => {
+                let slug = kv_json(&json, "nameWithOwner");
+                if json.contains("\"isPrivate\":true") {
+                    eprintln!(
+                        "warning: {} is a PRIVATE repository: its release assets need authentication and `std/update` sends none — publish to a public repo (--repo OWNER/NAME) or another host",
+                        slug.as_deref().unwrap_or("the target repo")
+                    );
+                }
+                slug
+            }
+            Err(_) => repo_arg.clone(),
+        }
+    } else {
+        None
+    };
     let base_url = base_url_arg.or_else(|| {
         if !publish {
             return None;
         }
-        let remote = sh_capture("git", &["remote", "get-url", "origin"], Some(&manifest.root)).ok()?;
-        github_slug(remote.trim()).map(|slug| format!("https://github.com/{slug}/releases/download/{tag}/"))
+        let slug = match &gh_repo {
+            Some(s) => s.clone(),
+            None => {
+                let remote = sh_capture("git", &["remote", "get-url", "origin"], Some(&manifest.root)).ok()?;
+                github_slug(remote.trim())?
+            }
+        };
+        Some(format!("https://github.com/{slug}/releases/download/{tag}/"))
     });
     // 1. El bundle, en un directorio de trabajo.
     let work = std::env::temp_dir().join(format!("ray-release-{}", process::id()));
@@ -693,9 +726,17 @@ fn cmd_release(args: &[String]) {
         let manifest_path = dist.join("update.json");
         let sig_path = dist.join("update.json.sig");
         let title = format!("{name} {version}");
-        let _ = sh_capture("gh", &["release", "create", &tag, "--title", &title, "--notes", &format!("{name} {version}")], Some(&manifest.root));
+        let notes = format!("{name} {version}");
+        let mut create = vec!["release", "create", tag.as_str(), "--title", &title, "--notes", &notes];
+        if let Some(r) = &repo_arg {
+            create.extend(["-R", r.as_str()]);
+        }
+        let _ = sh_capture("gh", &create, Some(&manifest.root));
         let files = [zip.as_str(), &manifest_path.to_string_lossy(), &sig_path.to_string_lossy()];
         let mut argv = vec!["release", "upload", &tag, "--clobber"];
+        if let Some(r) = &repo_arg {
+            argv.extend(["-R", r.as_str()]);
+        }
         argv.extend(files.iter().copied());
         match sh_capture("gh", &argv, Some(&manifest.root)) {
             Ok(_) => println!("published: release {tag} ({})", base_url.unwrap_or_default()),
@@ -717,6 +758,14 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// `owner/repo` de una URL de remoto de GitHub (ssh o https).
+/// El valor string de `"key":"…"` en un JSON plano (lo que devuelve `gh --json`); sin parser completo.
+fn kv_json(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let start = json.find(&needle)? + needle.len();
+    let end = json[start..].find('"')? + start;
+    Some(json[start..end].to_string())
+}
+
 fn github_slug(remote: &str) -> Option<String> {
     let rest = remote.strip_prefix("git@github.com:").or_else(|| remote.strip_prefix("https://github.com/"))?;
     Some(rest.trim_end_matches(".git").trim_end_matches('/').to_string())
@@ -6063,6 +6112,14 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// #117: el slug del repo efectivo sale del JSON de `gh repo view`, no del remoto `origin`.
+    #[test]
+    fn kv_json_reads_the_repo_slug_from_gh_output() {
+        let json = r#"{"isPrivate":false,"nameWithOwner":"ray-language/ray-sublime-releases"}"#;
+        assert_eq!(super::kv_json(json, "nameWithOwner").as_deref(), Some("ray-language/ray-sublime-releases"));
+        assert_eq!(super::kv_json(json, "missing"), None);
+    }
+
     #[test]
     fn the_device_banner_orders_the_three_steps_and_degrades_without_color() {
         let qr = "█▀█\n▀▀▀";

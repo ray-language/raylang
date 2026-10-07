@@ -26,6 +26,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   ejecutable `ray` por la raíz instalada y un test podía renombrar `~/.local/bin`. Además
   `apply_at` rechaza una raíz que contenga la toolchain (ray-sublime #114).
 
+## Sin publicar
+
+- **`ray release --publish`** toma la URL de descarga del repo **donde `gh` publica** (`--repo
+  OWNER/NAME`, `GH_REPO` o el del directorio), no del remoto `origin`: con `GH_REPO` apuntando a otro
+  repo el `update.json` nombraba un zip que no existía. Avisa si el repo destino es privado
+  (ray-sublime #117).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

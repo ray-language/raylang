@@ -70,8 +70,10 @@ fn collect(root: string, rel: string, top: string, out: [ZipEntry]) -> Result<in
         } else {
             let data = fs.read_file_bytes(path)?;
             // Ejecutables: lo que está bajo Contents/MacOS o en la raíz del bundle (Linux), o el .exe.
+            // #119 (ray-sublime): en la raíz del bundle `rel` es "" (la entrada ya lleva `top/`);
+            // la comparación con `top` nunca casaba y el binario de Linux salía sin bit de ejecución.
             let exe = entry_name.contains("/Contents/MacOS/")
-                || (rel == top && !name.contains("."))
+                || (rel == "" && !name.contains("."))
                 || name.ends_with(".exe");
             out.push(ZipEntry { name: entry_name, is_dir: false, executable: exe, data: data });
             n = n + 1;

@@ -90,6 +90,16 @@ fn keygen_then_release_produces_a_signed_manifest_the_app_verifies() {
     if let Ok(o) = Command::new("unzip").arg("-t").arg(&zip).output() {
         assert!(o.status.success(), "unzip -t: {}", String::from_utf8_lossy(&o.stdout));
     }
+    // #119 (ray-sublime): el ejecutable del bundle va con modo 0755 en el directorio central
+    // (en Linux la comparación con la raíz nunca casaba y el binario salía -rw-r--r--).
+    let exe_entry = if cfg!(target_os = "macos") { "hello.app/Contents/MacOS/hello" } else if cfg!(windows) { "hello/hello.exe" } else { "hello/hello" };
+    let modes = zip_entry_modes(&std::fs::read(&zip).unwrap());
+    let mode = modes.iter().find(|(n, _)| n == exe_entry).map(|(_, m)| *m).unwrap_or_else(|| panic!("{exe_entry} not in the zip: {modes:?}"));
+    assert_eq!(mode & 0o777, 0o755, "{exe_entry} mode {mode:o}");
+    let plain = modes.iter().find(|(n, _)| n.ends_with("/update.json") || n.ends_with(".desktop") || n.ends_with("Info.plist")).map(|(_, m)| *m);
+    if let Some(m) = plain {
+        assert_eq!(m & 0o777, 0o644, "a plain file keeps 0644: {m:o}");
+    }
 
     // Segunda ejecución con un artefacto ajeno de la misma versión en el manifiesto: se conserva.
     let with_other = manifest.replace(
@@ -117,4 +127,24 @@ fn release_refuses_a_key_that_does_not_match_the_baked_public_key() {
     let (out, err, ok) = ray(&app, &keys, &["release", "-o", "dist", "--key", other]);
     assert!(!ok, "debería negarse: {out}");
     assert!(err.contains("does not match [app] public_key"), "{err}");
+}
+
+/// (nombre, modo POSIX) de cada entrada del directorio central de un zip hecho por «unix» (3).
+fn zip_entry_modes(zip: &[u8]) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 46 <= zip.len() {
+        if &zip[i..i + 4] == b"PK\x01\x02" {
+            let name_len = u16::from_le_bytes([zip[i + 28], zip[i + 29]]) as usize;
+            let extra_len = u16::from_le_bytes([zip[i + 30], zip[i + 31]]) as usize;
+            let comment_len = u16::from_le_bytes([zip[i + 32], zip[i + 33]]) as usize;
+            let external = u32::from_le_bytes([zip[i + 38], zip[i + 39], zip[i + 40], zip[i + 41]]);
+            let name = String::from_utf8_lossy(&zip[i + 46..i + 46 + name_len]).into_owned();
+            out.push((name, external >> 16));
+            i += 46 + name_len + extra_len + comment_len;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }

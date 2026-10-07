@@ -708,6 +708,7 @@ pub fn apply_at(p: Package, root: string) -> Result<string, string> {
         // En su sitio: lo que esté en uso no se puede borrar pero SÍ renombrar.
         replace_tree(fresh, root)?;
         let _ = fs.remove_all(staging);
+        fix_launchers(root);
         return Result.Ok(root);
     }
     let old = root + ".old";
@@ -723,7 +724,55 @@ pub fn apply_at(p: Package, root: string) -> Result<string, string> {
         },
     }
     let _ = fs.remove_all(staging);
+    fix_launchers(root);
     Result.Ok(root)
+}
+
+// #119 (ray-sublime): los lanzadores de un bundle nacen con la ruta ABSOLUTA de la máquina que lo
+// construyó (el `.desktop` de Linux y el `.lnk` de Windows no admiten rutas relativas). Al instalar
+// en otro sitio se reescriben a la raíz real: `Exec=`/`Icon=` del `.desktop`, y el `.lnk` se vuelve
+// a crear con PowerShell apuntando al `.exe` instalado. Mejor esfuerzo: un fallo aquí no deshace
+// la instalación (la app ya corre; solo el acceso directo quedaría viejo).
+fn fix_launchers(root: string) {
+    let entries = match (fs.list_dir(root)) {
+        Result.Ok(xs) => xs,
+        Result.Err(_) => return,
+    };
+    for name in entries {
+        if (name.ends_with(".desktop")) {
+            let path = root + "/" + name;
+            match (fs.read_file(path)) {
+                Result.Ok(text) => {
+                    var out: [string] = [];
+                    for line in text.split("\n") {
+                        if (line.starts_with("Exec=")) {
+                            let exe = line.substring(5, line.len());
+                            out.push("Exec=" + root + "/" + base_name(exe));
+                        } else if (line.starts_with("Icon=") && line.contains("/")) {
+                            let icon = line.substring(5, line.len());
+                            out.push("Icon=" + root + "/" + base_name(icon));
+                        } else {
+                            out.push(line);
+                        }
+                    }
+                    let _ = fs.write_file(path, join(out, "\n"));
+                },
+                Result.Err(_) => { },
+            }
+        } else if (name.ends_with(".lnk") && platform() == "windows") {
+            let stem = name.substring(0, name.len() - 4);
+            let exe = root + "\\" + stem + ".exe";
+            let lnk = root + "\\" + name;
+            let script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
+                + lnk
+                + "'); $s.TargetPath = '"
+                + exe
+                + "'; $s.WorkingDirectory = '"
+                + root
+                + "'; $s.Save()";
+            let _ = process.run("powershell", ["-NoProfile", "-Command", script]);
+        }
+    }
 }
 
 // Windows: copia `src` sobre `dst` archivo a archivo; un destino que no se deja sobrescribir (el

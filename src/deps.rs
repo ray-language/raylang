@@ -481,10 +481,14 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
         // que hay EN DISCO —según el lock previo— no es la versión ya elegida: pasa al resolver por
         // el índice cambiando de versión entre ejecuciones, p. ej. tras `ray update` o un yank).
         let dest = cache.join(&name);
+        // R39 (rayauth): SIN lock (borrado a mano al cambiar la versión en ray.toml) el lock no
+        // puede delatar la caché vieja, y la versión antigua se comparaba contra el hash publicado
+        // de la nueva → «possible tampering» por un `.ray-deps` rancio. Se mira también lo que hay
+        // en disco: si el `ray.toml` del paquete descargado dice otra versión que el ref elegido
+        // (semver), es una caché de otra versión y se vuelve a descargar.
         let on_disk_stale = dest.exists()
-            && locked.get(&name).is_some_and(|e| {
-                e.git_ref != chosen_spec.git_ref || e.url != chosen_spec.url
-            });
+            && (locked.get(&name).is_some_and(|e| e.git_ref != chosen_spec.git_ref || e.url != chosen_spec.url)
+                || cached_version_differs(&dest, &chosen_spec));
         if cached.get(&name) != Some(&chosen_spec) {
             if (cached.contains_key(&name) || on_disk_stale) && dest.exists() {
                 let _ = std::fs::remove_dir_all(&dest); // upgrade dentro de esta resolución o vs. disco
@@ -567,6 +571,19 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     }
     write_lock(&manifest.root, &mut new_lock)?;
     Ok(downloaded)
+}
+
+/// R39: ¿el paquete en `dest` es de OTRA versión que la del ref semver de `spec`? `false` si el ref
+/// no es semver o el paquete no declara versión (entonces decide el lock, como siempre).
+fn cached_version_differs(dest: &Path, spec: &GitSpec) -> bool {
+    let Some(wanted) = semver(&spec.git_ref) else { return false };
+    // Solo el `ray.toml` DEL PAQUETE (`Manifest::load` subiría hasta el del proyecto).
+    let Ok(source) = std::fs::read_to_string(dest.join("ray.toml")) else { return false };
+    let Ok(m) = crate::manifest::parse(&source, dest.to_path_buf()) else { return false };
+    match crate::semver::parse_version(&m.version) {
+        Some(have) => have != wanted,
+        None => false,
+    }
 }
 
 /// Selección de versión ante un conflicto (mismo nombre, distinto spec): con la **misma URL** y

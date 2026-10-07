@@ -1036,3 +1036,29 @@ fn mirror_down_falls_back_to_original_url() {
     assert!(out.contains("120"), "{out}");
     assert!(err.contains("warning: the mirror did not serve 'geo'"), "avisa del fallback:\n{err}");
 }
+
+/// rayauth R39: cambiar la versión en `ray.toml` y borrar `ray.lock` dejaba la caché vieja en
+/// `.ray-deps`, que se comparaba contra el hash publicado de la versión nueva: «possible tampering»
+/// por un directorio rancio. Ahora una caché cuyo `ray.toml` dice otra versión se vuelve a descargar.
+#[test]
+fn a_stale_cache_is_redownloaded_instead_of_reported_as_tampering() {
+    let base = tmp("stale_cache");
+    let index = base.join("index");
+    let r100 = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 100 }\n");
+    let r200 = publish(&base, "geo", "2.0.0", "pub fn v() -> int { 200 }\n");
+    write_index(&index, "geo", &[("1.0.0", &r100), ("2.0.0", &r200)]);
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.0\"\n").unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("100"), "{out}");
+    // La escena del hallazgo: nueva versión a mano y el lock fuera.
+    std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^2.0\"\n").unwrap();
+    std::fs::remove_file(app.join("ray.lock")).unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "no es manipulación, es una caché vieja:\n{err}");
+    assert!(!err.contains("tampering"), "{err}");
+    assert!(out.contains("200"), "{out}");
+    let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
+    assert!(lock.contains("v2.0.0"), "{lock}");
+}

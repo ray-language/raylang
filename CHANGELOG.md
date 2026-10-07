@@ -10,6 +10,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   verificación de ID tokens y de access tokens RFC 9068 contra el JWKS (RS256, ES256, EdDSA),
   userinfo y logout iniciado por el RP. Nace del paquete que rayauth escribió para sus apps
   (rayauth R37); probado contra un proveedor de juguete en raylang, VM y nativo.
+- **`ray registry publish` acepta paquetes-librería**: sin `mod.ray` ni `entry`, la cara del paquete
+  son sus módulos `.ray` de la raíz, que se validan importándolos todos como haría un consumidor
+  (antes: «has no package face»). Encontrado al publicar `oidc`.
 
 ## 1.27.38 — 2026-10-07
 

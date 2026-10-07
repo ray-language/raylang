@@ -33,6 +33,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   repo el `update.json` nombraba un zip que no existía. Avisa si el repo destino es privado
   (ray-sublime #117).
 
+## Sin publicar
+
+- **Bundles de Linux y Windows instalables en otra máquina**: `std/update` reescribe al instalar el
+  `Exec=`/`Icon=` del `.desktop` y vuelve a crear el `.lnk` apuntando a la raíz real; el bundle de
+  Linux trae un `install.sh` que hace lo mismo para quien descomprime a mano. El zip de `ray release`
+  guarda el ejecutable con modo 0755 (la comparación con la raíz del bundle nunca casaba y salía
+  -rw-r--r--) (ray-sublime #119).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

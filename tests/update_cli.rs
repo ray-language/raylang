@@ -133,7 +133,13 @@ fn scenario(name: &str) -> (PathBuf, u16, String) {
     let work = base.join("work");
     std::fs::create_dir_all(&work).unwrap();
     let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-    let zip = stored_zip(&[("MyApp/", b""), ("MyApp/VERSION", b"2.0.0\n"), ("MyApp/data/hello.txt", b"hola")]);
+    // #119: el lanzador llega con la ruta de la máquina que construyó el bundle.
+    let zip = stored_zip(&[
+        ("MyApp/", b""),
+        ("MyApp/VERSION", b"2.0.0\n"),
+        ("MyApp/data/hello.txt", b"hola"),
+        ("MyApp/MyApp.desktop", b"[Desktop Entry]\nType=Application\nName=MyApp\nExec=/home/runner/build/MyApp/MyApp\nIcon=/home/runner/build/MyApp/icon.png\nTerminal=false\n"),
+    ]);
     std::fs::write(served.join("MyApp-2.0.0.zip"), &zip).unwrap();
     let mut hasher = sha256_simple::Sha256::new();
     hasher.update(&zip);
@@ -193,6 +199,9 @@ fn main() -> int {
     }
     print(fs.read_file(root + "/VERSION").unwrap_or("?").trim());
     print(fs.read_file(root + "/data/hello.txt").unwrap_or("?"));
+    // #119: `Exec=`/`Icon=` del lanzador reescritos a la raíz instalada.
+    let desktop = fs.read_file(root + "/MyApp.desktop").unwrap_or("?");
+    print(desktop.contains("Exec=" + root + "/MyApp\n") && desktop.contains("Icon=" + root + "/icon.png"));
     print(fs.exists(root + ".old/VERSION") || platform() == "windows");
     match (update.check(base + "/bad.json")) {
         Result.Ok(_) => print("bad accepted"),
@@ -232,7 +241,7 @@ fn fresh_install(base: &Path, name: &str) -> PathBuf {
 }
 
 fn want(current: &str) -> String {
-    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ntrue\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\n")
+    format!("com.example.myapp\n{current}\n2.0.0 https://example.test/notes 0.5.0 {{size}}\ntrue\ntrue\ninstalled ok\n2.0.0\nhola\ntrue\ntrue\ntrue\ntrue\ntrue\n")
 }
 
 fn normalize(s: &str) -> String {

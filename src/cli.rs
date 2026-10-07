@@ -2995,6 +2995,21 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
         eprintln!("bundle: could not write the .desktop launcher: {e}");
         process::exit(74);
     }
+    // #119 (ray-sublime): el `.desktop` lleva la ruta ABSOLUTA de esta máquina; quien descomprime
+    // el bundle en otro sitio lo arregla con `install.sh` (reescribe `Exec=`/`Icon=` a su
+    // ubicación real y lo registra en ~/.local/share/applications). `std/update` hace lo mismo al
+    // instalar una actualización.
+    let install = format!(
+        "#!/bin/sh\n# Installs the {name} launcher for the current user, pointing at this directory.\nset -e\nhere=$(cd \"$(dirname \"$0\")\" && pwd)\nchmod 755 \"$here/{name}\"\nsed -e \"s|^Exec=.*|Exec=$here/{name}|\" -e \"s|^Icon=.*|Icon=$here/icon.png|\" \"$here/{name}.desktop\" > \"$here/{name}.desktop.tmp\"\nmv \"$here/{name}.desktop.tmp\" \"$here/{name}.desktop\"\nmkdir -p \"$HOME/.local/share/applications\"\ncp \"$here/{name}.desktop\" \"$HOME/.local/share/applications/\"\necho \"installed: $HOME/.local/share/applications/{name}.desktop -> $here/{name}\"\n"
+    );
+    let install_path = dir.join("install.sh");
+    if fs::write(&install_path, install).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&install_path, fs::Permissions::from_mode(0o755));
+        }
+    }
     println!("ok: bundle '{}'", dir.display());
 }
 

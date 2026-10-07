@@ -464,8 +464,23 @@ pub fn parse_manifest(text: string, key: string) -> Result<Release, string> {
 /// Fetches `manifest_url` and `manifest_url + ".sig"`, verifies the signature with the baked
 /// public key (or `key` if given), and compares with `current()`: `Ok(None)` = up to date;
 /// `Ok(Some(release))` = a newer version for this platform; `Err` = could not check, the
-/// manifest is not trusted, or the installed version is older than `min_version`.
+/// manifest is not trusted, or the installed version is older than `min_version`. Under
+/// `ray run`/`ray dev`/`ray test` `current()` is `"dev"`, which counts as older than ANY
+/// published version (so the flow can be rehearsed): to test the "up to date" branch without a
+/// bundle, use `check_with_version`.
 pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, string> {
+    check_with_version(manifest_url, key, current())
+}
+
+/// `check_with` comparing against `current` instead of `current()` — a test fixes the running
+/// version (`check_with_version(url, key, "1.2.3")` reaches `Ok(None)` when the manifest says
+/// 1.2.3 or older, and the `min_version` error when it asks for more). `"dev"` behaves as in
+/// `check_with`.
+pub fn check_with_version(
+    manifest_url: string,
+    key: string,
+    current: string
+) -> Result<Option<Release>, string> {
     let pk = if (key != "") { key } else { public_key() };
     if (pk == "") {
         return Result.Err("update: no public key (set [app] public_key in ray.toml)");
@@ -505,7 +520,7 @@ pub fn check_with(manifest_url: string, key: string) -> Result<Option<Release>, 
             size: r.size
         };
     }
-    let cur = current();
+    let cur = current;
     if (cur != "dev" && compare_versions(r.version, cur) <= 0) {
         return Result.Ok(Option.None);
     }

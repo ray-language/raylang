@@ -148,3 +148,40 @@ fn zip_entry_modes(zip: &[u8]) -> Vec<(String, u32)> {
     }
     out
 }
+
+/// #118 (ray-sublime): un CI sin la clave privada empaqueta con `--no-sign` (zip + update.json sin
+/// `.sig`), y quien publica firma después con `ray release seal <dist>`, que antes comprueba que cada
+/// artefacto nombrado está en `dist/` con su sha256 y tamaño. `--publish --no-sign` se niega.
+#[test]
+fn release_without_signing_then_seal() {
+    let (app, keys) = project("seal");
+    let (_, _, ok) = ray(&app, &keys, &["keygen"]);
+    assert!(ok);
+    let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
+    let pk = toml.lines().find_map(|l| l.trim().strip_prefix("public_key = \"")).map(|v| v.trim_end_matches('"').to_string()).unwrap();
+    // Sin clave a la vista (RAY_KEYS_DIR vacío): --no-sign no la necesita.
+    let empty_keys = app.join("no-keys");
+    std::fs::create_dir_all(&empty_keys).unwrap();
+    let (out, err, ok) = ray(&app, &empty_keys, &["release", "-o", "dist", "--no-sign", "--notes", "https://example.dev/notes"]);
+    assert!(ok, "release --no-sign: {out}{err}");
+    assert!(out.contains("UNSIGNED") && out.contains("ray release seal dist"), "{out}");
+    assert!(app.join("dist/update.json").is_file() && !app.join("dist/update.json.sig").exists());
+    // Publicar sin firma se niega.
+    let (_, err, ok) = ray(&app, &empty_keys, &["release", "-o", "dist", "--no-sign", "--publish"]);
+    assert!(!ok && err.contains("seal it first"), "{err}");
+    // Un artefacto manipulado tras el empaquetado no se sella.
+    let key = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let zip = app.join("dist").join(format!("hello-1.2.3-{key}.zip"));
+    let original = std::fs::read(&zip).unwrap();
+    std::fs::write(&zip, [original.as_slice(), b"x"].concat()).unwrap();
+    let (_, err, ok) = ray(&app, &keys, &["release", "seal", "dist"]);
+    assert!(!ok && err.contains("does not match its manifest entry"), "{err}");
+    std::fs::write(&zip, &original).unwrap();
+    // Sellado: la firma verifica con la clave horneada.
+    let (out, err, ok) = ray(&app, &keys, &["release", "seal", "dist"]);
+    assert!(ok, "seal: {out}{err}");
+    assert!(out.contains("1 artifact(s) verified"), "{out}");
+    let (vout, verr, vok) = ray(&app, &keys, &["run", "verify.ray", &pk]);
+    assert!(vok, "verify: {vout}{verr}");
+    assert!(vout.starts_with("true\nfalse\n"), "{vout}");
+}

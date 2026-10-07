@@ -748,3 +748,15 @@ fn main() -> int {
         "{\n  \"zeta\": 1,\n  \"alpha\": {\n    \"b\": true,\n    \"a\": \"x\\\"y, {z}\"\n  },\n  \"list\": [\n    \"q\",\n    \"r\"\n  ]\n}\n{\n  \"e\": {},\n  \"n\": [\n    1\n  ]\n}\ntrue\n",
     );
 }
+
+/// raylb L21: en nativo, el bucle de `select_timeout` esperaba un pulso FIJO de 10 ms sin mirar lo
+/// que le quedaba del plazo: 2 ms duraban 10 y 11 duraban 20. Ahora espera `min(restante, 10 ms)`:
+/// un plazo de 2 ms vence en menos de 7 (holgura para el coalescing de temporizadores de macOS).
+#[test]
+fn native_select_timeout_keeps_millisecond_resolution() {
+    vm_and_native(
+        "select_timeout_resolution",
+        "import std/time;\nfn main() -> int {\n    let s: Channel<int> = Channel.bounded(1);\n    var i = 0;\n    while (i < 5) {\n        let t0 = time.monotonic_nanos();\n        let _ = select_timeout([s], 2);\n        let took = (time.monotonic_nanos() - t0) / 1000000;\n        if (took >= 7) { print(\"2 ms took ${took} ms\"); }\n        i = i + 1;\n    }\n    print(\"ok\");\n    0\n}\n",
+        "ok\n",
+    );
+}

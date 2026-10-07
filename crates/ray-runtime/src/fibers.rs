@@ -247,7 +247,13 @@ pub fn block_on(wl: &WaitList, seen: u64) {
 /// Como `block_on`, con plazo: despierta al próximo `wake_all` o cuando pasen `ms` milisegundos,
 /// lo que llegue antes (M319: lo usa `select_timeout`, que re-escanea y rechequea su deadline).
 pub fn block_on_timeout(wl: &WaitList, seen: u64, ms: i64) {
-    suspend(Park::WaitOnTimeout(wl.clone(), seen, Instant::now() + Duration::from_millis(ms.max(0) as u64)));
+    block_on_timeout_for(wl, seen, Duration::from_millis(ms.max(0) as u64));
+}
+
+/// `block_on_timeout` con el plazo como `Duration` (sub-milisegundo: el resto exacto de un
+/// `select_timeout`, raylb L21).
+pub fn block_on_timeout_for(wl: &WaitList, seen: u64, d: Duration) {
+    suspend(Park::WaitOnTimeout(wl.clone(), seen, Instant::now() + d));
 }
 
 /// Operaciones que los workers encargan al reactor (via buzón + tubería de despertar).

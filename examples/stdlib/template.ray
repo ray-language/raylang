@@ -689,7 +689,10 @@ fn emit_node(node: Node, ctx: [Bind], out: [string]) {
 // ---- API ----
 // Compila la plantilla (tokeniza + parsea). En SSR: una vez al arrancar.
 /// Compiles a template (tokenize + parse). For SSR, compile once at startup and `render` per
-/// request — rendering never re-parses.
+/// request — rendering never re-parses. Not the same thing as a COMPILED `page.ray.html` file: that
+/// is a module checked at build time, imported as `import page;` and rendered with
+/// `page.render(<params>)` — `{% params name: type, … %}` first, then `{% import site/model %}` lines;
+/// conditions must be `bool`; the same `{{ }}`/`{{& }}`/`{% if %}`/`{% for %}` syntax, no filters.
 pub fn compile(tpl: string) -> Result<Template, string> {
     let toks = match (tokenize(tpl)) {
         Result.Ok(t) => t,

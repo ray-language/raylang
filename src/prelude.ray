@@ -1416,6 +1416,7 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
 // `ms <= 0` = poll no bloqueante (mira sin esperar). Sigue con `recv(chs[i])`. Solo la VM.
 /// Like `select`, but gives up after `ms` milliseconds: `Some(i)` = index of a ready channel,
 /// `None` = the timeout elapsed. `ms <= 0` polls without blocking. Follow with `recv(chs[i])`.
+/// The deadline is honoured at millisecond resolution in the VM and in a native binary.
 fn select_timeout<T>(chs: [Channel<T>], ms: int) -> Option<int> {
     let r = __select_timeout(chs, ms);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }

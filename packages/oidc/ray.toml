@@ -1,0 +1,11 @@
+# Manifiesto del paquete-librería `oidc` (sin entry): el lado CLIENTE de OpenID Connect.
+[package]
+name = "oidc"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "OpenID Connect for raylang apps: discovery, authorization code + PKCE, ID and access token verification against the provider's JWKS, refresh, userinfo, RP-initiated logout"
+keywords = ["oidc", "openid", "oauth2", "jwt", "jwks", "pkce", "login", "sso"]
+raylang = "1.27.38"
+
+[dependencies]
+net = "path:../net"

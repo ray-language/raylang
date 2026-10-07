@@ -104,7 +104,8 @@ ray add web                # adds the dependency to ray.toml and downloads it
 The official packages are `net` (HTTP/1.1 and 2, WebSocket, DNS, TLS, gRPC), `web` (the
 Express-style application framework), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`,
 `cron`, and the three for agents: `llm` (talking to a model), `mcp` (tools over the Model Context
-Protocol) and `agent` (the loop that joins them). Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
+Protocol) and `agent` (the loop that joins them); and `oidc` (signing in with an OpenID Connect
+provider and accepting its tokens). Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
 `.ray-deps/`, which stays out of version control: after cloning a project, `ray fetch` downloads
 them again.
 
@@ -482,4 +483,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:17899843ad32 -->
+<!-- sync: sha256:b58e36ae4cf7 -->

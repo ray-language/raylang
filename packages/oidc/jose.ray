@@ -1,0 +1,99 @@
+// JWS compacto (RFC 7515) verificado contra JWKs PÚBLICAS: RS256, ES256 y EdDSA, los algoritmos
+// con los que firman los proveedores OIDC (y rayauth). El `alg` de la cabecera debe casar con el
+// TIPO de la clave: ni "none", ni confusión de algoritmos (una clave RSA nunca verifica un HS256).
+// Origen: paquete `examples/oidc` de rayauth (R37), probado contra su proveedor en un navegador.
+import std/base64;
+import std/crypto;
+import std/json;
+
+/// The protected header of a compact JWS, as read before any verification: `alg`, and `kid`/`typ`
+/// when present ("" otherwise). Use it to pick the provider key by `kid`.
+pub struct Header {
+    alg: string,
+    kid: string,
+    typ: string,
+}
+
+fn unb64(s: string) -> Result<bytes, string> {
+    base64.base64url_decode(s)
+}
+
+fn parts_of(token: string) -> Result<[string], string> {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
+        return Result.Err("jose: not a compact JWS (expected header.payload.signature)");
+    }
+    Result.Ok(parts)
+}
+
+/// Reads the protected header WITHOUT verifying the token (the key is chosen by `kid` before the
+/// signature can be checked). `Err` if the token is not a compact JWS or the header has no `alg`.
+pub fn header_of(token: string) -> Result<Header, string> {
+    let parts = parts_of(token)?;
+    let h = json.parse(from_utf8(unb64(parts[0])?)?)?;
+    Result.Ok(
+        Header {
+            alg: json.get_string(h, "alg").ok_or("jose: header without alg")?,
+            kid: json.get_string(h, "kid").unwrap_or(""),
+            typ: json.get_string(h, "typ").unwrap_or("")
+        }
+    )
+}
+
+/// The unverified payload as JSON text — only to READ hints such as `iss` before choosing a
+/// provider; never to trust a claim. `verify` is what makes a payload trustworthy.
+pub fn payload_unverified(token: string) -> Result<string, string> {
+    let parts = parts_of(token)?;
+    from_utf8(unb64(parts[1])?)
+}
+
+fn member(j: json.Json, k: string) -> Result<bytes, string> {
+    unb64(json.get_string(j, k).ok_or("jose: JWK without " + k)?)
+}
+
+/// Verifies `token` with the public JWK `jwk` (`kty` RSA → RS256; EC P-256 → ES256; OKP Ed25519
+/// → EdDSA; the header's `alg` must be the one the key type implies) and returns the payload as
+/// JSON text. `Err("jose: invalid signature")` on any mismatch, including `alg: none`.
+pub fn verify(token: string, jwk: json.Json) -> Result<string, string> {
+    let parts = parts_of(token)?;
+    let h = header_of(token)?;
+    let input = (parts[0] + "." + parts[1]).to_bytes();
+    let sig = unb64(parts[2])?;
+    let kty = json.get_string(jwk, "kty").unwrap_or("");
+    let crv = json.get_string(jwk, "crv").unwrap_or("");
+    let ok = if (kty == "RSA") {
+        h.alg == "RS256"
+            && crypto.rsa_pkcs1_verify(
+                crypto.rsa_public_key(member(jwk, "n")?, member(jwk, "e")?),
+                input,
+                sig
+            )
+    } else if (kty == "EC" && crv == "P-256") {
+        let point = bytes_of([4]) + member(jwk, "x")? + member(jwk, "y")?;
+        h.alg == "ES256" && crypto.p256_verify(point, input, sig)
+    } else if (kty == "OKP" && crv == "Ed25519") {
+        h.alg == "EdDSA" && crypto.ed25519_verify(member(jwk, "x")?, input, sig)
+    } else {
+        false
+    };
+    if (!ok) {
+        return Result.Err("jose: invalid signature");
+    }
+    from_utf8(unb64(parts[1])?)
+}
+
+/// The key with `kid` in a JWKS document (`{"keys": [...]}`); with `kid == ""` the single key of a
+/// one-key set. `None` when absent or when the document does not parse.
+pub fn key_in(jwks: string, kid: string) -> Option<json.Json> {
+    let doc = match (json.parse(jwks)) {
+        Result.Ok(d) => d,
+        Result.Err(_) => return Option.None,
+    };
+    let keys = json.get_array(doc, "keys").unwrap_or([]);
+    for k in keys {
+        if (json.get_string(k, "kid").unwrap_or("") == kid || (kid == "" && keys.len() == 1)) {
+            return Option.Some(k);
+        }
+    }
+    Option.None
+}

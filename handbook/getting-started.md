@@ -104,7 +104,8 @@ ray add web                # añade la dependencia a ray.toml y la descarga
 Los paquetes oficiales son `net` (HTTP/1.1 y 2, WebSocket, DNS, TLS, gRPC), `web` (el framework de
 aplicación al estilo Express), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`, `cron`, y
 los tres de agentes: `llm` (hablar con un modelo), `mcp` (herramientas por el Model Context
-Protocol) y `agent` (el bucle que los une).
+Protocol) y `agent` (el bucle que los une); y `oidc` (iniciar sesión con un proveedor OpenID
+Connect y aceptar sus tokens).
 Las versiones quedan fijadas en `ray.lock` con su hash. Los paquetes se descargan a `.ray-deps/`,
 que no va al control de versiones: tras clonar un proyecto, `ray fetch` los vuelve a bajar.
 

@@ -1,0 +1,105 @@
+// Los metadatos del proveedor (OpenID Connect Discovery 1.0) y sus claves de firma (JWKS). Un
+// `Provider` es un valor: `discover` lo construye por la red, `with_keys` lo arma a mano (tests,
+// proveedores sin discovery) y `refresh_keys` trae el JWKS otra vez tras una rotación de claves.
+import std/json;
+import net/http;
+import oidc/jose;
+
+/// Timeout, in ms, of every request this package makes to the provider (discovery, JWKS, token
+/// and userinfo endpoints): 10 s.
+pub const TIMEOUT_MS: int = 10000;
+
+/// An OpenID Connect provider: its issuer, endpoints and the JWKS document as last fetched.
+/// Endpoints the provider does not publish are "".
+pub struct Provider {
+    issuer: string,
+    authorization_endpoint: string,
+    token_endpoint: string,
+    userinfo_endpoint: string,
+    end_session_endpoint: string,
+    introspection_endpoint: string,
+    revocation_endpoint: string,
+    jwks_uri: string,
+    jwks: string,
+}
+
+/// `GET url` with `Accept: application/json`; `Ok(body)` on 200, `Err` otherwise. The HTTP helper
+/// the rest of the package uses (exposed for apps that call a provider endpoint not covered here).
+pub fn get_text(u: string) -> Result<string, string> {
+    let h: Map<string, string> = Map.new();
+    h.insert("Accept", "application/json");
+    let r = http.request_bytes("GET", u, "".to_bytes(), h, TIMEOUT_MS)?;
+    if (r.status != 200) {
+        return Result.Err("GET " + u + ": HTTP " + to_string(r.status));
+    }
+    http.body_text(r)
+}
+
+fn need(j: json.Json, k: string) -> Result<string, string> {
+    let v = json.get_string(j, k).unwrap_or("");
+    if (v == "") { Result.Err("provider metadata without " + k) } else { Result.Ok(v) }
+}
+
+/// Reads `<issuer>/.well-known/openid-configuration` and the JWKS it points to. The document
+/// must name exactly `issuer` (OIDC Discovery §4.3: an issuer that says it is someone else is
+/// rejected). `issuer` has no trailing slash.
+pub fn discover(issuer: string) -> Result<Provider, string> {
+    let d = json.parse(get_text(issuer + "/.well-known/openid-configuration")?)?;
+    let named = need(d, "issuer")?;
+    if (named != issuer) {
+        return Result.Err("discovery names issuer " + named + ", expected " + issuer);
+    }
+    let jwks_uri = need(d, "jwks_uri")?;
+    Result.Ok(
+        Provider {
+            issuer: issuer,
+            authorization_endpoint: need(d, "authorization_endpoint")?,
+            token_endpoint: need(d, "token_endpoint")?,
+            userinfo_endpoint: json.get_string(d, "userinfo_endpoint").unwrap_or(""),
+            end_session_endpoint: json.get_string(d, "end_session_endpoint").unwrap_or(""),
+            introspection_endpoint: json.get_string(d, "introspection_endpoint").unwrap_or(""),
+            revocation_endpoint: json.get_string(d, "revocation_endpoint").unwrap_or(""),
+            jwks_uri: jwks_uri,
+            jwks: get_text(jwks_uri)?
+        }
+    )
+}
+
+/// A provider assembled by hand, with its JWKS document given (no network): for tests, and for
+/// providers that publish no discovery document. `jwks_uri` may be "" (then `refresh_keys` is
+/// a no-op); the optional endpoints are "".
+pub fn with_keys(
+    issuer: string,
+    authorization_endpoint: string,
+    token_endpoint: string,
+    jwks_uri: string,
+    jwks: string
+) -> Provider {
+    Provider {
+        issuer: issuer,
+        authorization_endpoint: authorization_endpoint,
+        token_endpoint: token_endpoint,
+        userinfo_endpoint: "",
+        end_session_endpoint: "",
+        introspection_endpoint: "",
+        revocation_endpoint: "",
+        jwks_uri: jwks_uri,
+        jwks: jwks
+    }
+}
+
+/// The same provider with a freshly fetched JWKS (after a key rotation: a token whose `kid` is
+/// unknown triggers this once, see `tokens`). Without a `jwks_uri`, returns `p` unchanged.
+pub fn refresh_keys(p: Provider) -> Result<Provider, string> {
+    if (p.jwks_uri == "") {
+        return Result.Ok(p);
+    }
+    var q = p;
+    q.jwks = get_text(p.jwks_uri)?;
+    Result.Ok(q)
+}
+
+/// The provider's public JWK with `kid` ("" matches the single key of a one-key JWKS).
+pub fn key_of(p: Provider, kid: string) -> Option<json.Json> {
+    jose.key_in(p.jwks, kid)
+}

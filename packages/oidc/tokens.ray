@@ -1,0 +1,140 @@
+// Verificar lo que emite el proveedor: ID tokens (OIDC Core §3.1.3.7) y access tokens JWT
+// (RFC 9068, `typ: at+jwt`), con las claims que una app necesita a mano y el payload entero para
+// las demás. El reloj entra como parámetro (`now_ms`): los tests fijan el tiempo.
+import std/json;
+import std/time;
+import oidc/jose;
+import oidc/provider;
+from oidc/provider import Provider;
+
+/// Clock skew tolerated on `exp`/`nbf`, in seconds: 60.
+pub const LEEWAY_S: int = 60;
+
+/// The claims of a verified token. `raw` is the whole payload, for anything not listed.
+pub struct Claims {
+    sub: string,
+    name: string,
+    email: string,
+    preferred_username: string,
+    groups: [string],
+    /// Access tokens: the granted scopes (`scope` split by spaces) and the client they were issued to.
+    scope: [string],
+    client_id: string,
+    /// `exp`/`iat` in seconds since the epoch (0 when absent).
+    exp: int,
+    iat: int,
+    raw: json.Json,
+}
+
+fn strings(j: json.Json, k: string) -> [string] {
+    var out: [string] = [];
+    for x in json.get_array(j, k).unwrap_or([]) {
+        out.push(json.as_string(x).unwrap_or(""));
+    }
+    out
+}
+
+/// The `Claims` view of a payload (no verification: use it on what `verify_*` returned, or on the
+/// `raw` of another token).
+pub fn claims_of(c: json.Json) -> Claims {
+    let scope = json.get_string(c, "scope").unwrap_or("");
+    Claims {
+        sub: json.get_string(c, "sub").unwrap_or(""),
+        name: json.get_string(c, "name").unwrap_or(""),
+        email: json.get_string(c, "email").unwrap_or(""),
+        preferred_username: json.get_string(c, "preferred_username").unwrap_or(""),
+        groups: strings(c, "groups"),
+        scope: if (scope == "") { [] } else { scope.split(" ") },
+        client_id: json.get_string(c, "client_id").unwrap_or(""),
+        exp: json.get_int(c, "exp").unwrap_or(0),
+        iat: json.get_int(c, "iat").unwrap_or(0),
+        raw: c
+    }
+}
+
+/// Signature against the provider's keys (the JWKS is refetched ONCE when the token's `kid` is
+/// unknown — a key rotation), then `iss`, `exp` and `nbf` with `LEEWAY_S`. Returns the payload.
+/// The building block of `verify_id_token`/`verify_access_token`; use it for other JWTs the
+/// provider signs (logout tokens, custom assertions) — the caller checks `aud` and the rest.
+pub fn verify_jwt(p: Provider, token: string, now_ms: int) -> Result<json.Json, string> {
+    let h = jose.header_of(token)?;
+    let key = match (provider.key_of(p, h.kid)) {
+        Option.Some(k) => k,
+        Option.None => {
+            provider.key_of(provider.refresh_keys(p)?, h.kid)
+                .ok_or("no provider key '" + h.kid + "'")?
+        },
+    };
+    let c = json.parse(jose.verify(token, key)?)?;
+    if (json.get_string(c, "iss").unwrap_or("") != p.issuer) {
+        return Result.Err("token from another issuer");
+    }
+    let now_s = now_ms / 1000;
+    let exp = json.get_int(c, "exp").unwrap_or(0);
+    if (exp > 0 && now_s >= exp + LEEWAY_S) {
+        return Result.Err("token expired");
+    }
+    let nbf = json.get_int(c, "nbf").unwrap_or(0);
+    if (nbf > 0 && now_s + LEEWAY_S < nbf) {
+        return Result.Err("token not yet valid");
+    }
+    Result.Ok(c)
+}
+
+/// Whether `aud` (a string or an array of strings) names `client_id`.
+pub fn audience_has(c: json.Json, client_id: string) -> bool {
+    if (json.get_string(c, "aud").unwrap_or("") == client_id) {
+        return true;
+    }
+    strings(c, "aud").contains(client_id)
+}
+
+/// Verifies an ID token issued to `client_id` in answer to the authorization request that sent
+/// `nonce` (OIDC Core §3.1.3.7: signature, `iss`, `exp`, `aud`, `nonce`; with several audiences,
+/// `azp` must be `client_id`). `nonce == ""` skips the nonce check (a token from a refresh).
+pub fn verify_id_token(
+    p: Provider,
+    client_id: string,
+    token: string,
+    nonce: string,
+    now_ms: int
+) -> Result<Claims, string> {
+    let c = verify_jwt(p, token, now_ms)?;
+    if (!audience_has(c, client_id)) {
+        return Result.Err("ID token for another audience");
+    }
+    if (strings(c, "aud").len() > 1 && json.get_string(c, "azp").unwrap_or("") != client_id) {
+        return Result.Err("ID token with several audiences and azp is not this client");
+    }
+    if (nonce != "" && json.get_string(c, "nonce").unwrap_or("") != nonce) {
+        return Result.Err("ID token nonce mismatch");
+    }
+    Result.Ok(claims_of(c))
+}
+
+/// Verifies a JWT access token (RFC 9068: header `typ: at+jwt`, so an ID token is never accepted
+/// as one) that carries every scope in `required`. What a resource server calls on the bearer
+/// token of each request.
+pub fn verify_access_token(
+    p: Provider,
+    token: string,
+    required: [string],
+    now_ms: int
+) -> Result<Claims, string> {
+    let h = jose.header_of(token)?;
+    if (h.typ.to_lower() != "at+jwt" && h.typ.to_lower() != "application/at+jwt") {
+        return Result.Err("not an access token (typ " + h.typ + ")");
+    }
+    let claims = claims_of(verify_jwt(p, token, now_ms)?);
+    for s in required {
+        if (!claims.scope.contains(s)) {
+            return Result.Err("missing scope " + s);
+        }
+    }
+    Result.Ok(claims)
+}
+
+/// The current time in ms since the epoch — what to pass as `now_ms` outside tests.
+pub fn now() -> int {
+    time.now()
+}

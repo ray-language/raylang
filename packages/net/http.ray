@@ -541,7 +541,8 @@ pub fn fetch_traced(url: string, t: trace.Trace) -> Result<Response, string> {
 // La forma BASE (M58.2): cuerpo en bytes (subidas binarias; Content-Length en octetos) y plazo
 // total de lectura explícito en ms (<= 0 = sin plazo). Las demás formas delegan aquí.
 /// The base request form: raw `bytes` body (binary uploads; `Content-Length` counts octets) and
-/// an explicit total read-timeout in ms (`<= 0` = no timeout). `request`/`request_with` delegate
+/// an explicit total read-timeout in ms (`<= 0` = no timeout) that also bounds the CONNECT (with
+/// `<= 0`, the connect still gets `DEFAULT_CONNECT_TIMEOUT_MS`). `request`/`request_with` delegate
 /// here with a UTF-8 body and 30 s. Err on invalid URL, connect failure, I/O error/timeout, or a
 /// malformed/truncated response.
 pub fn request_bytes(
@@ -1038,8 +1039,9 @@ pub fn stream(
 
 /// Opens a streaming request: connects, sends, reads the head, and returns as soon as the
 /// status and headers are in — the body is pulled with `stream_read`. `idle_timeout_ms` bounds
-/// each individual read (a healthy stream may last minutes; silence is what signals trouble);
-/// `<= 0` = no timeout. The request does not advertise gzip (no incremental gunzip).
+/// each individual read (a healthy stream may last minutes; silence is what signals trouble) and
+/// the connect; `<= 0` = no read timeout (the connect keeps `DEFAULT_CONNECT_TIMEOUT_MS`). The
+/// request does not advertise gzip (no incremental gunzip).
 pub fn stream_with(
     method: string,
     url: string,
@@ -1420,7 +1422,8 @@ pub fn pool_request(
     pool_request_bytes(p, method, url, body.to_bytes(), headers, 30000)
 }
 
-/// The base form: raw bytes body and an explicit read timeout in ms (`<= 0` = none). A reused
+/// The base form: raw bytes body and an explicit read timeout in ms (`<= 0` = none) that also
+/// bounds the connect of a dialed slot (`<= 0` → `DEFAULT_CONNECT_TIMEOUT_MS`). A reused
 /// connection found dead (the server closed it while idle, before any response byte) is
 /// reconnected and the request retried once, as `conn_request_bytes` does; any other failure
 /// discards the connection.

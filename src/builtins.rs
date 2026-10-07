@@ -2378,24 +2378,34 @@ fn dial_stream(host: &str, port: i64, ms: i64) -> Result<std::net::TcpStream, St
         let _ = stream.set_nodelay(true); // Nagle+delayed-ACK = stalls fijos de 40-100 ms (M96b)
         return Ok(stream);
     }
+    // R38 (rayauth, regresión de M355): TODAS las direcciones resueltas, en orden, bajo un único
+    // plazo total — `localhost` es `::1` y `127.0.0.1`, y un servidor que solo escucha en IPv4
+    // rechaza la primera; `TcpStream::connect` (el camino sin plazo) ya hacía esto. El último error
+    // es el que se devuelve; agotar el plazo es «connect timeout».
     use std::net::ToSocketAddrs;
-    let addr = (host, port as u16)
-        .to_socket_addrs()
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or_else(|| format!("could not resolve host '{}'", host))?;
-    let stream = match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {
-        Ok(s) => s,
-        Err(ref e)
-            if e.kind() == std::io::ErrorKind::TimedOut
-                || e.kind() == std::io::ErrorKind::WouldBlock =>
-        {
+    let addrs: Vec<std::net::SocketAddr> = (host, port as u16).to_socket_addrs().map_err(|e| e.to_string())?.collect();
+    if addrs.is_empty() {
+        return Err(format!("could not resolve host '{}'", host));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+    let mut last_err = String::new();
+    for addr in &addrs {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
             return Err(CONNECT_TIMEOUT_MSG.to_string());
         }
-        Err(e) => return Err(e.to_string()),
-    };
-    let _ = stream.set_nodelay(true); // mismo trato que tcp_connect (M96b)
-    Ok(stream)
+        match std::net::TcpStream::connect_timeout(addr, left) {
+            Ok(s) => {
+                let _ = s.set_nodelay(true); // mismo trato que tcp_connect (M96b)
+                return Ok(s);
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
+                last_err = CONNECT_TIMEOUT_MSG.to_string();
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    Err(last_err)
 }
 
 /// Como [`tcp_connect`], con PLAZO (M122): un host que no responde al SYN (firewall que descarta,

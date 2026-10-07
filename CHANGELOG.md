@@ -11,6 +11,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   perfil de raylb); renombrados, y la guarda `naming_policy` vigila ahora todo lo que
   `src/stdlib.rs` embeba, viva donde viva.
 
+## Sin publicar
+
+- **`net.tcp_connect_timeout` prueba todas las direcciones resueltas** bajo un plazo total; 1.27.37
+  solo probaba la primera, y como el cliente `net/http` pasó a dialar con plazo,
+  `http://localhost:…` fallaba contra un servidor que solo escucha en IPv4 (regresión, rayauth R38).
+  La doc de `request_bytes`/`stream_with`/`pool_request_bytes` dice ya que el plazo acota también la
+  conexión (raylb L5).
+
 ## 1.27.37 — 2026-10-05
 
 El arco de raylb (IDEAS §103, M355–M361): el `connect` que aparca, el lote de correcciones, el

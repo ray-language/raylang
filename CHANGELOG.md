@@ -27,6 +27,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   brazo por patrón o a una guarda, y SPEC/llms.txt lo dicen (ray-ds #128).
 - **Documentación**: `close(h)` del prelude cierra una ventana de `std/ui` (no hay `ui.close`), en
   `ui.open`, REFERENCE y llms.txt (ray-sublime #132).
+- **`select_timeout` nativo con resolución de milisegundo**: el bucle esperaba un pulso fijo de
+  10 ms sin mirar lo que le quedaba del plazo, así que 2 ms duraban 10 y 11 duraban 20 (en la VM ya
+  era exacto). Ahora espera `min(restante, 10 ms)`; la doc fija la resolución (raylb L21).
+- **net 0.10.1**: publica la doc de `request_bytes`/`pool_request_bytes`/`stream_with` que ya decía
+  que el plazo acota también el connect (entró con R38 pero 0.10.0 se publicó antes; raylb L5).
+- **Documentación**: `close(h)` sobre una ventana de `std/ui` en `ray doc close`; `template.compile`
+  remite a las plantillas compiladas `.ray.html` y su forma (ray-ds #132, #126).
 
 ## 1.27.38 — 2026-10-07
 

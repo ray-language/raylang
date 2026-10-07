@@ -2009,10 +2009,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}\n",
             // M116.1: espera de actividad ACOTADA (una sola vez). A diferencia de __ray_wait_activity
             // (que bloquea HASTA que la generación cambie), retorna tras el despertar por notify (un
-            // canal listo) O el pulso de ~10 ms — el que llegue antes. Es lo que necesita
-            // select_timeout: su bucle re-escanea y re-chequea el deadline tras cada retorno, así el
-            // plazo vence aunque no haya ninguna actividad de canales que despierte.
-            "fn __ray_wait_activity_once(act: u64) {\n",
+            // canal listo) O el pulso `d` — el que llegue antes. Es lo que necesita select_timeout:
+            // su bucle re-escanea y re-chequea el deadline tras cada retorno, así el plazo vence
+            // aunque no haya ninguna actividad de canales que despierte. `d` = min(restante, 10 ms)
+            // (raylb L21: con un pulso FIJO de 10 ms, un plazo de 2 ms duraba 10 y uno de 11, 20).
+            "fn __ray_wait_activity_once(act: u64, d: std::time::Duration) {\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let g = __RAY_ACT_M.lock().unwrap();\n",
             "    if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
@@ -2023,13 +2024,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "            __ray_parked_set(Some(__ray_act_wl().clone()));\n",
                 "            let seen = __ray_act_wl().prepare();\n",
                 "            drop(g);\n",
-                // M319: la espera ACOTADA conserva su plazo de ~10 ms (select_timeout re-escanea).
-                "            if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act && !__ray_cancelled() { ray_runtime::fibers::block_on_timeout(__ray_act_wl(), seen, 10); }\n",
+                // M319: la espera ACOTADA conserva su pulso (select_timeout re-escanea).
+                "            if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act && !__ray_cancelled() { ray_runtime::fibers::block_on_timeout_for(__ray_act_wl(), seen, d); }\n",
                 "            __ray_parked_set(None);\n",
-                "        } else { let _ = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10)); }\n",
+                "        } else { let _ = __RAY_ACT_CV.wait_timeout(g, d); }\n",
             ));
         } else {
-            out.push_str("        let _ = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10));\n");
+            out.push_str("        let _ = __RAY_ACT_CV.wait_timeout(g, d);\n");
         }
         out.push_str(concat!(
             "    } else { drop(g); }\n",
@@ -2267,8 +2268,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            let st = ch.inner.0.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
             "        }\n",
-            "        match deadline { None => return -1, Some(d) => if std::time::Instant::now() >= d { return -1; } }\n",
-            "        __ray_wait_activity_once(act);\n",
+            "        let pulse = std::time::Duration::from_millis(10);\n",
+            "        let wait = match deadline { None => return -1, Some(d) => { let left = d.saturating_duration_since(std::time::Instant::now()); if left.is_zero() { return -1; } left.min(pulse) } };\n",
+            "        __ray_wait_activity_once(act, wait);\n",
             "    }\n}\n",
         ));
     }

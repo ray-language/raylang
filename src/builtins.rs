@@ -380,7 +380,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "try_send" => "Sends into a channel WITHOUT blocking: `true` if the value was delivered or queued, `false` if the channel is closed or full. Never fails: the non-panicking counterpart of `send` for producers whose consumer may be gone.",
         "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
         "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. SIGHUP, SIGQUIT and SIGUSR1/2 keep their OS default unless you ask for them with `process.listen_signal` (std/process). A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
-        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file. For a window handle from `ui.open` (std/ui): closes the window (the event loop reports `closed`; there is no `ui.close`).",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
         "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",

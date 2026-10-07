@@ -502,8 +502,8 @@ pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
 // el equivalente a ~256 octetos bit a bit); por debajo de ese umbral no se amortiza y se
 // usa la forma bit a bit original.
 // La tabla del CRC-32: tabla[b] = el resto de procesar el octeto `b` bit a bit.
-fn crc32_tabla() -> [int] {
-    var tabla: [int] = [];
+fn crc32_table() -> [int] {
+    var table: [int] = [];
     var b = 0;
     while (b < 256) {
         var v = b;
@@ -516,10 +516,10 @@ fn crc32_tabla() -> [int] {
             }
             j = j + 1;
         }
-        tabla.push(v);
+        table.push(v);
         b = b + 1;
     }
-    tabla
+    table
 }
 
 // La forma bit a bit original (para entradas cortas, donde construir la tabla cuesta más).
@@ -554,11 +554,11 @@ pub fn crc32(data: bytes) -> int {
     if (n < 256) {
         return crc32_bits(data);
     }
-    let tabla: [int] = crc32_tabla();
+    let table: [int] = crc32_table();
     var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
     while (i < n) {
-        crc = tabla[(crc ^ data[i]) & 255] ^ crc >> 8;
+        crc = table[(crc ^ data[i]) & 255] ^ crc >> 8;
         i = i + 1;
     }
     crc ^ 4294967295
@@ -635,9 +635,9 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).
             let n = data.len();
-            let crc_esperado = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
+            let crc_expected = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
             let crc_real = crc32(salida);
-            if ((crc_real & 4294967295) != (crc_esperado & 4294967295)) {
+            if ((crc_real & 4294967295) != (crc_expected & 4294967295)) {
                 Result.Err("CRC32 mismatch (corrupt gzip)")
             } else {
                 Result.Ok(salida)

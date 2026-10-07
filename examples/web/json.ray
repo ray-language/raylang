@@ -54,10 +54,10 @@ fn at_end(p: P) -> bool { p.i >= p.n }
 fn cur(p: P) -> char { p.cs[p.i] }
 
 fn skip_ws(p: P) {
-    var seguir: bool = true;
-    while (seguir) {
+    var keep_going: bool = true;
+    while (keep_going) {
         if (at_end(p)) {
-            seguir = false;
+            keep_going = false;
         } else {
             let c: char = cur(p);
             if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
@@ -77,7 +77,7 @@ fn skip_ws(p: P) {
                     p.i = p.i + 2;
                 }
             } else {
-                seguir = false;
+                keep_going = false;
             }
         }
     }
@@ -144,14 +144,14 @@ fn is_num_char(c: char) -> bool {
 
 fn parse_number(p: P) -> Result<Json, string> {
     let inicio: int = p.i;
-    var seguir: bool = true;
-    while (seguir) {
+    var keep_going: bool = true;
+    while (keep_going) {
         if (at_end(p)) {
-            seguir = false;
+            keep_going = false;
         } else if (is_num_char(cur(p))) {
             p.i = p.i + 1;
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     if (p.i == inicio) {
@@ -273,22 +273,22 @@ fn parse_u_escape(p: P) -> Result<string, string> {
 fn parse_str_raw(p: P) -> Result<string, string> {
     p.i = p.i + 1;  // saltar la comilla de apertura
     let b = sb.new();
-    var seguir: bool = true;
+    var keep_going: bool = true;
     var err: string = "";
-    while (seguir) {
+    while (keep_going) {
         if (at_end(p)) {
             err = "unterminated string";
-            seguir = false;
+            keep_going = false;
         } else {
             let c: char = cur(p);
             if (c == '"') {
                 p.i = p.i + 1;
-                seguir = false;
+                keep_going = false;
             } else if (c == '\\') {
                 p.i = p.i + 1;
                 if (at_end(p)) {
                     err = "unterminated escape";
-                    seguir = false;
+                    keep_going = false;
                 } else if (cur(p) == 'u') {
                     // \uXXXX (con par surrogate si es un astral).
                     p.i = p.i + 1;
@@ -298,7 +298,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                         },
                         Result.Err(m) => {
                             err = m;
-                            seguir = false;
+                            keep_going = false;
                         },
                     }
                 } else {
@@ -309,7 +309,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                         },
                         Option.None => {
                             err = "unsupported escape sequence";
-                            seguir = false;
+                            keep_going = false;
                         },
                     }
                 }
@@ -337,23 +337,23 @@ fn parse_array(p: P) -> Result<Json, string> {
         p.i = p.i + 1;
         return Result.Ok(Json.JArray(items));
     }
-    var seguir: bool = true;
+    var keep_going: bool = true;
     var err: string = "";
-    while (seguir) {
+    while (keep_going) {
         match (parse_value(p)) {
             Result.Ok(v) => {
                 items.push(v);
             },
             Result.Err(e) => {
                 err = e;
-                seguir = false;
+                keep_going = false;
             },
         }
-        if (seguir) {
+        if (keep_going) {
             skip_ws(p);
             if (at_end(p)) {
                 err = "unterminated array";
-                seguir = false;
+                keep_going = false;
             } else {
                 let c: char = cur(p);
                 if (c == ',') {
@@ -363,15 +363,15 @@ fn parse_array(p: P) -> Result<Json, string> {
                         skip_ws(p);
                         if (!at_end(p) && cur(p) == ']') {
                             p.i = p.i + 1;
-                            seguir = false;
+                            keep_going = false;
                         }
                     }
                 } else if (c == ']') {
                     p.i = p.i + 1;
-                    seguir = false;
+                    keep_going = false;
                 } else {
                     err = "expected ',' or ']'";
-                    seguir = false;
+                    keep_going = false;
                 }
             }
         }
@@ -387,20 +387,20 @@ fn parse_object(p: P) -> Result<Json, string> {
         p.i = p.i + 1;
         return Result.Ok(Json.JObject(obj));
     }
-    var seguir: bool = true;
+    var keep_going: bool = true;
     var err: string = "";
-    while (seguir) {
+    while (keep_going) {
         skip_ws(p);
         if (at_end(p) || cur(p) != '"') {
             err = "expected a string key";
-            seguir = false;
+            keep_going = false;
         } else {
             match (parse_str_raw(p)) {
                 Result.Ok(k) => {
                     skip_ws(p);
                     if (at_end(p) || cur(p) != ':') {
                         err = "expected ':'";
-                        seguir = false;
+                        keep_going = false;
                     } else {
                         p.i = p.i + 1;  // saltar ':'
                         match (parse_value(p)) {
@@ -409,7 +409,7 @@ fn parse_object(p: P) -> Result<Json, string> {
                                 skip_ws(p);
                                 if (at_end(p)) {
                                     err = "unterminated object";
-                                    seguir = false;
+                                    keep_going = false;
                                 } else {
                                     let c: char = cur(p);
                                     if (c == ',') {
@@ -419,28 +419,28 @@ fn parse_object(p: P) -> Result<Json, string> {
                                             skip_ws(p);
                                             if (!at_end(p) && cur(p) == '}') {
                                                 p.i = p.i + 1;
-                                                seguir = false;
+                                                keep_going = false;
                                             }
                                         }
                                     } else if (c == '}') {
                                         p.i = p.i + 1;
-                                        seguir = false;
+                                        keep_going = false;
                                     } else {
                                         err = "expected ',' or '}'";
-                                        seguir = false;
+                                        keep_going = false;
                                     }
                                 }
                             },
                             Result.Err(e) => {
                                 err = e;
-                                seguir = false;
+                                keep_going = false;
                             },
                         }
                     }
                 },
                 Result.Err(e) => {
                     err = e;
-                    seguir = false;
+                    keep_going = false;
                 },
             }
         }

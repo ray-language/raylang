@@ -3,6 +3,13 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
+## Sin publicar
+
+- **Stdlib en inglés**: los 14 módulos de la stdlib que se embeben desde `examples/` (`std/uuid`,
+  `std/regex`, `std/toml`, `std/template`, `std/markdown`, `std/inflate`, `std/json`,
+  `std/protobuf`…) conservaban identificadores en español (`std::uuid::formato`, visible en un
+  perfil de raylb); renombrados, y la guarda `naming_policy` vigila ahora todo lo que
+  `src/stdlib.rs` embeba, viva donde viva.
 
 ## 1.27.37 — 2026-10-05
 

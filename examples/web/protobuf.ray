@@ -130,13 +130,13 @@ fn decode_varint(data: bytes, pos: int) -> VarintResult {
     var result = 0;
     var shift = 0;
     var p = pos;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         let b = data[p];
         result = result | (b & 127) << shift;
         p = p + 1;
         if ((b & 128) == 0) {
-            seguir = false;
+            keep_going = false;
         } else {
             shift = shift + 7;
         }

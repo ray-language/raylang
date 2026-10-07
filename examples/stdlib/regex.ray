@@ -162,12 +162,12 @@ fn parse_alt(p: PS) -> Result<Re, string> {
 
 fn parse_concat(p: PS) -> Result<Re, string> {
     var node = Re.Empty;
-    var primero = true;
+    var first = true;
     while (!ps_at_end(p) && ps_peek(p) != '|' && ps_peek(p) != ')') {
         let r = parse_repeat(p)?;
-        if (primero) {
+        if (first) {
             node = r;
-            primero = false;
+            first = false;
         } else {
             node = Re.Concat(node, r);
         }
@@ -180,7 +180,7 @@ fn parse_concat(p: PS) -> Result<Re, string> {
 fn parse_repeat(p: PS) -> Result<Re, string> {
     var node = parse_atom(p)?;
     while (!ps_at_end(p)
-        && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
+        && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_open(p))) {
         let op = ps_advance(p);
         if (op == '{') {
             node = parse_bounds(p, node)?;
@@ -206,14 +206,14 @@ fn parse_repeat(p: PS) -> Result<Re, string> {
 }
 
 // ¿El cursor está sobre un `{` de cuantificador (`{` + dígito)?
-fn rep_abre(p: PS) -> bool {
+fn rep_open(p: PS) -> bool {
     if (ps_peek(p) != '{') {
         return false;
     }
-    p.pos + 1 < p.pat.len() && es_digito(p.pat[p.pos + 1])
+    p.pos + 1 < p.pat.len() && is_digit(p.pat[p.pos + 1])
 }
 
-fn es_digito(c: char) -> bool { '0' <= c && c <= '9' }
+fn is_digit(c: char) -> bool { '0' <= c && c <= '9' }
 
 // ¿Sigue un `?` (sufijo lazy)? Lo consume si está.
 fn quant_lazy(p: PS) -> bool {
@@ -227,7 +227,7 @@ fn quant_lazy(p: PS) -> bool {
 // Lee un entero decimal del patrón (al menos un dígito, garantizado por el llamador).
 fn parse_num(p: PS) -> int {
     var v = 0;
-    while (!ps_at_end(p) && es_digito(ps_peek(p))) {
+    while (!ps_at_end(p) && is_digit(ps_peek(p))) {
         let c = ps_advance(p);
         v = v * 10 + (c as int - '0' as int);
     }
@@ -244,7 +244,7 @@ fn parse_bounds(p: PS, node: Re) -> Result<Re, string> {
     var abierto = false;  // `{n,}`
     if (!ps_at_end(p) && ps_peek(p) == ',') {
         ps_advance(p);
-        if (!ps_at_end(p) && es_digito(ps_peek(p))) {
+        if (!ps_at_end(p) && is_digit(ps_peek(p))) {
             m = parse_num(p);
         } else {
             abierto = true;
@@ -263,12 +263,12 @@ fn parse_bounds(p: PS, node: Re) -> Result<Re, string> {
     }
     // n copias obligatorias…
     var out = Re.Empty;
-    var primero = true;
+    var first = true;
     var i = 0;
     while (i < n) {
-        if (primero) {
+        if (first) {
             out = node;
-            primero = false;
+            first = false;
         } else {
             out = Re.Concat(out, node);
         }
@@ -276,29 +276,29 @@ fn parse_bounds(p: PS, node: Re) -> Result<Re, string> {
     }
     // …y la cola: `X*` si es abierto, o (m−n) opcionales anidados de dentro afuera.
     if (abierto) {
-        let cola = Re.Star(node, lazy);
-        if (primero) {
-            return Result.Ok(cola);
+        let tail = Re.Star(node, lazy);
+        if (first) {
+            return Result.Ok(tail);
         }
-        return Result.Ok(Re.Concat(out, cola));
+        return Result.Ok(Re.Concat(out, tail));
     }
     var extra = m - n;
-    var cola = Re.Empty;
-    var hay_cola = false;
+    var tail = Re.Empty;
+    var has_tail = false;
     while (extra > 0) {
-        if (hay_cola) {
-            cola = Re.Opt(Re.Concat(node, cola), lazy);
+        if (has_tail) {
+            tail = Re.Opt(Re.Concat(node, tail), lazy);
         } else {
-            cola = Re.Opt(node, lazy);
-            hay_cola = true;
+            tail = Re.Opt(node, lazy);
+            has_tail = true;
         }
         extra = extra - 1;
     }
-    if (hay_cola) {
-        if (primero) {
-            return Result.Ok(cola);
+    if (has_tail) {
+        if (first) {
+            return Result.Ok(tail);
         }
-        return Result.Ok(Re.Concat(out, cola));
+        return Result.Ok(Re.Concat(out, tail));
     }
     Result.Ok(out)
 }
@@ -589,16 +589,16 @@ fn compile_re(re: Re, prog: Prog) {
             // L1: Split L2, L3 ; L2: <a> ; Jmp L1 ; L3:   (lazy: Split L3, L2)
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            let cuerpo = prog.insts.len();
+            let body = prog.insts.len();
             compile_re(a, prog);
             emit(prog, 3, sp, 0, ' ');
-            let salida = prog.insts.len();
+            let output = prog.insts.len();
             if (lazy) {
-                si.x = salida;
-                si.y = cuerpo;
+                si.x = output;
+                si.y = body;
             } else {
-                si.x = cuerpo;
-                si.y = salida;
+                si.x = body;
+                si.y = output;
             }
         },
         Re.Plus(a, lazy) => {
@@ -607,27 +607,27 @@ fn compile_re(re: Re, prog: Prog) {
             compile_re(a, prog);
             let sp = emit(prog, 4, l1, 0, ' ');
             let si = prog.insts[sp];
-            let salida = prog.insts.len();
+            let output = prog.insts.len();
             if (lazy) {
-                si.x = salida;
+                si.x = output;
                 si.y = l1;
             } else {
-                si.y = salida;
+                si.y = output;
             }
         },
         Re.Opt(a, lazy) => {
             // Split L1, L2 ; L1: <a> ; L2:   (lazy: Split L2, L1)
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            let cuerpo = prog.insts.len();
+            let body = prog.insts.len();
             compile_re(a, prog);
-            let salida = prog.insts.len();
+            let output = prog.insts.len();
             if (lazy) {
-                si.x = salida;
-                si.y = cuerpo;
+                si.x = output;
+                si.y = body;
             } else {
-                si.x = cuerpo;
-                si.y = salida;
+                si.x = body;
+                si.y = output;
             }
         },
         Re.Group(a, g) => {
@@ -812,8 +812,8 @@ fn add_thread(
 // muere en la aserción (pos != 0), pero ya pagó `new_saves` + `add_thread` en CADA posición.
 fn is_anchored(prog: Prog) -> bool {
     var pc = 0;
-    var pasos = 0;
-    while (pasos < prog.insts.len()) {
+    var steps = 0;
+    while (steps < prog.insts.len()) {
         let ins = prog.insts[pc];
         if (ins.op == 6) {
             return true;
@@ -824,7 +824,7 @@ fn is_anchored(prog: Prog) -> bool {
         } else {
             return false;
         }
-        pasos = pasos + 1;
+        steps = steps + 1;
     }
     false
 }
@@ -1054,8 +1054,8 @@ fn saves_to_groups(prog: Prog, sv: [int]) -> [Option<(int, int)>] {
             out.push(Option.Some((a, b)));
         } else {
             // Gotcha: `push(Option.None)` no infiere T → se materializa anotado.
-            var nada: Option<(int, int)> = Option.None;
-            out.push(nada);
+            var nothing: Option<(int, int)> = Option.None;
+            out.push(nothing);
         }
         g = g + 1;
     }
@@ -1094,8 +1094,8 @@ fn run_captures_str(prog: Prog, text: string) -> Option<[Option<string>]> {
                         out.push(Option.Some(text.substring(par.0, par.1)));
                     },
                     Option.None => {
-                        var nada: Option<string> = Option.None;
-                        out.push(nada);
+                        var nothing: Option<string> = Option.None;
+                        out.push(nothing);
                     },
                 }
                 i = i + 1;

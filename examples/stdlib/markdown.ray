@@ -183,7 +183,7 @@ const K_LIST: int = 2;
 
 const K_ITEM: int = 3;
 
-const K_PARA: int = 4;
+const K_PARAGRAPH: int = 4;
 
 const K_FENCE: int = 5;
 
@@ -515,13 +515,13 @@ fn continue_block(p: Parser, c: Node) -> int {
 fn try_start(p: Parser, keep: int) -> int {
     find_next_nonspace(p);
     let t = tip(p);
-    let para_open = t.kind == K_PARA && t.open;
+    let paragraph_open = t.kind == K_PARAGRAPH && t.open;
     // ¿El párrafo abierto es el último bloque CASADO? (setext/tabla no aplican a una
     // continuación perezosa)
-    let para_matched = para_open && p.stack.len() == keep;
+    let paragraph_matched = paragraph_open && p.stack.len() == keep;
     // Sangrado ≥ 4: código sangrado, salvo continuando un párrafo o en blanco.
     if (p.indent >= 4) {
-        if (para_open || p.blank) {
+        if (paragraph_open || p.blank) {
             return 0;
         }
         p.pos = p.pos + 4;
@@ -589,7 +589,7 @@ fn try_start(p: Parser, keep: int) -> int {
         }
     }
     // Subrayado setext bajo un párrafo abierto.
-    if (para_matched && (c == '=' || c == '-')) {
+    if (paragraph_matched && (c == '=' || c == '-')) {
         let rest = rest_from(p, p.next_nonspace).trim();
         var only = true;
         var k = 0;
@@ -602,19 +602,19 @@ fn try_start(p: Parser, keep: int) -> int {
         if (only && rest.len() > 0) {
             // Ojo: `---` cierra el párrafo como <h2> solo si el párrafo es hijo del contenedor
             // en curso (no una continuación perezosa).
-            let para = t;
+            let paragraph = t;
             // Las definiciones de referencia al inicio del párrafo no forman parte del
             // encabezado; si el párrafo queda vacío, el subrayado es texto (o una regla).
-            extract_ref_defs(p, para);
-            if (para.lines.len() > 0) {
-                para.kind = K_HEADING;
-                para.level = if (c == '=') { 1 } else { 2 };
+            extract_ref_defs(p, paragraph);
+            if (paragraph.lines.len() > 0) {
+                paragraph.kind = K_HEADING;
+                paragraph.level = if (c == '=') { 1 } else { 2 };
                 p.pos = p.line.len();
                 close_tip(p);
                 return 2;
             }
             if (c == '=') {
-                para.lines.push(rest);
+                paragraph.lines.push(rest);
                 p.pos = p.line.len();
                 return 2;
             }
@@ -648,7 +648,7 @@ fn try_start(p: Parser, keep: int) -> int {
             padding = width + 1;
         }
         // Un ítem vacío u ordenado que no empieza en 1 no interrumpe un párrafo.
-        if (para_matched && (empty_item || (ordered && start_n != 1))) {
+        if (paragraph_matched && (empty_item || (ordered && start_n != 1))) {
             return 0;
         }
         // Un `*`/`-` que también es regla ya se atendió arriba.
@@ -688,7 +688,7 @@ fn try_start(p: Parser, keep: int) -> int {
     if (c == '['
         && p.next_nonspace + 2 < p.line.len()
         && p.line[p.next_nonspace + 1] == '^'
-        && !para_open) {
+        && !paragraph_open) {
         let rest = rest_from(p, p.next_nonspace);
         let close = match (rest.index_of("]:")) {
             Option.Some(k) => k,
@@ -712,7 +712,7 @@ fn try_start(p: Parser, keep: int) -> int {
         }
     }
     // Tabla GFM: la fila separadora bajo un párrafo de UNA línea con el mismo número de celdas.
-    if (para_matched && t.lines.len() == 1 && (c == '|' || c == '-' || c == ':')) {
+    if (paragraph_matched && t.lines.len() == 1 && (c == '|' || c == '-' || c == ':')) {
         let rest = rest_from(p, p.next_nonspace).trim();
         let ncols = split_row(t.lines[0].trim()).len();
         if (t.lines[0].contains("|") && is_delimiter_row(rest, ncols)) {
@@ -755,7 +755,7 @@ fn is_ascii_punct(c: char) -> bool {
 // Finaliza un bloque al cerrarse: definiciones de referencia, apretado/suelto, avisos.
 fn finalize(p: Parser, n: Node) {
     n.open = false;
-    if (n.kind == K_PARA) {
+    if (n.kind == K_PARAGRAPH) {
         extract_ref_defs(p, n);
     } else if (n.kind == K_LIST) {
         // Suelta si hay líneas en blanco entre ítems, o dentro de un ítem entre sus bloques.
@@ -778,16 +778,18 @@ fn finalize(p: Parser, n: Node) {
         n.tight = tight;
     } else if (n.kind == K_QUOTE) {
         // Aviso de GitHub: la primera línea del primer párrafo es exactamente `[!KIND]`.
-        if (n.children.len() > 0 && n.children[0].kind == K_PARA && n.children[0].lines.len() > 0) {
+        if (n.children.len() > 0
+            && n.children[0].kind == K_PARAGRAPH
+            && n.children[0].lines.len() > 0) {
             let first = n.children[0].lines[0].trim();
             let kind = alert_kind(first);
             if (kind != "") {
                 n.label = kind;
-                let para = n.children[0];
+                let paragraph = n.children[0];
                 var rest: [string] = [];
                 var k = 1;
-                while (k < para.lines.len()) {
-                    rest.push(para.lines[k]);
+                while (k < paragraph.lines.len()) {
+                    rest.push(paragraph.lines[k]);
                     k = k + 1;
                 }
                 if (rest.len() == 0) {
@@ -799,7 +801,7 @@ fn finalize(p: Parser, n: Node) {
                     }
                     n.children = others;
                 } else {
-                    para.lines = rest;
+                    paragraph.lines = rest;
                 }
             }
         }
@@ -830,11 +832,11 @@ fn ends_with_blank(n: Node) -> bool {
 
 // Definiciones de referencia `[etiqueta]: destino "título"` al principio de un párrafo: se
 // guardan (la primera gana) y se quitan del párrafo.
-fn extract_ref_defs(p: Parser, para: Node) {
+fn extract_ref_defs(p: Parser, paragraph: Node) {
     var again = true;
-    while (again && para.lines.len() > 0) {
+    while (again && paragraph.lines.len() > 0) {
         again = false;
-        let text = join_lines(para.lines);
+        let text = join_lines(paragraph.lines);
         match (parse_ref_def(text)) {
             Option.Some(d) => {
                 // d.0 etiqueta, d.1 destino, d.2 título, d.3 caracteres consumidos
@@ -843,7 +845,7 @@ fn extract_ref_defs(p: Parser, para: Node) {
                     p.refs.insert(key, [d.1, d.2]);
                 }
                 let rest = text.substring(d.3, text.len());
-                para.lines = if (rest.trim() == "") { [] } else { split_lines(rest) };
+                paragraph.lines = if (rest.trim() == "") { [] } else { split_lines(rest) };
                 again = true;
             },
             Option.None => { },
@@ -1104,7 +1106,7 @@ fn incorporate_line(p: Parser, raw: string) {
     }
     find_next_nonspace(p);
     let cur = tip(p);
-    if (!all_matched && !p.blank && cur.kind == K_PARA) {
+    if (!all_matched && !p.blank && cur.kind == K_PARAGRAPH) {
         // Continuación perezosa del párrafo.
         cur.lines.push(rest_from(p, p.next_nonspace));
         return;
@@ -1134,16 +1136,16 @@ fn incorporate_line(p: Parser, raw: string) {
             p.stack[k].last_line_blank = false;
             k = k + 1;
         }
-        if (tp.kind == K_PARA) {
+        if (tp.kind == K_PARAGRAPH) {
             close_tip(p);
         }
-    } else if (tp.kind == K_PARA) {
+    } else if (tp.kind == K_PARAGRAPH) {
         tp.lines.push(rest_from(p, p.next_nonspace));
     } else {
         // Cualquier otro tip (contenedor, o una lista cuyo ítem no casó): párrafo nuevo —
         // add_child cierra lo que no pueda contenerlo.
-        let para = add_child(p, K_PARA);
-        para.lines.push(rest_from(p, p.next_nonspace));
+        let paragraph = add_child(p, K_PARAGRAPH);
+        paragraph.lines.push(rest_from(p, p.next_nonspace));
     }
 }
 
@@ -1222,7 +1224,7 @@ fn lower_children(p: Parser, n: Node, tight: bool) -> [Block] {
 
 fn lower(p: Parser, n: Node, tight: bool) -> Option<Block> {
     let k = n.kind;
-    if (k == K_PARA) {
+    if (k == K_PARAGRAPH) {
         if (n.lines.len() == 0) {
             return Option.None;
         }

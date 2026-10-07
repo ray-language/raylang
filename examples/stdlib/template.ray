@@ -182,21 +182,21 @@ fn tokenize(tpl: string) -> Result<[Tok], string> {
             if (i > start) {
                 toks.push(Tok.TText(tpl.substring(start, i)));
             }
-            let es_tag = cs[i + 1] == '%';
-            let cierre = if (es_tag) { '%' } else { '}' };
+            let is_tag = cs[i + 1] == '%';
+            let closing = if (is_tag) { '%' } else { '}' };
             let ini = i + 2;
             // Buscar el par de cierre (`%}` o `}}`) desde `ini`.
             var fin = 0 - 1;
             var j = ini;
             while (fin < 0 && j + 1 < n) {
-                if (cs[j] == cierre && cs[j + 1] == '}') {
+                if (cs[j] == closing && cs[j + 1] == '}') {
                     fin = j;
                 } else {
                     j = j + 1;
                 }
             }
             if (fin < 0) {
-                if (es_tag) {
+                if (is_tag) {
                     return Result.Err("unterminated '{%'");
                 }
                 return Result.Err("unterminated '{{'");
@@ -204,7 +204,7 @@ fn tokenize(tpl: string) -> Result<[Tok], string> {
             let inner = tpl.substring(ini, fin).trim();
             i = fin + 2;
             start = i;
-            if (es_tag) {
+            if (is_tag) {
                 toks.push(Tok.TTag(inner));
             } else {
                 if (inner.len() > 0 && inner[0] == '&') {
@@ -254,13 +254,13 @@ fn parse_if(pc: PC, cond: string) -> Result<Node, string> {
     var elsebody: [Node] = [];
     if (thenr.stop == "elif") {
         let cond2 = thenr.stop_tag.substring(4, thenr.stop_tag.len()).trim();
-        let anidado = match (parse_if(pc, cond2)) {
+        let nested = match (parse_if(pc, cond2)) {
             Result.Ok(x) => x,
             Result.Err(e) => {
                 return Result.Err(e);
             },
         };
-        elsebody.push(anidado);
+        elsebody.push(nested);
     } else {
         if (thenr.stop == "else") {
             let elser = match (parse_seq(pc, ["endif"])) {
@@ -406,13 +406,13 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
                     } else if (kw == "if") {
                         pc.pos = pc.pos + 1;
                         let cond = s.substring(2, s.len()).trim();
-                        let nodo = match (parse_if(pc, cond)) {
+                        let node = match (parse_if(pc, cond)) {
                             Result.Ok(x) => x,
                             Result.Err(e) => {
                                 return Result.Err(e);
                             },
                         };
-                        nodes.push(nodo);
+                        nodes.push(node);
                     } else if (kw == "for") {
                         pc.pos = pc.pos + 1;
                         let parts = s.split(" ");  // ["for", x, "in", lista]

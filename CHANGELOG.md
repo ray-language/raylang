@@ -3,7 +3,11 @@
 Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
-## Sin publicar
+
+## 1.27.39 — 2026-10-07
+
+Los hallazgos que las apps anotaron al revisar 1.27.38 (ray-apps/RAYLANG-FINDINGS.md #128–#132,
+raylb L5/L21, rayauth R37/R40) y el paquete `oidc`.
 
 - **Paquete `oidc` (0.1.0)**: el lado cliente de OpenID Connect — descubrimiento con JWKS y refresco
   por `kid`, inicio de sesión con código + PKCE S256 + nonce + `iss` (RFC 9207), canje y refresh,
@@ -37,6 +41,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **`ray profile`**: el tiempo propio descontaba solo la instrumentación de las llamadas hijas
   directas, cuando el inclusivo de las hijas ya venía descontado por todas sus descendientes; en
   macOS (coste calibrado mayor) salía `self > inclusive`. Ahora propio = inclusivo − hijas.
+- **`update.check_with_version(url, current)`**: compara contra la versión que se le da, así una
+  suite prueba la rama «al día» sin bundle; bajo `ray run`/`ray test` `current()` es `"dev"`, más
+  viejo que cualquier versión, y la rama `Ok(None)` de `check` era inalcanzable (ray-sublime #129).
+- **Tests**: el arnés de `webserver_stream_cli` anuncia su puerto efímero por stdout (una carrera
+  de puertos ponía el CI en rojo), y el test del pool de `rpc` tras un reinicio deja más margen y
+  muestra sus errores; la firma P-256 «manipulada» se comprueba contra otro mensaje (una de cada
+  256 firmas empezaba por `0x00` y coincidía con la original).
 
 ## 1.27.38 — 2026-10-07
 

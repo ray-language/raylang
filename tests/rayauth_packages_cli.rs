@@ -122,6 +122,8 @@ fn main() -> int {
 /// RS256/PS256 con una clave PKCS#8, `rsa_public_key(n, e)` ↔ `rsa_public_components`), más `std/pem`.
 /// ring no genera claves RSA, así que la trae el test (`tests/fixtures/rsa_test_key.pem`, 2048 bits
 /// de `openssl genpkey`, solo para pruebas).
+// La firma «manipulada» era `0x00 + s[1..]`: una de cada 256 firmas ya empieza por 0x00 y la
+// comprobación salía `true` (CI rojo del 7 oct 2026). Se verifica contra OTRO mensaje: siempre false.
 #[test]
 fn p256_and_rsa_sign_and_verify_on_all_engines() {
     let d = tmp("pk");
@@ -143,7 +145,7 @@ fn main() -> int {
     let k = crypto.p256_generate().unwrap();
     let kp = crypto.p256_public_key(k).unwrap();
     let s = crypto.p256_sign(k, msg).unwrap();
-    print("${kp.len()} ${s.len()} ${crypto.p256_verify(kp, msg, s)} ${crypto.p256_verify(kp, msg, b"\x00" + s.sub_bytes(1, 64))}");
+    print("${kp.len()} ${s.len()} ${crypto.p256_verify(kp, msg, s)} ${crypto.p256_verify(kp, "x".to_bytes(), s)}");
     let rsa = pem.decode_label(fs.read_file("rsa.pem").unwrap(), "PRIVATE KEY").unwrap();
     let pk = crypto.rsa_public_key_of(rsa).unwrap();
     let sig = crypto.rsa_pkcs1_sign(rsa, msg).unwrap();

@@ -149,9 +149,12 @@ impl FiberProfile {
         }
         let mut s = state().lock().unwrap();
         // M360: lo medido incluye la instrumentación de las llamadas de dentro; se descuenta.
+        // `child_ns` ya viene descontado por los descendientes de cada hija, así que el propio
+        // resta el inclusivo de las hijas al inclusivo propio: descontar aquí solo `child_calls`
+        // dejaba `self > inclusive` en macOS, donde el coste calibrado por llamada es mayor.
         let overhead = s.overhead_ns;
         let inclusive = elapsed.saturating_sub(f.desc_calls * overhead);
-        let own = elapsed.saturating_sub(f.child_ns).saturating_sub(f.child_calls * overhead);
+        let own = inclusive.saturating_sub(f.child_ns);
         if let Some(parent) = self.frames.last_mut() {
             parent.child_ns += inclusive;
             parent.child_calls += 1;

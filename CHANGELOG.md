@@ -34,6 +34,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   que el plazo acota también el connect (entró con R38 pero 0.10.0 se publicó antes; raylb L5).
 - **Documentación**: `close(h)` sobre una ventana de `std/ui` en `ray doc close`; `template.compile`
   remite a las plantillas compiladas `.ray.html` y su forma (ray-ds #132, #126).
+- **`ray profile`**: el tiempo propio descontaba solo la instrumentación de las llamadas hijas
+  directas, cuando el inclusivo de las hijas ya venía descontado por todas sus descendientes; en
+  macOS (coste calibrado mayor) salía `self > inclusive`. Ahora propio = inclusivo − hijas.
 
 ## 1.27.38 — 2026-10-07
 

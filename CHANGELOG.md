@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.43 — 2026-10-09
 
 - **El proyecto del archivo (M366, ray-ds)**: `ray run`/`check`/`build`/`test` con un archivo
   explícito, desde un directorio que no pertenece a ningún proyecto, toman el `ray.toml` del

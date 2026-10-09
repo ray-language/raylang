@@ -1062,3 +1062,117 @@ fn a_stale_cache_is_redownloaded_instead_of_reported_as_tampering() {
     let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
     assert!(lock.contains("v2.0.0"), "{lock}");
 }
+
+/// M368 (ray-ds #140): `ray registry mirror` publica un paquete que vive dentro de otro repo (un
+/// monorepo) como espejo propio — el paquete en la raíz, tag `v<versión>`, las dependencias
+/// hermanas por ruta reescritas a git pinneado, el README público — y su entrada en un índice
+/// clonado. Todo con repos `file://` locales: primero el hermano `net`, luego `web` que depende
+/// de él (el `publish` del índice resuelve `net` desde SU espejo).
+#[test]
+fn registry_mirror_publishes_a_monorepo_package_as_its_own_repository_and_in_the_index() {
+    let base = tmp("mirror");
+    // El monorepo: un repo git con packages/net y packages/web (web depende de net por ruta).
+    let mono = base.join("mono");
+    std::fs::create_dir_all(mono.join("packages/net")).unwrap();
+    std::fs::create_dir_all(mono.join("packages/web")).unwrap();
+    std::fs::write(mono.join("packages/net/ray.toml"), "[package]\nname = \"net\"\nversion = \"0.1.0\"\ndescription = \"the net\"\n").unwrap();
+    std::fs::write(mono.join("packages/net/http.ray"), "pub fn status() -> int { 200 }\n").unwrap();
+    std::fs::write(mono.join("packages/net/README.md"), "# net\n\nThe net package.\n").unwrap();
+    std::fs::write(
+        mono.join("packages/web/ray.toml"),
+        "[package]\nname = \"web\"\nversion = \"0.2.0\"\n\n[dependencies]\nnet = \"path:../net\"\n",
+    )
+    .unwrap();
+    std::fs::write(mono.join("packages/web/framework.ray"), "import net/http;\n\npub fn ok() -> int { http.status() }\n").unwrap();
+    std::fs::write(mono.join("packages/web/README.md"), "# `web`\n\nUses net:\n\n```toml\nnet = \"path:../net\"\n```\n\n```raylang\nimport web/framework;\n```\n").unwrap();
+    std::fs::write(mono.join("packages/web/ray.lock"), "# must not travel\n").unwrap();
+    git(&mono, &["init", "-q"]);
+    git(&mono, &["add", "-A"]);
+    git(&mono, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mono"]);
+    // Los espejos (bare) y el índice (bare con un commit raíz), servidos por file://.
+    let org = base.join("org");
+    for name in ["net", "web"] {
+        let bare = org.join(format!("{name}.git"));
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    }
+    let index_bare = org.join("ray-index.git");
+    std::fs::create_dir_all(&index_bare).unwrap();
+    git(&index_bare, &["init", "-q", "--bare", "-b", "main"]);
+    let seed = base.join("index-seed");
+    std::fs::create_dir_all(&seed).unwrap();
+    git(&seed, &["init", "-q", "-b", "main"]);
+    git(&seed, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "root", "--allow-empty"]);
+    git(&seed, &["remote", "add", "origin", index_bare.to_str().unwrap()]);
+    git(&seed, &["push", "-q", "origin", "main"]);
+    let public = |name: &str| format!("file://{}/{name}.git", org.display());
+    let index_url = format!("file://{}", index_bare.display());
+
+    // net primero (web lo necesita en su espejo al validar).
+    let (out, err, code) = ray_plain(
+        &mono.join("packages/net"),
+        &["registry", "mirror", &public("net"), "--public", &public("net"), "--index", &index_url],
+    );
+    assert_eq!(code, 0, "net: {err}\n{out}");
+    assert!(out.contains("net: mirrored as v0.1.0"), "{out}");
+    assert!(out.contains("index updated: net@0.1.0"), "{out}");
+    // web: su dependencia hermana queda pinneada al tag del espejo de net.
+    let (out, err, code) = ray_plain(
+        &mono.join("packages/web"),
+        &["registry", "mirror", &public("web"), "--public", &public("web"), "--index", &index_url],
+    );
+    assert_eq!(code, 0, "web: {err}\n{out}");
+    assert!(out.contains(&format!("web: dependency net -> git+{}@v0.1.0", public("net"))), "{out}");
+    assert!(out.contains("index updated: web@0.2.0"), "{out}");
+
+    // Lo publicado: un clon del espejo de web en su tag.
+    let check = base.join("check-web");
+    git(&base, &["clone", "-q", "--branch", "v0.2.0", public("web").as_str(), check.to_str().unwrap()]);
+    let toml = std::fs::read_to_string(check.join("ray.toml")).unwrap();
+    assert!(toml.contains(&format!("net = \"git+{}@v0.1.0\"", public("net"))), "{toml}");
+    assert!(!toml.contains("path:"), "{toml}");
+    assert!(check.join("framework.ray").is_file());
+    assert!(!check.join("ray.lock").exists(), "ray.lock no viaja");
+    let readme = std::fs::read_to_string(check.join("README.md")).unwrap();
+    assert!(readme.starts_with("# `web`\n\n> **Read-only mirror**"), "{readme}");
+    assert!(readme.contains("> web = \"^0.2.0\"\n"), "{readme}");
+    assert!(readme.contains("```rust\nimport web/framework;"), "{readme}");
+    assert!(readme.contains(&format!("net = \"git+{}@v0.1.0\"", public("net"))), "{readme}");
+    let log = Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&check).output().unwrap();
+    assert!(String::from_utf8_lossy(&log.stdout).starts_with("web 0.2.0 (from mono@"), "{}", String::from_utf8_lossy(&log.stdout));
+
+    // El índice: las dos entradas, con la URL pública y el hash.
+    let idx = base.join("check-index");
+    git(&base, &["clone", "-q", index_url.as_str(), idx.to_str().unwrap()]);
+    let web_entry = std::fs::read_to_string(idx.join("web.toml")).unwrap();
+    assert!(web_entry.contains("[0.2.0]"), "{web_entry}");
+    assert!(web_entry.contains(&format!("git = \"git+{}@v0.2.0\"", public("web"))), "{web_entry}");
+    assert!(web_entry.contains("hash = \""), "{web_entry}");
+    assert!(idx.join("net.toml").is_file());
+    assert!(std::fs::read_to_string(idx.join("net.meta.toml")).unwrap().contains("the net"));
+
+    // Un consumidor con ese índice instala web (y net, transitiva) desde los espejos.
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("ray.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+{index_url}@main\"\n\n[dependencies]\nweb = \"0.2.0\"\n")).unwrap();
+    std::fs::write(app.join("src/main.ray"), "import web/framework;\n\nfn main() {\n    print(framework.ok());\n}\n").unwrap();
+    let (out, err, code) = ray_plain(&app, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "200");
+
+    // Las versiones son inmutables: repetir sin subir la versión es un error claro.
+    let (_o, err, code) = ray_plain(&mono.join("packages/web"), &["registry", "mirror", &public("web"), "--public", &public("web")]);
+    assert_eq!(code, 65);
+    assert!(err.contains("web v0.2.0 already exists in the mirror"), "{err}");
+    // --readme-only refresca main sin tocar tags.
+    std::fs::write(mono.join("packages/web/README.md"), "# `web`\n\nNew intro.\n").unwrap();
+    let (out, err, code) = ray_plain(&mono.join("packages/web"), &["registry", "mirror", &public("web"), "--public", &public("web"), "--readme-only"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("web: README/LICENSE refreshed on main"), "{out}");
+    git(&check, &["fetch", "-q", "origin", "main"]);
+    let main_readme = Command::new("git").args(["show", "origin/main:README.md"]).current_dir(&check).output().unwrap();
+    let main_readme = String::from_utf8_lossy(&main_readme.stdout).into_owned();
+    assert!(main_readme.contains("New intro.") && main_readme.contains("Read-only mirror"), "{main_readme}");
+    let tags = Command::new("git").args(["ls-remote", "--tags", public("web").as_str()]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&tags.stdout).matches("refs/tags/").count(), 1, "sin tags nuevos");
+}

@@ -19,6 +19,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   prefijo en vivo desde el directorio del paquete; un prefijo que no es un directorio embebido
   (o `""` con dependencias) se monta por bytes, con las mismas claves en todos los motores. Un
   design system deja de necesitar un módulo generado con los archivos como constantes.
+- **`ray registry mirror` (M368, ray-ds #140)**: publicar un paquete que vive dentro de otro repo
+  (el `packages/web` del monorepo, el `ray_ds/` de un design system) como espejo de solo
+  lectura — el paquete en la raíz de su repo, tag `v<versión>`, las dependencias hermanas
+  `path:` reescritas a git pinneado, el README público con el bloque de instalación — y, con
+  `--index`, su entrada en el índice (clon, `publish`, commit, push). `--readme-only` refresca
+  solo el README/LICENSE. `tools/publish-packages.sh` queda como envoltura de una línea por
+  paquete. Documentado en `PUBLISH.md` §8 y MANUAL §11: un paquete es la raíz de un repo; un
+  monorepo publica espejos.
 
 ## 1.27.42 — 2026-10-09
 

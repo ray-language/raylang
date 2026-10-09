@@ -165,6 +165,8 @@ Registry (package authors):
   registry yank <name>@<ver> [--undo]    yank (or restore) a published version in the index
   registry keygen [--out F]              generate the Ed25519 publish key (RAY_KEY or ~/.ray/publish.key)
   registry verify [dir]                  audit the signatures of an index (for the index repo's CI)
+  registry mirror <repo> [--index URL]   publish a package that lives inside another repo (a monorepo)
+                                         as its own read-only mirror repository (+ its index entry)
 
 Tooling:
   lsp               start the Language Server
@@ -191,6 +193,7 @@ fn cmd_registry(args: &[String]) {
         Some("yank") => cmd_yank(&args[1..]),
         Some("keygen") => cmd_keygen(&args[1..]),
         Some("verify") => cmd_index_verify(&args[1..]),
+        Some("mirror") => crate::mirror::run(&args[1..]),
         other => {
             if let Some(sub) = other {
                 eprintln!("unknown registry subcommand: '{sub}'");
@@ -202,7 +205,8 @@ usage: ray registry <subcommand>
   publish [--repo S] [--sign]   publish this package's version in the index
   yank <name>@<ver> [--undo]    yank (or restore) a published version in the index
   keygen [--out F]              generate the Ed25519 publish key
-  verify [dir]                  audit the signatures of an index"
+  verify [dir]                  audit the signatures of an index
+  mirror <repo> [--index URL]   publish this package as a read-only mirror repository (+ index entry)"
             );
             process::exit(64);
         }
@@ -5139,26 +5143,6 @@ fn cmd_publish(args: &[String]) {
         eprintln!("no project: missing 'ray.toml' (create one with 'ray new')");
         process::exit(64);
     };
-    // Validación: nombre válido (construye rutas en índice/caché, M51d) + version semver.
-    if !crate::deps::valid_package_name(&m.name) {
-        eprintln!("invalid package name '{}': only letters, digits, '-' and '_'", m.name);
-        process::exit(65);
-    }
-    if crate::semver::parse_version(&m.version).is_none() {
-        eprintln!("the package version '{}' is not valid semver: '{}'", m.name, m.version);
-        process::exit(65);
-    }
-    // Spec git: la dada, o derivada de `origin` + tag `v<version>`.
-    let git_spec = match repo_override {
-        Some(s) => s,
-        None => match derive_git_spec(&m.root, &m.version) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("{e}");
-                process::exit(65);
-            }
-        },
-    };
     // Índice de destino.
     let index = match crate::deps::index_dir(&m) {
         Ok(Some(dir)) => dir,
@@ -5174,63 +5158,66 @@ fn cmd_publish(args: &[String]) {
             process::exit(65);
         }
     };
+    if let Err(e) = publish_in_index(&m, repo_override.as_deref(), &index, sign) {
+        eprintln!("{e}");
+        process::exit(65);
+    }
+    println!(
+        "note: the index is a git repo; commit and push '{}.toml' to share it.",
+        m.name
+    );
+}
+
+/// El cuerpo de `ray registry publish` (M51d/M83): valida nombre y versión, deriva la spec git
+/// (`--repo` o `origin` + `v<versión>`), valida y hashea el contenido de esa ref desde un clon
+/// limpio del repo local, firma si se pide y escribe la entrada (+ el sidecar de búsqueda) en
+/// `index`. No commitea ni empuja el índice. Lo comparte `ray registry mirror` (M368), que lo
+/// corre contra el clon del espejo y un índice clonado.
+pub(crate) fn publish_in_index(m: &Manifest, repo_override: Option<&str>, index: &Path, sign: bool) -> Result<String, String> {
+    // Validación: nombre válido (construye rutas en índice/caché, M51d) + version semver.
+    if !crate::deps::valid_package_name(&m.name) {
+        return Err(format!("invalid package name '{}': only letters, digits, '-' and '_'", m.name));
+    }
+    if crate::semver::parse_version(&m.version).is_none() {
+        return Err(format!("the package version '{}' is not valid semver: '{}'", m.name, m.version));
+    }
+    // Spec git: la dada, o derivada de `origin` + tag `v<version>`.
+    let git_spec = match repo_override {
+        Some(s) => s.to_string(),
+        None => derive_git_spec(&m.root, &m.version)?,
+    };
     // M51d: validar y hashear el **contenido de la ref publicada** (clon limpio del repo local en
     // el tag), no el working tree — el hash del índice debe corresponder a lo que el consumidor
     // descargará; cambios sin commitear o archivos sueltos no cuentan.
-    let hash = match published_hash(&m, &git_spec) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(65);
-        }
-    };
+    let hash = published_hash(m, &git_spec)?;
     // M83b/c: firmar la publicación y reclamar (o verificar) el dueño del nombre.
-    let mut sig: Option<String> = None;
-    if sign {
-        match sign_publication(&index, &m.name, &m.version, &hash) {
-            Ok(sg) => sig = Some(sg),
-            Err(e) => {
-                eprintln!("{e}");
-                process::exit(65);
-            }
+    let sig = if sign { Some(sign_publication(index, &m.name, &m.version, &hash)?) } else { None };
+    crate::index::append_version(index, &m.name, &m.version, &git_spec, Some(&hash), sig.as_deref())?;
+    println!("published {} {} in the index", m.name, m.version);
+    println!("  git:  {git_spec}");
+    println!("  hash: {hash}");
+    if sig.is_some() {
+        println!("  signature: ed25519 (owner in '{}.owners.toml')", m.name);
+    }
+    // M268: los metadatos de búsqueda (`[package] description`/`keywords` + los módulos
+    // del paquete) van al sidecar `<nombre>.meta.toml`, que `ray search` consulta.
+    let meta = crate::index::Meta {
+        description: m.description.clone().unwrap_or_default(),
+        keywords: m.keywords.clone(),
+        modules: package_modules(m),
+    };
+    if !meta.description.is_empty() || !meta.keywords.is_empty() || !meta.modules.is_empty() {
+        match crate::index::write_meta(index, &m.name, &meta) {
+            Ok(()) => println!(
+                "  metadata: {}.meta.toml ({} keyword(s), {} module(s))",
+                m.name,
+                meta.keywords.len(),
+                meta.modules.len()
+            ),
+            Err(e) => eprintln!("warning: {e}"),
         }
     }
-    match crate::index::append_version(&index, &m.name, &m.version, &git_spec, Some(&hash), sig.as_deref()) {
-        Ok(()) => {
-            println!("published {} {} in the index", m.name, m.version);
-            println!("  git:  {git_spec}");
-            println!("  hash: {hash}");
-            if sig.is_some() {
-                println!("  signature: ed25519 (owner in '{}.owners.toml')", m.name);
-            }
-            // M268: los metadatos de búsqueda (`[package] description`/`keywords` + los módulos
-            // del paquete) van al sidecar `<nombre>.meta.toml`, que `ray search` consulta.
-            let meta = crate::index::Meta {
-                description: m.description.clone().unwrap_or_default(),
-                keywords: m.keywords.clone(),
-                modules: package_modules(&m),
-            };
-            if !meta.description.is_empty() || !meta.keywords.is_empty() || !meta.modules.is_empty() {
-                match crate::index::write_meta(&index, &m.name, &meta) {
-                    Ok(()) => println!(
-                        "  metadata: {}.meta.toml ({} keyword(s), {} module(s))",
-                        m.name,
-                        meta.keywords.len(),
-                        meta.modules.len()
-                    ),
-                    Err(e) => eprintln!("warning: {e}"),
-                }
-            }
-            println!(
-                "note: the index is a git repo; commit and push '{}.toml' to share it.",
-                m.name
-            );
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(65);
-        }
-    }
+    Ok(hash)
 }
 
 /// M51d: valida y hashea el **contenido publicado** de un paquete: clona el repo local (`m.root`)

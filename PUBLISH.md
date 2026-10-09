@@ -216,3 +216,41 @@ ray add textutils          # ray.toml: textutils = "0.1.0"; descarga y fija en e
 import textutils;
 fn main() { print(textutils.shout("hola")); }   // HOLA!
 ```
+
+## 8. Desde un monorepo: `ray registry mirror`
+
+Un paquete es **la raíz de un repo** (§1): una dependencia `git+URL@ref` descarga el repo
+entero y el índice registra repos, así que un paquete que vive en un subdirectorio de otro
+repo (`packages/web` en el monorepo de raylang, `ray_ds/` en el repo de un design system) no
+se puede instalar tal cual — `git+https://…/raylang` daría el monorepo. La forma oficial es
+un **espejo**: un repo propio, de solo lectura, con el paquete en la raíz y un tag por
+versión. El desarrollo (tests, cambios en tándem con la app) sigue en el monorepo; el espejo
+es el artefacto de release que consume el mundo.
+
+```sh
+cd packages/web                        # dentro del paquete (su ray.toml)
+ray registry mirror git@github.com:ray-language/web.git \
+    --index git@github.com:ray-language/ray-index.git
+```
+
+Lo que hace, en orden:
+
+1. clona el espejo (o lo inicia si el repo remoto está vacío) y comprueba que `v<versión>`
+   **no existe** — las versiones son inmutables: para publicar de nuevo, sube `version`;
+2. vuelca el paquete sobre el clon (todo menos `.git`, `.ray-deps/` y `ray.lock`);
+3. reescribe en `ray.toml` las dependencias **hermanas por ruta** (`net = "path:../net"`) a
+   su git pinneado a la versión que el hermano declara ahora
+   (`net = "git+https://github.com/ray-language/net@v0.10.1"`): el espejo es autocontenido,
+   el consumidor no tiene el monorepo al lado — publica primero los hermanos;
+4. el README público: las mismas dependencias reescritas, los bloques ```` ```raylang ````
+   etiquetados `rust` (GitHub aún no colorea raylang) y, tras el título, el aviso de espejo
+   con `ray add <pkg>` y la dependencia git directa;
+5. commit `web 0.6.0 (from raylang@<sha>)`, tag `v0.6.0`, push de `main` y del tag;
+6. con `--index`: clona ese índice, corre el `publish` de §3 contra el clon del espejo (valida
+   y hashea el contenido del tag; la URL de la entrada es la **pública** https, derivada del
+   repo ssh o dada con `--public`), commit `publish: web@0.6.0` y push.
+
+`--readme-only` solo regenera README y LICENSE en el `main` del espejo (sin tags ni índice:
+el hash del índice es el del contenido del tag, así que es seguro). `--sign` firma la
+entrada (§6bis). Si el tag ya existe pero el índice no tiene la versión (un run anterior a
+medias), `--index` publica solo la entrada.

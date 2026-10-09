@@ -1100,8 +1100,16 @@ index = ""            # sin índice (o exporta RAY_INDEX vacía)
 El índice solo se consulta al resolver deps por nombre (`ray add`/`search`/`update`, o un
 requisito semver en `[dependencies]`); `ray run`/`build` con deps git/`path:` nunca lo tocan.
 
-El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías y
-receta de punta a punta) está en [`PUBLISH.md`](PUBLISH.md).
+**Un paquete es la raíz de un repo.** Una dependencia `git+URL@ref` descarga el repo entero a
+`.ray-deps/<nombre>/` y lo importa por ese nombre: no hay forma de apuntar a un subdirectorio,
+ni el índice la tiene. Un paquete que vive dentro de otro repo (el `packages/web` del monorepo
+de raylang, el `ray_ds/` de un design system) se publica como **espejo**: un repo propio con el
+paquete en la raíz y un tag por versión, que `ray registry mirror` escribe y etiqueta por ti
+(y registra en el índice con `--index`). Es como se publican `net`, `web`, `db`… desde
+`packages/`.
+
+El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías,
+espejos desde un monorepo y receta de punta a punta) está en [`PUBLISH.md`](PUBLISH.md).
 
 ## 12. La biblioteca estándar
 

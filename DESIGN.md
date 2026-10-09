@@ -17134,3 +17134,26 @@ ese prefijo** (el de la app o el del paquete), y `""` cuando no hay uno solo —
 con dependencias, prefijo parcial, dir no embebido —, y entonces el módulo monta por bytes, que
 vale para cualquier clave. Efecto lateral bienvenido: `mount_embed_at("", "missing")` daba `Err`
 en vivo y `Ok(0)` horneado; ahora `Ok(0)` en los tres.
+## 352. M368 — `ray registry mirror`: el patrón del monorepo deja de ser un script (oct 2026)
+
+El hallazgo #140 de ray-ds preguntaba cómo se publica un paquete que vive en el subdirectorio
+de otro repo, porque una dependencia `git+URL@ref` es la raíz del repo y el índice registra
+repos. raylang ya tenía la respuesta desde M135 —`packages/net` se publica como el espejo
+`ray-language/net`—, pero vivía en `tools/publish-packages.sh`, un script de shell con `sed -i
+''` de macOS, y ray-ds había tenido que reescribir lo mismo en raylang más un workflow con una
+deploy key. Dos implementaciones del mismo patrón, ninguna en el lenguaje.
+
+La decisión es mover el patrón al CLI: `ray registry mirror <repo> [--public URL] [--index
+GIT_URL]`, ejecutado dentro del paquete. Hace exactamente lo que hacía el script (clon o init
+del espejo, tag inmutable, volcado sin `.ray-deps/` ni `ray.lock`, reescritura de las
+dependencias hermanas `path:` al git pinneado de la versión actual del hermano, README público
+con el bloque de instalación, commit con el `repo@sha` de origen, push) y, con `--index`,
+clona el índice y reutiliza el cuerpo de `publish` (`publish_in_index`, extraído de
+`cmd_publish`) contra el clon del espejo, de modo que la validación y el hash son los mismos
+que en una publicación normal. El script queda como envoltura de una línea por paquete, por
+costumbre; ray-ds puede sustituir su exportador y su workflow por una llamada.
+
+Lo que NO se hizo: aceptar un subdirectorio en `git+` (`…@v1#ray_ds`) o en el índice. Cambiaría
+la forma de la caché (`.ray-deps/<nombre>` dejaría de ser un clon) y el hash, para ahorrar un
+repo por paquete; el espejo es más simple de explicar (un paquete = un repo) y ya es el patrón
+que usa el ecosistema. MANUAL §11 y PUBLISH §8 lo dicen ahora explícitamente.

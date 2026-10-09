@@ -2184,3 +2184,31 @@ el worker acaba de ser despertado dentro de la ventana, el patrón ping-pong; do
 lleva tiempo ocioso), que debería conservar la p99 sin pagar la CPU en servidores con holgura.
 Arnés: `$CLAUDE_JOB_DIR/tmp/ab_raygate.sh` (pendiente de convertirlo en `bench/` de raygate).
 
+### Spin adaptativo: probado y descartado (9 oct 2026, rama `exp/adaptive-spin`)
+
+Hipótesis: armar el spin solo cuando el último ocio del worker fue corto (ping-pong) y dormir
+directo tras un ocio largo, para recuperar la CPU del spin en servidores con holgura sin perder
+la p99. Mac mini M4 (limpio), raygate con `oha` a 64 conexiones, 3–4 rondas A B B A, contra
+1.27.39 (spin apagado por el bug de `pending`):
+
+| raygate | req/s | p99 | CPU por petición |
+|---|---:|---:|---:|
+| 1.27.40 (spin 10 µs cediendo, siempre) | **+5 %** | **−9 %** | +13 % |
+| adaptativo, umbral 4 ventanas | +1 % | −5 % | +9 % |
+| adaptativo, umbral 1 ventana | +0,5 % | −5 % | +10 % |
+| 1.27.40 con `RAYLANG_SPIN_US=5` / `=2` | +3 % / +1 % | −8 % / −6 % | +12 % / +10 % |
+| solo pausas de CPU (sin ceder), 2 µs / 5 µs | −9 % / −11 % | +15 % / +27 % | +12 % / +30 % |
+
+Lecturas: (1) la duración del ocio anterior NO predice la del siguiente en un proxy (huecos de
+10–200 µs sin patrón), así que el adaptativo solo recorta la mitad del coste y pierde casi toda
+la ganancia; (2) el coste del spin no es proporcional a la ventana: con 2 µs sigue costando
++10 % por petición, porque lo caro es el `sched_yield` de cada evento de ocio y una petición
+pasa por varios traspasos; (3) girar sin ceder es peor en todo: roba núcleos a quien trabaja y no
+engancha nada que el kernel no tuviera que hacer igual. Y (4) en Linux saturado (donde corre
+raygate) el spin cediendo es gratis: el hilo que cede entrega el núcleo y la ganancia de las
+guardas se queda (+6 % req/s con la misma CPU, tabla anterior).
+
+Decisión: el default de M319/1.27.40 se queda (10 µs cediendo). El mando ya existe:
+`RAYLANG_SPIN_US=0` cambia −9 % de p99 por −13 % de CPU en máquinas con holgura, y conviene
+decirlo en la doc de despliegue de raygate/raylb. La rama queda sin fusionar, con las dos
+palancas (`RAYLANG_SPIN_ARM`, `RAYLANG_SPIN_PAUSES`) por si un caso futuro las reabre.

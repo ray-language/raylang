@@ -550,6 +550,16 @@ las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de
   cerrado (`invalid handle`)— y sus handles son invisibles fuera. Los valores (canales, mensajes)
   cruzan dominios con normalidad; solo los handles están confinados. El intérprete, sin fibras,
   vive en un único dominio.
+- **Afinidad de worker** (M365). `spawn_local(f: fn() -> T) -> Task<T>` es `spawn` con una
+  **pista de colocación**: en el binario nativo la fibra nueva queda fijada al worker que la lanza
+  (corre cuando la madre cede, sin despertar a otro hilo); en la VM, cuya cola de listas es
+  compartida, es exactamente `spawn`. `worker_id() -> int` es el índice del worker que ejecuta la
+  tarea actual, en `0..worker_count()`, estable durante toda la vida de la tarea en el binario
+  nativo (las fibras no migran) y el del hilo que la ejecuta en ese momento en la VM;
+  `worker_count() -> int` es N. En el intérprete valen `0` y `1`. Semántica y aislamiento son los
+  de `spawn` (dominio heredado, heap propio): `spawn_local` solo decide **dónde** vive la fibra.
+  Un programa correcto con `spawn` lo es con `spawn_local`; la afinidad es rendimiento, nunca
+  corrección.
 - `scope(body: fn() -> R) -> R` **posee** las tareas lanzadas dentro: al salir las une; si una
   falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original.
 - `Channel.new() -> Channel<T>` (no acotado), `Channel.bounded(n)` (acotado; `n = 0` rendezvous).

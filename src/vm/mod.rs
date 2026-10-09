@@ -63,10 +63,10 @@ pub fn set_deterministic(v: bool) {
 }
 
 thread_local! {
-    /// EXP spawn-local: índice del worker de la VM que corre en este hilo (0 en single-thread).
+    /// M365: índice del worker de la VM que corre en este hilo (0 en single-thread).
     static VM_WORKER: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
-/// EXP spawn-local: workers lanzados por `run` (1 en single-thread).
+/// M365: workers lanzados por `run` (1 en single-thread).
 static VM_WORKER_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 /// M38.4: nº de hilos worker del scheduler M:N. **El multicore es el default** (§46.4); lo determinista es

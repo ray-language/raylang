@@ -176,6 +176,9 @@ use them; each has its public wrapper in the prelude or in `std/`.
 |---|---|---|
 | `spawn` | `(f: fn() -> T) -> Task<T>` | launches a concurrent task; `join` waits for its value |
 | `spawn_isolated` | `(f: fn() -> T) -> Task<T>` | like `spawn`, but in a fresh **handle domain**: the task cannot use the files/sockets/processes/windows of other domains (they behave as closed) nor they its own; its children inherit the domain |
+| `spawn_local` | `(f: fn() -> T) -> Task<T>` | like `spawn`, pinning the fiber to the **current worker** in a native binary (it runs when the parent yields, no cross-thread wake-up); in the VM it is `spawn`. The building block of **per-worker state** (one actor per worker, see `worker_id`) |
+| `worker_id` | `() -> int` | index of the worker running this task (`0..worker_count()`); stable for the task's whole life natively |
+| `worker_count` | `() -> int` | number of scheduler workers (cores, or `RAYLANG_THREADS`) |
 | `join` | `(t: Task<T>) -> T` | blocks until the task finishes (re-raises its failure). *Ad-hoc*: `join(arr, sep)` is the string one |
 | `scope` | `(body: fn() -> R) -> R` | structured concurrency: on return it joins every task launched inside; if one fails, it cancels its siblings and propagates |
 | `send` | `(ch: Channel<T>, v: T) -> unit` | sends; blocks if the bounded channel is full (backpressure) |
@@ -687,4 +690,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:d9dae043629d -->
+<!-- sync: sha256:08c18d06fdbb -->

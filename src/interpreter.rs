@@ -2904,7 +2904,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an int"),
             },
-            // EXP spawn-local: el oráculo secuencial es un único worker.
+            // M365: el oráculo secuencial es un único worker.
             "worker_id" => Value::Int(0),
             "worker_count" => Value::Int(1),
             _ => unreachable!("builtin unknown"),

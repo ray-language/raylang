@@ -466,9 +466,9 @@ pub enum OpCode {
     /// Empuja `unit` (el `Pop` que sigue lo tira). Solo la VM.
     /// M296: `spawn_isolated(f)` — como `Spawn`, pero la fibra hija estrena un dominio de handles.
     SpawnIsolated,
-    /// EXP spawn-local: como Spawn, fijando la fibra al worker actual (nativo); pista en la VM.
+    /// M365: como Spawn, fijando la fibra al worker actual (nativo); pista en la VM.
     SpawnLocal,
-    /// EXP spawn-local: índice del worker actual / número de workers.
+    /// M365: índice del worker actual / número de workers.
     WorkerId,
     WorkerCount,
     SpawnDiscard,

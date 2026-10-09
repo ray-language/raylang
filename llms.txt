@@ -193,6 +193,10 @@ tables (`{ path = ... }` is Cargo, not raylang). Path dependencies import by dir
 let ch: Channel<int> = Channel.new();            // annotate; Channel.bounded(n) = bounded
 spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 // spawn_isolated(f): same, but in a fresh handle domain (cannot use other tasks' files/sockets)
+// spawn_local(f): same, pinned to the CURRENT worker in a native binary (no cross-thread wake-up;
+//   plain spawn in the VM). worker_id() -> int (0..worker_count()), worker_count() -> int: the
+//   building blocks of per-worker state — one actor per worker, each handler asks inboxes[worker_id()]
+//   (3–13× the queries/s of a single central actor; state is sharded, so approximate counters only)
 if let Option.Some(v) = recv(ch) { print(v); }   // recv -> Option<T> (None = closed)
 
 let r = scope(fn() -> int {                      // structured: scope joins its tasks

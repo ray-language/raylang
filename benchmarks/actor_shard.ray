@@ -1,4 +1,4 @@
-// EXP spawn-local (estilo Seastar): un actor CENTRAL consultado desde todos los workers contra
+// M365 (estilo Seastar): un actor CENTRAL consultado desde todos los workers contra
 // un actor POR WORKER consultado solo desde su worker (`spawn_local` + `worker_id`). Cada
 // peticionario hace `iters` idas y vueltas `Ask(x, reply)`.
 //   ray build --native --release benchmarks/actor_shard.ray -o /tmp/actor_shard

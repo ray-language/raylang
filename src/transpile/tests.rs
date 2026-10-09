@@ -56,7 +56,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
     "exit", "panic", "print", "scope", "spawn_isolated", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
-    // EXP spawn-local: actor por worker (emit_call: __ray_spawn_local, __ray_worker_id, __ray_worker_count).
+    // M365: actor por worker (emit_call: __ray_spawn_local, __ray_worker_id, __ray_worker_count).
     "spawn_local", "worker_id", "worker_count",
     "__bigint_op", "__deflate_op",
     // M266: llavero del sistema.

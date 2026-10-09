@@ -2115,7 +2115,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // M296: `spawn` hereda el dominio de handles; `spawn_isolated` estrena uno.
                 "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain(), true) }\n",
                 "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain(), true) }\n",
-                // EXP spawn-local: fijada al worker actual (ray_runtime::fibers::spawn_local).
+                // M365: fijada al worker actual (ray_runtime::fibers::spawn_local).
                 "fn __ray_spawn_local<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain(), false) }\n",
                 "fn __ray_worker_id() -> i64 { ray_runtime::fibers::current_worker().map(|w| w as i64).unwrap_or(0) }\n",
                 "fn __ray_worker_count() -> i64 { ray_runtime::fibers::worker_count() as i64 }\n",

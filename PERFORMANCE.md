@@ -2246,9 +2246,9 @@ de semántica. Candidato a main como mejora de bajo riesgo; queda a decisión.
 - **Fuera de la caja, pendiente**: `spawn_local`/actor por worker (Seastar) para quitar el techo
   del buzón de un actor central; desfijar fibras (robo + runnext de Go) exige la auditoría del TLS.
 
-## 13. EXP spawn-local (oct 2026): actor por worker, estilo Seastar — rama experimental
+## 13. M365 (oct 2026): `spawn_local`, actor por worker al estilo Seastar
 
-Rama `exp/spawn-local` (derivada de `exp/wake-path`, NO fusionada). Tres builtins: `spawn_local(f)`
+Nació en la rama `exp/spawn-local` (derivada de `exp/wake-path`) y entró en main como M365. Tres builtins: `spawn_local(f)`
 (la fibra queda fijada al worker que la lanza: sin despertar entre hilos, corre cuando la madre
 cede), `worker_id()` y `worker_count()`. En la VM `spawn_local` es un `spawn` (cola `ready`
 compartida, sin fijación) y `worker_id` es el índice del hilo worker; en el oráculo, 0 y 1.

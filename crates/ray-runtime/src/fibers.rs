@@ -100,7 +100,7 @@ struct Task {
 }
 
 thread_local! {
-    /// EXP spawn-local: índice del worker que corre en ESTE hilo (-1 fuera de un worker).
+    /// M365: índice del worker que corre en ESTE hilo (-1 fuera de un worker).
     pub static WORKER: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
     /// M295: marcos raylang vivos en la fibra (o hilo) que corre en ESTE worker. Es un `Cell`
     /// thread-local y no un campo del contexto por fibra porque se toca en CADA llamada: el
@@ -534,7 +534,7 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     spawn_with_stack_on(fiber_stack_size(), None, f)
 }
 
-/// EXP spawn-local (estilo Seastar): como `spawn`, pero la fibra queda FIJADA al worker que la
+/// M365 (estilo Seastar): como `spawn`, pero la fibra queda FIJADA al worker que la
 /// lanza (fuera de un worker, reparto normal). Sin migración ni despertar entre hilos: la hija
 /// corre cuando la madre cede. Para estado por worker (actor por worker) y ayudantes de vida corta.
 pub fn spawn_local(f: impl FnOnce() + Send + 'static) -> JoinHandle {

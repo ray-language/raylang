@@ -1009,7 +1009,7 @@ fn main() -> int {
     assert_eq!(out.status.code(), Some(0), "un plazo de 20 ms esperó 300 ms o más junto a una fibra ocupada: {stdout}");
 }
 
-/// EXP spawn-local: `spawn_local` fija la hija al worker de la madre en nativo (en la VM es un
+/// M365: `spawn_local` fija la hija al worker de la madre en nativo (en la VM es un
 /// `spawn`), y `worker_id`/`worker_count` son coherentes en los tres motores.
 #[test]
 fn spawn_local_pins_the_child_to_the_parent_worker() {

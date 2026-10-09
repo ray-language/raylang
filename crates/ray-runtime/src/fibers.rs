@@ -271,6 +271,11 @@ struct WorkerQueue {
     cv: Condvar,
     /// M319: tareas encoladas y aún no sacadas — el spin-then-park del worker mira esto sin tomar el lock.
     pending: std::sync::atomic::AtomicUsize,
+    /// EXP wake-path (palanca 1): el dueño está DORMIDO en `cv` (se pone bajo el lock de `q`, justo
+    /// antes de `wait`, y se quita al salir). Quien encola solo notifica si está a `true`: en Linux
+    /// `Condvar::notify_one` de std es un `futex_wake` INCONDICIONAL (una syscall por encolado aunque
+    /// el worker esté corriendo o girando); en macOS `pthread_cond_signal` toma su lock interno.
+    sleeping: std::sync::atomic::AtomicBool,
 }
 
 struct Scheduler {
@@ -336,7 +341,10 @@ impl Scheduler {
             if self.polling[home].load(std::sync::atomic::Ordering::SeqCst) {
                 sys::wake(self.worker_wake_wr[home], 1);
             }
-        } else {
+        } else if wq.sleeping.load(std::sync::atomic::Ordering::SeqCst) {
+            // Sin carrera: el push va bajo el lock de `q` y el worker pone `sleeping` bajo ese
+            // mismo lock antes de dormir, así que o ve la tarea al tomar el lock o nosotros vemos
+            // `sleeping` tras soltarlo.
             wq.cv.notify_one();
         }
     }
@@ -417,7 +425,7 @@ fn sched() -> &'static Scheduler {
             }
         }
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
-            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0) }).collect(),
+            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
@@ -795,9 +803,11 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
             let mut q = wq.q.lock().unwrap();
             loop {
                 if let Some(t) = q.pop_front() {
+                    wq.sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
                     wq.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
                     break t;
                 }
+                wq.sleeping.store(true, std::sync::atomic::Ordering::SeqCst);
                 q = wq.cv.wait(q).unwrap();
             }
         };
@@ -1245,13 +1255,21 @@ fn flush_batches(s: &'static Scheduler, batches: &mut [Vec<Task>]) {
             continue;
         }
         let wq = &s.queues[home];
+        let n = batch.len();
         {
             let mut q = wq.q.lock().unwrap();
             for t in batch.drain(..) {
                 q.push_back(t);
             }
         }
-        wq.cv.notify_one();
+        // EXP wake-path: `pending` también cuenta los despertares del reactor. Antes no se sumaban
+        // y el pop del worker los RESTABA: `pending` desbordaba en el primer despertar de E/S y el
+        // spin-then-park de M319 (que mira `pending == 0`) quedaba apagado en ese worker para
+        // siempre; además un spinner no veía llegar la E/S y agotaba su ventana en vano.
+        wq.pending.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        if wq.sleeping.load(std::sync::atomic::Ordering::SeqCst) {
+            wq.cv.notify_one();
+        }
     }
 }
 

@@ -460,6 +460,54 @@ fn sched() -> &'static Scheduler {
 /// Ventana del spin-then-park del worker, en microsegundos (M319, medido).
 const DEFAULT_SPIN_US: u64 = 10;
 
+/// EXP spin adaptativo: el spin solo se arma si el ÚLTIMO ocio del worker duró menos que
+/// `SPIN_ARM_FACTOR` ventanas (llegó trabajo enseguida: el patrón ping-pong donde girar paga).
+/// Un ocio largo apaga el spin hasta que vuelva a haber un ocio corto. `RAYLANG_SPIN_ARM=0` gira
+/// siempre (el comportamiento de M319); `RAYLANG_SPIN_PAUSES` = pausas de CPU por ráfaga antes de
+/// cada cesión del hilo (0 = ceder en cada mirada, como M319).
+const SPIN_ARM_FACTOR: u64 = 4;
+
+fn spin_arm_factor() -> u64 {
+    static F: OnceLock<u64> = OnceLock::new();
+    *F.get_or_init(|| std::env::var("RAYLANG_SPIN_ARM").ok().and_then(|v| v.parse().ok()).unwrap_or(SPIN_ARM_FACTOR))
+}
+
+fn spin_pauses() -> usize {
+    static P: OnceLock<usize> = OnceLock::new();
+    *P.get_or_init(|| std::env::var("RAYLANG_SPIN_PAUSES").ok().and_then(|v| v.parse().ok()).unwrap_or(64))
+}
+
+/// Gira mirando `pending` hasta `spin_us` µs: ráfagas de `spin_loop` entre cesiones del hilo (en
+/// una VM Linux un `sched_yield` es un cambio de contexto real que agotaba la ventana en UNA
+/// cesión; medido con strace: los dos workers de un ping-pong dormían en cada vuelta). `true` si
+/// llegó trabajo.
+fn spin_for_work(pending: &std::sync::atomic::AtomicUsize, spin_us: u64) -> bool {
+    use std::sync::atomic::Ordering::Acquire;
+    let pauses = spin_pauses();
+    let until = Instant::now() + Duration::from_micros(spin_us);
+    loop {
+        for _ in 0..pauses {
+            if pending.load(Acquire) != 0 {
+                return true;
+            }
+            std::hint::spin_loop();
+        }
+        if pending.load(Acquire) != 0 {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// ¿Se arma el spin? Sí si el último ocio fue corto (o si el factor es 0: siempre).
+fn spin_armed(last_idle: Duration, spin_us: u64) -> bool {
+    let f = spin_arm_factor();
+    f == 0 || last_idle <= Duration::from_micros(spin_us * f)
+}
+
 /// Ids de espera de lista (F3), globales y monótonos: casan el pulso de cancelación con su fibra.
 static NEXT_WAIT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -829,14 +877,14 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
     // robaba CPU a quien trabajaba (−36 % en envíos masivos); cediendo, el mismo caso mejora
     // (medido en `benchmarks/actor_ask.ray`, PERFORMANCE.md §M319). `RAYLANG_SPIN_US=0` lo apaga.
     let spin_us: u64 = std::env::var("RAYLANG_SPIN_US").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_SPIN_US);
+    // EXP spin adaptativo: duración del último ocio de este worker (ver `spin_armed`).
+    let mut last_idle = Duration::ZERO;
     loop {
+        let idle_from = Instant::now();
         let mut task = {
-            // Spin-then-park (ver arriba).
-            if spin_us > 0 && wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 {
-                let until = Instant::now() + Duration::from_micros(spin_us);
-                while wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 && Instant::now() < until {
-                    std::thread::yield_now();
-                }
+            // Spin-then-park (ver arriba), armado solo tras un ocio corto.
+            if spin_us > 0 && wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 && spin_armed(last_idle, spin_us) {
+                spin_for_work(&wq.pending, spin_us);
             }
             let mut q = wq.q.lock().unwrap();
             loop {
@@ -849,6 +897,7 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
                 q = wq.cv.wait(q).unwrap();
             }
         };
+        last_idle = idle_from.elapsed();
         debug_assert_eq!(task.home, me, "una fibra solo reanuda en su worker de origen");
         // Publica el slot fiber-local de ESTA task mientras corre (puntero crudo: la Task vive en
         // este marco durante todo el resume; se retira ANTES de ceder la Task a nadie).
@@ -1212,10 +1261,7 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                     None => {
                         // 2) Ocioso: spin breve mirando la cola (M319), luego dormir en el poller.
                         if spin_us > 0 {
-                            let until = Instant::now() + Duration::from_micros(spin_us);
-                            while wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < until {
-                                std::thread::yield_now();
-                            }
+                            spin_for_work(&wq.pending, spin_us);
                         }
                         s.polling[me].store(true, std::sync::atomic::Ordering::SeqCst);
                         let now = Instant::now();

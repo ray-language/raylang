@@ -1896,8 +1896,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // helpers y el alias del tipo.
         if t.fibers {
             out.push_str(concat!(
-                "type __RaySync<T> = (std::sync::Mutex<T>, std::sync::Condvar, ray_runtime::fibers::WaitList);\n",
-                "fn __ray_sync_new<T>(v: T) -> __RaySync<T> { (std::sync::Mutex::new(v), std::sync::Condvar::new(), ray_runtime::fibers::WaitList::new()) }\n",
+                // EXP wake-path: el 4.º campo cuenta los HILOS (no fibras) esperando en la condvar —
+                // `notify_all` solo si hay alguno: en Linux es un futex_wake incondicional (una syscall
+                // por send/close) y desde M329 casi nadie espera como hilo.
+                "type __RaySync<T> = (std::sync::Mutex<T>, std::sync::Condvar, ray_runtime::fibers::WaitList, std::sync::atomic::AtomicUsize);\n",
+                "fn __ray_sync_new<T>(v: T) -> __RaySync<T> { (std::sync::Mutex::new(v), std::sync::Condvar::new(), ray_runtime::fibers::WaitList::new(), std::sync::atomic::AtomicUsize::new(0)) }\n",
                 // M319: la tarea anota en `parked` la lista en la que va a aparcar y rechequea la
                 // cancelación DESPUÉS de leer la generación (prepare): el cancelador pone el flag y
                 // luego despierta la lista, así que o la fibra ve el flag aquí, o su registro ve la
@@ -1916,8 +1919,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        __ray_parked_set(None);\n",
                 "        return inner.0.lock().unwrap();\n",
                 "    }\n",
-                "    inner.1.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0\n}\n",
-                "fn __ray_notify<T>(inner: &__RaySync<T>) { inner.1.notify_all(); inner.2.wake_all(); }\n",
+                "    inner.3.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+                "    let g = inner.1.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0;\n",
+                "    inner.3.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
+                "    g\n}\n",
+                "fn __ray_notify<T>(inner: &__RaySync<T>) { if inner.3.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = inner.0.lock().unwrap(); inner.1.notify_all(); } inner.2.wake_all(); }\n",
             ));
         } else {
             out.push_str(concat!(

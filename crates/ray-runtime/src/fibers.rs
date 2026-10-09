@@ -781,6 +781,9 @@ fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// Pausas de CPU por ráfaga del spin híbrido (~100–300 ns por ráfaga) antes de ceder el hilo.
+const SPIN_PAUSES: usize = 64;
+
 fn worker_loop(s: &'static Scheduler, me: usize) {
     let wq = &s.queues[me];
     // M319 (findings #75): spin-then-park. Un worker sin trabajo mira su cola durante `spin_us`
@@ -795,8 +798,22 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
         let mut task = {
             // Spin-then-park (ver arriba).
             if spin_us > 0 && wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                // EXP wake-path: spin HÍBRIDO. Antes cada mirada cedía el hilo (`yield_now`); en una
+                // VM Linux un `sched_yield` es un cambio de contexto real que agota la ventana de
+                // 10 µs en UNA cesión (medido con strace: 2 sched_yield y 4 futex por ida y vuelta,
+                // los dos workers dormían en cada vuelta). Ahora: ráfaga de pausas de CPU mirando la
+                // cola (cientos de ns, lo que tarda la respuesta de un actor) y solo después ceder.
                 let until = Instant::now() + Duration::from_micros(spin_us);
-                while wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 && Instant::now() < until {
+                'spin: loop {
+                    for _ in 0..SPIN_PAUSES {
+                        if wq.pending.load(std::sync::atomic::Ordering::Acquire) != 0 {
+                            break 'spin;
+                        }
+                        std::hint::spin_loop();
+                    }
+                    if Instant::now() >= until {
+                        break;
+                    }
                     std::thread::yield_now();
                 }
             }

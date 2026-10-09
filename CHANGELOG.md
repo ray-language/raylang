@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.41 — 2026-10-09
 
 - **Scheduler nativo: una fibra nueva prefiere un worker en spin (M364)**. Entre los workers de
   carga mínima, `spawn` elige uno que esté despierto y libre (en su spin-then-park) antes que el

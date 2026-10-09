@@ -2139,6 +2139,14 @@ impl Transpiler {
                 self.needs_signals = true;
                 out.push_str("__ray_signals()");
             }
+            "worker_id" => {
+                self.needs_concurrency = true;
+                out.push_str("__ray_worker_id()");
+            }
+            "worker_count" => {
+                self.needs_concurrency = true;
+                out.push_str("__ray_worker_count()");
+            }
             // select([chs]) -> int: índice del primer canal listo para recibir (poll del índice menor).
             "select" => {
                 self.needs_concurrency = true;
@@ -2159,7 +2167,7 @@ impl Transpiler {
             // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
             // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
             // una función de nivel superior de aridad 0 (`spawn(worker)` → `move || worker()`; sin captura).
-            "spawn" | "spawn_isolated" | "scope" => {
+            "spawn" | "spawn_isolated" | "spawn_local" | "scope" => {
                 self.needs_concurrency = true;
                 let is_spawn = method != "scope"; // M296: spawn_isolated se emite como spawn
                 let named: Option<String> = match &eff[0].kind {
@@ -2217,6 +2225,7 @@ impl Transpiler {
                 let runtime = match method {
                     "spawn" => "__ray_spawn",
                     "spawn_isolated" => "__ray_spawn_isolated",
+                    "spawn_local" => "__ray_spawn_local",
                     // M357: un scope cuyo cuerpo devuelve `Result` mata a sus procesos hijos si sale por `Err`.
                     _ if matches!(&ret, Type::Enum(n, _) | Type::Struct(n, _) if n == "Result") => "__ray_scope_res",
                     _ => "__ray_scope",

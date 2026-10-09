@@ -1,0 +1,153 @@
+// EXP spawn-local (estilo Seastar): un actor CENTRAL consultado desde todos los workers contra
+// un actor POR WORKER consultado solo desde su worker (`spawn_local` + `worker_id`). Cada
+// peticionario hace `iters` idas y vueltas `Ask(x, reply)`.
+//   ray build --native --release benchmarks/actor_shard.ray -o /tmp/actor_shard
+//   /tmp/actor_shard central 8 50000     # 8 peticionarios, un actor (cruza hilos)
+//   /tmp/actor_shard local 8 50000       # 8 peticionarios, cada uno con el actor de SU worker
+//   /tmp/actor_shard mixed 8 50000       # actores por worker, peticionarios repartidos por spawn
+//                                        #   normal que escogen el actor de su worker_id()
+import std/time;
+
+enum Msg {
+    Ask(int, Channel<int>),
+    Stop,
+}
+
+fn actor(inbox: Channel<Msg>) -> int {
+    var sum = 0;
+    while (true) {
+        match (recv(inbox)) {
+            Option.Some(m) => match (m) {
+                Msg.Ask(x, reply) => {
+                    sum = sum + x;
+                    send(reply, x + 1);
+                },
+                Msg.Stop => {
+                    return sum;
+                },
+            },
+            Option.None => {
+                return sum;
+            },
+        }
+    }
+    sum
+}
+
+fn ask_loop(inbox: Channel<Msg>, iters: int) -> int {
+    var acc = 0;
+    for i in 0..iters {
+        let reply: Channel<int> = Channel.bounded(1);
+        send(inbox, Msg.Ask(i, reply));
+        acc = acc + recv(reply).unwrap_or(0);
+    }
+    acc
+}
+
+fn main() -> int {
+    let mode = if (args().len() > 0) { args()[0] } else { "central" };
+    let fibers = if (args().len() > 1) { parse_int(args()[1]).unwrap_or(8) } else { 8 };
+    let iters = if (args().len() > 2) { parse_int(args()[2]).unwrap_or(50000) } else { 50000 };
+    let done: Channel<int> = Channel.bounded(1024);
+    let t0 = time.monotonic();
+    var actors: [Task<int>] = [];
+    if (mode == "central") {
+        let inbox: Channel<Msg> = Channel.bounded(1024);
+        actors.push(spawn(fn() -> int { actor(inbox) }));
+        for _ in 0..fibers {
+            spawn(fn() {
+                send(done, ask_loop(inbox, iters));
+            });
+        }
+        for _ in 0..fibers {
+            let _ = recv(done);
+        }
+        send(inbox, Msg.Stop);
+    } else if (mode == "local") {
+        // Cada peticionario lanza SU actor fijado a su propio worker.
+        for _ in 0..fibers {
+            spawn(fn() {
+                let inbox: Channel<Msg> = Channel.bounded(1024);
+                let a = spawn_local(fn() -> int { actor(inbox) });
+                let acc = ask_loop(inbox, iters);
+                send(inbox, Msg.Stop);
+                let _ = join(a);
+                send(done, acc);
+            });
+        }
+        for _ in 0..fibers {
+            let _ = recv(done);
+        }
+    } else {
+        // Un actor por worker (lanzado desde una fibra de ese worker); los peticionarios, repartidos
+        // por `spawn` normal, consultan al actor de su `worker_id()`: el patrón de un servidor.
+        let n = worker_count();
+        let boxes: Channel<(int, Channel<Msg>)> = Channel.bounded(1024);
+        var placed = 0;
+        var tries = 0;
+        var seen: [bool] = [];
+        for _ in 0..n {
+            seen.push(false);
+        }
+        var inboxes: [Channel<Msg>] = [];
+        for _ in 0..n {
+            inboxes.push(Channel.bounded(1024));
+        }
+        // Coloca un actor en cada worker: lanza fibras hasta haber visitado todos los workers.
+        while (placed < n && tries < n * 64) {
+            let t = spawn(fn() -> int {
+                let w = worker_id();
+                send(boxes, (w, inboxes[w]));
+                w
+            });
+            let w = join(t);
+            if (!seen[w]) {
+                seen[w] = true;
+                placed = placed + 1;
+                let ib = inboxes[w];
+                let holder = spawn(fn() -> int {
+                    // Esta fibra puede haber caído en otro worker: usa el suyo para fijar el actor.
+                    let mine = worker_id();
+                    let a = spawn_local(fn() -> int { actor(inboxes[mine]) });
+                    join(a)
+                });
+                actors.push(holder);
+            }
+            tries = tries + 1;
+        }
+        for _ in 0..fibers {
+            spawn(fn() {
+                send(done, ask_loop(inboxes[worker_id()], iters));
+            });
+        }
+        for _ in 0..fibers {
+            let _ = recv(done);
+        }
+        for ib in inboxes {
+            send(ib, Msg.Stop);
+        }
+    }
+    var sum = 0;
+    for a in actors {
+        sum = sum + join(a);
+    }
+    let ms = time.monotonic() - t0;
+    let ops = fibers * iters;
+    let per_sec = if (ms > 0) { ops * 1000 / ms } else { 0 };
+    print(
+        mode
+            + " fibers="
+            + to_string(fibers)
+            + " workers="
+            + to_string(worker_count())
+            + " ops="
+            + to_string(ops)
+            + " ms="
+            + to_string(ms)
+            + " ops/s="
+            + to_string(per_sec)
+            + " check="
+            + to_string(sum >= 0)
+    );
+    0
+}

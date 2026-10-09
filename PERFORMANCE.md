@@ -2238,3 +2238,51 @@ está en la cola de latencia con poca carga (una petición aislada ya no paga el
 futex de un worker dormido al lanzar su ayudante) y en cualquier programa que lance fibras de
 vida corta desde una sola (pipelines, `deadline.within`, `scope`). Sin coste de CPU ni cambio
 de semántica. Candidato a main como mejora de bajo riesgo; queda a decisión.
+- **Sin compromiso, por PR propio**: el arreglo de `pending` en `flush_batches` (bug), las dos
+  guardas de notificación (`sleeping`, hilos esperando por canal) y la caché de pilas.
+- **Con decisión**: el spin híbrido (ganancia grande en Linux, −11 % en `oneway8` macOS con
+  núcleos llenos; alternativa: ráfaga más corta o adaptativa) y el desempate de `pick_home`
+  (ganancia enorme en spawn corto; vigilar el reparto en servidores con fibras largas).
+- **Fuera de la caja, pendiente**: `spawn_local`/actor por worker (Seastar) para quitar el techo
+  del buzón de un actor central; desfijar fibras (robo + runnext de Go) exige la auditoría del TLS.
+
+## 13. EXP spawn-local (oct 2026): actor por worker, estilo Seastar — rama experimental
+
+Rama `exp/spawn-local` (derivada de `exp/wake-path`, NO fusionada). Tres builtins: `spawn_local(f)`
+(la fibra queda fijada al worker que la lanza: sin despertar entre hilos, corre cuando la madre
+cede), `worker_id()` y `worker_count()`. En la VM `spawn_local` es un `spawn` (cola `ready`
+compartida, sin fijación) y `worker_id` es el índice del hilo worker; en el oráculo, 0 y 1.
+`benchmarks/actor_shard.ray` compara un actor CENTRAL consultado desde todos los workers con un
+actor POR WORKER: modo `local` (cada peticionario con su actor) y modo `mixed` (el patrón de un
+servidor: peticionarios repartidos por `spawn` normal que consultan al actor de su `worker_id()`;
+la colocación de un actor por worker usa un token por worker y `spawn_local`).
+
+| máquina | peticionarios | central (ops/s) | por worker, `mixed` | `local` | ganancia |
+|---|---:|---:|---:|---:|---:|
+| Linux VM 4 vCPU (4 workers) | 1 | 579 k | 2,70 M | 2,78 M | 4,7× |
+| | 8 | 1,72 M | 4,26 M | 3,74 M | 2,5× |
+| | 64 | 1,78 M | 4,94 M | 3,60 M | 2,8× |
+| Linux VM, `RAYLANG_THREADS=2` | 64 | 2,22 M | 3,70 M | 2,82 M | 1,7× |
+| macOS M3 Pro (11 workers) | 1 | 1,01 M | 3,17 M | 3,20 M | 3,1× |
+| | 8 | 387 k | 4,88 M | 5,41 M | 12,6× |
+| | 64 | 593 k | 6,25 M | 5,41 M | 10,5× |
+
+Lecturas:
+- El actor central tiene TECHO: su buzón serializa y cada consulta cruza hilos (387–593 k/s en
+  macOS con 8–64 peticionarios, 1,7–1,8 M/s en Linux tras la palanca 1). El actor por worker
+  escala con los workers (6 M/s en macOS) porque ninguna consulta cruza hilos ni comparte buzón.
+- Una consulta local cuesta ~0,16–0,3 µs: dos cambios de contexto en el mismo worker. Es la cifra
+  de `RAYLANG_THREADS=1` de §8, ahora disponible en un programa multicore.
+- El precio es del programa: el estado queda PARTIDO por worker (rate limit, breaker, métricas
+  aproximados por shard, o con agregación periódica). Para raygate es natural (las decisiones por
+  petición son locales); para un contador global exacto no sirve.
+- Semántica preservada: cada actor sigue con su heap; `spawn_local` solo elige DÓNDE vive. En la VM
+  el patrón funciona (sin garantía de localidad), así que un programa corre igual en ambos motores.
+
+Bug cazado por el camino (del benchmark, no del runtime): la primera versión de `mixed` marcaba
+el worker con una fibra y fijaba el actor con OTRA, que con el `pick_home` de §12 podía caer en un
+worker distinto → un worker sin actor y sus peticionarios colgados para siempre (deadlock en la VM
+Linux). La colocación por token lo hace imposible.
+
+Pendiente si se decide llevar a main: SPEC (semántica de `spawn_local` en VM/nativo), REFERENCE y
+llms.txt, selfhost, `raydoc`; y probar el patrón en raygate/raylb (su actor Pick+Done) con el A/B.

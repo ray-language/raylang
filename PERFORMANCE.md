@@ -2160,3 +2160,27 @@ hunde la ida y vuelta en macOS a 16 µs (despertar por tubería + `kevent`); las
 hacen falta: el residuo son sueños de condvar, no contención de mutex. En raylb (A/B 64
 conexiones, 3 réplicas) la versión completa de la rama dio p99 −33 % en el Mac mini y +4–8 % de
 req/s por núcleo en Linux con throughput plano: para un proxy HTTP el techo es el kernel.
+
+### raygate A/B, 1.27.39 → 1.27.40 (9 oct 2026)
+
+raygate es la app donde el patrón pedir/responder pesa (un `admit` de ida y vuelta al actor de
+control por petición, más un `report` de un sentido). Arnés propio: upstream = `backend` del
+bench de raylb (0 ms, 128 B), `oha` con 64 conexiones, 5 s por corrida, orden A B B A, una ruta
+sin rate limit (el `admit` se consulta igual). Mediana de 3–4 corridas por lado.
+
+| máquina | req/s | p99 | CPU de raygate |
+|---|---:|---:|---:|
+| Linux VM 4 vCPU, `RAYLANG_THREADS=2` (saturado: 2,1 núcleos) | 46,6 k → 49,3 k (**+6 %**) | 2,63 → 2,49 ms (−5 %) | igual (10,6 s) |
+| Linux VM, 4 workers | 44,2 k → 45,5 k (+3 %) | 4,4 → 3,95 ms (**−11 %**) | igual |
+| macOS M3 Pro (11 núcleos, no saturado) | 52,3 k → 53,5 k (+2 %) | 2,0 → 1,78 ms (**−11 %**) | 24,5 → 27,6 s (**+13 %**) |
+
+El +13 % de CPU en macOS es el spin de M319 **revivido** por el fix de `pending`: en todo
+servidor estaba apagado desde la primera conexión, y el bug ahorraba CPU sin que nadie lo
+supiera. Comprobado con `RAYLANG_SPIN_US=0` sobre 1.27.40 en la misma máquina: la CPU vuelve a
+23,9 s y la p99 sube a 2,0 ms (+12 %), con −3 % de req/s. En Linux saturado el spin no cambia
+nada (no hay ciclos ociosos que quemar) y la ganancia de las guardas se queda: +6 % req/s con la
+misma CPU. Decisión pendiente, para la rama experimental: un spin ADAPTATIVO (girar solo cuando
+el worker acaba de ser despertado dentro de la ventana, el patrón ping-pong; dormir directo si
+lleva tiempo ocioso), que debería conservar la p99 sin pagar la CPU en servidores con holgura.
+Arnés: `$CLAUDE_JOB_DIR/tmp/ab_raygate.sh` (pendiente de convertirlo en `bench/` de raygate).
+

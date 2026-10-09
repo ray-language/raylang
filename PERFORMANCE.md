@@ -2104,3 +2104,87 @@ Con dos workers y reactor local el servidor pelado queda al **94 % de hyper** en
 por petición y el `http.pool` compartido entre fibras (un canal). Lo que queda de la lista de §10:
 las asignaciones por petición (~7 %) y, para el proxy, el camino del cliente HTTP.
 
+
+## 12. EXP wake-path (oct 2026): el camino de despertar entre workers, medido en rama experimental
+
+Rama `exp/wake-path` (NO fusionada). Pregunta: cuánto rinde abaratar el despertar de una fibra en
+otro hilo (findings #75/#107) y qué palancas quedan tras M319/M329. Herramientas:
+`benchmarks/actor_ask.ray` (mediana de 5), `strace -c` en una VM Linux de 4 vCPU (Ubuntu 24.04,
+`aarch64`), el micro y el A/B de raylb (`bench/micro.ray`, `bench/ab.ray`) en el portátil (M3 Pro,
+ruidoso), en la VM y en el Mac mini (M4, 10 núcleos, dispersión 0,5 %).
+
+**Diagnóstico con `strace`** (base 1.27.39, Linux, `rt 1`): **10,7 `futex` y 2 `sched_yield` por
+ida y vuelta**. Tres fuentes: (a) los DOS workers se dormían en su condvar en CADA vuelta — el spin
+de M319 cedía el hilo en cada mirada y en una VM un `sched_yield` es un cambio de contexto real que
+agota la ventana de 10 µs en una sola cesión; (b) `__ray_notify` del canal emitido hacía
+`notify_all` incondicional (en Linux, un `futex_wake` por `send`/`close` aunque nadie espere como
+hilo, que desde M329 es casi nadie); (c) `Scheduler::enqueue` notificaba la condvar del worker
+siempre (`Condvar::notify_one` de std es `futex_wake` incondicional en Linux).
+
+**Bug colateral encontrado (vale por sí solo):** `flush_batches` —los despertares de E/S que
+entrega el reactor— encolaba SIN sumar a `pending`, y el pop del worker lo restaba: `pending`
+desbordaba en el primer despertar de E/S y el spin-then-park de M319 (que mira `pending == 0`)
+quedaba **apagado para siempre en ese worker**, además de que un spinner no veía llegar la E/S.
+Explica por qué raylb midió «`RAYLANG_SPIN_US=0` sin efecto» (su PERFORMANCE §1): en un servidor
+el spin estaba muerto desde la primera conexión.
+
+### Palanca 1 — despertar solo a quien duerme + spin híbrido
+
+Flag `sleeping` por worker (bajo el lock de su cola) y notificar solo si está a `true`; contador de
+hilos esperando por canal y `notify_all` solo con alguno; spin híbrido (ráfagas de `spin_loop`
+mirando la cola antes de cada `yield_now`); `pending` cuenta también la E/S.
+
+| `actor_ask`, ops/s | Linux VM base | Linux VM P1 | macOS M3 base | macOS M3 P1 |
+|---|---:|---:|---:|---:|
+| ida y vuelta, 1 peticionario (`rt1`) | 288 k (3,5 µs) | **641 k (1,56 µs), 2,2×** | 820 k | 971 k (+18 %) |
+| `rt8` | 971 k | **2,02 M, 2,1×** | 365 k | 416 k (+14 %) |
+| `rt64` | 771 k | **2,12 M, 2,75×** | 595 k | 617 k |
+| un sentido, 8 emisores | 1,61 M | **5,59 M, 3,5×** | 956 k | 923 k |
+| `RAYLANG_THREADS=1` | 957 k | **3,33 M, 3,5×** | 3,17 M | 3,39 M |
+
+`futex` por 100 k vueltas en Linux: 1,07 M → 38 k (28× menos). Lo que queda con 8 peticionarios
+(1,76/op) son pares WAIT/WAKE de las condvar de los workers, no contención de mutex: por eso la
+palanca 3 (colas sin lock) no se implementó — atacaría una parte menor.
+
+### Palanca 2 — reactor por worker (M358) como default: NO
+
+Con `RAYLANG_REACTOR=local`, `rt1` en macOS cae de 855 k a **60 k ops/s (16 µs)**: el worker
+duerme en `kqueue` y el despertar por tubería + `kevent` tarda ~8 µs, más que la ventana de spin,
+así que el ping-pong nunca se queda en spin (y alargar el spin lo empeora: 36 k). `oneway8` sube
+2,7× porque ahí sí se salta el despertar al worker ocupado. M358 sigue siendo opt-in.
+
+### Coste de `spawn` (lo que raylb paga por petición)
+
+El micro de raylb «spawn + canal» daba 8,5–12 µs en macOS. Dos causas, dos arreglos:
+
+1. **Caché de pilas** (`RAYLANG_STACK_CACHE`, 256 por defecto): cada `spawn` hacía `mmap` +
+   `mprotect` y cada fin `munmap`, y la pila nueva pagaba sus fallos de página. Linux con 1 worker:
+   3,0 → 0,43 µs (7×).
+2. **`pick_home` prefiere un worker DESPIERTO entre los menos cargados**: con el desempate
+   round-robin puro, cada spawn de corta vida caía en un worker distinto que ya dormía y pagaba
+   un futex. VM Linux de 4 vCPU con 4 workers: **44–58 µs → 1,8–2,3 µs**; macOS: 10,5 → 1,04 µs
+   (`deadline.within` 10,4 → 1,45). Es el «runnext» de Go sin migrar fibras; el reparto por
+   fibras vivas (M254) sigue mandando.
+
+### raylb, A/B contra 1.27.39 (`bench/ab.ray`, 64 conexiones, 3 réplicas, 5 × 5 s)
+
+| máquina | req/s | req/s por núcleo | p99 | núcleos |
+|---|---:|---:|---:|---:|
+| Mac mini M4 (dispersión 0,5 %) | +0,7 % | −4,3 % | **5,79 → 3,85 ms (−33 %)** | 4,44 → 4,67 |
+| Linux VM 4 vCPU, `RAYLANG_THREADS=2` | −0,1 % | **+4,3 %** | −0,07 ms | 1,2 → 1,2 |
+| Linux VM 4 vCPU, workers = vCPU | −5,5 % (ruido 29 %) | **+7,9 %** | +0,7 ms | 1,6 → 1,4 |
+
+Lectura: para un proxy HTTP el despertar no es el cuello (su CPU va al kernel: `kevent`,
+sockets); lo que cambia es la cola de latencia (p99 −33 % en el Mac mini) y la eficiencia por
+núcleo en Linux. El spin híbrido cuesta ~5 % de CPU con los núcleos llenos y le quita un 11 % al
+envío masivo de un sentido en macOS (el compromiso que ya documentó M319).
+
+### Qué llevar a main (propuesta)
+
+- **Sin compromiso, por PR propio**: el arreglo de `pending` en `flush_batches` (bug), las dos
+  guardas de notificación (`sleeping`, hilos esperando por canal) y la caché de pilas.
+- **Con decisión**: el spin híbrido (ganancia grande en Linux, −11 % en `oneway8` macOS con
+  núcleos llenos; alternativa: ráfaga más corta o adaptativa) y el desempate de `pick_home`
+  (ganancia enorme en spawn corto; vigilar el reparto en servidores con fibras largas).
+- **Fuera de la caja, pendiente**: `spawn_local`/actor por worker (Seastar) para quitar el techo
+  del buzón de un actor central; desfijar fibras (robo + runnext de Go) exige la auditoría del TLS.

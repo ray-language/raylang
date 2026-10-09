@@ -1566,3 +1566,43 @@ fn background_color_changes_on_an_open_window_on_all_three_engines() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "native\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+// M363 — con `std/ui` el `main` nativo sigue siendo un HILO del SO, y un hilo que espera en un
+// canal es el único caso en que `__ray_notify` despierta la condvar. La primera versión volvía a
+// tomar el mutex del canal (que el emisor ya tiene en mano) → bloqueo del propio hilo, visto en
+// CI como tres tests de esta suite colgados. El programa no abre ventana: vale en todo SO.
+#[test]
+fn a_thread_main_waiting_on_a_channel_is_woken_by_a_fiber_send() {
+    if !Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        return;
+    }
+    let base = tmp("thread_main_recv");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\n\nfn main() -> int {\n    let ch: Channel<int> = Channel.bounded(1);\n    var total = 0;\n    for i in 0..200 {\n        spawn(fn() { send(ch, i); });\n        total = total + recv(ch).unwrap_or(0);\n    }\n    let it = ui.item(\"a\", \"A\", \"\");\n    print(\"total=${total} ui=${it.tag}\");\n    0\n}\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let b = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+        .current_dir(&base)
+        .output()
+        .expect("build");
+    assert!(b.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&b.stderr));
+    let mut child = Command::new(&bin).current_dir(&base).stdout(std::process::Stdio::piped()).spawn().expect("corre");
+    let t0 = std::time::Instant::now();
+    loop {
+        if let Some(st) = child.try_wait().expect("wait") {
+            let mut out = String::new();
+            std::io::Read::read_to_string(child.stdout.as_mut().unwrap(), &mut out).unwrap();
+            assert_eq!(st.code(), Some(0));
+            assert_eq!(out, "total=19900 ui=a\n");
+            return;
+        }
+        if t0.elapsed().as_secs() > 60 {
+            let _ = child.kill();
+            panic!("el main-hilo se quedó esperando en el canal (notify perdido o bloqueo)");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}

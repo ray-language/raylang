@@ -1923,7 +1923,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    let g = inner.1.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0;\n",
                 "    inner.3.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
                 "    g\n}\n",
-                "fn __ray_notify<T>(inner: &__RaySync<T>) { if inner.3.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = inner.0.lock().unwrap(); inner.1.notify_all(); } inner.2.wake_all(); }\n",
+                // Sin tomar `inner.0`: los llamadores notifican CON el guard del canal aún en mano (relock =
+                // bloqueo del propio hilo, cazado por ui_cli). Es correcto sin él: el hilo esperador sube el
+                // contador bajo ese lock antes de dormir, así que o ve el valor o recibe el notify.
+                "fn __ray_notify<T>(inner: &__RaySync<T>) { if inner.3.load(std::sync::atomic::Ordering::SeqCst) > 0 { inner.1.notify_all(); } inner.2.wake_all(); }\n",
             ));
         } else {
             out.push_str(concat!(

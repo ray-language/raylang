@@ -72,6 +72,7 @@ HTTP. No other app on the machine and no page in the browser can talk to it.
 | `ui.mount_embed_at("", "frontend/dist")` | a frontend build, at the root | `ray://app/…` |
 | `ui.mount_dir("files", folder)` | a folder on disk, with range reads | `ray://app/files/…` |
 | `ui.mount_bytes(path, data)` | bytes in memory | `ray://app/<path>` |
+| (by itself, on open or mount) | the npm package of a dependency with `[web] package`, with an import map in every page | `ray://app/node_modules/<npm name>/…` |
 
 `mount_dir` never serves anything outside its folder, and it supports `Range` requests: a video or
 a large file is read in chunks, never loaded whole.
@@ -434,4 +435,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:d137258afbbe -->
+<!-- sync: sha256:4781fa04a6a0 -->

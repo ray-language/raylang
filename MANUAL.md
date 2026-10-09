@@ -1443,6 +1443,31 @@ system `ray_ds` con `embed = ["assets"]` aporta `ray_ds/assets/index.js`, que la
 vivo con `ray run`, horneado en el binario nativo y en el bundle, sin copiar nada. El propio
 paquete lee sus archivos por esa misma clave.
 
+**Un paquete también puede traer un paquete npm para las páginas.** Si su `ray.toml` declara
+
+```toml
+[web]
+package = "web"   # un directorio con su package.json: name + exports
+```
+
+las páginas de la app lo importan **por su nombre npm**, igual que con un bundler —
+`import "@ray-ds/elements/button"`, `import { enableRaylang } from "@ray-ds/elements/core"` —
+sin que la app escriba nada:
+
+- `std/ui` lo sirve en `ray://app/node_modules/<nombre npm>/` (donde lo pondría npm; las hojas
+  de estilo se enlazan por esa ruta: `href="/node_modules/@ray-ds/elements/tokens.css"`) y a cada
+  página HTML de `ray://app/` le inyecta, justo tras `<head>`, un **import map** construido con
+  los `exports` del `package.json`. `ui.import_map()` lo devuelve; una página con su propio
+  `<script type="importmap">` se sirve tal cual (copia ahí las entradas). En vivo con `ray run`,
+  horneado en el binario nativo y en el bundle: el espacio embed lo lleva como
+  `node_modules/<nombre npm>/…`.
+- `ray run`, `ray fetch` y `ray update` lo **enlazan** en `node_modules/<nombre npm>` de la app
+  (symlink; junction en Windows), siempre a la copia de la dependencia — `path:` o `.ray-deps/`
+  —, así que el editor resuelve los mismos imports con sus tipos y va a su definición. Añade
+  `node_modules/` al `.gitignore` (`ray new` ya lo trae). Con un `jsconfig.json` con
+  `"moduleResolution": "bundler"` (el de cualquier plantilla de Vite), VS Code los resuelve sin
+  más; un `node_modules/<nombre>` real (instalado con npm) no se toca.
+
 ### Apps de escritorio y móvil (`std/ui`, `ray bundle`)
 
 Las ventanas, el empaquetado y todo lo que rodea a una app de escritorio o móvil se explican en el

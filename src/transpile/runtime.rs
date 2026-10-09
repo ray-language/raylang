@@ -970,7 +970,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M226: montajes del esquema ray://.
             "fn __ray_ui_mount(kind: &str, prefix: &str, source: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let r = match kind { \"dir\" => ray_runtime::ui::scheme::mount_dir(prefix, source), other => Err(format!(\"ui: unknown mount kind '{other}'\")) };\n",
+            "    let r = match kind { \"dir\" => ray_runtime::ui::scheme::mount_dir(prefix, source), \"importmap\" => { ray_runtime::ui::scheme::set_import_map(source); Ok(()) } other => Err(format!(\"ui: unknown mount kind '{other}'\")) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_mount_bytes(path: &str, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::scheme::mount_bytes(path, data.to_vec()) { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",

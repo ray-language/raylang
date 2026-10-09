@@ -75,6 +75,12 @@ pub struct Manifest {
     /// M147: `[native] embed` — directorios de assets embebidos en el binario nativo (y el
     /// espacio de nombres de `std/embed` en todos los motores). Vacío si no hay `[native]`.
     pub native_embed: Vec<String>,
+    /// M369: `[web] package = "web"` — el directorio (relativo a la raíz) con un paquete npm
+    /// (`package.json` con `name` y `exports`) que el PAQUETE ofrece a las apps que dependen de
+    /// él: entra al espacio embed como `node_modules/<nombre npm>/…`, `std/ui` lo sirve en
+    /// `ray://app/node_modules/<nombre npm>/` con un import map, y la CLI lo enlaza en
+    /// `node_modules/` de la app para el editor. `None` = el paquete no trae paquete web.
+    pub web_package: Option<String>,
     /// `[dev] listen` — dirección `host:port` que `ray dev` **pre-abre y retiene** entre reinicios
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
@@ -211,6 +217,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut registry_mirror = None;
     let mut native_without = Vec::new();
     let mut native_embed = Vec::new();
+    let mut web_package = None;
     let mut dev_listen = None;
     let mut frontend: Option<Frontend> = None;
     let mut ios_development_team = None;
@@ -314,6 +321,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 }
                 _ => {} // otras claves de [native] se ignoran por ahora (extensibilidad)
             },
+            "web" => match key {
+                // M369: `package = "web"` — el paquete npm que este paquete ofrece a sus apps.
+                "package" => web_package = Some(as_string()?.trim_matches('/').to_string()),
+                _ => {} // otras claves de [web] se ignoran por ahora (extensibilidad)
+            },
             "dev" => match key {
                 // `listen = "127.0.0.1:8080"` — socket que `ray dev` retiene entre reinicios (M92.3).
                 "listen" => dev_listen = Some(as_string()?),
@@ -394,6 +406,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         registry_mirror,
         native_without,
         native_embed,
+        web_package,
         dev_listen,
         frontend,
         ios_development_team,
@@ -534,6 +547,15 @@ mod tests {
         assert!(m.dependencies.is_empty());
         assert!(m.native_without.is_empty()); // sin [native] → sin exclusión
         assert_eq!(m.entry_path(), PathBuf::from("/proj/src/main.ray"));
+    }
+
+    #[test]
+    fn web_package_section_names_the_directory() {
+        // M369: [web] package — el paquete npm que un paquete raylang ofrece a sus apps.
+        let m = parse_src("[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[web]\npackage = \"web/\"\n").unwrap();
+        assert_eq!(m.web_package.as_deref(), Some("web"));
+        let m = parse_src("[package]\nname = \"ds\"\nversion = \"0.1.0\"\n").unwrap();
+        assert_eq!(m.web_package, None);
     }
 
     #[test]

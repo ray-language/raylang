@@ -9,6 +9,9 @@
 //
 // Backends: AppKit/WKWebView en macOS; `RAY_UI_BACKEND=headless` (tests/CI) en cualquier OS.
 
+import std/json;
+from std/json import Json;
+
 /// One UI event. `kind` is "closed" (the window left the screen — the red button and
 /// `close(h)` both report here, exactly once per window; `tag` is empty), "menu" (a custom
 /// menu item was chosen: `tag` is the item's tag; `window` is the handle of the window that
@@ -67,6 +70,7 @@ pub fn app_url(url: string) -> string {
 /// user is a no-op. With `RAY_UI_BACKEND=headless` in the environment, windows are in-memory rows
 /// (tests, CI).
 pub fn open(title: string, url: string, width: int, height: int) -> Result<int, string> {
+    mount_web_packages();
     let r = __ui_open(title, resolve_app_url(url), width, height);
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -145,6 +149,7 @@ pub fn options(width: int, height: int) -> WindowOptions {
 /// setting e.g. `o.min_width = 640; o.autosave = "main"; o.titlebar_color = "#1f2430";`. Errors
 /// on an invalid size, a minimum larger than the window or a color that is not `#rrggbb`.
 pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, string> {
+    mount_web_packages();
     let r = __ui_open_with(
         title,
         resolve_app_url(url),
@@ -787,6 +792,12 @@ pub fn mount_bytes(path: string, data: bytes) -> Result<int, string> {
 /// embed key is kept whole — to mount a directory's CONTENTS at a path (the Vite build at the
 /// root), use `mount_embed_at`.
 pub fn mount_embed(prefix: string, embed_prefix: string) -> Result<int, string> {
+    mount_web_packages();
+    embed_mount(prefix, embed_prefix)
+}
+
+// `mount_embed` sin montar los paquetes web (lo usa el propio montaje de los paquetes).
+fn embed_mount(prefix: string, embed_prefix: string) -> Result<int, string> {
     let names = __embed_list();
     if (names.len() > 0 && names[0] != "ok") {
         return Result.Err(names[1]);
@@ -844,8 +855,14 @@ pub fn mount_embed(prefix: string, embed_prefix: string) -> Result<int, string> 
 /// dependency's assets at `ray://app/ray-ds/…`. Live from disk under `ray run`/`ray dev`, baked
 /// into the native binary otherwise (see `mount_embed`). Returns the number of files mounted.
 pub fn mount_embed_at(prefix: string, embed_prefix: string) -> Result<int, string> {
+    mount_web_packages();
+    embed_mount_at(prefix, embed_prefix)
+}
+
+// `mount_embed_at` sin montar los paquetes web.
+fn embed_mount_at(prefix: string, embed_prefix: string) -> Result<int, string> {
     if (embed_prefix == "") {
-        return mount_embed(prefix, "");
+        return embed_mount(prefix, "");
     }
     let names = __embed_list();
     if (names.len() > 0 && names[0] != "ok") {
@@ -890,6 +907,207 @@ pub fn mount_embed_at(prefix: string, embed_prefix: string) -> Result<int, strin
         i = i + 1;
     }
     Result.Ok(n)
+}
+
+/// The import map of the web packages of your dependencies, as JSON (`{"imports":{…}}`), or
+/// `""` when no dependency has one (M369). A dependency whose `ray.toml` declares
+/// `[web] package = "web"` ships that npm package (its `package.json` with `name` and `exports`);
+/// `open`, `open_with`, `mount_embed` and `mount_embed_at` serve it at
+/// `ray://app/node_modules/<name>/` and every HTML page of `ray://app/` gets this map injected
+/// right after `<head>`, so the page imports it by its npm name, as with a bundler:
+/// `import "@ray-ds/elements/button"`. Each subpath of `exports` maps to its file (conditions
+/// in the order `browser`, `import`, `module`, `default`; `"./x/*": "./y/*.js"` patterns are not
+/// mapped), `"<name>/"` maps to the package's folder, and a package without `exports` maps its
+/// `module` or `main`. A page that declares its own `<script type="importmap">` is served as is
+/// — copy these entries into it. `ray run`/`ray fetch` also link each package into the app's
+/// `node_modules/<name>`, so the editor resolves the same imports with their types.
+pub fn import_map() -> string {
+    web_packages(false)
+}
+
+// M369: monta los paquetes web de las dependencias (`node_modules/<nombre>/` del espacio embed,
+// lo que la CLI pone ahí por `[web] package`) en `ray://app/node_modules/<nombre>/` y fija el
+// import map que el runtime inyecta en cada página HTML. Idempotente; sin paquetes, no hace nada.
+fn mount_web_packages() {
+    web_packages(true);
+}
+
+// Recorre los paquetes web del espacio embed (montándolos si `mount`) y devuelve su import map.
+fn web_packages(mount: bool) -> string {
+    let names = __embed_list();
+    if (names.len() == 0 || names[0] != "ok") {
+        return "";
+    }
+    var entries: [(string, string)] = [];
+    var i = 1;
+    while (i < names.len()) {
+        let key = names[i];
+        i = i + 1;
+        let name = match (web_package_name(key)) {
+            Option.Some(n) => n,
+            Option.None => {
+                continue;
+            },
+        };
+        let root = "node_modules/" + name;
+        if (mount) {
+            match (embed_mount_at(root, root)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    eprint("[ui] could not mount the web package ${name}: ${e}");
+                    continue;
+                },
+            }
+        }
+        let r = __embed_read(key);
+        if (r[0] != b"ok") {
+            continue;
+        }
+        let text = match (from_utf8(r[1])) {
+            Result.Ok(t) => t,
+            Result.Err(_) => {
+                continue;
+            },
+        };
+        match (json.parse(text)) {
+            Result.Ok(pj) => {
+                entries = entries + package_imports(name, "/" + root, pj);
+            },
+            Result.Err(e) => {
+                eprint("[ui] the package.json of ${name} is not valid JSON: ${e}");
+            },
+        }
+    }
+    if (entries.len() == 0) {
+        return "";
+    }
+    var parts: [string] = [];
+    var seen: [string] = [];
+    for (k, v) in entries {
+        if (!seen.contains(k)) {
+            seen.push(k);
+            parts.push(json.stringify(Json.JStr(k)) + ":" + json.stringify(Json.JStr(v)));
+        }
+    }
+    let map = "{\"imports\":{" + join(parts, ",") + "}}";
+    if (mount) {
+        let _r = __ui_mount("importmap", "", map);
+    }
+    map
+}
+
+// El nombre npm de un paquete web si `key` es su `package.json` en el espacio embed:
+// `node_modules/<nombre>/package.json`, con `<nombre>` = `pkg` o `@scope/pkg`.
+fn web_package_name(key: string) -> Option<string> {
+    let head = "node_modules/";
+    let tail = "/package.json";
+    if (!key.starts_with(head) || !key.ends_with(tail) || key.len() <= head.len() + tail.len()) {
+        return Option.None;
+    }
+    let name = key.substring(head.len(), key.len() - tail.len());
+    let segs = name.split("/");
+    let ok = if (segs.len() == 1) {
+        !name.starts_with("@")
+    } else {
+        segs.len() == 2 && segs[0].starts_with("@") && segs[0].len() > 1 && segs[1] != ""
+    };
+    if (ok) { Option.Some(name) } else { Option.None }
+}
+
+// Las entradas del import map de un paquete: cada subruta de `exports` → su archivo bajo `base`
+// (`/node_modules/<nombre>`), más `<nombre>/` → la carpeta del paquete.
+fn package_imports(name: string, base: string, pj: Json) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    match (json.member(pj, "exports")) {
+        Option.Some(Json.JObject(obj)) => {
+            let ks: [string] = obj.keys();
+            if (ks.len() > 0 && ks[0].starts_with(".")) {
+                for k in ks {
+                    let target = match (get(obj, k)) {
+                        Option.Some(v) => condition_target(v),
+                        Option.None => Option.None,
+                    };
+                    match (target) {
+                        Option.Some(t) => {
+                            if (k == ".") {
+                                out.push((name, package_url(base, t)));
+                            } else if (k.ends_with("/*") && t.ends_with("/*")) {
+                                // `"./x/*": "./y/*"` → un prefijo: `<nombre>/x/` → `…/y/`.
+                                let from = name + k.substring(1, k.len() - 1);
+                                out.push((from, package_url(base, t.substring(0, t.len() - 1))));
+                            } else if (!k.contains("*")) {
+                                out.push((name + k.substring(1, k.len()), package_url(base, t)));
+                            }
+                        },
+                        Option.None => { },
+                    }
+                }
+            } else {
+                match (condition_target(Json.JObject(obj))) {
+                    Option.Some(t) => out.push((name, package_url(base, t))),
+                    Option.None => { },
+                }
+            }
+        },
+        Option.Some(e) => {
+            match (condition_target(e)) {
+                Option.Some(t) => out.push((name, package_url(base, t))),
+                Option.None => { },
+            }
+        },
+        Option.None => {
+            let main = match (json.get_string(pj, "module")) {
+                Option.Some(m) => Option.Some(m),
+                Option.None => json.get_string(pj, "main"),
+            };
+            match (main) {
+                Option.Some(m) => out.push((name, package_url(base, m))),
+                Option.None => { },
+            }
+        },
+    }
+    out.push((name + "/", base + "/"));
+    out
+}
+
+// El archivo de un valor de `exports`: una cadena relativa (`./x.js`), la primera alternativa que
+// resuelve de un arreglo, o la condición `browser`/`import`/`module`/`default` de un objeto
+// (`types` y `require` no son para el navegador).
+fn condition_target(v: Json) -> Option<string> {
+    match (v) {
+        Json.JStr(s) => if (s.starts_with("./")) { Option.Some(s) } else { Option.None },
+        Json.JArray(items) => {
+            for it in items {
+                match (condition_target(it)) {
+                    Option.Some(t) => {
+                        return Option.Some(t);
+                    },
+                    Option.None => { },
+                }
+            }
+            Option.None
+        },
+        Json.JObject(_) => {
+            for c in ["browser", "import", "module", "default"] {
+                match (json.member(v, c)) {
+                    Option.Some(inner) => match (condition_target(inner)) {
+                        Option.Some(t) => {
+                            return Option.Some(t);
+                        },
+                        Option.None => { },
+                    },
+                    Option.None => { },
+                }
+            }
+            Option.None
+        },
+        _ => Option.None,
+    }
+}
+
+fn package_url(base: string, rel: string) -> string {
+    let r = if (rel.starts_with("./")) { rel.substring(2, rel.len()) } else { rel };
+    base + "/" + r
 }
 
 /// The UI events as a channel: spawns a pump fiber that forwards `next_event()` into it — use

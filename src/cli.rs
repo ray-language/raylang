@@ -247,7 +247,7 @@ fn cmd_new(args: &[String]) {
         env!("CARGO_PKG_VERSION")
     );
     let mut main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
-    let mut gitignore = "# dependencies downloaded by the package manager\n.ray-deps/\n# the device link of `ray dev --device` (port + token)\n.ray-dev\n".to_string();
+    let mut gitignore = "# dependencies downloaded by the package manager\n.ray-deps/\n# the web packages of dependencies, linked by ray for the editor\n/node_modules/\n# the device link of `ray dev --device` (port + token)\n.ray-dev\n".to_string();
     if frontend.is_some() {
         manifest.push_str(FRONTEND_MANIFEST_SECTION);
         main_ray = FRONTEND_MAIN_RAY.replace("{name}", name);
@@ -3673,7 +3673,7 @@ fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> 
     let dir_names: Vec<String> = dirs.into_iter().map(|(d, _)| d).collect();
     let mut sources = Vec::new();
     if !dir_names.is_empty() {
-        sources.push(crate::builtins::EmbedSource { root, dirs: dir_names, prefix: String::new() });
+        sources.push(crate::builtins::EmbedSource { root, dirs: dir_names, prefix: String::new(), flat: false });
     }
     // M367: los assets de cada dependencia, bajo su nombre.
     if let Some(m) = &manifest {
@@ -3691,23 +3691,64 @@ fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> 
 /// iconos, una página) sin que cada app los copie, igual bajo `ray run`, en el binario nativo y
 /// en el bundle. Un dir declarado que no existe es un error del paquete (fail-fast, como en la
 /// app). El `[frontend] dist` de una dependencia no cuenta: es de la app.
+///
+/// M369: el paquete web de una dependencia (`[web] package = "web"`) entra ENTERO y sin el nombre
+/// de su dir bajo `node_modules/<nombre npm>/` (`node_modules/@ray-ds/elements/core.js`) — la
+/// misma ruta que tiene en el disco de la app (`link_web_packages`) y en `ray://app/` (`std/ui`).
+/// Si además figura en su `[native] embed`, no entra dos veces.
 pub(crate) fn dependency_embed_sources(m: &Manifest) -> Vec<crate::builtins::EmbedSource> {
     let mut sources = Vec::new();
     for (name, dir) in crate::deps::dependency_packages(m) {
         let Ok(Some(dm)) = Manifest::load(&dir) else { continue };
-        if dm.native_embed.is_empty() {
-            continue;
-        }
         let root = dir.canonicalize().unwrap_or(dir);
-        for d in &dm.native_embed {
+        // Un paquete web roto se avisa y se omite (no se sirve): el programa puede no usarlo — p. ej.
+        // las herramientas de un monorepo que GENERAN ese directorio y dependen del paquete.
+        let web = crate::deps::web_package_of(&name, &root, &dm).unwrap_or_else(|e| {
+            eprintln!("warning: {e} (the web package is skipped)");
+            None
+        });
+        let web_dir = dm.web_package.clone().unwrap_or_default();
+        let dirs: Vec<String> = dm.native_embed.iter().filter(|d| d.trim_matches('/') != web_dir).cloned().collect();
+        for d in &dirs {
             if !root.join(d).is_dir() {
                 eprintln!("embed directory in the ray.toml of dependency '{name}' does not exist: '{d}' (relative to '{}')", root.display());
                 process::exit(64);
             }
         }
-        sources.push(crate::builtins::EmbedSource { root, dirs: dm.native_embed.clone(), prefix: name });
+        if !dirs.is_empty() {
+            sources.push(crate::builtins::EmbedSource { root: root.clone(), dirs, prefix: name, flat: false });
+        }
+        if let Some(w) = web {
+            sources.push(crate::builtins::EmbedSource { root, dirs: vec![web_dir], prefix: format!("node_modules/{}", w.name), flat: true });
+        }
     }
     sources
+}
+
+/// M369: enlaza los paquetes web de las dependencias en `node_modules/` de la app (para el
+/// editor) y avisa una vez si el `.gitignore` del proyecto no lo excluye. Nunca falla el comando:
+/// el enlace es para las herramientas, la app corre igual sin él. `warn_broken` avisa de los
+/// paquetes web rotos (`ray fetch`/`update`; bajo `ray run` ya los avisó el embed).
+pub(crate) fn link_web_packages(m: &Manifest, warn_broken: bool) {
+    let (packages, errors) = crate::deps::web_packages(m);
+    if warn_broken {
+        for e in errors {
+            eprintln!("warning: {e} (the web package is skipped)");
+        }
+    }
+    if packages.is_empty() {
+        return;
+    }
+    let first = !m.root.join("node_modules").exists();
+    for note in crate::deps::link_web_packages(&m.root, &packages) {
+        eprintln!("warning: {note}");
+    }
+    if first
+        && let Ok(gi) = fs::read_to_string(m.root.join(".gitignore"))
+        && !gi.lines().any(|l| l.trim().trim_matches('/') == "node_modules")
+    {
+        eprintln!("note: ray linked the web packages of your dependencies in node_modules/ (for the editor); add `node_modules/` to .gitignore");
+    }
 }
 
 
@@ -5408,6 +5449,8 @@ fn cmd_update(_args: &[String]) {
             process::exit(65);
         }
     }
+    // M369: el paquete web de cada dependencia, enlazado en node_modules/ para el editor.
+    link_web_packages(&m, true);
 }
 
 /// `ray yank <nombre>@<versión> [--undo]`: marca una versión publicada como **retirada** en el índice
@@ -5473,6 +5516,8 @@ fn cmd_fetch(_args: &[String]) {
             process::exit(65);
         }
     }
+    // M369: el paquete web de cada dependencia, enlazado en node_modules/ para el editor.
+    link_web_packages(&m, true);
 }
 
 /// `ray fmt <archivo>`: imprime la versión canónica por stdout.
@@ -6108,13 +6153,15 @@ pub(crate) fn configure_embed(entry: &str) {
         let mut sources = Vec::new();
         if !dirs.is_empty() {
             let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
-            sources.push(crate::builtins::EmbedSource { root, dirs, prefix: String::new() });
+            sources.push(crate::builtins::EmbedSource { root, dirs, prefix: String::new(), flat: false });
         }
         // M367: los assets de cada dependencia, bajo su nombre (en vivo desde su directorio).
         sources.extend(dependency_embed_sources(&m));
         if !sources.is_empty() {
             crate::builtins::set_embed_config(sources);
         }
+        // M369: el paquete web de cada dependencia, enlazado en node_modules/ para el editor.
+        link_web_packages(&m, false);
     }
 }
 

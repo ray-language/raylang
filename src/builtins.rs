@@ -1633,11 +1633,16 @@ pub fn ui_reply(_h: i64, _id: i64, _value: &str, _as_json: bool) -> Result<(), S
     Err(UI_UNAVAILABLE.to_string())
 }
 
-/// M226: montajes del esquema `ray://app/…` — `kind` = "dir" (source = directorio).
+/// M226: montajes del esquema `ray://app/…` — `kind` = "dir" (source = directorio) o, M369,
+/// "importmap" (source = el import map JSON que se inyecta en cada página; `""` lo quita).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_mount(kind: &str, prefix: &str, source: &str) -> Result<(), String> {
     match kind {
         "dir" => ray_runtime::ui::scheme::mount_dir(prefix, source),
+        "importmap" => {
+            ray_runtime::ui::scheme::set_import_map(source);
+            Ok(())
+        }
         other => Err(format!("ui: unknown mount kind '{other}'")),
     }
 }
@@ -1697,11 +1702,15 @@ pub fn ui_try_next() -> Option<(String, i64, String)> {
 /// Un origen de assets embebidos (M367): la raíz en disco de un proyecto, sus dirs de
 /// `[native] embed` y el prefijo bajo el que entran al espacio de claves — `""` para la app
 /// (`assets/app.css`), el nombre de la dependencia para un paquete (`ray_ds/assets/index.js`).
+/// M369: `flat` mete el CONTENIDO de cada dir directamente bajo el prefijo, sin el nombre del dir
+/// — el paquete web de una dependencia (`[web] package = "web"`) entra como
+/// `node_modules/@ray-ds/elements/core.js`, la misma ruta que tiene en disco para el editor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmbedSource {
     pub root: std::path::PathBuf,
     pub dirs: Vec<String>,
     pub prefix: String,
+    pub flat: bool,
 }
 
 /// La config de embed del proceso: los orígenes (la app y cada dependencia con `[native] embed`).
@@ -1812,7 +1821,15 @@ pub fn embed_table(sources: &[EmbedSource]) -> Vec<(String, std::path::PathBuf)>
     let mut out = Vec::new();
     for s in sources {
         for (key, path) in embed_walk(&s.root, &s.dirs) {
-            let key = if s.prefix.is_empty() { key } else { format!("{}/{key}", s.prefix) };
+            let key = if s.flat {
+                // M369: sin el nombre del dir (`web/core.js` → `<prefijo>/core.js`).
+                let rest = key.split_once('/').map(|(_, r)| r).unwrap_or(&key);
+                format!("{}/{rest}", s.prefix)
+            } else if s.prefix.is_empty() {
+                key
+            } else {
+                format!("{}/{key}", s.prefix)
+            };
             out.push((key, path));
         }
     }
@@ -1837,6 +1854,20 @@ fn embed_live_dir(sources: &[EmbedSource], prefix: &str) -> Option<std::path::Pa
     }
     for s in sources {
         // El prefijo debe empezar por el del origen (`ray_ds/…`) y seguir con un dir embebido.
+        if s.flat {
+            // M369: el prefijo del origen ES el dir (su contenido entra sin el nombre del dir).
+            let [dir] = s.dirs.as_slice() else { continue };
+            let rest = if prefix == s.prefix {
+                ""
+            } else {
+                match prefix.strip_prefix(s.prefix.as_str()).and_then(|r| r.strip_prefix('/')) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            };
+            let dir = s.root.join(dir.trim_matches('/'));
+            return Some(if rest.is_empty() { dir } else { dir.join(rest) });
+        }
         let rest = if s.prefix.is_empty() {
             prefix
         } else {
@@ -6997,8 +7028,8 @@ mod tests {
         std::fs::write(base.join("app/assets/app.css"), "a").unwrap();
         std::fs::write(base.join("ds/assets/index.js"), "b").unwrap();
         std::fs::write(base.join("ds/assets/core/base.css"), "c").unwrap();
-        let app = EmbedSource { root: base.join("app"), dirs: vec!["assets".into()], prefix: String::new() };
-        let ds = EmbedSource { root: base.join("ds"), dirs: vec!["assets".into()], prefix: "ds".into() };
+        let app = EmbedSource { root: base.join("app"), dirs: vec!["assets".into()], prefix: String::new(), flat: false };
+        let ds = EmbedSource { root: base.join("ds"), dirs: vec!["assets".into()], prefix: "ds".into(), flat: false };
         let keys: Vec<String> = embed_table(&[app.clone(), ds.clone()]).into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, ["assets/app.css", "ds/assets/core/base.css", "ds/assets/index.js"]);
         // El directorio en vivo: el de la app, el del paquete, un subdirectorio del paquete.
@@ -7013,6 +7044,25 @@ mod tests {
         assert_eq!(embed_live_dir(&both, "ds/other"), None);
         // Solo la app: el prefijo vacío es su raíz, como siempre.
         assert_eq!(embed_live_dir(&[app.clone()], ""), Some(base.join("app")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// M369: un origen `flat` (el paquete web de una dependencia) entra sin el nombre de su dir,
+    /// y su directorio en vivo es el dir mismo (o un subdirectorio).
+    #[test]
+    fn flat_sources_enter_under_their_prefix_without_the_dir_name() {
+        let base = std::env::temp_dir().join(format!("ray_embed_flat_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("ds/web/components/button")).unwrap();
+        std::fs::write(base.join("ds/web/package.json"), "{}").unwrap();
+        std::fs::write(base.join("ds/web/components/button/button.js"), "b").unwrap();
+        let web = EmbedSource { root: base.join("ds"), dirs: vec!["web".into()], prefix: "node_modules/@ds/elements".into(), flat: true };
+        let keys: Vec<String> = embed_table(std::slice::from_ref(&web)).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["node_modules/@ds/elements/components/button/button.js", "node_modules/@ds/elements/package.json"]);
+        assert_eq!(embed_live_dir(std::slice::from_ref(&web), "node_modules/@ds/elements"), Some(base.join("ds/web")));
+        assert_eq!(embed_live_dir(std::slice::from_ref(&web), "node_modules/@ds/elements/components"), Some(base.join("ds/web/components")));
+        assert_eq!(embed_live_dir(std::slice::from_ref(&web), "node_modules/@ds"), None);
+        assert_eq!(embed_live_dir(std::slice::from_ref(&web), "node_modules/@ds/elementsx"), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

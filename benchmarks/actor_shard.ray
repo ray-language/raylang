@@ -82,38 +82,53 @@ fn main() -> int {
         // Un actor por worker (lanzado desde una fibra de ese worker); los peticionarios, repartidos
         // por `spawn` normal, consultan al actor de su `worker_id()`: el patrón de un servidor.
         let n = worker_count();
-        let boxes: Channel<(int, Channel<Msg>)> = Channel.bounded(1024);
-        var placed = 0;
-        var tries = 0;
-        var seen: [bool] = [];
-        for _ in 0..n {
-            seen.push(false);
-        }
         var inboxes: [Channel<Msg>] = [];
         for _ in 0..n {
             inboxes.push(Channel.bounded(1024));
         }
-        // Coloca un actor en cada worker: lanza fibras hasta haber visitado todos los workers.
-        while (placed < n && tries < n * 64) {
-            let t = spawn(fn() -> int {
-                let w = worker_id();
-                send(boxes, (w, inboxes[w]));
-                w
+        // Un actor por worker. Cada worker tiene un token (canal de capacidad 1); una fibra lanzada
+        // con `spawn` normal toma el token de SU worker si sigue libre y fija el actor ahí con
+        // `spawn_local`; si no, termina. main lanza fibras hasta que todos los tokens se han tomado.
+        var tokens: [Channel<int>] = [];
+        for _ in 0..n {
+            let t: Channel<int> = Channel.bounded(1);
+            send(t, 1);
+            tokens.push(t);
+        }
+        let placed_ch: Channel<int> = Channel.bounded(1024);
+        var placed = 0;
+        var tries = 0;
+        while (placed < n && tries < n * 256) {
+            let h = spawn(fn() -> int {
+                let mine = worker_id();
+                match (try_recv(tokens[mine])) {
+                    Received.Got(_) => {
+                        let a = spawn_local(fn() -> int { actor(inboxes[mine]) });
+                        send(placed_ch, mine);
+                        join(a)
+                    },
+                    _ => -1,
+                }
             });
-            let w = join(t);
-            if (!seen[w]) {
-                seen[w] = true;
-                placed = placed + 1;
-                let ib = inboxes[w];
-                let holder = spawn(fn() -> int {
-                    // Esta fibra puede haber caído en otro worker: usa el suyo para fijar el actor.
-                    let mine = worker_id();
-                    let a = spawn_local(fn() -> int { actor(inboxes[mine]) });
-                    join(a)
-                });
-                actors.push(holder);
+            actors.push(h);
+            match (select_timeout([placed_ch], 20)) {
+                Option.Some(_) => {
+                    let _ = recv(placed_ch);
+                    placed = placed + 1;
+                },
+                Option.None => { },
             }
             tries = tries + 1;
+        }
+        if (placed < n) {
+            print(
+                "could not place an actor on every worker ("
+                    + to_string(placed)
+                    + "/"
+                    + to_string(n)
+                    + ")"
+            );
+            return 1;
         }
         for _ in 0..fibers {
             spawn(fn() {

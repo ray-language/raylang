@@ -2212,3 +2212,29 @@ Decisión: el default de M319/1.27.40 se queda (10 µs cediendo). El mando ya ex
 `RAYLANG_SPIN_US=0` cambia −9 % de p99 por −13 % de CPU en máquinas con holgura, y conviene
 decirlo en la doc de despliegue de raygate/raylb. La rama queda sin fusionar, con las dos
 palancas (`RAYLANG_SPIN_ARM`, `RAYLANG_SPIN_PAUSES`) por si un caso futuro las reabre.
+
+### `pick_home` prefiere un worker despierto (9 oct 2026, rama `exp/pick-home-awake`)
+
+Cambio de una función: entre los workers de carga MÍNIMA (fibras vivas, M254), `pick_home`
+elige uno que esté despierto (corriendo o en su spin) antes que el siguiente del round-robin,
+que con cargas iguales caía casi siempre en un worker dormido. El reparto por fibras vivas
+sigue mandando: la preferencia solo rompe empates, así que el desequilibrio máximo es el mismo
+que antes (±1 fibra).
+
+| medida | 1.27.40 | `pick_home` despierto |
+|---|---:|---:|
+| `spawn` + respuesta, Linux VM 4 vCPU con 4 workers (micro de raylb) | 42 µs | **1,8 µs (23×)** |
+| ídem, macOS M3 Pro | 5,6 µs | **1,0 µs** |
+| `deadline.within` (spawn + timer), macOS | 6,7 µs | 1,45 µs |
+| raygate, Mac mini, 64 conexiones | 57,4 k req/s, p99 1,48 ms | igual (ruido) |
+| raygate, Linux VM, 4 workers | 45,4 k, p99 4,0 ms | 44,5 k (−2 %, ruido), p99 4,3 |
+| raylb, Linux VM, lazo cerrado (4 y 2 workers) | — | 0 % / +0,7 % |
+| raylb, Linux VM, lazo abierto a 2 000 req/s | p99 3,82 ms | **3,63 ms (−5 %)** |
+| raylb, lazo abierto a 10 000 req/s | p99 3,31 ms | 3,21 ms (−3 %) |
+| `actor_ask` (sin spawn en el camino) | — | igual |
+
+Lectura: bajo carga todos los workers están despiertos y el desempate no decide nada; el efecto
+está en la cola de latencia con poca carga (una petición aislada ya no paga el despertar por
+futex de un worker dormido al lanzar su ayudante) y en cualquier programa que lance fibras de
+vida corta desde una sola (pipelines, `deadline.within`, `scope`). Sin coste de CPU ni cambio
+de semántica. Candidato a main como mejora de bajo riesgo; queda a decisión.

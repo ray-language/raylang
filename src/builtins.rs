@@ -367,6 +367,9 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "random_int" => "A pseudo-random int in `[0, n)`.",
         // --- Concurrencia (VM) ---
         "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
+        "spawn_local" => "Like `spawn`, but in a native binary the task is pinned to the CURRENT scheduler worker: no cross-thread wake-up, it runs when the caller yields (sub-microsecond for short helpers). The building block of per-worker state (one actor per worker, Seastar style: see `worker_id`). In the VM it is a plain `spawn`.",
+        "worker_id" => "Index of the scheduler worker running this task (0..worker_count()). Stable for the task's whole life in a native binary (tasks never migrate); in the VM it is the current thread's worker index. Use it to pick per-worker state (one actor per worker).",
+        "worker_count" => "Number of scheduler workers (cores, or `RAYLANG_THREADS`).",
         "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns inherit its domain. The building block for running plugins or less-trusted code in-process.",
         "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure). Runtime error on a closed channel (use `try_send` when the receiver may be gone).",
@@ -4286,6 +4289,22 @@ static BUILTINS: &[Builtin] = &[
             Type::Fn(_, _) => Err((Some(0), "spawn_isolated requires a function WITHOUT parameters (fn() -> T)".into())),
             other => Err((Some(0), format!("spawn_isolated expects a function, not {}", other))),
         }
+    } },
+    Builtin { name: "spawn_local", opcode: OpCode::SpawnLocal, check: |a| {
+        arity(a, 1, "spawn_local", " (a function with no parameters)")?;
+        match &a[0] {
+            Type::Fn(params, ret) if params.is_empty() => Ok(Type::Task(ret.clone())),
+            Type::Fn(_, _) => Err((Some(0), "spawn_local requires a function WITHOUT parameters (fn() -> T)".into())),
+            other => Err((Some(0), format!("spawn_local expects a function, not {}", other))),
+        }
+    } },
+    Builtin { name: "worker_id", opcode: OpCode::WorkerId, check: |a| {
+        nullary(a, "worker_id")?;
+        Ok(Type::Int)
+    } },
+    Builtin { name: "worker_count", opcode: OpCode::WorkerCount, check: |a| {
+        nullary(a, "worker_count")?;
+        Ok(Type::Int)
     } },
     Builtin { name: "spawn", opcode: OpCode::Spawn, check: |a| {
         arity(a, 1, "spawn", " (a function with no parameters)")?;

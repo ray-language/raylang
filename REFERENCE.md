@@ -177,6 +177,9 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 |---|---|---|
 | `spawn` | `(f: fn() -> T) -> Task<T>` | lanza una tarea concurrente; `join` espera su valor |
 | `spawn_isolated` | `(f: fn() -> T) -> Task<T>` | como `spawn`, pero en un **dominio de handles** nuevo: la tarea no ve los archivos/sockets/procesos/ventanas de otros dominios (se comportan como cerrados) ni ellos los suyos; sus hijas heredan el dominio |
+| `spawn_local` | `(f: fn() -> T) -> Task<T>` | como `spawn`, fijando la fibra al **worker actual** en el binario nativo (corre cuando la madre cede, sin despertar a otro hilo); en la VM es `spawn`. La pieza del **estado por worker** (un actor por worker, ver `worker_id`) |
+| `worker_id` | `() -> int` | índice del worker que ejecuta la tarea (`0..worker_count()`); estable para toda la tarea en nativo |
+| `worker_count` | `() -> int` | número de workers del scheduler (núcleos o `RAYLANG_THREADS`) |
 | `join` | `(t: Task<T>) -> T` | bloquea hasta que la tarea termina (re-lanza su fallo). *Ad-hoc*: `join(arr, sep)` es el de strings |
 | `scope` | `(body: fn() -> R) -> R` | concurrencia estructurada: al volver une todas las tareas lanzadas dentro; si una falla, cancela a sus hermanas y propaga |
 | `send` | `(ch: Channel<T>, v: T) -> unit` | envía; bloquea si el canal acotado está lleno (backpressure) |

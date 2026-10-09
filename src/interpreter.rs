@@ -1022,7 +1022,7 @@ impl<'a> Interpreter<'a> {
                     // corre en el intérprete; un canal nunca llega al intérprete (channel() ya da error).
                     // `join` NO va aquí: es ad-hoc polimórfico y su forma de strings (M11.7a) corre en el
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
-                    if name == "spawn" || name == "spawn_isolated" || name == "send" || name == "__recv"
+                    if name == "spawn" || name == "spawn_isolated" || name == "spawn_local" || name == "send" || name == "__recv"
                         || name == "scope" || name == "select" || name == "try_recv" || name == "try_send"
                         || name == "__select_timeout" || name == "__task_failed" || name == "signals" {
                         return Err(runtime_error(callee.line, callee.col,
@@ -2904,6 +2904,9 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an int"),
             },
+            // M365: el oráculo secuencial es un único worker.
+            "worker_id" => Value::Int(0),
+            "worker_count" => Value::Int(1),
             _ => unreachable!("builtin unknown"),
         }
     }

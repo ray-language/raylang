@@ -100,6 +100,8 @@ struct Task {
 }
 
 thread_local! {
+    /// M365: índice del worker que corre en ESTE hilo (-1 fuera de un worker).
+    pub static WORKER: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
     /// M295: marcos raylang vivos en la fibra (o hilo) que corre en ESTE worker. Es un `Cell`
     /// thread-local y no un campo del contexto por fibra porque se toca en CADA llamada: el
     /// scheduler la intercambia con `Task::depth` alrededor de cada `resume`.
@@ -529,7 +531,26 @@ fn recycle_stack(task: Task) {
 
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
-    spawn_with_stack(fiber_stack_size(), f)
+    spawn_with_stack_on(fiber_stack_size(), None, f)
+}
+
+/// M365 (estilo Seastar): como `spawn`, pero la fibra queda FIJADA al worker que la
+/// lanza (fuera de un worker, reparto normal). Sin migración ni despertar entre hilos: la hija
+/// corre cuando la madre cede. Para estado por worker (actor por worker) y ayudantes de vida corta.
+pub fn spawn_local(f: impl FnOnce() + Send + 'static) -> JoinHandle {
+    let me = WORKER.with(|w| w.get());
+    spawn_with_stack_on(fiber_stack_size(), if me >= 0 { Some(me as usize) } else { None }, f)
+}
+
+/// Índice del worker actual (`None` fuera de un worker, p. ej. en el hilo `main` de `--lib`).
+pub fn current_worker() -> Option<usize> {
+    let me = WORKER.with(|w| w.get());
+    if me >= 0 { Some(me as usize) } else { None }
+}
+
+/// Número de workers del scheduler (lo arranca si hace falta).
+pub fn worker_count() -> usize {
+    sched().queues.len()
 }
 
 /// M329 (findings #107): como `spawn`, con una RESERVA de pila explícita en bytes — para el `main`
@@ -539,6 +560,10 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
 /// (~3 µs por ida y vuelta, y `RAYLANG_THREADS=1` no cambiaba nada); como fibra paga lo mismo
 /// que cualquier otra (~1 µs entre workers, ~0,2 µs en el mismo).
 pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -> JoinHandle {
+    spawn_with_stack_on(stack_bytes, None, f)
+}
+
+fn spawn_with_stack_on(stack_bytes: usize, on: Option<usize>, f: impl FnOnce() + Send + 'static) -> JoinHandle {
     let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new(), wl: WaitList::new() });
     let stack = take_stack(stack_bytes);
     let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
@@ -547,7 +572,13 @@ pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -
         f();
     });
     let s = sched();
-    let home = s.pick_home();
+    let home = match on {
+        Some(w) if w < s.queues.len() => {
+            s.alive[w].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            w
+        }
+        _ => s.pick_home(),
+    };
     // M296: la fibra nace en el dominio del que la lanza (el `spawn_isolated` lo cambia dentro).
     let task = Task { co, stack_bytes, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
     s.enqueue(task);
@@ -840,6 +871,7 @@ fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
 }
 
 fn worker_loop(s: &'static Scheduler, me: usize) {
+    WORKER.with(|w| w.set(me as isize));
     let wq = &s.queues[me];
     // M319 (findings #75): spin-then-park. Un worker sin trabajo mira su cola durante `spin_us`
     // microsegundos CEDIENDO el hilo al SO entre miradas (`yield_now`) antes de dormir en la
@@ -1194,6 +1226,7 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
 /// temporizadores y la E/S no esperen a que la cola de listas se vacíe (una cola que no se vacía
 /// nunca es el caso de un servidor saturado: justo cuando los `select_timeout` importan).
 fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
+    WORKER.with(|w| w.set(me as isize));
     let wq = &s.queues[me];
     let spin_us: u64 = std::env::var("RAYLANG_SPIN_US").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_SPIN_US);
     let mut rs = ReactorState::new(wake_rd);

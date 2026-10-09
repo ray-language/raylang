@@ -466,6 +466,11 @@ pub enum OpCode {
     /// Empuja `unit` (el `Pop` que sigue lo tira). Solo la VM.
     /// M296: `spawn_isolated(f)` — como `Spawn`, pero la fibra hija estrena un dominio de handles.
     SpawnIsolated,
+    /// M365: como Spawn, fijando la fibra al worker actual (nativo); pista en la VM.
+    SpawnLocal,
+    /// M365: índice del worker actual / número de workers.
+    WorkerId,
+    WorkerCount,
     SpawnDiscard,
     /// Saca un `Task<T>`; **une** la tarea: si terminó, empuja su valor; si falló (panic), re-lanza ese
     /// fallo; si sigue pendiente, **bloquea** la fibra hasta que termine (M12.3). Builtin `join` de 1

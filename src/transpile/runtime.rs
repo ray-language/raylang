@@ -2113,18 +2113,23 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         if t.fibers {
             out.push_str(concat!(
                 // M296: `spawn` hereda el dominio de handles; `spawn_isolated` estrena uno.
-                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain()) }\n",
-                "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain()) }\n",
-                "fn __ray_spawn_in<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F, domain: u64) -> __RayTask<T> {\n",
+                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain(), true) }\n",
+                "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain(), true) }\n",
+                // M365: fijada al worker actual (ray_runtime::fibers::spawn_local).
+                "fn __ray_spawn_local<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain(), false) }\n",
+                "fn __ray_worker_id() -> i64 { ray_runtime::fibers::current_worker().map(|w| w as i64).unwrap_or(0) }\n",
+                "fn __ray_worker_count() -> i64 { ray_runtime::fibers::worker_count() as i64 }\n",
+                "fn __ray_spawn_in<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F, domain: u64, anywhere: bool) -> __RayTask<T> {\n",
                 "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), parked: __ray_parked_new() };\n",
                 "    let t = task.clone();\n",
-                "    let _ = ray_runtime::fibers::spawn(move || {\n",
+                "    let body = move || {\n",
                 "        __ray_set_domain(domain);\n",
                 "        __ray_ctx(|c| { c.cancel = Some(t.cancel.clone()); c.parked = Some(t.parked.clone()); });\n",
                 "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
                 "        if r.is_err() { let frames = __ray_ctx(|c| std::mem::take(&mut c.scopes)); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
                 "        let mut st = t.inner.0.lock().unwrap(); st.result = Some(r); drop(st); __ray_notify(&t.inner); __ray_bump();\n",
-                "    });\n",
+                "    };\n",
+                "    let _ = if anywhere { ray_runtime::fibers::spawn(body) } else { ray_runtime::fibers::spawn_local(body) };\n",
                 "    let t2 = task.clone();\n",
                 "    __ray_ctx(|c| { if let Some(frame) = c.scopes.last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
                 "    task\n}\n",

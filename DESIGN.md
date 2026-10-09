@@ -17071,3 +17071,25 @@ E/S en `pending`, reciclar pilas de fibra), con tests que fallan sin cada arregl
 un caso y empeora otro —spin híbrido, elegir worker despierto al nacer, `spawn_local` al estilo
 Seastar, el reactor por worker como default— queda medido en ramas experimentales con sus
 cifras (PERFORMANCE §12) para decidirlo con un caso real delante, no por el microbenchmark.
+
+## 349. M365 — `spawn_local`: elegir dónde vive una fibra, sin tocar qué puede hacer (oct 2026)
+
+Tras M363 y M364 la pregunta del usuario fue qué hacen otros runtimes con el coste de cruzar
+hilos. Go y Tokio lo resuelven moviendo fibras (robo de trabajo y «runnext»), que raylang no puede
+hacer: sus fibras están fijadas al worker por el hazard del TLS cacheado por LLVM (doc de
+`fibers.rs`). Seastar, que también fija todo a su core, lo resuelve al revés: no mueve trabajo,
+reparte el ESTADO por core y cada petición habla con el de su core. Es la forma que encaja con
+el modelo de raylang sin cambiarlo.
+
+De ahí tres builtins: `spawn_local` (la fibra nueva se fija al worker que la lanza; en la VM, cuya
+cola es compartida, es `spawn`), `worker_id` y `worker_count`. No cambian ninguna semántica —el
+dominio de handles, el heap propio y el aislamiento son los de `spawn`— y un programa correcto
+con `spawn` lo es con `spawn_local`: la afinidad es rendimiento, nunca corrección. Lo medido
+(PERFORMANCE §13): un actor central consultado desde todos los workers tiene techo (su buzón
+serializa y cada consulta cruza hilos); un actor por worker escala con los núcleos, 2,4–13× en
+consultas por segundo a ~0,2 µs cada una. El precio lo paga el programa: el estado queda partido
+por worker, así que vale para rate limits, breakers y métricas aproximadas o agregables, no para
+un contador global exacto. Se descartó exponer `spawn_on(worker)`: colocar por índice invita a
+reinventar el reparto por fibras vivas de M254; con `spawn_local` + `worker_id` el programa
+coloca «uno por worker» lanzando fibras hasta cubrirlos (el patrón de tokens de
+`benchmarks/actor_shard.ray`), y el scheduler sigue mandando en el reparto.

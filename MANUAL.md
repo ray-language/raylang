@@ -2481,6 +2481,31 @@ Es la pieza para correr un plugin o código de menos confianza dentro del proces
 los canales cruzan con normalidad, los handles no. En el día a día no hace falta: `spawn` hereda
 el dominio del padre, así que un servidor sigue repartiendo conexiones a sus fibras.
 
+`spawn_local` es `spawn` con afinidad: en el binario nativo la fibra queda en el **mismo worker**
+que la lanza, así que corre en cuanto la madre cede y nadie tiene que despertar a otro hilo (en la
+VM es un `spawn` normal). Con `worker_id()` y `worker_count()` permite el patrón **un actor por
+worker**: un servidor que consulta a un actor central en cada petición (rate limit, breaker,
+métricas) paga un cruce de hilos y comparte un único buzón; con un actor por worker, cada
+petición consulta al suyo en ~0,2 µs y el conjunto escala con los núcleos (medido: 3–13× en
+consultas por segundo). El precio es que el estado queda partido por worker: vale para decisiones
+aproximadas o agregables, no para un contador global exacto.
+
+```rust
+// Un actor por worker: cada handler consulta al de su worker, sin cruzar hilos.
+fn main() -> int {
+    let n = worker_count();
+    var inboxes: [Channel<Msg>] = [];
+    for _ in 0..n { inboxes.push(Channel.bounded(1024)); }
+    // Colocación: una fibra por worker, cada una fija su actor con spawn_local.
+    // (ver benchmarks/actor_shard.ray para la colocación garantizada con tokens)
+    // ...
+    // En un handler:
+    let reply: Channel<int> = Channel.bounded(1);
+    send(inboxes[worker_id()], Msg.Ask(1, reply));
+    recv(reply).unwrap_or(0)
+}
+```
+
 ```rust
 fn main() -> int {
     let total = scope(fn() -> int {

@@ -1008,3 +1008,28 @@ fn main() -> int {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "un plazo de 20 ms esperó 300 ms o más junto a una fibra ocupada: {stdout}");
 }
+
+/// M365: `spawn_local` fija la hija al worker de la madre en nativo (en la VM es un
+/// `spawn`), y `worker_id`/`worker_count` son coherentes en los tres motores.
+#[test]
+fn spawn_local_pins_the_child_to_the_parent_worker() {
+    let d = std::env::temp_dir().join("raylang_test_spawn_local");
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn main() -> int {\n    print(\"ok=${worker_count() > 0 && worker_id() >= 0 && worker_id() < worker_count()}\");\n    let t = spawn_local(fn() -> int { worker_id() });\n    let child = join(t);\n    print(\"same=${child == worker_id()}\");\n    0\n}\n",
+    )
+    .unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    let out = Command::new(ray).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("ok=true\n"));
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = d.join("prog_bin");
+        let b = Command::new(ray).args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+        let out = Command::new(&bin).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok=true\nsame=true\n");
+    }
+}

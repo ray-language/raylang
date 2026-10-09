@@ -62,6 +62,13 @@ pub fn set_deterministic(v: bool) {
     FORCE_DETERMINISTIC.store(v, std::sync::atomic::Ordering::Relaxed);
 }
 
+thread_local! {
+    /// M365: índice del worker de la VM que corre en este hilo (0 en single-thread).
+    static VM_WORKER: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+/// M365: workers lanzados por `run` (1 en single-thread).
+static VM_WORKER_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
 /// M38.4: nº de hilos worker del scheduler M:N. **El multicore es el default** (§46.4); lo determinista es
 /// opt-in. Reglas, en orden:
 /// 1. `--deterministic` (o el default de los tests) → **1** (M:1 reproducible; el oráculo/M12 lo exige).
@@ -99,7 +106,7 @@ fn num_workers(program: &CompiledProgram) -> usize {
 /// M44a: solo lo usa la rama no-wasm de `num_workers` (en wasm siempre es 1).
 #[cfg(not(target_arch = "wasm32"))]
 fn program_uses_spawn(program: &CompiledProgram) -> bool {
-    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated)))
+    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated | OpCode::SpawnLocal)))
 }
 
 /// M38.3b paso 3: una referencia al programa compilado **compartible entre hilos worker**. `CompiledProgram`
@@ -320,6 +327,7 @@ impl<'a> Vm<'a> {
         self.sched().ready.push_back(main_fiber);
 
         let n = num_workers(self.program);
+        VM_WORKER_COUNT.store(n, std::sync::atomic::Ordering::Relaxed);
         if n == 1 {
             // Single-thread determinista (default): este Vm ES el único worker. `poll_next` toma main de
             // `ready`; comportamiento idéntico a antes de M38.3b (con N=1 el `running` oscila 1↔0 y nunca se
@@ -332,7 +340,7 @@ impl<'a> Vm<'a> {
             let prog = ProgRef(self.program);
             let shared = Arc::clone(&self.shared);
             std::thread::scope(|s| {
-                for _ in 0..n {
+                for wi in 0..n {
                     let shared = Arc::clone(&shared);
                     // Pila grande por worker (paridad con `with_big_stack`): la VM es iterativa, pero
                     // `format_value`/`collect`/`transfer_value` recurren sobre la pila de Rust en estructuras
@@ -343,6 +351,7 @@ impl<'a> Vm<'a> {
                             // Rebind del `ProgRef` ENTERO (no `prog.0`): fuerza la captura de la struct
                             // `Send`, no del `&CompiledProgram` disjunto (captura disjunta de la ed. 2021).
                             let prog = prog;
+                            VM_WORKER.with(|w| w.set(wi as i64));
                             let mut w = Vm::worker(prog.0, shared);
                             w.run_worker();
                         })
@@ -1251,7 +1260,7 @@ impl<'a> Vm<'a> {
                 }
 
                 // --- Concurrencia: CSP sobre la VM (M12.1) ---
-                OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated => {
+                OpCode::Spawn | OpCode::SpawnDiscard | OpCode::SpawnIsolated | OpCode::SpawnLocal => {
                     // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args), le asigna una
                     // Task<T> (M12.3) y la encola. Si hay un scope activo, adscribe la tarea a él.
                     // M98.1: `SpawnDiscard` (fire-and-forget fuera de scope) NO aloja Task — no hay
@@ -1314,6 +1323,14 @@ impl<'a> Vm<'a> {
                     } else {
                         self.push(HeapValue::Task(task.expect("Spawn always allocates")));
                     }
+                }
+                OpCode::WorkerId => {
+                    let id = VM_WORKER.with(|w| w.get());
+                    self.push(HeapValue::Int(id));
+                }
+                OpCode::WorkerCount => {
+                    let n = VM_WORKER_COUNT.load(std::sync::atomic::Ordering::Relaxed).max(1) as i64;
+                    self.push(HeapValue::Int(n));
                 }
                 OpCode::Signals => {
                     // M88.1: el canal de señales del SO — SINGLETON del proceso (la primera

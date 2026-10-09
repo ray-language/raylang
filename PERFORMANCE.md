@@ -2284,5 +2284,12 @@ el worker con una fibra y fijaba el actor con OTRA, que con el `pick_home` de §
 worker distinto → un worker sin actor y sus peticionarios colgados para siempre (deadlock en la VM
 Linux). La colocación por token lo hace imposible.
 
+**Re-medido sobre 1.27.41** (9 oct 2026, rama reconstruida sobre main con M363 y M364 dentro): las
+cifras se mantienen — Linux VM 4 workers: central 549 k / 1,78 M / 1,73 M frente a por worker
+2,72 M / 4,26 M / 4,88 M (1, 8 y 64 peticionarios: 5,0× / 2,4× / 2,8×); macOS: 883 k / 360 k /
+607 k frente a 3,17 M / 4,82 M / 6,15 M (3,6× / 13,4× / 10,1×). El actor central ya tiene en main
+las guardas de M363 y aun así su techo es el mismo: lo que lo limita es el buzón único y cruzar
+hilos, no las syscalls.
+
 Pendiente si se decide llevar a main: SPEC (semántica de `spawn_local` en VM/nativo), REFERENCE y
 llms.txt, selfhost, `raydoc`; y probar el patrón en raygate/raylb (su actor Pick+Done) con el A/B.

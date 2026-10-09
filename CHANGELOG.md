@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.42 — 2026-10-09
 
 - **`spawn_local`, `worker_id`, `worker_count` (M365)**: afinidad de worker en el binario nativo —
   la fibra nueva queda en el worker que la lanza y corre cuando la madre cede, sin despertar a

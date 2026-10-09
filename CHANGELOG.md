@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray registry mirror` (M368, ray-ds #140)**: publicar un paquete que vive dentro de otro repo
+  (el `packages/web` del monorepo, el `ray_ds/` de un design system) como espejo de solo
+  lectura — el paquete en la raíz de su repo, tag `v<versión>`, las dependencias hermanas
+  `path:` reescritas a git pinneado, el README público con el bloque de instalación — y, con
+  `--index`, su entrada en el índice (clon, `publish`, commit, push). `--readme-only` refresca
+  solo el README/LICENSE. `tools/publish-packages.sh` queda como envoltura de una línea por
+  paquete. Documentado en `PUBLISH.md` §8 y MANUAL §11: un paquete es la raíz de un repo; un
+  monorepo publica espejos.
+
 ## 1.27.42 — 2026-10-09
 
 - **`spawn_local`, `worker_id`, `worker_count` (M365)**: afinidad de worker en el binario nativo —

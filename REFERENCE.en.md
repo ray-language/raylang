@@ -621,6 +621,7 @@ inert. `blocking` is contextual: it remains valid as an identifier.
 | `ray registry keygen [--out F]` | generates the Ed25519 publishing key (`RAY_KEY` or `~/.ray/publish.key`) |
 | `ray registry verify [dir]` | audits the signatures of an index against its owners (the index repo's CI) |
 | `ray registry yank <name>@<ver> [--undo]` | withdraws/restores a published version |
+| `ray registry mirror <repo> [--public URL] [--index GIT_URL] [--sign] [--readme-only]` | publishes a package that lives INSIDE another repo (a monorepo's `packages/web`) as a read-only **mirror**: the package at the root of `<repo>`, tag `v<version>`, sibling `path:` dependencies rewritten to pinned git, the README with the install block; with `--index` also its entry in that index (clone, `publish`, commit, push). Versions are immutable (a repeated tag is an error). Run it inside the package directory (`PUBLISH.md` §8) |
 | `ray upgrade [tag] [--check]` | updates `ray`/`raylang` to the latest release (or the tag); `--check` only reports (0 = up to date, 1 = a newer one exists). **Clean machine** (no `ray` yet, e.g. a CI): `curl -sSfL https://raylang.dev/install.sh \| sh` (macOS/Linux → `~/.local/bin`) or `irm https://raylang.dev/install.ps1 \| iex` (Windows); or by hand, the release asset `https://github.com/ray-language/raylang/releases/latest/download/raylang-<triple>.tar.gz` (`.zip` on Windows; triples: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `aarch64-pc-windows-msvc`, `x86_64-pc-windows-msvc`), which ships `ray` and `raylang` |
 | `ray toolchain install [--rust <channel>] [--targets ios,android,<triple>…] [--force] [--no-vendor]` | installs a PRIVATE Rust toolchain for `build --native` under `~/.ray/toolchain` (rustup `minimal` profile, without touching the user's Rust or PATH) and the release's `ray-runtime` vendor (first build offline). With `cargo` already on the PATH it installs nothing (unless `--force`). `--targets` also adds the std of those targets |
 | `ray toolchain add-target <ios\|android\|triple>…` | installs the Rust standard library of those targets into the toolchain `build --native` uses (`ios` = `aarch64-apple-ios` + `aarch64-apple-ios-sim`; `android` = `aarch64-linux-android` + `x86_64-linux-android`), the private one included, which is not on the PATH. What `bundle --ios`/`--android` need. Exit 69 without `rustup` |
@@ -690,4 +691,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:08c18d06fdbb -->
+<!-- sync: sha256:e7d89949f3b8 -->

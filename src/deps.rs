@@ -13,7 +13,7 @@
 //!
 //! La verificación de integridad (lockfile + hashes de contenido, *supply-chain*) llega en M39c-2b.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::manifest::Manifest;
@@ -784,6 +784,41 @@ fn read_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>
 /// `.ray-deps/<nombre>` sigue en uso (el paquete puede seguir siendo transitiva de otra dep).
 pub fn locked_names(root: &Path) -> Vec<String> {
     read_lock(root).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+}
+
+/// M367: las dependencias del proyecto `m` PRESENTES en disco, como `(nombre, directorio)`:
+/// cada `nombre = "path:<dir>"` (o su copia `.ray-path-deps/<dir>` en un dispositivo de
+/// `ray dev --device`) y cada paquete cacheado en `.ray-deps/<nombre>/` (git/registro, incluidas
+/// las transitivas; sin el `.index`). Un paquete por ruta gana al cacheado del mismo nombre. Las
+/// consulta `[native] embed`: los assets de una dependencia entran al espacio embed bajo su
+/// nombre. No descarga nada.
+pub fn dependency_packages(m: &Manifest) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for (name, spec) in &m.dependencies {
+        if let Some(p) = path_of_path_dep(spec) {
+            let mut dir = m.root.join(p);
+            if !dir.is_dir()
+                && let Some(base) = Path::new(p).file_name()
+            {
+                dir = m.root.join(".ray-path-deps").join(base);
+            }
+            if dir.join("ray.toml").is_file() {
+                out.push((name.clone(), dir));
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir(m.root.join(".ray-deps")) {
+        let mut cached: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        cached.sort();
+        for dir in cached {
+            let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+            if name.starts_with('.') || !dir.join("ray.toml").is_file() || out.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            out.push((name, dir));
+        }
+    }
+    out
 }
 
 /// Las raíces de módulos de dependencias para el proyecto que contiene `dir`: el caché

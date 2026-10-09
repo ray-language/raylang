@@ -1428,6 +1428,13 @@ motores), 304 y Range que `static_files`. Bajo `ray dev`, un cambio en un asset 
 reinicia** el programa (la lectura ya es en vivo): el supervisor recarga el navegador directo
 por el hub de live-reload.
 
+**Un paquete también lleva assets.** El `[native] embed` de cada dependencia (por `path:` o
+descargada en `.ray-deps/`) entra al mismo espacio **bajo el nombre del paquete**: un design
+system `ray_ds` con `embed = ["assets"]` aporta `ray_ds/assets/index.js`, que la app lee con
+`embed.read` y sirve en su ventana con `ui.mount_embed_at("ray-ds", "ray_ds/assets")` — en
+vivo con `ray run`, horneado en el binario nativo y en el bundle, sin copiar nada. El propio
+paquete lee sus archivos por esa misma clave.
+
 ### Apps de escritorio y móvil (`std/ui`, `ray bundle`)
 
 Las ventanas, el empaquetado y todo lo que rodea a una app de escritorio o móvil se explican en el

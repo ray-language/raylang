@@ -271,6 +271,13 @@ pub fn collect_snapshot(root: &Path) -> Result<Files, String> {
         }
     }
     for (base, pdir) in path_deps {
+        // M367: los dirs de `[native] embed` del paquete viajan también (sus assets entran al
+        // espacio embed de la app bajo su nombre).
+        let dep_embed: Vec<PathBuf> = crate::manifest::Manifest::load(&pdir)
+            .ok()
+            .flatten()
+            .map(|dm| dm.native_embed.iter().map(|d| pdir.join(d)).collect())
+            .unwrap_or_default();
         let mut pending = vec![pdir.clone()];
         while let Some(dir) = pending.pop() {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -279,13 +286,14 @@ pub fn collect_snapshot(root: &Path) -> Result<Files, String> {
             for entry in entries {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().into_owned();
+                let in_embed = dep_embed.iter().any(|d| path.starts_with(d));
                 if path.is_dir() {
-                    if !(name.starts_with('.') || name == "target" || name == "node_modules") {
+                    if in_embed || !(name.starts_with('.') || name == "target" || name == "node_modules") {
                         pending.push(path);
                     }
                     continue;
                 }
-                if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+                if in_embed || name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
                     if name.ends_with(".ray") && !name.ends_with(".ray.html") && path.with_extension("ray.html").exists() {
                         continue;
                     }

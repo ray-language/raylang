@@ -4,9 +4,12 @@
 // `ray build --native` los HORNEA dentro del binario (autocontenido: el binario corre desde
 // cualquier directorio, y es lo que un .app de `ray bundle` necesita — Finder lanza con
 // cwd=/). Las claves usan `/` y son relativas a la raíz del proyecto: "assets/app.css".
+// M367: los `[native] embed` de cada DEPENDENCIA entran bajo su nombre ("ray_ds/assets/x.js"),
+// en todos los motores — un paquete lleva sus assets sin que la app los copie.
 
-/// Reads one embedded asset by its key (e.g. "assets/app.css"): `Ok(bytes)`, or `Err` if the
-/// key is not in the embed namespace or nothing is configured. Keys are exact strings — no
+/// Reads one embedded asset by its key (e.g. "assets/app.css"; a dependency's assets live under
+/// its name, "ray_ds/assets/index.js"): `Ok(bytes)`, or `Err` if the key is not in the embed
+/// namespace or nothing is configured. Keys are exact strings — no
 /// `..`, no case folding: the namespace is identical on every engine and build.
 pub fn read(path: string) -> Result<bytes, string> {
     let r = __embed_read(path);

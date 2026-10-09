@@ -2336,7 +2336,10 @@ impl<'a> Vm<'a> {
                 }
                 // M147: las claves del espacio embed → ["ok", clave…] o ["err", msg].
                 OpCode::EmbedRoot => {
-                    self.push(HeapValue::Str(crate::builtins::embed_root().into()));
+                    let HeapValue::Str(prefix) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    self.push(HeapValue::Str(crate::builtins::embed_root(&prefix).into()));
                 }
                 OpCode::EmbedList => {
                     let elems = match crate::builtins::embed_list() {

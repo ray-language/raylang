@@ -12,6 +12,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   que desde dentro. Antes `ray run tools/src/main.ray` desde la raíz de un monorepo corría el
   programa sin proyecto y ray-ds copiaba a mano los módulos del paquete hermano. Un cwd dentro
   de un proyecto manda, como siempre.
+- **Los assets de una dependencia (M367, ray-ds #139)**: el `[native] embed` de cada paquete
+  (`path:` o `.ray-deps/`) entra al espacio de `std/embed` bajo su nombre
+  (`ray_ds/assets/index.js`) — en vivo con `ray run`, horneado en el binario nativo, en el
+  bundle y en el dispositivo de `ray dev --device`. `ui.mount_embed`/`mount_embed_at` montan ese
+  prefijo en vivo desde el directorio del paquete; un prefijo que no es un directorio embebido
+  (o `""` con dependencias) se monta por bytes, con las mismas claves en todos los motores. Un
+  design system deja de necesitar un módulo generado con los archivos como constantes.
 
 ## 1.27.42 — 2026-10-09
 

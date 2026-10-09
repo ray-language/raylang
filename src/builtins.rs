@@ -1450,11 +1450,14 @@ pub fn set_ui_dev_reload(_port: u16) {}
 /// M234: la raíz EN DISCO de los assets embebidos cuando el programa corre bajo la toolchain
 /// (`ray run`/`ray dev` leen `[native] embed` del proyecto en vivo); `""` sin configuración. El
 /// binario nativo lleva los assets horneados y devuelve siempre `""` (ver el transpilador).
-pub fn embed_root() -> String {
-    let Some((root, _)) = embed_config().get() else {
+pub fn embed_root(prefix: &str) -> String {
+    let Some(sources) = embed_config().get() else {
         return String::new();
     };
-    let s = root.to_string_lossy().into_owned();
+    let Some(dir) = embed_live_dir(sources, prefix) else {
+        return String::new();
+    };
+    let s = dir.to_string_lossy().into_owned();
     // Windows: `canonicalize` devuelve la forma `\\?\C:\…` (extended-length), que no admite `/` al
     // concatenar en raylang; sin el prefijo, Win32 acepta separadores mixtos y `mount_dir` vuelve a
     // canonicalizar.
@@ -1691,11 +1694,21 @@ pub fn ui_try_next() -> Option<(String, i64, String)> {
 // la CLI al arrancar; el binario nativo con `--embed` los lleva horneados (include_bytes!). El
 // espacio de nombres es el MISMO en todos los motores: las claves que produce `embed_walk`. ---
 
-/// La config de embed del proceso: (raíz del proyecto, dirs de `[native] embed`). La fija la
-/// CLI al arrancar (run/test, desde el manifiesto del ENTRY); sin config, std/embed da Err.
-fn embed_config() -> &'static std::sync::OnceLock<(std::path::PathBuf, Vec<String>)> {
-    static CONFIG: std::sync::OnceLock<(std::path::PathBuf, Vec<String>)> =
-        std::sync::OnceLock::new();
+/// Un origen de assets embebidos (M367): la raíz en disco de un proyecto, sus dirs de
+/// `[native] embed` y el prefijo bajo el que entran al espacio de claves — `""` para la app
+/// (`assets/app.css`), el nombre de la dependencia para un paquete (`ray_ds/assets/index.js`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbedSource {
+    pub root: std::path::PathBuf,
+    pub dirs: Vec<String>,
+    pub prefix: String,
+}
+
+/// La config de embed del proceso: los orígenes (la app y cada dependencia con `[native] embed`).
+/// La fija la CLI al arrancar (run/test, desde el manifiesto del ENTRY); sin config, std/embed
+/// da Err.
+fn embed_config() -> &'static std::sync::OnceLock<Vec<EmbedSource>> {
+    static CONFIG: std::sync::OnceLock<Vec<EmbedSource>> = std::sync::OnceLock::new();
     &CONFIG
 }
 
@@ -1787,8 +1800,60 @@ pub fn dev_url_reachable(url: &str) -> bool {
     false
 }
 
-pub fn set_embed_config(root: std::path::PathBuf, dirs: Vec<String>) {
-    let _ = embed_config().set((root, dirs));
+pub fn set_embed_config(sources: Vec<EmbedSource>) {
+    let _ = embed_config().set(sources);
+}
+
+/// M367: la tabla `(clave, ruta)` de TODOS los orígenes, ordenada por clave: cada dependencia
+/// entra bajo su nombre (`<dep>/<dir>/<archivo>`), la app sin prefijo. La comparten la VM
+/// (`embed_list`/`embed_read`) y `ray build --native` (la tabla de include_bytes!) → un solo
+/// espacio de nombres, idéntico en todos los motores.
+pub fn embed_table(sources: &[EmbedSource]) -> Vec<(String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    for s in sources {
+        for (key, path) in embed_walk(&s.root, &s.dirs) {
+            let key = if s.prefix.is_empty() { key } else { format!("{}/{key}", s.prefix) };
+            out.push((key, path));
+        }
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+/// M367: el directorio EN DISCO que contiene exactamente las claves bajo `prefix` (para que
+/// `ui.mount_embed` monte en vivo): `assets` → `<raíz>/assets`, `ray_ds/assets/core` →
+/// `<raíz de ray_ds>/assets/core`. `None` si el prefijo no cae dentro de un dir embebido de un
+/// solo origen (p. ej. `""` con dependencias, o un prefijo parcial): el llamador cae al montaje
+/// por bytes, que vale para cualquier clave.
+fn embed_live_dir(sources: &[EmbedSource], prefix: &str) -> Option<std::path::PathBuf> {
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        // Toda la raíz de la app, como siempre — solo si no hay más orígenes que la app.
+        return match sources {
+            [only] if only.prefix.is_empty() => Some(only.root.clone()),
+            _ => None,
+        };
+    }
+    for s in sources {
+        // El prefijo debe empezar por el del origen (`ray_ds/…`) y seguir con un dir embebido.
+        let rest = if s.prefix.is_empty() {
+            prefix
+        } else {
+            match prefix.strip_prefix(s.prefix.as_str()).and_then(|r| r.strip_prefix('/')) {
+                Some(r) => r,
+                None => continue,
+            }
+        };
+        let in_dir = s.dirs.iter().any(|d| {
+            let d = d.trim_matches('/');
+            rest == d || rest.starts_with(&format!("{d}/"))
+        });
+        if in_dir {
+            return Some(s.root.join(rest));
+        }
+    }
+    None
 }
 
 const EMBED_NO_CONFIG: &str =
@@ -1833,16 +1898,16 @@ pub fn embed_walk(root: &std::path::Path, dirs: &[String]) -> Vec<(String, std::
 
 /// M147: las claves del espacio embed (orden lexicográfico).
 pub fn embed_list() -> Result<Vec<String>, String> {
-    let (root, dirs) = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
-    Ok(embed_walk(root, dirs).into_iter().map(|(k, _)| k).collect())
+    let sources = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
+    Ok(embed_table(sources).into_iter().map(|(k, _)| k).collect())
 }
 
 /// M147: el contenido de un asset del espacio embed. La ruta se resuelve por membership EXACTO
 /// contra el walk (nunca contra el filesystem directo: eso define `..` fuera y mata la deriva
 /// de mayúsculas de un filesystem case-insensitive).
 pub fn embed_read(path: &str) -> Result<Vec<u8>, String> {
-    let (root, dirs) = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
-    match embed_walk(root, dirs).iter().find(|(k, _)| k == path) {
+    let sources = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
+    match embed_table(sources).iter().find(|(k, _)| k == path) {
         Some((_, p)) => {
             std::fs::read(p).map_err(|e| format!("embed: could not read '{path}': {e}"))
         }
@@ -5189,10 +5254,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__embed_read expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
-    // __embed_root() -> string (M234): raíz en disco de los embebidos bajo la toolchain; "" si van
-    // horneados (nativo) o no hay configuración. `ui.mount_embed` monta el directorio en vivo con ella.
+    // __embed_root(prefix) -> string (M234/M367): el directorio en disco que contiene las claves
+    // bajo `prefix` cuando el programa corre bajo la toolchain ("" = toda la raíz de la app); ""
+    // si van horneados (nativo), no hay configuración o el prefijo no cae en un dir embebido de
+    // un solo origen. `ui.mount_embed` monta ese directorio en vivo; con "" monta por bytes.
     Builtin { name: "__embed_root", opcode: OpCode::EmbedRoot, check: |a| {
-        nullary(a, "__embed_root")?;
+        arity(a, 1, "__embed_root", " (prefix)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__embed_root expects a string (the embed prefix), not {}", a[0]))); }
         Ok(Type::String)
     } },
     // M246: __proc_spawn_detached(program, args, dir, env, env_clear) -> [bytes] (["ok", pid] o
@@ -6917,5 +6985,34 @@ mod tests {
         assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
         assert_eq!(char_index_of("añô", "z"), None);
     }
-}
 
+    /// M367: la tabla une los orígenes bajo su prefijo y el directorio en vivo solo existe
+    /// cuando el prefijo cae dentro de un dir embebido de UN origen.
+    #[test]
+    fn dependency_embed_sources_join_the_table_under_their_name() {
+        let base = std::env::temp_dir().join(format!("ray_embed_sources_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("app/assets")).unwrap();
+        std::fs::create_dir_all(base.join("ds/assets/core")).unwrap();
+        std::fs::write(base.join("app/assets/app.css"), "a").unwrap();
+        std::fs::write(base.join("ds/assets/index.js"), "b").unwrap();
+        std::fs::write(base.join("ds/assets/core/base.css"), "c").unwrap();
+        let app = EmbedSource { root: base.join("app"), dirs: vec!["assets".into()], prefix: String::new() };
+        let ds = EmbedSource { root: base.join("ds"), dirs: vec!["assets".into()], prefix: "ds".into() };
+        let keys: Vec<String> = embed_table(&[app.clone(), ds.clone()]).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["assets/app.css", "ds/assets/core/base.css", "ds/assets/index.js"]);
+        // El directorio en vivo: el de la app, el del paquete, un subdirectorio del paquete.
+        let both = [app.clone(), ds.clone()];
+        assert_eq!(embed_live_dir(&both, "assets"), Some(base.join("app/assets")));
+        assert_eq!(embed_live_dir(&both, "ds/assets"), Some(base.join("ds/assets")));
+        assert_eq!(embed_live_dir(&both, "ds/assets/core/"), Some(base.join("ds/assets/core")));
+        // Sin directorio único: prefijo vacío con dependencias, prefijo parcial, dir no embebido.
+        assert_eq!(embed_live_dir(&both, ""), None);
+        assert_eq!(embed_live_dir(&both, "ds"), None);
+        assert_eq!(embed_live_dir(&both, "ass"), None);
+        assert_eq!(embed_live_dir(&both, "ds/other"), None);
+        // Solo la app: el prefijo vacío es su raíz, como siempre.
+        assert_eq!(embed_live_dir(&[app.clone()], ""), Some(base.join("app")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

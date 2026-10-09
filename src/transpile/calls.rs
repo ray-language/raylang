@@ -2979,7 +2979,10 @@ impl Transpiler {
             }
             // M234: en el nativo los assets van horneados → no hay raíz en disco.
             "embed_root" if name.starts_with("__") => {
-                out.push_str("Rc::<str>::from(\"\")");
+                // El argumento (el prefijo) se evalúa por sus efectos y se descarta.
+                out.push_str("{ let _ = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; Rc::<str>::from(\"\") }");
             }
             "embed_list" if name.starts_with("__") => {
                 self.needs_embed = true;

@@ -147,9 +147,21 @@ fn the_device_reads_the_projects_embedded_assets() {
     )
     .unwrap();
     std::fs::write(project.join("assets/greeting.txt"), "hello from an embedded asset").unwrap();
+    // M367: una dependencia por ruta FUERA del proyecto con sus propios assets viaja con ellos.
+    let dep_base = scratch("embed-dep");
+    let dep = dep_base.join("ds"); // una dependencia por ruta se resuelve por el nombre de su directorio
+    std::fs::create_dir_all(dep.join("assets")).unwrap();
+    std::fs::write(dep.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"assets\"]\n").unwrap();
+    std::fs::write(dep.join("assets/theme.css"), "and one from a dependency").unwrap();
+    std::fs::write(dep.join("theme.ray"), "import std/embed;\n\npub fn css() -> Result<bytes, string> { embed.read(\"ds/assets/theme.css\") }\n").unwrap();
+    std::fs::write(
+        project.join("ray.toml"),
+        format!("[package]\nname = \"embedded\"\nversion = \"0.1.0\"\n\n[dependencies]\nds = \"path:{}\"\n\n[native]\nembed = [\"assets\"]\n", dep.display()),
+    )
+    .unwrap();
     std::fs::write(
         project.join("src/main.ray"),
-        "import std/embed;\nimport std/time;\nfn main() {\n    match (embed.read(\"assets/greeting.txt\")) {\n        Result.Ok(b) => print(from_utf8(b).unwrap_or(\"?\")),\n        Result.Err(e) => print(\"embed error: \" + e),\n    }\n    time.sleep(600000);\n}\n",
+        "import std/embed;\nimport std/time;\nimport ds/theme;\nfn main() {\n    match (embed.read(\"assets/greeting.txt\")) {\n        Result.Ok(b) => print(from_utf8(b).unwrap_or(\"?\")),\n        Result.Err(e) => print(\"embed error: \" + e),\n    }\n    match (theme.css()) {\n        Result.Ok(b) => print(from_utf8(b).unwrap_or(\"?\")),\n        Result.Err(e) => print(\"embed error: \" + e),\n    }\n    time.sleep(600000);\n}\n",
     )
     .unwrap();
 
@@ -194,8 +206,15 @@ fn the_device_reads_the_projects_embedded_assets() {
         client_err.lock().unwrap(),
         host_err.lock().unwrap()
     );
+    assert!(
+        wait_for(&client_out, "and one from a dependency", 30),
+        "the device could not read the dependency's asset:\nstdout:\n{}\nstderr:\n{}",
+        client_out.lock().unwrap(),
+        client_err.lock().unwrap()
+    );
     assert!(!client_out.lock().unwrap().contains("embed error"));
 
     let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_dir_all(&dep_base);
     let _ = std::fs::remove_dir_all(&sandbox);
 }

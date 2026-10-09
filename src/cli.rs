@@ -5724,6 +5724,9 @@ fn legacy(rest: &[String]) {
 /// el cwd; si nada, error de uso. Avisa —una vez— si el manifiesto declara dependencias
 /// (aún no se resuelven, M39c).
 fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
+    if let Some(p) = explicit {
+        adopt_project_of(p);
+    }
     let manifest = load_manifest();
     if let Some(m) = &manifest {
         if banner {
@@ -5809,15 +5812,48 @@ fn dependency_roots() -> Vec<PathBuf> {
     // M40.8a: caché `.ray-deps/` + el padre de cada dependencia por ruta. La lógica vive en
     // `deps::dependency_roots_for` (compartida con el LSP → un archivo diagnostica con las MISMAS
     // raíces con las que corre). La stdlib no es raíz de disco: va embebida (M40.5).
+    crate::deps::dependency_roots_for(&project_dir())
+}
+
+/// M366 (ray-ds): el directorio desde el que se busca el `ray.toml` (subiendo). Es el cwd, salvo
+/// que el cwd NO esté dentro de un proyecto y el archivo explícito de la línea de comandos sí:
+/// entonces es el directorio del archivo (`adopt_project_of`). Lo comparten `load_manifest` y
+/// `dependency_roots`, para que el manifiesto y las raíces de dependencias sean siempre del
+/// MISMO proyecto (y el mismo que `configure_embed` y el LSP ven desde el archivo).
+fn project_dir() -> PathBuf {
+    PROJECT_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+static PROJECT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// M366: `ray run tools/src/main.ray` desde la raíz de un repo sin `ray.toml` propio (un monorepo
+/// con el proyecto raylang en `tools/`) tomaba el programa SIN proyecto: `tools/ray.toml` y sus
+/// `[dependencies]` no se leían, y un `path:` hacia un paquete hermano no resolvía (ray-ds
+/// copiaba el módulo a mano). Si el cwd no pertenece a ningún proyecto, el proyecto es el del
+/// archivo — como ya hacían `configure_embed` y el LSP. Un cwd DENTRO de un proyecto manda, como
+/// siempre (un archivo de fuera se trata como módulo suelto de ese proyecto).
+fn adopt_project_of(entry: &str) {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    crate::deps::dependency_roots_for(&cwd)
+    if Manifest::find(&cwd).is_some() {
+        return;
+    }
+    let dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => return,
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+    if Manifest::find(&dir).is_some() {
+        let _ = PROJECT_DIR.set(dir);
+    }
 }
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay
 /// proyecto; un `ray.toml` mal formado aborta con 65 (error de compilación de la config).
 fn load_manifest() -> Option<Manifest> {
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match Manifest::load(&cwd) {
+    match Manifest::load(&project_dir()) {
         Ok(m) => {
             if let Some(m) = &m {
                 check_required_raylang(m);

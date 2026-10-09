@@ -4097,3 +4097,39 @@ fn assert_eq_msg_names_what_is_compared() {
     assert_eq!(code, 70, "{err}");
     assert!(err.contains("assert_eq failed: permission bits: 420 != 384"), "{err}");
 }
+
+/// M366 (ray-ds): `ray run tools/src/main.ray` desde un directorio SIN `ray.toml` toma el proyecto
+/// del archivo — su manifiesto y sus `[dependencies]` (aquí un paquete hermano por `path:`). Un
+/// cwd dentro de otro proyecto sigue mandando: el archivo de fuera se trata como módulo suelto.
+#[test]
+fn run_from_outside_a_project_adopts_the_project_of_the_file() {
+    let base = tmp("adopt_project");
+    // Un paquete-librería hermano y un proyecto `tools/` que depende de él por ruta.
+    let pkg = base.join("greet");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("ray.toml"), "[package]\nname = \"greet\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(pkg.join("hello.ray"), "pub fn hi(n: string) -> string { \"hi \" + n }\n").unwrap();
+    let tools = base.join("tools");
+    std::fs::create_dir_all(tools.join("src")).unwrap();
+    std::fs::write(
+        tools.join("ray.toml"),
+        "[package]\nname = \"tools\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n\n[dependencies]\ngreet = \"path:../greet\"\n",
+    )
+    .unwrap();
+    std::fs::write(tools.join("src/main.ray"), "import greet/hello;\n\nfn main() {\n    print(hello.hi(\"tools\"));\n}\n").unwrap();
+    // Desde la raíz del monorepo (sin ray.toml): el proyecto es el del archivo.
+    let (out, err, code) = ray(&base, &["run", "tools/src/main.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "hi tools");
+    // `ray check` y `ray test` por el mismo camino.
+    let (_o, err, code) = ray(&base, &["check", "tools/src/main.ray"]);
+    assert_eq!(code, 0, "{err}");
+    // Un cwd DENTRO de otro proyecto (una app con su entrada) manda: ahí `greet/hello` no resuelve.
+    let other = base.join("other");
+    std::fs::create_dir_all(other.join("src")).unwrap();
+    std::fs::write(other.join("ray.toml"), "[package]\nname = \"someapp\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(other.join("src/main.ray"), "fn main() {}\n").unwrap();
+    let (_o, err, code) = ray(&other, &["run", "../tools/src/main.ray"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("greet/hello") || err.contains("could not read module"), "{err}");
+}

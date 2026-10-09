@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El proyecto del archivo (M366, ray-ds)**: `ray run`/`check`/`build`/`test` con un archivo
+  explícito, desde un directorio que no pertenece a ningún proyecto, toman el `ray.toml` del
+  archivo (subiendo desde él): su manifiesto, sus `[dependencies]` y sus `path:` resuelven igual
+  que desde dentro. Antes `ray run tools/src/main.ray` desde la raíz de un monorepo corría el
+  programa sin proyecto y ray-ds copiaba a mano los módulos del paquete hermano. Un cwd dentro
+  de un proyecto manda, como siempre.
+
 ## 1.27.42 — 2026-10-09
 
 - **`spawn_local`, `worker_id`, `worker_count` (M365)**: afinidad de worker en el binario nativo —

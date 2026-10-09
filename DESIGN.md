@@ -17093,3 +17093,20 @@ un contador global exacto. Se descartó exponer `spawn_on(worker)`: colocar por 
 reinventar el reparto por fibras vivas de M254; con `spawn_local` + `worker_id` el programa
 coloca «uno por worker» lanzando fibras hasta cubrirlos (el patrón de tokens de
 `benchmarks/actor_shard.ray`), y el scheduler sigue mandando en el reparto.
+
+## 350. M366 — El proyecto es el del archivo cuando el cwd no tiene ninguno (oct 2026)
+
+Al revisar cómo publica ray-ds su paquete raylang `ray_ds` apareció una copia a mano:
+`tools/src/ray_ds/bridge.ray`, duplicado de `ray_ds/bridge.ray`, con un check de CI para
+mantenerla al día. La causa estaba en raylang: `ray run tools/src/main.ray` desde la raíz del
+repo (que no tiene `ray.toml`; el proyecto raylang vive en `tools/`) buscaba el manifiesto
+subiendo desde el **cwd**, no encontraba ninguno y corría el programa sin proyecto —
+`tools/ray.toml` y su `ray_ds = "path:../ray_ds"` no se leían. `configure_embed` y el LSP, en
+cambio, ya partían del archivo.
+
+La decisión es mínima: `resolve_entry` adopta el proyecto del archivo explícito **solo si el
+cwd no pertenece a ninguno** (`adopt_project_of`), y `load_manifest`/`dependency_roots` leen
+el mismo `project_dir()` para que manifiesto y raíces de dependencias sean siempre del mismo
+proyecto. Un cwd dentro de un proyecto sigue mandando (un archivo de fuera es un módulo suelto
+de ese proyecto, como antes): no cambia ningún flujo existente, solo deja de ignorar el
+proyecto en el caso en que no había ninguno que respetar.

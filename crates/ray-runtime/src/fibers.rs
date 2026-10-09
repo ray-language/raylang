@@ -316,19 +316,41 @@ impl Scheduler {
         use std::sync::atomic::Ordering::Relaxed;
         let n = self.queues.len();
         let start = self.next_home.fetch_add(1, Relaxed) % n;
-        let mut best = start;
-        let mut best_load = usize::MAX;
+        let mut min_load = usize::MAX;
+        for w in 0..n {
+            min_load = min_load.min(self.alive[w].load(Relaxed));
+        }
+        // EXP pick-home: entre los workers de carga MÍNIMA, preferir uno DESPIERTO (corriendo o en
+        // su spin): con el desempate round-robin puro, cada spawn de corta vida caía en un worker
+        // distinto que ya se había dormido, y pagaba un despertar por futex (medido en una VM
+        // Linux de 4 vCPU: spawn + respuesta 44–58 µs con 4 workers, 1,4 µs con 2 y 0,43 con 1).
+        // Es la versión sin migración del "runnext" de Go: localidad sin perder el reparto por
+        // fibras vivas (M254), que sigue mandando.
+        let asleep = |w: usize| {
+            if self.local_reactor {
+                self.polling[w].load(Relaxed)
+            } else {
+                self.queues[w].sleeping.load(Relaxed)
+            }
+        };
+        let mut best: Option<usize> = None;
+        let mut fallback = start;
+        let mut have_fallback = false;
         for k in 0..n {
             let w = (start + k) % n;
-            let load = self.alive[w].load(Relaxed);
-            if load < best_load {
-                best = w;
-                best_load = load;
-                if load == 0 {
-                    break;
-                }
+            if self.alive[w].load(Relaxed) != min_load {
+                continue;
+            }
+            if !have_fallback {
+                fallback = w;
+                have_fallback = true;
+            }
+            if !asleep(w) {
+                best = Some(w);
+                break;
             }
         }
+        let best = best.unwrap_or(fallback);
         self.alive[best].fetch_add(1, Relaxed);
         best
     }

@@ -78,6 +78,9 @@ type FiberCo = Coroutine<bool, Park, ()>;
 /// Una fibra en vuelo: la corrutina + la celda donde se publica su resultado.
 struct Task {
     co: FiberCo,
+    /// EXP wake-path: bytes de RESERVA de la pila de `co` — solo las del tamaño por defecto se
+    /// reciclan en `STACK_CACHE` al terminar (ver `recycle_stack`).
+    stack_bytes: usize,
     done: Arc<DoneCell>,
     /// Almacén FIBER-LOCAL genérico (viaja con la fibra entre workers): el binario transpilado
     /// guarda aquí su contexto (token de cancelación, pila de scopes, profundidad de try_call),
@@ -469,6 +472,41 @@ thread_local! {
     static CURRENT_LOCAL: Cell<*mut Option<Box<dyn std::any::Any>>> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+// EXP wake-path (coste de `spawn`): caché GLOBAL de pilas de fibra del tamaño por defecto. Cada
+// `spawn` hacía `mmap` + `mprotect` (guarda) y cada fin `munmap` —tres syscalls— y la fibra nueva
+// pagaba los fallos de página de una pila fría (raylb medía 8,5 µs por spawn + canal). Una pila
+// reciclada llega mapeada y con sus páginas calientes (Go y BEAM reciclan pilas igual). La
+// residencia queda acotada: `RAYLANG_STACK_CACHE` pilas como máximo (default 256; `0` apaga la
+// caché) × las páginas que cada una tocó (4–12 KiB medidos en net/webserver).
+static STACK_CACHE: Mutex<Vec<DefaultStack>> = Mutex::new(Vec::new());
+
+fn stack_cache_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| std::env::var("RAYLANG_STACK_CACHE").ok().and_then(|v| v.parse().ok()).unwrap_or(256))
+}
+
+/// Pila para una fibra nueva: de la caché si es del tamaño por defecto y hay alguna; si no, mapeada.
+fn take_stack(stack_bytes: usize) -> DefaultStack {
+    if stack_bytes == fiber_stack_size() && stack_cache_cap() > 0 {
+        if let Some(st) = STACK_CACHE.lock().unwrap().pop() {
+            return st;
+        }
+    }
+    DefaultStack::new(stack_bytes.max(32 * 1024)).expect("could not map a fiber stack")
+}
+
+/// Recicla la pila de una fibra TERMINADA (del tamaño por defecto, con hueco en la caché).
+fn recycle_stack(task: Task) {
+    if task.stack_bytes != fiber_stack_size() || stack_cache_cap() == 0 || !task.co.done() {
+        return;
+    }
+    let stack = task.co.into_stack();
+    let mut cache = STACK_CACHE.lock().unwrap();
+    if cache.len() < stack_cache_cap() {
+        cache.push(stack);
+    }
+}
+
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     spawn_with_stack(fiber_stack_size(), f)
@@ -482,7 +520,7 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
 /// que cualquier otra (~1 µs entre workers, ~0,2 µs en el mismo).
 pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -> JoinHandle {
     let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new(), wl: WaitList::new() });
-    let stack = DefaultStack::new(stack_bytes.max(32 * 1024)).expect("could not map a fiber stack");
+    let stack = take_stack(stack_bytes);
     let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
         // Prólogo: deja el yielder a mano para la cesión profunda (park desde N marcos más abajo).
         CURRENT.with(|c| c.set(y as *const Yielder<bool, Park> as *const ()));
@@ -491,7 +529,7 @@ pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -
     let s = sched();
     let home = s.pick_home();
     // M296: la fibra nace en el dominio del que la lanza (el `spawn_isolated` lo cambia dentro).
-    let task = Task { co, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
+    let task = Task { co, stack_bytes, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
     s.enqueue(task);
     JoinHandle { done }
 }
@@ -884,10 +922,12 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
             Ok(CoroutineResult::Return(())) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Ok(()));
+                recycle_stack(task);
             }
             Err(p) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Err(panic_msg(&*p)));
+                recycle_stack(task);
             }
         }
     }
@@ -1253,10 +1293,12 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
             Ok(CoroutineResult::Return(())) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Ok(()));
+                recycle_stack(task);
             }
             Err(p) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Err(panic_msg(&*p)));
+                recycle_stack(task);
             }
         }
         // Un fd imposible de armar despierta de inmediato (sale por `woken`).

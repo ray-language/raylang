@@ -17053,3 +17053,21 @@ modelo de actores que vale para cualquier servidor de pruebas: una `var` captura
 se copia por fibra, así que el estado entre peticiones (aquí, el reto PKCE) no puede vivir en
 ella; el juguete lo lleva dentro del código de autorización.
 
+
+## 348. M363 — Lo que `strace` enseñó del despertar entre workers (oct 2026)
+
+Tras M319 y M329 la ida y vuelta a un actor costaba 3,5 µs en Linux y 1,2 en macOS, y la
+pregunta del usuario fue cuánto quedaba por ganar y qué hacen otros runtimes. En vez de
+rediseñar, se contaron syscalls: 10,7 `futex` por ida y vuelta. La mayoría eran despertares a
+quien no dormía —`Condvar::notify_one` de std en Linux es un `futex_wake` incondicional, y lo
+hacían tanto la cola del worker como el canal emitido— y el resto, dos workers durmiéndose en
+cada vuelta. Por el camino apareció un bug con historia: los despertares de E/S no contaban en
+`pending`, el contador desbordaba y el spin de M319 quedaba apagado en cuanto un servidor atendía
+su primera conexión; raylb lo había medido meses antes como «el spin no tiene efecto» sin poder
+explicarlo.
+
+Decisión: a main va solo lo que no tiene compromiso (notificar solo a quien duerme, contar la
+E/S en `pending`, reciclar pilas de fibra), con tests que fallan sin cada arreglo. Lo que mejora
+un caso y empeora otro —spin híbrido, elegir worker despierto al nacer, `spawn_local` al estilo
+Seastar, el reactor por worker como default— queda medido en ramas experimentales con sus
+cifras (PERFORMANCE §12) para decidirlo con un caso real delante, no por el microbenchmark.

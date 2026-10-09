@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Scheduler nativo: despertar entre workers más barato (M363)**. Tres arreglos sin cambio de
+  semántica: (1) los despertares de E/S que entrega el reactor no contaban en `pending`, que
+  desbordaba y dejaba el spin-then-park de M319 apagado para siempre en ese worker desde la
+  primera conexión (es lo que raylb midió como «`RAYLANG_SPIN_US=0` sin efecto»); (2) un worker
+  solo se notifica si está dormido y el canal solo despierta hilos si hay alguno esperando (en
+  Linux eran dos `futex_wake` por mensaje aunque nadie durmiera); (3) caché de pilas de fibra
+  (`RAYLANG_STACK_CACHE`, 256 por defecto, `0` la apaga): un `spawn` ya no hace `mmap`/`munmap`
+  ni paga los fallos de página de una pila fría. Medido con `benchmarks/actor_ask.ray` en Linux:
+  ida y vuelta a un actor 1,7×, con 8–64 peticionarios 2,1–2,7×, envío de un sentido 3,5×, un
+  solo hilo 3,4× (`futex` por 100 k vueltas: 1,07 M → 45 k); `spawn` + respuesta en macOS 10,5 →
+  5,6 µs. Detalle en PERFORMANCE §12.
+
 ## 1.27.39 — 2026-10-07
 
 Los hallazgos que las apps anotaron al revisar 1.27.38 (ray-apps/RAYLANG-FINDINGS.md #128–#132,

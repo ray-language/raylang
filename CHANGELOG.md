@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Scheduler nativo: una fibra nueva prefiere un worker en spin (M364)**. Entre los workers de
+  carga mínima, `spawn` elige uno que esté despierto y libre (en su spin-then-park) antes que el
+  siguiente del round-robin, que solía estar dormido y costaba un despertar por futex; un worker
+  despierto pero ocupado no se prefiere. El reparto por fibras vivas (M254) sigue mandando. Medido:
+  `spawn` + respuesta 42 → 1,8 µs en una VM Linux de 4 vCPU con 4 workers (macOS 5,6 → 1,2);
+  raylb en lazo abierto p99 −3–5 %; neutro bajo carga. PERFORMANCE §12.
+
 ## 1.27.40 — 2026-10-09
 
 - **Scheduler nativo: despertar entre workers más barato (M363)**. Tres arreglos sin cambio de

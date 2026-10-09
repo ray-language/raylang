@@ -279,6 +279,10 @@ struct WorkerQueue {
     /// `Condvar::notify_one` de std es un `futex_wake` INCONDICIONAL (una syscall por encolado aunque
     /// el worker esté corriendo o girando); en macOS `pthread_cond_signal` toma su lock interno.
     sleeping: std::sync::atomic::AtomicBool,
+    /// M364: el dueño está en su spin-then-park: despierto Y libre (sin fibra en ejecución).
+    /// `pick_home` prefiere estos workers entre los de carga mínima: la fibra nueva corre de
+    /// inmediato y sin despertar a nadie.
+    spinning: std::sync::atomic::AtomicBool,
 }
 
 struct Scheduler {
@@ -316,19 +320,35 @@ impl Scheduler {
         use std::sync::atomic::Ordering::Relaxed;
         let n = self.queues.len();
         let start = self.next_home.fetch_add(1, Relaxed) % n;
-        let mut best = start;
-        let mut best_load = usize::MAX;
+        let mut min_load = usize::MAX;
+        for w in 0..n {
+            min_load = min_load.min(self.alive[w].load(Relaxed));
+        }
+        // M364: entre los workers de carga MÍNIMA, preferir uno que esté en su spin (despierto Y
+        // libre): la fibra nueva corre de inmediato sin despertar a nadie. Con el desempate
+        // round-robin puro, cada spawn de corta vida caía en un worker distinto que ya se había
+        // dormido y pagaba un despertar por futex (medido en una VM Linux de 4 vCPU: spawn +
+        // respuesta 42 µs con 4 workers, 1,8 con esta preferencia). Un worker despierto pero
+        // OCUPADO no se prefiere: la nueva esperaría detrás de la que corre (M254). El reparto
+        // por fibras vivas sigue mandando: la preferencia solo rompe empates.
+        let mut best: Option<usize> = None;
+        let mut fallback = start;
+        let mut have_fallback = false;
         for k in 0..n {
             let w = (start + k) % n;
-            let load = self.alive[w].load(Relaxed);
-            if load < best_load {
-                best = w;
-                best_load = load;
-                if load == 0 {
-                    break;
-                }
+            if self.alive[w].load(Relaxed) != min_load {
+                continue;
+            }
+            if !have_fallback {
+                fallback = w;
+                have_fallback = true;
+            }
+            if self.queues[w].spinning.load(Relaxed) {
+                best = Some(w);
+                break;
             }
         }
+        let best = best.unwrap_or(fallback);
         self.alive[best].fetch_add(1, Relaxed);
         best
     }
@@ -428,7 +448,7 @@ fn sched() -> &'static Scheduler {
             }
         }
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
-            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false) }).collect(),
+            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false), spinning: std::sync::atomic::AtomicBool::new(false) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
@@ -833,10 +853,12 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
         let mut task = {
             // Spin-then-park (ver arriba).
             if spin_us > 0 && wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                wq.spinning.store(true, std::sync::atomic::Ordering::SeqCst);
                 let until = Instant::now() + Duration::from_micros(spin_us);
                 while wq.pending.load(std::sync::atomic::Ordering::Acquire) == 0 && Instant::now() < until {
                     std::thread::yield_now();
                 }
+                wq.spinning.store(false, std::sync::atomic::Ordering::SeqCst);
             }
             let mut q = wq.q.lock().unwrap();
             loop {
@@ -1212,10 +1234,12 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                     None => {
                         // 2) Ocioso: spin breve mirando la cola (M319), luego dormir en el poller.
                         if spin_us > 0 {
+                            wq.spinning.store(true, std::sync::atomic::Ordering::SeqCst);
                             let until = Instant::now() + Duration::from_micros(spin_us);
                             while wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < until {
                                 std::thread::yield_now();
                             }
+                            wq.spinning.store(false, std::sync::atomic::Ordering::SeqCst);
                         }
                         s.polling[me].store(true, std::sync::atomic::Ordering::SeqCst);
                         let now = Instant::now();
@@ -2151,6 +2175,37 @@ mod tests {
             c.join().expect("la fibra cliente termina");
         }
         server.join().expect("la fibra servidora termina");
+    }
+
+    /// M364: fibras de vida corta lanzadas una tras otra caen en el worker que acaba de correr la
+    /// anterior (está en su spin: despierto y libre), no en el siguiente del round-robin (dormido:
+    /// un futex). Se mide cuántas veces el siguiente spawn repite worker: con round-robin puro y
+    /// N workers sería ~1/N; con la preferencia, la mayoría (otros tests en paralelo mueven las
+    /// cargas, así que el umbral es laxo).
+    #[test]
+    fn sequential_short_spawns_prefer_an_awake_worker() {
+        let n = sched().queues.len();
+        if n < 3 {
+            return;
+        }
+        let mut prev: Option<std::thread::ThreadId> = None;
+        let mut same = 0;
+        let rounds = 40;
+        for _ in 0..rounds {
+            let slot = Arc::new(Mutex::new(None));
+            let s2 = slot.clone();
+            spawn(move || {
+                *s2.lock().unwrap() = Some(std::thread::current().id());
+            })
+            .join()
+            .expect("termina");
+            let id = slot.lock().unwrap().expect("corrió");
+            if prev == Some(id) {
+                same += 1;
+            }
+            prev = Some(id);
+        }
+        assert!(same * 100 / rounds >= 40, "solo {same}/{rounds} spawns repitieron worker (N = {n})");
     }
 
     /// M363: una fibra terminada devuelve su pila a la caché y el siguiente spawn la reutiliza

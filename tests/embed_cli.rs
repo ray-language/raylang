@@ -130,3 +130,67 @@ fn a_missing_embed_directory_fails_the_build_naming_the_origin() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("embed directory in --embed does not exist: 'nope'"), "nombra el origen: {err}");
 }
+
+/// M367 (ray-ds #139): los assets de una DEPENDENCIA entran al espacio embed bajo su nombre
+/// (`ds/assets/…`), unidos a los de la app, en los tres motores — y también cuando la app no
+/// declara `[native] embed` propio (solo el paquete lleva assets).
+#[test]
+fn a_dependencys_embedded_assets_join_the_namespace_under_its_name() {
+    let base = tmp("dependency");
+    // El paquete hermano, con sus propios assets.
+    let pkg = base.join("ds");
+    std::fs::create_dir_all(pkg.join("assets/core")).unwrap();
+    std::fs::write(pkg.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"assets\"]\n").unwrap();
+    std::fs::write(pkg.join("assets/index.js"), "export const ds = 1;\n").unwrap();
+    std::fs::write(pkg.join("assets/core/base.css"), ":root {}\n").unwrap();
+    std::fs::write(pkg.join("files.ray"), "import std/embed;\n\npub fn own() -> Result<bytes, string> { embed.read(\"ds/assets/index.js\") }\n").unwrap();
+    // La app: sus assets más la dependencia por ruta.
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("assets")).unwrap();
+    std::fs::write(app.join("assets/app.css"), "body {}\n").unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n[dependencies]\nds = \"path:../ds\"\n\n[native]\nembed = [\"assets\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app.join("main.ray"),
+        "import std/embed;\nimport ds/files;\n\nfn main() {\n    match (embed.list()) {\n        Result.Err(e) => print(\"list err: \" + e),\n        Result.Ok(keys) => {\n            var i = 0;\n            while (i < keys.len()) {\n                print(\"key: \" + keys[i]);\n                i = i + 1;\n            }\n        },\n    }\n    match (files.own()) {\n        Result.Ok(d) => print(\"from the package: \" + to_string(d.len())),\n        Result.Err(e) => print(\"err: \" + e),\n    }\n    match (embed.read(\"ds/assets/core/base.css\")) {\n        Result.Ok(d) => print(\"css: \" + to_string(d.len())),\n        Result.Err(e) => print(\"err: \" + e),\n    }\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "key: assets/app.css\nkey: ds/assets/core/base.css\nkey: ds/assets/index.js\nfrom the package: 21\ncss: 9\n";
+    for engine in ["--vm", "--interp"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "main.ray"]).current_dir(&app).output().expect("corre");
+        assert_eq!(out.status.code(), Some(0), "{engine}: exit 0\n{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine}: salida exacta");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = app.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "main.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&app)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(std::env::temp_dir()).output().expect("corre");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo ≡ VM (desde otro cwd)");
+    }
+    // Solo el paquete lleva assets: la app sin `[native] embed` igual los ve.
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n[dependencies]\nds = \"path:../ds\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "main.ray"]).current_dir(&app).output().expect("corre");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "key: ds/assets/core/base.css\nkey: ds/assets/index.js\nfrom the package: 21\ncss: 9\n",
+        "sin embed propio: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Un dir declarado por el paquete que no existe es un error que nombra al paquete.
+    std::fs::write(pkg.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"missing\"]\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "main.ray"]).current_dir(&app).output().expect("corre");
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("dependency 'ds' does not exist: 'missing'"), "{}", String::from_utf8_lossy(&out.stderr));
+}

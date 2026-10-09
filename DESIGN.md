@@ -17093,3 +17093,28 @@ un contador global exacto. Se descartó exponer `spawn_on(worker)`: colocar por 
 reinventar el reparto por fibras vivas de M254; con `spawn_local` + `worker_id` el programa
 coloca «uno por worker» lanzando fibras hasta cubrirlos (el patrón de tokens de
 `benchmarks/actor_shard.ray`), y el scheduler sigue mandando en el reparto.
+
+## 351. M367 — Los assets de una dependencia entran al espacio embed bajo su nombre (oct 2026)
+
+El hallazgo #139 de ray-ds lo decía todo: un paquete con `[native] embed` no podía llevar sus
+assets a la app, ni con `ray run` ni en el nativo — `std/embed` solo veía los de la app, y el
+paquete, al leer, veía el espacio de la app. El rodeo fue un `assets.ray` generado de 700 KB con
+los 86 archivos del design system como constantes string: funciona, pero es un archivo generado
+grande en el repo y una carga de compilación para cada app.
+
+La causa era la forma de la configuración: `(raíz, dirs)`, un solo origen. Ahora es una lista
+de `EmbedSource { root, dirs, prefix }`: la app con prefijo `""` y cada dependencia presente en
+disco (`path:`, `.ray-deps/<nombre>`, o `.ray-path-deps/<dir>` en el dispositivo) con su
+nombre. `embed_table` une los walks bajo su prefijo y ordena: un solo espacio de claves,
+idéntico en la VM, el intérprete, la tabla de `include_bytes!` del nativo y el bundle. La
+clave es el **nombre de la dependencia** (`ray_ds/assets/index.js`), no su ruta: es lo que el
+paquete sabe de sí mismo (lee sus propios archivos con esa clave) y lo que la app escribe en
+`[dependencies]`.
+
+El montaje en vivo de `ui.mount_embed` necesitaba un cambio de contrato: `__embed_root()` daba
+la raíz de la app y el módulo concatenaba el prefijo; con dependencias ese directorio no existe.
+Ahora `__embed_root(prefix)` devuelve **el directorio que contiene exactamente las claves bajo
+ese prefijo** (el de la app o el del paquete), y `""` cuando no hay uno solo — prefijo vacío
+con dependencias, prefijo parcial, dir no embebido —, y entonces el módulo monta por bytes, que
+vale para cualquier clave. Efecto lateral bienvenido: `mount_embed_at("", "missing")` daba `Err`
+en vivo y `Ok(0)` horneado; ahora `Ok(0)` en los tres.

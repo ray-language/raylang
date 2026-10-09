@@ -3658,10 +3658,7 @@ fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> 
             dirs.push((dist.to_string(), "ray.toml ([frontend] dist)"));
         }
     }
-    if dirs.is_empty() {
-        return Vec::new();
-    }
-    let root = manifest.map(|m| m.root).unwrap_or(entry_dir);
+    let root = manifest.as_ref().map(|m| m.root.clone()).unwrap_or(entry_dir);
     let root = root.canonicalize().unwrap_or(root);
     for (d, origin) in &dirs {
         if !root.join(d).is_dir() {
@@ -3670,10 +3667,43 @@ fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> 
         }
     }
     let dir_names: Vec<String> = dirs.into_iter().map(|(d, _)| d).collect();
-    crate::builtins::embed_walk(&root, &dir_names)
+    let mut sources = Vec::new();
+    if !dir_names.is_empty() {
+        sources.push(crate::builtins::EmbedSource { root, dirs: dir_names, prefix: String::new() });
+    }
+    // M367: los assets de cada dependencia, bajo su nombre.
+    if let Some(m) = &manifest {
+        sources.extend(dependency_embed_sources(m));
+    }
+    crate::builtins::embed_table(&sources)
         .into_iter()
         .map(|(key, p)| (key, p.to_string_lossy().into_owned()))
         .collect()
+}
+
+/// M367 (ray-ds #139): los orígenes de embed de las DEPENDENCIAS de `m` — cada paquete presente
+/// en disco (`path:` o `.ray-deps/`) con `[native] embed` en su `ray.toml` entra al espacio embed
+/// bajo su nombre: `ray_ds/assets/index.js`. Así un paquete lleva sus assets (un design system,
+/// iconos, una página) sin que cada app los copie, igual bajo `ray run`, en el binario nativo y
+/// en el bundle. Un dir declarado que no existe es un error del paquete (fail-fast, como en la
+/// app). El `[frontend] dist` de una dependencia no cuenta: es de la app.
+pub(crate) fn dependency_embed_sources(m: &Manifest) -> Vec<crate::builtins::EmbedSource> {
+    let mut sources = Vec::new();
+    for (name, dir) in crate::deps::dependency_packages(m) {
+        let Ok(Some(dm)) = Manifest::load(&dir) else { continue };
+        if dm.native_embed.is_empty() {
+            continue;
+        }
+        let root = dir.canonicalize().unwrap_or(dir);
+        for d in &dm.native_embed {
+            if !root.join(d).is_dir() {
+                eprintln!("embed directory in the ray.toml of dependency '{name}' does not exist: '{d}' (relative to '{}')", root.display());
+                process::exit(64);
+            }
+        }
+        sources.push(crate::builtins::EmbedSource { root, dirs: dm.native_embed.clone(), prefix: name });
+    }
+    sources
 }
 
 
@@ -6052,9 +6082,15 @@ pub(crate) fn configure_embed(entry: &str) {
             let how = f.build.as_deref().unwrap_or("the frontend build");
             eprintln!("note: frontend build '{dist}' not found — run `{how}` first, or use `ray dev`");
         }
+        let mut sources = Vec::new();
         if !dirs.is_empty() {
             let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
-            crate::builtins::set_embed_config(root, dirs);
+            sources.push(crate::builtins::EmbedSource { root, dirs, prefix: String::new() });
+        }
+        // M367: los assets de cada dependencia, bajo su nombre (en vivo desde su directorio).
+        sources.extend(dependency_embed_sources(&m));
+        if !sources.is_empty() {
+            crate::builtins::set_embed_config(sources);
         }
     }
 }

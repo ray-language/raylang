@@ -878,6 +878,57 @@ fn mount_embed_serves_the_directory_live_under_the_toolchain_and_baked_natively(
     }
 }
 
+/// M367 (ray-ds #139): los assets de una DEPENDENCIA se montan por su prefijo (`ds/assets`): en
+/// vivo como el directorio del paquete, en el nativo horneados. Con dependencias, el prefijo
+/// vacío (toda la app) ya no es un solo directorio → se monta por bytes, con las mismas claves.
+#[test]
+fn mount_embed_serves_a_dependencys_assets_live_and_natively() {
+    let base = tmp("mount_embed_dep");
+    let pkg = base.join("ds");
+    std::fs::create_dir_all(pkg.join("assets/core")).unwrap();
+    std::fs::write(pkg.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[native]\nembed = [\"assets\"]\n").unwrap();
+    std::fs::write(pkg.join("assets/index.js"), "export {}").unwrap();
+    std::fs::write(pkg.join("assets/core/base.css"), ":root {}").unwrap();
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("assets")).unwrap();
+    std::fs::write(app.join("assets/a.txt"), "hola").unwrap();
+    std::fs::write(app.join("ray.toml"), "[package]\nname = \"embeddep\"\nversion = \"0.1.0\"\n\n[dependencies]\nds = \"path:../ds\"\n\n[native]\nembed = [\"assets\"]\n").unwrap();
+    std::fs::write(
+        app.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    match (ui.mount_embed_at(\"ray-ds\", \"ds/assets\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n    match (ui.mount_embed(\"\", \"ds/assets/core\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n    match (ui.mount_embed(\"\", \"\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n}\n",
+    )
+    .unwrap();
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&app)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 2\nok 1\nok 3\n", "{engine:?}\n{err}");
+        assert!(err.contains("[ui] mount dir ray-ds "), "{engine:?}: el directorio del paquete en vivo\n{err}");
+        assert!(err.contains("[ui] mount dir ds/assets/core "), "{engine:?}\n{err}");
+        // El prefijo vacío con dependencias: por bytes, nunca la raíz de la app como directorio.
+        assert!(!err.contains("[ui] mount dir  "), "{engine:?}: sin montar la raíz\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = app.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&app)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 2\nok 1\nok 3\n", "nativo\n{err}");
+        assert!(!err.contains("[ui] mount dir"), "nativo: horneado\n{err}");
+    }
+}
+
 /// M323 (ray808 #11): `mount_embed_at` RECORTA la clave del embed — `mount_embed_at("", "assets")`
 /// monta el contenido de `assets/` en la raíz (`ray://app/a.txt`) y `mount_embed_at("www", "assets")`
 /// bajo `www/`; en vivo (toolchain) como directorio, en el nativo horneado. `mount_embed` sigue
@@ -904,8 +955,9 @@ fn mount_embed_at_strips_the_embed_prefix_live_and_natively() {
             .output()
             .unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
-        // En vivo el directorio se monta en el prefijo pedido (raíz: prefijo vacío); `missing` no existe.
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 2\nok 2\nerr\n", "{engine:?}\n{err}");
+        // En vivo el directorio se monta en el prefijo pedido (raíz: prefijo vacío); `missing` no es
+        // un dir embebido → se monta por bytes (0 claves), igual que el horneado (M367).
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok 2\nok 2\nok 0\n", "{engine:?}\n{err}");
         assert!(err.contains("[ui] mount dir  "), "{engine:?}: montaje en la raíz\n{err}");
         assert!(err.contains("[ui] mount dir www "), "{engine:?}\n{err}");
         assert!(!err.contains("[ui] mount dir assets "), "{engine:?}: la clave se recorta\n{err}");

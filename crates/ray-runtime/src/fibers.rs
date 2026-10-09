@@ -78,6 +78,9 @@ type FiberCo = Coroutine<bool, Park, ()>;
 /// Una fibra en vuelo: la corrutina + la celda donde se publica su resultado.
 struct Task {
     co: FiberCo,
+    /// M363: bytes de RESERVA de la pila de `co` — solo las del tamaño por defecto se
+    /// reciclan en `STACK_CACHE` al terminar (ver `recycle_stack`).
+    stack_bytes: usize,
     done: Arc<DoneCell>,
     /// Almacén FIBER-LOCAL genérico (viaja con la fibra entre workers): el binario transpilado
     /// guarda aquí su contexto (token de cancelación, pila de scopes, profundidad de try_call),
@@ -271,6 +274,11 @@ struct WorkerQueue {
     cv: Condvar,
     /// M319: tareas encoladas y aún no sacadas — el spin-then-park del worker mira esto sin tomar el lock.
     pending: std::sync::atomic::AtomicUsize,
+    /// M363: el dueño está DORMIDO en `cv` (se pone bajo el lock de `q`, justo
+    /// antes de `wait`, y se quita al salir). Quien encola solo notifica si está a `true`: en Linux
+    /// `Condvar::notify_one` de std es un `futex_wake` INCONDICIONAL (una syscall por encolado aunque
+    /// el worker esté corriendo o girando); en macOS `pthread_cond_signal` toma su lock interno.
+    sleeping: std::sync::atomic::AtomicBool,
 }
 
 struct Scheduler {
@@ -336,7 +344,10 @@ impl Scheduler {
             if self.polling[home].load(std::sync::atomic::Ordering::SeqCst) {
                 sys::wake(self.worker_wake_wr[home], 1);
             }
-        } else {
+        } else if wq.sleeping.load(std::sync::atomic::Ordering::SeqCst) {
+            // Sin carrera: el push va bajo el lock de `q` y el worker pone `sleeping` bajo ese
+            // mismo lock antes de dormir, así que o ve la tarea al tomar el lock o nosotros vemos
+            // `sleeping` tras soltarlo.
             wq.cv.notify_one();
         }
     }
@@ -417,7 +428,7 @@ fn sched() -> &'static Scheduler {
             }
         }
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
-            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0) }).collect(),
+            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
@@ -461,6 +472,41 @@ thread_local! {
     static CURRENT_LOCAL: Cell<*mut Option<Box<dyn std::any::Any>>> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+// M363 (coste de `spawn`): caché GLOBAL de pilas de fibra del tamaño por defecto. Cada
+// `spawn` hacía `mmap` + `mprotect` (guarda) y cada fin `munmap` —tres syscalls— y la fibra nueva
+// pagaba los fallos de página de una pila fría (raylb medía 8,5 µs por spawn + canal). Una pila
+// reciclada llega mapeada y con sus páginas calientes (Go y BEAM reciclan pilas igual). La
+// residencia queda acotada: `RAYLANG_STACK_CACHE` pilas como máximo (default 256; `0` apaga la
+// caché) × las páginas que cada una tocó (4–12 KiB medidos en net/webserver).
+static STACK_CACHE: Mutex<Vec<DefaultStack>> = Mutex::new(Vec::new());
+
+fn stack_cache_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| std::env::var("RAYLANG_STACK_CACHE").ok().and_then(|v| v.parse().ok()).unwrap_or(256))
+}
+
+/// Pila para una fibra nueva: de la caché si es del tamaño por defecto y hay alguna; si no, mapeada.
+fn take_stack(stack_bytes: usize) -> DefaultStack {
+    if stack_bytes == fiber_stack_size() && stack_cache_cap() > 0 {
+        if let Some(st) = STACK_CACHE.lock().unwrap().pop() {
+            return st;
+        }
+    }
+    DefaultStack::new(stack_bytes.max(32 * 1024)).expect("could not map a fiber stack")
+}
+
+/// Recicla la pila de una fibra TERMINADA (del tamaño por defecto, con hueco en la caché).
+fn recycle_stack(task: Task) {
+    if task.stack_bytes != fiber_stack_size() || stack_cache_cap() == 0 || !task.co.done() {
+        return;
+    }
+    let stack = task.co.into_stack();
+    let mut cache = STACK_CACHE.lock().unwrap();
+    if cache.len() < stack_cache_cap() {
+        cache.push(stack);
+    }
+}
+
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     spawn_with_stack(fiber_stack_size(), f)
@@ -474,7 +520,7 @@ pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
 /// que cualquier otra (~1 µs entre workers, ~0,2 µs en el mismo).
 pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -> JoinHandle {
     let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new(), wl: WaitList::new() });
-    let stack = DefaultStack::new(stack_bytes.max(32 * 1024)).expect("could not map a fiber stack");
+    let stack = take_stack(stack_bytes);
     let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
         // Prólogo: deja el yielder a mano para la cesión profunda (park desde N marcos más abajo).
         CURRENT.with(|c| c.set(y as *const Yielder<bool, Park> as *const ()));
@@ -483,7 +529,7 @@ pub fn spawn_with_stack(stack_bytes: usize, f: impl FnOnce() + Send + 'static) -
     let s = sched();
     let home = s.pick_home();
     // M296: la fibra nace en el dominio del que la lanza (el `spawn_isolated` lo cambia dentro).
-    let task = Task { co, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
+    let task = Task { co, stack_bytes, done: done.clone(), local: None, timed_out: false, home, depth: 0, domain: DOMAIN.with(|d| d.get()) };
     s.enqueue(task);
     JoinHandle { done }
 }
@@ -795,9 +841,11 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
             let mut q = wq.q.lock().unwrap();
             loop {
                 if let Some(t) = q.pop_front() {
+                    wq.sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
                     wq.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
                     break t;
                 }
+                wq.sleeping.store(true, std::sync::atomic::Ordering::SeqCst);
                 q = wq.cv.wait(q).unwrap();
             }
         };
@@ -857,10 +905,12 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
             Ok(CoroutineResult::Return(())) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Ok(()));
+                recycle_stack(task);
             }
             Err(p) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Err(panic_msg(&*p)));
+                recycle_stack(task);
             }
         }
     }
@@ -1226,10 +1276,12 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
             Ok(CoroutineResult::Return(())) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Ok(()));
+                recycle_stack(task);
             }
             Err(p) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 finish(&task.done, Err(panic_msg(&*p)));
+                recycle_stack(task);
             }
         }
         // Un fd imposible de armar despierta de inmediato (sale por `woken`).
@@ -1245,13 +1297,21 @@ fn flush_batches(s: &'static Scheduler, batches: &mut [Vec<Task>]) {
             continue;
         }
         let wq = &s.queues[home];
+        let n = batch.len();
         {
             let mut q = wq.q.lock().unwrap();
             for t in batch.drain(..) {
                 q.push_back(t);
             }
         }
-        wq.cv.notify_one();
+        // M363: `pending` también cuenta los despertares del reactor. Antes no se sumaban
+        // y el pop del worker los RESTABA: `pending` desbordaba en el primer despertar de E/S y el
+        // spin-then-park de M319 (que mira `pending == 0`) quedaba apagado en ese worker para
+        // siempre; además un spinner no veía llegar la E/S y agotaba su ventana en vano.
+        wq.pending.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        if wq.sleeping.load(std::sync::atomic::Ordering::SeqCst) {
+            wq.cv.notify_one();
+        }
     }
 }
 
@@ -2091,6 +2151,37 @@ mod tests {
             c.join().expect("la fibra cliente termina");
         }
         server.join().expect("la fibra servidora termina");
+    }
+
+    /// M363: una fibra terminada devuelve su pila a la caché y el siguiente spawn la reutiliza
+    /// (la caché nunca supera su tope).
+    #[test]
+    fn finished_fibers_recycle_their_stacks() {
+        if stack_cache_cap() == 0 {
+            return;
+        }
+        for _ in 0..8 {
+            spawn(|| {}).join().expect("termina");
+        }
+        let cached = STACK_CACHE.lock().unwrap().len();
+        assert!(cached >= 1 && cached <= stack_cache_cap(), "pilas en caché: {cached}");
+    }
+
+    /// M363: los despertares que entrega el reactor (sueños) cuentan en `pending` como los de
+    /// `enqueue`. Antes no se sumaban y el pop los restaba: `pending` desbordaba y el spin de M319
+    /// quedaba apagado para siempre en ese worker. Tras muchos sueños, `pending` vuelve a 0.
+    #[test]
+    fn reactor_wakeups_keep_pending_balanced() {
+        let handles: Vec<_> = (0..16).map(|_| spawn(|| fiber_sleep(1))).collect();
+        for h in handles {
+            h.join().expect("la fibra durmiente termina");
+        }
+        // Deja que los workers saquen todo lo encolado (las fibras ya terminaron).
+        std::thread::sleep(Duration::from_millis(20));
+        for (i, wq) in sched().queues.iter().enumerate() {
+            let p = wq.pending.load(Ordering::SeqCst);
+            assert!(p < 1024, "pending del worker {i} desbordado: {p}");
+        }
     }
 
     #[test]

@@ -1071,7 +1071,13 @@ util = "path:../util"                           # local (no se bloquea; para des
 
 `ray build`/`run`/`test` resuelven y cachean las dependencias en `.ray-deps/` (con dependencias
 **transitivas** y resolución "gana la mayor compatible"). El lockfile `ray.lock` fija cada dependencia con
-su **hash SHA-256** — un contenido alterado se detecta como error de supply-chain. Gestión desde el CLI:
+su **hash SHA-256** — un contenido alterado se detecta como error de supply-chain.
+
+**Qué proyecto es**: el del `ray.toml` más cercano **subiendo desde el directorio actual**. Si el
+directorio actual no está dentro de ningún proyecto y el archivo de la línea de comandos sí
+(`ray run tools/src/main.ray` desde la raíz de un repo cuyo proyecto raylang vive en `tools/`),
+el proyecto es el del **archivo**: se leen su manifiesto y sus `[dependencies]` igual que desde
+dentro. Gestión desde el CLI:
 
 ```sh
 ray add textutils@^1.2      # añade al manifiesto y descarga

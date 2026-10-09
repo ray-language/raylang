@@ -2104,3 +2104,59 @@ Con dos workers y reactor local el servidor pelado queda al **94 % de hyper** en
 por petición y el `http.pool` compartido entre fibras (un canal). Lo que queda de la lista de §10:
 las asignaciones por petición (~7 %) y, para el proxy, el camino del cliente HTTP.
 
+
+## 12. M363 (oct 2026): el camino de despertar entre workers, medido con `strace`
+
+Pregunta (tras #75/#107 y M319/M329): cuánto queda por ganar en el despertar de una fibra en otro
+hilo y dónde se va. Herramientas: `benchmarks/actor_ask.ray` (mediana de 5), `strace -c` en una
+VM Linux de 4 vCPU (Ubuntu 24.04, `aarch64`), el micro y el A/B de raylb (`bench/micro.ray`,
+`bench/ab.ray`). Lo que aquí se describe es lo que entró en main; el resto del experimento
+(spin híbrido, `pick_home` con preferencia por workers despiertos, `spawn_local`) vive en las
+ramas `exp/wake-path` y `exp/spawn-local` con sus propias cifras.
+
+**Diagnóstico.** Base 1.27.39 en Linux, `rt 1`: **10,7 `futex` y 2 `sched_yield` por ida y
+vuelta**, con tres fuentes: (a) `Scheduler::enqueue` notificaba la condvar del worker siempre, y
+`Condvar::notify_one` de std es un `futex_wake` incondicional en Linux; (b) `__ray_notify` del canal
+emitido hacía `notify_all` incondicional (otro `futex_wake` por `send`/`close`), para hilos que
+desde M329 casi nunca esperan; (c) los dos workers se dormían en cada vuelta (ver abajo).
+
+**Bug que explica una medida vieja.** `flush_batches` —los despertares de E/S que entrega el
+reactor— encolaba SIN sumar a `pending`, y el pop del worker lo restaba: `pending` desbordaba en
+el primer despertar de E/S y el spin-then-park de M319 (que mira `pending == 0`) quedaba apagado
+para siempre en ese worker; además un spinner no veía llegar la E/S. En un servidor, el spin
+estaba muerto desde la primera conexión: es lo que raylb midió como «`RAYLANG_SPIN_US=0` sin
+efecto» (su PERFORMANCE §1). Test: `reactor_wakeups_keep_pending_balanced`.
+
+**Arreglos (M363)**: flag `sleeping` por worker puesto bajo el lock de su cola justo antes de
+`wait` (quien encola solo notifica si está a `true`; el push va bajo el mismo lock, así que no hay
+despertar perdido); contador de hilos esperando por canal y `notify_all` solo con alguno;
+`pending` cuenta también la E/S; y una **caché global de pilas de fibra** (`RAYLANG_STACK_CACHE`,
+256 por defecto; solo el tamaño por defecto se recicla): cada `spawn` hacía `mmap` + `mprotect` y
+cada fin `munmap`, y la pila nueva pagaba sus fallos de página; una reciclada llega mapeada y
+caliente (Go y BEAM reciclan pilas igual). Residencia acotada: tope × páginas tocadas (4–12 KiB
+medidos en `net/webserver`). Test: `finished_fibers_recycle_their_stacks`.
+
+| `actor_ask`, ops/s | Linux VM base | **Linux VM M363** | macOS M3 base | macOS M3 M363 |
+|---|---:|---:|---:|---:|
+| ida y vuelta, 1 peticionario | 299 k (3,4 µs) | **506 k (2,0 µs), 1,7×** | 873 k | 948 k (+9 %) |
+| 8 peticionarios | 995 k | **2,11 M, 2,1×** | 362 k | 362 k |
+| 64 peticionarios | 790 k | **2,15 M, 2,7×** | 631 k | 632 k |
+| un sentido, 8 emisores | 1,62 M | **5,67 M, 3,5×** | 932 k | 995 k (+7 %) |
+| `RAYLANG_THREADS=1` | 1,03 M | **3,45 M, 3,4×** | 3,45 M | 3,51 M |
+
+`futex` por 100 k vueltas en Linux: 1,07 M → 45 k. macOS apenas se mueve porque
+`pthread_cond_signal` ya era barato sin esperadores; la ganancia es de Linux, donde corren raygate
+y raylb en producción.
+
+**`spawn`** (micro de raylb «spawn + canal»): macOS 10,5 → 5,6 µs; Linux con 2 workers 1,3 µs.
+Con 4 workers en la VM de 4 vCPU sigue en ~40 µs: ahí el coste es que la fibra nueva cae en un
+worker distinto y DORMIDO (desempate round-robin de `pick_home`), que es lo que resuelve el
+`pick_home` de la rama experimental (44–58 → 1,8 µs) y queda pendiente de decisión.
+
+**Lo que NO entró y por qué** (medido en las ramas `exp/`): el spin híbrido (ráfagas de
+`spin_loop` antes de ceder) sube `rt1` en Linux a 641 k pero cuesta ~5 % de CPU con los núcleos
+llenos y −11 % en envío masivo de un sentido en macOS; el reactor por worker (M358) como default
+hunde la ida y vuelta en macOS a 16 µs (despertar por tubería + `kevent`); las colas sin lock no
+hacen falta: el residuo son sueños de condvar, no contención de mutex. En raylb (A/B 64
+conexiones, 3 réplicas) la versión completa de la rama dio p99 −33 % en el Mac mini y +4–8 % de
+req/s por núcleo en Linux con throughput plano: para un proxy HTTP el techo es el kernel.

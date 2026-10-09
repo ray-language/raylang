@@ -658,6 +658,7 @@ sin ella ni `[registry] index` se usa el oficial `ray-language/ray-index`; vací
 `RAYLANG_THREADS` (nº de hilos worker del scheduler; `1` = determinista),
 `RAY_FIBER_STACK_KIB` (reserva de pila por fibra en el binario nativo),
 `RAYLANG_SPIN_US` (µs de spin cediendo el hilo antes de dormir en el scheduler nativo; `0` lo apaga),
+`RAYLANG_STACK_CACHE` (pilas de fibra recicladas como máximo en el binario nativo; 256 por defecto, `0` apaga la caché),
 `RAYLANG_MAX_DEPTH` (marcos de recursión permitidos; 1024 por defecto),
 `RAY_SIGN_IDENTITY` / `RAY_NOTARY_PROFILE` / `RAY_SIGN_PFX_PASSWORD` (firma y notarización de `ray bundle`/`ray release`, equivalentes a `[app] sign`/`notary` y a la contraseña del `.pfx` en Windows),
 `RAY_SIGNING_KEY` / `RAY_KEYS_DIR` (clave Ed25519 de `std/update` para `ray release`, o el directorio de `ray keygen`; `~/.ray/keys` por defecto),

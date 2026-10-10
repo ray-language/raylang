@@ -1103,7 +1103,7 @@ requisito semver en `[dependencies]`); `ray run`/`build` con deps git/`path:` nu
 **Un paquete es la raíz de un repo.** Una dependencia `git+URL@ref` descarga el repo entero a
 `.ray-deps/<nombre>/` y lo importa por ese nombre: no hay forma de apuntar a un subdirectorio,
 ni el índice la tiene. Un paquete que vive dentro de otro repo (el `packages/web` del monorepo
-de raylang, el `ray_ds/` de un design system) se publica como **espejo**: un repo propio con el
+de raylang, el `elements/` de un design system) se publica como **espejo**: un repo propio con el
 paquete en la raíz y un tag por versión, que `ray registry mirror` escribe y etiqueta por ti
 (y registra en el índice con `--index`). Es como se publican `net`, `web`, `db`… desde
 `packages/`.
@@ -1438,8 +1438,8 @@ por el hub de live-reload.
 
 **Un paquete también lleva assets.** El `[native] embed` de cada dependencia (por `path:` o
 descargada en `.ray-deps/`) entra al mismo espacio **bajo el nombre del paquete**: un design
-system `ray_ds` con `embed = ["assets"]` aporta `ray_ds/assets/index.js`, que la app lee con
-`embed.read` y sirve en su ventana con `ui.mount_embed_at("ray-ds", "ray_ds/assets")` — en
+system `elements` con `embed = ["assets"]` aporta `elements/assets/index.js`, que la app lee con
+`embed.read` y sirve en su ventana con `ui.mount_embed_at("ray-elements", "elements/assets")` — en
 vivo con `ray run`, horneado en el binario nativo y en el bundle, sin copiar nada. El propio
 paquete lee sus archivos por esa misma clave.
 
@@ -1451,11 +1451,11 @@ package = "web"   # un directorio con su package.json: name + exports
 ```
 
 las páginas de la app lo importan **por su nombre npm**, igual que con un bundler —
-`import "@ray-ds/elements/button"`, `import { enableRaylang } from "@ray-ds/elements/core"` —
+`import "@raylang/elements/button"`, `import { enableRaylang } from "@raylang/elements/core"` —
 sin que la app escriba nada:
 
 - `std/ui` lo sirve en `ray://app/node_modules/<nombre npm>/` (donde lo pondría npm; las hojas
-  de estilo se enlazan por esa ruta: `href="/node_modules/@ray-ds/elements/tokens.css"`) y a cada
+  de estilo se enlazan por esa ruta: `href="/node_modules/@raylang/elements/tokens.css"`) y a cada
   página HTML de `ray://app/` le inyecta, justo tras `<head>`, un **import map** construido con
   los `exports` del `package.json`. `ui.import_map()` lo devuelve; una página con su propio
   `<script type="importmap">` se sirve tal cual (copia ahí las entradas). En vivo con `ray run`,
@@ -1467,7 +1467,7 @@ sin que la app escriba nada:
   `node_modules/` al `.gitignore` (`ray new` ya lo trae). Como en cualquier plantilla de Vite,
   dos archivos fijos hacen que todos los editores lo vean: un `tsconfig.json` con
   `"allowJs": true`, `"moduleResolution": "bundler"` y la lib `dom` (lo leen TypeScript y Deno), y
-  un `package.json` que declare la dependencia (`"dependencies": { "@ray-ds/elements": "*" }`):
+  un `package.json` que declare la dependencia (`"dependencies": { "@raylang/elements": "*" }`):
   el servidor de lenguaje de Deno solo resuelve por `node_modules` lo que el proyecto declara. Un
   `node_modules/<nombre>` real (instalado con npm) no se toca.
 

@@ -221,7 +221,7 @@ fn main() { print(textutils.shout("hola")); }   // HOLA!
 
 Un paquete es **la raíz de un repo** (§1): una dependencia `git+URL@ref` descarga el repo
 entero y el índice registra repos, así que un paquete que vive en un subdirectorio de otro
-repo (`packages/web` en el monorepo de raylang, `ray_ds/` en el repo de un design system) no
+repo (`packages/web` en el monorepo de raylang, `elements/` en el repo de un design system) no
 se puede instalar tal cual — `git+https://…/raylang` daría el monorepo. La forma oficial es
 un **espejo**: un repo propio, de solo lectura, con el paquete en la raíz y un tag por
 versión. El desarrollo (tests, cambios en tándem con la app) sigue en el monorepo; el espejo

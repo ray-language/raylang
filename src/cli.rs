@@ -2796,9 +2796,11 @@ fn cmd_bundle(args: &[String]) {
             ));
         }
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &tmp_bin, &signing);
+        let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
     } else if cfg!(unix) {
-        bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
+        let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
+        bundle_linux(&out_dir, &name, icon.as_deref(), &opens, &tmp_bin);
     } else if cfg!(windows) {
         // M180 (W7d): `<name><name>.exe` (subsistema WINDOWS + icono + VERSIONINFO como
         // recursos) y el acceso directo `<name>.lnk`.
@@ -2838,6 +2840,71 @@ fn uses_network(entry: &str) -> bool {
 }
 
 /// Escapa `&`, `<` y `>` para un valor de texto del plist.
+/// M370 (ray-sublime #120): un elemento de `[app] opens` traducido a las tres plataformas:
+/// `(UTIs de macOS, extensiones de macOS, MIME de Linux)`. Alias: `folder`, `text`, `image`,
+/// `any`; `.ext` = una extensión; `a/b` = un MIME literal (macOS lo recibe como extensión
+/// vacía y UTI `public.data`, el sistema resuelve por MIME solo en Linux); `x.y.z` = un UTI
+/// literal (macOS). Pura (testeable).
+fn open_type_mapping(item: &str) -> (Vec<&'static str>, Vec<String>, Vec<String>) {
+    let item = item.trim();
+    match item {
+        "folder" => (vec!["public.folder"], vec![], vec!["inode/directory".into()]),
+        "text" => (vec!["public.plain-text"], vec![], vec!["text/plain".into()]),
+        "image" => (vec!["public.image"], vec![], vec!["image/*".into()]),
+        "any" => (vec!["public.item"], vec![], vec!["application/octet-stream".into(), "text/plain".into(), "inode/directory".into()]),
+        _ if item.starts_with('.') && item.len() > 1 => {
+            let ext = item[1..].to_string();
+            (vec![], vec![ext.clone()], vec![format!("application/x-{ext}")])
+        }
+        _ if item.contains('/') => (vec!["public.data"], vec![], vec![item.to_string()]),
+        _ => (vec![], vec![], vec![]), // un UTI literal: solo macOS, lo añade el llamador
+    }
+}
+
+/// M370: el bloque `CFBundleDocumentTypes` del Info.plist para `[app] opens` (vacío sin tipos):
+/// una entrada con los UTIs (`LSItemContentTypes`) y otra con las extensiones
+/// (`CFBundleTypeExtensions`), ambas con rol `Editor` para que Finder ofrezca la app en
+/// «Abrir con» y acepte el arrastre sobre el icono. Pura.
+fn document_types_plist(opens: &[String]) -> String {
+    if opens.is_empty() {
+        return String::new();
+    }
+    let mut utis: Vec<String> = Vec::new();
+    let mut exts: Vec<String> = Vec::new();
+    for item in opens {
+        let (u, e, _) = open_type_mapping(item);
+        let literal_uti = u.is_empty() && e.is_empty() && !item.trim().is_empty();
+        utis.extend(u.iter().map(|x| x.to_string()));
+        exts.extend(e);
+        if literal_uti {
+            utis.push(item.trim().to_string()); // UTI literal
+        }
+    }
+    let mut out = String::from("\x20 <key>CFBundleDocumentTypes</key><array>\n");
+    let strings = |xs: &[String]| xs.iter().map(|x| format!("<string>{}</string>", plist_escape(x))).collect::<String>();
+    if !utis.is_empty() {
+        out.push_str(&format!("\x20   <dict><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array>{}</array></dict>\n", strings(&utis)));
+    }
+    if !exts.is_empty() {
+        out.push_str(&format!("\x20   <dict><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Alternate</string><key>CFBundleTypeExtensions</key><array>{}</array></dict>\n", strings(&exts)));
+    }
+    out.push_str("\x20 </array>\n");
+    out
+}
+
+/// M370: la línea `MimeType=` del `.desktop` para `[app] opens` (vacía sin tipos). Pura.
+fn desktop_mime_line(opens: &[String]) -> String {
+    let mut mimes: Vec<String> = Vec::new();
+    for item in opens {
+        for m in open_type_mapping(item).2 {
+            if !mimes.contains(&m) {
+                mimes.push(m);
+            }
+        }
+    }
+    if mimes.is_empty() { String::new() } else { format!("MimeType={};\n", mimes.join(";")) }
+}
+
 fn plist_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -2953,7 +3020,7 @@ fn sign_and_notarize_macos(app: &Path, signing: &Signing) {
     }
 }
 
-fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], bin: &Path, signing: &Signing) {
+fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], opens: &[String], bin: &Path, signing: &Signing) {
     let app = out_dir.join(format!("{name}.app"));
     let _ = fs::remove_dir_all(&app);
     let macos_dir = app.join("Contents/MacOS");
@@ -2978,6 +3045,8 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
     let copyright_key = copyright
         .map(|c| format!("\x20 <key>NSHumanReadableCopyright</key><string>{c}</string>\n"))
         .unwrap_or_default();
+    // M370: `[app] opens` → CFBundleDocumentTypes (lo que Finder deja soltar sobre el icono).
+    let document_types = document_types_plist(opens);
     // M209: `[app.plist]` + el permiso de red local por defecto, tal cual, en orden.
     let mut extra_keys = String::new();
     for (k, v) in extra {
@@ -3007,6 +3076,7 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
          {icon_key}\
          {copyright_key}\
          {extra_keys}\
+         {document_types}\
          \x20 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n\
          </dict>\n</plist>\n"
     );
@@ -3022,7 +3092,7 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
 /// El "bundle" de Linux: un directorio con el binario + el lanzador `.desktop` (el `Exec=` va
 /// ABSOLUTO — un .desktop con ruta relativa no funciona desde un lanzador; para instalarlo,
 /// copiarlo a ~/.local/share/applications ajustando la ruta si se mueve el directorio).
-fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
+fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String], bin: &Path) {
     let dir = out_dir.join(name);
     let _ = fs::remove_dir_all(&dir);
     if let Err(e) = fs::create_dir_all(&dir) {
@@ -3048,8 +3118,12 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
             Err(e) => eprintln!("bundle: warning: could not copy the icon ({e}); continuing without it"),
         }
     }
+    // M370: `[app] opens` → `MimeType=` (el menú «Abrir con» y el arrastre en los escritorios
+    // freedesktop) y `%F` en `Exec=` para recibir las rutas como argumentos.
+    let mime_line = desktop_mime_line(opens);
+    let exec_args = if opens.is_empty() { "" } else { " %F" };
     let desktop = format!(
-        "[Desktop Entry]\nType=Application\nName={name}\nExec={}/{name}\n{icon_line}Terminal=false\nCategories=Utility;\n",
+        "[Desktop Entry]\nType=Application\nName={name}\nExec={}/{name}{exec_args}\n{icon_line}{mime_line}Terminal=false\nCategories=Utility;\n",
         abs.display()
     );
     if let Err(e) = fs::write(dir.join(format!("{name}.desktop")), desktop) {
@@ -6309,6 +6383,19 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// M370: `[app] opens` → CFBundleDocumentTypes (UTIs y extensiones) y `MimeType=`.
+    #[test]
+    fn app_opens_maps_to_document_types_and_mime_types() {
+        let opens: Vec<String> = ["folder", ".ray", "text", "public.json", "image/png"].iter().map(|s| s.to_string()).collect();
+        let plist = super::document_types_plist(&opens);
+        assert!(plist.contains("<key>CFBundleDocumentTypes</key><array>"), "{plist}");
+        assert!(plist.contains("<key>LSItemContentTypes</key><array><string>public.folder</string><string>public.plain-text</string><string>public.json</string><string>public.data</string></array>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleTypeExtensions</key><array><string>ray</string></array>"), "{plist}");
+        assert_eq!(super::desktop_mime_line(&opens), "MimeType=inode/directory;application/x-ray;text/plain;image/png;\n");
+        assert_eq!(super::document_types_plist(&[]), "");
+        assert_eq!(super::desktop_mime_line(&[]), "");
+    }
+
     /// #117: el slug del repo efectivo sale del JSON de `gh repo view`, no del remoto `origin`.
     #[test]
     fn kv_json_reads_the_repo_slug_from_gh_output() {

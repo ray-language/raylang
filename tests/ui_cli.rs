@@ -1727,3 +1727,39 @@ fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
         assert!(err.contains(&format!("[ui] import map {MAP}")), "nativo\n{err}");
     }
 }
+
+/// M370 (ray-sublime #120): lo que el sistema pide abrir llega como eventos `"open"` (`window` 0,
+/// `tag` = ruta, uno por elemento). En headless los inyecta `RAY_UI_OPEN` (rutas separadas por
+/// `:`) una vez por proceso, también sin ventana abierta — como `open -a App ruta` al arrancar.
+#[test]
+fn the_system_asking_to_open_paths_arrives_as_open_events() {
+    let base = tmp("open_events");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    var n = 0;\n    while (n < 2) {\n        match (ui.next_event_timeout(2000)) {\n            Result.Ok(Option.Some(e)) => {\n                print(e.kind + \" \" + to_string(e.window) + \" \" + e.tag);\n                n = n + 1;\n            },\n            Result.Ok(Option.None) => {\n                print(\"timeout\");\n                n = 2;\n            },\n            Result.Err(e) => {\n                print(e);\n                n = 2;\n            },\n        }\n    }\n}\n",
+    )
+    .unwrap();
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_OPEN", "/tmp/a folder:/tmp/b.ray")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "open 0 /tmp/a folder\nopen 0 /tmp/b.ray\n", "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").env("RAY_UI_OPEN", "/tmp/a folder:/tmp/b.ray").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "open 0 /tmp/a folder\nopen 0 /tmp/b.ray\n", "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

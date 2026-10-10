@@ -178,6 +178,22 @@ fn enforce_queue_cap(q: &mut VecDeque<Event>) {
     }
 }
 
+/// M370: el inyector headless de lo que el sistema «pide abrir» (precedente RAY_UI_MSG): con
+/// `RAY_UI_OPEN=/ruta/a:/ruta/b` (separador `:`) se encolan esos eventos ("open", 0, ruta) UNA
+/// vez por proceso, al abrir la primera ventana headless o al esperar el primer evento — como
+/// haría macOS con un `open -a App ruta` al arrancar. Permite probar el handler sin un .app.
+pub(crate) fn headless_inject_open_once() {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !headless() || DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(list) = std::env::var("RAY_UI_OPEN") {
+        for p in list.split(':').filter(|p| !p.is_empty()) {
+            push_event("open", 0, p);
+        }
+    }
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ev = events();
@@ -205,10 +221,12 @@ pub fn event_fd() -> i32 {
 /// de la VM (Windows) para despertar la fibra SOLO cuando hay algo — despertarla a ciegas cada
 /// 1 ms renovaba el plazo de `next_event_timeout` y nunca vencía (el mismo caso de stdin, M173).
 pub fn has_pending_event() -> bool {
+    headless_inject_open_once();
     !events().queue.lock().unwrap().is_empty()
 }
 
 pub fn try_next_event() -> Option<(String, i64, String)> {
+    headless_inject_open_once();
     let ev = events();
     let mut q = ev.queue.lock().unwrap();
     match q.pop_front() {
@@ -226,6 +244,7 @@ pub fn try_next_event() -> Option<(String, i64, String)> {
 /// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo secuencial): espera en la
 /// condvar de la cola — sin sondeo. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
 pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
+    headless_inject_open_once();
     let ev = events();
     let deadline = if ms > 0 {
         Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
@@ -1545,6 +1564,7 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
         {
             push_event("message", id, &msg);
         }
+        headless_inject_open_once();
         return Ok(());
     }
     // §80b: modo SHELL (iOS; o `ui-shell` en pruebas) — el shell registró sus handlers ANTES
@@ -3198,6 +3218,42 @@ mod mac {
             extern "C" fn application_should_terminate(_this: Id, _sel: Sel, _app: Id) -> u64 {
                 if super::quit_requested() { 0 } else { 1 }
             }
+            // M370 (ray-sublime #120): lo que el sistema pide abrir — soltar sobre el icono del
+            // Dock, «Abrir con», `open -a App ruta` — llega por Apple Event a
+            // `application:openURLs:`, tanto al arrancar (tras finishLaunching, antes del primer
+            // evento de usuario) como con la app ya corriendo. Un evento ("open", 0, ruta) por
+            // URL, en orden; una URL que no es de archivo viaja como su texto absoluto.
+            extern "C" fn application_open_urls(_this: Id, _sel: Sel, _app: Id, urls: Id) {
+                // SAFETY: el run loop entrega un NSArray<NSURL> válido; se copia dentro del bloque.
+                let paths: Vec<String> = unsafe {
+                    let plain_id: MsgId = std::mem::transmute(msg_send());
+                    let count: MsgI64 = std::mem::transmute(msg_send());
+                    let at: MsgIdI64 = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let is_file: MsgU64 = std::mem::transmute(msg_send());
+                    let text_of = |obj: Id| -> Option<String> {
+                        if obj.is_null() {
+                            return None;
+                        }
+                        let c = utf8(obj, sel(b"UTF8String\0"));
+                        (!c.is_null()).then(|| std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
+                    };
+                    let n = if urls.is_null() { 0 } else { count(urls, sel(b"count\0")) };
+                    (0..n)
+                        .filter_map(|i| {
+                            let url = at(urls, sel(b"objectAtIndex:\0"), i);
+                            if url.is_null() {
+                                return None;
+                            }
+                            let sel_name = if is_file(url, sel(b"isFileURL\0")) & 0xff != 0 { b"path\0" as &[u8] } else { b"absoluteString\0" };
+                            text_of(plain_id(url, sel(sel_name)))
+                        })
+                        .collect()
+                };
+                for p in paths {
+                    super::push_event("open", 0, &p);
+                }
+            }
             extern "C" fn window_will_close(_this: Id, _sel: Sel, notification: Id) {
                 // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
                 let win = unsafe {
@@ -3376,6 +3432,13 @@ mod mac {
                     sel(b"applicationShouldTerminate:\0"),
                     application_should_terminate as extern "C" fn(Id, Sel, Id) -> u64 as *const c_void,
                     c"Q@:@".as_ptr(),
+                );
+                // M370: archivos/carpetas/URLs que el sistema pide abrir → eventos "open".
+                class_addMethod(
+                    cls_new,
+                    sel(b"application:openURLs:\0"),
+                    application_open_urls as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
                 );
                 // M252: la ventana que pasa a ser la clave → evento ("focused", id, "").
                 class_addMethod(

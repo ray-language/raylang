@@ -17202,3 +17202,29 @@ prefijo). Un paquete web roto (sin `package.json`) se avisa y se omite en vez de
 herramientas de un monorepo que GENERAN ese directorio dependen del paquete. Verificado con las
 tres apps de ejemplo de ray-ds en WKWebView (`--check`), `lean-app` también como binario nativo
 corrido desde otro directorio, y `tsc` resolviendo los imports por el enlace.
+
+## 353. M370 — Lo que el sistema pide abrir llega como evento `"open"` (oct 2026)
+
+ray-sublime (#120) descubrió que soltar una carpeta sobre el icono del Dock, «Abrir con» o
+`open -a App ruta` arrancaban la app con `args()` vacío y sin ningún evento: en macOS lo abierto
+no viaja por `argv` sino por Apple Event a `application:openURLs:` del delegado de la aplicación,
+también cuando la app ya corre. Sin eso no hay editor ni gestor de archivos posible: `code .`
+no puede pasar una ruta a la instancia abierta.
+
+La pieza que faltaba era pequeña porque el delegado de `NSApp` ya existía (M257, para
+`applicationShouldTerminate:`): un método más, `application:openURLs:`, que encola
+`("open", 0, ruta)` por cada URL, en orden — una URL de archivo como su `path`, cualquier otra
+como su texto absoluto. Un evento por elemento y no una lista en `tag`: así no hay que inventar
+un separador para rutas que pueden llevar cualquier carácter. El evento llega al arrancar (AppKit
+lo entrega tras `finishLaunching`, antes del primer evento de usuario; nuestro delegado se
+instala en `init_app`, antes de que el run loop bombee) y con la app abierta, y así se comprobó
+con un `.app` real, no con un ejemplo mínimo.
+
+Para que Finder ofrezca la app hace falta declarar lo que abre: `[app] opens` en `ray.toml`, con
+una tabla corta de alias (`folder`, `text`, `image`, `any`), extensiones (`.ray`) y UTIs/MIME
+literales, que `ray bundle` traduce a `CFBundleDocumentTypes` (macOS) y `MimeType=` + `%F`
+(Linux). Antes había que editar el plist con `plutil` y volver a firmar. En headless,
+`RAY_UI_OPEN=a:b` inyecta los eventos una vez por proceso (precedente `RAY_UI_MSG`), para que la
+batería de tres motores pruebe el handler sin bundle. Linux y Windows no tienen Apple Events: la
+segunda instancia debe reenviar su `argv` a la primera — la instancia única opcional queda para
+la siguiente PR del arco, junto con las asociaciones del registro de Windows.

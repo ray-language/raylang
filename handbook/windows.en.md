@@ -97,6 +97,7 @@ next one without using CPU.
 | `"closed"` | a window closed | |
 | `"close_requested"` | the user tried to close (with `intercept_close`) | |
 | `"quit_requested"` | the user tried to quit (with `intercept_quit`) | |
+| `"open"` | the system asked to open something: a file or folder dropped on the icon, "Open with", `open -a App path` (also while running; needs `[app] opens`) | the path, one event per item |
 | `"focused"` | a window came to the front | |
 | `"lifecycle"` | on mobile, the app went to the background or came back | `"background"` / `"foreground"` |
 
@@ -435,4 +436,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:4781fa04a6a0 -->
+<!-- sync: sha256:570197075b84 -->

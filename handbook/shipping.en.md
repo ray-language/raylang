@@ -42,6 +42,7 @@ Everything `ray bundle` needs to know about the app is in the `[app]` section:
 | `sign` | the signing identity (section 2) |
 | `notary` | the macOS notarization profile (section 2) |
 | `entitlements` | a permissions file for the macOS signature |
+| `opens` | what the app can open — `["folder", "text", "image", ".ray"]` or a literal UTI/MIME —; the system hands those items over as `"open"` events (drop on the icon, "Open with") |
 | `public_key` | the public key for updates (section 3); `ray keygen` writes it |
 
 Besides, `[app.plist]` adds keys to the macOS `Info.plist`, and `[native] embed` lists the folders
@@ -300,4 +301,4 @@ CMD ["notes-api"]
 That is the end of the chapters. For other use cases, [**More examples**](examples.en.md) gathers
 the apps of the ray-language organization, with their full source.
 
-<!-- sync: sha256:c18c89811acc -->
+<!-- sync: sha256:7accae018191 -->

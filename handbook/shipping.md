@@ -42,6 +42,7 @@ Todo lo que `ray bundle` necesita saber de la app está en la sección `[app]`:
 | `sign` | la identidad de firma (sección 2) |
 | `notary` | el perfil de notarización de macOS (sección 2) |
 | `entitlements` | un archivo de permisos para la firma de macOS |
+| `opens` | lo que la app sabe abrir — `["folder", "text", "image", ".ray"]` o un UTI/MIME literal —; el sistema le entrega esos elementos como eventos `"open"` (soltar sobre el icono, «Abrir con») |
 | `public_key` | la clave pública de las actualizaciones (sección 3); la escribe `ray keygen` |
 
 Además, `[app.plist]` añade claves al `Info.plist` de macOS, y `[native] embed` lista las carpetas

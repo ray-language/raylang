@@ -98,6 +98,7 @@ consumir CPU.
 | `"closed"` | una ventana se cerró | |
 | `"close_requested"` | el usuario intentó cerrar (con `intercept_close`) | |
 | `"quit_requested"` | el usuario intentó salir (con `intercept_quit`) | |
+| `"open"` | el sistema pidió abrir algo: un archivo o carpeta soltado sobre el icono, «Abrir con», `open -a App ruta` (también con la app abierta; requiere `[app] opens`) | la ruta, un evento por elemento |
 | `"focused"` | una ventana pasó al frente | |
 | `"lifecycle"` | en móvil, la app pasó a segundo plano o volvió | `"background"` / `"foreground"` |
 

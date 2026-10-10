@@ -21,13 +21,18 @@ from std/json import Json;
 /// refresh on regaining focus), "message" (the page called `window.ray.send(text)`: `tag`
 /// is the text and `window` the sender), "close_requested" (M257: the user tried to close
 /// `window` while `intercept_close(h, true)` is on — the window stays open until you `close(h)`)
-/// or "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
-/// `window` is 0; the app keeps running until `main` returns). In the iOS/Android shells of
+/// "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
+/// `window` is 0; the app keeps running until `main` returns) or "open" (M370: the system asked
+/// the app to open something — a file or folder dropped on its Dock icon, "Open with",
+/// `open -a App path` — `tag` is the path, one event per item, also when the app is already
+/// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
+/// still gets its launch arguments in `args()`). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.
-/// In headless mode opening a window produces no event; `focus(h)` emits "focused", and the
-/// env var RAY_UI_MSG injects one "message" per opened window (tests).
+/// In headless mode opening a window produces no event; `focus(h)` emits "focused", the
+/// env var RAY_UI_MSG injects one "message" per opened window, and RAY_UI_OPEN (paths
+/// separated by `:`) injects the "open" events once per process (tests).
 pub struct UiEvent {
     kind: string,
     window: int,

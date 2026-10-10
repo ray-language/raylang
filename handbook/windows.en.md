@@ -98,6 +98,7 @@ next one without using CPU.
 | `"close_requested"` | the user tried to close (with `intercept_close`) | |
 | `"quit_requested"` | the user tried to quit (with `intercept_quit`) | |
 | `"focused"` | a window came to the front | |
+| `"notification"` | the user clicked a notification from `ui.notify` | the notification's tag |
 | `"lifecycle"` | on mobile, the app went to the background or came back | `"background"` / `"foreground"` |
 
 Every event carries its window in `window`. There is a single consumer: use `next_event()`, or
@@ -400,8 +401,17 @@ attribute. On Linux and Windows it behaves like `document`.
 - `ui.open_path(path)` opens a file with its default application, and `ui.reveal(path)` shows it
   in the file manager.
 - `std/keychain` stores secrets in the system keychain.
+- **Notifications.** `ui.notify("Mail", "3 new messages")` shows a system notification with the
+  app's icon, no buttons; `ui.notify_with(title, body, tag, sound)` tags it, and a click arrives
+  as a `"notification"` event with that tag. On macOS the real thing (own icon, click, the
+  permission the system asks for the first time) needs an app packaged with `ray bundle`; under
+  `ray run` the notification shows all the same, but with no own icon and no click. Linux uses
+  `notify-send`; Windows is not there yet.
+- **Badge and attention.** `ui.badge("3")` puts the count on the Dock icon (`""` clears it; Linux
+  has none and ignores it) and `ui.request_attention()` bounces the icon or highlights the window
+  in the taskbar without stealing focus.
 
-None of that goes through a shell.
+None of that goes through a shell, except `notify-send` on Linux.
 
 ## 10. Developing and testing
 
@@ -435,4 +445,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:4781fa04a6a0 -->
+<!-- sync: sha256:91c8df03114a -->

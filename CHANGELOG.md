@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Notificaciones, badge y atención (M371)**: `ui.notify(title, body)` / `notify_with(title, body,
+  tag, sound)` muestran una notificación del sistema con el icono de la app, sin botones; pulsarla
+  emite el evento `"notification"` con su `tag`. macOS: UNUserNotificationCenter en un `.app`
+  (permiso la primera vez), `osascript` fuera de un bundle (visible en desarrollo, sin icono ni
+  clic); Linux: `notify-send` (clic con libnotify ≥ 0.7.10); Windows: aún no (`Err`). `ui.badge`
+  (icono del Dock) y `ui.request_attention()` (el Dock salta / la ventana se resalta). Headless:
+  trazas y `RAY_UI_NOTIFY_CLICK=1` pulsa cada notificación.
+
 ## 1.27.44 — 2026-10-09
 
 - **Paquetes web de las dependencias (M369, ray-ds)**: un paquete cuyo `ray.toml` declara

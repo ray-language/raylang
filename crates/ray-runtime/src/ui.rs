@@ -1695,6 +1695,81 @@ fn quit_requested() -> bool {
     intercept
 }
 
+/// M371: operaciones de APP (sin ventana): `notify` (`arg` = `título\ncuerpo\ntag\nsonido`),
+/// `badge` (`arg` = el texto del Dock / barra de tareas; vacío = quitar) y `request_attention`.
+/// Una notificación pulsada emite `("notification", 0, tag)`. Headless: traza `RAY_UI_TRACE`.
+/// macOS: UNUserNotificationCenter en un `.app` (pide autorización la primera vez) o
+/// NSUserNotificationCenter en un binario suelto; `NSDockTile`; `requestUserAttention:`. Linux:
+/// `notify-send` (libnotify) con la acción por defecto como clic; el badge no existe en
+/// freedesktop (no-op); la atención es `gtk_window_set_urgency_hint` sobre la última ventana.
+fn app_op(op: &str, arg: &str) -> Result<(), String> {
+    if headless() {
+        if ui_trace() {
+            match op {
+                "notify" => {
+                    let mut it = arg.split('\n');
+                    let title = it.next().unwrap_or("");
+                    let body = it.next().unwrap_or("");
+                    let tag = it.next().unwrap_or("");
+                    eprintln!("[ui] notify {title:?} {body:?} tag={tag:?}");
+                }
+                "badge" => eprintln!("[ui] badge {arg:?}"),
+                _ => eprintln!("[ui] request attention"),
+            }
+        }
+        // El inyector de pruebas: RAY_UI_NOTIFY_CLICK=1 → la notificación "se pulsa" al emitirse.
+        if op == "notify" && std::env::var("RAY_UI_NOTIFY_CLICK").map(|v| v == "1").unwrap_or(false) {
+            let tag = arg.split('\n').nth(2).unwrap_or("");
+            push_event("notification", 0, tag);
+        }
+        return Ok(());
+    }
+    #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+    if shell::active() {
+        return Err("ui: notifications are not available in the mobile shell yet".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        let mut it = arg.split('\n');
+        return match op {
+            "notify" => {
+                let title = it.next().unwrap_or("").to_string();
+                let body = it.next().unwrap_or("").to_string();
+                let tag = it.next().unwrap_or("").to_string();
+                let sound = it.next().unwrap_or("0") == "1";
+                mac::notify(title, body, tag, sound)
+            }
+            "badge" => mac::set_badge(arg.to_string()),
+            _ => mac::request_attention(),
+        };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut it = arg.split('\n');
+        return match op {
+            "notify" => {
+                let title = it.next().unwrap_or("").to_string();
+                let body = it.next().unwrap_or("").to_string();
+                let tag = it.next().unwrap_or("").to_string();
+                gtk::notify(title, body, tag)
+            }
+            "badge" => {
+                if ui_trace() {
+                    eprintln!("[ui] badge {arg:?} (no badge on this desktop; ignored)");
+                }
+                Ok(())
+            }
+            _ => gtk::request_attention(),
+        };
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = arg;
+        Err(format!("ui: '{op}' is not available on this platform yet"))
+    }
+}
+
 /// M257 (ray-sublime): operaciones sobre una ventana ABIERTA por nombre — una sola primitiva
 /// (`__ui_window(h, op, arg)`) para lo pequeño y frecuente:
 /// - `set_title` (`arg` = título): `setTitle:` / `gtk_window_set_title` / `SetWindowTextW`.
@@ -1708,6 +1783,9 @@ fn quit_requested() -> bool {
 /// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
 pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     let on = arg == "1" || arg == "true";
+    if matches!(op, "notify" | "badge" | "request_attention") {
+        return app_op(op, arg);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {
@@ -3198,6 +3276,66 @@ mod mac {
             extern "C" fn application_should_terminate(_this: Id, _sel: Sel, _app: Id) -> u64 {
                 if super::quit_requested() { 0 } else { 1 }
             }
+            // M371: una notificación pulsada → ("notification", 0, tag). Dos APIs: la moderna
+            // (UNUserNotificationCenter, solo en un .app) entrega la respuesta con un bloque de
+            // finalización que HAY que invocar; la clásica (NSUserNotificationCenter, binarios
+            // sueltos) entrega la notificación activada. El tag viaja en `userInfo["tag"]`.
+            extern "C" fn un_did_receive_response(_this: Id, _sel: Sel, _center: Id, response: Id, handler: *const BlockLiteral) {
+                // SAFETY: objetos válidos del run loop; el bloque se invoca una vez con su propia firma.
+                unsafe {
+                    let get: MsgId = std::mem::transmute(msg_send());
+                    let notification = get(response, sel(b"notification\0"));
+                    let request = get(notification, sel(b"request\0"));
+                    let content = get(request, sel(b"content\0"));
+                    let info = get(content, sel(b"userInfo\0"));
+                    let tag = user_info_tag(info);
+                    super::push_event("notification", 0, &tag);
+                    if !handler.is_null() {
+                        let invoke: unsafe extern "C" fn(*const BlockLiteral) = std::mem::transmute((*handler).invoke);
+                        invoke(handler);
+                    }
+                }
+            }
+            // M371: con la app en primer plano la notificación se muestra igual (banner + lista + sonido).
+            extern "C" fn un_will_present(_this: Id, _sel: Sel, _center: Id, _notification: Id, handler: *const BlockLiteral) {
+                const BANNER: u64 = 1 << 4;
+                const LIST: u64 = 1 << 3;
+                const SOUND: u64 = 1 << 1;
+                // SAFETY: el bloque se invoca una vez con (options).
+                unsafe {
+                    if !handler.is_null() {
+                        let invoke: unsafe extern "C" fn(*const BlockLiteral, u64) = std::mem::transmute((*handler).invoke);
+                        invoke(handler, BANNER | LIST | SOUND);
+                    }
+                }
+            }
+            extern "C" fn ns_did_activate(_this: Id, _sel: Sel, _center: Id, notification: Id) {
+                // SAFETY: NSUserNotification válida del run loop.
+                let tag = unsafe {
+                    let get: MsgId = std::mem::transmute(msg_send());
+                    user_info_tag(get(notification, sel(b"userInfo\0")))
+                };
+                super::push_event("notification", 0, &tag);
+            }
+            extern "C" fn ns_should_present(_this: Id, _sel: Sel, _center: Id, _notification: Id) -> bool {
+                true
+            }
+            /// `userInfo["tag"]` como String ("" si no hay).
+            unsafe fn user_info_tag(info: Id) -> String {
+                unsafe {
+                    if info.is_null() {
+                        return String::new();
+                    }
+                    let obj_for: MsgIdId = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let v = obj_for(info, sel(b"objectForKey:\0"), nsstring("tag"));
+                    if v.is_null() {
+                        return String::new();
+                    }
+                    let c = utf8(v, sel(b"UTF8String\0"));
+                    if c.is_null() { String::new() } else { std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned() }
+                }
+            }
             extern "C" fn window_will_close(_this: Id, _sel: Sel, notification: Id) {
                 // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
                 let win = unsafe {
@@ -3377,6 +3515,31 @@ mod mac {
                     application_should_terminate as extern "C" fn(Id, Sel, Id) -> u64 as *const c_void,
                     c"Q@:@".as_ptr(),
                 );
+                // M371: notificaciones pulsadas (API moderna y clásica).
+                class_addMethod(
+                    cls_new,
+                    sel(b"userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:\0"),
+                    un_did_receive_response as extern "C" fn(Id, Sel, Id, Id, *const BlockLiteral) as *const c_void,
+                    c"v@:@@@?".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"userNotificationCenter:willPresentNotification:withCompletionHandler:\0"),
+                    un_will_present as extern "C" fn(Id, Sel, Id, Id, *const BlockLiteral) as *const c_void,
+                    c"v@:@@@?".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"userNotificationCenter:didActivateNotification:\0"),
+                    ns_did_activate as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"userNotificationCenter:shouldPresentNotification:\0"),
+                    ns_should_present as extern "C" fn(Id, Sel, Id, Id) -> bool as *const c_void,
+                    c"B@:@@".as_ptr(),
+                );
                 // M252: la ventana que pasa a ser la clave → evento ("focused", id, "").
                 class_addMethod(
                     cls_new,
@@ -3553,6 +3716,224 @@ mod mac {
 
     /// El target singleton de los items de menú (una instancia del delegate), creado en main la
     /// primera vez; compartido por `add_menu`, `set_app_menu` y `replace_menu` (M250).
+    // ── M371: notificaciones, badge del Dock y atención ─────────────────────────────────────
+
+    /// La cabecera común de un bloque de Objective-C (ABI de clang): basta para INVOCAR los que
+    /// nos entregan (`invoke` con la firma del bloque) y para construir los globales nuestros.
+    #[repr(C)]
+    pub(super) struct BlockLiteral {
+        isa: *const c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: *const c_void,
+        descriptor: *const BlockDescriptor,
+    }
+    #[repr(C)]
+    struct BlockDescriptor {
+        reserved: u64,
+        size: u64,
+    }
+    unsafe impl Sync for BlockLiteral {}
+    unsafe impl Send for BlockLiteral {}
+    const BLOCK_IS_GLOBAL: i32 = 1 << 28;
+    static BLOCK_DESCRIPTOR: BlockDescriptor = BlockDescriptor { reserved: 0, size: std::mem::size_of::<BlockLiteral>() as u64 };
+    unsafe impl Sync for BlockDescriptor {}
+    unsafe extern "C" {
+        static _NSConcreteGlobalBlock: [u8; 0];
+        fn dlopen(path: *const std::ffi::c_char, flags: i32) -> *mut c_void;
+    }
+    /// Un bloque GLOBAL (sin capturas, vive para siempre) con el `invoke` dado.
+    fn global_block(invoke: *const c_void) -> &'static BlockLiteral {
+        static BLOCKS: std::sync::Mutex<Vec<&'static BlockLiteral>> = std::sync::Mutex::new(Vec::new());
+        let mut v = BLOCKS.lock().unwrap();
+        if let Some(b) = v.iter().find(|b| b.invoke == invoke) {
+            return b;
+        }
+        let b: &'static BlockLiteral = Box::leak(Box::new(BlockLiteral {
+            isa: std::ptr::addr_of!(_NSConcreteGlobalBlock) as *const c_void,
+            flags: BLOCK_IS_GLOBAL,
+            reserved: 0,
+            invoke,
+            descriptor: &BLOCK_DESCRIPTOR,
+        }));
+        v.push(b);
+        b
+    }
+
+    /// ¿Corre dentro de un `.app` con identificador? Solo entonces existe UNUserNotificationCenter
+    /// (`currentNotificationCenter` aborta sin bundle).
+    fn bundled() -> bool {
+        // SAFETY: NSBundle es seguro de consultar en cualquier hilo.
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let main = get(cls(b"NSBundle\0"), sel(b"mainBundle\0"));
+            if main.is_null() {
+                return false;
+            }
+            let ident = get(main, sel(b"bundleIdentifier\0"));
+            let path = get(main, sel(b"bundlePath\0"));
+            let utf8: MsgCStr = std::mem::transmute(msg_send());
+            let p = if path.is_null() { std::ptr::null() } else { utf8(path, sel(b"UTF8String\0")) };
+            let is_app = !p.is_null() && std::ffi::CStr::from_ptr(p).to_string_lossy().ends_with(".app");
+            !ident.is_null() && is_app
+        }
+    }
+
+    /// Autorización de UNUserNotificationCenter: -1 sin pedir, 0 denegada, 1 concedida.
+    static UN_AUTH: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+    /// Peticiones encoladas mientras se espera la autorización (se añaden al concederla).
+    static UN_PENDING: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+    extern "C" fn un_auth_done(_block: *const BlockLiteral, granted: u8, _error: Id) {
+        UN_AUTH.store(if granted != 0 { 1 } else { 0 }, std::sync::atomic::Ordering::SeqCst);
+        let pending: Vec<usize> = std::mem::take(&mut *UN_PENDING.lock().unwrap());
+        if granted != 0 {
+            for req in pending {
+                un_add(req as Id);
+            }
+        } else if super::ui_trace() {
+            eprintln!("[ui] notify: the user did not authorize notifications ({} dropped)", pending.len());
+        }
+    }
+
+    fn un_center() -> Id {
+        // SAFETY: carga del framework (idempotente) + mensaje de clase.
+        unsafe {
+            dlopen(c"/System/Library/Frameworks/UserNotifications.framework/UserNotifications".as_ptr(), 2 /* RTLD_NOW */);
+            let get: MsgId = std::mem::transmute(msg_send());
+            let c = cls(b"UNUserNotificationCenter\0");
+            if c.is_null() { std::ptr::null_mut() } else { get(c, sel(b"currentNotificationCenter\0")) }
+        }
+    }
+
+    fn un_add(request: Id) {
+        // SAFETY: `addNotificationRequest:withCompletionHandler:` acepta handler nil.
+        unsafe {
+            type MsgVoidIdPtr = unsafe extern "C" fn(Id, Sel, Id, *const c_void);
+            let add: MsgVoidIdPtr = std::mem::transmute(msg_send());
+            add(un_center(), sel(b"addNotificationRequest:withCompletionHandler:\0"), request, std::ptr::null());
+        }
+    }
+
+    /// `@{ "tag": tag }` (autoreleased; el contenido lo retiene al asignarlo).
+    unsafe fn tag_info(tag: &str) -> Id {
+        unsafe {
+            type MsgIdIdIdRet = unsafe extern "C" fn(Id, Sel, Id, Id) -> Id;
+            let dict: MsgIdIdIdRet = std::mem::transmute(msg_send());
+            dict(cls(b"NSDictionary\0"), sel(b"dictionaryWithObject:forKey:\0"), nsstring(tag), nsstring("tag"))
+        }
+    }
+
+    pub(super) fn notify(title: String, body: String, tag: String, sound: bool) -> Result<(), String> {
+        if bundled() {
+            // SAFETY: mensajes documentados de UserNotifications; los objetos se retienen
+            // mientras el centro los necesita.
+            unsafe {
+                let center = un_center();
+                if center.is_null() {
+                    return Err("ui: notifications are not available (UserNotifications framework missing)".to_string());
+                }
+                let get: MsgId = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                set_id(center, sel(b"setDelegate:\0"), menu_target());
+                let content = get(get(cls(b"UNMutableNotificationContent\0"), sel(b"alloc\0")), sel(b"init\0"));
+                set_id(content, sel(b"setTitle:\0"), nsstring(&title));
+                set_id(content, sel(b"setBody:\0"), nsstring(&body));
+                set_id(content, sel(b"setUserInfo:\0"), tag_info(&tag));
+                if sound {
+                    set_id(content, sel(b"setSound:\0"), get(cls(b"UNNotificationSound\0"), sel(b"defaultSound\0")));
+                }
+                type MsgReq = unsafe extern "C" fn(Id, Sel, Id, Id, Id) -> Id;
+                let make: MsgReq = std::mem::transmute(msg_send());
+                let ident = nsstring(&format!("ray-{}-{}", std::process::id(), super::EVENT_SEQ.load(std::sync::atomic::Ordering::SeqCst)));
+                let request = make(cls(b"UNNotificationRequest\0"), sel(b"requestWithIdentifier:content:trigger:\0"), ident, content, std::ptr::null_mut());
+                let retain: MsgId = std::mem::transmute(msg_send());
+                retain(request, sel(b"retain\0"));
+                match UN_AUTH.load(std::sync::atomic::Ordering::SeqCst) {
+                    1 => un_add(request),
+                    0 => return Err("ui: notifications are not authorized for this app (System Settings → Notifications)".to_string()),
+                    _ => {
+                        let first = {
+                            let mut p = UN_PENDING.lock().unwrap();
+                            p.push(request as usize);
+                            p.len() == 1
+                        };
+                        if first {
+                            const ALERT_SOUND_BADGE: u64 = 1 | 2 | 4;
+                            type MsgAuth = unsafe extern "C" fn(Id, Sel, u64, *const BlockLiteral);
+                            let ask: MsgAuth = std::mem::transmute(msg_send());
+                            let block = global_block(un_auth_done as extern "C" fn(*const BlockLiteral, u8, Id) as *const c_void);
+                            ask(center, sel(b"requestAuthorizationWithOptions:completionHandler:\0"), ALERT_SOUND_BADGE, block);
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+        // Binario suelto (`ray run`, `ray build`): el centro clásico si el proceso tiene uno; si
+        // no (lo normal sin bundle: `defaultUserNotificationCenter` es nil), la notificación sale
+        // por `osascript` — se ve en desarrollo, con el icono de Script Editor y sin clic. La
+        // versión real, con el icono de la app y el evento, es la del `.app`.
+        on_main_sync(move || unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let center = get(cls(b"NSUserNotificationCenter\0"), sel(b"defaultUserNotificationCenter\0"));
+            if center.is_null() {
+                let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+                let mut script = format!("display notification \"{}\" with title \"{}\"", esc(&body), esc(&title));
+                if sound {
+                    script.push_str(" sound name \"default\"");
+                }
+                let st = std::process::Command::new("osascript").args(["-e", &script]).stdin(std::process::Stdio::null()).output();
+                return match st {
+                    Ok(o) if o.status.success() => {
+                        if super::ui_trace() {
+                            eprintln!("[ui] notify via osascript (no app bundle: no app icon, no click event)");
+                        }
+                        Ok(())
+                    }
+                    Ok(o) => Err(format!("ui: notifications need an app bundle here (`ray bundle`); osascript fallback failed: {}", String::from_utf8_lossy(&o.stderr).trim())),
+                    Err(e) => Err(format!("ui: notifications need an app bundle here (`ray bundle`); osascript fallback failed: {e}")),
+                };
+            }
+            set_id(center, sel(b"setDelegate:\0"), menu_target());
+            let n = get(get(cls(b"NSUserNotification\0"), sel(b"alloc\0")), sel(b"init\0"));
+            set_id(n, sel(b"setTitle:\0"), nsstring(&title));
+            set_id(n, sel(b"setInformativeText:\0"), nsstring(&body));
+            set_id(n, sel(b"setUserInfo:\0"), tag_info(&tag));
+            if sound {
+                set_id(n, sel(b"setSoundName:\0"), nsstring("NSUserNotificationDefaultSoundName"));
+            }
+            set_id(center, sel(b"deliverNotification:\0"), n);
+            Ok(())
+        })
+    }
+
+    /// El badge del icono del Dock (`""` lo quita).
+    pub(super) fn set_badge(label: String) -> Result<(), String> {
+        on_main_sync(move || unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let app = get(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+            let tile = get(app, sel(b"dockTile\0"));
+            let value = if label.is_empty() { std::ptr::null_mut() } else { nsstring(&label) };
+            set_id(tile, sel(b"setBadgeLabel:\0"), value);
+            Ok(())
+        })
+    }
+
+    /// El icono del Dock salta hasta que la app pasa al frente (`NSCriticalRequest`).
+    pub(super) fn request_attention() -> Result<(), String> {
+        on_main_sync(|| unsafe {
+            const NS_CRITICAL_REQUEST: i64 = 0;
+            let get: MsgId = std::mem::transmute(msg_send());
+            let req: MsgIdI64 = std::mem::transmute(msg_send());
+            let app = get(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+            req(app, sel(b"requestUserAttention:\0"), NS_CRITICAL_REQUEST);
+            Ok(())
+        })
+    }
+
     unsafe fn menu_target() -> Id {
         static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
@@ -5980,6 +6361,8 @@ mod gtk {
         screen_default: Option<unsafe extern "C" fn() -> *mut c_void>,
         screen_width: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
         screen_height: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+        /// M371: `request_attention` — la pista de urgencia (el WM resalta la ventana en la barra).
+        set_urgency_hint: Option<unsafe extern "C" fn(Widget, i32)>,
     }
     unsafe impl Send for WindowApi {}
     unsafe impl Sync for WindowApi {}
@@ -6012,9 +6395,73 @@ mod gtk {
                     screen_default: opt(gdk, c"gdk_screen_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
                     screen_width: opt(gdk, c"gdk_screen_get_width").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
                     screen_height: opt(gdk, c"gdk_screen_get_height").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
+                    set_urgency_hint: opt(gtk, c"gtk_window_set_urgency_hint").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                 }
             }
         })
+    }
+
+    /// M371: una notificación de escritorio por `notify-send` (libnotify, presente en todos los
+    /// escritorios freedesktop; sin dependencia de build). Con `-A default=Open --wait`
+    /// (libnotify ≥ 0.7.10) el proceso espera a que el usuario la pulse o la descarte e imprime la
+    /// acción: el clic se convierte en `("notification", 0, tag)`. Un `notify-send` viejo que no
+    /// conoce `-A` se reintenta sin acciones (sin clic). Todo en un hilo: nunca bloquea al programa.
+    pub(super) fn notify(title: String, body: String, tag: String) -> Result<(), String> {
+        let probe = std::process::Command::new("notify-send").arg("--version").output();
+        if probe.is_err() {
+            return Err("ui: notifications need `notify-send` (libnotify) on this desktop".to_string());
+        }
+        std::thread::Builder::new()
+            .name("ray-notify".into())
+            .spawn(move || {
+                let app = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_else(|| "ray".into());
+                let with_action = std::process::Command::new("notify-send")
+                    .args(["--app-name", &app, "-A", "default=Open", "--wait", "--", &title, &body])
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+                match with_action {
+                    Ok(out) if out.status.success() => {
+                        if String::from_utf8_lossy(&out.stdout).trim() == "default" {
+                            super::push_event("notification", 0, &tag);
+                        }
+                    }
+                    _ => {
+                        let _ = std::process::Command::new("notify-send")
+                            .args(["--app-name", &app, "--", &title, &body])
+                            .stdin(std::process::Stdio::null())
+                            .output();
+                    }
+                }
+            })
+            .map_err(|e| format!("ui: could not start the notification thread: {e}"))?;
+        Ok(())
+    }
+
+    /// M371: la pista de urgencia sobre la última ventana abierta (el WM la resalta en la barra
+    /// hasta que recibe el foco). Sin ventanas, nada que resaltar: `Ok`.
+    pub(super) fn request_attention() -> Result<(), String> {
+        let target = {
+            let map = super::windows().lock().unwrap();
+            map.iter()
+                .filter(|(_, st)| !st.closed)
+                .max_by_key(|(id, _)| **id)
+                .and_then(|(_, st)| match &st.win {
+                    super::Win::Gtk { window, alive, .. } => Some((*window, alive.clone())),
+                    _ => None,
+                })
+        };
+        let Some((window, alive)) = target else { return Ok(()) };
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Some(f) = window_api().set_urgency_hint {
+                // SAFETY: ventana viva en el hilo del loop; firma C de GTK 3.
+                unsafe { f(window as Widget, 1) };
+            }
+        });
+        Ok(())
     }
 
     /// M260: operaciones de geometría/estado en el hilo gtk. `Center` sobre una ventana ya

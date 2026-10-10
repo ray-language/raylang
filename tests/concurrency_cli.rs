@@ -1033,3 +1033,31 @@ fn spawn_local_pins_the_child_to_the_parent_worker() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "ok=true\nsame=true\n");
     }
 }
+
+/// M372 (raykv #144): en el nativo, una fibra que encadena recepciones listas cede cada 32 a las
+/// fibras listas de su worker. Con un solo worker: el actor drena 20 000 mensajes ya encolados y una
+/// hermana lanzada después debe correr ANTES de que termine (sin la cesión corría al final).
+#[test]
+fn a_busy_actor_yields_to_the_fibers_born_on_its_worker() {
+    let d = std::env::temp_dir().join("raylang_test_coop_yield");
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn main() -> int {\n    let ch: Channel<int> = Channel.bounded(20000);\n    var i = 0;\n    while (i < 20000) {\n        send(ch, i);\n        i = i + 1;\n    }\n    let flag: Channel<int> = Channel.bounded(1);\n    let actor = spawn(fn() -> int {\n        var n = 0;\n        var seen_at = -1;\n        while (n < 20000) {\n            match (recv(ch)) {\n                Option.Some(_) => { n = n + 1; },\n                Option.None => { break; },\n            }\n            if (seen_at < 0) {\n                match (try_recv(flag)) {\n                    Received.Got(_) => { seen_at = n; },\n                    _ => {},\n                }\n            }\n        }\n        seen_at\n    });\n    let sibling = spawn(fn() { send(flag, 1); });\n    join(sibling);\n    let at = join(actor);\n    print(\"sibling ran after ${at} messages\");\n    print(\"fair=${at >= 0 && at < 20000}\");\n    0\n}\n",
+    )
+    .unwrap();
+    let ray = env!("CARGO_BIN_EXE_ray");
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = d.join("prog_bin");
+        let b = Command::new(ray).args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+        let out = Command::new(&bin).env("RAYLANG_THREADS", "1").output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("fair=true"), "{text}");
+        // Con la cesión apagada, la hermana solo corre cuando el actor termina (el comportamiento anterior).
+        let out = Command::new(&bin).env("RAYLANG_THREADS", "1").env("RAYLANG_COOP", "0").output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("fair=false"), "{text}");
+    }
+}

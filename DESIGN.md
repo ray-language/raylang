@@ -17203,7 +17203,7 @@ herramientas de un monorepo que GENERAN ese directorio dependen del paquete. Ver
 tres apps de ejemplo de ray-ds en WKWebView (`--check`), `lean-app` también como binario nativo
 corrido desde otro directorio, y `tsc` resolviendo los imports por el enlace.
 
-## 353. M370 — Lo que el sistema pide abrir llega como evento `"open"` (oct 2026)
+## 354. M370 — Lo que el sistema pide abrir llega como evento `"open"` (oct 2026)
 
 ray-sublime (#120) descubrió que soltar una carpeta sobre el icono del Dock, «Abrir con» o
 `open -a App ruta` arrancaban la app con `args()` vacío y sin ningún evento: en macOS lo abierto
@@ -17243,7 +17243,7 @@ run` el `argv` del proceso es el de la toolchain), y el id sale de `__app_info()
 huérfano se detecta porque nadie contesta y se reemplaza. Se descartó el resultado por
 `Result<(), …>` con un tipo nuevo: `__ui_window` devuelve `["ok"]`/`["err", msg]`, y el caso
 «hay otra instancia» viaja como un mensaje fijo que `std/ui` traduce a `Ok(false)`.
-## 354. M371 — Notificaciones, badge y atención: lo nativo donde se siente (oct 2026)
+## 355. M371 — Notificaciones, badge y atención: lo nativo donde se siente (oct 2026)
 
 Diferidas desde M148 («UNUserNotificationCenter exige bundle+autorización → encaja tras `ray
 bundle` cuando un dogfood lo pida»), las notificaciones llegan con la decisión del usuario de
@@ -17267,3 +17267,37 @@ evento, y un `notify-send` viejo degrada a mostrar sin clic; el badge no existe 
 (no-op documentado) y la atención es la pista de urgencia de GTK sobre la última ventana. Windows
 queda para una PR propia con verificación en la VM (`Shell_NotifyIcon` + `FlashWindowEx`): no se
 afirma lo que no se ha visto.
+## 356. M372 — Equidad cooperativa en los canales: la regresión de raykv que no era del despertar (oct 2026)
+
+raykv (#144) midió con `redis-benchmark` que la peor latencia de un `SET` con AOF (`fs.sync_data`
+por petición) pasaba de 7–9 ms en 1.27.21 a 1,1 s en 1.27.44, y que las víctimas eran siempre la
+primera petición de las conexiones nacidas en el worker del actor del AOF: una de cada
+`worker_count()`. La sospecha natural era el arco del despertar (M363–M365, 1.27.40–42), que es
+donde se había tocado el planificador. La bisección con los binarios de las releases la descartó:
+1.27.24, .28, .31, .34, .35 y .36 bien; 1.27.37 mal. El salto está en el arco de raylb (M355–M361),
+y no porque algo se rompiera: el reactor más rápido de M358 hace que el buzón del actor **nunca se
+vacíe** —46 conexiones realimentan más deprisa de lo que un `fsync` de ~25 µs drena—, y un actor
+cuyo `recv` siempre encuentra dato no aparca jamás. Con las fibras fijadas a su worker (sin
+migración) y sin preempción, las fibras nuevas de ese worker esperan a que el buzón se vacíe: en
+1.27.21 eso pasaba cada pocos milisegundos; desde 1.27.37, al final de la carga. Sin `sync_data`
+el actor drena en microsegundos y el buzón se vacía igual que antes, por eso solo se veía con AOF.
+
+La causa de fondo es que el runtime no tenía ningún punto de cesión en el camino de una fibra
+que siempre encuentra trabajo. La decisión: las operaciones de canal que completan sin aparcar
+son **puntos de cesión cooperativos** (el modelo de presupuesto de Tokio o Go, en pequeño): cada
+32 operaciones listas de un canal, si en el worker hay otras fibras listas (`pending > 0`), la
+fibra cede. El contador vive en el estado del canal, bajo el mutex que la operación ya tiene
+tomado: gratis. La comprobación (`fibers::coop`) corre 1 de cada 32 veces y fuera de línea.
+
+Tres intentos enseñaron lo que cuesta un camino caliente. El primero consultaba el worker con
+tres thread-locals por operación: −20 % en `actor_shard`. El segundo publicaba desde el worker un
+puntero a su cola en un thread-local NUEVO y lo leía 1 de cada 64 operaciones: −20 % igual,
+aunque se leyera poco; leer en el mismo sitio el thread-local `CURRENT` que ya existía no costaba
+nada, y una función vacía tampoco. No hay explicación cerrada (¿un `tlv_get_addr` con reserva
+perezosa por bloque TLS nuevo?); la evidencia bastó para la regla: **no introducir thread-locals
+nuevos en el runtime de fibras; reutilizar `WORKER`/`CURRENT`**. El tercero, con `WORKER` (M365),
+`in_fiber()` y `sched()`, queda en paridad: `actor_shard` igual o mejor (local 64: +5–8 %),
+`actor_ask` rt1 −3–5 %, el resto en el ruido; el repro de raykv pasa de 1,1 s a 10–17 ms (lo de
+1.27.21). `RAYLANG_COOP=0` devuelve el comportamiento anterior para medir. SPEC §concurrencia
+explica por fin el modelo que ray-apps pedía: fijación, qué bloquea el worker (una syscall), qué
+cede (E/S, canal, sleep, yield, y ahora los canales cada 32 operaciones).

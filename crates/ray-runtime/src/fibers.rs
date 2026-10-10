@@ -271,9 +271,13 @@ enum Op {
 }
 
 /// La cola de UN worker: solo su dueño saca; cualquiera (spawn, reactor) mete.
+#[repr(align(128))]
 struct WorkerQueue {
     q: Mutex<VecDeque<Task>>,
     cv: Condvar,
+    /// M372: ¿cesión cooperativa activa? (`RAYLANG_COOP=0` la apaga). Copia por worker: el camino
+    /// caliente no lee ningún estático compartido con otros hilos.
+    coop_enabled: bool,
     /// M319: tareas encoladas y aún no sacadas — el spin-then-park del worker mira esto sin tomar el lock.
     pending: std::sync::atomic::AtomicUsize,
     /// M363: el dueño está DORMIDO en `cv` (se pone bajo el lock de `q`, justo
@@ -440,6 +444,8 @@ fn sched() -> &'static Scheduler {
         // req/s con 2–4 workers, neutro con 11. `RAYLANG_REACTOR=local` lo activa; el default sigue
         // siendo el hilo reactor único hasta decidir el diseño con las cifras delante.
         let local_reactor = cfg!(unix) && matches!(std::env::var("RAYLANG_REACTOR").as_deref(), Ok("local"));
+        // M372: cesión cooperativa (RAYLANG_COOP=0 la apaga), copiada en cada cola.
+        let coop_enabled = coop_enabled_from_env();
         let mut worker_wake_rd: Vec<i32> = Vec::new();
         let mut worker_wake_wr: Vec<i32> = Vec::new();
         if local_reactor {
@@ -450,7 +456,7 @@ fn sched() -> &'static Scheduler {
             }
         }
         let s: &'static Scheduler = Box::leak(Box::new(Scheduler {
-            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false), spinning: std::sync::atomic::AtomicBool::new(false) }).collect(),
+            queues: (0..workers).map(|_| WorkerQueue { q: Mutex::new(VecDeque::new()), cv: Condvar::new(), coop_enabled, pending: std::sync::atomic::AtomicUsize::new(0), sleeping: std::sync::atomic::AtomicBool::new(false), spinning: std::sync::atomic::AtomicBool::new(false) }).collect(),
             next_home: std::sync::atomic::AtomicUsize::new(0),
             alive: (0..workers).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect(),
             inbox: Mutex::new(Vec::new()),
@@ -700,6 +706,34 @@ pub fn sleep_ms(ms: i64) {
 /// Cede el turno: la fibra vuelve al final de la cola de listas.
 pub fn yield_now() {
     suspend(Park::Yield);
+}
+
+fn coop_enabled_from_env() -> bool {
+    !matches!(std::env::var("RAYLANG_COOP").as_deref(), Ok("0"))
+}
+
+/// M372 (raykv #144): punto de cesión COOPERATIVO. Lo llaman —amortizado, cada 64 operaciones— las
+/// operaciones que completan sin aparcar (recibir de un canal con dato, enviar con hueco): si en
+/// ESTE worker hay otras fibras listas, la fibra cede el turno (vuelve al final de la cola) y la
+/// siguiente corre. Sin vecinos listos no hace nada más. Es lo que impide que un actor cuyo buzón
+/// nunca se vacía —y que bloquea el hilo en cada `fsync`— deje sin arrancar a las fibras que
+/// nacieron en su worker: con las fibras fijadas a su worker (sin migración) la equidad solo puede
+/// venir de la fibra que corre.
+///
+/// Solo usa thread-locals que YA existen (`WORKER`, `CURRENT`): un thread-local nuevo leído desde la
+/// fibra costaba un 20 % en actor_shard aunque se leyera 1 de cada 64 operaciones (medido; la
+/// lectura de `CURRENT` en el mismo sitio no cuesta nada). Fuera de línea para que el llamador
+/// no ice nada a su camino caliente.
+#[inline(never)]
+pub fn coop() {
+    let me = WORKER.with(|w| w.get());
+    if me < 0 || !in_fiber() {
+        return;
+    }
+    let wq = &sched().queues[me as usize];
+    if wq.coop_enabled && wq.pending.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        yield_now();
+    }
 }
 
 // ============================================================================
@@ -2239,6 +2273,34 @@ mod tests {
             prev = Some(id);
         }
         assert!(same * 100 / rounds >= 40, "solo {same}/{rounds} spawns repitieron worker (N = {n})");
+    }
+
+    /// M372 (raykv #144): una fibra que encadena operaciones listas cede a las fibras que esperan
+    /// en SU worker en cuanto agota el presupuesto de `coop`; sin la cesión, la hija (`spawn_local`,
+    /// mismo worker) solo correría cuando la madre terminara.
+    #[test]
+    fn a_busy_fiber_yields_to_its_worker_siblings_at_coop_points() {
+        let seen_at = Arc::new(Mutex::new(None::<u32>));
+        let seen2 = seen_at.clone();
+        spawn(move || {
+            let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let f2 = flag.clone();
+            let child = spawn_local(move || {
+                f2.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            for i in 0..1000u32 {
+                coop();
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    *seen2.lock().unwrap() = Some(i);
+                    break;
+                }
+            }
+            child.join().expect("la hija termina");
+        })
+        .join()
+        .expect("termina");
+        let at = seen_at.lock().unwrap().expect("la hija corrió ANTES de que la madre agotara su bucle");
+        assert!(at <= 1, "la madre cedió tarde: iteración {at}");
     }
 
     /// M363: una fibra terminada devuelve su pila a la caché y el siguiente spawn la reutiliza

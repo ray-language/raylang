@@ -2293,3 +2293,38 @@ hilos, no las syscalls.
 
 Pendiente si se decide llevar a main: SPEC (semántica de `spawn_local` en VM/nativo), REFERENCE y
 llms.txt, selfhost, `raydoc`; y probar el patrón en raygate/raylb (su actor Pick+Done) con el A/B.
+
+## 14. M372 (oct 2026): equidad cooperativa en los canales — la regresión de raykv
+
+**Síntoma (raykv #144)**: `redis-benchmark -t set -c 50` con AOF (`fs.sync_data` por `SET`): peor
+latencia 7–9 ms en 1.27.21 → ~1,1 s en 1.27.44; p99 1,3 ms. Siempre la primera petición de las
+conexiones nacidas en el worker del actor del AOF.
+
+**Bisección** (repro del hallazgo: actor con `write_bytes`+`sync_data` por petición, 50 conexiones
+× 1000 líneas, binarios de las releases, Apple M3 Pro):
+
+| release | peor latencia | conexiones > 100 ms |
+|---|---|---|
+| 1.27.21 / .24 / .28 / .31 / .34 / .35 / .36 | 7–15 ms | 0 |
+| 1.27.37 / .38 / .39 / .40 / .41 / .42 / .44 | 1,0–1,15 s | 3–4 |
+
+El salto es 1.27.37 (arco raylb, M355–M361): el reactor más rápido hace que el buzón del actor no
+se vacíe nunca y el actor no aparca; sin preempción ni migración, las fibras nuevas de su worker
+esperan al final de la carga. No es el arco del despertar (1.27.40–42).
+
+**Arreglo**: cada 32 operaciones listas de un canal, si hay fibras listas en el worker, la fibra
+cede (`fibers::coop`, DESIGN §356). Coste medido (mediana de 5, `benchmarks/actor_ask.ray` y
+`actor_shard.ray`, main vs arreglo, binarios `--release`):
+
+| | main | arreglo |
+|---|---|---|
+| actor_ask rt1 | 926–961k | 885–889k (−5 %) |
+| actor_ask rt8 / rt64 / oneway8 | 371k / 638k / 1,01M | 367k / 616k / 0,99M (−1 / −3 / −2 %) |
+| actor_shard 64 fibras: central / mixed / local | 614–619k / 6,06–6,15M / 5,33–5,41M | 594k / 6,35–6,56M / 5,71–6,15M |
+| repro raykv (sync) peor latencia | 1,1 s | 10–17 ms |
+| repro raykv (sin sync) | 1,2 ms, 120k req/s | 2,3 ms, 120k req/s |
+
+Lo que costó llegar: la comprobación por operación con thread-locals costaba −20 % en
+`actor_shard` aunque se ejecutara 1 de cada 64 veces si el thread-local era nuevo; reutilizando
+`WORKER`/`CURRENT` y amortizando el contador en el estado del canal, paridad. `RAYLANG_COOP=0` lo
+apaga.

@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.45 — 2026-10-10
 
 - **Evento `"open"` y `[app] opens` (M370, ray-sublime #120)**: lo que el sistema pide abrir —
   soltar un archivo o carpeta sobre el icono del Dock, «Abrir con», `open -a App ruta` — llega a
@@ -26,6 +26,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   clic); Linux: `notify-send` (clic con libnotify ≥ 0.7.10); Windows: aún no (`Err`). `ui.badge`
   (icono del Dock) y `ui.request_attention()` (el Dock salta / la ventana se resalta). Headless:
   trazas y `RAY_UI_NOTIFY_CLICK=1` pulsa cada notificación.
+- **Cesión cooperativa en los canales del nativo (M372, raykv #144)**: las operaciones de canal que
+  completan sin aparcar ceden el turno cada 32 operaciones si hay otras fibras listas en el mismo
+  worker. Arregla la inanición que raykv midió desde 1.27.37: con AOF (`fs.sync_data` por
+  `SET`), las fibras de conexión nacidas en el worker del actor no arrancaban hasta que el buzón se
+  vaciaba (peor latencia 1,1 s; ahora 10–17 ms, como en 1.27.21) — la regresión no estaba en el
+  arco del despertar (1.27.40–42) sino en 1.27.37, cuyo reactor más rápido dejó de vaciar el
+  buzón del actor. Coste medido en `actor_ask`/`actor_shard`: dentro del ruido (rt1 −3–5 %);
+  `RAYLANG_COOP=0` lo apaga. SPEC §concurrencia documenta el modelo (fijación, bloqueo del
+  worker en syscalls, cesión en canales); la doc de `spawn` deja de decir «Requires the VM
+  engine» (#145).
 
 ## 1.27.44 — 2026-10-09
 

@@ -4049,3 +4049,20 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
 | L17 | B | Nativo: lo que captura la closure de un `scope` se mueve y no se puede usar después | ✅ **M356**: el cierre de `scope` no es `move` (corre en línea) |
 | L18 | D | El perfilador de la VM infla las funciones con muchas llamadas internas | ✅ **M360**: calibra su coste por llamada y lo descuenta por marco; la cabecera lo indica |
 | L19 | B | Nativo: un `connect` a un host que descarta paquetes bloqueaba el hilo worker, no la fibra | ✅ **M355**: `tcp_connect`/`tls_connect` corren en el pool bloqueante (nativo) o en un hilo auxiliar con waker (VM) y la fibra aparca |
+
+## 104. Paquetes web de las dependencias (M369, oct 2026) — clasificación
+
+`[web] package` (DESIGN §353) compromete dos nombres y un comportamiento:
+
+- **`node_modules/` queda reservado** en el espacio embed y en `ray://app/`: ahí viven los
+  paquetes web de las dependencias. **Impacto**: bajo (ninguna app embebía un `node_modules/`).
+  **Restricción**: no dar otro significado a ese prefijo; un futuro «paquete web de la propia
+  app» debe entrar por el mismo sitio.
+- **Inyección del import map** en cada página HTML de `ray://app/`. **Impacto**: medio — una
+  transformación de la respuesta. **Restricción**: debe seguir siendo idempotente y apagarse sola
+  ante un import map propio; si algún día se sirve HTML con CSP estricta, el `<script>` inline
+  necesitará un nonce/hash.
+- **Pendiente, sin compromiso**: el mismo import map para páginas servidas por el webserver
+  embebido (`net`/`web`), donde hoy la app lo escribe (`ui.import_map()` lo da); y la
+  preferencia de condiciones en orden de objeto si un `Map` ordenado por inserción llega a
+  `std/json`.

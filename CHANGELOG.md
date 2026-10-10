@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.44 — 2026-10-09
+
+- **Paquetes web de las dependencias (M369, ray-ds)**: un paquete cuyo `ray.toml` declara
+  `[web] package = "web"` (un directorio con su `package.json`) lleva ese paquete npm a las
+  páginas de la app, que lo importan **por su nombre npm** como con un bundler —
+  `import "@ray-ds/elements/button"` — sin que la app escriba nada: `std/ui` lo sirve en
+  `ray://app/node_modules/<nombre npm>/` al abrir o montar, e inyecta en cada página HTML de
+  `ray://app/` un import map construido con sus `exports` (`ui.import_map()` lo devuelve; una
+  página con su propio import map se sirve tal cual). En vivo con `ray run`, horneado en el
+  binario nativo y en el bundle. Y `ray run`/`fetch`/`update` lo enlazan en
+  `node_modules/<nombre npm>` de la app (symlink; junction en Windows), la misma ruta sea la
+  dependencia `path:` o de `.ray-deps/`: el editor resuelve los imports con sus tipos y va a su
+  definición. `ray new` añade `/node_modules/` al `.gitignore`. Antes la página importaba
+  `./ray-ds/components/button/button.js`, una ruta que solo existía en la ventana.
+
 ## 1.27.43 — 2026-10-09
 
 - **El proyecto del archivo (M366, ray-ds)**: `ray run`/`check`/`build`/`test` con un archivo

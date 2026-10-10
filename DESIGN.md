@@ -17157,3 +17157,48 @@ Lo que NO se hizo: aceptar un subdirectorio en `git+` (`…@v1#ray_ds`) o en el 
 la forma de la caché (`.ray-deps/<nombre>` dejaría de ser un clon) y el hash, para ahorrar un
 repo por paquete; el espejo es más simple de explicar (un paquete = un repo) y ya es el patrón
 que usa el ecosistema. MANUAL §11 y PUBLISH §8 lo dicen ahora explícitamente.
+
+## 353. M369 — Los paquetes web de las dependencias, por su nombre npm (oct 2026)
+
+M367 llevó los assets de una dependencia a la app, pero dejó el lado de la página como estaba: la
+app de ejemplo `lean-app` de ray-ds importaba `./ray-ds/components/button/button.js`, una ruta
+que solo existía en la ventana (`ray://app/ray-ds/…`, montada por el programa), que el editor no
+podía resolver —sin tipos, sin autocompletado, sin ir a la definición— y que no se parecía a los
+nombres de npm (`@ray-ds/elements/button`): lo aprendido con Vite no servía aquí. La primera
+propuesta fue parchear cada app (un import map escrito a mano en el `index.html`, un `jsconfig`
+con una ruta que cambia según la dependencia sea `path:` o `.ray-deps/`); se descartó: el
+problema es que el espacio de URLs de la ventana y el del disco no coinciden, y eso lo resuelve
+la toolchain, no cada app.
+
+La decisión es hacer que coincidan donde ya coinciden en el ecosistema JS: `node_modules/<nombre
+npm>`. Un paquete declara `[web] package = "web"` (un directorio con su `package.json`) y:
+
+1. **El espacio embed** lo lleva como `node_modules/<nombre npm>/…` — un `EmbedSource` `flat`
+   (el contenido del dir, sin su nombre). Así lo hornea el nativo y lo lleva el bundle sin tabla
+   nueva: es una clave más. El nombre sale del `name` del `package.json` (validado como nombre
+   npm: nunca sube de nivel).
+2. **`std/ui`** lo monta en `ray://app/node_modules/<nombre npm>/` al abrir una ventana o montar
+   embebidos (`open`, `open_with`, `mount_embed`, `mount_embed_at`: el shell móvil carga la
+   página sin `open`), y calcula de los `exports` un **import map** que fija con un `kind` nuevo de
+   `__ui_mount` (`"importmap"`) — sin builtin nuevo, la misma implementación para VM, intérprete y
+   nativo. El cálculo vive en raylang (`std/json`): el runtime no tiene parser JSON, y así el
+   import map es idéntico en los tres motores.
+3. **`ray_runtime::ui::scheme::serve`** —por donde pasan los cuatro backends— inyecta el import
+   map tras `<head>` en cada respuesta HTML (entera: sin Range). Es lo que hace Vite al servir
+   `index.html`; `ui.import_map()` lo deja ver. Una página con su propio import map manda: no se
+   mezclan, porque un motor que no admite varios rechazaría el segundo.
+4. **La CLI** enlaza el paquete en `node_modules/<nombre npm>` de la app (symlink; junction en
+   Windows) en `ray run`/`fetch`/`update`: la ruta es la misma venga de donde venga la
+   dependencia y no es una copia. TypeScript, ESLint o Vite lo resuelven sin configuración
+   (`exports` + tipos); un `node_modules/<nombre>` real no se toca y los enlaces colgantes se
+   retiran.
+
+Lo que NO se hizo: servir cada entrada sin extensión (`ray-ds/button`) — `mime_for` decide por
+extensión y un módulo con `application/octet-stream` se rechaza —; resolver las condiciones de
+`exports` en el orden del objeto (el `Map` de raylang recorre por clave: se usa la preferencia
+fija `browser` → `import` → `module` → `default`, suficiente para paquetes de navegador); y los
+patrones `"./x/*": "./y/*.js"`, que un import map no expresa (solo `"./x/*": "./y/*"`, como
+prefijo). Un paquete web roto (sin `package.json`) se avisa y se omite en vez de abortar: las
+herramientas de un monorepo que GENERAN ese directorio dependen del paquete. Verificado con las
+tres apps de ejemplo de ray-ds en WKWebView (`--check`), `lean-app` también como binario nativo
+corrido desde otro directorio, y `tsc` resolviendo los imports por el enlace.

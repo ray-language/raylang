@@ -1031,6 +1031,64 @@ pub mod scheme {
         Ok(())
     }
 
+    /// M369: el import map de los paquetes web de las dependencias (`{"imports":{…}}`), que
+    /// `std/ui` calcula de sus `package.json` al abrir una ventana. Vacío = ninguno.
+    fn import_map_slot() -> &'static Mutex<String> {
+        static MAP: OnceLock<Mutex<String>> = OnceLock::new();
+        MAP.get_or_init(|| Mutex::new(String::new()))
+    }
+
+    /// M369: fija el import map que se inyecta en cada página HTML de `ray://app/` (`""` lo quita).
+    pub fn set_import_map(json: &str) {
+        if super::ui_trace() {
+            eprintln!("[ui] import map {json}");
+        }
+        *import_map_slot().lock().unwrap() = json.trim().to_string();
+    }
+
+    /// M369: el import map vigente (`""` si no hay).
+    pub fn import_map() -> String {
+        import_map_slot().lock().unwrap().clone()
+    }
+
+    /// M369: `html` con `<script type="importmap">map</script>` justo tras la apertura de `<head>`
+    /// (o de `<html>`, o del doctype; si no, al principio): antes de cualquier módulo, que es lo
+    /// que exige un import map. `None` si la página ya declara el suyo — entonces manda el de la
+    /// página (no se mezclan: un motor que no admite varios rechazaría el segundo).
+    pub fn inject_import_map(html: &[u8], map: &str) -> Option<Vec<u8>> {
+        let lower = html.to_ascii_lowercase();
+        let find = |needle: &[u8], from: usize| {
+            lower.get(from..).and_then(|rest| rest.windows(needle.len()).position(|w| w == needle)).map(|i| i + from)
+        };
+        let mut at = 0;
+        while let Some(i) = find(b"<script", at) {
+            let end = find(b">", i).unwrap_or(lower.len());
+            if find(b"importmap", i).is_some_and(|j| j < end) {
+                return None;
+            }
+            at = end;
+        }
+        // El final de la etiqueta de apertura `<tag` (seguida de `>` o de un espacio: no `<header>`).
+        let after_open = |tag: &[u8]| {
+            let mut from = 0;
+            while let Some(i) = find(tag, from) {
+                match lower.get(i + tag.len()) {
+                    Some(b'>' | b' ' | b'\t' | b'\n' | b'\r') => return find(b">", i).map(|e| e + 1),
+                    _ => from = i + tag.len(),
+                }
+            }
+            None
+        };
+        let pos = after_open(b"<head").or_else(|| after_open(b"<html")).or_else(|| after_open(b"<!doctype")).unwrap_or(0);
+        // `</` dentro del JSON no puede cerrar el <script> (las URLs no lo llevan; por si acaso).
+        let tag = format!("<script type=\"importmap\">{}</script>", map.replace("</", "<\\/"));
+        let mut out = Vec::with_capacity(html.len() + tag.len());
+        out.extend_from_slice(&html[..pos]);
+        out.extend_from_slice(tag.as_bytes());
+        out.extend_from_slice(&html[pos..]);
+        Some(out)
+    }
+
     /// ¿Hay algo montado? (los backends registran el handler siempre; esto es informativo).
     pub fn has_mounts() -> bool {
         let m = mounts().lock().unwrap();
@@ -1185,10 +1243,29 @@ pub mod scheme {
         if method != "GET" && method != "HEAD" {
             return Response::plain(405, "method not allowed");
         }
-        let (name, body, total, etag) = match locate(&path) {
+        let (name, mut body, mut total, mut etag) = match locate(&path) {
             Some(x) => x,
             None => return Response::plain(404, "not found"),
         };
+        // M369: una página HTML lleva el import map de los paquetes web (entera: sin Range).
+        let mut range = range;
+        let map = import_map();
+        if !map.is_empty() && mime_for(&name).starts_with("text/html") {
+            let html: Option<Vec<u8>> = match &body {
+                Located::Memory(b) => Some(b.to_vec()),
+                Located::Disk(p) => std::fs::read(p).ok(),
+            };
+            match html.as_deref().map(|h| inject_import_map(h, &map)) {
+                Some(Some(page)) => {
+                    etag = format!("\"h-{}-{:x}\"", page.len(), fnv(&page));
+                    total = page.len() as u64;
+                    body = Located::Memory(Arc::from(page));
+                    range = None;
+                }
+                Some(None) => warn_own_import_map(&path),
+                None => {}
+            }
+        }
         let mut headers = vec![
             ("Content-Type".to_string(), mime_for(&name).to_string()),
             ("Accept-Ranges".to_string(), "bytes".to_string()),
@@ -1221,6 +1298,14 @@ pub mod scheme {
             }
         };
         Response { status, headers, body }
+    }
+
+    /// M369: una vez por proceso, cuando una página trae su propio import map.
+    fn warn_own_import_map(path: &str) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!("[ui] ray://app/{path} declares its own import map: the dependencies' web packages are not added to it (ui.import_map() returns their entries)");
+        });
     }
 
     enum Located {
@@ -1352,6 +1437,24 @@ pub mod scheme {
             assert!(matches!(&r.body, Body::Bytes(b, 0, 11) if &b[..] == b"from memory"), "memory wins: {:?}", r.status);
             assert_eq!(serve("ray://app/boot/y.js", "GET", None, None).status, 200, "the directory still serves the rest");
             let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// M369: el import map entra tras `<head>` (antes de cualquier módulo), o tras `<html>`, o
+        /// al principio; una página con su propio import map se deja como está.
+        #[test]
+        fn import_map_is_injected_before_any_module() {
+            let map = r#"{"imports":{"x":"/node_modules/x/index.js"}}"#;
+            let tag = format!("<script type=\"importmap\">{map}</script>");
+            let page = b"<!doctype html><html><header>h</header><head lang=x><script type=module src=app.js></script></head></html>";
+            let out = String::from_utf8(inject_import_map(page, map).unwrap()).unwrap();
+            assert_eq!(out, format!("<!doctype html><html><header>h</header><head lang=x>{tag}<script type=module src=app.js></script></head></html>"));
+            let out = String::from_utf8(inject_import_map(b"<HTML>\n<body></body></HTML>", map).unwrap()).unwrap();
+            assert_eq!(out, format!("<HTML>{tag}\n<body></body></HTML>"));
+            let out = String::from_utf8(inject_import_map(b"<p>bare</p>", map).unwrap()).unwrap();
+            assert_eq!(out, format!("{tag}<p>bare</p>"));
+            assert!(inject_import_map(b"<head><SCRIPT TYPE='importmap'>{}</SCRIPT></head>", map).is_none());
+            let out = String::from_utf8(inject_import_map(b"<head></head>", r#"{"a":"</script>"}"#).unwrap()).unwrap();
+            assert!(out.contains(r#"{"a":"<\/script>"}"#), "{out}");
         }
 
         #[test]

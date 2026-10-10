@@ -73,6 +73,7 @@ Ninguna otra app de la máquina ni ninguna página del navegador puede hablar co
 | `ui.mount_embed_at("", "frontend/dist")` | un build de frontend, en la raíz | `ray://app/…` |
 | `ui.mount_dir("files", carpeta)` | una carpeta del disco, con lecturas por tramos | `ray://app/files/…` |
 | `ui.mount_bytes(ruta, datos)` | unos bytes en memoria | `ray://app/<ruta>` |
+| (solo, al abrir o montar) | el paquete npm de una dependencia con `[web] package`, con un import map en cada página | `ray://app/node_modules/<nombre npm>/…` |
 
 `mount_dir` nunca sirve nada de fuera de su carpeta, y admite peticiones `Range`: un vídeo o un
 archivo grande se leen por trozos, sin cargarlos enteros.

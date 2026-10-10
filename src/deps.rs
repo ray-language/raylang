@@ -821,6 +821,178 @@ pub fn dependency_packages(m: &Manifest) -> Vec<(String, PathBuf)> {
     out
 }
 
+/// M369: el paquete web (`[web] package`) de una dependencia: su nombre npm (el `name` de su
+/// `package.json`) y el directorio que lo contiene.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebPackage {
+    /// El nombre de la dependencia en `[dependencies]` (`ray_ds`).
+    pub dependency: String,
+    /// El nombre npm (`@ray-ds/elements`): la ruta bajo `node_modules/` en el espacio embed, en
+    /// `ray://app/` y en el disco de la app.
+    pub name: String,
+    /// El directorio del paquete web (el que contiene su `package.json`).
+    pub dir: PathBuf,
+}
+
+/// M369: el paquete web que declara el `ray.toml` `dm` de la dependencia `dependency` (en `dir`),
+/// o `None` si no declara `[web] package`. Un directorio que no existe, sin `package.json` o con
+/// un `name` que no es un nombre npm válido es un error del paquete.
+pub fn web_package_of(dependency: &str, dir: &Path, dm: &Manifest) -> Result<Option<WebPackage>, String> {
+    let Some(rel) = &dm.web_package else { return Ok(None) };
+    let web = dir.join(rel);
+    let pj = web.join("package.json");
+    let text = std::fs::read_to_string(&pj).map_err(|_| {
+        format!("the [web] package of dependency '{dependency}' has no package.json: '{}'", pj.display())
+    })?;
+    let json = crate::lsp::json::parse(&text)
+        .map_err(|e| format!("the package.json of dependency '{dependency}' is not valid JSON ({e}): '{}'", pj.display()))?;
+    let name = json.get("name").and_then(|n| n.as_str()).unwrap_or("");
+    if !valid_npm_name(name) {
+        return Err(format!("the package.json of dependency '{dependency}' needs a valid npm \"name\" (got '{name}'): '{}'", pj.display()));
+    }
+    let dir = web.canonicalize().unwrap_or(web);
+    Ok(Some(WebPackage { dependency: dependency.to_string(), name: name.to_string(), dir }))
+}
+
+/// M369: los paquetes web de las dependencias del proyecto `m` presentes en disco, y los errores
+/// de los que están rotos (que se omiten).
+pub fn web_packages(m: &Manifest) -> (Vec<WebPackage>, Vec<String>) {
+    let (mut out, mut errors) = (Vec::new(), Vec::new());
+    for (name, dir) in dependency_packages(m) {
+        let Ok(Some(dm)) = Manifest::load(&dir) else { continue };
+        match web_package_of(&name, &dir, &dm) {
+            Ok(Some(w)) => out.push(w),
+            Ok(None) => {}
+            Err(e) => errors.push(e),
+        }
+    }
+    (out, errors)
+}
+
+/// M369: ¿`name` es un nombre de paquete npm (`pkg` o `@scope/pkg`; minúsculas, dígitos y
+/// `-._~`, sin empezar por `.` o `_`)? Es una ruta bajo `node_modules/`: nunca sube de nivel.
+pub fn valid_npm_name(name: &str) -> bool {
+    fn part(p: &str) -> bool {
+        !p.is_empty()
+            && !p.starts_with('.')
+            && !p.starts_with('_')
+            && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-._~".contains(c))
+    }
+    if name.is_empty() || name.len() > 214 {
+        return false;
+    }
+    match name.strip_prefix('@') {
+        Some(scoped) => matches!(scoped.split_once('/'), Some((scope, pkg)) if part(scope) && part(pkg)),
+        None => part(name),
+    }
+}
+
+/// M369: enlaza cada paquete web en `<root>/node_modules/<nombre npm>` (symlink; junction en
+/// Windows) para que el editor y las herramientas de JS resuelvan `import "@ray-ds/elements/…"`
+/// con sus tipos, igual que en un proyecto npm — la misma ruta sin importar si la dependencia es
+/// `path:` o está en `.ray-deps/`, y siempre al día porque no es una copia. Un enlace a otro sitio
+/// se rehace; algo que NO es un enlace (un paquete instalado con npm) no se toca. Los enlaces
+/// colgantes que quedan en `node_modules/` (una dependencia quitada) se retiran. Devuelve avisos.
+pub fn link_web_packages(root: &Path, packages: &[WebPackage]) -> Vec<String> {
+    let mut notes = Vec::new();
+    let modules = root.join("node_modules");
+    prune_dangling_links(&modules);
+    for p in packages {
+        let link = modules.join(&p.name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(meta) if is_link(&meta) => {
+                if std::fs::canonicalize(&link).ok().as_deref() == Some(p.dir.as_path()) {
+                    continue;
+                }
+                if let Err(e) = remove_link(&link) {
+                    notes.push(format!("could not replace the link '{}': {e}", link.display()));
+                    continue;
+                }
+            }
+            Ok(_) => {
+                notes.push(format!(
+                    "node_modules/{} is not a link made by ray (installed with npm?): left as is; the editor sees that copy, not dependency '{}'",
+                    p.name, p.dependency
+                ));
+                continue;
+            }
+            Err(_) => {}
+        }
+        if let Some(parent) = link.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            notes.push(format!("could not create '{}': {e}", parent.display()));
+            continue;
+        }
+        if let Err(e) = make_dir_link(&p.dir, &link) {
+            notes.push(format!("could not link '{}' to '{}': {e}", link.display(), p.dir.display()));
+        }
+    }
+    notes
+}
+
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // Una junction no es symlink para std: se reconoce por el atributo de punto de reanálisis.
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+fn remove_link(link: &Path) -> std::io::Result<()> {
+    // Un symlink a directorio se borra como archivo en Unix y como directorio en Windows (también
+    // la junction); `remove_dir` sobre un enlace nunca toca el contenido del destino.
+    std::fs::remove_file(link).or_else(|_| std::fs::remove_dir(link))
+}
+
+#[cfg(unix)]
+fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    // Un symlink pide modo desarrollador o privilegios; la junction no, y basta para un dir local.
+    if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+        return Ok(());
+    }
+    let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output()?;
+    if status.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(String::from_utf8_lossy(&status.stderr).trim().to_string()))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_dir_link(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other("links are not supported on this platform"))
+}
+
+/// Retira de `node_modules/` (y de cada `@scope/`) los enlaces cuyo destino ya no existe.
+fn prune_dangling_links(modules: &Path) {
+    let Ok(rd) = std::fs::read_dir(modules) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        if is_link(&meta) {
+            if !path.exists() {
+                let _ = remove_link(&path);
+            }
+        } else if meta.is_dir() && e.file_name().to_string_lossy().starts_with('@') {
+            prune_dangling_links(&path);
+            let _ = std::fs::remove_dir(&path); // solo si quedó vacío
+        }
+    }
+}
+
 /// Las raíces de módulos de dependencias para el proyecto que contiene `dir`: el caché
 /// `.ray-deps/` (git/registro, si existe) y el **padre** de cada dependencia por ruta
 /// (`nombre = "path:<dir>"` — el loader busca `<raíz>/<nombre>/…`). No descarga nada: usa lo que
@@ -929,6 +1101,57 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M369: nombres npm válidos (una ruta bajo node_modules/ que nunca sube de nivel).
+    #[test]
+    fn npm_names_are_validated() {
+        for ok in ["elements", "@ray-ds/elements", "a.b-c_d~e", "x1"] {
+            assert!(valid_npm_name(ok), "{ok}");
+        }
+        for bad in ["", "@ray-ds", "@/x", "@a/", "../x", "@a/../b", "Upper", ".hidden", "_x", "a/b", "@a/b/c", "a b"] {
+            assert!(!valid_npm_name(bad), "{bad}");
+        }
+    }
+
+    /// M369: el paquete web de una dependencia se enlaza en node_modules/<nombre npm>; enlazar de
+    /// nuevo no cambia nada, un directorio real (npm) no se toca y un enlace colgante se retira.
+    #[cfg(unix)]
+    #[test]
+    fn web_packages_are_linked_into_node_modules() {
+        let base = std::env::temp_dir().join(format!("ray_web_link_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("app");
+        let ds = base.join("ds");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(ds.join("web")).unwrap();
+        std::fs::write(ds.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[web]\npackage = \"web\"\n").unwrap();
+        std::fs::write(ds.join("web/package.json"), r#"{"name": "@ds/elements", "exports": {".": "./index.js"}}"#).unwrap();
+        std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nds = \"path:../ds\"\n").unwrap();
+        let m = Manifest::load(&app).unwrap().unwrap();
+        let pkgs = web_packages(&m).0;
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!((pkgs[0].dependency.as_str(), pkgs[0].name.as_str()), ("ds", "@ds/elements"));
+        assert!(link_web_packages(&app, &pkgs).is_empty());
+        assert!(link_web_packages(&app, &pkgs).is_empty());
+        let link = app.join("node_modules/@ds/elements");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(link.join("package.json").is_file());
+        // Quitada la dependencia, su enlace colgante (y el @scope vacío) se retiran.
+        std::fs::remove_dir_all(ds.join("web")).unwrap();
+        assert!(link_web_packages(&app, &[]).is_empty());
+        assert!(!app.join("node_modules/@ds").exists());
+        // Un paquete instalado con npm (un directorio real) se respeta, con un aviso.
+        std::fs::create_dir_all(ds.join("web")).unwrap();
+        std::fs::write(ds.join("web/package.json"), r#"{"name": "@ds/elements"}"#).unwrap();
+        std::fs::create_dir_all(&link).unwrap();
+        let notes = link_web_packages(&app, &web_packages(&m).0);
+        assert!(notes.len() == 1 && notes[0].contains("not a link made by ray"), "{notes:?}");
+        // Un package.json sin nombre npm válido es un error del paquete.
+        std::fs::write(ds.join("web/package.json"), r#"{"name": "../x"}"#).unwrap();
+        let (pkgs, errors) = web_packages(&m);
+        assert!(pkgs.is_empty() && errors.len() == 1 && errors[0].contains("valid npm"), "{errors:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// M166: el hash de contenido no cambia si git reescribió los saltos de línea a CRLF (Windows,
     /// `core.autocrlf=true`); y un `\r` suelto (no seguido de `\n`) sí cuenta como contenido.

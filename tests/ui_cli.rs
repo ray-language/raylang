@@ -1658,3 +1658,72 @@ fn a_thread_main_waiting_on_a_channel_is_woken_by_a_fiber_send() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+
+/// M369 — el paquete web de una dependencia (`[web] package = "web"` en SU ray.toml): entra al
+/// espacio embed como `node_modules/<nombre npm>/…`, `std/ui` lo monta en
+/// `ray://app/node_modules/<nombre npm>/` (en vivo bajo la toolchain, horneado en el nativo) y
+/// fija el import map de sus `exports`; `ray run` lo enlaza en `node_modules/` de la app.
+#[test]
+fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
+    let base = tmp("web_packages");
+    let ds = base.join("ds");
+    let app = base.join("app");
+    std::fs::create_dir_all(ds.join("web/components/button")).unwrap();
+    std::fs::create_dir_all(app.join("assets")).unwrap();
+    std::fs::write(ds.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[web]\npackage = \"web\"\n").unwrap();
+    std::fs::write(
+        ds.join("web/package.json"),
+        r#"{"name": "@ds/elements", "exports": {".": {"types": "./ds.d.ts", "default": "./index.js"}, "./button": "./components/button/button.js", "./icons/*": "./icons/*", "./x/*": "./x/*.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(ds.join("web/index.js"), "export const x = 1;\n").unwrap();
+    std::fs::write(ds.join("web/components/button/button.js"), "export const b = 1;\n").unwrap();
+    std::fs::write(app.join("assets/index.html"), "<head></head>\n").unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nds = \"path:../ds\"\n\n[native]\nembed = [\"assets\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app.join("prog.ray"),
+        "import std/ui;\nimport std/embed;\nfn main() {\n    print(ui.import_map());\n    match (ui.mount_embed_at(\"\", \"assets\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n    for k in embed.list().unwrap() {\n        print(k);\n    }\n}\n",
+    )
+    .unwrap();
+    // Las claves de `exports` se recorren en orden de clave (Map); `./x/*` → `./x/*.js` no se mapea.
+    const MAP: &str = r#"{"imports":{"@ds/elements":"/node_modules/@ds/elements/index.js","@ds/elements/button":"/node_modules/@ds/elements/components/button/button.js","@ds/elements/icons/":"/node_modules/@ds/elements/icons/","@ds/elements/":"/node_modules/@ds/elements/"}}"#;
+    let want = format!("{MAP}\nok 1\nassets/index.html\nnode_modules/@ds/elements/components/button/button.js\nnode_modules/@ds/elements/index.js\nnode_modules/@ds/elements/package.json\n");
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&app)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{engine:?}\n{err}");
+        // En vivo: el directorio del paquete, montado en su ruta npm; y el import map fijado.
+        assert!(err.contains("[ui] mount dir node_modules/@ds/elements "), "{engine:?}\n{err}");
+        assert!(err.contains(&format!("[ui] import map {MAP}")), "{engine:?}\n{err}");
+    }
+    // El enlace para el editor: node_modules/@ds/elements → el paquete web de la dependencia.
+    let link = app.join("node_modules/@ds/elements");
+    assert!(link.join("package.json").is_file(), "enlace en node_modules/");
+    assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(ds.join("web")).unwrap());
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = app.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&app)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        // Desde otro directorio: el paquete web va horneado en el binario.
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "nativo\n{err}");
+        assert!(!err.contains("[ui] mount dir"), "nativo: horneado\n{err}");
+        assert!(err.contains(&format!("[ui] import map {MAP}")), "nativo\n{err}");
+    }
+}

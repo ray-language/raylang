@@ -538,7 +538,13 @@ precisión de ~1 ms); en el binario nativo, el reactor los atiende en su propio 
 reanuda en su worker de origen, que se elige al nacer entre los de **menos fibras vivas**. Con
 **N = 1**, o cuando hay más fibras ocupadas en CPU que workers, una fibra que no cede sí retrasa a
 las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de eventos debe
-**ceder periódicamente** (`time.sleep(1)` o `yield`).
+**ceder periódicamente** (`time.sleep(1)` o `yield`). Las operaciones de **canal** que completan sin
+aparcar (recibir con dato, enviar con hueco) son además **puntos de cesión cooperativos** en el
+binario nativo: cada 32 de ellas, si hay otras fibras listas en el mismo worker, la fibra cede el
+turno. Así un actor cuyo buzón nunca se vacía —y que bloquea el hilo en cada operación (un `fsync`
+por mensaje)— no deja sin correr a las fibras que nacieron en su worker: esperan a lo sumo 32
+mensajes, no a que el buzón se vacíe. Una llamada bloqueante del sistema (`fs.sync_data`, un
+`fsync`) sí ocupa el worker mientras dura; no hay migración de fibras entre workers.
 
 - `spawn(f: fn() -> T) -> Task<T>` lanza una fibra (no cede). `join(t: Task<T>) -> T` bloquea
   hasta que termina y **re-lanza** su fallo; `try_join(t) -> Result<T, string>` lo devuelve como

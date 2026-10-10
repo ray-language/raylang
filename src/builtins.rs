@@ -366,7 +366,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "random" => "A pseudo-random float in `[0, 1)`.",
         "random_int" => "A pseudo-random int in `[0, n)`.",
         // --- Concurrencia (VM) ---
-        "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
+        "spawn" => "Starts a new concurrent task (a fiber) running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. VM and native binaries; the interpreter has no fibers. In a native binary the fiber is pinned to the worker chosen at spawn (the least loaded) and never migrates; channel operations that complete without parking yield to ready siblings every 32 operations.",
         "spawn_local" => "Like `spawn`, but in a native binary the task is pinned to the CURRENT scheduler worker: no cross-thread wake-up, it runs when the caller yields (sub-microsecond for short helpers). The building block of per-worker state (one actor per worker, Seastar style: see `worker_id`). In the VM it is a plain `spawn`.",
         "worker_id" => "Index of the scheduler worker running this task (0..worker_count()). Stable for the task's whole life in a native binary (tasks never migrate); in the VM it is the current thread's worker index. Use it to pick per-worker state (one actor per worker).",
         "worker_count" => "Number of scheduler workers (cores, or `RAYLANG_THREADS`).",

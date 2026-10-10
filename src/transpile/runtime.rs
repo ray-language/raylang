@@ -1810,7 +1810,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // `taken` cuenta los valores CONSUMIDOS (para el handshake rendezvous por generación) y
             // `senders` los emisores bloqueados (para que `close` los detecte, como la VM). Los panics
             // llevan el MISMO texto que el error de ejecución de la VM (exit code ≠ 70: diferido a H6).
-            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
+            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize, ops: u32 }\n",
             // M116: el resultado interno de `try_recv` (repr SEND del payload); el sitio lo mapea al
             // enum del prelude `Received` (repr programa).
             "enum __TryRecv<T> { Got(T), Empty, Closed }\n",
@@ -1822,7 +1822,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M313: un canal cruza COMPARTIÉNDOSE también por el trait (mismo `Ch` type-erased).
             "impl<T: Send + Sync + 'static> __RaySendConv for __RayChan<T> { fn __to_send(self) -> __RaySend { __RaySend::Ch(std::sync::Arc::new(self) as std::sync::Arc<dyn std::any::Any + Send + Sync>) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::Ch(__sc) => __sc.downcast_ref::<__RayChan<T>>().expect(\"channel type mismatch across threads\").clone(), _ => unreachable!() } } }\n",
             "impl<T: Send> __RayChan<T> {\n",
-            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new(__ray_sync_new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 })) } }\n",
+            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new(__ray_sync_new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0, ops: 0 })) } }\n",
             "    fn send(&self, v: T) {\n",
             "        let mut st = self.inner.0.lock().unwrap();\n",
             // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
@@ -1850,12 +1850,16 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.senders -= 1;\n",
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
-            "        st.q.push_back(v); __ray_notify(&self.inner); drop(st); __ray_bump();\n",
+            "        st.q.push_back(v); __ray_notify(&self.inner); st.ops = st.ops.wrapping_add(1); let coop = st.ops & 31 == 0; drop(st); __ray_bump(); if coop { __ray_coop(); }\n",
             "    }\n",
+            // M372 (raykv #144): cada 64 operaciones listas del canal (el contador va bajo el mutex ya
+            // tomado: gratis), un punto de cesión cooperativo — con fibras listas en el mismo worker,
+            // la fibra cede (ver fibers::coop). El acceso TLS de `coop` se amortiza así 64 veces: por
+            // operación costaba un 20 % en actor_shard.
             "    fn recv(&self) -> Option<T> {\n",
             "        let mut st = self.inner.0.lock().unwrap();\n",
             "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
-            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; __ray_notify(&self.inner); } v\n",
+            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; __ray_notify(&self.inner); } st.ops = st.ops.wrapping_add(1); let coop = st.ops & 31 == 0; drop(st); if coop { __ray_coop(); } v\n",
             "    }\n",
             // M116: recepción NO bloqueante. Got(v) drena y despierta a un emisor (como recv); vacío y
             // abierto → Empty; vacío y cerrado → Closed. El sitio de llamada mapea `__TryRecv<sendrepr>`
@@ -1981,6 +1985,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
                 "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); } __ray_act_wl().wake_all(); }\n",
                 "}\n",
+                // M372: el punto de cesión cooperativo de los canales (fibers::coop).
+                "fn __ray_coop() { ray_runtime::fibers::coop(); }\n",
             ));
         } else {
             out.push_str(concat!(
@@ -1988,6 +1994,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
                 "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); }\n",
                 "}\n",
+                // Sin fibras (hilo por tarea) el SO reparte: no hay cesión cooperativa.
+                "fn __ray_coop() {}\n",
             ));
         }
         out.push_str(concat!(

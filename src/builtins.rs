@@ -1556,7 +1556,7 @@ pub fn ui_set_titlebar(_h: i64, _color: &str) -> Result<(), String> {
 /// (`set_title`, `set_edited`, `intercept_close`) y la app (`intercept_quit`, `h` ignorado).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
-    if op == "intercept_quit" || op == "single_instance" {
+    if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention") {
         return ray_runtime::ui::window_op(0, op, arg);
     }
     let win = match registry().lock().unwrap().open.get(&h) {

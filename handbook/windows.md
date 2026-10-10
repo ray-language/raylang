@@ -106,6 +106,7 @@ instancia devuelve `true` y recibe sus `args()` y los de cada lanzamiento poster
 `"open"`; la posterior devuelve `false` y retorna de `main`. Así `miapp carpeta/` desde la
 terminal y «Abrir con» se tratan igual que el arrastre al icono en macOS.
 | `"focused"` | una ventana pasó al frente | |
+| `"notification"` | el usuario pulsó una notificación de `ui.notify` | la etiqueta de la notificación |
 | `"lifecycle"` | en móvil, la app pasó a segundo plano o volvió | `"background"` / `"foreground"` |
 
 Cada evento lleva la ventana en `window`. Hay un único consumidor: usa `next_event()`, o
@@ -408,8 +409,17 @@ ventana. En Linux y Windows se comporta como `document`.
 - `ui.open_path(ruta)` abre un archivo con su aplicación por defecto, y `ui.reveal(ruta)` lo
   muestra en el gestor de archivos.
 - `std/keychain` guarda secretos en el llavero del sistema.
+- **Notificaciones.** `ui.notify("Correo", "3 mensajes nuevos")` muestra una notificación del
+  sistema con el icono de la app, sin botones; `ui.notify_with(título, cuerpo, etiqueta, sonido)`
+  le pone una etiqueta, y pulsarla llega como evento `"notification"` con esa etiqueta. En macOS
+  la versión real (icono propio, clic, permiso que el sistema pide la primera vez) es la de una
+  app empaquetada con `ray bundle`; bajo `ray run` la notificación se ve igual, pero sin icono
+  propio ni clic. En Linux usa `notify-send`; en Windows aún no está.
+- **Badge y atención.** `ui.badge("3")` pone el contador en el icono del Dock (`""` lo quita; en
+  Linux no existe y se ignora) y `ui.request_attention()` hace saltar el icono o resalta la
+  ventana en la barra sin robar el foco.
 
-Nada de eso pasa por una shell.
+Nada de eso pasa por una shell, salvo `notify-send` en Linux.
 
 ## 10. Desarrollar y probar
 

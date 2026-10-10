@@ -19,6 +19,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   eventos `"open"` (rutas relativas existentes hechas absolutas); la posterior obtiene `false` y
   retorna de `main`. En Linux y Windows es lo que convierte «Abrir con» y `miapp ruta` desde la
   terminal en el mismo evento que el arrastre al icono en macOS.
+- **Notificaciones, badge y atención (M371)**: `ui.notify(title, body)` / `notify_with(title, body,
+  tag, sound)` muestran una notificación del sistema con el icono de la app, sin botones; pulsarla
+  emite el evento `"notification"` con su `tag`. macOS: UNUserNotificationCenter en un `.app`
+  (permiso la primera vez), `osascript` fuera de un bundle (visible en desarrollo, sin icono ni
+  clic); Linux: `notify-send` (clic con libnotify ≥ 0.7.10); Windows: aún no (`Err`). `ui.badge`
+  (icono del Dock) y `ui.request_attention()` (el Dock salta / la ventana se resalta). Headless:
+  trazas y `RAY_UI_NOTIFY_CLICK=1` pulsa cada notificación.
 
 ## 1.27.44 — 2026-10-09
 

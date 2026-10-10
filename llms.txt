@@ -398,6 +398,9 @@ event `"open"` = the system asked to open a path (drop on the Dock icon, "Open w
 `tag` = path, one per item; bundle with `[app] opens = ["folder", ".ray"]`; headless `RAY_UI_OPEN=a:b`);
 `ui.single_instance() -> Result<bool,_>`: true = first instance (its `args()` and every later launch's
 arguments arrive as `"open"` events), false = another instance got them → return from main;
+`ui.notify(title, body)` / `ui.notify_with(title, body, tag, sound)`: system notification (app icon, no
+buttons; click → event `"notification"` with `tag`; real icon+click need a `ray bundle` app on macOS);
+`ui.badge("3")` (Dock badge, "" clears), `ui.request_attention()` (bounce/highlight without focus);
 native message dialogs: `ui.message(title, text, ["Save", "Don't Save", "Cancel"]) -> Result<int,_>`
 (index pressed; dismiss = last button), `ui.message_styled(…, "warning"|"error", …)`, `ui.alert`,
 `ui.confirm(title, text, ok, cancel) -> Result<bool,_>`; file dialogs with options:

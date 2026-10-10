@@ -21,12 +21,14 @@ from std/json import Json;
 /// refresh on regaining focus), "message" (the page called `window.ray.send(text)`: `tag`
 /// is the text and `window` the sender), "close_requested" (M257: the user tried to close
 /// `window` while `intercept_close(h, true)` is on — the window stays open until you `close(h)`)
-/// "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
+/// or "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
 /// `window` is 0; the app keeps running until `main` returns) or "open" (M370: the system asked
 /// the app to open something — a file or folder dropped on its Dock icon, "Open with",
 /// `open -a App path` — `tag` is the path, one event per item, also when the app is already
 /// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
-/// still gets its launch arguments in `args()`). In the iOS/Android shells of
+/// still gets its launch arguments in `args()`) or "notification" (M371: the user
+/// clicked a notification shown with `notify`/`notify_with`; `tag` is the notification's tag,
+/// `window` is 0). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.
@@ -677,6 +679,50 @@ pub fn single_instance() -> Result<bool, string> {
     } else {
         Result.Err(r[1])
     }
+}
+
+/// Shows a system notification with the app's icon (M371): title and body, no buttons. macOS:
+/// the notification center (inside a `ray bundle` app it asks the user's permission the first
+/// time — a denied permission makes later calls `Err`; a bare `ray run` binary uses the classic
+/// center when there is one, `osascript` otherwise — visible, no own icon, no click). Linux:
+/// libnotify (`notify-send`). Windows: not available yet (`Err`). Headless:
+/// `Ok` + trace. Clicking the notification emits a `"notification"` event (`window` 0, `tag` ""):
+/// use `notify_with` to tell them apart.
+pub fn notify(title: string, body: string) -> Result<int, string> {
+    notify_with(title, body, "", true)
+}
+
+/// `notify` with a `tag` (the `tag` of the `"notification"` event emitted when the user clicks
+/// it) and a `sound` switch. In headless mode RAY_UI_NOTIFY_CLICK=1 "clicks" every notification
+/// as it is shown (tests).
+pub fn notify_with(title: string, body: string, tag: string, sound: bool) -> Result<int, string> {
+    let r = __ui_window(
+        0,
+        "notify",
+        title.replace("\n", " ")
+            + "\n"
+            + body
+            + "\n"
+            + tag.replace("\n", " ")
+            + "\n"
+            + if (sound) { "1" } else { "0" }
+    );
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Sets the badge on the app's Dock icon (macOS) — an unread count, a "!" — or clears it with
+/// `""` (M371). Linux desktops have no badge (ignored, `Ok`); Windows: not available yet (`Err`).
+pub fn badge(text: string) -> Result<int, string> {
+    let r = __ui_window(0, "badge", text);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Asks for the user's attention without stealing focus (M371): the Dock icon bounces until the
+/// app comes to the front (macOS), the window is highlighted in the taskbar (Linux, urgency
+/// hint on the last open window). Windows: not available yet (`Err`).
+pub fn request_attention() -> Result<int, string> {
+    let r = __ui_window(0, "request_attention", "");
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
 /// Makes the USER's attempt to quit the app — ⌘Q or Quit in the application menu on macOS —

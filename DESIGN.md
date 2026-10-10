@@ -17243,3 +17243,27 @@ run` el `argv` del proceso es el de la toolchain), y el id sale de `__app_info()
 huérfano se detecta porque nadie contesta y se reemplaza. Se descartó el resultado por
 `Result<(), …>` con un tipo nuevo: `__ui_window` devuelve `["ok"]`/`["err", msg]`, y el caso
 «hay otra instancia» viaja como un mensaje fijo que `std/ui` traduce a `Ok(false)`.
+## 354. M371 — Notificaciones, badge y atención: lo nativo donde se siente (oct 2026)
+
+Diferidas desde M148 («UNUserNotificationCenter exige bundle+autorización → encaja tras `ray
+bundle` cuando un dogfood lo pida»), las notificaciones llegan con la decisión del usuario de
+mantenerlas mínimas: título, cuerpo, el icono de la app y un clic; sin botones hasta que una app
+los pida. Y con el badge del Dock y «pedir atención» en el mismo arco: son las dos funciones que
+acompañan a una notificación en un cliente de correo o un chat.
+
+La superficie es `notify`/`notify_with`/`badge`/`request_attention` sobre la primitiva
+`__ui_window(0, op, arg)` que ya cubría `intercept_quit` (operaciones de app, sin ventana), y el
+evento `"notification"` con el `tag`. Por plataforma, lo que da el sistema sin construir nada
+encima: en macOS **dos APIs**, porque `UNUserNotificationCenter` aborta sin bundle y
+`NSUserNotificationCenter` (la clásica) devuelve nil sin bundle en macOS 26 — se comprobó —, así
+que dentro de un `.app` va la moderna (autorización asíncrona por bloque; las peticiones hechas
+antes de la respuesta esperan en cola y se añaden al conceder) y fuera, `osascript display
+notification`: se ve en desarrollo, con el icono de Script Editor y sin clic, que es lo que un
+`ray run` necesita para probar el flujo. Invocar y construir bloques de Objective-C a mano
+(cabecera `isa/flags/invoke/descriptor`, un bloque global por `invoke`) fue la única pieza nueva
+de plomería: los handlers de finalización de UserNotifications son obligatorios. En Linux,
+`notify-send` en un hilo con `-A default=Open --wait` (libnotify ≥ 0.7.10) convierte el clic en
+evento, y un `notify-send` viejo degrada a mostrar sin clic; el badge no existe en freedesktop
+(no-op documentado) y la atención es la pista de urgencia de GTK sobre la última ventana. Windows
+queda para una PR propia con verificación en la VM (`Shell_NotifyIcon` + `FlashWindowEx`): no se
+afirma lo que no se ha visto.

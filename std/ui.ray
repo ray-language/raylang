@@ -21,13 +21,18 @@ from std/json import Json;
 /// refresh on regaining focus), "message" (the page called `window.ray.send(text)`: `tag`
 /// is the text and `window` the sender), "close_requested" (M257: the user tried to close
 /// `window` while `intercept_close(h, true)` is on — the window stays open until you `close(h)`)
-/// or "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
-/// `window` is 0; the app keeps running until `main` returns). In the iOS/Android shells of
+/// "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
+/// `window` is 0; the app keeps running until `main` returns) or "open" (M370: the system asked
+/// the app to open something — a file or folder dropped on its Dock icon, "Open with",
+/// `open -a App path` — `tag` is the path, one event per item, also when the app is already
+/// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
+/// still gets its launch arguments in `args()`). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.
-/// In headless mode opening a window produces no event; `focus(h)` emits "focused", and the
-/// env var RAY_UI_MSG injects one "message" per opened window (tests).
+/// In headless mode opening a window produces no event; `focus(h)` emits "focused", the
+/// env var RAY_UI_MSG injects one "message" per opened window, and RAY_UI_OPEN (paths
+/// separated by `:`) injects the "open" events once per process (tests).
 pub struct UiEvent {
     kind: string,
     window: int,
@@ -646,6 +651,32 @@ pub fn set_edited(h: int, edited: bool) -> Result<int, string> {
 pub fn intercept_close(h: int, on: bool) -> Result<int, string> {
     let r = __ui_window(h, "intercept_close", if (on) { "1" } else { "0" });
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Makes this process the app's single instance (M370b). `Ok(true)`: no other instance was
+/// running — keep going; this launch's arguments (`args()`) have been queued as `"open"` events,
+/// so the program handles "open this" the same way whether it came from `argv` (Linux, Windows,
+/// a bare binary) or from the system (macOS `.app`, see the `"open"` event). `Ok(false)`: another
+/// instance is already running and has received these arguments as its own `"open"` events —
+/// return from `main`. Relative paths that exist are made absolute before forwarding. Keyed by
+/// `[app] id` (or the executable's name); the rendezvous is a local socket under
+/// `$XDG_RUNTIME_DIR`/the temp dir (Unix) or `%LOCALAPPDATA%\ray` (Windows). A stale socket
+/// left by a crashed instance is replaced. On macOS a `ray bundle` app is already single by the
+/// system; this call is harmless there.
+///
+/// ```ray
+/// if (!ui.single_instance()?) { return 0; }   // the running app got our paths
+/// for e in ui.events() { if (e.kind == "open") { open_path(e.tag); } }
+/// ```
+pub fn single_instance() -> Result<bool, string> {
+    let r = __ui_window(0, "single_instance", __app_info()[0] + "\n" + join(args(), "\n"));
+    if (r[0] == "ok") {
+        Result.Ok(true)
+    } else if (r[1] == "ui: another instance is already running and received this launch's arguments") {
+        Result.Ok(false)
+    } else {
+        Result.Err(r[1])
+    }
 }
 
 /// Makes the USER's attempt to quit the app — ⌘Q or Quit in the application menu on macOS —

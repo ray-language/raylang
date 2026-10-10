@@ -97,6 +97,13 @@ next one without using CPU.
 | `"closed"` | a window closed | |
 | `"close_requested"` | the user tried to close (with `intercept_close`) | |
 | `"quit_requested"` | the user tried to quit (with `intercept_quit`) | |
+| `"open"` | the system asked to open something: a file or folder dropped on the icon, "Open with", `open -a App path` (also while running; needs `[app] opens`) | the path, one event per item |
+
+On Linux and Windows what the user opens arrives as the arguments of a **new process**. For it
+to reach the running app too, call `ui.single_instance()` first: the first instance returns
+`true` and receives its `args()` and every later launch's arguments as `"open"` events; the later
+one returns `false` and returns from `main`. That way `myapp folder/` from a terminal and "Open
+with" behave like dropping on the Dock icon on macOS.
 | `"focused"` | a window came to the front | |
 | `"lifecycle"` | on mobile, the app went to the background or came back | `"background"` / `"foreground"` |
 
@@ -435,4 +442,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:4781fa04a6a0 -->
+<!-- sync: sha256:76930083789b -->

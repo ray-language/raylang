@@ -178,6 +178,22 @@ fn enforce_queue_cap(q: &mut VecDeque<Event>) {
     }
 }
 
+/// M370: el inyector headless de lo que el sistema «pide abrir» (precedente RAY_UI_MSG): con
+/// `RAY_UI_OPEN=/ruta/a:/ruta/b` (separador `:`) se encolan esos eventos ("open", 0, ruta) UNA
+/// vez por proceso, al abrir la primera ventana headless o al esperar el primer evento — como
+/// haría macOS con un `open -a App ruta` al arrancar. Permite probar el handler sin un .app.
+pub(crate) fn headless_inject_open_once() {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !headless() || DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(list) = std::env::var("RAY_UI_OPEN") {
+        for p in list.split(':').filter(|p| !p.is_empty()) {
+            push_event("open", 0, p);
+        }
+    }
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ev = events();
@@ -205,10 +221,12 @@ pub fn event_fd() -> i32 {
 /// de la VM (Windows) para despertar la fibra SOLO cuando hay algo — despertarla a ciegas cada
 /// 1 ms renovaba el plazo de `next_event_timeout` y nunca vencía (el mismo caso de stdin, M173).
 pub fn has_pending_event() -> bool {
+    headless_inject_open_once();
     !events().queue.lock().unwrap().is_empty()
 }
 
 pub fn try_next_event() -> Option<(String, i64, String)> {
+    headless_inject_open_once();
     let ev = events();
     let mut q = ev.queue.lock().unwrap();
     match q.pop_front() {
@@ -226,6 +244,7 @@ pub fn try_next_event() -> Option<(String, i64, String)> {
 /// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo secuencial): espera en la
 /// condvar de la cola — sin sondeo. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
 pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
+    headless_inject_open_once();
     let ev = events();
     let deadline = if ms > 0 {
         Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
@@ -1545,6 +1564,7 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
         {
             push_event("message", id, &msg);
         }
+        headless_inject_open_once();
         return Ok(());
     }
     // §80b: modo SHELL (iOS; o `ui-shell` en pruebas) — el shell registró sus handlers ANTES
@@ -1695,6 +1715,175 @@ fn quit_requested() -> bool {
     intercept
 }
 
+/// M370b (ray-sublime #120): el mensaje con el que `single_instance` dice «ya hay otra
+/// instancia; le pasé tus argumentos». std/ui lo convierte en `Ok(false)`.
+pub const SINGLE_INSTANCE_SECONDARY: &str = "ui: another instance is already running and received this launch's arguments";
+
+/// M370b: la instancia única de la app. `arg` = `<id de la app>\n<arg1>\n<arg2>…` (el id de
+/// `[app] id`, o vacío → el nombre del ejecutable). La PRIMERA instancia abre un socket local
+/// con ese nombre (Unix: `$XDG_RUNTIME_DIR/ray-<id>.sock` o `$TMPDIR/ray-<id>-<uid>.sock`;
+/// Windows: TCP en 127.0.0.1 con el puerto y un token en `%LOCALAPPDATA%\ray\<id>.instance`),
+/// atiende en un hilo (cada línea recibida = un evento `("open", 0, ruta)`) y encola sus
+/// PROPIOS argumentos como eventos `"open"` — así el programa tiene un solo camino para «abre
+/// esto», llegue por `argv` (Linux/Windows, binario suelto) o por el sistema (macOS). Una
+/// instancia POSTERIOR se conecta, envía sus argumentos (las rutas relativas que existen se
+/// vuelven absolutas: su cwd no es el de la primera) y devuelve `Err(SINGLE_INSTANCE_SECONDARY)`.
+/// Un socket huérfano (la primera murió) se detecta porque nadie contesta y se reemplaza.
+fn single_instance(arg: &str) -> Result<(), String> {
+    let mut lines = arg.split('\n');
+    let id = lines.next().unwrap_or("").trim();
+    let id = if id.is_empty() {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "ray-app".to_string())
+    } else {
+        id.to_string()
+    };
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect();
+    let args: Vec<String> = lines.filter(|l| !l.is_empty()).map(absolutize).collect();
+    match single_instance_connect(&safe) {
+        Some(mut stream) => {
+            use std::io::Write;
+            let payload = args.join("\n");
+            let _ = stream.write_all(payload.as_bytes());
+            let _ = stream.flush();
+            if ui_trace() {
+                eprintln!("[ui] single instance: forwarded {} argument(s) to the running instance", args.len());
+            }
+            Err(SINGLE_INSTANCE_SECONDARY.to_string())
+        }
+        None => {
+            single_instance_listen(&safe)?;
+            if ui_trace() {
+                eprintln!("[ui] single instance: primary ({safe})");
+            }
+            for a in &args {
+                push_event("open", 0, a);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Una ruta relativa que EXISTE, hecha absoluta contra el cwd; lo demás viaja tal cual.
+fn absolutize(a: &str) -> String {
+    let p = std::path::Path::new(a);
+    if p.is_absolute() || !p.exists() {
+        return a.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => {
+            let joined = cwd.join(p);
+            joined.canonicalize().unwrap_or(joined).to_string_lossy().into_owned()
+        }
+        Err(_) => a.to_string(),
+    }
+}
+
+/// Reparte las líneas recibidas por una conexión como eventos "open".
+fn single_instance_serve(mut stream: impl std::io::Read) {
+    let mut buf = String::new();
+    if stream.read_to_string(&mut buf).is_ok() {
+        for line in buf.split('\n').filter(|l| !l.is_empty()) {
+            push_event("open", 0, line);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn single_instance_path(id: &str) -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return std::path::PathBuf::from(dir).join(format!("ray-{id}.sock"));
+    }
+    // SAFETY: `getuid` no tiene precondiciones.
+    let uid = unsafe { getuid() };
+    std::env::temp_dir().join(format!("ray-{id}-{uid}.sock"))
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn getuid() -> u32;
+}
+
+#[cfg(unix)]
+fn single_instance_connect(id: &str) -> Option<std::os::unix::net::UnixStream> {
+    let path = single_instance_path(id);
+    match std::os::unix::net::UnixStream::connect(&path) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            // Nadie contesta: un socket huérfano (o ninguno). La primera instancia lo creará.
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn single_instance_listen(id: &str) -> Result<(), String> {
+    let path = single_instance_path(id);
+    let listener = std::os::unix::net::UnixListener::bind(&path)
+        .map_err(|e| format!("ui: single_instance could not listen on '{}': {e}", path.display()))?;
+    std::thread::Builder::new()
+        .name("ray-single-instance".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                single_instance_serve(stream);
+            }
+        })
+        .map_err(|e| format!("ui: single_instance could not start its thread: {e}"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn single_instance_file(id: &str) -> std::path::PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    base.join("ray").join(format!("{id}.instance"))
+}
+
+#[cfg(windows)]
+fn single_instance_connect(id: &str) -> Option<std::net::TcpStream> {
+    let file = single_instance_file(id);
+    let text = std::fs::read_to_string(&file).ok()?;
+    let mut it = text.lines();
+    let port: u16 = it.next()?.trim().parse().ok()?;
+    let token = it.next()?.trim().to_string();
+    let mut s = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), std::time::Duration::from_millis(500)).ok()?;
+    use std::io::Write;
+    // La primera línea es el token del archivo: otro proceso en ese puerto no nos confunde.
+    s.write_all(format!("{token}\n").as_bytes()).ok()?;
+    Some(s)
+}
+
+#[cfg(windows)]
+fn single_instance_listen(id: &str) -> Result<(), String> {
+    let file = single_instance_file(id);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|e| format!("ui: single_instance could not listen: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let token = format!("{:x}{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    std::fs::write(&file, format!("{port}\n{token}\n")).map_err(|e| format!("ui: single_instance could not write '{}': {e}", file.display()))?;
+    std::thread::Builder::new()
+        .name("ray-single-instance".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut buf = String::new();
+                let mut stream = stream;
+                if std::io::Read::read_to_string(&mut stream, &mut buf).is_ok()
+                    && let Some((first, rest)) = buf.split_once('\n')
+                    && first.trim() == token
+                {
+                    single_instance_serve(rest.as_bytes());
+                }
+            }
+        })
+        .map_err(|e| format!("ui: single_instance could not start its thread: {e}"))?;
+    Ok(())
+}
+
 /// M257 (ray-sublime): operaciones sobre una ventana ABIERTA por nombre — una sola primitiva
 /// (`__ui_window(h, op, arg)`) para lo pequeño y frecuente:
 /// - `set_title` (`arg` = título): `setTitle:` / `gtk_window_set_title` / `SetWindowTextW`.
@@ -1708,6 +1897,9 @@ fn quit_requested() -> bool {
 /// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
 pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     let on = arg == "1" || arg == "true";
+    if op == "single_instance" {
+        return single_instance(arg);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {
@@ -3198,6 +3390,42 @@ mod mac {
             extern "C" fn application_should_terminate(_this: Id, _sel: Sel, _app: Id) -> u64 {
                 if super::quit_requested() { 0 } else { 1 }
             }
+            // M370 (ray-sublime #120): lo que el sistema pide abrir — soltar sobre el icono del
+            // Dock, «Abrir con», `open -a App ruta` — llega por Apple Event a
+            // `application:openURLs:`, tanto al arrancar (tras finishLaunching, antes del primer
+            // evento de usuario) como con la app ya corriendo. Un evento ("open", 0, ruta) por
+            // URL, en orden; una URL que no es de archivo viaja como su texto absoluto.
+            extern "C" fn application_open_urls(_this: Id, _sel: Sel, _app: Id, urls: Id) {
+                // SAFETY: el run loop entrega un NSArray<NSURL> válido; se copia dentro del bloque.
+                let paths: Vec<String> = unsafe {
+                    let plain_id: MsgId = std::mem::transmute(msg_send());
+                    let count: MsgI64 = std::mem::transmute(msg_send());
+                    let at: MsgIdI64 = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let is_file: MsgU64 = std::mem::transmute(msg_send());
+                    let text_of = |obj: Id| -> Option<String> {
+                        if obj.is_null() {
+                            return None;
+                        }
+                        let c = utf8(obj, sel(b"UTF8String\0"));
+                        (!c.is_null()).then(|| std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned())
+                    };
+                    let n = if urls.is_null() { 0 } else { count(urls, sel(b"count\0")) };
+                    (0..n)
+                        .filter_map(|i| {
+                            let url = at(urls, sel(b"objectAtIndex:\0"), i);
+                            if url.is_null() {
+                                return None;
+                            }
+                            let sel_name = if is_file(url, sel(b"isFileURL\0")) & 0xff != 0 { b"path\0" as &[u8] } else { b"absoluteString\0" };
+                            text_of(plain_id(url, sel(sel_name)))
+                        })
+                        .collect()
+                };
+                for p in paths {
+                    super::push_event("open", 0, &p);
+                }
+            }
             extern "C" fn window_will_close(_this: Id, _sel: Sel, notification: Id) {
                 // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
                 let win = unsafe {
@@ -3376,6 +3604,13 @@ mod mac {
                     sel(b"applicationShouldTerminate:\0"),
                     application_should_terminate as extern "C" fn(Id, Sel, Id) -> u64 as *const c_void,
                     c"Q@:@".as_ptr(),
+                );
+                // M370: archivos/carpetas/URLs que el sistema pide abrir → eventos "open".
+                class_addMethod(
+                    cls_new,
+                    sel(b"application:openURLs:\0"),
+                    application_open_urls as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
                 );
                 // M252: la ventana que pasa a ser la clave → evento ("focused", id, "").
                 class_addMethod(

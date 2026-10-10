@@ -4,6 +4,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Evento `"open"` y `[app] opens` (M370, ray-sublime #120)**: lo que el sistema pide abrir —
+  soltar un archivo o carpeta sobre el icono del Dock, «Abrir con», `open -a App ruta` — llega a
+  `ui.events()` como `"open"` con la ruta en `tag`, un evento por elemento, también con la app ya
+  abierta (macOS, `application:openURLs:`). `[app] opens = ["folder", ".ray", "text"]` en
+  `ray.toml` escribe `CFBundleDocumentTypes` en el `.app` y `MimeType=`/`%F` en el `.desktop`
+  (alias `folder`/`text`/`image`/`any`, extensiones `.ext`, UTIs o MIME literales). En headless,
+  `RAY_UI_OPEN=a:b` inyecta los eventos para probar el handler sin bundle. Verificado con un
+  `.app` real: al arrancar y con la app corriendo.
+- **`ui.single_instance()` (M370b)**: la primera instancia (`true`) atiende un socket local por
+  `[app] id` y recibe sus propios `args()` y los argumentos de cada lanzamiento posterior como
+  eventos `"open"` (rutas relativas existentes hechas absolutas); la posterior obtiene `false` y
+  retorna de `main`. En Linux y Windows es lo que convierte «Abrir con» y `miapp ruta` desde la
+  terminal en el mismo evento que el arrastre al icono en macOS.
+
 ## 1.27.44 — 2026-10-09
 
 - **Paquetes web de las dependencias (M369, ray-ds)**: un paquete cuyo `ray.toml` declara

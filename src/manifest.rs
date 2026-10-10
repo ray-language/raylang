@@ -121,6 +121,12 @@ pub struct Manifest {
     /// `true`/`false` sin comillas → `<true/>`/`<false/>`. Sin ella, `ray bundle` no daba forma de
     /// declarar `NSLocalNetworkUsageDescription` y el rodeo era `plutil` + `codesign`.
     pub app_plist: Vec<(String, PlistValue)>,
+    /// M370 (ray-sublime #120): `[app] opens` — lo que la app sabe abrir, para que el sistema le
+    /// entregue archivos y carpetas (soltar sobre el icono, «Abrir con», `open -a App ruta`):
+    /// alias (`folder`, `text`, `image`, `any`), extensiones (`.ray`) o UTIs/MIME literales.
+    /// `ray bundle` lo escribe como `CFBundleDocumentTypes` (macOS) y `MimeType=` (Linux); lo
+    /// abierto llega como eventos `"open"` de `std/ui`.
+    pub app_opens: Vec<String>,
     /// M155: `[app] description` — la descripción corta de la app (hoy la usa `ui.set_about`
     /// como referencia documental; el panel la recibe por código). `None` = sin descripción.
     pub app_description: Option<String>,
@@ -232,6 +238,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_notary = None;
     let mut app_entitlements = None;
     let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
+    let mut app_opens: Vec<String> = Vec::new();
     let mut raylang_min: Option<String> = None;
     let mut android_application_id = None;
     let mut app_description = None;
@@ -357,6 +364,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "sign" => app_sign = Some(as_string()?),
                 "notary" => app_notary = Some(as_string()?),
                 "entitlements" => app_entitlements = Some(as_string()?),
+                // M370: los tipos que la app abre (eventos "open").
+                "opens" => {
+                    app_opens = parse_string_array(value_raw)
+                        .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"folder\", \".ray\"]"))?;
+                }
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
             "android" => match key {
@@ -418,6 +430,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_icon,
         app_id,
         app_plist,
+        app_opens,
         raylang: raylang_min,
         app_description,
         app_public_key,
@@ -600,6 +613,11 @@ mod tests {
         assert_eq!(m.app_icon.as_deref(), Some("assets/icon.png"));
         assert_eq!(m.app_id.as_deref(), Some("org.example.demo"));
         assert!(bare.app_name.is_none() && bare.app_icon.is_none() && bare.app_id.is_none());
+        // M370: [app] opens — lo que la app abre (eventos "open").
+        let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nopens = [\"folder\", \".ray\"]\n").unwrap();
+        assert_eq!(m.app_opens, vec!["folder".to_string(), ".ray".to_string()]);
+        assert!(bare.app_opens.is_empty());
+        assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nopens = \"folder\"\n").is_err());
         // M209: [app.plist] — claves extra del Info.plist, cadena o bool, en orden.
         let m = parse_src(
             "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app.plist]\nNSLocalNetworkUsageDescription = \"Talks to devices nearby\"\nLSUIElement = true\nUIBackgroundModes = [\"audio\", \"fetch\"]\n\n[ios]\nbackground_audio = true\n\n[android]\nbackground_audio = false\n",

@@ -1464,9 +1464,12 @@ sin que la app escriba nada:
 - `ray run`, `ray fetch` y `ray update` lo **enlazan** en `node_modules/<nombre npm>` de la app
   (symlink; junction en Windows), siempre a la copia de la dependencia — `path:` o `.ray-deps/`
   —, así que el editor resuelve los mismos imports con sus tipos y va a su definición. Añade
-  `node_modules/` al `.gitignore` (`ray new` ya lo trae). Con un `jsconfig.json` con
-  `"moduleResolution": "bundler"` (el de cualquier plantilla de Vite), VS Code los resuelve sin
-  más; un `node_modules/<nombre>` real (instalado con npm) no se toca.
+  `node_modules/` al `.gitignore` (`ray new` ya lo trae). Como en cualquier plantilla de Vite,
+  dos archivos fijos hacen que todos los editores lo vean: un `tsconfig.json` con
+  `"allowJs": true`, `"moduleResolution": "bundler"` y la lib `dom` (lo leen TypeScript y Deno), y
+  un `package.json` que declare la dependencia (`"dependencies": { "@ray-ds/elements": "*" }`):
+  el servidor de lenguaje de Deno solo resuelve por `node_modules` lo que el proyecto declara. Un
+  `node_modules/<nombre>` real (instalado con npm) no se toca.
 
 ### Apps de escritorio y móvil (`std/ui`, `ray bundle`)
 

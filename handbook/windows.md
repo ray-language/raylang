@@ -99,6 +99,12 @@ consumir CPU.
 | `"close_requested"` | el usuario intentó cerrar (con `intercept_close`) | |
 | `"quit_requested"` | el usuario intentó salir (con `intercept_quit`) | |
 | `"open"` | el sistema pidió abrir algo: un archivo o carpeta soltado sobre el icono, «Abrir con», `open -a App ruta` (también con la app abierta; requiere `[app] opens`) | la ruta, un evento por elemento |
+
+En Linux y Windows lo que el usuario abre llega como argumentos de un **proceso nuevo**. Para que
+también acabe en la app ya abierta, llama a `ui.single_instance()` al empezar: la primera
+instancia devuelve `true` y recibe sus `args()` y los de cada lanzamiento posterior como eventos
+`"open"`; la posterior devuelve `false` y retorna de `main`. Así `miapp carpeta/` desde la
+terminal y «Abrir con» se tratan igual que el arrastre al icono en macOS.
 | `"focused"` | una ventana pasó al frente | |
 | `"lifecycle"` | en móvil, la app pasó a segundo plano o volvió | `"background"` / `"foreground"` |
 

@@ -1763,3 +1763,70 @@ fn the_system_asking_to_open_paths_arrives_as_open_events() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "open 0 /tmp/a folder\nopen 0 /tmp/b.ray\n", "nativo\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// M370b: `ui.single_instance()` — la primera instancia recibe sus propios argumentos como eventos
+/// `"open"` y los de cada instancia posterior (rutas relativas existentes hechas absolutas); la
+/// posterior obtiene `false` y sale. Socket local en el runtime, igual en los tres motores.
+#[test]
+fn single_instance_forwards_a_later_launchs_arguments_as_open_events() {
+    let base = tmp("single_instance");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("first.txt"), "1").unwrap();
+    std::fs::write(base.join("second.txt"), "2").unwrap();
+    std::fs::write(base.join("ray.toml"), format!("[package]\nname = \"single\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n\n[app]\nid = \"org.raylang.test.single.{}\"\n", std::process::id())).unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import std/ui;\nfn main() -> int {\n    match (ui.single_instance()) {\n        Result.Err(e) => { print(\"err \" + e); return 1; },\n        Result.Ok(false) => { print(\"secondary\"); return 0; },\n        Result.Ok(true) => print(\"primary\"),\n    }\n    var n = 0;\n    while (n < 3) {\n        match (ui.next_event_timeout(6000)) {\n            Result.Ok(Option.Some(e)) => { print(e.kind + \" \" + to_string(e.window) + \" \" + e.tag); n = n + 1; },\n            _ => { print(\"timeout\"); n = 3; },\n        }\n    }\n    0\n}\n",
+    )
+    .unwrap();
+    let abs = |p: &str| base.join(p).canonicalize().unwrap().to_string_lossy().into_owned();
+    for engine in [&["run", "src/main.ray"][..], &["run", "--interp", "src/main.ray"][..]] {
+        let mut primary = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .args(["--", "first.txt"])
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        // La segunda instancia, desde OTRO cwd: su ruta relativa debe llegar absoluta.
+        let second = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .args(["--", "second.txt", "hello"])
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&second.stdout), "secondary\n", "{engine:?}\n{}", String::from_utf8_lossy(&second.stderr));
+        let out = primary.wait_with_output().unwrap();
+        let want = format!("primary\nopen 0 {}\nopen 0 {}\nopen 0 hello\n", abs("first.txt"), abs("second.txt"));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{engine:?}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("single_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "src/main.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let mut primary = Command::new(&bin)
+            .arg("first.txt")
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let second = Command::new(&bin).args(["second.txt", "hello"]).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&second.stdout), "secondary\n", "nativo\n{}", String::from_utf8_lossy(&second.stderr));
+        let out = primary.wait_with_output().unwrap();
+        let want = format!("primary\nopen 0 {}\nopen 0 {}\nopen 0 hello\n", abs("first.txt"), abs("second.txt"));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}

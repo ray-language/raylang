@@ -17228,3 +17228,18 @@ literales, que `ray bundle` traduce a `CFBundleDocumentTypes` (macOS) y `MimeTyp
 batería de tres motores pruebe el handler sin bundle. Linux y Windows no tienen Apple Events: la
 segunda instancia debe reenviar su `argv` a la primera — la instancia única opcional queda para
 la siguiente PR del arco, junto con las asociaciones del registro de Windows.
+
+La segunda mitad (M370b, misma PR del arco) es `ui.single_instance()`: Linux y Windows no tienen
+Apple Events, lo que el usuario abre llega como `argv` de un proceso NUEVO. La primera instancia
+abre un socket local con el `[app] id` (Unix domain socket bajo `$XDG_RUNTIME_DIR` o el temporal;
+en Windows TCP en loopback con puerto y token en `%LOCALAPPDATA%\ray`, porque `std` no trae named
+pipes) y lo atiende en un hilo: cada línea recibida es un evento `"open"`. La posterior se
+conecta, envía sus argumentos —las rutas relativas que existen hechas absolutas, porque su cwd no
+es el de la primera— y devuelve `false`. La decisión que da un solo camino al programa: la
+primera instancia encola también SUS PROPIOS `args()` como eventos `"open"`, así `miapp carpeta/`
+desde la terminal, «Abrir con» en Linux y el arrastre al Dock en macOS acaban en el mismo `if
+(e.kind == "open")`. Los argumentos los aporta `std/ui` con el `args()` del lenguaje (bajo `ray
+run` el `argv` del proceso es el de la toolchain), y el id sale de `__app_info()`. Un socket
+huérfano se detecta porque nadie contesta y se reemplaza. Se descartó el resultado por
+`Result<(), …>` con un tipo nuevo: `__ui_window` devuelve `["ok"]`/`["err", msg]`, y el caso
+«hay otra instancia» viaja como un mensaje fijo que `std/ui` traduce a `Ok(false)`.

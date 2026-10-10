@@ -1715,6 +1715,175 @@ fn quit_requested() -> bool {
     intercept
 }
 
+/// M370b (ray-sublime #120): el mensaje con el que `single_instance` dice «ya hay otra
+/// instancia; le pasé tus argumentos». std/ui lo convierte en `Ok(false)`.
+pub const SINGLE_INSTANCE_SECONDARY: &str = "ui: another instance is already running and received this launch's arguments";
+
+/// M370b: la instancia única de la app. `arg` = `<id de la app>\n<arg1>\n<arg2>…` (el id de
+/// `[app] id`, o vacío → el nombre del ejecutable). La PRIMERA instancia abre un socket local
+/// con ese nombre (Unix: `$XDG_RUNTIME_DIR/ray-<id>.sock` o `$TMPDIR/ray-<id>-<uid>.sock`;
+/// Windows: TCP en 127.0.0.1 con el puerto y un token en `%LOCALAPPDATA%\ray\<id>.instance`),
+/// atiende en un hilo (cada línea recibida = un evento `("open", 0, ruta)`) y encola sus
+/// PROPIOS argumentos como eventos `"open"` — así el programa tiene un solo camino para «abre
+/// esto», llegue por `argv` (Linux/Windows, binario suelto) o por el sistema (macOS). Una
+/// instancia POSTERIOR se conecta, envía sus argumentos (las rutas relativas que existen se
+/// vuelven absolutas: su cwd no es el de la primera) y devuelve `Err(SINGLE_INSTANCE_SECONDARY)`.
+/// Un socket huérfano (la primera murió) se detecta porque nadie contesta y se reemplaza.
+fn single_instance(arg: &str) -> Result<(), String> {
+    let mut lines = arg.split('\n');
+    let id = lines.next().unwrap_or("").trim();
+    let id = if id.is_empty() {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "ray-app".to_string())
+    } else {
+        id.to_string()
+    };
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect();
+    let args: Vec<String> = lines.filter(|l| !l.is_empty()).map(absolutize).collect();
+    match single_instance_connect(&safe) {
+        Some(mut stream) => {
+            use std::io::Write;
+            let payload = args.join("\n");
+            let _ = stream.write_all(payload.as_bytes());
+            let _ = stream.flush();
+            if ui_trace() {
+                eprintln!("[ui] single instance: forwarded {} argument(s) to the running instance", args.len());
+            }
+            Err(SINGLE_INSTANCE_SECONDARY.to_string())
+        }
+        None => {
+            single_instance_listen(&safe)?;
+            if ui_trace() {
+                eprintln!("[ui] single instance: primary ({safe})");
+            }
+            for a in &args {
+                push_event("open", 0, a);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Una ruta relativa que EXISTE, hecha absoluta contra el cwd; lo demás viaja tal cual.
+fn absolutize(a: &str) -> String {
+    let p = std::path::Path::new(a);
+    if p.is_absolute() || !p.exists() {
+        return a.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => {
+            let joined = cwd.join(p);
+            joined.canonicalize().unwrap_or(joined).to_string_lossy().into_owned()
+        }
+        Err(_) => a.to_string(),
+    }
+}
+
+/// Reparte las líneas recibidas por una conexión como eventos "open".
+fn single_instance_serve(mut stream: impl std::io::Read) {
+    let mut buf = String::new();
+    if stream.read_to_string(&mut buf).is_ok() {
+        for line in buf.split('\n').filter(|l| !l.is_empty()) {
+            push_event("open", 0, line);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn single_instance_path(id: &str) -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return std::path::PathBuf::from(dir).join(format!("ray-{id}.sock"));
+    }
+    // SAFETY: `getuid` no tiene precondiciones.
+    let uid = unsafe { getuid() };
+    std::env::temp_dir().join(format!("ray-{id}-{uid}.sock"))
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn getuid() -> u32;
+}
+
+#[cfg(unix)]
+fn single_instance_connect(id: &str) -> Option<std::os::unix::net::UnixStream> {
+    let path = single_instance_path(id);
+    match std::os::unix::net::UnixStream::connect(&path) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            // Nadie contesta: un socket huérfano (o ninguno). La primera instancia lo creará.
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn single_instance_listen(id: &str) -> Result<(), String> {
+    let path = single_instance_path(id);
+    let listener = std::os::unix::net::UnixListener::bind(&path)
+        .map_err(|e| format!("ui: single_instance could not listen on '{}': {e}", path.display()))?;
+    std::thread::Builder::new()
+        .name("ray-single-instance".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                single_instance_serve(stream);
+            }
+        })
+        .map_err(|e| format!("ui: single_instance could not start its thread: {e}"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn single_instance_file(id: &str) -> std::path::PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    base.join("ray").join(format!("{id}.instance"))
+}
+
+#[cfg(windows)]
+fn single_instance_connect(id: &str) -> Option<std::net::TcpStream> {
+    let file = single_instance_file(id);
+    let text = std::fs::read_to_string(&file).ok()?;
+    let mut it = text.lines();
+    let port: u16 = it.next()?.trim().parse().ok()?;
+    let token = it.next()?.trim().to_string();
+    let mut s = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), std::time::Duration::from_millis(500)).ok()?;
+    use std::io::Write;
+    // La primera línea es el token del archivo: otro proceso en ese puerto no nos confunde.
+    s.write_all(format!("{token}\n").as_bytes()).ok()?;
+    Some(s)
+}
+
+#[cfg(windows)]
+fn single_instance_listen(id: &str) -> Result<(), String> {
+    let file = single_instance_file(id);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|e| format!("ui: single_instance could not listen: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let token = format!("{:x}{:x}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    std::fs::write(&file, format!("{port}\n{token}\n")).map_err(|e| format!("ui: single_instance could not write '{}': {e}", file.display()))?;
+    std::thread::Builder::new()
+        .name("ray-single-instance".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut buf = String::new();
+                let mut stream = stream;
+                if std::io::Read::read_to_string(&mut stream, &mut buf).is_ok()
+                    && let Some((first, rest)) = buf.split_once('\n')
+                    && first.trim() == token
+                {
+                    single_instance_serve(rest.as_bytes());
+                }
+            }
+        })
+        .map_err(|e| format!("ui: single_instance could not start its thread: {e}"))?;
+    Ok(())
+}
+
 /// M257 (ray-sublime): operaciones sobre una ventana ABIERTA por nombre — una sola primitiva
 /// (`__ui_window(h, op, arg)`) para lo pequeño y frecuente:
 /// - `set_title` (`arg` = título): `setTitle:` / `gtk_window_set_title` / `SetWindowTextW`.
@@ -1728,6 +1897,9 @@ fn quit_requested() -> bool {
 /// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
 pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     let on = arg == "1" || arg == "true";
+    if op == "single_instance" {
+        return single_instance(arg);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {

@@ -194,6 +194,73 @@ pub(crate) fn headless_inject_open_once() {
     }
 }
 
+/// M374 (ray-sublime #148): «la app terminó de lanzarse». En macOS lo marca
+/// `applicationDidFinishLaunching:` — AppKit entrega ANTES los `application:openURLs:` del
+/// lanzamiento (entre will- y didFinishLaunching), así que lo soltado sobre el icono ya está en
+/// la cola cuando se marca. En GTK/Windows lo marca `run_main_loop` al inicializar (allí lo del
+/// lanzamiento viaja en argv).
+fn launch_gate() -> &'static (Mutex<bool>, Condvar) {
+    static GATE: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
+    GATE.get_or_init(|| (Mutex::new(false), Condvar::new()))
+}
+
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
+fn mark_launched() {
+    let (flag, changed) = launch_gate();
+    *flag.lock().unwrap() = true;
+    changed.notify_all();
+}
+
+#[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
+fn wait_launched(timeout: std::time::Duration) -> bool {
+    let (flag, changed) = launch_gate();
+    let deadline = std::time::Instant::now() + timeout;
+    let mut done = flag.lock().unwrap();
+    while !*done {
+        let rem = deadline.saturating_duration_since(std::time::Instant::now());
+        if rem.is_zero() {
+            return false;
+        }
+        done = changed.wait_timeout(done, rem).unwrap().0;
+    }
+    true
+}
+
+/// M374 (ray-sublime #148): lo que el sistema pidió abrir AL LANZAR la app, de forma
+/// determinista y antes de cualquier ventana: arranca la app (como haría la primera ventana o
+/// menú), espera a que termine de lanzarse y devuelve —sacándolas de la cola, no volverán como
+/// eventos— las rutas de los `"open"` recibidos hasta entonces. Un editor decide así si
+/// restaura la sesión o abre solo la carpeta soltada. Headless: `RAY_UI_OPEN`. Lo que llegue
+/// después, con la app corriendo, sigue siendo evento `"open"`.
+pub fn launch_paths() -> Result<Vec<String>, String> {
+    if headless() {
+        headless_inject_open_once();
+    } else {
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        {
+            ensure_app()?;
+            if !wait_launched(std::time::Duration::from_secs(5)) {
+                return Err("ui: the application did not finish launching".to_string());
+            }
+        }
+    }
+    let ev = events();
+    let mut q = ev.queue.lock().unwrap();
+    let mut paths: Vec<String> = Vec::new();
+    q.retain(|(kind, _, tag)| {
+        if kind == "open" {
+            paths.push(tag.clone());
+            false
+        } else {
+            true
+        }
+    });
+    if !paths.is_empty() {
+        drain_pipe(ev.pipe_rd, paths.len());
+    }
+    Ok(paths)
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ev = events();
@@ -460,6 +527,9 @@ pub fn run_main_loop() -> Result<(), String> {
         Ok(()) => {
             *g.state.lock().unwrap() = AppState::Ready;
             g.changed.notify_all();
+            // M374: en macOS lo marca el delegate (applicationDidFinishLaunching:); aquí el resto.
+            #[cfg(not(target_os = "macos"))]
+            mark_launched();
             // No retorna: [NSApp run] / gtk_main() para el resto del proceso.
             #[cfg(target_os = "macos")]
             mac::run_app();
@@ -2859,6 +2929,11 @@ pub struct FileDialogOptions {
 /// M258: [`dialog`] con opciones. Devuelve las rutas elegidas (vacío = canceló; una sola salvo
 /// `multiple`). Headless: `RAY_UI_PICK` conduce el resultado (varias rutas separadas por `\n`).
 pub fn dialog_with(kind: &str, opts: &FileDialogOptions) -> Result<Vec<String>, String> {
+    // M374: `ui.launch_paths()` viaja por el canal «el sistema devuelve rutas» de los diálogos
+    // (misma forma de respuesta en los tres motores), sin builtin nuevo.
+    if kind == "launch_paths" {
+        return launch_paths();
+    }
     if !matches!(kind, "open_file" | "open_folder" | "save_file") {
         return Err(format!("ui: unknown dialog kind '{kind}'"));
     }
@@ -3473,6 +3548,11 @@ mod mac {
             // `application:openURLs:`, tanto al arrancar (tras finishLaunching, antes del primer
             // evento de usuario) como con la app ya corriendo. Un evento ("open", 0, ruta) por
             // URL, en orden; una URL que no es de archivo viaja como su texto absoluto.
+            // M374 (ray-sublime #148): la app terminó de lanzarse — los `application:openURLs:`
+            // del lanzamiento ya se entregaron (AppKit los envía antes de este mensaje).
+            extern "C" fn application_did_finish_launching(_this: Id, _sel: Sel, _note: Id) {
+                super::mark_launched();
+            }
             extern "C" fn application_open_urls(_this: Id, _sel: Sel, _app: Id, urls: Id) {
                 // SAFETY: el run loop entrega un NSArray<NSURL> válido; se copia dentro del bloque.
                 let paths: Vec<String> = unsafe {
@@ -3749,6 +3829,13 @@ mod mac {
                     sel(b"application:openURLs:\0"),
                     application_open_urls as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
                     c"v@:@@".as_ptr(),
+                );
+                // M374: fin del lanzamiento (para `ui.launch_paths`).
+                class_addMethod(
+                    cls_new,
+                    sel(b"applicationDidFinishLaunching:\0"),
+                    application_did_finish_launching as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
                 );
                 // M371: notificaciones pulsadas (API moderna y clásica).
                 class_addMethod(

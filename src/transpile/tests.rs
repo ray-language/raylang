@@ -788,6 +788,40 @@ fn an_untranspilable_function_becomes_a_panicking_stub() {
 }
 
 #[test]
+fn a_match_arm_with_a_placeholder_does_not_fix_the_type_of_the_match() {
+    // M373 (ray-sublime #147): el primer brazo construye `Result.Ok(x)` sin contexto (`E` = hueco) y
+    // el segundo llama a una función con el `Result` completo: el tipo del match es el completo, como
+    // infiere el checker (y como ya hacía el `if`, M344). Antes el `Err(e) => "err ${e}"` moría con
+    // "unknown return type of '__concat'" y `main` caía fuera del subconjunto.
+    let rust = transpile_src(
+        "fn probe() -> Result<Option<int>, string> { Result.Err(\"no\") }\n\
+         fn main() -> int {\n\
+             var early: [int] = [];\n\
+             let next = match (early.pop()) { Option.Some(v) => Result.Ok(Option.Some(v)), Option.None => probe() };\n\
+             match (next) { Result.Ok(Option.Some(v)) => v, Result.Ok(Option.None) => 0, Result.Err(e) => { print(\"err ${e}\"); 1 } }\n\
+         }",
+    );
+    assert!(rust.contains("fn ray_main()"), "main transpila entero: {}", rust);
+}
+
+#[test]
+fn a_main_outside_the_subset_reports_the_position_of_the_statement() {
+    // M373 (ray-sublime #147): el error del subconjunto lleva la posición de la sentencia (o cola)
+    // más interna que lo produjo — sin ella había que bisecar `main` a mano.
+    let tokens = crate::lexer::lex(
+        "struct Pt { x: int }\nenum E { P(Pt) }\nfn main() -> int {\n    let e = E.P(Pt { x: 3 });\n    let n = match (e) { E.P(Pt { x }) => x };\n    n\n}",
+    )
+    .expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    let err = match transpile(&prog) {
+        Err(e) => e,
+        Ok(_) => panic!("main debía quedar fuera del subconjunto"),
+    };
+    assert!(err.ends_with("could not infer the type of the match at 5:5"), "{err}");
+}
+
+#[test]
 fn concat_of_bytes_and_arrays() {
     // `a + b` para bytes → concat de slices en un Rc<[u8]> nuevo; para arreglos → arreglo nuevo con
     // los elementos de ambos. Antes caían al `+` genérico, que Rust rechaza (Rc<[u8]>/Vec no tienen Add).

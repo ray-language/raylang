@@ -470,11 +470,11 @@ impl Transpiler {
                 fused_here.push(name);
                 continue;
             }
-            self.emit_stmt(out, s)?;
+            self.emit_stmt(out, s).map_err(|e| with_position(e, s.line, s.col))?;
         }
         if let Some(tail) = &b.tail {
             out.push_str("    ");
-            self.emit_expr(out, tail)?;
+            self.emit_expr(out, tail).map_err(|e| with_position(e, tail.line, tail.col))?;
             out.push('\n');
         }
         for name in fused_here {
@@ -2363,6 +2363,17 @@ pub(super) fn opt_of(t: Type) -> Type {
 /// ¿Lleva `t` un hueco de inferencia? (M344) Los literales `Option.None` / `Result.Ok(x)` /
 /// `Result.Err(e)` se tipan con `unit` en el argumento que no se conoce (placeholder que debe fijar el
 /// contexto), así que un `unit` dentro de los args de un enum/array/tupla delata un tipo incompleto.
+/// M373 (ray-sublime #147): cuelga al error del subconjunto nativo la posición de la sentencia (o
+/// cola de bloque) que lo produjo, UNA vez — los bloques anidados pasan por aquí de dentro afuera
+/// y la posición más interna es la útil («main is outside the supported subset: unknown return
+/// type of '__concat' at 12:9» en vez de bisecar 2 400 líneas a mano).
+pub(super) fn with_position(e: String, line: usize, col: usize) -> String {
+    let already = e.rsplit_once(" at ").is_some_and(|(_, pos)| {
+        pos.contains(':') && pos.split(':').all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    });
+    if already { e } else { format!("{e} at {line}:{col}") }
+}
+
 pub(super) fn has_placeholder(t: &Type) -> bool {
     match t {
         Type::Enum(_, args) | Type::Struct(_, args) | Type::Tuple(args) => {

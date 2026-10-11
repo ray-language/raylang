@@ -2797,9 +2797,11 @@ fn cmd_bundle(args: &[String]) {
         }
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
+        warn_unknown_open_types(&opens);
         bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
     } else if cfg!(unix) {
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
+        warn_unknown_open_types(&opens);
         bundle_linux(&out_dir, &name, icon.as_deref(), &opens, &tmp_bin);
     } else if cfg!(windows) {
         // M180 (W7d): `<name><name>.exe` (subsistema WINDOWS + icono + VERSIONINFO como
@@ -2858,6 +2860,33 @@ fn open_type_mapping(item: &str) -> (Vec<&'static str>, Vec<String>, Vec<String>
         }
         _ if item.contains('/') => (vec!["public.data"], vec![], vec![item.to_string()]),
         _ => (vec![], vec![], vec![]), // un UTI literal: solo macOS, lo añade el llamador
+    }
+}
+
+/// M375 (ray-sublime #146): un elemento de `[app] opens` que no es alias, `.ext`, MIME `a/b` ni
+/// UTI con punto (`com.x.y`) no significa nada para el sistema — antes pasaba en silencio al
+/// `LSItemContentTypes` y el icono no aceptaba nada sin que nadie se enterase. El aviso que toca
+/// imprimir, o `None` si el valor es reconocible. Pura.
+fn open_type_warning(item: &str) -> Option<String> {
+    let t = item.trim();
+    let no_spaces = !t.contains(char::is_whitespace);
+    let alias = matches!(t, "folder" | "text" | "image" | "any");
+    let ext = t.starts_with('.') && t.len() > 1 && no_spaces && !t[1..].contains(['.', '/']);
+    let mime = no_spaces && t.split_once('/').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('/'));
+    let uti = no_spaces && !t.contains('/') && !t.starts_with('.') && !t.ends_with('.') && t.contains('.');
+    if alias || ext || mime || uti {
+        None
+    } else {
+        Some(format!(
+            "bundle: warning: [app] opens item '{t}' is not an alias (folder, text, image, any), an extension (.ext), \
+             a MIME type (a/b) or a UTI (com.x.y); the system will ignore it"
+        ))
+    }
+}
+
+fn warn_unknown_open_types(opens: &[String]) {
+    for w in opens.iter().filter_map(|o| open_type_warning(o)) {
+        eprintln!("{w}");
     }
 }
 
@@ -6394,6 +6423,18 @@ mod tests {
         assert_eq!(super::desktop_mime_line(&opens), "MimeType=inode/directory;application/x-ray;text/plain;image/png;\n");
         assert_eq!(super::document_types_plist(&[]), "");
         assert_eq!(super::desktop_mime_line(&[]), "");
+    }
+
+    /// M375 (ray-sublime #146): un `opens` que el sistema ignorará avisa; los reconocibles, no.
+    #[test]
+    fn app_opens_warns_about_values_the_system_will_ignore() {
+        for ok in ["folder", "text", "image", "any", ".ray", "public.data", "com.example.doc", "image/png", " text "] {
+            assert_eq!(super::open_type_warning(ok), None, "{ok}");
+        }
+        for bad in ["*", "data", "bogus", "", ".", "a b", "a/b/c", "image/"] {
+            let w = super::open_type_warning(bad).unwrap_or_else(|| panic!("{bad:?} debía avisar"));
+            assert!(w.starts_with("bundle: warning: [app] opens item '") && w.ends_with("the system will ignore it"), "{w}");
+        }
     }
 
     /// #117: el slug del repo efectivo sale del JSON de `gh repo view`, no del remoto `origin`.

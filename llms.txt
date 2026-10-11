@@ -399,7 +399,12 @@ window lifecycle: `ui.set_title(h, t)`, `ui.set_edited(h, bool)` (macOS dirty do
 `ui.intercept_close(h, true)` → the user's close emits a `close_requested` event instead of closing
 (you ask/save, then `close(h)`), `ui.intercept_quit(true)` → ⌘Q emits `quit_requested` (window 0);
 event `"open"` = the system asked to open a path (drop on the Dock icon, "Open with", `open -a App p`;
-`tag` = path, one per item; bundle with `[app] opens = ["folder", ".ray"]`; headless `RAY_UI_OPEN=a:b`);
+`tag` = path, one per item; bundle with `[app] opens = ["folder", ".ray"]` — aliases `folder`/`text`/`image`/`any`,
+an extension `.ext`, a MIME `a/b` or a UTI `com.x.y`; anything else gets a `ray bundle` warning; the launch's
+"open"s arrive once the app has started (first window or menu), not before; headless `RAY_UI_OPEN=a:b`);
+`ui.launch_paths() -> Result<[string],_>`: what the system asked to open AT LAUNCH, deterministic and before
+any window (starts the app, waits for it to finish launching, dequeues those paths; `[]` = launched bare —
+restore the session only then); later opens still arrive as `"open"` events;
 `ui.single_instance() -> Result<bool,_>`: true = first instance (its `args()` and every later launch's
 arguments arrive as `"open"` events), false = another instance got them → return from main;
 `ui.notify(title, body)` / `ui.notify_with(title, body, tag, sound)`: system notification (app icon, no

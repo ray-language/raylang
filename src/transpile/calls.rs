@@ -3625,9 +3625,16 @@ impl Transpiler {
                         None
                     }
                 };
-                arms.iter()
-                    .find_map(|a| self.arm_type(scrut_ty.as_ref(), a))
-                    .ok_or("could not infer the type of the match")?
+                // M373 (ray-sublime #147): como en el `if` (M344), un brazo que tipa con un HUECO
+                // (`Result.Ok(x)` sin contexto → `Result<T, unit>`) no gana sobre otro que tipa
+                // completo: `match (o) { Some(v) => Result.Ok(v), None => f() }` toma el `E` de `f`.
+                let mut typed = arms.iter().filter_map(|a| self.arm_type(scrut_ty.as_ref(), a));
+                let first = typed.next().ok_or("could not infer the type of the match")?;
+                if has_placeholder(&first) {
+                    typed.find(|t| !has_placeholder(t)).unwrap_or(first)
+                } else {
+                    first
+                }
             }
             ExprKind::Cast { ty, .. } => normalize_type(ty),
             ExprKind::MapLit(pairs) => {

@@ -1764,6 +1764,43 @@ fn the_system_asking_to_open_paths_arrives_as_open_events() {
     }
 }
 
+/// M374 (ray-sublime #148): `ui.launch_paths()` devuelve, de forma determinista y antes de cualquier
+/// ventana, lo que el sistema pidió abrir al lanzar la app, y lo saca de la cola (no vuelve como
+/// evento `"open"`). En headless lo inyecta `RAY_UI_OPEN`; sin él, `[]`. Igual en los tres motores.
+#[test]
+fn launch_paths_returns_what_the_system_asked_to_open_at_launch_and_dequeues_it() {
+    let base = tmp("launch_paths");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nfn main() {\n    match (ui.launch_paths()) {\n        Result.Ok(paths) => { print(\"launch \" + to_string(paths.len()) + \" \" + join(paths, \"|\")); },\n        Result.Err(e) => { print(\"err \" + e); },\n    }\n    match (ui.next_event_timeout(100)) {\n        Result.Ok(Option.Some(e)) => { print(\"event \" + e.kind + \" \" + e.tag); },\n        Result.Ok(Option.None) => { print(\"timeout\"); },\n        Result.Err(e) => { print(e); },\n    }\n}\n",
+    )
+    .unwrap();
+    let expect = |open: Option<&str>| if open.is_some() { "launch 2 /tmp/a folder|/tmp/b.ray\ntimeout\n" } else { "launch 0 \ntimeout\n" };
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        for open in [Some("/tmp/a folder:/tmp/b.ray"), None] {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_ray"));
+            cmd.args(engine).current_dir(&base).env("RAY_UI_BACKEND", "headless").stdin(std::process::Stdio::null());
+            if let Some(o) = open {
+                cmd.env("RAY_UI_OPEN", o);
+            }
+            let out = cmd.output().unwrap();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(String::from_utf8_lossy(&out.stdout), expect(open), "{engine:?} open={open:?}\n{err}");
+        }
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").env("RAY_UI_OPEN", "/tmp/a folder:/tmp/b.ray").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expect(Some("")), "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 /// M370b: `ui.single_instance()` — la primera instancia recibe sus propios argumentos como eventos
 /// `"open"` y los de cada instancia posterior (rutas relativas existentes hechas absolutas); la
 /// posterior obtiene `false` y sale. Socket local en el runtime, igual en los tres motores.

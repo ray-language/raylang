@@ -681,6 +681,25 @@ pub fn single_instance() -> Result<bool, string> {
     }
 }
 
+/// What the system asked the app to open when it was LAUNCHED (M374) — the folder or files
+/// dropped on the Dock icon, "Open with", `open -a App path` — deterministically and before any
+/// window. Starts the application (as the first window or menu would), waits until it has
+/// finished launching and returns the paths received so far, removing them from the event
+/// queue (they will not arrive again as `"open"` events). `[]` when the app was launched bare.
+/// Call it before restoring a session, so a launch "on a folder" opens that folder instead
+/// (like `code .`); what the system asks for later, with the app running, still arrives as
+/// `"open"` events. On Linux and Windows the launch items come in `args()` — `single_instance`
+/// queues them as `"open"` events, so call `launch_paths` AFTER it to collect them the same
+/// way. Headless: `RAY_UI_OPEN=a:b`.
+///
+/// ```ray
+/// let dropped = ui.launch_paths()?;   // [] = nothing was dropped on the icon
+/// if (dropped.len() > 0) { open_folder(dropped[0]); } else { restore_session(); }
+/// ```
+pub fn launch_paths() -> Result<[string], string> {
+    dialog_with("launch_paths", file_options(), true)
+}
+
 /// Shows a system notification with the app's icon (M371): title and body, no buttons. macOS:
 /// the notification center (inside a `ray bundle` app it asks the user's permission the first
 /// time — a denied permission makes later calls `Err`; a bare `ray run` binary uses the classic

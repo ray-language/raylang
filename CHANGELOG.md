@@ -4,6 +4,26 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.46 — 2026-10-11
+
+- **Nativo: un `match` cuyo primer brazo construye `Result.Ok(x)` sin contexto ya toma el tipo de los
+  demás brazos (M373, ray-sublime #147)**: `match (o) { Some(v) => Result.Ok(Some(v)), None => f() }`
+  tipa como el `Result<_, string>` de `f`, igual que el checker (y que el `if` desde M344); antes el
+  hueco del primer brazo ganaba y un `"err ${e}"` posterior sacaba a `main` del subconjunto. Y el
+  error «main is outside the supported subset: …» lleva ahora la posición `at L:C` de la sentencia
+  más interna que lo produjo — antes había que bisecar `main` a mano.
+- **`ui.launch_paths()` (M374, ray-sublime #148)**: lo que el sistema pidió abrir AL LANZAR la app
+  —la carpeta soltada sobre el icono, «Abrir con»—, determinista y antes de cualquier ventana:
+  arranca la app, espera a que termine de lanzarse (macOS `applicationDidFinishLaunching:`, que
+  AppKit envía tras los `openURLs:` del lanzamiento) y devuelve las rutas sacándolas de la cola.
+  `[]` = lanzada sin nada (restaurar la sesión solo entonces). Documentado además que los `"open"`
+  del lanzamiento llegan al arrancar la app (primera ventana o menú), no antes. Verificado con un
+  `.app` real en macOS 26 e igual en los tres motores (headless: `RAY_UI_OPEN`).
+- **`[app] opens` con gramática documentada y aviso (M375, ray-sublime #146)**: los valores
+  reconocidos —alias `folder`/`text`/`image`/`any`, extensión `.ext`, MIME `a/b`, UTI `com.x.y`—
+  están en REFERENCE y `llms.txt`; cualquier otro (`"*"`, `"bogus"`) imprime un aviso en `ray
+  bundle` en vez de colarse en silencio en `LSItemContentTypes`.
+
 ## 1.27.45 — 2026-10-10
 
 - **Evento `"open"` y `[app] opens` (M370, ray-sublime #120)**: lo que el sistema pide abrir —

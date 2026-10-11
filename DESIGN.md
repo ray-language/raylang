@@ -17301,3 +17301,37 @@ nuevos en el runtime de fibras; reutilizar `WORKER`/`CURRENT`**. El tercero, con
 1.27.21). `RAYLANG_COOP=0` devuelve el comportamiento anterior para medir. SPEC §concurrencia
 explica por fin el modelo que ray-apps pedía: fijación, qué bloquea el worker (una syscall), qué
 cede (E/S, canal, sleep, yield, y ahora los canales cada 32 operaciones).
+
+## 357. M373–M375 — Tercera revisión de ray-sublime: soltar en el icono, de verdad (oct 2026)
+
+ray-sublime revisó 1.27.45 con una app mínima empaquetada y dejó tres hallazgos (#146–#148). Los
+tres son reales y se resuelven juntos en una PR.
+
+**M373 (#147), nativo.** `type_of` de un `match` tomaba el tipo del PRIMER brazo no divergente.
+Si ese brazo construye `Result.Ok(x)` sin contexto, el `E` queda como hueco (`unit`) y el `Err(e)
+=> "err ${e}"` de después muere con «unknown return type of '__concat'». El `if` ya resolvía esto
+desde M344 (rayauth R19): un brazo con hueco cede ante otro que tipa completo. Se aplica el mismo
+criterio al `match`: el primer tipo completo manda; si ninguno lo es, el primero. Y el error del
+subconjunto de `main` lleva ahora `at L:C` de la sentencia (o cola de bloque) más interna —
+`with_position` lo cuelga una vez, de dentro afuera—; bisecar 2 400 líneas a mano no es un flujo.
+
+**M374 (#148), `ui.launch_paths()`.** Los `"open"` del lanzamiento llegan por Apple Event dentro
+de `[NSApp run]`, así que no existen hasta que algo arranca la app (`ensure_app`: la primera
+ventana o menú). Un editor necesita decidir ANTES de restaurar la sesión si lo lanzaron sobre una
+carpeta. En vez de documentar una espera heurística, una primitiva determinista: arranca la app,
+espera `applicationDidFinishLaunching:` (AppKit entrega los `openURLs:` del lanzamiento ENTRE
+`will-` y `didFinishLaunching`, así que al marcarse ya están en la cola) y devuelve esas rutas
+sacándolas de la cola. Viaja por el canal de los diálogos (`__ui_dialog_with("launch_paths", …)`,
+respuesta `["ok", rutas…]`): cero builtins nuevos, cero cambios en el transpilador, igual en los
+tres motores. GTK/Windows marcan el lanzamiento al inicializar (allí lo lanzado va en argv y
+`single_instance` lo encola, así que `launch_paths` tras él también lo devuelve). Medido con un
+`.app`: la carpeta soltada vuelve en ~140 ms desde el arranque; sin nada, `[]` en ~100 ms.
+Se descartó arrancar la app desde `next_event*` (cambiaría el comportamiento de todo programa que
+espere eventos sin ventana) y un evento `"launched"` (un `kind` nuevo que todo bucle existente
+tendría que ignorar).
+
+**M375 (#146), `[app] opens`.** La gramática existía desde M370 (alias, `.ext`, MIME, UTI) pero
+solo en el CHANGELOG; y un valor sin sentido pasaba tal cual al `Info.plist`. Ahora está en
+REFERENCE/`llms.txt` y `ray bundle` avisa (`open_type_warning`, pura y testeada) de lo que no es
+alias, extensión, MIME ni UTI con punto. Se mantiene el mapeo de `any` a `public.item` (incluye
+carpetas; `public.data` las excluiría).

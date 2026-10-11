@@ -4066,3 +4066,25 @@ Severidad: **B** bug · **D** documentación · **E** hueco de API. Plan en seis
   embebido (`net`/`web`), donde hoy la app lo escribe (`ui.import_map()` lo da); y la
   preferencia de condiciones en orden de objeto si un `Map` ordenado por inserción llega a
   `std/json`.
+
+## 105. Canal de pre-releases para las versiones (oct 2026) — evolución anotada
+
+**Motivo**: varias de las últimas versiones (1.27.19 → Android #99; 1.27.37 → inanición de raykv
+#144, detectada en 1.27.44) salieron con regresiones que no cazó el CI sino las apps al re-medir
+DESPUÉS de publicar. Con siete tags en tres días (1.27.40–1.27.46), una rama `unstable` de larga
+vida duplicaría el coste (backports, dos CI, dos árboles de contrato) sin dar más detección: las
+apps son el banco de pruebas y seguirían la rama que use el mantenedor.
+
+**Propuesta (canal, no rama)**: cada tag nace como **pre-release** de GitHub (`gh release create
+--prerelease` en `release.yml`, una palabra). `releases/latest` ignora las pre-releases por sí
+solo, así que `ray upgrade` sin argumentos y el instalador siguen entregando la última estable sin
+tocar código; `ray upgrade X`, `ray toolchain install` y las apps que pinean `raylang = "X"` van por
+tag y las obtienen igual. **Promoción** = `gh release edit vX --prerelease=false` (reversible, sin
+recompilar; envoltorio `make promote v=X`) cuando las apps hayan re-medido o tras un soak corto.
+Rama `release/1.27.x` SOLO bajo demanda para un hotfix de la estable con `main` sin promover.
+Complemento: job nocturno que construya raykv/raylb/ray-sublime contra `main`.
+
+**Impacto**: bajo (operativo, sin tocar lenguaje ni superficie). **Restricciones** si se adopta:
+la política va en PRODUCTION.md; `ray upgrade --unstable` tendría que resolver la última
+pre-release vía API (no existe `latest-prerelease`); el sufijo SemVer `-rc` es independiente del
+flag y no hace falta.

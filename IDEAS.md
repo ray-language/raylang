@@ -4100,3 +4100,30 @@ y `save_file` sobre el exportador equivalente. **Impacto**: medio — toca los d
 semántica de «ruta» en móvil (temporal, con permiso de alcance). **Restricción**: la firma
 `Result<Option<string>, string>` se mantiene; en móvil la ruta puede ser efímera y hay que
 documentar su vida útil.
+
+## 107. Carpetas en móvil: `pick_folder*` en iOS y el montaje SAF en Android (oct 2026)
+
+M382 (DESIGN §361) trajo los archivos; las carpetas quedan fuera y las dos plataformas no cuestan
+lo mismo:
+
+- **iOS — barato y real.** El mismo `UIDocumentPickerViewController` acepta `UTTypeFolder` y
+  devuelve una URL con permiso de alcance: mientras el shell mantenga
+  `startAccessingSecurityScopedResource`, la ruta es un directorio normal que `std/fs` lee y
+  ESCRIBE en su sitio original (iCloud Drive, «En mi iPhone», otra app). Persistencia entre
+  arranques = bookmark guardado y resuelto al arrancar. Cabe en una PR pequeña sin tocar
+  `std/fs`: `pick_folder`/`pick_folder_with` devuelven la ruta y el shell retiene el acceso
+  mientras viva el proceso (+ una llamada opcional para soltarlo).
+- **Android — no hay ruta.** `ACTION_OPEN_DOCUMENT_TREE` devuelve un URI de árbol de Storage
+  Access Framework; listar/leer/escribir va por `DocumentFile`/`ContentResolver`, que `std/fs`
+  no habla. Salidas: (a) copiar el árbol al sandbox — simétrico con M382, vale para «importar»,
+  no para trabajar sobre un proyecto (los cambios no vuelven); (b) **montaje virtual**: rutas
+  bajo un prefijo (`saf://<id>/…`) que `std/fs` resuelve vía el shell en los tres motores, con
+  `takePersistableUriPermission` — lo correcto, un arco propio; (c) lectura con copia perezosa,
+  un híbrido que acaba siendo (b) a medias.
+
+**Pregunta de diseño previa**: ¿en móvil una carpeta es «un proyecto donde trabajar» (→ montaje)
+o «algo que importar» (→ copia)? Ninguna app lo ha pedido aún (rayplay pidió archivos).
+**Impacto**: iOS bajo (solo shell + doc); Android medio-alto (toca `fs` y el puente).
+**Restricción**: la firma `Result<Option<string>, string>` de `pick_folder*` se mantiene; en
+Android, si se elige el montaje, la «ruta» devuelta llevará el prefijo virtual y hay que
+documentar que no es un path del SO.

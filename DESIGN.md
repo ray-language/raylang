@@ -17402,3 +17402,31 @@ byte a byte (SCRAM y JWT los aseveran). 32 MB: 2,2 s → 0,15 s.
 señala la vía móvil (`<input type="file">` + `window.ray.request` con un mensaje plano, no JSON,
 para cargas grandes — ahora viables por M379/M380). El selector nativo móvil
 (`UIDocumentPickerViewController` / `ACTION_OPEN_DOCUMENT`) va a IDEAS §106.
+
+## 361. M382 — El selector de archivos del sistema en móvil (oct 2026)
+
+IDEAS §106 (rayplay #152): un editor de audio en el iPhone tenía que cruzar el puente con el
+archivo entero porque `ui.pick_file*` no existía en móvil. La implementación reutiliza el contrato
+del shell (§80b): el shell registra un handler más (`ray_ui_set_pick_handler`, tras los dos de
+siempre) y responde por un export nuevo (`ray_ui_pick_result`). `shell::pick` entrega la petición
+con un id y BLOQUEA el hilo del programa en una condvar hasta la respuesta — el mismo
+comportamiento modal que los diálogos de escritorio; el id evita que una respuesta tardía de un
+picker anterior se cuele. En Android, `call_bridge` solo pasa Strings, así que la petición viaja a
+`RayBridge.onPick(spec)` como un solo string con `\n`; `GetStaticMethodID` sobre un shell
+anterior sin `onPick` deja una `NoSuchMethodError` pendiente que `init` limpia (y entonces no
+registra el handler: el programa recibe un `Err` que dice regenerar el shell).
+
+Decisión de semántica: lo que vuelve es una COPIA en el sandbox (iOS `asCopy:YES`, Android copia
+del `InputStream` a `cacheDir/ray-picked/<ts>/<nombre>` fuera del hilo principal), no una URL con
+permiso de alcance: así `std/fs` la lee sin ceremonia y la firma `Result<Option<string>>` no
+cambia. El coste es una copia, que para los archivos de decenas de MB de rayplay es un orden de
+magnitud menor que el viaje por JSON que sustituye. Carpetas (`ACTION_OPEN_DOCUMENT_TREE` da un
+árbol, no una ruta) y «guardar como» quedan fuera.
+
+Verificación: test del puente en host (feature `ui-shell`, respuesta desde otro hilo, cancelar y
+error); Android de punta a punta en el emulador (`adb shell input tap` sobre el selector: el
+filtro `wav,mp3` deja solo «Audio» y «Downloads», elegir `probe.wav` devuelve
+`cache/ray-picked/<ts>/probe.wav` al programa); iOS: el shell compila con `xcodebuild` y presenta
+el selector en el simulador (captura); la vuelta con un archivo elegido queda por verificar en un
+iPhone (rayplay). Gotcha del emulador: con snapshot, `am start` reanuda el proceso anterior —
+`am force-stop` antes de cada medición.

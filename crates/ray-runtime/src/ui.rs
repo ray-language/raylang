@@ -2965,8 +2965,8 @@ pub fn dialog_with(kind: &str, opts: &FileDialogOptions) -> Result<Vec<String>, 
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
-        let _ = (kind, opts);
-        Err("ui: file dialogs are not available on mobile (v1)".to_string())
+        // M382 (rayplay #152, IDEAS §106): el selector del sistema, presentado por el shell.
+        shell::pick(kind, opts)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
     {
@@ -7005,6 +7005,127 @@ mod shell {
         CAPS.load(std::sync::atomic::Ordering::SeqCst) & cap != 0
     }
 
+    // ── M382 (rayplay #152, IDEAS §106): el selector de archivos del SISTEMA en móvil. El shell
+    // registra un handler (`ray_ui_set_pick_handler`, tras `ray_ui_set_handlers`; un shell
+    // anterior no lo hace y `pick` devuelve un `Err` que dice cómo regenerarlo); `pick` le
+    // entrega la petición con un id y BLOQUEA el hilo del programa hasta que el shell responde
+    // por `ray_ui_pick_result` (rutas separadas por `\n`, o un error). Lo que vuelve son COPIAS
+    // dentro del sandbox de la app (iOS: `UIDocumentPickerViewController` con `asCopy`; Android:
+    // `ACTION_OPEN_DOCUMENT` copiado a `cacheDir`), legibles con `std/fs` sin más permisos; viven
+    // hasta que el programa las borre o el SO purgue tmp/cache. Solo `open_file` (uno o varios):
+    // carpetas y «guardar como» siguen sin existir en móvil. ──
+    pub type PickHandler = extern "C" fn(i64, *const c_char, *const c_char, i32, *const c_char);
+    static PICK_HANDLER: OnceLock<PickHandler> = OnceLock::new();
+    static PICK_SEQ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+    struct PickState {
+        pending: std::sync::Mutex<std::collections::HashMap<i64, Option<Result<Vec<String>, String>>>>,
+        done: std::sync::Condvar,
+    }
+
+    fn pick_state() -> &'static PickState {
+        static STATE: OnceLock<PickState> = OnceLock::new();
+        STATE.get_or_init(|| PickState { pending: std::sync::Mutex::new(std::collections::HashMap::new()), done: std::sync::Condvar::new() })
+    }
+
+    /// El shell registra su selector de archivos (una vez, tras `ray_ui_set_handlers`). El
+    /// handler recibe `(id, kind, title, multiple, extensiones separadas por coma)` desde el
+    /// hilo del programa; debe copiar los strings, despachar a su hilo principal y responder
+    /// con `ray_ui_pick_result` cuando el usuario decida.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_set_pick_handler(pick: PickHandler) {
+        let _ = PICK_HANDLER.set(pick);
+    }
+
+    /// La respuesta del shell a una petición de `pick`: `paths` = rutas separadas por `\n`
+    /// (vacío = el usuario canceló), `err` = NULL si no hubo error. Strings como siempre:
+    /// NUL-terminated, válidos solo durante la llamada.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_pick_result(id: i64, paths: *const c_char, err: *const c_char) {
+        let text = |p: *const c_char| {
+            if p.is_null() {
+                String::new()
+            } else {
+                // SAFETY: contrato del export — NUL-terminated, vivo durante la llamada; se copia.
+                unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+            }
+        };
+        let result = if err.is_null() {
+            Ok(text(paths).split('\n').filter(|p| !p.is_empty()).map(String::from).collect())
+        } else {
+            Err(text(err))
+        };
+        let st = pick_state();
+        let mut pending = st.pending.lock().unwrap();
+        if let Some(slot) = pending.get_mut(&id) {
+            *slot = Some(result);
+            st.done.notify_all();
+        }
+    }
+
+    pub(super) fn pick(kind: &str, opts: &super::FileDialogOptions) -> Result<Vec<String>, String> {
+        let Some(handler) = PICK_HANDLER.get() else {
+            return Err("ui: this shell has no file picker (regenerate it with `ray bundle --ios` / `--android`, raylang 1.27.48 or newer)".to_string());
+        };
+        if kind != "open_file" {
+            return Err("ui: only the file picker (pick_file, pick_files, pick_file_with) is available on mobile; folder and save dialogs are not (v1)".to_string());
+        }
+        let id = PICK_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let st = pick_state();
+        st.pending.lock().unwrap().insert(id, None);
+        let exts: Vec<String> = opts.filters.iter().flat_map(|(_, e)| e.iter().map(|x| x.trim_start_matches('.').to_string())).filter(|x| !x.is_empty()).collect();
+        let kind_c = CString::new(kind.replace('\0', "")).unwrap();
+        let title_c = CString::new(opts.title.replace('\0', "")).unwrap();
+        let exts_c = CString::new(exts.join(",")).unwrap();
+        handler(id, kind_c.as_ptr(), title_c.as_ptr(), opts.multiple as i32, exts_c.as_ptr());
+        let mut pending = st.pending.lock().unwrap();
+        loop {
+            if let Some(Some(_)) = pending.get(&id) {
+                return pending.remove(&id).flatten().unwrap_or_else(|| Err("ui: the file picker returned nothing".to_string()));
+            }
+            pending = st.done.wait(pending).unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    mod pick_tests {
+        /// M382: una petición de `pick` viaja al handler del shell y la respuesta (asíncrona, desde
+        /// otro hilo, como el hilo principal de un shell real) despierta al que espera; cancelar =
+        /// `Ok([])`; un error del shell = `Err`.
+        extern "C" fn fake_shell(id: i64, kind: *const std::ffi::c_char, title: *const std::ffi::c_char, multiple: i32, exts: *const std::ffi::c_char) {
+            let s = |p: *const std::ffi::c_char| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+            let (kind, title, exts) = (s(kind), s(title), s(exts));
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let reply = format!("/tmp/{kind}-{title}-{multiple}-{exts}.txt\n/tmp/second.txt");
+                if title == "cancel" {
+                    super::ray_ui_pick_result(id, c"".as_ptr(), std::ptr::null());
+                } else if title == "boom" {
+                    super::ray_ui_pick_result(id, std::ptr::null(), c"ui: no picker".as_ptr());
+                } else {
+                    let c = std::ffi::CString::new(reply).unwrap();
+                    super::ray_ui_pick_result(id, c.as_ptr(), std::ptr::null());
+                }
+            });
+        }
+
+        #[test]
+        fn pick_round_trips_through_the_shell_handler() {
+            super::ray_ui_set_pick_handler(fake_shell);
+            let opts = |title: &str, multiple: bool| crate::ui::FileDialogOptions {
+                title: title.to_string(),
+                directory: String::new(),
+                suggested: String::new(),
+                filters: vec![("Audio".to_string(), vec![".wav".to_string(), "mp3".to_string()])],
+                multiple,
+            };
+            assert_eq!(super::pick("open_file", &opts("t", true)).unwrap(), vec!["/tmp/open_file-t-1-wav,mp3.txt", "/tmp/second.txt"]);
+            assert_eq!(super::pick("open_file", &opts("cancel", false)).unwrap(), Vec::<String>::new());
+            assert_eq!(super::pick("open_file", &opts("boom", false)).unwrap_err(), "ui: no picker");
+            assert!(super::pick("save_file", &opts("t", false)).unwrap_err().contains("only the file picker"));
+        }
+    }
+
     pub(super) fn open(title: &str, url: &str) {
         if let Some((open, _)) = HANDLERS.get() {
             let t = CString::new(title.replace('\0', "")).unwrap();
@@ -7255,6 +7376,7 @@ mod android {
     static BRIDGE: AtomicUsize = AtomicUsize::new(0);
     static MID_OPEN: AtomicUsize = AtomicUsize::new(0);
     static MID_EVAL: AtomicUsize = AtomicUsize::new(0);
+    static MID_PICK: AtomicUsize = AtomicUsize::new(0); // M382: 0 = shell anterior, sin selector
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -7284,8 +7406,33 @@ mod android {
             let eval = get_static(env, bridge, c"onEval".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
             MID_OPEN.store(open as usize, Ordering::SeqCst);
             MID_EVAL.store(eval as usize, Ordering::SeqCst);
+            // M382: `onPick` existe desde 1.27.48; en un shell anterior GetStaticMethodID deja una
+            // NoSuchMethodError PENDIENTE que hay que limpiar (cruzar a Java con ella es fatal).
+            let pick = get_static(env, bridge, c"onPick".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
+            let check: unsafe extern "C" fn(JniEnv) -> u8 = std::mem::transmute(env_slot(env, ENV_EXCEPTION_CHECK));
+            let clear: unsafe extern "C" fn(JniEnv) = std::mem::transmute(env_slot(env, ENV_EXCEPTION_CLEAR));
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_PICK.store(pick as usize, Ordering::SeqCst);
+            }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
+        if MID_PICK.load(Ordering::SeqCst) != 0 {
+            super::shell::ray_ui_set_pick_handler(pick_handler);
+        }
+    }
+
+    /// M382: `RayBridge.pickResult(id, paths, err)` delega aquí (jstrings, ambos anulables).
+    pub fn pick_result(env: JniEnv, id: i64, paths: JObject, err: JObject) {
+        let paths = if paths.is_null() { String::new() } else { jstring_to_string(env, paths) };
+        let paths_c = std::ffi::CString::new(paths.replace('\0', "")).unwrap();
+        if err.is_null() {
+            super::shell::ray_ui_pick_result(id, paths_c.as_ptr(), std::ptr::null());
+        } else {
+            let err_c = std::ffi::CString::new(jstring_to_string(env, err).replace('\0', "")).unwrap();
+            super::shell::ray_ui_pick_result(id, paths_c.as_ptr(), err_c.as_ptr());
+        }
     }
 
     /// `RayBridge.pushEvent(kind, window, tag)` delega aquí (jstrings → push_event).
@@ -7351,6 +7498,13 @@ mod android {
     extern "C" fn eval_handler(js: *const c_char) {
         let js = cstr_owned(js);
         call_bridge(MID_EVAL.load(Ordering::SeqCst), &[&js]);
+    }
+
+    // M382: la petición del selector viaja a `RayBridge.onPick(spec)` en UN string
+    // (`id\nkind\ntitle\nmultiple\nextensiones`): `call_bridge` solo pasa Strings.
+    extern "C" fn pick_handler(id: i64, kind: *const c_char, title: *const c_char, multiple: i32, exts: *const c_char) {
+        let spec = format!("{id}\n{}\n{}\n{multiple}\n{}", cstr_owned(kind), cstr_owned(title), cstr_owned(exts));
+        call_bridge(MID_PICK.load(Ordering::SeqCst), &[&spec]);
     }
 
     fn cstr_owned(p: *const c_char) -> String {
@@ -7531,6 +7685,11 @@ pub fn android_scheme_close(h: i64) {
 #[cfg(target_os = "android")]
 pub fn android_capabilities(caps: i32) {
     shell::ray_ui_shell_capabilities(caps)
+}
+/// M382: `RayBridge.pickResult(id, paths, err)` — la respuesta del selector de archivos.
+#[cfg(target_os = "android")]
+pub fn android_pick_result(env: *mut std::ffi::c_void, id: i64, paths: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {
+    android::pick_result(env as android::JniEnv, id, paths, err)
 }
 /// M330 D5: un `jstring` de JNI → `String` (para el `devLink` del shell de desarrollo, que vive
 /// en el cdylib generado y no puede leer strings de la JVM por su cuenta).

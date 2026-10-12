@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:
+  `ui.pick_file`, `pick_files` y `pick_file_with` abren `UIDocumentPickerViewController` (modo
+  copia) o `ACTION_OPEN_DOCUMENT` y devuelven copias dentro del sandbox de la app, legibles con
+  `std/fs`; los filtros van por extensión. El shell lo presenta y responde por el puente nuevo
+  (`ray_ui_set_pick_handler` / `ray_ui_pick_result`; en Android `RayBridge.onPick`/`pickResult`):
+  hay que regenerar el shell con `ray bundle --ios`/`--android`; uno anterior responde `Err` con
+  esa indicación. Carpetas y «guardar como» siguen sin existir en móvil. Verificado en el emulador
+  Android de punta a punta (el filtro `wav,mp3` deja solo «Audio»/«Downloads», elegir un WAV
+  devuelve su copia en `cache/ray-picked/…`) y en el simulador iOS (el selector se presenta; la
+  vuelta con un archivo queda por verificar en un iPhone).
+
 ## 1.27.47 — 2026-10-12
 
 - **Doc de módulo `//!` (M376, ray-ds #126)**: las líneas `//!` con que empieza un archivo `.ray`

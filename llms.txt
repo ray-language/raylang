@@ -414,10 +414,10 @@ native message dialogs: `ui.message(title, text, ["Save", "Don't Save", "Cancel"
 (index pressed; dismiss = last button), `ui.message_styled(…, "warning"|"error", …)`, `ui.alert`,
 `ui.confirm(title, text, ok, cancel) -> Result<bool,_>`; file dialogs with options:
 `var o = ui.file_options(); o.filters = [ui.filter("Ray", ["ray"])]; ui.pick_file_with(o)`,
-`ui.pick_files(o) -> Result<[string],_>` (multiple), `ui.save_file_with(o)` (`o.suggested`); ALL file dialogs
-are DESKTOP ONLY — on iOS/Android they return `Err("ui: file dialogs are not available on mobile (v1)")`:
-use `<input type="file">` in the page + `window.ray.request` (a plain `add:<name>\n<base64>` message, not JSON,
-for big files; `base64_decode` is native since M380);
+`ui.pick_files(o) -> Result<[string],_>` (multiple), `ui.save_file_with(o)` (`o.suggested`); on iOS/Android
+`pick_file`/`pick_files`/`pick_file_with` open the system document picker and return COPIES inside the app
+sandbox (readable with `std/fs`; delete when done) — shell from raylang 1.27.48+; folder and save dialogs
+are still desktop only (`Err` on mobile);
 context menu: `ui.popup_menu(h, items)` at the mouse position (choice arrives as a `menu` event;
 wire it from the page's `contextmenu` via `window.ray.send`); window kinds: `o.kind = "panel"`
 (floating utility palette) | `"borderless"` | `"full_content"` (1.27.23: the page runs under the

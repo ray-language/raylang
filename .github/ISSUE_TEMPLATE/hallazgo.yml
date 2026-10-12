@@ -1,0 +1,50 @@
+# Plantilla de issue para un hallazgo (M377): lo mínimo para reproducir, lo mismo que ya exige el
+# archivo de hallazgos de las ray-apps (findings/). Las issues las abre raylang al revisar una
+# campaña, solo para los de tipo B y las regresiones; el título cita el origen («ray-sublime #147: …»).
+name: Hallazgo
+description: Bug o regresión con reproducción (versión, motor, SO)
+title: "<app> #<n>: <qué falla>"
+labels: ["hallazgo"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Versión de raylang
+      description: La release del binario (`ray version`), no la HEAD
+      placeholder: "1.27.46"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Motor
+      multiple: true
+      options: ["VM (ray run)", "nativo (ray build --native / ray bundle)", "intérprete (--interp)", "ray test", "LSP / ray doc / ray fmt"]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Sistema operativo
+      placeholder: "macOS 26 arm64 · Linux x86_64 · Windows 11 · iOS · Android"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproducción mínima
+      description: Programa o comandos que lo muestran, y qué se observó frente a lo esperado
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: origin
+    attributes:
+      label: Origen
+      description: App y número del hallazgo en `ray-apps/findings/` (si viene de una campaña)
+      placeholder: "ray-sublime #147 · findings/open/ray-sublime-1.27.46.md"
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Opcional

@@ -1474,7 +1474,7 @@ impl<'a> Interpreter<'a> {
                 let (Value::Str(text), Value::Bool(url)) = (&values[0], &values[1]) else {
                     unreachable!("the checker guarantees (string, bool)")
                 };
-                let arr = match ray_runtime::b64::decode(text, *url) {
+                let arr = match crate::builtins::b64::decode(text, *url) {
                     Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
                     Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
                 };
@@ -1484,7 +1484,7 @@ impl<'a> Interpreter<'a> {
                 let (Value::Bytes(data), Value::Bool(url)) = (&values[0], &values[1]) else {
                     unreachable!("the checker guarantees (bytes, bool)")
                 };
-                Value::Str(ray_runtime::b64::encode(data, *url))
+                Value::Str(crate::builtins::b64::encode(data, *url))
             }
             "__read_file_bytes" => {
                 let arr = match &values[0] {

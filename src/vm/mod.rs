@@ -2332,7 +2332,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s,
                         _ => unreachable!("the checker guarantees a string"),
                     };
-                    let elems = match ray_runtime::b64::decode(&text, url) {
+                    let elems = match crate::builtins::b64::decode(&text, url) {
                         Ok(data) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)],
                         Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
                     };
@@ -2348,7 +2348,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Bytes(b) => b,
                         _ => unreachable!("the checker guarantees bytes"),
                     };
-                    self.push(HeapValue::Str(ray_runtime::b64::encode(&data, url).into()));
+                    self.push(HeapValue::Str(crate::builtins::b64::encode(&data, url).into()));
                 }
                 // M147: un asset del espacio embed → [b"ok", datos] o [b"err", msg].
                 OpCode::EmbedRead => {

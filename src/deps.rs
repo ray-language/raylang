@@ -14,6 +14,7 @@
 //! La verificación de integridad (lockfile + hashes de contenido, *supply-chain*) llega en M39c-2b.
 
 use std::path::{Path, PathBuf};
+use crate::loader::DepRoots;
 use std::process::Command;
 
 use crate::manifest::Manifest;
@@ -999,27 +1000,42 @@ fn prune_dangling_links(modules: &Path) {
 /// haya en disco (por eso sirve también para el LSP, que no debe tocar la red al diagnosticar).
 /// Compartida por el CLI (`ray run/build/…`) y el LSP → un archivo diagnostica con las MISMAS
 /// raíces con las que corre.
-pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
+pub fn dependency_roots_for(dir: &Path) -> DepRoots {
     let root = Manifest::find(dir)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| dir.to_path_buf());
     let cache = root.join(".ray-deps");
-    let mut roots = Vec::new();
+    let mut roots = DepRoots::default();
     if cache.is_dir() {
-        roots.push(cache);
+        roots.push_dir(cache);
     }
     if let Ok(Some(m)) = Manifest::load(dir) {
-        for (_name, spec) in &m.dependencies {
+        for (name, spec) in &m.dependencies {
             if let Some(p) = path_of_path_dep(spec) {
-                let pdir = m.root.join(p);
-                if let Some(parent) = pdir.parent().map(Path::to_path_buf)
-                    && pdir.exists()
-                    && !roots.contains(&parent)
+                let mut pdir = m.root.join(p);
+                // En un dispositivo de `ray dev --device` la dependencia viaja copiada bajo
+                // `.ray-path-deps/<dir>` (D4).
+                if !pdir.is_dir()
+                    && let Some(base) = Path::new(p).file_name()
                 {
-                    roots.push(parent);
+                    pdir = m.root.join(".ray-path-deps").join(base);
+                }
+                if pdir.exists() {
+                    // M383 (ray-elements #135): la dependencia se importa por su CLAVE
+                    // (`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;`), se llame como se
+                    // llame el directorio. El padre sigue entrando como directorio-raíz (los
+                    // imports por nombre de directorio y las hermanas de un monorepo).
+                    roots.push_package(name, pdir.clone());
+                    if let Some(parent) = pdir.parent().map(Path::to_path_buf) {
+                        roots.push_dir(parent);
+                    }
                 }
             }
         }
+        // M383 (ray-elements #142): el propio proyecto, por su `[package] name`: dentro de un
+        // paquete, `import pkg/version;` resuelve a su raíz aunque el clon se llame `checkout/`
+        // — la misma forma con que lo importa un consumidor, válida siempre.
+        roots.push_package(&m.name, m.root.clone());
         // Un ray.toml cuyo `entry` NO existe es un PAQUETE-LIBRERÍA (packages/net, packages/web…):
         // sus archivos se importan por el nombre del paquete (`import net/trace` desde dentro de
         // packages/net) y entre hermanas del monorepo (`import net/webserver` desde packages/web).
@@ -1028,9 +1044,8 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         // (entry presente) no se ensancha.
         if !m.entry_path().is_file()
             && let Some(parent) = m.root.parent().map(Path::to_path_buf)
-            && !roots.contains(&parent)
         {
-            roots.push(parent);
+            roots.push_dir(parent);
         }
         // M309 (findings #61): un paquete cuyo directorio se llama como él (`libs/grpc` con
         // `name = "grpc"`) se resuelve por su propio nombre desde dentro — sus módulos se importan
@@ -1038,9 +1053,8 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         // heurística "entry = aplicación" lo dejaba fuera y el rodeo era depender de sí mismo).
         if m.root.file_name().is_some_and(|n| n == m.name.as_str())
             && let Some(parent) = m.root.parent().map(Path::to_path_buf)
-            && !roots.contains(&parent)
         {
-            roots.push(parent);
+            roots.push_dir(parent);
         }
         // M138: un paquete DESCARGADO —su `ray.toml` vive directamente bajo una caché
         // `.ray-deps/`— resuelve a sus dependencias hermanas por la CACHÉ PLANA: el padre entra
@@ -1051,9 +1065,8 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         // `ray run` resuelve bien desde el proyecto consumidor.
         if let Some(parent) = m.root.parent().map(Path::to_path_buf)
             && parent.file_name().is_some_and(|n| n == ".ray-deps")
-            && !roots.contains(&parent)
         {
-            roots.push(parent);
+            roots.push_dir(parent);
         }
         // M113b: en un proyecto-APLICACIÓN, el directorio de la entrada (típicamente `src/`) entra
         // como raíz de RESPALDO. Es la convención que `ray test` ya aplicaba a mano ("la raíz de
@@ -1067,9 +1080,8 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         if m.entry_path().is_file()
             && let Some(entry_dir) = m.entry_path().parent().map(Path::to_path_buf)
             && entry_dir != dir
-            && !roots.contains(&entry_dir)
         {
-            roots.push(entry_dir);
+            roots.push_dir(entry_dir);
         }
     }
     roots
@@ -1197,10 +1209,60 @@ mod tests {
 
         let roots = dependency_roots_for(&web);
         let cache = base.join("store/.ray-deps");
-        assert!(roots.contains(&cache), "la caché plana es raíz (hermanas por nombre): {roots:?}");
+        assert!(roots.dirs.contains(&cache), "la caché plana es raíz (hermanas por nombre): {roots:?}");
         // La raíz propia del archivo que pregunta no se repite (antes salía duplicada en los
         // mensajes de error del loader: "in: …/web, …/web").
-        assert!(!roots.contains(&web), "sin duplicar la raíz propia: {roots:?}");
+        assert!(!roots.dirs.contains(&web), "sin duplicar la raíz propia: {roots:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// M383 (ray-elements #135/#142): una dependencia `path:` se importa por su CLAVE aunque el
+    /// directorio se llame distinto (`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;`), y
+    /// dentro de un paquete `import <name>/x;` resuelve a su raíz aunque el clon se llame `checkout/`.
+    #[test]
+    fn path_dependencies_import_by_key_and_a_package_by_its_name() {
+        let base = std::env::temp_dir().join(format!("ray-deps-by-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let lib = base.join("lib/ray-ds");
+        let app = base.join("app");
+        std::fs::create_dir_all(lib.join("internal")).unwrap();
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(lib.join("ray.toml"), "[package]\nname = \"ray_ds\"\nversion = \"0.1.0\"\n").unwrap();
+        std::fs::write(lib.join("version.ray"), "pub fn version() -> string { \"0.1.0\" }\n").unwrap();
+        std::fs::write(lib.join("bridge.ray"), "import ray_ds/version;\npub fn tag() -> string { version.version() }\n").unwrap();
+        std::fs::write(lib.join("internal/mod.ray"), "pub fn secret() -> int { 1 }\n").unwrap();
+        std::fs::write(lib.join("internal/deep.ray"), "pub fn x() -> int { 2 }\n").unwrap();
+        std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n\n[dependencies]\nray_ds = \"path:../lib/ray-ds\"\n").unwrap();
+        std::fs::write(app.join("src/main.ray"), "import ray_ds/bridge;\nfn main() -> int { bridge.tag().len() }\n").unwrap();
+
+        let roots = dependency_roots_for(&app);
+        let same = |a: &Path, b: &Path| a.canonicalize().ok() == b.canonicalize().ok();
+        assert!(roots.packages.iter().any(|(n, d)| n == "ray_ds" && same(d, &lib)), "{roots:?}");
+        assert!(roots.packages.iter().any(|(n, d)| n == "app" && same(d, &app)), "{roots:?}");
+        let loaded = crate::loader::load_with_deps(&app.join("src/main.ray"), &roots);
+        assert!(loaded.is_ok(), "{:?}", loaded.err().map(|e| e.message));
+        // La cápsula del paquete sigue cerrada por la clave.
+        std::fs::write(app.join("src/main.ray"), "import ray_ds/internal/deep;\nfn main() -> int { deep.x() }\n").unwrap();
+        let e = crate::loader::load_with_deps(&app.join("src/main.ray"), &roots).err().expect("debe fallar");
+        assert!(e.message.contains("internal to capsule 'ray_ds/internal'"), "{}", e.message);
+        // Un módulo inexistente lista el paquete declarado y dónde se buscó.
+        std::fs::write(app.join("src/main.ray"), "import ray_ds/nope;\nfn main() -> int { 0 }\n").unwrap();
+        let e = crate::loader::load_with_deps(&app.join("src/main.ray"), &roots).err().expect("debe fallar");
+        assert!(e.message.contains("packages: ray_ds=") && e.message.contains("app="), "{}", e.message);
+
+        // Dentro de un clon del paquete con otro nombre de directorio, `import ray_ds/version;` vale.
+        let checkout = base.join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        for f in ["ray.toml", "version.ray", "bridge.ray"] {
+            std::fs::copy(lib.join(f), checkout.join(f)).unwrap();
+        }
+        let roots = dependency_roots_for(&checkout);
+        assert!(roots.packages.iter().any(|(n, d)| n == "ray_ds" && same(d, &checkout)), "{roots:?}");
+        let loaded = crate::loader::load_with_deps(&checkout.join("bridge.ray"), &roots);
+        assert!(loaded.is_ok(), "{:?}", loaded.err().map(|e| e.message));
+        // El completion de imports ofrece los módulos del paquete por su clave.
+        let mods = crate::loader::available_modules(&dependency_roots_for(&app), &app.join("src/main.ray"));
+        assert!(mods.iter().any(|m| m == "ray_ds/bridge"), "{mods:?}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

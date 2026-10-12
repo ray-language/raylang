@@ -456,7 +456,7 @@ fn run_release_program(args: Vec<String>) -> Result<String, i32> {
 /// `ray release`: así el proceso padre sigue siendo la CLI de Rust y este solo produce datos).
 fn run_release_program_inner(args: &[String]) {
     runtime::set_program_args(args.to_vec());
-    let loaded = match loader::load_source(Path::new("ray-release.ray"), RELEASE_RAY, &[]) {
+    let loaded = match loader::load_source(Path::new("ray-release.ray"), RELEASE_RAY, &loader::DepRoots::default()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("internal error loading the embedded release program: {}", e.message);
@@ -872,7 +872,7 @@ fn cmd_serve(args: &[String]) {
     }
     runtime::set_program_args(vec![dir, host, port]);
     // El servidor solo importa std/*: la ruta de entrada es virtual (no se lee del disco).
-    let loaded = match loader::load_source(Path::new("ray-serve.ray"), SERVE_RAY, &[]) {
+    let loaded = match loader::load_source(Path::new("ray-serve.ray"), SERVE_RAY, &loader::DepRoots::default()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("internal error loading the embedded server: {}", e.message);
@@ -4568,7 +4568,7 @@ fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
 /// explícitas, la entrada del proyecto más cada `tests/*.ray`. La raíz de cada entrada
 /// implicada va como raíz extra del loader (un `tests/*.ray` resuelve `import m;` contra
 /// `src/`).
-fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, crate::loader::DepRoots) {
     let mut suites: Vec<PathBuf> = Vec::new();
     let mut library_root: Option<PathBuf> = None;
     if explicit.is_empty() {
@@ -4600,16 +4600,14 @@ fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
     }
     let mut roots = dependency_roots();
     if let Some(root) = library_root {
-        roots.push(root);
+        roots.push_dir(root);
     }
     // Solo las entradas-ANCLA aportan raíz: la del proyecto (modo implícito) o cada explícita —
     // los `tests/*.ray` descubiertos no (su raíz útil es la de la entrada, no `tests/`).
     let anchors = if explicit.is_empty() { 1 } else { suites.len() };
     for s in suites.iter().take(anchors) {
-        if let Some(parent) = s.parent().map(Path::to_path_buf)
-            && !roots.contains(&parent)
-        {
-            roots.push(parent);
+        if let Some(parent) = s.parent().map(Path::to_path_buf) {
+            roots.push_dir(parent);
         }
     }
     (suites, roots)
@@ -5431,7 +5429,7 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
 /// verifica con `check_all_modulo` (el checker SIN exigir `main`: un paquete es una librería).
 /// Un error se reporta contra su archivo y línea local (vía `Loaded::locate`).
 fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
-    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut roots = crate::loader::DepRoots::default();
     if tmp.join("ray.toml").is_file()
         && let Ok(Some(mc)) = crate::manifest::Manifest::load(tmp)
     {
@@ -5442,17 +5440,18 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
         }
         let cache = mc.root.join(".ray-deps");
         if cache.is_dir() {
-            roots.push(cache);
+            roots.push_dir(cache);
         }
-        // Path-deps del paquete (raras al publicar, pero el check las honra igual que `ray run`).
-        for (_n, s) in &mc.dependencies {
+        // Path-deps del paquete (raras al publicar, pero el check las honra igual que `ray run`):
+        // por clave (M383) y por el padre del directorio.
+        for (n, s) in &mc.dependencies {
             if let Some(p) = crate::deps::path_of_path_dep(s) {
                 let dir = mc.root.join(p);
-                if let Some(parent) = dir.parent().map(Path::to_path_buf)
-                    && dir.exists()
-                    && !roots.contains(&parent)
-                {
-                    roots.push(parent);
+                if dir.exists() {
+                    roots.push_package(n, dir.clone());
+                    if let Some(parent) = dir.parent().map(Path::to_path_buf) {
+                        roots.push_dir(parent);
+                    }
                 }
             }
         }
@@ -5975,7 +5974,7 @@ fn library_modules(root: &Path) -> Vec<PathBuf> {
 /// proyecto (junto al `ray.toml`), si existe. Un paquete descargado vive en `.ray-deps/<dep>/`
 /// como cápsula; el loader busca ahí tras la raíz del proyecto. Sin proyecto ni caché, `[]`
 /// (comportamiento idéntico a antes: el loader resuelve solo contra la raíz del archivo).
-fn dependency_roots() -> Vec<PathBuf> {
+fn dependency_roots() -> crate::loader::DepRoots {
     // M40.8a: caché `.ray-deps/` + el padre de cada dependencia por ruta. La lógica vive en
     // `deps::dependency_roots_for` (compartida con el LSP → un archivo diagnostica con las MISMAS
     // raíces con las que corre). La stdlib no es raíz de disco: va embebida (M40.5).
@@ -6045,7 +6044,7 @@ fn check_required_raylang(m: &Manifest) {
         process::exit(65);
     };
     if have < want {
-        eprintln!("this project requires raylang {req} or newer; this toolchain is {} — update with `ray update-self`", env!("RAYLANG_VERSION_FULL"));
+        eprintln!("this project requires raylang {req} or newer; this toolchain is {} — update with `ray upgrade`", env!("RAYLANG_VERSION_FULL"));
         process::exit(65);
     }
     if !env!("RAYLANG_BUILD_SUFFIX").is_empty() {

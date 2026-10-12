@@ -104,7 +104,7 @@ fn run_source(src: &str) -> String {
     use crate::{checker, diagnostic, loader};
 
     let entry = std::path::Path::new("playground/main.ray");
-    let loaded = match loader::load_source(entry, src, &[]) {
+    let loaded = match loader::load_source(entry, src, &loader::DepRoots::default()) {
         Ok(l) => l,
         // Si la entrada ni siquiera parsea, la vía directa da el diagnóstico preciso con
         // posición; si parsea, el fallo es de un import → el mensaje del loader tal cual.

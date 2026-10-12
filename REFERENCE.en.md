@@ -455,6 +455,17 @@ Tier 2: they do **not** ship in the binary; they are declared in `ray.toml` —a
 directory, relative to the root) or `geo = "git+https://host/geo@v1.0"`; no inline tables— and
 imported the same way (`import net/http;` → `http.fetch(…)`). They live in the repo's `packages/`.
 
+**How a dependency is imported (M383).** The first segment of the `import` is the **key** in
+`[dependencies]` and what follows is the module file at the **package root** (not under `src/`):
+`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` is `lib/ray-ds/bridge.ray`, whatever the
+directory is called (`import ray_ds;` only if it has a `mod.ray`). Inside a package, its modules
+import each other by the `[package] name` (`import ray_ds/version;` from `bridge.ray`): the same
+form a consumer uses, valid in any checkout. A `git+` dependency is the **root of the repo** (the
+copy lives in `.ray-deps/<key>/`); there is no subdirectory syntax: a package that lives inside a
+bigger repo is published as its own repo with `ray registry mirror` (§14), which is how the
+packages under `packages/` reach the index. A "module not found" for a declared key says where the
+package lives and that it has no such module.
+
 ### `packages/web` — the application framework (Express-style, on top of `net/webserver`)
 
 | Surface | What it does |
@@ -691,4 +702,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:dc9c302b3fcf -->
+<!-- sync: sha256:d3255fa7fde2 -->

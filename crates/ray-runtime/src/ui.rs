@@ -105,7 +105,7 @@ fn events() -> &'static Events {
 /// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
 /// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
-pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}},titlebar_height:0};document.addEventListener("mousedown",function(ev){if(ev.button!==0)return;var t=ev.target;if(!(t&&t.closest))return;if(!t.closest("[data-ray-drag]"))return;if(t.closest("button,a,input,select,textarea,[data-ray-no-drag]"))return;ev.preventDefault();q(ev.detail>=2?"\u0001zoom":"\u0001drag")},true)})();"#;
+pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}},titlebar_height:0};document.addEventListener("mousedown",function(ev){if(ev.button!==0)return;var path=ev.composedPath?ev.composedPath():[ev.target],i,el,drag=false;for(i=0;i<path.length;i++){el=path[i];if(!(el&&el.matches))continue;if(el.matches("button,a,input,select,textarea,[data-ray-no-drag]"))return;if(el.matches("[data-ray-drag]")){drag=true;break}}if(!drag)return;ev.preventDefault();q(ev.detail>=2?"\u0001zoom":"\u0001drag")},true)})();"#;
 
 /// M328: los mensajes de CONTROL del shim (no llegan al programa): arrastrar la ventana desde una
 /// zona `data-ray-drag` de la página y hacer zoom con doble clic — lo que hace la barra de título
@@ -1480,11 +1480,14 @@ pub mod scheme {
 
         /// M328: el shim lleva las zonas de arrastre (`data-ray-drag`, con hijos interactivos
         /// excluidos y doble clic = zoom) y `titlebar_height`; los mensajes de control tienen su
-        /// forma fija, que los tres backends filtran antes de emitir `message`.
+        /// forma fija, que los tres backends filtran antes de emitir `message`. M386 (ray-elements
+        /// #138): la zona y los hijos interactivos se buscan por `composedPath()` (el evento
+        /// retargeteado al host de un shadow root escondía el botón de dentro), el más cercano manda.
         #[test]
         fn the_shim_carries_drag_regions_and_the_titlebar_height() {
             let shim = super::super::RAY_JS_SHIM;
-            assert!(shim.contains("t.closest(\"[data-ray-drag]\")"), "{shim}");
+            assert!(shim.contains("ev.composedPath?ev.composedPath():[ev.target]"), "{shim}");
+            assert!(shim.contains("el.matches(\"[data-ray-drag]\")"), "{shim}");
             assert!(shim.contains("button,a,input,select,textarea,[data-ray-no-drag]"), "{shim}");
             assert!(shim.contains("titlebar_height:0"), "{shim}");
             assert!(shim.contains("ev.detail>=2?\"\\u0001zoom\":\"\\u0001drag\""), "{shim}");
@@ -4936,7 +4939,13 @@ mod mac {
                     }
                 }
                 None => {
-                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 0);
+                    // M387 (ray-elements #141): una ventana `full_content` (título oculto, M328)
+                    // vive con la barra transparente; devolverla opaca le quitaba a la página la
+                    // franja de la barra (`innerHeight` −28 px) con `titlebar_height` aún en 28.
+                    // «Sistema» aquí es: fondo y apariencia heredados, barra como se abrió.
+                    let title_visibility: MsgI64 = std::mem::transmute(msg_send());
+                    let hidden_title = title_visibility(window, sel(b"titleVisibility\0")) == 1;
+                    set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), u8::from(hidden_title));
                     set_id(window, sel(b"setAppearance:\0"), std::ptr::null_mut());
                     let default = class_item(cls(b"NSColor\0"), sel(b"windowBackgroundColor\0"));
                     if !default.is_null() {

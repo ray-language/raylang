@@ -1235,21 +1235,32 @@ impl Transpiler {
                 }
             }
             ExprKind::Binary { op, left, right } => {
+                // El tipo del operando que decide la forma del `+`: el izquierdo, salvo que sea un
+                // `[]` (M384, ray-elements #133: `[] + xs`), que lo toma del derecho. Para los demás
+                // operadores no se consulta (los `?` de abajo solo corren en los brazos de `Add`).
+                let add_ty = if matches!(op, BinaryOp::Add) {
+                    Some(match &left.kind {
+                        ExprKind::ArrayLit(v) if v.is_empty() => self.type_of(right)?,
+                        _ => self.type_of(left)?,
+                    })
+                } else {
+                    None
+                };
                 // `string + string` → concatenación. Se APLANA toda la cadena `a + b + c + …` en un solo
                 // `format!` (una alocación, no una anidada por `+`), e inlinea `to_string(x)` como `{}`
                 // sobre `x` (evita el Rc intermedio). Clave para que el nativo bata a la VM en strings.
-                if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::String) {
+                if matches!(add_ty, Some(Type::String)) {
                     let mut operands = Vec::new();
                     self.flatten_concat(e, &mut operands)?;
                     self.emit_concat(out, &operands)?;
-                } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Bytes) {
+                } else if matches!(add_ty, Some(Type::Bytes)) {
                     // bytes: `a + b` concatena los dos slices en un Rc<[u8]> nuevo (como `Value::Bytes` +).
                     out.push_str("Rc::<[u8]>::from([&*");
                     self.emit_expr(out, left)?;
                     out.push_str(", &*");
                     self.emit_expr(out, right)?;
                     out.push_str("].concat())");
-                } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Array(_)) {
+                } else if matches!(add_ty, Some(Type::Array(_))) {
                     // arreglos (M11.7b): `a + b` es un arreglo NUEVO con los elementos (clonados) de ambos.
                     // Dos `.borrow()` compartidos coexisten (incl. `a + a`); el `clone()` libera el primero.
                     out.push_str("{ let mut __rt_v = ");

@@ -2107,6 +2107,13 @@ impl Parser {
         if let TokenKind::Ident(name) = tok.kind {
             self.advance();
             Ok((name, tok.line, tok.col))
+        } else if let Some(ty) = self.primitive_type_keyword() {
+            // M385 (ray-elements #134): `bytes: int` en un struct o `rep.bytes` daban «expected a
+            // field name» sin decir por qué. El nombre de un tipo primitivo es una palabra
+            // reservada: se dice y se propone renombrar.
+            Err(self.error_here(format!(
+                "expected {}, but '{}' is a type name and cannot be used as an identifier (rename it)", what, ty
+            )))
         } else {
             Err(self.error_here(format!("expected {}", what)))
         }
@@ -2208,6 +2215,18 @@ mod tests {
     }
 
     /// M217 (ray-sublime #22): un tipo primitivo como nombre de función dice que está reservado.
+    /// M385 (ray-elements #134): el nombre de un tipo primitivo donde va un identificador (un
+    /// campo `bytes: int`, `rep.bytes`) dice la causa y propone renombrar.
+    #[test]
+    fn a_type_name_where_an_identifier_goes_says_why() {
+        let e = crate::parser::parse(crate::lexer::lex("struct Report { files: int, bytes: int }").unwrap()).expect_err("debe fallar");
+        assert_eq!(e.msg, "expected a field name, but 'bytes' is a type name and cannot be used as an identifier (rename it)");
+        let e = crate::parser::parse(crate::lexer::lex("fn f(r: Report) -> int { r.bytes }").unwrap()).expect_err("debe fallar");
+        assert_eq!(e.msg, "expected the field name after '.', but 'bytes' is a type name and cannot be used as an identifier (rename it)");
+        let e = crate::parser::parse(crate::lexer::lex("struct R { int }").unwrap()).expect_err("debe fallar");
+        assert!(e.msg.starts_with("expected a field name, but 'int' is a type name"), "{}", e.msg);
+    }
+
     #[test]
     fn a_primitive_type_cannot_name_a_function() {
         for (src, prim) in [("fn u32(x: int) -> int { x }", "u32"), ("fn int() -> int { 1 }", "int"), ("fn bytes() -> int { 1 }", "bytes")] {

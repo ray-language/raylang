@@ -2237,6 +2237,20 @@ impl Checker {
                 self.check_match(scrutinee, arms, Some(expected), expr.line, expr.col)
             }
             ExprKind::Block(b) => self.check_block_expected(b, expected),
+            // M384 (ray-elements #137): una tupla con tipo esperado `(A, B, …)` de la misma aridad
+            // pasa cada esperado a su elemento — así `("error", Option.None)` toma `Option<string>`
+            // del otro brazo del `match` (o del retorno) igual que lo haría un `Option.None` suelto.
+            // Otra aridad: chequeo normal (el error de tipos lo da quien pidió el esperado).
+            ExprKind::TupleLit(elems) => match expected {
+                Type::Tuple(exps) if exps.len() == elems.len() => {
+                    let mut tys = Vec::with_capacity(elems.len());
+                    for (e, exp) in elems.iter().zip(exps.iter()) {
+                        tys.push(self.check_expr_expected(e, exp)?);
+                    }
+                    Ok(Type::Tuple(tys))
+                }
+                _ => self.check_expr(expr),
+            },
             // Arreglo: con un tipo esperado `[T]`, el vacío adopta `[T]` (arregla la
             // aspereza histórica) y los elementos se chequean contra `T`.
             ExprKind::ArrayLit(elems) => match expected {
@@ -2722,18 +2736,23 @@ impl Checker {
         // (`Option.None`, `Result.Err(e)`) lo toma del OTRO lado, en cualquier orden. Solo `==`/`!=`:
         // el resto de operadores no comparan enums. Se reintenta únicamente ante el error de
         // inferencia, así los demás mensajes (operandos incompatibles) no cambian.
+        // M384 (ray-elements #133): lo mismo para `+` con un `[]` a un lado (`[] + xs` es la copia
+        // idiomática de un arreglo): el vacío adopta el tipo del otro operando.
         let is_infer_err = |e: &TypeError| e.msg.starts_with("could not infer the type parameter");
+        let is_empty_array_err = |e: &TypeError| e.msg.starts_with("cannot infer the type of [] here");
         let eq_op = matches!(op, BinaryOp::Eq | BinaryOp::Ne);
+        let add_op = op == BinaryOp::Add;
+        let retry = |e: &TypeError| (eq_op && is_infer_err(e)) || (add_op && is_empty_array_err(e));
         let (lt, rt) = match self.check_expr(left) {
             Ok(lt) => match self.check_expr(right) {
                 Ok(rt) => (lt, rt),
-                Err(e) if eq_op && is_infer_err(&e) => {
+                Err(e) if retry(&e) => {
                     let rt = self.check_expr_expected(right, &lt)?;
                     (lt, rt)
                 }
                 Err(e) => return Err(e),
             },
-            Err(e) if eq_op && is_infer_err(&e) => {
+            Err(e) if retry(&e) => {
                 let rt = self.check_expr(right)?;
                 let lt = self.check_expr_expected(left, &rt)?;
                 (lt, rt)

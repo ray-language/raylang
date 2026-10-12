@@ -137,7 +137,7 @@ struct Module {
 
 /// Carga el archivo de entrada y sus imports (transitivos), y devuelve el programa fusionado.
 pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
-    load_with_deps(entry, &[])
+    load_with_deps(entry, &DepRoots::default())
 }
 
 /// Como [`load`], pero además busca los módulos en las **raíces de dependencias** `dep_roots`
@@ -146,14 +146,61 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 /// **cápsula** (`<dep>/mod.ray`): `import geo;` la trae y sus submódulos internos quedan
 /// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
 /// comportamiento es idéntico a antes (un solo `root`).
-pub fn load_with_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+pub fn load_with_deps(entry: &Path, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
     load_impl(entry, dep_roots, None, None)
+}
+
+/// M383 (ray-elements #135/#142): las raíces de dependencias del loader, en dos formas. `dirs` son
+/// directorios que contienen módulos y paquetes **por nombre de directorio** (`<dir>/<name>/…`: la
+/// caché `.ray-deps/`, el padre de una dependencia por ruta, `src/` de respaldo). `packages` son
+/// paquetes **por clave** (`import <name>/x;` → `<dir>/x.ray`, `import <name>;` → `<dir>/mod.ray`),
+/// que no dependen de cómo se llame el directorio: la clave de `[dependencies]` de cada dependencia
+/// `path:` y el `[package] name` del propio proyecto (así `import pkg/version;` vale dentro de un
+/// clon del paquete llamado de otra forma). Se resuelve la raíz del proyecto, luego los paquetes
+/// (lo declarado manda sobre un directorio hermano casual), luego los `dirs`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DepRoots {
+    pub dirs: Vec<PathBuf>,
+    pub packages: Vec<(String, PathBuf)>,
+}
+
+impl DepRoots {
+    /// Solo directorios (la forma clásica).
+    pub fn from_dirs(dirs: Vec<PathBuf>) -> Self {
+        DepRoots { dirs, packages: Vec::new() }
+    }
+
+    /// Añade un directorio-raíz, sin duplicarlo.
+    pub fn push_dir(&mut self, dir: PathBuf) {
+        if !self.dirs.contains(&dir) {
+            self.dirs.push(dir);
+        }
+    }
+
+    /// Añade un paquete por clave; la primera declaración de una clave gana.
+    pub fn push_package(&mut self, name: &str, dir: PathBuf) {
+        if !self.packages.iter().any(|(n, _)| n == name) {
+            self.packages.push((name.to_string(), dir));
+        }
+    }
+
+    /// La ruta `<dir>/<resto>` del paquete al que pertenece la ruta de módulo `dep` (`pkg/a/b` →
+    /// `<dir de pkg>/a/b`; `pkg` → `<dir de pkg>`), si `dep` empieza por la clave de alguno.
+    pub(crate) fn package_path(&self, dep: &str) -> Option<PathBuf> {
+        self.packages.iter().find_map(|(name, dir)| {
+            if dep == name {
+                Some(dir.clone())
+            } else {
+                dep.strip_prefix(name.as_str()).and_then(|r| r.strip_prefix('/')).map(|rest| dir.join(rest))
+            }
+        })
+    }
 }
 
 /// Como [`load_with_deps`], pero usa `source` como contenido del **archivo de entrada** en vez de
 /// leerlo del disco (los imports sí se leen de disco). Es lo que necesita el **LSP**: analizar el
 /// buffer en memoria (con cambios sin guardar) mientras resuelve sus imports desde los archivos.
-pub fn load_source(entry: &Path, source: &str, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+pub fn load_source(entry: &Path, source: &str, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
     load_impl(entry, dep_roots, Some(source), None)
 }
 
@@ -165,7 +212,7 @@ pub fn load_source(entry: &Path, source: &str, dep_roots: &[PathBuf]) -> Result<
 /// trataría como externa a su propia cápsula—. Con la raíz correcta, la entrada se identifica por su
 /// **ruta relativa** a ella y ambos problemas desaparecen (imports y cápsulas se comportan como bajo
 /// `ray run` desde la entrada real del proyecto).
-pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
     load_impl(entry, dep_roots, Some(source), Some(project_root.to_path_buf()))
 }
 
@@ -174,12 +221,14 @@ pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_r
 /// si está, fija la raíz del proyecto (y con ella la identidad de módulo de la entrada, por su ruta
 /// relativa); si es `None`, la raíz es `entry.parent()` y la entrada se identifica por su *stem* (el
 /// comportamiento clásico: la entrada del proyecto vive en la raíz).
-fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, project_root_override: Option<PathBuf>) -> Result<Loaded, LoadError> {
+fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, project_root_override: Option<PathBuf>) -> Result<Loaded, LoadError> {
     let project_root = project_root_override.clone()
         .unwrap_or_else(|| entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")));
-    // Raíces de búsqueda de módulos: el proyecto primero, luego la caché de dependencias.
+    // Raíces de búsqueda de módulos: el proyecto primero, luego los paquetes por clave (M383) y
+    // la caché de dependencias (`roots` son los directorios; `dep_roots.packages`, los paquetes).
     let mut roots = vec![project_root.clone()];
-    roots.extend(dep_roots.iter().cloned());
+    roots.extend(dep_roots.dirs.iter().cloned());
+    let all_roots = DepRoots { dirs: roots.clone(), packages: dep_roots.packages.clone() };
     // Identidad de la entrada: su ruta relativa a la raíz (`geo/formas/circulo`) cuando la raíz se dio
     // explícitamente (LSP sobre un submódulo); si no, el *stem* clásico. Solo afecta a la clave del
     // módulo y al enforcement de cápsula: la entrada NUNCA se namespaca (`module_prefix` → None).
@@ -232,7 +281,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         for (dep, line, col) in deps {
             // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
-            if let Some(c) = capsule_violated(&roots, &name, dep) {
+            if let Some(c) = capsule_violated(&all_roots, &name, dep) {
                 return Err(rend(line, col, 1, &format!(
                     "module '{}' is internal to capsule '{}'; import it with 'import {};'",
                     dep, c, c
@@ -256,7 +305,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                     .and_then(|s| s.to_str())
                     .filter(|dir| dep == *dir || dep.starts_with(&format!("{dir}/")))
                     .and_then(|_| project_root.parent().map(|p| vec![p.to_path_buf()]));
-                let resolved = match resolve_module_path(&roots, dep) {
+                let resolved = match resolve_module(&all_roots, dep) {
                     Err(msg) => return Err(rend(line, col, 1, &msg)),
                     Ok(Some(mp)) => Some(mp),
                     Ok(None) => match self_root.as_deref().map(|r| resolve_module_path(r, dep)) {
@@ -270,16 +319,31 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                     None => {
                         // M309 (findings #62): las dependencias no son transitivas — un módulo
                         // `pkg/…` de un paquete que solo trae otra dependencia hay que declararlo.
+                        // M383: si el paquete SÍ está declarado (por clave), el consejo de declararlo
+                        // sobraba; se dice dónde vive y que no tiene ese módulo.
                         let hint = match dep.split_once('/') {
+                            Some((pkg, rest)) if all_roots.packages.iter().any(|(n, _)| n == pkg) => {
+                                let dir = all_roots.packages.iter().find(|(n, _)| n == pkg).map(|(_, d)| d.display().to_string()).unwrap_or_default();
+                                format!("; the package '{pkg}' is declared and lives in '{dir}', but it has no module '{rest}' (modules are looked up at the package root, not under src/)")
+                            }
                             Some((pkg, _)) if pkg != "std" && crate::deps::valid_package_name(pkg) => format!(
                                 "; if '{pkg}' is a package (also when another dependency imports it: dependencies are not transitive), declare it in [dependencies] — `ray add {pkg}`"
                             ),
                             _ => String::new(),
                         };
+                        // M383: los paquetes por clave se listan como `clave=<dir>`, para que se vea
+                        // que la dependencia está declarada y dónde se buscó.
+                        let packages = if all_roots.packages.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; packages: {}", all_roots.packages.iter()
+                                .map(|(n, d)| format!("{n}={}", d.display())).collect::<Vec<_>>().join(", "))
+                        };
                         return Err(rend(line, col, 1, &format!(
-                            "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {}){}",
+                            "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {}{}){}",
                             dep, dep, dep,
                             roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", "),
+                            packages,
                             hint
                         )));
                     }
@@ -647,14 +711,16 @@ fn rel_module_name(path: &Path, root: &Path) -> Option<String> {
 /// propia cápsula (`importer == C`, su `mod.ray`) o vive bajo `C/`. Devuelve `Some(C)` si la viola.
 /// Las cápsulas anidadas componen: estar dentro de la interior implica estar dentro de la exterior,
 /// así que basta comprobar la más cercana.
-fn capsule_violated(roots: &[PathBuf], importer: &str, target: &str) -> Option<String> {
+fn capsule_violated(roots: &DepRoots, importer: &str, target: &str) -> Option<String> {
     let segs: Vec<&str> = target.split('/').collect();
     for k in (1..segs.len()).rev() {
         let c = segs[..k].join("/");
         // Una cápsula `C` existe si CUALQUIER raíz tiene `<raíz>/C/mod.ray` (una dependencia
         // descargada es una cápsula en la caché; sus internos quedan protegidos igual que los del
-        // proyecto). La más profunda gana (cápsulas anidadas componen).
-        if roots.iter().any(|r| r.join(&c).join("mod.ray").exists()) {
+        // proyecto), o si un paquete por clave (M383) la tiene bajo su directorio. La más profunda
+        // gana (cápsulas anidadas componen).
+        let in_package = roots.package_path(&c).is_some_and(|p| p.join("mod.ray").exists());
+        if in_package || roots.dirs.iter().any(|r| r.join(&c).join("mod.ray").exists()) {
             let inside = importer == c || importer.starts_with(&format!("{}/", c));
             return if inside { None } else { Some(c) };
         }
@@ -667,12 +733,18 @@ fn capsule_violated(roots: &[PathBuf], importer: &str, target: &str) -> Option<S
 /// (`rel_module_name`) y **descarta** las que cruzarían el borde de una cápsula desde `entry`
 /// (`capsule_violated`) — así solo se ofrece lo que el checker aceptaría. Excluye la propia entrada y
 /// los puntos de entrada `main`. Ordenadas y sin duplicados.
-pub fn available_modules(roots: &[PathBuf], entry: &Path) -> Vec<String> {
-    let importer = roots.iter().find_map(|r| rel_module_name(entry, r));
+pub fn available_modules(roots: &DepRoots, entry: &Path) -> Vec<String> {
+    let importer = roots.dirs.iter().find_map(|r| rel_module_name(entry, r));
     let imp = importer.as_deref().unwrap_or("");
     let mut set = std::collections::BTreeSet::new();
-    for root in roots {
+    for root in &roots.dirs {
         collect_modules(root, root, &mut set);
+    }
+    // M383: los módulos de un paquete por clave, con su clave como prefijo (`ray_ds/bridge`).
+    for (name, dir) in &roots.packages {
+        let mut own = std::collections::BTreeSet::new();
+        collect_modules(dir, dir, &mut own);
+        set.extend(own.into_iter().map(|m| format!("{name}/{m}")));
     }
     // La stdlib embebida también es importable (LSP, IDEAS §56): sus rutas no viven en disco.
     set.extend(crate::stdlib::names().into_iter().map(|s| s.to_string()));
@@ -703,6 +775,29 @@ fn collect_modules(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet
 /// directorio: el `mod.ray` *es* el módulo de identidad `dep`). Una sola forma canónica: si **ambos**
 /// existen, es ambiguo (error) —evita el lío histórico de `foo.rs`-vs-`foo/mod.rs`—. `None` si no
 /// existe ninguno.
+pub fn resolve_module(roots: &DepRoots, dep: &str) -> Result<Option<PathBuf>, String> {
+    // M383: la raíz del proyecto (la primera de `dirs`) manda; luego los paquetes por clave —lo
+    // declarado gana a un directorio hermano casual—; luego el resto de directorios.
+    let (first, rest) = roots.dirs.split_at(roots.dirs.len().min(1));
+    if let Some(mp) = resolve_module_path(first, dep)? {
+        return Ok(Some(mp));
+    }
+    if let Some(path) = roots.package_path(dep) {
+        // `<dir>/<resto>` como archivo (`.ray`/`.ray.html`) o cápsula (`/mod.ray`): la misma regla
+        // que una raíz-directorio, aplicada al padre y al último segmento.
+        let (parent, leaf) = match (path.parent(), path.file_name().and_then(|s| s.to_str())) {
+            (Some(p), Some(l)) => (p.to_path_buf(), l.to_string()),
+            _ => return Ok(None),
+        };
+        if let Some(mp) = resolve_module_path(&[parent], &leaf)? {
+            return Ok(Some(mp));
+        }
+    }
+    resolve_module_path(rest, dep)
+}
+
+/// Resuelve la ruta de módulo `dep` contra una lista de **directorios** (ver [`resolve_module`]
+/// para la forma completa, con paquetes por clave).
 pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
     // Se prueban las raíces en orden (proyecto → caché de dependencias); la primera que resuelva
     // gana. La ambigüedad archivo-vs-directorio se comprueba **dentro** de cada raíz.

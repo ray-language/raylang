@@ -45,9 +45,14 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   pattern, or a guard (`x if x == "a" || x == "b" =>`), or `["a", "b"].contains(x)` in an `if`.
 - Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
   flags; keep mutable state in `main` or an actor fiber).
-- Primitive type names cannot name a function: `pub fn int(key: string)` / `fn u32(…)` are
-  errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`). Type aliases exist
-  since 1.27.13 (`type Handler = …;`, `pub type` exports; see the canonical forms below).
+- Reserved names: the keywords (`fn let var if else while for in match struct enum trait impl
+  dyn pub import from as return break continue const type true false`) and the primitive type
+  names (`int float bool string char bytes u8 u16 u32 u64`) cannot be used as identifiers
+  anywhere — not for a function, a field, a variable or a parameter. `pub fn int(key: string)` /
+  `fn u32(…)` are errors (`config.int("PORT")` → call it `config.int_of`/`config.get_int`); a
+  struct field `bytes: int` → «expected a field name, but 'bytes' is a type name and cannot be
+  used as an identifier (rename it)» (call it `size`). Type aliases exist since 1.27.13 (`type
+  Handler = …;`, `pub type` exports; see the canonical forms below).
 - Server handlers (web/rpc/gRPC) receive a COPY of what they capture: fiber heaps are isolated,
   so a captured `Map` mutated inside a handler does not persist — per connection on the VM
   (one connection "works"), per call on native. Shared state lives in a database or an actor
@@ -152,6 +157,8 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
   (a `let` with a function-type annotation, a function parameter); `let g = to_string` alone
   needs the annotation.
 - Arrays: `xs.slice(from, to)` (clamped copy, 1.27.14): `xs.slice(1, xs.len())` = all but the first.
+  A full copy is `[] + xs` (the empty literal takes the type of the other operand, 1.27.48) or
+  `xs.slice(0, xs.len())`; there is no `clone()`.
 - `args()` is ONLY the program's arguments: neither `ray` nor the file (`ray run f.ray a b` → `["a", "b"]`; in a native binary, `./f a b` → the same). Do not skip its first element.
 - Bitwise `&`/`|`/`^` bind LOOSER than `==` (C-style): write `(a & b) == c`.
 - Core builtins (`print`, `to_string`, `panic`…) cannot be redefined. A top-level function of
@@ -181,10 +188,15 @@ them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a patter
 are private. Inside a module, calls to its own functions and UFCS both resolve
 module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
 `net = "^0.10"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
-local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"`. No inline
-tables (`{ path = ... }` is Cargo, not raylang). Path dependencies import by dir/leaf:
-`import rpc/rpc;` (the package dir, then the module file) — NOT `import rpc;` unless it has a
-`mod.ray`. A LIBRARY package (no `entry` in `[package]` and no `src/main.ray`) is checked with
+local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"` (the
+package is the ROOT of that repo — there is no subdirectory syntax; a package that lives inside a
+bigger repo is published as its own repo with `ray registry mirror`). No inline tables
+(`{ path = ... }` is Cargo, not raylang). A dependency imports by its KEY, then the module file:
+`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` is `<lib/ray-ds>/bridge.ray` (modules at
+the package ROOT, not under `src/`; whatever the directory is called, 1.27.48) — NOT `import
+ray_ds;` unless it has a `mod.ray`. Inside a package, its modules import each other by the
+`[package] name` (`import ray_ds/version;` from `bridge.ray`), the same form a consumer uses,
+valid in any checkout. A LIBRARY package (no `entry` in `[package]` and no `src/main.ray`) is checked with
 `ray check` and tested with `ray test` module by module; `ray run`/`ray build` need an entry.
 
 ## Concurrency (CSP; VM and native binaries — the interpreter has no fibers)

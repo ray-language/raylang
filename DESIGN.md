@@ -17430,3 +17430,62 @@ filtro `wav,mp3` deja solo «Audio» y «Downloads», elegir `probe.wav` devuelv
 el selector en el simulador (captura); la vuelta con un archivo elegido queda por verificar en un
 iPhone (rayplay). Gotcha del emulador: con snapshot, `am start` reanuda el proceso anterior —
 `am force-stop` antes de cada medición.
+## 362. M383–M387 — ray-elements con 1.27.47: paquetes por clave y cuatro asperezas (oct 2026)
+
+ray-elements re-midió sus hallazgos (#133–#143) con la 1.27.47 y quedaban nueve abiertos. Ninguno
+era un bug de ejecución (tipo B): seis de ergonomía/diagnóstico y tres de documentación. Van juntos
+en una PR porque comparten la causa de fondo —cosas que funcionaban «por geometría» y no por lo que
+el usuario declaró— y la vara: que el mensaje diga la causa y que la forma documentada sea la que
+funciona siempre.
+
+**M383, dependencias por clave.** El loader solo conocía *directorios-raíz*: una dependencia
+`path:` entraba como el **padre** de su directorio y el `import` se resolvía por el **nombre del
+directorio** (`<padre>/<dir>/<módulo>.ray`), así que la clave de `[dependencies]` no contaba
+(#135: `ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` fallaba con «declare it in
+[dependencies]», aunque estaba declarada), y dentro de un paquete `import pkg/version;` valía solo si
+el directorio se llamaba `pkg` (#142). La solución es dar al loader la noción que faltaba:
+`DepRoots { dirs, packages }`, donde `packages` son paquetes **por clave** (`import <clave>/x;` →
+`<dir>/x.ray`; `import <clave>;` → `<dir>/mod.ray`). `deps::dependency_roots_for` registra cada
+dependencia `path:` por su clave (y en un dispositivo de `ray dev --device`, su copia en
+`.ray-path-deps/`) y el propio proyecto por su `[package] name`. Orden de resolución: raíz del
+proyecto, paquetes por clave (lo declarado gana a un directorio hermano casual), resto de
+directorios. Las cápsulas (`mod.ray`) se respetan también por clave; el completion de `import`
+del LSP lista los módulos del paquete con su clave; y el «module not found» de una clave declarada
+dice dónde vive el paquete y que no tiene ese módulo (y que los módulos van en la raíz, no en
+`src/`) en vez de mandar a declararla. Los directorios-raíz de antes se conservan (los imports por
+nombre de directorio y las hermanas de un monorepo siguen funcionando), así que no hay ruptura.
+Se descartó materializar la clave con un enlace simbólico en `.ray-deps/` (como hace `node_modules/`
+para los paquetes web, M369): escribiría en disco desde el LSP y dentro del propio paquete para
+#142. #140 (subdirectorio en `git+`) queda como estaba —el paquete es la raíz del repo— y se
+documenta junto a la salida que ya existía, `ray registry mirror`.
+
+**M384, el checker en dos huecos de la inferencia bidireccional.** `[] + xs` (#133): `check_binary`
+reintentaba con el tipo del otro lado solo para `==`/`!=` (M316); se extiende a `+` ante el error
+del `[]` vacío, y el transpilador tipa el `+` por el operando derecho cuando el izquierdo es `[]`
+(antes «empty array literal without an annotation»). Tuplas (#137): `check_expr_expected` no tenía
+caso para `TupleLit`, así que el esperado que ya fluía a un `Option.None` suelto (M204/M303) no
+llegaba dentro de `("error", Option.None)`; ahora, con un esperado `(A, B, …)` de la misma aridad,
+cada elemento recibe el suyo. Con otra aridad cae al chequeo normal y el error lo da quien pidió
+el esperado.
+
+**M385, el nombre de un tipo donde va un identificador** (#134): `expect_ident` distingue el caso
+y lo dice («'bytes' is a type name and cannot be used as an identifier (rename it)»); el espejo
+selfhost emite el mismo texto para los tipos que conoce. `llms.txt` lista los nombres reservados y
+dónde no se pueden usar.
+
+**M386, el shim de arrastre y el shadow DOM** (#138): `event.target` llega retargeteado al host de
+un shadow root, así que `closest("[data-ray-drag]")` no veía ni la zona de dentro ni el botón de
+dentro. El shim recorre `composedPath()` del más cercano al más lejano: el primer interactivo
+cancela, el primer `data-ray-drag` arrastra. Sigue siendo un `mousedown` en captura, y ahora la doc
+lo dice.
+
+**M387, `set_titlebar_color(h, "")` en `full_content`** (#141): «sistema» devolvía la barra opaca,
+que en una ventana `full_content` es romperla (la página pierde la franja y `titlebar_height` no
+cambia). `apply_titlebar` consulta `titleVisibility` (oculto solo en `full_content`, M328) y conserva
+la transparencia. La otra mitad del hallazgo —que la luminancia fija la apariencia de la ventana y
+la página la hereda en `prefers-color-scheme`— es el comportamiento buscado desde M224 (texto de la
+barra legible), y se documenta en `WindowOptions.titlebar_color` y `set_titlebar_color` con la
+regla práctica: una página que sigue el tema del sistema deja la barra en `""`. Queda abierto, si
+hace falta, un `set_appearance(h, "light"|"dark"|"")` explícito que separe las dos cosas.
+
+Y #143: el error de versión mínima decía `ray update-self`; el comando es `ray upgrade`.

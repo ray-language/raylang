@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:
   `ui.pick_file`, `pick_files` y `pick_file_with` abren `UIDocumentPickerViewController` (modo
@@ -16,6 +16,29 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   Android de punta a punta (el filtro `wav,mp3` deja solo «Audio»/«Downloads», elegir un WAV
   devuelve su copia en `cache/ray-picked/…`) y en el simulador iOS (el selector se presenta; la
   vuelta con un archivo queda por verificar en un iPhone).
+- **Las dependencias `path:` se importan por su clave (M383, ray-elements #135/#142)**: el primer
+  segmento del `import` es la clave de `[dependencies]`, se llame como se llame el directorio
+  (`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;`; antes mandaba el nombre del directorio
+  y la clave no contaba). Dentro de un paquete, `import <name>/x;` con su `[package] name` resuelve a
+  su raíz en cualquier clon (antes solo si el directorio se llamaba igual). El «module not found» de
+  una clave declarada dice dónde vive el paquete y que no tiene ese módulo, en vez de mandar a
+  declararla; el completion de `import` del LSP ofrece los módulos por su clave. §11 de la
+  REFERENCE y `llms.txt` cuentan la forma (y que una dependencia `git+` es la raíz del repo).
+- **`[] + xs` y tuplas con `Option.None` (M384, ray-elements #133/#137)**: el `[]` de `[] + xs`
+  toma el tipo del otro operando (la copia idiomática de un arreglo, también en nativo), y una
+  tupla con tipo esperado lo pasa a sus elementos — `("error", Option.None)` toma `Option<string>`
+  del otro brazo del `match`, del tipo de retorno o de la anotación.
+- **Un nombre de tipo donde va un identificador dice por qué (M385, ray-elements #134)**: `bytes:
+  int` en un struct o `rep.bytes` → «expected a field name, but 'bytes' is a type name and cannot
+  be used as an identifier (rename it)». `llms.txt` lista los nombres reservados.
+- **`data-ray-drag` ve el shadow DOM (M386, ray-elements #138)**: el shim busca la zona de
+  arrastre y los hijos interactivos por `composedPath()`; un `<button>` dentro del shadow root de
+  un host arrastrable recibe el clic y un `data-ray-drag` dentro de un componente arrastra.
+- **`set_titlebar_color(h, "")` en una ventana `full_content` (M387, ray-elements #141)**: la barra
+  sigue transparente (antes volvía opaca y la página perdía los 28 px con `titlebar_height` aún en
+  28). La doc dice que la luminancia fija la apariencia de la ventana y que la página la hereda en
+  `prefers-color-scheme`.
+- **El error de versión mínima recomienda `ray upgrade` (ray-elements #143)**, no `ray update-self`.
 
 ## 1.27.47 — 2026-10-12
 

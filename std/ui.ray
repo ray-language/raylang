@@ -95,7 +95,10 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `frameAutosaveName` on macOS; Linux and Windows have no equivalent and ignore it; "" = don't).
 /// `titlebar_color` (M224): a `#rrggbb` color that paints the system title bar like the app's
 /// theme (macOS: transparent title bar over the window background, dark or light title text by
-/// luminance; Windows 11: the caption color; Linux ignores it; "" = system default).
+/// luminance; Windows 11: the caption color; Linux ignores it; "" = system default). On macOS
+/// the luminance also sets the WINDOW appearance, which the page inherits as
+/// `prefers-color-scheme` (a dark bar makes `(prefers-color-scheme: dark)` match even when the
+/// system is light): a page that follows the system theme should leave the bar at "".
 /// `background` (M327): the `#rrggbb` color the window shows UNTIL the page paints — no white
 /// or grey flash while WebKit parses a large app (macOS: the webview's under-page color and the
 /// window background; Linux: WebKitGTK's background color; Windows: WebView2's default
@@ -112,7 +115,10 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// that strip with `window.ray.titlebar_height` (px; 0 when there is none) and marks what should
 /// drag the window with `data-ray-drag` on an element (children `button`/`a`/`input`/
 /// `select`/`textarea` or `data-ray-no-drag` stay clickable; double-click zooms) — macOS and
-/// Windows honour it, also for `borderless` windows. `always_on_top` (M260) keeps the
+/// Windows honour it, also for `borderless` windows. The lookup is a `mousedown` listener in
+/// the capture phase that walks the event's `composedPath()`, so it sees through shadow roots
+/// (M386): `data-ray-drag` inside a custom element works, a `<button>` inside the shadow root of
+/// a dragging host stays clickable, and the nearest marked element wins. `always_on_top` (M260) keeps the
 /// window above every other window. `parent` (M260) is the handle of the OWNING window (0 =
 /// none): the new one stays above it and follows it — the closest thing to a sheet on every OS.
 /// Build it with `ui.options(width, height)` and tweak the fields you need.
@@ -815,9 +821,12 @@ pub fn maximize(h: int) -> Result<int, string> {
 
 /// Changes the title bar color of an OPEN window (M239): `"#rrggbb"` tints it like
 /// `WindowOptions.titlebar_color` does at creation (macOS: transparent bar over the window
-/// background with a light or dark appearance by luminance; Windows 11: `DWMWA_CAPTION_COLOR`),
-/// `""` restores the system bar. Follows a theme change without reopening the window. Linux
-/// ignores it, as at creation. `Err` for a malformed color or a closed window.
+/// background with a light or dark appearance by luminance — the page inherits that appearance
+/// as `prefers-color-scheme`, see `WindowOptions`; Windows 11: `DWMWA_CAPTION_COLOR`), `""`
+/// restores the system bar: default background, inherited appearance and, in a `"full_content"`
+/// window, the bar stays transparent so the page keeps its `titlebar_height` strip (M387).
+/// Follows a theme change without reopening the window. Linux ignores it, as at creation. `Err`
+/// for a malformed color or a closed window.
 pub fn set_titlebar_color(h: int, color: string) -> Result<int, string> {
     let r = __ui_set_titlebar(h, color);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

@@ -98,10 +98,14 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
     let mut frontend_failed = false;
     let mut compile_failures = 0;
     let mut suites: Vec<Suite> = Vec::new();
+    // M390 (ray-remote #149): los módulos de una DEPENDENCIA (paquetes por clave, `.ray-deps/`)
+    // no son del proyecto: sus `@test` son del paquete (corren con `ray test` dentro de él) y
+    // antes entraban en la suite de la entrada que los importaba, contados como propios.
+    let foreign = foreign_module_dirs(suite_paths.first().map(PathBuf::as_path), dep_roots);
     for (i, path) in suite_paths.iter().enumerate() {
         match loader::load_with_deps(path, dep_roots) {
             Ok(loaded) => {
-                let tests = collect_tests(&loaded.program, filter, i > 0);
+                let tests = collect_tests(&loaded, filter, i > 0, &foreign);
                 suites.push(Suite { display: display_path(path), path: path.clone(), loaded, tests });
             }
             Err(e) => {
@@ -229,12 +233,23 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
 /// Recolecta las funciones `@test` del programa fusionado, en orden de declaración, aplicando el
 /// filtro por subcadena sobre el nombre de cara al usuario (`math.double_ok`). Con `own_only`,
 /// solo las del módulo de entrada de la suite (las importadas llevan nombre namespaceado `::`).
-fn collect_tests(program: &Program, filter: Option<&str>, own_only: bool) -> Vec<Test> {
+fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign: &[PathBuf]) -> Vec<Test> {
+    let program = &loaded.program;
+    // El archivo del módulo de una función, por la banda de líneas del programa fusionado
+    // (`modules` va ordenado por `start_line`).
+    let module_path = |line: usize| loaded.modules.iter().rev().find(|m| m.start_line <= line).map(|m| m.path.as_path());
+    let is_foreign = |f: &crate::ast::Function| {
+        module_path(f.line).is_some_and(|p| {
+            let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            foreign.iter().any(|d| p.starts_with(d))
+        })
+    };
     program
         .functions
         .iter()
         .filter(|f| f.annotations.iter().any(|a| a.name == "test"))
         .filter(|f| !(own_only && f.name.contains("::")))
+        .filter(|f| !is_foreign(f))
         .map(|f| Test {
             global: f.name.clone(),
             // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
@@ -243,6 +258,26 @@ fn collect_tests(program: &Program, filter: Option<&str>, own_only: bool) -> Vec
         })
         .filter(|t| filter.is_none_or(|p| t.display.contains(p)))
         .collect()
+}
+
+/// M390 (ray-remote #149): los directorios cuyos módulos NO son del proyecto — cada paquete por
+/// clave de `dep_roots` salvo el propio proyecto (la raíz del `ray.toml` de la primera suite, o su
+/// carpeta) y toda caché `.ray-deps/`. Canonizados, para compararlos con las rutas del loader.
+fn foreign_module_dirs(first: Option<&Path>, dep_roots: &loader::DepRoots) -> Vec<PathBuf> {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let own = first.and_then(|f| f.parent()).map(|dir| {
+        crate::manifest::Manifest::find(dir)
+            .and_then(|toml| toml.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| dir.to_path_buf())
+    }).map(|d| canon(&d));
+    let mut out: Vec<PathBuf> = dep_roots
+        .packages
+        .iter()
+        .map(|(_, d)| canon(d))
+        .filter(|d| own.as_ref() != Some(d))
+        .collect();
+    out.extend(dep_roots.dirs.iter().filter(|d| d.file_name().is_some_and(|n| n == ".ray-deps")).map(|d| canon(d)));
+    out
 }
 
 /// Chequea la suite completa (un `main` sintético que llama a todas sus pruebas). Un error se

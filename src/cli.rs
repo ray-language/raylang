@@ -2858,9 +2858,61 @@ fn open_type_mapping(item: &str) -> (Vec<&'static str>, Vec<String>, Vec<String>
             let ext = item[1..].to_string();
             (vec![], vec![ext.clone()], vec![format!("application/x-{ext}")])
         }
-        _ if item.contains('/') => (vec!["public.data"], vec![], vec![item.to_string()]),
+        // M389 (ray-sublime #153): un MIME se traduce a su UTI; antes todos acababan en
+        // `public.data` («cualquier archivo») y la app decía abrir de todo. Sin UTI conocido, no
+        // entra en el plist (Linux sí lo recibe tal cual) y `open_type_warning` lo dice.
+        _ if item.contains('/') => (mime_to_uti(item).map(|u| vec![u]).unwrap_or_default(), vec![], vec![item.to_string()]),
         _ => (vec![], vec![], vec![]), // un UTI literal: solo macOS, lo añade el llamador
     }
+}
+
+/// M389: el UTI del sistema para los MIME corrientes (los que `UTType(mimeType:)` resuelve en
+/// macOS). `None` = sin equivalente conocido. Pura.
+fn mime_to_uti(mime: &str) -> Option<&'static str> {
+    Some(match mime.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "public.png",
+        "image/jpeg" | "image/jpg" => "public.jpeg",
+        "image/gif" => "com.compuserve.gif",
+        "image/webp" => "org.webmproject.webp",
+        "image/svg+xml" => "public.svg-image",
+        "image/tiff" => "public.tiff",
+        "image/bmp" => "com.microsoft.bmp",
+        "image/heic" => "public.heic",
+        "image/*" => "public.image",
+        "text/plain" => "public.plain-text",
+        "text/markdown" => "net.daringfireball.markdown",
+        "text/html" => "public.html",
+        "text/css" => "public.css",
+        "text/csv" => "public.comma-separated-values-text",
+        "text/xml" | "application/xml" => "public.xml",
+        "text/javascript" | "application/javascript" => "com.netscape.javascript-source",
+        "text/*" => "public.text",
+        "application/json" => "public.json",
+        "application/pdf" => "com.adobe.pdf",
+        "application/zip" => "public.zip-archive",
+        "application/gzip" => "org.gnu.gnu-zip-archive",
+        "application/x-tar" => "public.tar-archive",
+        "application/rtf" => "public.rtf",
+        "application/octet-stream" => "public.data",
+        "application/toml" => "public.toml",
+        "application/x-yaml" | "application/yaml" => "public.yaml",
+        "audio/mpeg" | "audio/mp3" => "public.mp3",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => "com.microsoft.waveform-audio",
+        "audio/flac" | "audio/x-flac" => "org.xiph.flac",
+        "audio/ogg" => "org.xiph.ogg-audio",
+        "audio/aac" => "public.aac-audio",
+        "audio/mp4" | "audio/x-m4a" => "public.mpeg-4-audio",
+        "audio/aiff" | "audio/x-aiff" => "public.aiff-audio",
+        "audio/*" => "public.audio",
+        "video/mp4" => "public.mpeg-4",
+        "video/quicktime" => "com.apple.quicktime-movie",
+        "video/webm" => "org.webmproject.webm",
+        "video/*" => "public.movie",
+        "font/ttf" => "public.truetype-ttf-font",
+        "font/otf" => "public.opentype-font",
+        "inode/directory" => "public.folder",
+        _ => return None,
+    })
 }
 
 /// M375 (ray-sublime #146): un elemento de `[app] opens` que no es alias, `.ext`, MIME `a/b` ni
@@ -2874,6 +2926,13 @@ fn open_type_warning(item: &str) -> Option<String> {
     let ext = t.starts_with('.') && t.len() > 1 && no_spaces && !t[1..].contains(['.', '/']);
     let mime = no_spaces && t.split_once('/').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('/'));
     let uti = no_spaces && !t.contains('/') && !t.starts_with('.') && !t.ends_with('.') && t.contains('.');
+    // M389 (ray-sublime #153): un MIME sin UTI conocido no llega al plist de macOS.
+    if mime && mime_to_uti(t).is_none() {
+        return Some(format!(
+            "bundle: warning: [app] opens item '{t}' has no known macOS type (UTI): the macOS bundle will not offer the app \
+             for it (Linux uses the MIME as is); declare the extension (.ext) or the UTI (com.x.y) instead"
+        ));
+    }
     if alias || ext || mime || uti {
         None
     } else {
@@ -2902,11 +2961,19 @@ fn document_types_plist(opens: &[String]) -> String {
     let mut exts: Vec<String> = Vec::new();
     for item in opens {
         let (u, e, _) = open_type_mapping(item);
-        let literal_uti = u.is_empty() && e.is_empty() && !item.trim().is_empty();
-        utis.extend(u.iter().map(|x| x.to_string()));
-        exts.extend(e);
-        if literal_uti {
-            utis.push(item.trim().to_string()); // UTI literal
+        // Un UTI literal (`com.x.y`): sin alias, sin extensión y sin `/` (un MIME sin UTI conocido
+        // no entra, M389).
+        let literal_uti = u.is_empty() && e.is_empty() && !item.trim().is_empty() && !item.contains('/');
+        // M389: sin duplicados (dos MIME que caen en el mismo UTI, o un alias y su UTI).
+        for x in u.iter().map(|x| x.to_string()).chain(literal_uti.then(|| item.trim().to_string())) {
+            if !utis.contains(&x) {
+                utis.push(x);
+            }
+        }
+        for x in e {
+            if !exts.contains(&x) {
+                exts.push(x);
+            }
         }
     }
     let mut out = String::from("\x20 <key>CFBundleDocumentTypes</key><array>\n");
@@ -6419,11 +6486,27 @@ mod tests {
         let opens: Vec<String> = ["folder", ".ray", "text", "public.json", "image/png"].iter().map(|s| s.to_string()).collect();
         let plist = super::document_types_plist(&opens);
         assert!(plist.contains("<key>CFBundleDocumentTypes</key><array>"), "{plist}");
-        assert!(plist.contains("<key>LSItemContentTypes</key><array><string>public.folder</string><string>public.plain-text</string><string>public.json</string><string>public.data</string></array>"), "{plist}");
+        assert!(plist.contains("<key>LSItemContentTypes</key><array><string>public.folder</string><string>public.plain-text</string><string>public.json</string><string>public.png</string></array>"), "{plist}");
         assert!(plist.contains("<key>CFBundleTypeExtensions</key><array><string>ray</string></array>"), "{plist}");
         assert_eq!(super::desktop_mime_line(&opens), "MimeType=inode/directory;application/x-ray;text/plain;image/png;\n");
         assert_eq!(super::document_types_plist(&[]), "");
         assert_eq!(super::desktop_mime_line(&[]), "");
+    }
+
+    /// M389 (ray-sublime #153): un MIME va al plist como su UTI (no como `public.data`), sin
+    /// duplicados; un MIME sin UTI conocido no entra en macOS y avisa (Linux lo recibe tal cual).
+    #[test]
+    fn app_opens_translates_mime_types_to_utis_without_duplicates() {
+        let opens: Vec<String> = ["image/png", "text/markdown", "image", "image/*", "public.png", "application/x-ray-thing", ".ray", ".ray"].iter().map(|s| s.to_string()).collect();
+        let plist = super::document_types_plist(&opens);
+        assert!(plist.contains("<key>LSItemContentTypes</key><array><string>public.png</string><string>net.daringfireball.markdown</string><string>public.image</string></array>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleTypeExtensions</key><array><string>ray</string></array>"), "{plist}");
+        assert!(!plist.contains("public.data"), "{plist}");
+        assert_eq!(super::desktop_mime_line(&opens), "MimeType=image/png;text/markdown;image/*;application/x-ray-thing;application/x-ray;\n");
+        let w = super::open_type_warning("application/x-ray-thing").expect("sin UTI debe avisar");
+        assert!(w.contains("has no known macOS type (UTI)"), "{w}");
+        assert_eq!(super::open_type_warning("audio/wav"), None);
+        assert_eq!(super::mime_to_uti("application/octet-stream"), Some("public.data"));
     }
 
     /// M375 (ray-sublime #146): un `opens` que el sistema ignorará avisa; los reconocibles, no.

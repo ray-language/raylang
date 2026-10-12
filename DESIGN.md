@@ -17489,3 +17489,42 @@ regla práctica: una página que sigue el tema del sistema deja la barra en `""`
 hace falta, un `set_appearance(h, "light"|"dark"|"")` explícito que separe las dos cosas.
 
 Y #143: el error de versión mínima decía `ray update-self`; el comando es `ray upgrade`.
+
+## 363. M388–M390 — rayplay, ray-sublime y ray-remote con 1.27.47: tres arreglos contenidos (oct 2026)
+
+Segunda tanda de la re-medición con 1.27.47 (#149, #153–#158). Dos tipo B con causa clara y un
+E/D del runner van aquí; #157 (los `const` compuestos se construyen en cada acceso) y #155 (la
+cesión cooperativa no cubre syscalls de 5 ms) son arcos propios y quedan como issues #522 y #520.
+
+**M388, el préstamo del rango** (#156). `for i in 0..s.len() { s[i] = 0; }` compilaba a `for i in
+(0)..(s.borrow().len() as i64) { s.borrow_mut()[i] = 0 }`, y en Rust los temporales de la expresión
+del iterador de un `for` viven hasta el final del bucle: el guard del `borrow()` seguía vivo y el
+`borrow_mut` del cuerpo moría con «RefCell already borrowed», solo en nativo (la VM evalúa el rango
+una vez y lo suelta). La ruta con izado de préstamos (N6b) ya evaluaba los extremos a temporales
+antes de crear los guards; la ruta general no. Ahora las dos: `let __rt_lo = …; let __rt_hi = …;
+for i in __rt_lo..__rt_hi`. El guard muere al acabar la sentencia, como en la VM. Es la forma más
+natural de recorrer un arreglo para transformarlo y pasaba la suite de la VM: un recordatorio de
+que el harness diferencial debe cubrir también los patrones de mutación dentro de bucles.
+
+**M389, MIME → UTI** (#153). M370 traducía un MIME `a/b` de `[app] opens` a `public.data` porque el
+`Info.plist` no entiende MIME, y `public.data` «abre de todo»: una app que solo quería PNG aparecía en
+«Abrir con» para cualquier archivo. Se añade una tabla de los MIME corrientes a su UTI (la que
+`UTType(mimeType:)` resuelve), un MIME sin UTI conocido no entra en el plist y `ray bundle` lo avisa
+(Linux sigue recibiendo el MIME tal cual en `MimeType=`), y `LSItemContentTypes`/extensiones salen
+sin duplicados. Se descartó llamar a `UTType` en tiempo de bundle: la tabla es pura, testeable y
+no depende de la máquina que empaqueta.
+
+**M390, las pruebas de una dependencia** (#149). `ray test` recolectaba toda `@test` del programa
+fusionado de la entrada, módulos de dependencias incluidos: ray-remote contaba 50 pruebas, 12 de
+`elements`. Con `DepRoots` (M383) el runner sabe qué directorios son paquetes ajenos (cada paquete
+por clave salvo el propio proyecto, y toda caché `.ray-deps/`) y descarta las funciones cuyo módulo
+vive ahí (por la banda de líneas del programa fusionado → `LoadedModule.path`). Las pruebas de un
+paquete corren con `ray test` dentro de él, que es donde se escriben y se mantienen.
+
+**Docs** (#154, #158, #113, #111). Qué proyecto usa un comando (el `ray.toml` sobre el directorio
+actual; si no, el del archivo, M366) y la consecuencia de compilar un archivo suelto desde otro
+proyecto; el valor `unit` se escribe `{ }` y `()` no es una expresión (el literal `()` va a IDEAS
+§108: bajo impacto, lo que compromete es el formateador); la fila de `bytes` afirmaba que `push` +
+`bytes_of` era dos órdenes más lento y la medición de rayplay dice lo contrario (es lo más rápido
+en la VM; `+` por trozos pequeños ~2×) — se corrige con la cifra; y `ray dev --device` documenta el
+`.ray-dev` que deja en la raíz (y que `ray new` ya ignoraba en git).

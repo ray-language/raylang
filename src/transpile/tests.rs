@@ -138,6 +138,16 @@ fn empty_array_concat_and_tuples_with_none_transpile() {
     assert!(rs.contains("fn f("), "{rs}");
 }
 
+/// M388 (rayplay #156): el extremo de un `for` sobre rango se evalúa a un temporal antes del
+/// bucle — `for i in 0..s.len() { s[i] = 0; }` ya no retiene el `borrow()` de `s` durante el cuerpo
+/// (en Rust los temporales del iterador de un `for` viven todo el bucle).
+#[test]
+fn for_range_bounds_are_evaluated_before_the_loop() {
+    let rs = transpile_src("fn zero(s: [int]) -> unit { for i in 0..s.len() { s[i] = 0; } }\nfn main() -> int { var xs: [int] = [1, 2, 3]; zero(xs); for i in 0..xs.len() { xs.push(i); } xs.len() }");
+    assert!(rs.contains("let __rt_hi: i64 = "), "{rs}");
+    assert!(!rs.contains("for i in ("), "{rs}");
+}
+
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
 /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
 /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.

@@ -4,6 +4,30 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Nativo: `for i in 0..xs.len()` con `xs[i] = …` o `xs.push(…)` en el cuerpo ya no revienta
+  (M388, rayplay #156, issue #521)**: los extremos del rango se evalúan a temporales antes del bucle.
+  En Rust los temporales de la expresión del iterador viven todo el `for`, así que el `borrow()` del
+  `.len()` se retenía durante el cuerpo y el `borrow_mut` moría con «RefCell already borrowed» — solo
+  en el binario (la VM iba bien).
+- **`[app] opens` traduce los MIME a su UTI en el bundle de macOS (M389, ray-sublime #153, issue
+  #519)**: `image/png` → `public.png`, `text/markdown` → `net.daringfireball.markdown`, `audio/wav`
+  → `com.microsoft.waveform-audio`… (unos 50 MIME corrientes); antes todos acababan en `public.data`
+  («cualquier archivo») y la app aparecía en «Abrir con» para todo. Un MIME sin UTI conocido no
+  entra en el plist y `ray bundle` lo avisa (Linux lo recibe tal cual en `MimeType=`);
+  `LSItemContentTypes` y las extensiones salen sin duplicados.
+- **`ray test` no corre las `@test` de las dependencias (M390, ray-remote #149)**: los módulos de un
+  paquete por clave o de `.ray-deps/` no son del proyecto; sus pruebas son del paquete (`ray test`
+  dentro de él). Antes entraban en la suite de la entrada que los importaba y se contaban como
+  propias (ray-remote: 50 en vez de 38).
+- **Docs (ray-remote #154, rayplay #158/#113/#111)**: qué proyecto usa un comando (el `ray.toml`
+  por encima del directorio actual, si no el del archivo; un archivo suelto compilado desde otro
+  proyecto hereda sus dependencias); el valor `unit` se escribe `{ }` y `()` no es una expresión
+  (REFERENCE, `llms.txt` «Mistakes»; `()` como literal → IDEAS §108); la fila de `bytes` ya no dice
+  que `push` + `bytes_of` sea dos órdenes más lento (medido: es lo más rápido en la VM); `ray dev
+  --device` documenta `.ray-dev`.
+
 ## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:

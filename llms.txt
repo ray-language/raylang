@@ -198,6 +198,9 @@ ray_ds;` unless it has a `mod.ray`. Inside a package, its modules import each ot
 `[package] name` (`import ray_ds/version;` from `bridge.ray`), the same form a consumer uses,
 valid in any checkout. A LIBRARY package (no `entry` in `[package]` and no `src/main.ray`) is checked with
 `ray check` and tested with `ray test` module by module; `ray run`/`ray build` need an entry.
+Which project a command uses: the closest `ray.toml` above the CURRENT DIRECTORY, else the closest
+above the file; a stray file compiled from inside another project gets that project's dependencies.
+`ray test` runs the project's `@test`s only — a dependency's tests belong to the package (1.27.49).
 
 ## Concurrency (CSP; VM and native binaries — the interpreter has no fibers)
 
@@ -468,6 +471,7 @@ arity/type dualities.
 | `match (n) { 0 => a, 1 => b }` on an int | `type error at L:C: non-exhaustive match on int: some nested cases are not covered (add a '_' arm or cover every case)` | add `_ => …` (literals never exhaust int/string/char) |
 | `f(1)` on `fn f(a: int, b: int)` | `type error at L:C: 'f' expects 2 argument(s), received 1` | fix arity |
 | `f("x")` on `fn f(a: int)` | `type error at L:C: argument 1 of 'f': expected int, got string` | fix the type |
+| `Result.Ok(())` | `syntax error at L:C: expected an expression, found RParen` | `Result.Ok({ })` — the empty block `{ }` IS the unit value; `()` is not an expression |
 
 Error headers (stable): `lex error at L:C:` · `syntax error at L:C:` ·
 `type error at L:C:` · `runtime error at L:C:` — always with source line and `^` cursor,

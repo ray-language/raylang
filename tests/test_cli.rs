@@ -352,3 +352,26 @@ fn main() -> int { 0 }
     assert!(out.contains("ok    listener_is_gone"), "el puerto debe estar CERRADO en el segundo test\n{out}");
     assert_eq!(code, 0, "ambos verdes\n{out}");
 }
+
+/// M390 (ray-remote #149): las `@test` de una dependencia `path:` no son del proyecto — ni corren
+/// ni cuentan en su suite (son del paquete: `ray test` dentro de él las corre).
+#[test]
+fn dependency_tests_do_not_run_in_the_app_suite() {
+    let files: &[(&str, &str)] = &[
+        ("dep/ray.toml", "[package]\nname = \"dep\"\nversion = \"0.1.0\"\n"),
+        ("dep/util.ray", "pub fn two() -> int { 2 }\n\n@test\nfn dep_own_test() -> bool { two() == 2 }\n"),
+        ("ray.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n\n[dependencies]\ndep = \"path:dep\"\n"),
+        ("src/main.ray", "import dep/util;\n\n@test\nfn app_test() -> bool { util.two() == 2 }\n\nfn main() -> int { 0 }\n"),
+    ];
+    let (out, code) = run_project("ray_test_dep_tests_excluded", files, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("app_test"), "{out}");
+    assert!(!out.contains("dep_own_test"), "{out}");
+    assert!(out.contains("1 test(s)"), "{out}");
+    // Dentro del paquete, su test sí corre.
+    let mut root = std::env::temp_dir();
+    root.push("ray_test_dep_tests_excluded/dep");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg("test").current_dir(&root).output().expect("ejecuta el binary");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("dep_own_test") && out.status.code() == Some(0), "{text}");
+}

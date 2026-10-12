@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Doc de módulo `//!` (M376, ray-ds #126)**: las líneas `//!` con que empieza un archivo `.ray`
+  son la documentación DEL MÓDULO (inglés, pública, como `///`): `ray doc` la pone bajo el título
+  y el listado de un módulo (`ray_doc std/x` del MCP, `ray doc std/x`, módulos del proyecto) abre
+  con ella. `std/template` la estrena contando lo que sus firmas no cuentan: la sintaxis común y
+  las plantillas COMPILADAS `.ray.html` (`{% params %}` primero, `{% import %}`, `page.render(…)`).
+
 ## 1.27.46 — 2026-10-11
 
 - **Nativo: un `match` cuyo primer brazo construye `Result.Ok(x)` sin contexto ya toma el tipo de los

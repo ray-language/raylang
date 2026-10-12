@@ -1,3 +1,28 @@
+//! HTML templates, two flavours that share one syntax: `{{ x }}` (HTML-autoescaped), `{{& x }}`
+//! (raw), `{% if c %}…{% elif c2 %}…{% else %}…{% endif %}` and `{% for x in xs %}…{% endfor %}`;
+//! dotted paths `{{ user.name }}` / `items.0`; conditions are `bool`, `not x` or `a == "b"` only
+//! (no filters, no other expressions).
+//!
+//! 1. RUNTIME templates (this module): for templates loaded at run time — from disk, a database,
+//!    edited by the user. The context is typed: `[Bind]` built with `ctx_str`/`ctx_int`/`ctx_bool`/
+//!    `ctx_list`/`ctx_map` (objects via `val_map` + `field`, or `from_json`). For SSR `compile(tpl)`
+//!    ONCE and `render(t, ctx)` per request; `render_template(tpl, ctx)` does both in one call.
+//! 2. COMPILED templates (`.ray.html` files): a file `site/page.ray.html` is an importable module
+//!    checked at build time — `import site/page;` then `page.render(title, items)`. Its FIRST
+//!    directive is `{% params title: string, items: [model.Item] %}`; types of other modules come
+//!    with `{% import site/model %}` lines right after it (not `from … import`); then the same
+//!    `{{ }}`/`{{& }}`/`{% if %}`/`{% for %}` plus `{% include %}`/`{% extends %}`/`{% block %}`/
+//!    `{% let %}`. A sibling `page.ray` with the same name is ignored. `ray build --templates-only`
+//!    writes the generated module to disk for inspection. Compiled pages import `escape_html` from
+//!    here. Prefer them for the app's own pages (typed, zero parsing at run time); use this module
+//!    only for templates that do not exist at build time.
+//!
+//! ```ray
+//! import std/template;
+//! let t = template.compile("<h1>{{ title }}</h1>{% for p in posts %}<li>{{ p.name }}</li>{% endfor %}")?;
+//! let html = template.render(t, [template.ctx_str("title", "Blog"), template.ctx_list("posts", posts)]);
+//! ```
+
 // Motor de plantillas HTML (M32.3; optimizado para SSR jul 2026) escrito EN raylang. Puro cómputo,
 // cero runtime. Sintaxis estilo Jinja/Django: interpolación `{{ var }}` (con **autoescape** HTML),
 // sin escapar `{{& var }}`, condicionales `{% if c %}…{% elif c2 %}…{% else %}…{% endif %}` y bucles

@@ -574,12 +574,15 @@ fn std_module_listing(symbol: &str) -> Option<String> {
     })?;
     let import_path = name.clone();
     let lines = module_surface(src)?;
+    // M376 (ray-ds #126): la doc de módulo (`//!`) va delante — es lo que dice QUÉ es el módulo
+    // y lo que el listado de firmas no cuenta (p. ej. la sintaxis de las plantillas).
+    let intro = crate::raydoc::module_doc(src).map(|d| format!("{d}\n\n")).unwrap_or_default();
     // M202/M206: la nota de cada listado dice cómo se llama lo que lista. Desde M206 UFCS resuelve
     // contra el módulo que declara el tipo del receptor: `x.f(…)` encadena con `import std/<m>;`
     // si `x` es un struct/enum de este módulo; sobre primitivos y tipos del prelude hace falta el
     // import sin calificar.
     Some(format!(
-        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
+        "{name} — public surface ({} exports):\n{intro}{}\nUse ray_doc \"{}.<name>\" for the full doc of one export. \
          With `import {import_path};` call them qualified: `{bare}.f(x, …)`. Method-style chaining `x.f(…)` \
          (UFCS) works when `x` is a struct/enum declared by this module (pub functions taking it first); \
          on primitives or prelude types (`Option`/`Result`/`Map`) it needs `from {import_path} import f;`.",
@@ -641,8 +644,9 @@ fn project_module_listing(symbol: &str, path: &str) -> Option<String> {
         let Ok(src) = std::fs::read_to_string(f) else { continue };
         let Some(lines) = module_surface(&src) else { continue };
         let label = f.strip_prefix(&root).unwrap_or(f).to_string_lossy().into_owned();
+        let intro = crate::raydoc::module_doc(&src).map(|d| format!("{d}\n\n")).unwrap_or_default();
         return Some(format!(
-            "{label} — public surface ({} exports):\n{}\nUse ray_doc \"{stem}.<name>\" (with the same 'path') for the full doc of one export.",
+            "{label} — public surface ({} exports):\n{intro}{}\nUse ray_doc \"{stem}.<name>\" (with the same 'path') for the full doc of one export.",
             lines.len(),
             lines.join("\n"),
         ));
@@ -974,6 +978,19 @@ mod tests {
             .lines()
             .map(|l| json::parse(l).expect("respuesta JSON válida"))
             .collect()
+    }
+
+    /// M376 (ray-ds #126): el listado de un módulo abre con su doc de módulo (`//!`). La de
+    /// `std/template` es la que cuenta las plantillas COMPILADAS `.ray.html` (`{% params %}`,
+    /// `{% import %}`, `page.render(…)`), que el listado de firmas no puede contar.
+    #[test]
+    fn a_module_listing_opens_with_its_module_doc() {
+        let text = doc_text("std/template");
+        let head = text.split("\nctx_str(").next().unwrap_or("");
+        for needle in ["{% params title: string", "{% import site/model %}", "page.render(", "render_template(tpl, ctx)"] {
+            assert!(head.contains(needle), "{needle:?} debe ir en la cabecera, antes de las firmas:\n{text}");
+        }
+        assert!(text.contains("std/template — public surface ("), "{text}");
     }
 
     #[test]

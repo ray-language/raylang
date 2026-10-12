@@ -476,7 +476,7 @@ ray build --native --release f.ray  # a function outside the native subset is an
 ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray test --native [--release]  # same tests on the NATIVE binary (one binary per suite, one process per test); same report/exit codes
 ray fmt file.ray            # canonical formatting
-ray doc file.ray            # API docs (raydoc); `ray doc Type.method` (e.g. bytes.index_of_from, Result.map) — inside a project it also resolves its modules and dependencies
+ray doc file.ray            # API docs (raydoc; `///` on items, `//!` lines at the top = module doc); `ray doc Type.method` (e.g. bytes.index_of_from, Result.map) — inside a project it also resolves its modules and dependencies
 ray serve [dir]             # static file server for previews (127.0.0.1:8000; --host/--port; --port 0 = free)
 ```
 

@@ -2322,6 +2322,34 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M380 (rayplay #151): base64 en Rust — [b"ok", datos] o [b"err", msg].
+                OpCode::Base64Decode => {
+                    let url = match self.pop() {
+                        HeapValue::Bool(b) => b,
+                        _ => unreachable!("the checker guarantees a bool"),
+                    };
+                    let text = match self.pop() {
+                        HeapValue::Str(s) => s,
+                        _ => unreachable!("the checker guarantees a string"),
+                    };
+                    let elems = match crate::builtins::b64::decode(&text, url) {
+                        Ok(data) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(data)],
+                        Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Base64Encode => {
+                    let url = match self.pop() {
+                        HeapValue::Bool(b) => b,
+                        _ => unreachable!("the checker guarantees a bool"),
+                    };
+                    let data = match self.pop() {
+                        HeapValue::Bytes(b) => b,
+                        _ => unreachable!("the checker guarantees bytes"),
+                    };
+                    self.push(HeapValue::Str(crate::builtins::b64::encode(&data, url).into()));
+                }
                 // M147: un asset del espacio embed → [b"ok", datos] o [b"err", msg].
                 OpCode::EmbedRead => {
                     let HeapValue::Str(path) = self.pop() else {

@@ -4156,6 +4156,7 @@ const RT_CARGO_TOML: &str = include_str!("../crates/ray-runtime/Cargo.toml");
 const RT_LIB_RS: &str = include_str!("../crates/ray-runtime/src/lib.rs");
 const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); // M195
+const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M380
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
@@ -4291,6 +4292,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/unicode.rs", RT_UNICODE_RS),
         ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
         ("ray-runtime/src/bigint.rs", RT_BIGINT_RS),
+        ("ray-runtime/src/b64.rs", RT_B64_RS),
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),

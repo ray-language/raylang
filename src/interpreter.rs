@@ -1469,6 +1469,23 @@ impl<'a> Interpreter<'a> {
             }
             // M16.1c: lee un archivo como bytes → [b"ok", datos] o [b"err", msg]. Tag en bytes para
             // que el arreglo sea homogéneo ([bytes]); el prelude → Result<bytes,string>.
+            // M380 (rayplay #151): base64 en Rust.
+            "__base64_decode" => {
+                let (Value::Str(text), Value::Bool(url)) = (&values[0], &values[1]) else {
+                    unreachable!("the checker guarantees (string, bool)")
+                };
+                let arr = match crate::builtins::b64::decode(text, *url) {
+                    Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
+                    Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__base64_encode" => {
+                let (Value::Bytes(data), Value::Bool(url)) = (&values[0], &values[1]) else {
+                    unreachable!("the checker guarantees (bytes, bool)")
+                };
+                Value::Str(crate::builtins::b64::encode(data, *url))
+            }
             "__read_file_bytes" => {
                 let arr = match &values[0] {
                     Value::Str(path) => match crate::builtins::read_file_bytes(path) {

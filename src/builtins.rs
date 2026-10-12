@@ -20,6 +20,13 @@
 //! int/float/bool/string). Por eso la regla es una función y no una firma fija: cada uno expresa su
 //! propio criterio. Es la razón por la que se eligió esta tabla en Rust frente a un `@builtin fn`.
 
+/// M380: el base64 de `crates/ray-runtime/src/b64.rs` compilado DENTRO de este crate (`#[path]`):
+/// la VM y el intérprete no pueden depender de `ray_runtime` en wasm32 (el playground), y el
+/// binario nativo incluye el mismo archivo textualmente — una sola fuente de verdad, tres copias
+/// compiladas.
+#[path = "../crates/ray-runtime/src/b64.rs"]
+pub mod b64;
+
 use crate::ast::Type;
 use crate::bytecode::{FsOp, FsTest, MathFn, OpCode};
 
@@ -4196,6 +4203,21 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__read_file_bytes", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__read_file_bytes expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M380 (rayplay #151): base64 en Rust (`builtins::b64`, el MISMO archivo que `ray_runtime::b64`). __base64_decode(texto, url) -> [bytes]:
+    // [b"ok", datos] o [b"err", msg]; `url` elige base64url sin relleno. std/base64 envuelve en Result.
+    Builtin { name: "__base64_decode", opcode: OpCode::Base64Decode, check: |a| {
+        arity(a, 2, "__base64_decode", " (text, url)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__base64_decode expects a string (the text), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__base64_decode expects a bool (url alphabet), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __base64_encode(datos, url) -> string.
+    Builtin { name: "__base64_encode", opcode: OpCode::Base64Encode, check: |a| {
+        arity(a, 2, "__base64_encode", " (data, url)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__base64_encode expects bytes (the data), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__base64_encode expects a bool (url alphabet), not {}", a[1]))); }
+        Ok(Type::String)
     } },
     // __write_file_bytes(ruta, datos) -> [string]: ["ok"] o ["err", msg]. El prelude → Result<int,string>.
     Builtin { name: "__write_file_bytes", opcode: OpCode::WriteFileBytes, check: |a| {

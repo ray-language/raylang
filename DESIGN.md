@@ -17376,3 +17376,29 @@ y se vio que la VM fallaba igual que el nativo. Resultado: cero huecos en 22/44,
 estéreo, VM y nativo; suelo total ~50 ms en macOS y la cola sigue la pista desde 50 ms. iOS
 conserva sus suelos propios (M332). Se descartó bajar el socket a 10 ms (la VM cortaba el flujo:
 3 s de audio en 5,3 s) y mantener 30 (sobraba una vez sano el anillo).
+## 360. M379–M381 — rayplay en el iPhone: un WAV por el puente (oct 2026)
+
+rayplay (#150–#152) cargaba un WAV de 56 MB desde la página con `window.ray.request` como JSON
+con el archivo en base64, y iOS mataba la app por memoria (~2 GB por proceso). Dos costes
+escondidos de la stdlib y una doc incompleta:
+
+**M379, `json.parse`.** M59.5 había movido el cursor a `[char]` para evitar el `s[i]` O(i) de los
+strings, pero eso es un valor del arreglo por carácter (en la VM, un `HeapValue`), y
+`parse_str_raw` hacía `sb.push(to_string(c))` por carácter: 55× en nativo, 85× en la VM. El
+cursor pasa a `bytes` (`b[i]` es O(1) y un octeto; JSON es ASCII fuera de los strings) y los
+strings salen en rachas: `run_end` busca la comilla o el escape y `from_utf8(sub_bytes(…))` corta
+UNA vez; con escapes, rachas + reemplazos en el StringBuilder. 32 MB: 1738 → 142 MB. Los mensajes
+no cambian; aparece uno nuevo para UTF-8 inválido dentro de un string.
+
+**M380, `std/base64`.** La versión raylang acumulaba un `[int]` por octeto y lo volcaba con
+`bytes_of`: ~14× la entrada y 15 MB/s. La filosofía «protocolos = librería raylang» cede aquí ante
+el rendimiento (como `std/sort` en M279): el cómputo va a `ray_runtime::b64` (solo `std`, sin
+features) y dos builtins nuevos lo exponen a los tres motores; el nativo incluye el MISMO archivo
+textualmente (`include_str!` → `mod __ray_b64`), así que no depende del crate ni de la vía Cargo
+(`--without mimalloc,ahash,fibers` sigue funcionando). La API y los mensajes de error se conservan
+byte a byte (SCRAM y JWT los aseveran). 32 MB: 2,2 s → 0,15 s.
+
+**M381, diálogos de archivo.** Solo existen en escritorio y nada lo decía. Se documenta y se
+señala la vía móvil (`<input type="file">` + `window.ray.request` con un mensaje plano, no JSON,
+para cargas grandes — ahora viables por M379/M380). El selector nativo móvil
+(`UIDocumentPickerViewController` / `ACTION_OPEN_DOCUMENT`) va a IDEAS §106.

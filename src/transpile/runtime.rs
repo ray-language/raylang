@@ -865,6 +865,21 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // claves llegan ya ORDENADAS del walker compartido (builtins::embed_walk) → el listado es
     // byte-idéntico al de la VM. Tabla vacía (built sin --embed ni [native] embed) → el MISMO
     // mensaje de sin-config que la VM.
+    if t.needs_b64 {
+        // M380: una sola fuente de verdad — el módulo del runtime, sin depender del crate.
+        out.push_str("#[allow(dead_code)]\nmod __ray_b64 {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/b64.rs"));
+        out.push_str(concat!(
+            "\n    /// La forma etiquetada del builtin `__base64_decode`: [b\"ok\", datos] o [b\"err\", msg].\n",
+            "    pub fn decode_tagged(s: &str, url: bool) -> std::rc::Rc<std::cell::RefCell<Vec<std::rc::Rc<[u8]>>>> {\n",
+            "        let arr: Vec<std::rc::Rc<[u8]>> = match decode(s, url) {\n",
+            "            Ok(d) => vec![std::rc::Rc::<[u8]>::from(&b\"ok\"[..]), std::rc::Rc::<[u8]>::from(d)],\n",
+            "            Err(e) => vec![std::rc::Rc::<[u8]>::from(&b\"err\"[..]), std::rc::Rc::<[u8]>::from(e.into_bytes())],\n",
+            "        };\n",
+            "        std::rc::Rc::new(std::cell::RefCell::new(arr))\n",
+            "    }\n}\n",
+        ));
+    }
     if t.needs_embed {
         out.push_str("static __RAY_EMBED: &[(&str, &[u8])] = &[\n");
         for (key, path) in &t.embed {

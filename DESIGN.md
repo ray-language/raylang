@@ -17489,3 +17489,37 @@ regla práctica: una página que sigue el tema del sistema deja la barra en `""`
 hace falta, un `set_appearance(h, "light"|"dark"|"")` explícito que separe las dos cosas.
 
 Y #143: el error de versión mínima decía `ray update-self`; el comando es `ray upgrade`.
+
+## 364. M391 — `const` arreglos: leer sin reconstruir (rayplay #157, oct 2026)
+
+M274 fijó la semántica de un `const` compuesto como **literal inyectado**: cada uso construye un
+arreglo fresco, sin estado compartido que un alias pudiera mutar. Es la semántica correcta —`let t =
+C; t.push(1)` no debe tocar `C`— pero cobraba el literal entero en cada `C[i]`: con tablas de Huffman
+de 2164 entradas en un decodificador MP3 (rayplay), 10 M lecturas costaban 2,2 s en nativo y 134 s
+en la VM, ×437 y ×290 frente a una copia local (#157).
+
+**Decisión: compartir solo lo que no puede mutar ni retener.** Las formas `C[i]`, `C.len()` y
+`C.contains(x)` leen el arreglo y lo sueltan; nada de lo que devuelven es el arreglo ni un handle a
+su interior si los elementos son escalares inmutables (`int`, `float`, `bool`, `string`, `char`,
+`bytes`: inline o `Arc`). Solo esas tres formas, y solo para `const` de arreglo de escalares, leen un
+arreglo **compartido**; el resto de usos (bind, argumento, retorno, `push`, un `const` de tuplas o
+structs) siguen como M274. Así la semántica observable es idéntica a la de antes y a la del
+intérprete, que sigue evaluando el literal en cada uso y hace de oráculo (`oracle_program`).
+
+**VM.** El compilador pliega el literal una vez (`fold_scalar_array`: literales, aritmética
+constante, otros `const`, strings/chars/bytes) a `CompiledProgram::shared_consts[k]` y emite
+`SharedConst(k)` como receptor de `Index`/`Len`/`Contains`; la VM lo materializa en el heap de la
+fibra la primera vez (heap por fibra, M38: la caché vive en `Fiber::const_cache`, raíz del GC como
+`unit_enums`) y después empuja el handle. Sin salto nuevo en el bytecode: los cuatro pases
+peephole remapean destinos y un opcode con destino habría tocado los cuatro; el plegado en
+compilación lo evita y además es más barato que ejecutar el literal la primera vez. Un `const` que no
+pliega (no debería ocurrir: M345 acota `const_valor`) cae al literal de siempre.
+
+**Nativo.** Cada `const` elegible gana `NAME__shared()`, un `thread_local!` construido con `NAME()`
+la primera vez por hilo (los valores son `Rc`, no `Sync`; un `static` no vale); `emit_shared_const`
+lo usa en los tres sitios cuando el nombre no está sombreado por una variable ni por un préstamo
+izado (N6b). El coste por lectura es el acceso al TLS (~2 ns), frente a los ~220 ns de construir
+2000 enteros.
+
+**Medido** (repro de rayplay, 2000 enteros): nativo 10 M lecturas 2234 → 31 ms (copia local: 5–10
+ms); VM 1 M lecturas 12 958 → 60 ms (copia local: 39 ms). PERFORMANCE §15.

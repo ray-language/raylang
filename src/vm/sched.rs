@@ -32,6 +32,9 @@ pub(super) struct Fiber {
     /// construcciones de la misma variante vacía comparten un solo objeto del heap (antes:
     /// una asignación POR construcción — en binary-trees, 2 `None` por hoja). Raíz del GC.
     pub(super) unit_enums: crate::gc::MapStore2,
+    /// M391: el arreglo compartido de cada `const` de escalares (`SharedConst(k)`), materializado
+    /// en el heap de ESTA fibra la primera vez que se lee. Raíz del GC.
+    pub(super) const_cache: Vec<Option<Handle>>,
     /// M97.2: pila de marcadores de `try_call` activos en esta fibra. Cada `TryCall` empuja uno con
     /// la altura de marcos y de pila de operandos ANTES de la llamada; al fallar, el error se
     /// desenrolla hasta el más interno en vez de tumbar la fibra. Anidan (un `try_call` dentro de

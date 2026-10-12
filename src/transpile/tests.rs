@@ -138,6 +138,19 @@ fn empty_array_concat_and_tuples_with_none_transpile() {
     assert!(rs.contains("fn f("), "{rs}");
 }
 
+/// M391 (rayplay #157): un const arreglo de escalares tiene su `NAME__shared()` (thread_local) y
+/// lo usan `C[i]`, `C.len()` y `C.contains(x)`; `let t = C;` y un const de structs no.
+#[test]
+fn scalar_const_arrays_are_read_from_a_shared_thread_local() {
+    let rs = transpile_src("const TAB: [int] = [1, 2, 3];\nconst PS: [(int, int)] = [(1, 2)];\nfn main() -> int { let t = TAB; t.push(4); let (a, _) = PS[0]; TAB[0] + TAB.len() + t.len() + (if (TAB.contains(2)) { 1 } else { 0 }) + a }");
+    assert!(rs.contains("fn TAB__shared()"), "{rs}");
+    assert!(rs.contains("TAB__shared(); let __rt_i"), "{rs}");
+    assert!(rs.contains("TAB__shared().borrow().len()"), "{rs}");
+    assert!(rs.contains("TAB__shared().borrow().iter().any"), "{rs}");
+    assert!(rs.contains("let t = TAB();"), "{rs}");
+    assert!(!rs.contains("fn PS__shared()"), "{rs}");
+}
+
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
 /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
 /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.

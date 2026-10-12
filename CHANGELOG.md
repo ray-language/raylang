@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Indexar un `const` arreglo ya no lo reconstruye en cada acceso (M391, rayplay #157, issue
+  #522)**: las lecturas `C[i]`, `C.len()` y `C.contains(x)` de un `const` de tipo arreglo de escalares
+  (`int`, `float`, `bool`, `string`, `char`, `bytes`) comparten UN arreglo por fibra (VM) o por hilo
+  (nativo, `thread_local`), materializado la primera vez. 2000 elementos, 10 M lecturas: nativo 2234 →
+  31 ms; VM (1 M) 12 958 → 60 ms — lo mismo que una copia local. Todo otro uso (`let t = C;`, pasarlo,
+  `C.push`) sigue dando un arreglo fresco, así que mutar un alias no cambia lo que leen los demás; un
+  `const` de tuplas o structs no cambia.
+
 ## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:

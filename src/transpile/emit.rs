@@ -1494,9 +1494,12 @@ impl Transpiler {
                                 write!(out, "; let __rt_b = {}.borrow(); __rt_b[__ray_idx(__rt_i, __rt_b.len())].clone() }}", mangle(name)).unwrap();
                             }
                             _ => {
-                                // Orden de la VM: arreglo, luego índice.
+                                // Orden de la VM: arreglo, luego índice. M391: un const arreglo de
+                                // escalares se lee del compartido (`NAME__shared()`).
                                 out.push_str("{ let __rt_a = ");
-                                self.emit_expr(out, array)?;
+                                if !self.emit_shared_const(out, array) {
+                                    self.emit_expr(out, array)?;
+                                }
                                 out.push_str("; let __rt_i: i64 = ");
                                 self.emit_expr(out, index)?;
                                 out.push_str("; let __rt_b = __rt_a.borrow(); __rt_b[__ray_idx(__rt_i, __rt_b.len())].clone() }");
@@ -2415,6 +2418,31 @@ pub(super) fn expr_diverges(e: &Expr) -> bool {
         },
         ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic" || n == "exit"),
         _ => false,
+    }
+}
+
+impl Transpiler {
+    /// M391: si `name` es un const de tipo arreglo de escalares (compartible), su nombre; `None` si
+    /// no es const o sus elementos no son escalares inmutables.
+    pub(super) fn shared_const_name(&self, name: &str) -> Option<String> {
+        match self.consts.get(name) {
+            Some(Type::Array(elem)) if crate::compiler::is_shareable_scalar(elem) => Some(mangle(name)),
+            _ => None,
+        }
+    }
+
+    /// M391: emite el arreglo COMPARTIDO de `e` si es la lectura de un const arreglo de escalares no
+    /// sombreado por una variable (`NAME__shared()`), y devuelve `true`; si no, no emite nada.
+    pub(super) fn emit_shared_const(&mut self, out: &mut String, e: &Expr) -> bool {
+        if let ExprKind::Ident(name) = &e.kind
+            && self.lookup(name).is_none()
+            && !self.hoisted_borrows.contains_key(name)
+            && let Some(n) = self.shared_const_name(name)
+        {
+            write!(out, "{n}__shared()").unwrap();
+            return true;
+        }
+        false
     }
 }
 

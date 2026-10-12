@@ -129,6 +129,13 @@ pub enum OpCode {
     Pop,
     /// Empuja el valor unit `()`.
     Unit,
+    /// M391 (rayplay #157): empuja el arreglo COMPARTIDO de la constante compuesta `k`
+    /// (`CompiledProgram::shared_consts[k]`): la primera vez en cada fibra lo materializa en su heap y
+    /// lo guarda en la caché de la fibra (raíz del GC); después es un handle. Solo lo emite el
+    /// compilador para LECTURAS que no pueden mutar ni retener el arreglo (`CONST[i]`, `CONST.len()`,
+    /// `CONST.contains(x)`) sobre constantes de escalares; todo otro uso sigue construyendo un
+    /// arreglo fresco (semántica de literal inyectado, M274).
+    SharedConst(usize),
     /// Salta incondicionalmente a la instrucción en el índice dado.
     Jump(usize),
     /// Si la cima es `false`, salta al índice dado. **No** saca la condición de la
@@ -1103,6 +1110,9 @@ pub struct CompiledProgram {
     pub structs: Vec<CompiledStruct>,
     pub enums: Vec<CompiledEnum>,
     pub main: usize,
+    /// M391: los `const` de tipo arreglo de escalares, ya plegados (sus elementos), indexados por el
+    /// `SharedConst(k)` que los lee sin reconstruirlos.
+    pub shared_consts: Vec<Vec<crate::runtime::Value>>,
     /// Descriptores de las funciones externas (M41, FFI), indexados por el `CallExtern(idx, _)`.
     pub externs: Vec<crate::ffi::ExternDesc>,
 }

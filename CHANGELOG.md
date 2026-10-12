@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:
   `ui.pick_file`, `pick_files` y `pick_file_with` abren `UIDocumentPickerViewController` (modo

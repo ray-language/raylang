@@ -29,6 +29,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__make_temp_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
+    "__base64_decode", "__base64_encode",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
     "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__chmod", "__watch", "__watch_next", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",

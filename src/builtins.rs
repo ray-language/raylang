@@ -4197,6 +4197,21 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__read_file_bytes expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // M380 (rayplay #151): base64 en Rust (`ray_runtime::b64`). __base64_decode(texto, url) -> [bytes]:
+    // [b"ok", datos] o [b"err", msg]; `url` elige base64url sin relleno. std/base64 envuelve en Result.
+    Builtin { name: "__base64_decode", opcode: OpCode::Base64Decode, check: |a| {
+        arity(a, 2, "__base64_decode", " (text, url)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__base64_decode expects a string (the text), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__base64_decode expects a bool (url alphabet), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __base64_encode(datos, url) -> string.
+    Builtin { name: "__base64_encode", opcode: OpCode::Base64Encode, check: |a| {
+        arity(a, 2, "__base64_encode", " (data, url)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__base64_encode expects bytes (the data), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__base64_encode expects a bool (url alphabet), not {}", a[1]))); }
+        Ok(Type::String)
+    } },
     // __write_file_bytes(ruta, datos) -> [string]: ["ok"] o ["err", msg]. El prelude → Result<int,string>.
     Builtin { name: "__write_file_bytes", opcode: OpCode::WriteFileBytes, check: |a| {
         arity(a, 2, "__write_file_bytes", " (path, data)")?;

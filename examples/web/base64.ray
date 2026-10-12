@@ -1,197 +1,47 @@
 // base64 (RFC 4648) escrito EN raylang. Cero runtime nuevo: puro cómputo sobre los operadores
 // bit a bit (M19.3a) y la stdlib de strings. Importable: `from base64 import base64;`.
 // M59.5: el encode acumula en StringBuilder (O(n), no O(n²) de `s = s + …`).
-import std/collections/stringbuilder as sb;
 
-// Codifica `bytes` en su representación base64 estándar (con relleno `=`); M60: la API habla
-// `bytes`, no `[int]`. Es lo que el handshake de WebSocket necesita para el digest SHA-1.
-fn alphabet() -> string { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
-
-// El carácter base64 del valor de 6 bits `idx` (0..63).
-fn enc_char(idx: int) -> string {
-    let a = alphabet();
-    to_string(a[idx])
-}
+// M380 (rayplay #151): el cómputo vive en Rust (`ray_runtime::b64`, builtins `__base64_encode` /
+// `__base64_decode`): la versión raylang decodificaba a ~15 MB/s en nativo (~1,7 MB/s en la VM) y
+// retenía ~14× la entrada (un `[int]` por octeto antes de `bytes_of`) — 75 MB de base64 eran 1,1 GB
+// de pico en un iPhone. La API, la estrictez (M59.3) y los mensajes de error no cambian.
 
 /// Encodes `bytes` as standard base64 (RFC 4648) with `=` padding.
 pub fn base64(data: bytes) -> string {
-    let n = data.len();
-    let b = sb.new();
-    // Bloques completos de 3 octetos → 4 caracteres.
-    var i = 0;
-    while (i + 3 <= n) {
-        let b0 = data[i] & 255;
-        let b1 = data[i + 1] & 255;
-        let b2 = data[i + 2] & 255;
-        let triple = b0 << 16 | b1 << 8 | b2;
-        sb.push(
-            b,
-            enc_char(triple >> 18 & 63)
-                + enc_char(triple >> 12 & 63)
-                + enc_char(triple >> 6 & 63)
-                + enc_char(triple & 63)
-        );
-        i = i + 3;
-    }
-    // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
-    let rem = n - i;
-    if (rem == 1) {
-        let b0 = data[i] & 255;
-        let triple = b0 << 16;
-        sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + "==");
-    } else {
-        if (rem == 2) {
-            let b0 = data[i] & 255;
-            let b1 = data[i + 1] & 255;
-            let triple = b0 << 16 | b1 << 8;
-            sb.push(
-                b,
-                enc_char(triple >> 18 & 63)
-                    + enc_char(triple >> 12 & 63)
-                    + enc_char(triple >> 6 & 63)
-                    + "="
-            );
-        }
-    }
-    sb.build(b)
+    __base64_encode(data, false)
 }
 
-// --- base64url (RFC 4648 §5): alfabeto URL-safe (`-`/`_` en vez de `+`/`/`) y SIN relleno `=`. ---
-// Es la codificación que usan los JSON Web Tokens (cada segmento es base64url sin padding).
-// Reemplaza los caracteres no-URL-safe y quita el relleno de una cadena base64 estándar.
-// M59.5: con el `replace` nativo (O(n)) en vez del bucle por carácter (O(n²)).
-fn to_url(s: string) -> string {
-    s.replace("+", "-").replace("/", "_").replace("=", "")
-}
-
-// Octetos → base64url (sin relleno). Se reusa `base64` y se transforma el alfabeto.
-/// Encodes `bytes` as base64url (RFC 4648 §5): URL-safe alphabet (`-`/`_`) and no `=` padding.
-/// This is the encoding used by JWT segments.
+/// Encodes `bytes` as unpadded base64url (RFC 4648 §5, `-`/`_` alphabet) — the JWT/JWS form.
 pub fn base64url(data: bytes) -> string {
-    to_url(base64(data))
+    __base64_encode(data, true)
 }
 
-// El valor de 6 bits (0..63) de un carácter base64url, o -1 si no pertenece al alfabeto.
-fn dec_char(c: char) -> int {
-    if (c == '-') {
-        62
+// El [bytes] etiquetado del builtin → Result (el mensaje de error viaja como bytes UTF-8).
+fn decoded(r: [bytes]) -> Result<bytes, string> {
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
     } else {
-        if (c == '_') {
-            63
-        } else {
-            // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
-            match (index_of(
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-                to_string(c)
-            )) {
-                Option.Some(i) => i,
-                Option.None => 0 - 1,
-            }
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(_) => Result.Err("base64: invalid input"),
         }
     }
 }
 
-// El valor de 6 bits de un carácter base64 ESTÁNDAR (`+`/`/`), o -1 si no pertenece.
-fn dec_char_std(c: char) -> int {
-    if (c == '+') {
-        62
-    } else {
-        if (c == '/') {
-            63
-        } else {
-            match (index_of(
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-                to_string(c)
-            )) {
-                Option.Some(i) => i,
-                Option.None => 0 - 1,
-            }
-        }
-    }
-}
-
-// base64 estándar (con relleno `=`) → octetos. Lo usa SCRAM/PostgreSQL (M32.1) para el salt y la
-// firma del servidor. M59.3 — decode ESTRICTO (RFC 4648 §3.5): un solo encoding válido por payload
-// (sin maleabilidad de representación, importa bajo credenciales): `Err` con carácter fuera del
-// alfabeto, datos tras el relleno, longitud no múltiplo de 4, relleno de más, o bits sobrantes ≠ 0.
 /// Decodes a standard base64 string (RFC 4648, `+`/`/` alphabet) into `bytes`.
 /// Strict: rejects characters outside the alphabet, data after the `=` padding, a length
 /// that is not a multiple of 4, over-padding, and non-zero trailing bits (non-canonical
-/// encodings), so each payload has exactly one accepted representation.
+/// encodings), so each payload has exactly one accepted representation. One pass in Rust:
+/// ~1× the input in memory, hundreds of MB/s (M380).
 pub fn base64_decode(s: string) -> Result<bytes, string> {
-    let n = s.len();
-    var out: [int] = [];
-    var acc = 0;
-    var nbits = 0;
-    var i = 0;
-    var chars = 0;  // caracteres de datos (sin contar '=')
-    var pad = 0;  // caracteres '=' de relleno
-    while (i < n) {
-        let c = s[i];
-        if (c == '=') {
-            pad = pad + 1;
-        } else {
-            if (pad > 0) {
-                return Result.Err("base64: data after '=' padding");
-            }
-            let v = dec_char_std(c);
-            if (v < 0) {
-                return Result.Err("invalid base64 character");
-            }
-            acc = acc << 6 | v;
-            nbits = nbits + 6;
-            if (nbits >= 8) {
-                nbits = nbits - 8;
-                out.push(acc >> nbits & 255);
-            }
-            chars = chars + 1;
-        }
-        i = i + 1;
-    }
-    if ((chars + pad) % 4 != 0) {
-        return Result.Err("base64: invalid length (not a multiple of 4)");
-    }
-    if (pad > 2) {
-        return Result.Err("base64: invalid '=' padding");
-    }
-    if (nbits > 0 && (acc & (1 << nbits) - 1) != 0) {
-        return Result.Err("base64: non-zero trailing bits (non-canonical encoding)");
-    }
-    Result.Ok(bytes_of(out))
+    decoded(__base64_decode(s, false))
 }
 
-// base64url (sin relleno) → octetos. Decodifica grupos de 4 caracteres (24 bits → 3 octetos); una
-// cola de 2 caracteres da 1 octeto y de 3 da 2. M59.3 — estricto: `Err` con carácter fuera del
-// alfabeto ('=' incluido: aquí no hay relleno), cola de 1 carácter (6 bits: imposible) o bits
-// sobrantes ≠ 0 — bajo JWT, dos representaciones del mismo payload serían maleabilidad de la firma.
 /// Decodes an unpadded base64url string (RFC 4648 §5, `-`/`_` alphabet) into `bytes`.
 /// Strict: rejects characters outside the alphabet (including `=`), a 1-character tail,
 /// and non-zero trailing bits (non-canonical encodings), so each payload has exactly one
 /// accepted representation — this matters for JWT, where the signature covers the encoding.
 pub fn base64url_decode(s: string) -> Result<bytes, string> {
-    let n = s.len();
-    var out: [int] = [];
-    var acc = 0;  // acumulador de bits
-    var nbits = 0;  // bits válidos en el acumulador
-    var i = 0;
-    while (i < n) {
-        let v = dec_char(s[i]);
-        if (v < 0) {
-            return Result.Err("invalid base64url character");
-        }
-        acc = acc << 6 | v;
-        nbits = nbits + 6;
-        if (nbits >= 8) {
-            nbits = nbits - 8;
-            out.push(acc >> nbits & 255);
-        }
-        i = i + 1;
-    }
-    if (n % 4 == 1) {
-        return Result.Err("base64url: invalid length");
-    }
-    if (nbits > 0 && (acc & (1 << nbits) - 1) != 0) {
-        return Result.Err("base64url: non-zero trailing bits (non-canonical encoding)");
-    }
-    Result.Ok(bytes_of(out))
+    decoded(__base64_decode(s, true))
 }

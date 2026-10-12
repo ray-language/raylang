@@ -121,6 +121,8 @@ struct Transpiler {
     pub(super) needs_rt_watch: bool,
     /// M145: salida de audio (ray_runtime::audio; detectado por USO de __audio_*).
     pub(super) needs_rt_audio: bool,
+    /// M380: base64 en Rust (`__ray_b64`, el `b64.rs` del runtime incluido textualmente).
+    pub(super) needs_b64: bool,
     /// M146: ventana + webview (ray_runtime::ui; detectado por USO de __ui_*). Además de la
     /// feature, cambia la FORMA del main emitido: el programa corre en un hilo del SO con pila
     /// grande y el hilo 1 del proceso queda esperando el loop de AppKit (contrato de std/ui).
@@ -375,6 +377,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_fs_meta: false,
         needs_rt_watch: false,
         needs_rt_audio: false,
+        needs_b64: false,
         needs_rt_ui: false,
         needs_embed: false,
         embed: embed.to_vec(),

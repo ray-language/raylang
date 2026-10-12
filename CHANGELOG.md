@@ -20,6 +20,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   dice el rango 20–1000 y el suelo real (~50 ms en macOS). Medido en 22/44,1/48 kHz, mono y
   estéreo, VM y nativo: cero huecos; la cola sigue la pista desde 50 ms. `RAY_AUDIO_TRACE=1`
   imprime al cerrar el anillo, el silencio de keepalive, los fundidos y los huecos.
+- **`json.parse` ya no cuesta 55× un string largo (M379, rayplay #150)**: el parser corría sobre
+  `[char]` (un valor por carácter) y construía cada string carácter a carácter; un JSON con un
+  string de 32 MB subía a 1,7 GB en nativo (y un WAV en base64 tumbaba la app en el iPhone). Ahora
+  el cursor corre sobre `bytes` (`b[i]`, O(1)) y los strings salen en rachas (`sub_bytes` +
+  `from_utf8`): el mismo JSON de 32 MB cuesta 142 MB y 0,11 s en nativo (8 MB: 747 → 67 MB en la
+  VM). Mismos mensajes de error; UTF-8 inválido dentro de un string es `Err`.
+- **`std/base64` en Rust (M380, rayplay #151)**: `base64_decode`/`base64url_decode`/`base64`/
+  `base64url` llaman a los builtins `__base64_decode`/`__base64_encode` (`ray_runtime::b64`, el mismo
+  archivo incluido textualmente en el binario nativo). 32 MB de base64: 2,2 s y 623 MB → 0,15 s y
+  125 MB en nativo; 8 MB en la VM: 77 s y 306 MB → 0,12 s y 47 MB. API, estrictez (M59.3) y
+  mensajes de error idénticos.
+- **Los diálogos de archivo son solo de escritorio (M381, rayplay #152)**: la doc de `pick_file*`,
+  `pick_folder*` y `save_file*` (y `llms.txt`) dice que en iOS/Android devuelven `Err("ui: file
+  dialogs are not available on mobile (v1)")` y cuál es la vía allí (`<input type="file">` +
+  `window.ray.request`, sin JSON para cargas grandes). Un selector nativo móvil queda en IDEAS §106.
 
 ## 1.27.46 — 2026-10-11
 

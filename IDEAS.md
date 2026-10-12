@@ -4088,3 +4088,15 @@ Complemento: job nocturno que construya raykv/raylb/ray-sublime contra `main`.
 la política va en PRODUCTION.md; `ray upgrade --unstable` tendría que resolver la última
 pre-release vía API (no existe `latest-prerelease`); el sufijo SemVer `-rc` es independiente del
 flag y no hace falta.
+
+## 106. Selector de archivos nativo en iOS y Android (rayplay #152, oct 2026)
+
+`ui.pick_file*`/`save_file*` devuelven `Err` en móvil (M381 lo documenta). La vía actual —
+`<input type="file">` en la página y el contenido por `window.ray.request`— cruza el puente con el
+archivo entero (viable desde M379/M380, pero sigue siendo una copia en texto). **Propuesta**:
+`pick_file`/`pick_files` sobre `UIDocumentPickerViewController` (iOS) y `ACTION_OPEN_DOCUMENT`
+(Android), devolviendo una ruta legible por `std/fs` (copia en el sandbox o security-scoped URL)
+y `save_file` sobre el exportador equivalente. **Impacto**: medio — toca los dos shells y la
+semántica de «ruta» en móvil (temporal, con permiso de alcance). **Restricción**: la firma
+`Result<Option<string>, string>` se mantiene; en móvil la ruta puede ser efímera y hay que
+documentar su vida útil.

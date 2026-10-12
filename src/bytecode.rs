@@ -370,6 +370,9 @@ pub enum OpCode {
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).
     /// Primitivo `__read_file_bytes`; el prelude → `Result<bytes, string>`.
     ReadFileBytes,
+    // M380: base64 en Rust (rayplay #151).
+    Base64Decode,
+    Base64Encode,
     /// Saca `datos` (bytes) y la ruta (string); escribe el archivo y empuja `[string]` etiquetado.
     /// Primitivo `__write_file_bytes`; el prelude → `Result<int, string>`.
     WriteFileBytes,

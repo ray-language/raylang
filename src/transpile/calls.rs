@@ -2971,6 +2971,23 @@ impl Transpiler {
                 out.push(')');
             }
                         // M147: std/embed — la tabla horneada (sin feature: helpers inline, vía rustc intacta).
+            // M380 (rayplay #151): base64 en Rust — el mismo `b64.rs` del runtime, incluido textualmente.
+            "base64_decode" if name.starts_with("__") => {
+                self.needs_b64 = true;
+                out.push_str("__ray_b64::decode_tagged(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "base64_encode" if name.starts_with("__") => {
+                self.needs_b64 = true;
+                out.push_str("Rc::<str>::from(__ray_b64::encode(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("))");
+            }
             "embed_read" if name.starts_with("__") => {
                 self.needs_embed = true;
                 out.push_str("__ray_embed_read(&*");

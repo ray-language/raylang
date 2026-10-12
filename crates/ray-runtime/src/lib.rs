@@ -9,6 +9,7 @@
 //! así un build "slim" de raylang (sin `net-tls`) no arrastra nada.
 
 pub mod audio;
+pub mod b64;
 pub mod bigint;
 pub mod keychain;
 pub mod deflate;

@@ -127,6 +127,17 @@ fn transpile_src(src: &str) -> String {
     transpile(&prog).expect("transpile").source
 }
 
+/// M384 (ray-elements #133/#137): `[] + xs` toma el tipo del otro operando también en nativo (antes
+/// «empty array literal without an annotation»), y una tupla con `Option.None` dentro de un brazo
+/// de `match` transpila (el checker ya le dio el tipo del otro brazo).
+#[test]
+fn empty_array_concat_and_tuples_with_none_transpile() {
+    let rs = transpile_src("fn main() -> int { let entries: [string] = [\"a\"]; let q: [string] = [] + entries; let r = [] + entries; q.len() + r.len() }");
+    assert!(rs.contains("__rt_v.extend("), "{rs}");
+    let rs = transpile_src("fn f(r: Result<int, string>) -> int { let t = match (r) { Result.Ok(v) => (\"ok\", Option.Some(v)), Result.Err(e) => (\"error\", Option.None) }; match (t) { (_, Option.Some(v)) => v, (_, Option.None) => 0 } }\nfn main() -> int { f(Result.Ok(1)) }");
+    assert!(rs.contains("fn f("), "{rs}");
+}
+
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
 /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
 /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.

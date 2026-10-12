@@ -457,6 +457,17 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` —siempre una caden
 a la raíz) o `geo = "git+https://host/geo@v1.0"`; sin tablas inline— y se importan igual
 (`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
 
+**Cómo se importa una dependencia (M383).** El primer segmento del `import` es la **clave** de
+`[dependencies]` y lo que sigue, el archivo de módulo en la **raíz del paquete** (no bajo `src/`):
+`ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` es `lib/ray-ds/bridge.ray`, se llame como
+se llame el directorio (`import ray_ds;` solo si tiene `mod.ray`). Dentro de un paquete, sus módulos
+se importan entre sí por el `[package] name` (`import ray_ds/version;` desde `bridge.ray`): la misma
+forma que usa un consumidor, válida en cualquier clon. Una dependencia `git+` es la **raíz del
+repo** (la copia vive en `.ray-deps/<clave>/`); no hay sintaxis de subdirectorio: un paquete que vive
+dentro de un repo mayor se publica como repo propio con `ray registry mirror` (§14), que es como
+llegan al índice los paquetes de `packages/`. Un «module not found» de una clave declarada dice dónde
+vive el paquete y que no tiene ese módulo.
+
 ### `packages/web` — el framework de aplicación (estilo Express, sobre `net/webserver`)
 
 | Superficie | Qué hace |

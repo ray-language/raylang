@@ -547,8 +547,23 @@ fn expect_ident(p: Parser, what: string) -> Result<string, ParseError> {
             advance(p);
             Result.Ok(n)
         },
+        TokKind.IntType => Result.Err(perr_here(p, type_name_as_ident(what, "int"))),
+        TokKind.FloatType => Result.Err(perr_here(p, type_name_as_ident(what, "float"))),
+        TokKind.BoolType => Result.Err(perr_here(p, type_name_as_ident(what, "bool"))),
+        TokKind.StringType => Result.Err(perr_here(p, type_name_as_ident(what, "string"))),
+        TokKind.CharType => Result.Err(perr_here(p, type_name_as_ident(what, "char"))),
         _ => Result.Err(perr_here(p, "expected " + what)),
     }
+}
+
+// M385 (ray-elements #134): el nombre de un tipo primitivo donde va un identificador (espejo del
+// mensaje de Rust, byte a byte).
+fn type_name_as_ident(what: string, ty: string) -> string {
+    "expected "
+        + what
+        + ", but '"
+        + ty
+        + "' is a type name and cannot be used as an identifier (rename it)"
 }
 
 // =====================================================================

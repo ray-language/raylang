@@ -360,7 +360,7 @@ pub(super) fn percent_decode(s: &str) -> String {
 
 /// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
 /// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
-pub(super) fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
+pub(super) fn dep_roots_for(entry: &Path) -> loader::DepRoots {
     // Compartida con el CLI (`deps::dependency_roots_for`): caché `.ray-deps/` + el PADRE de cada
     // dependencia por ruta (`nombre = "path:<dir>"`). Sin esto, un proyecto con path-deps (como
     // `examples/db`) compilaba con `ray run` pero el editor marcaba "no se encuentra el módulo".

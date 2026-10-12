@@ -1041,6 +1041,33 @@ fn if_branches_infer_each_other_without_an_expected_type() {
     err_contains("fn main() -> int { let o = if (true) { Option.Some(1) } else { 2 }; 0 }", "the if branches have different types: Option<int> and int");
 }
 
+/// M384 (ray-elements #133): `[] + xs` — el vacío toma el tipo del otro operando de `+`, en
+/// cualquier orden y con o sin anotación del `let`; dos vacíos siguen sin poder inferirse.
+#[test]
+fn an_empty_array_concatenated_takes_the_type_of_the_other_operand() {
+    let ok = "fn main() -> int { let entries: [string] = [\"a\", \"b\"]; let q: [string] = [] + entries; let r = entries + []; let s = [] + entries; q.len() + r.len() + s.len() }";
+    assert!(check_src(ok).is_ok(), "{:?}", check_src(ok));
+    err_contains("fn main() -> int { let q = [] + []; q.len() }", "cannot infer the type of []");
+    err_contains("fn main() -> int { let q = [] + 1; 0 }", "cannot infer the type of []");
+}
+
+/// M384 (ray-elements #137): una tupla recibe el tipo esperado elemento a elemento — así el
+/// `Option.None` de `("error", Option.None)` toma `Option<string>` del otro brazo del `match`, del
+/// tipo de retorno o de la anotación del `let`.
+#[test]
+fn a_tuple_propagates_the_expected_type_to_its_elements() {
+    let arms = "fn f(r: Result<int, string>) -> int { let t = match (r) { Result.Ok(v) => (\"ok\", Option.Some(v)), Result.Err(e) => (\"error\", Option.None) }; match (t) { (_, Option.Some(v)) => v, (_, Option.None) => 0 } }\nfn main() -> int { f(Result.Ok(1)) }";
+    assert!(check_src(arms).is_ok(), "{:?}", check_src(arms));
+    let first_arm = "fn f(r: Result<int, string>) -> int { let t = match (r) { Result.Err(e) => (\"error\", Option.None), Result.Ok(v) => (\"ok\", Option.Some(v)) }; match (t) { (_, Option.Some(v)) => v, (_, Option.None) => 0 } }\nfn main() -> int { f(Result.Ok(1)) }";
+    assert!(check_src(first_arm).is_ok(), "{:?}", check_src(first_arm));
+    let ret = "fn g(ok: bool) -> Option<(string, Option<string>)> { Option.Some(if (ok) { (\"ok\", Option.Some(\"t\")) } else { (\"error\", Option.None) }) }\nfn main() -> int { match (g(true)) { Option.Some(_) => 0, Option.None => 1 } }";
+    assert!(check_src(ret).is_ok(), "{:?}", check_src(ret));
+    let annotated = "fn main() -> int { let t: (string, Option<int>) = (\"a\", Option.None); match (t) { (_, Option.None) => 0, (_, Option.Some(v)) => v } }";
+    assert!(check_src(annotated).is_ok(), "{:?}", check_src(annotated));
+    err_contains("fn main() -> int { let t: (string, Option<int>) = (\"a\", Option.Some(\"s\")); 0 }", "cannot be int and string");
+    err_contains("fn main() -> int { let t = (\"a\", Option.None); 0 }", "could not infer the type parameter 'T'");
+}
+
 /// M307 (IDEAS §97 #7): una constante puede ser una tupla, un arreglo de tuplas o referir a
 /// constantes declaradas antes; una llamada o una constante declarada después siguen sin valer.
 #[test]

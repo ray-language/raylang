@@ -3198,10 +3198,15 @@ impl Transpiler {
                 UnaryOp::BitNot => Type::Int,
                 UnaryOp::Neg => self.type_of(expr)?,
             },
-            ExprKind::Binary { op, left, .. } => match op {
+            ExprKind::Binary { op, left, right } => match op {
                 BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
                 | BinaryOp::And | BinaryOp::Or => Type::Bool,
-                _ => self.type_of(left)?, // aritmética/bitwise/concat: el tipo del operando izquierdo
+                // Aritmética/bitwise/concat: el tipo del operando izquierdo. M384 (ray-elements
+                // #133): `[] + xs` — el vacío no tipa solo; lo da el otro operando.
+                _ => match &left.kind {
+                    ExprKind::ArrayLit(v) if v.is_empty() => self.type_of(right)?,
+                    _ => self.type_of(left)?,
+                },
             },
             ExprKind::Call { callee, args } => {
                 let (n, recv) = resolve_callee(callee)?;

@@ -824,12 +824,18 @@ pub(super) fn import_context(prefix: &str) -> Option<ImportCtx> {
 /// Las raíces de resolución de módulos para el archivo `entry` (M45c): la raíz del proyecto (si hay
 /// `main.ray` ancestro) seguida de las de dependencias (`.ray-deps`). Reusa la lógica de los
 /// diagnósticos modulares.
-pub(super) fn import_roots(entry: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
+pub(super) fn import_roots(entry: &Path) -> loader::DepRoots {
+    let mut roots = loader::DepRoots::default();
     if let Some(root) = project_root_for(entry) {
-        roots.push(root);
+        roots.push_dir(root);
     }
-    roots.extend(dep_roots_for(entry));
+    let deps = dep_roots_for(entry);
+    for d in deps.dirs {
+        roots.push_dir(d);
+    }
+    for (n, d) in deps.packages {
+        roots.push_package(&n, d);
+    }
     roots
 }
 
@@ -976,11 +982,11 @@ pub(super) fn code_block_snippets() -> Vec<Json> {
 /// La fuente del módulo `path` (IDEAS §56): la stdlib **embebida** primero — `std/…` no existe en
 /// disco fuera del repo, el mismo orden de resolución que el loader — y si no, el archivo resuelto
 /// en las raíces del proyecto.
-pub(super) fn module_source(roots: &[PathBuf], path: &str) -> Option<String> {
+pub(super) fn module_source(roots: &loader::DepRoots, path: &str) -> Option<String> {
     if let Some(src) = crate::stdlib::embedded(path) {
         return Some(src.to_string());
     }
-    let file = loader::resolve_module_path(roots, path).ok()??;
+    let file = loader::resolve_module(roots, path).ok()??;
     std::fs::read_to_string(file).ok()
 }
 

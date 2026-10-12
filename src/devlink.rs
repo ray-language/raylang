@@ -889,7 +889,7 @@ fn load_and_compile(project: &Path) -> Result<crate::bytecode::CompiledProgram, 
     // D4: las dependencias `path = …` que el anfitrión empaquetó fuera de la raíz.
     let path_deps = project.join(".ray-path-deps");
     if path_deps.is_dir() {
-        roots.push(path_deps);
+        roots.push_dir(path_deps);
     }
     let mut loaded = crate::loader::load_with_deps(&entry, &roots).map_err(|e| e.message)?;
     crate::checker::check(&mut loaded.program).map_err(|e| format!("type error at {}:{}: {}", e.line, e.col, e.msg))?;

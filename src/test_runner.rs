@@ -66,7 +66,7 @@ struct Suite {
 /// corren en la suite del proyecto y repetirlas duplicaría el informe. `filter`, si está,
 /// selecciona las pruebas cuyo nombre de cara al usuario lo **contiene** (subcadena). Imprime el
 /// informe y los errores.
-pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>) -> i32 {
+pub fn run(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, filter: Option<&str>) -> i32 {
     run_with(suite_paths, dep_roots, filter, None)
 }
 
@@ -75,7 +75,7 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
 /// como argumento) y corre cada prueba como un proceso: mismo informe, mismos códigos de salida.
 /// Una suite cuyo binario no compila aborta la corrida (el build nativo sale del proceso con el
 /// error de rustc; un fallo de front-end sigue contando como «suite que no compila», 65).
-pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>, native: Option<crate::cli::NativeTestOptions>) -> i32 {
+pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, filter: Option<&str>, native: Option<crate::cli::NativeTestOptions>) -> i32 {
     // M146: una suite no abre ventanas reales por defecto — std/ui corre headless bajo el
     // runner (RAY_UI_BACKEND en el entorno sigue mandando si el usuario lo puso).
     #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]

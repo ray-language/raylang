@@ -22,7 +22,14 @@ pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
 }
 
 /// Like `open`, with a LATENCY HINT (M158): `latency_ms` sizes the ring/device buffers and
-/// the feeder chunk — a rhythm game wants 20-50 ms, a radio tolerates 200-1000. Smaller =
+/// the feeder chunk — a rhythm game wants 20-50 ms, a radio tolerates 200-1000. Accepted
+/// range: 20–1000 (or 0 = the default); anything else is `Err`. The hint is the TOTAL queued
+/// between `write` and the speaker (`write` parks once ~that much is pending). Floor on macOS:
+/// ~50 ms in total (a 20 ms socket, three 5 ms device buffers and a ring that keeps the
+/// anti-click ramp plus three buffers); from 50 ms up the queue follows the hint. iOS floor:
+/// ~240 ms (the system freezes the app for ~200 ms on lock/unlock). `RAY_AUDIO_TRACE=1` prints
+/// the ring size, the keepalive silence inserted, fade-outs and gaps when the output closes
+/// (a clean stream has 1 fade-out and 0 gaps). Smaller =
 /// more reactive but more underrun-prone; 0 (or plain `open`) = the 200 ms default. On
 /// Android, a hint of 50 ms or less requests the LOW_LATENCY performance mode.
 pub fn open_latency(sample_rate: int, channels: int, latency_ms: int) -> Result<int, string> {

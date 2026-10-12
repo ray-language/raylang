@@ -70,10 +70,18 @@ const SO_SNDBUF: i32 = 0x1001;
 const SO_RCVBUF: i32 = 0x1002;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const SO_NOSIGPIPE: i32 = 0x1022;
-/// El mínimo de cola entre el programa y el alimentador (octetos): por debajo, el coste por
-/// syscall se come el margen. A 8 kHz mono son 128 ms; a 44,1 kHz estéreo, 12 ms.
-#[cfg(unix)]
-const MIN_QUEUE_BYTES: i64 = 2048;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const SO_SNDLOWAT: i32 = 0x1003;
+/// M378 (1942 #108): la cola entre el programa y el alimentador en octetos — la mitad de la
+/// latencia pedida y nunca menos de dos chunks del alimentador (el coste por syscall ya lo acota
+/// el suelo de 256 B del chunk). Antes había además un suelo de 2 KiB que a 22 050 Hz mono valía
+/// 46 ms: con los otros dos suelos en bytes de CoreAudio, ninguna pista bajaba de ~130 ms. Pura.
+fn queue_budget_bytes(bytes_per_sec: i64, latency_ms: i64, chunk: usize) -> i32 {
+    // Suelo de 20 ms de audio en el socket: lo que tarda en despertar la fibra que escribe
+    // (medido a 22 050 Hz mono con el anillo ya sano: con 10 ms la VM cortaba la salida — 3 s
+    // de audio tardaban 5,3 s —; con 20 ms, cero huecos en 22/44,1/48 kHz, mono y estéreo).
+    (bytes_per_sec * latency_ms / 2000).max(bytes_per_sec * 20 / 1000).max(chunk as i64 * 2) as i32
+}
 
 /// El control de una salida viva, para `drain`: cuántos octetos ha aceptado el alimentador que
 /// aún no ha entregado al backend, y los parámetros para estimar la latencia del dispositivo.
@@ -151,7 +159,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
         // que `open_latency(…, 200)` encolaba ~600 ms. Reparto: socket ½, backend ½ (anillo ¼ +
         // buffers ¼ en CoreAudio; ALSA/WASAPI ya pedían ½ al dispositivo). Nunca menos de dos
         // chunks del alimentador, para que el flujo no se corte por el propio reparto.
-        let budget = (bytes_per_sec * latency_ms / 2000).max(MIN_QUEUE_BYTES).max(chunk as i64 * 2) as i32;
+        let budget = queue_budget_bytes(bytes_per_sec, latency_ms, chunk);
         unsafe {
             let v = &budget as *const i32 as *const core::ffi::c_void;
             for fd in [fd_r, fd_w] {
@@ -163,6 +171,16 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             {
                 let one: i32 = 1;
                 setsockopt(fd_w, SOL_SOCKET, SO_NOSIGPIPE, &one as *const i32 as *const core::ffi::c_void, 4);
+            }
+            // M378 (1942 #108): en BSD/macOS el socket solo se reporta ESCRIBIBLE (kqueue, la
+            // espera de la fibra) con al menos SO_SNDLOWAT libre — 2 KiB por defecto, recortado
+            // al tamaño del buffer si este es menor —, así que con un buffer de ~30 ms la fibra
+            // solo despertaba con el socket VACÍO y el anillo + los búferes (25 ms) no cubrían
+            // el despertar: silencio. Con la marca en un chunk, despierta en cuanto cabe uno.
+            #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+            {
+                let lowat: i32 = chunk as i32;
+                setsockopt(fd_w, SOL_SOCKET, SO_SNDLOWAT, &lowat as *const i32 as *const core::ffi::c_void, 4);
             }
         }
         // El extremo de escritura NO-bloqueante: el contrato de `socket_write_nb` (WouldBlock =
@@ -540,6 +558,13 @@ mod coreaudio {
         /// sí, el siguiente bloque con datos arranca con una rampa de entrada. Solo lo toca el
         /// callback (un hilo), con el anillo bloqueado.
         after_gap: std::sync::atomic::AtomicBool,
+        /// M378: contadores de diagnóstico (`RAY_AUDIO_TRACE=1` los imprime al cerrar): octetos de
+        /// silencio de keepalive insertados (anillo seco) y salidas fundidas (anillo casi seco).
+        silence_bytes: std::sync::atomic::AtomicUsize,
+        fade_outs: std::sync::atomic::AtomicUsize,
+        /// M378: transiciones dato → silencio (huecos). Un flujo limpio tiene exactamente uno:
+        /// la cola final. Cada hueco a mitad de flujo es un underrun audible.
+        gaps: std::sync::atomic::AtomicUsize,
         /// M332: fotogramas de la rampa anti-clic (10 ms). Un corte a mitad de onda — `close`,
         /// cambio de pista, o el anillo vaciándose porque iOS congeló el proceso al bloquear la
         /// pantalla — suena como un clic; atenuado a cero en unos milisegundos es un silencio
@@ -621,6 +646,7 @@ mod coreaudio {
                     ramp(out, fb, 0, shared.ramp_frames.min(frames), true);
                 }
                 if fading_out {
+                    shared.fade_outs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let n = shared.ramp_frames.min(frames);
                     ramp(out, fb, frames - n, n, false);
                     shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -631,10 +657,13 @@ mod coreaudio {
                 // Anillo seco: el MÍNIMO de silencio que mantiene viva la cola (~8 ms) — un
                 // buffer sin encolar sale de la rotación y la cola muere.
                 let silence = shared.keepalive_bytes.min(cap).max(fb);
+                shared.silence_bytes.fetch_add(silence, std::sync::atomic::Ordering::Relaxed);
                 for slot in out.iter_mut().take(silence) {
                     *slot = 0;
                 }
-                shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
+                if !shared.after_gap.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    shared.gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 (*buf).audio_data_byte_size = silence as u32;
             }
             shared.space.notify_all();
@@ -673,18 +702,32 @@ mod coreaudio {
         // salta otro tanto) mientras la cola sigue sonando: lo único que la alimenta entonces
         // es lo que ya tiene encolado DENTRO. Suelo en iOS: 4 búferes de 60 ms (240 ms
         // encolados) y un anillo de al menos 100 ms, independientes de la latencia pedida (que
-        // sigue mandando por encima). En macOS sobra CPU y se respeta la petición tal cual.
-        let (min_buf_ms, min_ring_ms): (usize, usize) = if cfg!(target_os = "ios") { (60, 100) } else { (0, 0) };
-        let cap = (bytes_per_sec * latency_ms as usize / 4000)
-            .max(bytes_per_sec * min_ring_ms / 1000)
-            .max(4096)
-            / frame_bytes
-            * frame_bytes;
-        let buf_size = ((bytes_per_sec * latency_ms as usize / 12000)
+        // sigue mandando por encima). En macOS sobra CPU y se respeta la petición tal cual,
+        // con suelos de 5 ms de anillo y 5 ms por búfer.
+        // M378 (1942 #108): los suelos van en MILISEGUNDOS, no en octetos. Los antiguos (4 KiB de
+        // anillo, 1 KiB por búfer) a 22 050 Hz mono eran 93 + 70 ms: con ellos y el del socket,
+        // `open_latency(…, 20)` encolaba ~130 ms, lo mismo que `…, 100`. Queda un suelo absoluto
+        // mínimo (256 B) para que un búfer de AudioQueue nunca sea de un puñado de frames.
+        // La rampa anti-clic (M332) se ACORTA con la pista: 10 ms con 80 ms o más, lat/8 por
+        // debajo (20 → 2,5 ms; nunca menos de 2). Y el anillo nunca baja de rampa + 3 búferes:
+        // el callback retiene la rampa en el anillo para poder fundir si el flujo se corta, y
+        // con un anillo igual a la rampa (10 ms a pista 20, el caso del hallazgo) CADA callback
+        // lo vaciaba con fundido de salida (321 fundidos en 3 s) y el siguiente entraba con
+        // rampa: señal troceada y anillo seco.
+        let (min_buf_ms, min_ring_ms): (usize, usize) = if cfg!(target_os = "ios") { (60, 100) } else { (5, 0) };
+        let ramp_ms = (latency_ms as usize / 8).clamp(2, 10);
+        let buf_ms_floor = latency_ms as usize / 12;
+        let buf_size = ((bytes_per_sec * buf_ms_floor / 1000)
             .max(bytes_per_sec * min_buf_ms / 1000)
-            .max(1024)
+            .max(256)
             / frame_bytes
             * frame_bytes) as u32;
+        let ring_floor = bytes_per_sec * ramp_ms / 1000 + 3 * buf_size as usize;
+        let cap = (bytes_per_sec * latency_ms as usize / 4000)
+            .max(bytes_per_sec * min_ring_ms / 1000)
+            .max(ring_floor)
+            / frame_bytes
+            * frame_bytes;
         // ~8 ms de silencio de keepalive (el cebado son 3 → ~24 ms de retraso inicial, no 150).
         let keepalive_bytes = (bytes_per_sec / 125).max(frame_bytes) / frame_bytes * frame_bytes;
         let shared = Arc::new(Shared {
@@ -694,7 +737,10 @@ mod coreaudio {
             frame_bytes,
             keepalive_bytes,
             after_gap: std::sync::atomic::AtomicBool::new(true), // la primera salida arranca suave
-            ramp_frames: (rate as usize / 100).max(64),       // 10 ms
+            silence_bytes: std::sync::atomic::AtomicUsize::new(0),
+            fade_outs: std::sync::atomic::AtomicUsize::new(0),
+            gaps: std::sync::atomic::AtomicUsize::new(0),
+            ramp_frames: (rate as usize * ramp_ms / 1000).max(16),
         });
         let user = Arc::into_raw(shared.clone()) as *mut std::ffi::c_void;
         let mut q: AudioQueueRef = std::ptr::null_mut();
@@ -765,6 +811,15 @@ mod coreaudio {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
+            if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
+                eprintln!(
+                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, gaps {} (1 = only the tail)",
+                    self.shared.cap,
+                    self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                    self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
+                    self.shared.gaps.load(std::sync::atomic::Ordering::Relaxed)
+                );
+            }
             unsafe {
                 AudioQueueStop(self.q, 0);
                 AudioQueueDispose(self.q, 0);
@@ -1390,5 +1445,23 @@ mod wasapi {
             self.device = std::ptr::null_mut();
             self.enumerator = std::ptr::null_mut();
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod budget_tests {
+    use super::queue_budget_bytes;
+
+    /// M378 (1942 #108): el presupuesto del socket sigue la pista pedida (½) desde 20 ms; el único
+    /// suelo son dos chunks del alimentador. A 22 050 Hz mono, 20 ms ya no son 2 KiB (46 ms).
+    #[test]
+    fn the_queue_budget_follows_small_latency_hints() {
+        let bps = 22_050 * 2;
+        let chunk = |lat: i64| ((bps * lat / 4000).max(256) as usize) & !1;
+        assert_eq!(queue_budget_bytes(bps, 20, chunk(20)), 882); // ½ = 441 → suelo de 20 ms
+        assert_eq!(queue_budget_bytes(bps, 50, chunk(50)), 1102); // 25 ms
+        assert_eq!(queue_budget_bytes(bps, 80, chunk(80)), 1764); // 40 ms
+        assert_eq!(queue_budget_bytes(bps, 200, chunk(200)), 4410); // 100 ms
+        assert!(queue_budget_bytes(bps, 20, chunk(20)) < 2048, "el suelo de 2 KiB ya no existe");
     }
 }

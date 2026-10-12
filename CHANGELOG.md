@@ -11,6 +11,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   y el listado de un módulo (`ray_doc std/x` del MCP, `ray doc std/x`, módulos del proyecto) abre
   con ella. `std/template` la estrena contando lo que sus firmas no cuentan: la sintaxis común y
   las plantillas COMPILADAS `.ray.html` (`{% params %}` primero, `{% import %}`, `page.render(…)`).
+- **`audio.open_latency` honra las pistas pequeñas (M378, 1942 #108, issue #512)**: a 22 050 Hz
+  mono ninguna pista por debajo de 100 ms bajaba de ~130 ms en cola, porque los suelos de las tres
+  etapas iban en octetos (2 KiB de socket, 4 KiB de anillo, 1 KiB por búfer) y en milisegundos
+  eran 46 + 93 + 70. Ahora los suelos son de tiempo (socket 20 ms, búferes 5 ms, anillo = rampa
+  anti-clic + 3 búferes; la rampa se acorta con la pista, lat/8 entre 2 y 10 ms), el socket fija
+  `SO_SNDLOWAT` a un chunk (en macOS solo se reportaba escribible al vaciarse del todo) y la doc
+  dice el rango 20–1000 y el suelo real (~50 ms en macOS). Medido en 22/44,1/48 kHz, mono y
+  estéreo, VM y nativo: cero huecos; la cola sigue la pista desde 50 ms. `RAY_AUDIO_TRACE=1`
+  imprime al cerrar el anillo, el silencio de keepalive, los fundidos y los huecos.
 
 ## 1.27.46 — 2026-10-11
 

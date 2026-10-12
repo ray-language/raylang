@@ -17350,3 +17350,29 @@ gramática ni en el formateador); `raydoc::module_doc` las extrae del texto y la
 Se descartó meter el texto en la fila de REFERENCE o solo en `llms.txt`: el agente que pregunta
 `ray_doc std/template` debe recibir la respuesta ahí, y la fuente de verdad debe vivir junto al
 código. La convención de idioma queda: `//` español interno, `///` y `//!` inglés público.
+## 359. M378 — Pistas de latencia pequeñas: suelos en tiempo, no en octetos (oct 2026)
+
+1942 y rallyx (#108, la primera issue de GitHub del flujo nuevo, #512) medían ~130 ms en cola
+pidieran 20, 50 u 80 ms a 22 050 Hz mono, y por eso adelantaban el reloj 30 ms a mano. Tres
+causas, todas en el backend CoreAudio y en la cola del programa:
+
+1. **Suelos en octetos.** M298/M326 pusieron suelos de 2 KiB (socket), 4 KiB (anillo) y 1 KiB
+   (búfer) pensando en 44,1 kHz estéreo (12 ms). A 22 050 Hz mono son 46 + 93 + 70 ms: el suelo
+   era el techo. Pasan a milisegundos (20 / 5 / rampa + 3 búferes).
+2. **Anillo igual a la rampa.** El callback retiene la rampa anti-clic (10 ms, M332) para poder
+   fundir si el flujo se corta. Con pista 20 el anillo valía 10 ms: cada callback lo vaciaba con
+   fundido de salida (321 fundidos en 3 s) y el siguiente entraba con rampa — señal troceada.
+   La rampa se acorta con la pista (lat/8, 2–10 ms) y el anillo nunca baja de rampa + 3 búferes
+   (con 2 bastaba UN callback de retraso del alimentador para fundir: 50 fundidos a 44,1 kHz).
+3. **`SO_SNDLOWAT`.** En BSD/macOS el socket solo se reporta escribible con ≥ SO_SNDLOWAT libre
+   (2 KiB, recortado al tamaño del buffer): con un buffer de 30 ms la fibra despertaba solo con el
+   socket VACÍO. Con la marca en un chunk despierta en cuanto cabe uno.
+
+La métrica que guió el arreglo no fue la cola «al primer bloqueo» (engañosa: medía 27 ms con un
+flujo que en realidad se troceaba) sino dos contadores en el callback que `RAY_AUDIO_TRACE=1`
+imprime al cerrar: fundidos y HUECOS (transiciones dato → silencio; un flujo limpio tiene 1 y 0).
+Con ellos se descartó el scheduler de fibras (el nativo sin fibras, con `poll(2)`, fallaba igual)
+y se vio que la VM fallaba igual que el nativo. Resultado: cero huecos en 22/44,1/48 kHz, mono y
+estéreo, VM y nativo; suelo total ~50 ms en macOS y la cola sigue la pista desde 50 ms. iOS
+conserva sus suelos propios (M332). Se descartó bajar el socket a 10 ms (la VM cortaba el flujo:
+3 s de audio en 5,3 s) y mantener 30 (sobraba una vez sano el anillo).

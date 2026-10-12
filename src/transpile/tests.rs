@@ -196,7 +196,8 @@ fn transpiles_for_range_loop() {
     let rust = transpile_src(
         "fn main() { var acc: int = 0; for i in 0..100 { acc = acc + i; } print(acc); }",
     );
-    assert!(rust.contains("for i in (0i64)..(100i64)"), "{}", rust);
+    // M388: los extremos van a temporales antes del bucle (ver `for_range_bounds_are_evaluated_before_the_loop`).
+    assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = 100i64; for i in __rt_lo..__rt_hi"), "{}", rust);
     assert!(rust.contains("let mut acc: i64 = 0i64"), "{}", rust); // anotación emitida (pina inferencia)
 }
 
@@ -905,13 +906,13 @@ fn string_index_goes_through_the_char_cache() {
     assert!(rust.contains("Rc::ptr_eq(&e.s, s)"), "identidad por Rc: {}", rust);
 }
 
-/// Los extremos de un `for` de rango se emiten ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
-/// bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten un bloque (`len` de string,
-/// concatenación, `push`). Sin paréntesis, `for i in 0..s.len() { … }` no compilaba.
+/// Los extremos de un `for` de rango se evalúan a TEMPORALES antes del bucle (M388): así un extremo
+/// que emite un bloque (`len` de string, concatenación, `push`) no se confunde con el cuerpo del
+/// `for` de Rust, y el `borrow()` de un `.len()` de arreglo no vive durante el cuerpo.
 #[test]
-fn parenthesizes_the_bounds_of_a_range_loop() {
+fn hoists_the_bounds_of_a_range_loop() {
     let rust = transpile_src("fn main() { let s = \"abc\"; for i in 0..s.len() { print(s[i]); } }");
-    assert!(rust.contains("for i in (0i64)..(__ray_char_len(&(s.clone())))"), "extremos entre parentesis: {}", rust);
+    assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = __ray_char_len(&(s.clone())); for i in __rt_lo..__rt_hi"), "extremos en temporales: {}", rust);
 }
 
 /// El modo de iteración de un `for … in` lo decide el tipo del CONTENEDOR, no el del elemento:

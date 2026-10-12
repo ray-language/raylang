@@ -17335,3 +17335,18 @@ solo en el CHANGELOG; y un valor sin sentido pasaba tal cual al `Info.plist`. Ah
 REFERENCE/`llms.txt` y `ray bundle` avisa (`open_type_warning`, pura y testeada) de lo que no es
 alias, extensión, MIME ni UTI con punto. Se mantiene el mapeo de `any` a `public.item` (incluye
 carpetas; `public.data` las excluiría).
+
+## 358. M376 — Doc de módulo `//!`: lo que las firmas no cuentan (oct 2026)
+
+ray-ds (#126) y ray-sublime reclamaron dos veces que `ray_doc std/template` «no menciona las
+plantillas»: el listado de un módulo era solo su superficie (firmas), y la cabecera de
+`template.ray` eran comentarios `//` internos en español. El hueco es general: un módulo cuyo
+valor está en una SINTAXIS (plantillas, regex, rutas de `web`) no se explica con firmas.
+
+La forma elegida es la de Rust: las líneas `//!` con que empieza el archivo son la doc del módulo,
+pública y en inglés como `///`. Para el lexer siguen siendo comentarios (cero cambios en la
+gramática ni en el formateador); `raydoc::module_doc` las extrae del texto y la muestran `ray doc`
+(bajo el título) y los dos listados de módulo del MCP (stdlib y proyecto), delante de las firmas.
+Se descartó meter el texto en la fila de REFERENCE o solo en `llms.txt`: el agente que pregunta
+`ray_doc std/template` debe recibir la respuesta ahí, y la fuente de verdad debe vivir junto al
+código. La convención de idioma queda: `//` español interno, `///` y `//!` inglés público.

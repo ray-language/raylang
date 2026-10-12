@@ -9,6 +9,26 @@ use crate::ast::*;
 
 /// Genera la documentación Markdown de `src`. `titulo` encabeza el documento (p. ej. el nombre del
 /// archivo). Error si el fuente no lexea/parsea.
+/// M376 (ray-ds #126): la documentación DE MÓDULO — las líneas `//!` con que empieza el archivo
+/// (tras líneas en blanco), como en Rust. Es doc pública (inglés, como `///`): la muestran
+/// `ray doc`, `ray_doc <módulo>` del MCP y el listado de un módulo del proyecto. Un comentario
+/// `//` ordinario la termina. `None` si el archivo no empieza por `//!`.
+pub fn module_doc(src: &str) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in src.lines() {
+        let t = line.trim_start();
+        if t.is_empty() && out.is_empty() {
+            continue;
+        }
+        match t.strip_prefix("//!") {
+            Some(rest) => out.push(rest.strip_prefix(' ').unwrap_or(rest).trim_end().to_string()),
+            None => break,
+        }
+    }
+    let text = out.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 pub fn generate(src: &str, title: &str) -> Result<String, String> {
     let tokens = crate::lexer::lex(src).map_err(|e| format!("{e}"))?;
     let program = crate::parser::parse(tokens).map_err(|e| format!("{e}"))?;
@@ -24,6 +44,10 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
 
     let mut out = String::new();
     out.push_str(&format!("# {title}\n\n"));
+    if let Some(doc) = module_doc(src) {
+        out.push_str(&doc);
+        out.push_str("\n\n");
+    }
 
     // --- Traits ---
     let traits: Vec<&TraitDef> = program.traits.iter().filter(|t| include(t.is_pub)).collect();
@@ -210,6 +234,16 @@ fn sig_trait(t: &TraitDef) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M376: `//!` al principio del archivo = doc de módulo; un `//` corriente la cierra; sin `//!`, nada.
+    #[test]
+    fn module_doc_is_the_leading_bang_comment_block() {
+        let src = "\n//! A module.\n//!\n//!   Indented line.\n// interno\n//! no cuenta\npub fn f() {}\n";
+        assert_eq!(module_doc(src).as_deref(), Some("A module.\n\n  Indented line."));
+        assert_eq!(module_doc("// solo interno\npub fn f() {}\n"), None);
+        let md = generate(src, "m").unwrap();
+        assert!(md.starts_with("# m\n\nA module.\n\n  Indented line.\n\n"), "{md}");
+    }
 
     #[test]
     fn doc_lines_above_does_not_overflow_with_a_line_outside_of_range() {

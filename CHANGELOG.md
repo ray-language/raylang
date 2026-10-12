@@ -14,6 +14,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `C.push`) sigue dando un arreglo fresco, así que mutar un alias no cambia lo que leen los demás; un
   `const` de tuplas o structs no cambia.
 
+## Sin publicar
+
+- **Nativo: `fs.sync` ya no para el worker de fibras (M392, raykv #155, issue #520)**: con fibras,
+  `fs.sync` (F_FULLFSYNC en APFS, ~4–5 ms) corre en el pool bloqueante sobre un `try_clone` del
+  descriptor y la fibra aparca; el worker sigue con sus otras fibras. Antes el actor del AOF
+  bloqueaba el hilo 5 ms por petición y, en una de cada cuatro corridas, las conexiones nacidas en su
+  worker esperaban de 0,5 s a toda la corrida (la cesión cada 32 operaciones no alcanza a una syscall
+  de 5 ms). Repro de raykv (50 conexiones × 60 `fs.sync`): peor latencia 1,1–7,9 s → 242–265 ms,
+  igual en todos los workers (la cola pura), mismo total. `sync_data` (decenas de µs) sigue inline.
+
 ## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:

@@ -678,6 +678,12 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_schemeClose(_env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, h: i64) {\n",
             "    ray_runtime::ui::android_scheme_close(h)\n",
             "}\n",
+            // M382: la respuesta del selector de archivos del shell.
+            "#[cfg(target_os = \"android\")]\n",
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_pickResult(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, id: i64, paths: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {\n",
+            "    ray_runtime::ui::android_pick_result(env, id, paths, err)\n",
+            "}\n",
             // M323: el shell declara sus capacidades antes de start().
             "#[cfg(target_os = \"android\")]\n",
             "#[unsafe(no_mangle)]\n",

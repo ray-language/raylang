@@ -132,6 +132,88 @@ public class MainActivity extends Activity {
     // El <input type="file"> de la página abre el selector del sistema.
     private static final int RAY_FILE_CHOOSER = 7001;
     private ValueCallback<Uri[]> rayFileCallback = null;
+    // M382: `ui.pick_file*` del programa → ACTION_OPEN_DOCUMENT; lo elegido se COPIA al cacheDir
+    // de la app (un content:// no es una ruta) y las rutas vuelven por RayBridge.pickResult.
+    private static final int RAY_PICK = 7002;
+    private long rayPickId = 0;
+    static MainActivity rayCurrent = null;
+
+    void rayPick(String spec) {
+        String[] f = spec.split("\n", -1); // id, kind, title, multiple, extensiones (a,b,c)
+        long id = Long.parseLong(f[0]);
+        if (rayPickId != 0) {
+            RayBridge.pickResult(id, "", "ui: a file picker is already open");
+            return;
+        }
+        rayPickId = id;
+        Intent in = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        in.addCategory(Intent.CATEGORY_OPENABLE);
+        in.setType("*/*");
+        java.util.ArrayList<String> mimes = new java.util.ArrayList<>();
+        for (String ext : f[4].split(",")) {
+            if (ext.isEmpty()) continue;
+            String m = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase());
+            if (m != null && !mimes.contains(m)) mimes.add(m);
+        }
+        if (!mimes.isEmpty()) in.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0]));
+        if (f[3].equals("1")) in.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        if (!f[2].isEmpty()) in.putExtra(Intent.EXTRA_TITLE, f[2]);
+        try {
+            startActivityForResult(in, RAY_PICK);
+        } catch (Exception e) {
+            rayPickId = 0;
+            RayBridge.pickResult(id, "", "ui: no file picker on this device: " + e);
+        }
+    }
+
+    private String rayDisplayName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (i >= 0 && c.getString(i) != null) return c.getString(i);
+            }
+        } catch (Exception ignored) {
+        }
+        String last = uri.getLastPathSegment();
+        return last == null ? "file" : last.replace('/', '_');
+    }
+
+    private void rayFinishPick(long id, int resultCode, Intent data) {
+        java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+        if (resultCode == RESULT_OK && data != null) {
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                uris.add(data.getData());
+            }
+        }
+        if (uris.isEmpty()) {
+            RayBridge.pickResult(id, "", null); // cancelado
+            return;
+        }
+        // Copiar fuera del hilo principal: un archivo de decenas de MB no debe congelar la UI.
+        new Thread(() -> {
+            StringBuilder paths = new StringBuilder();
+            String err = null;
+            java.io.File dir = new java.io.File(getCacheDir(), "ray-picked/" + System.currentTimeMillis());
+            dir.mkdirs();
+            for (Uri uri : uris) {
+                try (java.io.InputStream src = getContentResolver().openInputStream(uri)) {
+                    if (src == null) throw new java.io.IOException("no stream for " + uri);
+                    java.io.File out = new java.io.File(dir, rayDisplayName(uri));
+                    try (java.io.FileOutputStream dst = new java.io.FileOutputStream(out)) {
+                        byte[] buf = new byte[1 << 16];
+                        int n;
+                        while ((n = src.read(buf)) > 0) dst.write(buf, 0, n);
+                    }
+                    paths.append(out.getAbsolutePath()).append('\n');
+                } catch (Exception e) {
+                    err = "ui: could not read the picked file: " + e;
+                }
+            }
+            RayBridge.pickResult(id, paths.toString(), err);
+        }).start();
+    }
     // `[android] background_audio` — foreground service mientras la app está
     // en segundo plano, para que el sistema no mate el proceso (y con él std/audio).
     static final boolean RAY_BACKGROUND_AUDIO = /*RAY_BACKGROUND_AUDIO*/false;
@@ -226,6 +308,7 @@ public class MainActivity extends Activity {
         }
         setContentView(frame);
         RayBridge.attach(web);
+        rayCurrent = this;
         if (RayBridge.lastUrl != null) {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
         }
@@ -241,6 +324,12 @@ public class MainActivity extends Activity {
                 rayFileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
                 rayFileCallback = null;
             }
+            return;
+        }
+        if (requestCode == RAY_PICK) {
+            long id = rayPickId;
+            rayPickId = 0;
+            if (id != 0) rayFinishPick(id, resultCode, data);
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -378,6 +467,9 @@ public final class RayBridge {
     public static native int start();
 
     public static native void pushEvent(String kind, long window, String tag);
+
+    // M382: la respuesta del selector de archivos (ver MainActivity.rayPick).
+    public static native void pickResult(long id, String paths, String err);
     /*RAY_DEV_NATIVE*/
 
     // El esquema ray://app/… (ver RayScheme).
@@ -406,6 +498,18 @@ public final class RayBridge {
         MAIN.post(() -> {
             if (webView != null) {
                 webView.evaluateJavascript(js, null);
+            }
+        });
+    }
+
+    // M382: `ui.pick_file*` — el programa pide el selector; la Activity lo presenta.
+    public static void onPick(String spec) {
+        MAIN.post(() -> {
+            MainActivity a = MainActivity.rayCurrent;
+            if (a == null) {
+                pickResult(Long.parseLong(spec.split("\n", -1)[0]), "", "ui: no activity to present the file picker");
+            } else {
+                a.rayPick(spec);
             }
         });
     }
@@ -746,6 +850,10 @@ mod tests {
     fn the_templates_carry_the_load_bearing_pieces() {
         // Los invariantes del contrato: loadLibrary del nombre FIJO, los natives que casan
         // con los símbolos JNI emitidos, el shim M152, y el cleartext ACOTADO al loopback.
+        // M382: el selector de archivos del sistema (onPick → MainActivity.rayPick → pickResult).
+        assert!(RAY_BRIDGE_JAVA.contains("public static native void pickResult(long id, String paths, String err)"));
+        assert!(RAY_BRIDGE_JAVA.contains("public static void onPick(String spec)"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("Intent.ACTION_OPEN_DOCUMENT") && MAIN_ACTIVITY_JAVA.contains("requestCode == RAY_PICK"));
         assert!(RAY_BRIDGE_JAVA.contains("System.loadLibrary(\"ray_app\")"));
         assert!(RAY_BRIDGE_JAVA.contains("public static native int start()"));
         assert!(RAY_BRIDGE_JAVA

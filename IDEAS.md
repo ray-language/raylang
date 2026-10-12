@@ -4089,7 +4089,7 @@ la política va en PRODUCTION.md; `ray upgrade --unstable` tendría que resolver
 pre-release vía API (no existe `latest-prerelease`); el sufijo SemVer `-rc` es independiente del
 flag y no hace falta.
 
-## 106. Selector de archivos nativo en iOS y Android (rayplay #152, oct 2026)
+## 106. Selector de archivos nativo en iOS y Android (rayplay #152, oct 2026) — ✅ EJECUTADA como M382 (DESIGN §361; variante «copia al sandbox», sin carpetas ni guardar)
 
 `ui.pick_file*`/`save_file*` devuelven `Err` en móvil (M381 lo documenta). La vía actual —
 `<input type="file">` en la página y el contenido por `window.ray.request`— cruza el puente con el

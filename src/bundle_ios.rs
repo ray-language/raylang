@@ -73,6 +73,7 @@ const SCENE_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 /// también la guarda por si llega ANTES de que la escena conecte (programa madrugador).
 const SCENE_DELEGATE_M: &str = r#"#import "SceneDelegate.h"
 #import <WebKit/WebKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 extern void ray_ui_set_handlers(void (*open)(const char *, const char *),
                                 void (*eval)(const char *));
@@ -85,6 +86,10 @@ extern const char *ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
 extern void ray_ui_shell_capabilities(int caps); // 1 = este shell sirve ray://app
+// M382: el selector de archivos del sistema (`ui.pick_file*`).
+extern void ray_ui_set_pick_handler(void (*pick)(long long, const char *, const char *, int,
+                                                 const char *));
+extern void ray_ui_pick_result(long long id, const char *paths, const char *err);
 /*RAY_DEV_EXTERN*/
 
 // `ray://app/…` servido desde el programa (WKURLSchemeHandler; el MISMO resolver que el
@@ -204,6 +209,62 @@ static NSString *const rayJsShim =
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;
 
+// M382: `ui.pick_file*` → UIDocumentPickerViewController en modo COPIA (`asCopy:YES`): el
+// sistema deja una copia en el tmp de la app y las rutas que vuelven se leen con std/fs sin
+// permisos de alcance. El delegate vive en una estática mientras el picker está en pantalla.
+@interface RayPickDelegate : NSObject <UIDocumentPickerDelegate>
+@property long long pickId;
+@end
+
+static RayPickDelegate *rayPickDelegate = nil;
+
+@implementation RayPickDelegate
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSMutableArray<NSString *> *paths = [NSMutableArray new];
+    for (NSURL *u in urls) {
+        if (u.isFileURL) { [paths addObject:u.path]; }
+    }
+    ray_ui_pick_result(self.pickId, [[paths componentsJoinedByString:@"\n"] UTF8String], NULL);
+    rayPickDelegate = nil;
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    ray_ui_pick_result(self.pickId, "", NULL);
+    rayPickDelegate = nil;
+}
+@end
+
+static void ray_pick(long long id, const char *kind, const char *title, int multiple,
+                     const char *exts) {
+    NSString *e = [NSString stringWithUTF8String:exts ? exts : ""]; // copiar ANTES de despachar
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (rayPickDelegate != nil) {
+          ray_ui_pick_result(id, "", "ui: a file picker is already open");
+          return;
+      }
+      UIViewController *root = rayWebView.window.rootViewController;
+      if (root == nil) {
+          ray_ui_pick_result(id, "", "ui: no window to present the file picker");
+          return;
+      }
+      NSMutableArray<UTType *> *types = [NSMutableArray new];
+      for (NSString *ext in [e componentsSeparatedByString:@","]) {
+          if (ext.length == 0) { continue; }
+          UTType *t = [UTType typeWithFilenameExtension:ext];
+          if (t != nil) { [types addObject:t]; }
+      }
+      if (types.count == 0) { [types addObject:UTTypeItem]; }
+      UIDocumentPickerViewController *picker =
+          [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+      picker.allowsMultipleSelection = multiple != 0;
+      RayPickDelegate *d = [RayPickDelegate new];
+      d.pickId = id;
+      rayPickDelegate = d;
+      picker.delegate = d;
+      [root presentViewController:picker animated:YES completion:nil];
+    });
+}
+
 static void ray_open(const char *title, const char *url) {
     NSString *u = [NSString stringWithUTF8String:url]; // copiar ANTES de despachar
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -253,6 +314,7 @@ static void ray_eval(const char *js) {
           ?: [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
       if (rayLabel != nil) { setenv("RAY_DEV_APP_NAME", [rayLabel UTF8String], 1); }
       ray_ui_set_handlers(ray_open, ray_eval);
+      ray_ui_set_pick_handler(ray_pick); // M382
       ray_ui_shell_capabilities(1);
       ray_start();
     });
@@ -527,6 +589,8 @@ mod devtools_tests {
             super::write_project(&base, "App", "org.example.app", "1.0.0", &super::Signing::default(), opts, &[]).unwrap();
             let src = std::fs::read_to_string(base.join("Shell/SceneDelegate.m")).unwrap();
             assert_eq!(src.contains("rayWebView.inspectable = YES"), want, "devtools={devtools}");
+            // M382: el selector de archivos del sistema siempre está en el shell.
+            assert!(src.contains("ray_ui_set_pick_handler(ray_pick)") && src.contains("UIDocumentPickerViewController") && src.contains("asCopy:YES"), "picker en el shell");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
         }
         let _ = std::fs::remove_dir_all(&base);

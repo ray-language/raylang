@@ -741,13 +741,6 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
-            "fn __ray_sync(h: i64) -> Result<i64, Rc<str>> {\n",
-            "    let mut reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get_mut(&h) {\n",
-            "        Some(__RayHandle::Writer(f)) => f.sync_all().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
-            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
-            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
-            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
             // M307: fdatasync (espejo de builtins::sync_data_handle). M326 (findings #104): en Apple,
             // fsync(2) a secas — la std usa F_FULLFSYNC también en sync_data (espejo de builtins::fsync_data).
             "#[cfg(target_vendor = \"apple\")]\n",
@@ -779,6 +772,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file\")),\n",
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
         ));
+        // M392 (raykv #155): con fibras, `fs.sync` (F_FULLFSYNC en APFS, ~4–5 ms) corre en el pool
+        // bloqueante sobre un `try_clone` del descriptor (misma open file description → mismo fsync),
+        // SIN el candado del registro, y la fibra APARCA: el worker sigue con sus otras fibras en vez
+        // de quedarse 5 ms parado por cada petición del actor. `sync_data` (decenas de µs) se queda
+        // inline: el salto de hilo costaría más que la llamada.
+        out.push_str("fn __ray_sync(h: i64) -> Result<i64, Rc<str>> {\n");
+        out.push_str(if t.fibers {
+            "    let f = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) {\n        Some(__RayHandle::Writer(f)) => f.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?,\n        Some(__RayHandle::Reader(_)) => return Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n        Some(_) => return Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n        None => return Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } };\n    ray_runtime::fibers::run_blocking(move || f.sync_all()).map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())) }\n"
+        } else {
+            "    let mut reg = __ray_reg().lock().unwrap();\n    match reg.open.get_mut(&h) {\n        Some(__RayHandle::Writer(f)) => f.sync_all().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n"
+        });
     }
     // M115.3: primitivos de metadatos (stat sin seguir symlinks + chmod). Arreglo etiquetado
     // byte-idéntico a builtins::fs_tagged(FsOp::Stat)/chmod_path — los wrappers fs.stat/fs.chmod

@@ -35,6 +35,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `C.push`) sigue dando un arreglo fresco, así que mutar un alias no cambia lo que leen los demás; un
   `const` de tuplas o structs no cambia.
 
+- **Nativo: `fs.sync` ya no para el worker de fibras (M392, raykv #155, issue #520)**: con fibras,
+  `fs.sync` (F_FULLFSYNC en APFS, ~4–5 ms) corre en el pool bloqueante sobre un `try_clone` del
+  descriptor y la fibra aparca; el worker sigue con sus otras fibras. Antes el actor del AOF
+  bloqueaba el hilo 5 ms por petición y, en una de cada cuatro corridas, las conexiones nacidas en su
+  worker esperaban de 0,5 s a toda la corrida (la cesión cada 32 operaciones no alcanza a una syscall
+  de 5 ms). Repro de raykv (50 conexiones × 60 `fs.sync`): peor latencia 1,1–7,9 s → 242–265 ms,
+  igual en todos los workers (la cola pura), mismo total. `sync_data` (decenas de µs) sigue inline.
+
 ## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:
@@ -455,7 +463,6 @@ La cola del arco de rayauth: generar claves RSA y objetos en las plantillas.
 
 El arco de rayauth (IDEAS §102): 24 de los 28 hallazgos de un proveedor de identidad escrito en
 raylang, en cuatro oleadas (M344–M347).
-
 
 - **Un local que no es función ya no tapa a un método UFCS.** `fn fail(r: Res, status: int) {
   r.status(status) }` llama a `status(Res, int)` en los tres motores (antes: «cannot call a value
@@ -2558,7 +2565,6 @@ en **inglés**, y el **manejador de paquetes validado contra GitHub real**.
   `close_stdin` ES el EOF que el hijo espera. En la VM y en el binario nativo (fibras e
   hilo-por-tarea), byte-idénticos.
 
-
 - **`std/fs`: lectura por trozos + `seek`** (M113): `fs.read_bytes(h, max) ->
   Result<Option<bytes>, string>` lee hasta `max` octetos del handle desde su posición actual
   (trozos **exactos** salvo cerca del final; `None` = EOF; la memoria queda acotada por lo
@@ -2633,14 +2639,12 @@ en **inglés**, y el **manejador de paquetes validado contra GitHub real**.
   solo el cuerpo-identificador pelado resolvía). De paso, la llamada a un **campo-closure**
   (`b.f(x)`) también se tipa (espejo del branch de emisión que ya existía).
 
-
 - **El LSP resuelve los imports de un `tests/*.ray` como `ray test`** (M113b): el editor marcaba
   "module 'fileread' not found" sobre un test de integración que corría en verde — `ray test`
   añadía a mano la raíz de la entrada (`src/`) como raíz extra del loader y el LSP no. La regla
   vive ahora en `deps::dependency_roots_for` (compartida por CLI y LSP): en un proyecto-aplicación
   con `ray.toml`, el directorio de la entrada entra como raíz de **respaldo** — el editor y
   `ray run tests/x.ray` resuelven igual que `ray test`.
-
 
 - **`std/markdown`: el `_` intra-palabra ya no crea énfasis** (regla 17 de CommonMark):
   `snake_case_name` en prosa quedaba mutilado a `snake<em>case</em>name` — especialmente dañino
@@ -2653,7 +2657,6 @@ en **inglés**, y el **manejador de paquetes validado contra GitHub real**.
   (se renderizaba como 1). El AST gana el campo — `Block.List(ordered, start, items)` (cambio
   de firma; `start` es el número del PRIMER marcador, los demás se ignoran como en CommonMark) —
   y el render emite `<ol start="2">` cuando no empieza en 1.
-
 
 - **`ray fmt` borraba código en `"x ${n}" + " tail"`** (la misma familia de colisión de posición
   que el ConcatN de abajo, ahora en el formateador): el `+` exterior hereda la (línea, col) de la

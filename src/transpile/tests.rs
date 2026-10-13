@@ -159,6 +159,27 @@ fn scalar_const_arrays_are_read_from_a_shared_thread_local() {
     assert!(!rs.contains("fn PS__shared()"), "{rs}");
 }
 
+/// M392 (raykv #155): con fibras, `fs.sync` corre en el pool bloqueante sobre un `try_clone` del
+/// descriptor (la fibra aparca, el worker sigue); sin fibras, la llamada directa de siempre.
+/// `sync_data` no cambia en ninguno de los dos modos.
+#[test]
+fn fs_sync_runs_in_the_blocking_pool_under_fibers() {
+    // `import std/fs` necesita el loader (como el test de std/ffi).
+    let dir = std::env::temp_dir().join(format!("ray_fs_sync_pool_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = "import std/fs;\nfn main() -> int { let h = fs.open(\"x.log\", \"w\").expect(\"open\"); let _ = fs.sync(h); let _ = fs.sync_data(h); 0 }\n";
+    std::fs::write(dir.join("main.ray"), src).unwrap();
+    let loaded = match crate::loader::load(&dir.join("main.ray")) { Ok(l) => l, Err(e) => panic!("no se pudo cargar std/fs: {}", e.message) };
+    let mut prog = loaded.program;
+    crate::checker::check(&mut prog).expect("check");
+    let with = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
+    assert!(with.contains("f.try_clone()") && with.contains("ray_runtime::fibers::run_blocking(move || f.sync_all())"), "{with}");
+    assert!(!with.contains("run_blocking(move || __ray_fsync_data"), "{with}");
+    let without = super::transpile_full(&prog, &[], false, false).expect("transpile").source;
+    assert!(without.contains("f.sync_all().map(|_| 0i64)") && !without.contains("run_blocking"), "{without}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
 /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
 /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.

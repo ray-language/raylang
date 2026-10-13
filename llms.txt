@@ -214,6 +214,9 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 //   syscall (fs.sync_data, a slow FFI call) holds that worker; there is no preemption, but channel
 //   send/recv that complete without parking yield to ready siblings on the same worker every 32
 //   operations, so a busy actor cannot starve the fibers born on its worker (RAYLANG_COOP=0 disables).
+//   A long blocking syscall is different: in a native binary `fs.sync` (F_FULLFSYNC, ~5 ms) runs in
+//   the blocking pool and PARKS the fiber (1.27.49), like an `extern fn blocking`; `fs.sync_data`
+//   (tens of µs) runs inline.
 // spawn_local(f): same, pinned to the CURRENT worker in a native binary (no cross-thread wake-up;
 //   plain spawn in the VM). worker_id() -> int (0..worker_count()), worker_count() -> int: the
 //   building blocks of per-worker state — one actor per worker, each handler asks inboxes[worker_id()]

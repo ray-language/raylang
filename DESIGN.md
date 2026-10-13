@@ -17561,3 +17561,31 @@ izado (N6b). El coste por lectura es el acceso al TLS (~2 ns), frente a los ~220
 
 **Medido** (repro de rayplay, 2000 enteros): nativo 10 M lecturas 2234 → 31 ms (copia local: 5–10
 ms); VM 1 M lecturas 12 958 → 60 ms (copia local: 39 ms). PERFORMANCE §15.
+
+## 365. M392 — `fs.sync` en el pool bloqueante: la cesión cooperativa no alcanza a una syscall de 5 ms (raykv #155, oct 2026)
+
+M372 (§356) arregló la inanición de las fibras del worker de un actor cediendo el turno cada 32
+operaciones de canal que completan sin aparcar. raykv volvió a medir con `fs.sync` en vez de
+`fs.sync_data` (#155): con un F_FULLFSYNC de ~4–5 ms por petición, 32 operaciones son 80–160 ms sin
+ceder, y en una de cada cuatro corridas las conexiones nacidas en el worker del actor quedaban
+paradas de 0,5 s a los 10,7 s de toda la corrida, como con `RAYLANG_COOP=0`. La cesión por cuenta de
+operaciones no puede ver el tiempo que una syscall bloquea el hilo.
+
+**Decisión: la syscall larga sale del worker.** El runtime ya tenía la válvula para esto, el pool
+bloqueante de las `extern fn blocking` (`fibers::run_blocking`: el closure corre en un hilo del
+pool, la fibra aparca en una `WaitList`, el worker queda libre). `fs.sync` en nativo con fibras va
+por ahí: se toma un `try_clone` del descriptor bajo el candado del registro (misma *open file
+description*, así que el `fsync` es el mismo), se suelta el candado y `f.sync_all()` corre en el
+pool. La fibra del actor aparca ~5 ms y el worker atiende a sus otras fibras; al despertar, el actor
+sigue. El coste es un `dup(2)` y un salto de hilo por llamada, nada frente a los 4–5 ms del fsync.
+
+`fs.sync_data` no cambia: en APFS es un `fsync(2)` de decenas de µs (M326) y el salto de hilo
+costaría más que la llamada; raykv `--fsync data` (121–136k SET/s) no debe pagar nada. Es la
+misma frontera que la doc de `std/fs` ya trazaba entre los dos (`sync` para los checkpoints,
+`sync_data` para cada registro). Sin fibras (`--without fibers`, hilo por tarea) la llamada directa
+se queda: bloquear un hilo plano no vara a nadie.
+
+**Medido** (repro de #155, 50 conexiones × 60 `fs.sync`, Apple M3 Pro, 5 corridas): antes, peor
+latencia 1,1–2,3 s en general y 7,9 s en el worker del actor en una corrida; después, 242–265 ms en
+TODOS los workers (la cola pura: 50 clientes × 4,5 ms), con el mismo total (12,6 s). La VM no cambia
+en esta PR: su scheduler no tiene pool bloqueante y el hallazgo es nativo; queda anotado.

@@ -2347,3 +2347,21 @@ leen un arreglo compartido (VM: `SharedConst(k)` + caché por fibra, plegado en 
 
 Los ~2 ns por lectura del nativo son el acceso al `thread_local` (la copia local evita hasta eso);
 en la VM el coste restante es el propio `Index`. El intérprete no cambia (oráculo).
+
+## 16. M392 (oct 2026): `fs.sync` fuera del worker — raykv #155
+
+**Síntoma.** Actor con `write_bytes` + `fs.sync` (F_FULLFSYNC, ~4,5 ms) por petición; 50 conexiones ×
+60 líneas. La cesión cada 32 operaciones (M372) no cubre una syscall de 5 ms: en 1 de cada 4 corridas
+las conexiones del worker del actor quedaban paradas 0,5–10,7 s.
+
+**Cambio.** Con fibras, `fs.sync` corre en el pool bloqueante (`run_blocking`) sobre un `try_clone`
+del descriptor; la fibra aparca. `sync_data` sigue inline (DESIGN §365).
+
+| 50 × 60 `fs.sync`, nativo `--release` (M3 Pro) | antes (5 corridas) | después (5 corridas) |
+|---|---:|---:|
+| peor latencia, worker del actor | 1,4 / 1,6 / 1,9 / 2,3 / **7,9** s | 242–263 ms |
+| peor latencia, resto de workers | 1,1–3,4 s | 247–265 ms |
+| total | 12,4–15,0 s | 12,6–13,0 s |
+
+Después, la peor latencia es la cola (50 clientes × 4,5 ms ≈ 225 ms) y es igual en todos los
+workers: el worker del actor ya no es especial.

@@ -4145,3 +4145,60 @@ conserve `()` en vez de reescribirlo a `{ }`. Espejo selfhost en tándem. SPEC �
 compromete decidirlo ahora es la coherencia del formateador (un sitio más que recordar, como
 `paren_sites`). **Restricción**: `()` como PATRÓN (`match (u) { () => … }`) queda fuera — `unit` no
 se matchea.
+
+## 109. `bytes` sin copias cuadráticas: `bytes_concat`, un builder y la stdlib sobre tramos (raykv #162, rayplay #161, oct 2026)
+
+**Qué.** `out = out + chunk` sobre `bytes` copia TODO lo acumulado en cada `+` (8 MB en 65 536 trozos:
+9 s en VM y nativo) y la REFERENCE decía «amortized linear». No hay forma lineal de juntar trozos:
+`join` es solo `[string]`, `push` a `[int]` + `bytes_of` va octeto a octeto (5× más lento con pocos
+trozos) y no hay builder. raykv une por pares a mano (n·log n) y aun así gasta ~19 % de CPU en
+`memmove`. En paralelo, `base64_decode` solo acepta `string`: decodificar un tramo de una petición
+obliga a copiarlo (rayplay se queda con su decodificador propio en raylang porque es más barato).
+
+**Cómo.** Tres piezas, de menor a mayor:
+1. `bytes_concat(parts: [bytes]) -> bytes` (una reserva del total + un `memcpy` por trozo): lineal,
+   trivial en VM (`Arc<[u8]>` nuevo) y nativo (`Rc<[u8]>`). Es lo que raykv necesita para un lote de
+   respuestas.
+2. `std/collections/bytesbuilder` (`push(b: bytes)`, `push_byte`, `len`, `build() -> bytes`), el
+   gemelo de `stringbuilder`, sobre un `[int]` interno con `bytes_of` al final o, mejor, un builtin
+   `__bytes_builder` con `Vec<u8>` real (el `[int]` cuesta 8 B por octeto).
+3. Tramos sin copia hacia la stdlib: `base64_decode_bytes(b, from, to)` (y `from_utf8_range`,
+   `index_of_from` ya existe) — o, más general, que `sub_bytes` sea O(1) compartiendo el búfer
+   (`Arc<[u8]>` + offset/len en la representación de `bytes`). Lo tercero cambia la representación
+   del valor en dos motores y el FFI (`bytes` = puntero al búfer): es un arco propio.
+   `+` en su sitio cuando el `bytes` no se comparte (contar el `Arc`/`Rc`) daría el «amortized
+   linear» prometido, pero en la VM el valor es `Arc<[u8]>` (sin capacidad) y harían falta `Vec`
+   + capacidad; con 1 y 2 el caso de uso está cubierto sin tocar la representación.
+
+**Impacto.** 1 y 2 son superficie nueva de stdlib (SPEC §stdlib, REFERENCE, llms) sin romper nada; 3
+es el que compromete: cambiar `bytes` a (búfer compartido, offset, len) toca VM, nativo, FFI y
+`sub_bytes`/`to_string`. Mientras, la fila de `bytes` de la REFERENCE debe decir «`+` es O(total) por
+llamada; para juntar trozos usa `bytes_concat`».
+
+## 110. El reactor nativo por petición: `kevent` + pipe cada vez que una fibra aparca (raykv #163, raygate #75/#107, oct 2026)
+
+**Qué.** Un servidor TCP mínimo en nativo (una fibra por conexión, `+PONG` por línea) se queda en
+~200k peticiones/s frente a 260–270k de Redis, y con 11 workers rinde menos que con 1 y gasta 3× la
+CPU. Por petición: 3,6 µs de `kevent` (todo en `ReactorState::wait`, hilo reactor) frente a 0,2 de
+Redis, y un aviso por pipe (`to_reactor` → `read` del reactor) cada vez que una fibra aparca en su
+socket; los workers pasan el 56 % de su tiempo en `swtch_pri` (el giro antes de aparcar,
+`RAYLANG_SPIN_US`; con 0 la CPU baja de 402 % a 206 % sin perder rendimiento). Es la misma familia
+que #75/#107 (despertar entre workers 1,75–5,5 µs frente a 0,2 en el mismo worker).
+
+**Cómo (a medir, PERFORMANCE §17 cuando arranque).**
+1. Interés por socket registrado UNA vez (`EV_CLEAR`/edge-triggered, o `EV_DISPATCH`) en vez de
+   `EV_ADD`/`EV_ONESHOT` por aparcada: quita el `kevent` de registro por petición; el reactor solo
+   recoge eventos.
+2. Sin pipe por fibra: el worker que aparca una fibra no avisa al reactor (el interés ya está); el
+   reactor despierta al worker dueño con el mecanismo de M363 (notify del worker), no al revés.
+3. Reactor por worker (`kqueue` propio, sondeado cuando el worker no tiene trabajo listo, M358 ya lo
+   dejó como opción en PERFORMANCE §10–§11): elimina el hilo reactor y el cruce de hilos por
+   petición; es el diseño de Seastar/io_uring-per-core y el que hace que más workers escalen.
+4. Giro por defecto: `RAYLANG_SPIN_US` para servidores de red dobla la CPU sin ganar nada; medir un
+   default adaptativo (girar solo si el último despertar llegó dentro del giro) o 0 con fibras de
+   red. Documentar el modelo del reactor y el valor por defecto en `llms.txt`/REFERENCE.
+
+**Impacto.** Alto y transversal: es el camino caliente de toda la red nativa (raykv, raylb,
+rayauth, web). Se hace solo con el banco de #163 (servidor mínimo + `redis-benchmark` × 2–4 clientes,
+CPU del servidor) y los de M363/M365 (`actor_ask`, `actor_shard`, raylb p99) como guardas de no
+regresión. Antes de 3 hay que decidir si el reactor por worker es el default (pendiente de M358).

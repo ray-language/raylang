@@ -17589,3 +17589,39 @@ se queda: bloquear un hilo plano no vara a nadie.
 latencia 1,1–2,3 s en general y 7,9 s en el worker del actor en una corrida; después, 242–265 ms en
 TODOS los workers (la cola pura: 50 clientes × 4,5 ms), con el mismo total (12,6 s). La VM no cambia
 en esta PR: su scheduler no tiene pool bloqueante y el hallazgo es nativo; queda anotado.
+
+## 366. M394 — rayplay y ray-sublime con 1.27.49: `substring` sin materializar, la doc homónima y el `.lnk` de otra máquina (oct 2026)
+
+Cuatro hallazgos de la pasada a 1.27.49, contenidos y sin cambio de superficie.
+
+**`substring` no-ASCII costaba el string entero por caracteres (rayplay #160, issue #527).** El
+fast-path ASCII de D1 corta por bytes; el camino general materializaba `Vec<char>` del string
+COMPLETO (4 B/carácter) y recogía otro `String`: sobre 78 MB con un acento, +474 MB y 137 ms por
+llamada, cuando el resultado era el mismo tramo. Ahora `builtins::substring_slice` recorre
+`char_indices` hasta `j` y devuelve el PRÉSTAMO del tramo, que el llamador copia una vez (la VM a su
+`Arc<str>`, el intérprete a `String`); el nativo `__ray_substring` es el mismo bucle. El clamp no
+cambia (`i`/`j` fuera de rango se recortan, `i > j` → `""`). Medido (78 MB, un `ñ` cada 1 150
+caracteres, VM): 78 → 44 ms y ~110 MB menos de pico; el coste residual es el recorrido UTF-8 hasta
+`j`, que un string sin índice de caracteres no puede evitar.
+
+**`ray doc string.index_of` decía «Octet index» (rayplay #159).** La función libre `index_of(s:
+string, …)` devuelve índice de carácter y su `///` lo dice; pero `prelude_doc_text` buscaba las `///`
+desde la línea 0 del prelude por la cabeza `fn index_of(`, y la primera coincidencia era el método
+`BytesOps.index_of` (declarado antes). La búsqueda arranca ahora en la línea de la propia función
+(`f.line - LINE_BASE`), como ya hacía para los métodos de trait. REFERENCE pone la unidad en la fila
+de `index_of` (carácter; el de octeto es `bytes.index_of`).
+
+**El `.lnk` del bundle de Windows apunta a la máquina que lo construyó (ray-sublime #119).** M393
+cerró Linux (`install.sh`). En Windows el `.lnk` de `WScript.Shell` solo admite rutas absolutas, y
+`update.apply_at` lo rehacía con destino y cwd reales pero dejaba `IconLocation` en el temporal del
+que compiló (acceso directo sin icono). Decisión simétrica a Linux: `fix_launchers` reescribe también
+`IconLocation`, y `ray bundle` deja un `install.ps1` (puro, testeado en cualquier host) que rehace el
+`.lnk` junto al exe con destino, cwd e icono reales y lo copia al menú Inicio; el `.lnk` del zip se
+conserva porque sirve tal cual en la máquina que lo construyó.
+
+**La fila de `bytes` decía «lineal amortizado» (raykv #162).** `+` sobre `bytes` copia el resultado
+entero en cada llamada: lineal en el total acumulado, cuadrático en el bucle (8 MB en 65 536 trozos:
+9 s). La fila lo dice ya y manda acumular en `[bytes]` y unir una vez; la primitiva lineal
+(`bytes_concat`/builder) va en IDEAS §109. De paso, `ray dev --device` avisa una vez si el
+`.gitignore` del proyecto no excluye `.ray-dev` (misma regla que `node_modules/`), y `llms.txt` lo
+nombra.

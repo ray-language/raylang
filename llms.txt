@@ -492,7 +492,7 @@ up to 20 diagnostics per run.
 # `ray` and `raylang`. `ray upgrade` updates an existing install.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
-ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change
+ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change; the link (port + token) is saved in `.ray-dev` at the project root — keep it out of git (`ray new` already ignores it)
 ray bundle --ios --dev      # the DEVELOPMENT shell (<id>.dev; also --android --dev): toolchain + VM inside; install once, scan the QR `ray dev --device` prints, reload on every save
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)

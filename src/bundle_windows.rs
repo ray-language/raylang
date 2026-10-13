@@ -15,8 +15,11 @@
 //!    alineada a 4 bytes) y se inyecta con `UpdateResourceW` de kernel32, sin `rc.exe`.
 //!
 //! El `.lnk` lo escribe `WScript.Shell` (COM, vía PowerShell): apunta al exe con ruta ABSOLUTA
-//! y cwd = el directorio del bundle (el `Exec=` absoluto del `.desktop` de Linux); para
-//! instalarlo, copiarlo al menú Inicio (`%APPDATA%\Microsoft\Windows\Start Menu\Programs`).
+//! y cwd = el directorio del bundle (el `Exec=` absoluto del `.desktop` de Linux). Como ese
+//! `.desktop`, lleva la ruta de la máquina que lo construyó: el bundle trae un `install.ps1`
+//! (M394, ray-sublime #119; gemelo del `install.sh` de Linux) que lo vuelve a crear apuntando
+//! al directorio real y lo copia al menú Inicio (`%APPDATA%\Microsoft\Windows\Start
+//! Menu\Programs`); `std/update` hace lo mismo al instalar una actualización.
 //! Sin firma (Authenticode) en v1: SmartScreen avisará de un exe descargado, como Gatekeeper.
 
 use std::fs;
@@ -48,6 +51,11 @@ pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>
 
     if let Err(e) = write_shortcut(&dir, name, &exe) {
         eprintln!("bundle: warning: could not write the shortcut ({e}); continuing without it");
+    }
+    // M394 (#119): el `.lnk` recién escrito apunta a ESTE directorio; quien descomprime el zip de
+    // `ray release` en otra máquina lo rehace con `install.ps1` (destino, cwd e icono reales).
+    if let Err(e) = fs::write(dir.join("install.ps1"), windows_install_script(name)) {
+        eprintln!("bundle: warning: could not write install.ps1 ({e}); continuing without it");
     }
     // M249: firma Authenticode con signtool (sujeto del certificado en el almacén, o un .pfx).
     if let Some(identity) = sign {
@@ -187,6 +195,30 @@ fn write_shortcut(dir: &Path, name: &str, exe: &Path) -> Result<(), String> {
         name.replace('\'', "''")
     );
     run_powershell(&script)
+}
+
+/// M394 (ray-sublime #119): el `install.ps1` del bundle — rehace `<name>.lnk` junto al exe con destino,
+/// cwd e icono en la ubicación REAL y lo copia al menú Inicio del usuario. Se ejecuta con
+/// `powershell -ExecutionPolicy Bypass -File install.ps1`. Pura (testeable en cualquier host).
+pub fn windows_install_script(name: &str) -> String {
+    let quoted = name.replace('\'', "''");
+    format!(
+        "# Installs the {name} shortcut for the current user, pointing at this directory.\r\n\
+         $ErrorActionPreference = 'Stop'\r\n\
+         $here = Split-Path -Parent $MyInvocation.MyCommand.Path\r\n\
+         $exe = Join-Path $here '{quoted}.exe'\r\n\
+         $lnk = Join-Path $here '{quoted}.lnk'\r\n\
+         $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)\r\n\
+         $s.TargetPath = $exe\r\n\
+         $s.WorkingDirectory = $here\r\n\
+         $s.IconLocation = \"$exe,0\"\r\n\
+         $s.Description = '{quoted}'\r\n\
+         $s.Save()\r\n\
+         $menu = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'\r\n\
+         New-Item -ItemType Directory -Force -Path $menu | Out-Null\r\n\
+         Copy-Item $lnk (Join-Path $menu '{quoted}.lnk') -Force\r\n\
+         Write-Output \"installed: $menu\\{quoted}.lnk -> $exe\"\r\n"
+    )
 }
 
 fn run_powershell(script: &str) -> Result<(), String> {
@@ -339,6 +371,20 @@ mod sys {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // M394 (#119): el script rehace el .lnk en el directorio REAL (nada de la máquina que compiló),
+    // con icono, y lo copia al menú Inicio; un `'` del nombre se dobla.
+    #[test]
+    fn install_script_recreates_the_shortcut_with_icon_and_copies_it_to_the_start_menu() {
+        let s = windows_install_script("Probe's");
+        assert!(s.starts_with("# Installs the Probe's shortcut"), "{s}");
+        assert!(s.contains("$here = Split-Path -Parent $MyInvocation.MyCommand.Path"));
+        assert!(s.contains("$exe = Join-Path $here 'Probe''s.exe'"), "{s}");
+        assert!(s.contains("$s.IconLocation = \"$exe,0\""), "{s}");
+        assert!(s.contains("Start Menu\\Programs") && s.contains("Copy-Item $lnk (Join-Path $menu 'Probe''s.lnk') -Force"), "{s}");
+        assert!(!s.contains("\\\\?\\") && !s.contains("Temp"), "sin rutas de esta máquina: {s}");
+        assert!(s.lines().all(|l| l.ends_with('\r')), "CRLF para el Bloc de notas: {s:?}");
+    }
 
     #[test]
     fn version_info_is_a_well_formed_tree() {

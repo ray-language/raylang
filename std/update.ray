@@ -769,8 +769,10 @@ pub fn apply_at(p: Package, root: string) -> Result<string, string> {
 // #119 (ray-sublime): los lanzadores de un bundle nacen con la ruta ABSOLUTA de la máquina que lo
 // construyó (el `.desktop` de Linux y el `.lnk` de Windows no admiten rutas relativas). Al instalar
 // en otro sitio se reescriben a la raíz real: `Exec=`/`Icon=` del `.desktop`, y el `.lnk` se vuelve
-// a crear con PowerShell apuntando al `.exe` instalado. Mejor esfuerzo: un fallo aquí no deshace
-// la instalación (la app ya corre; solo el acceso directo quedaría viejo).
+// a crear con PowerShell apuntando al `.exe` instalado — destino, cwd y también el icono (M394: con
+// `IconLocation` en el temporal de quien compiló, el acceso directo instalado se quedaba sin icono).
+// Mejor esfuerzo: un fallo aquí no deshace la instalación (la app ya corre; solo el acceso directo
+// quedaría viejo).
 fn fix_launchers(root: string) {
     let entries = match (fs.list_dir(root)) {
         Result.Ok(xs) => xs,
@@ -807,7 +809,9 @@ fn fix_launchers(root: string) {
                 + exe
                 + "'; $s.WorkingDirectory = '"
                 + root
-                + "'; $s.Save()";
+                + "'; $s.IconLocation = '"
+                + exe
+                + ",0'; $s.Save()";
             let _ = process.run("powershell", ["-NoProfile", "-Command", script]);
         }
     }

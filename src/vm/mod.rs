@@ -2584,11 +2584,9 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Int(i), HeapValue::Int(j)) = (s, i, j) else {
                         unreachable!("the checker guarantees string, int, int");
                     };
-                    // M233: ASCII → tramo prestado, un solo Arc; el resto por `substring_chars`.
-                    let out: Arc<str> = match crate::builtins::substring_ascii(&s, i, j) {
-                        Some(slice) => slice.into(),
-                        None => crate::builtins::substring_chars(&s, i, j).into(),
-                    };
+                    // M233: ASCII → tramo prestado, un solo Arc; M394 (rayplay #160): también el no-ASCII
+                    // (antes materializaba el string entero por caracteres).
+                    let out: Arc<str> = crate::builtins::substring_slice(&s, i, j).into();
                     self.push(HeapValue::Str(out));
                 }
                 // M19.2: sub-secuencia de bytes por octeto (con clamp). Orden en la pila: b, i, j.

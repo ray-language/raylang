@@ -4,6 +4,24 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`substring` sobre un string con caracteres no ASCII ya no materializa el string entero (M394,
+  rayplay #160, issue #527)**: el tramo `[i, j)` se corta recorriendo el UTF-8 hasta `j` y se copia
+  una sola vez, en la VM y en el binario nativo. Antes el camino no-ASCII construía el `Vec<char>`
+  completo y otro `String` (~6 B/carácter sobre todo el string: 78 MB → +474 MB y 137 ms por
+  llamada); medido en la VM, 78 → 44 ms y ~110 MB menos de pico.
+- **`ray doc string.index_of` / `string.last_index_of` ya dan su propia doc (rayplay #159)**: decían
+  «Octet index» porque tomaban las `///` del método homónimo de `bytes`; la unidad (carácter) consta
+  también en la fila de `index_of` de REFERENCE.
+- **Bundle de Windows instalable en otra máquina (ray-sublime #119)**: `ray bundle` deja un
+  `install.ps1` (gemelo del `install.sh` de Linux) que rehace `<name>.lnk` con destino, cwd e icono
+  de su ubicación real y lo copia al menú Inicio; `std/update` rehace también el icono del acceso
+  directo al instalar (antes quedaba apuntando al temporal de quien compiló).
+- **Docs y avisos (raykv #162, rayplay)**: la fila de `bytes` dice que `+` copia el resultado entero
+  en cada llamada (no «lineal amortizado») y cómo acumular muchos trozos; `ray dev --device` avisa
+  una vez si el `.gitignore` no excluye `.ray-dev`, y `llms.txt` lo nombra.
+
 ## 1.27.49 — 2026-10-13
 
 - **Nativo: `for i in 0..xs.len()` con `xs[i] = …` o `xs.push(…)` en el cuerpo ya no revienta

@@ -27,6 +27,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (REFERENCE, `llms.txt` «Mistakes»; `()` como literal → IDEAS §108); la fila de `bytes` ya no dice
   que `push` + `bytes_of` sea dos órdenes más lento (medido: es lo más rápido en la VM); `ray dev
   --device` documenta `.ray-dev`.
+- **Indexar un `const` arreglo ya no lo reconstruye en cada acceso (M391, rayplay #157, issue
+  #522)**: las lecturas `C[i]`, `C.len()` y `C.contains(x)` de un `const` de tipo arreglo de escalares
+  (`int`, `float`, `bool`, `string`, `char`, `bytes`) comparten UN arreglo por fibra (VM) o por hilo
+  (nativo, `thread_local`), materializado la primera vez. 2000 elementos, 10 M lecturas: nativo 2234 →
+  31 ms; VM (1 M) 12 958 → 60 ms — lo mismo que una copia local. Todo otro uso (`let t = C;`, pasarlo,
+  `C.push`) sigue dando un arreglo fresco, así que mutar un alias no cambia lo que leen los demás; un
+  `const` de tuplas o structs no cambia.
 
 ## 1.27.48 — 2026-10-12
 

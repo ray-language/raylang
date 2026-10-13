@@ -488,6 +488,19 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         write!(out, "fn {}() -> {} {{ ", mangle(&c.name), rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
+        // M391 (rayplay #157): un const arreglo de escalares tiene además su versión COMPARTIDA, un
+        // `thread_local` construido una vez por hilo; las lecturas (`C[i]`, `C.len()`,
+        // `C.contains(x)`) la usan en vez de reconstruir el literal (2000 elementos × 10 M lecturas:
+        // 2,2 s → 5 ms). Todo otro uso sigue llamando a `NAME()` (un arreglo fresco, como la VM).
+        if t.shared_const_name(&c.name).is_some() {
+            let ty = rust_ty(&c.ty, &t.enums, &t.tparams)?;
+            writeln!(
+                out,
+                "fn {n}__shared() -> {ty} {{ thread_local! {{ static __RAY_SHARED: {ty} = {n}(); }} __RAY_SHARED.with(|c| c.clone()) }}",
+                n = mangle(&c.name)
+            )
+            .unwrap();
+        }
     }
     // Funciones externas (FFI, M41): declaraciones `extern "C"` + wrappers que marshalan.
     t.emit_externs(&mut out, prog)?;

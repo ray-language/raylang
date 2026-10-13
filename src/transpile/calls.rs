@@ -1570,7 +1570,10 @@ impl Transpiler {
                 match self.type_of(eff[0])? {
                     Type::Array(_) | Type::Map(_, _) => {
                         out.push('(');
-                        self.emit_expr(out, eff[0])?;
+                        // M391: `C.len()` de un const arreglo de escalares lee el compartido.
+                        if !self.emit_shared_const(out, eff[0]) {
+                            self.emit_expr(out, eff[0])?;
+                        }
                         out.push_str(".borrow().len() as i64)");
                     }
                     // string: `len` cuenta CARACTERES, no octetos — clave con UTF-8 multibyte (`más`, `ñ`).
@@ -2008,7 +2011,10 @@ impl Transpiler {
                     out.push_str("{ let __rt_x = ");
                     self.emit_expr(out, eff[1])?;
                     out.push_str("; ");
-                    self.emit_expr(out, eff[0])?;
+                    // M391: `C.contains(x)` de un const arreglo de escalares lee el compartido.
+                    if !self.emit_shared_const(out, eff[0]) {
+                        self.emit_expr(out, eff[0])?;
+                    }
                     out.push_str(".borrow().iter().any(|__e| *__e == __rt_x) }");
                 }
                 other => return Err(format!("contains on {:?} is not supported", other)),

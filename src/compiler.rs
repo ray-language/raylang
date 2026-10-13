@@ -102,6 +102,22 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     for cst in &program.consts {
         consts.insert(cst.name.clone(), cst.value.clone());
     }
+    // M391 (rayplay #157): un `const` arreglo de ESCALARES se pliega una vez aquí; sus lecturas
+    // (`C[i]`, `C.len()`, `C.contains(x)`) comparten un solo arreglo por fibra en vez de construir
+    // los N elementos en cada acceso (2000 elementos × 10 M lecturas: 134 s → 0,5 s). Un uso que
+    // pueda mutar o retener el arreglo (`let t = C;`, pasarlo, `C.push`) sigue siendo un literal
+    // fresco, así que ningún alias puede alterar lo que leen los demás.
+    let mut shared_slots = HashMap::new();
+    let mut shared_consts: Vec<Vec<Value>> = Vec::new();
+    for cst in &program.consts {
+        if let Type::Array(elem) = &cst.ty
+            && is_shareable_scalar(elem)
+            && let Some(elems) = fold_scalar_array(&cst.value, &consts)
+        {
+            shared_slots.insert(cst.name.clone(), shared_consts.len());
+            shared_consts.push(elems);
+        }
+    }
 
     // M41: tabla de funciones externas (FFI) + mapa nombre → índice (para bajar `CallExtern`).
     let mut externs = Vec::new();
@@ -121,14 +137,17 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         functions: (0..total).map(|_| None).collect(),
         scopes: Vec::new(),
         consts,
+        shared_slots,
+        shared_consts,
         extern_indices: &extern_indices,
     };
     for (i, f) in program.functions.iter().enumerate() {
         c.compile_function(i, &f.params, &f.body, f.line, f.col, f.name.clone())?;
     }
 
+    let shared_consts = std::mem::take(&mut c.shared_consts);
     let functions = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
-    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main, externs })
+    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main, externs, shared_consts })
 }
 
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
@@ -138,7 +157,7 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let structs = HashMap::new();
     let enums = HashMap::new();
     let extern_indices = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), extern_indices: &extern_indices };
+    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -207,6 +226,11 @@ struct Compiler<'a> {
     scopes: Vec<FnScope>,
     /// Constantes de nivel superior (M27.5): nombre → su valor. Una referencia se compila a `Constant`.
     consts: HashMap<String, Expr>,
+    /// M391: constantes de tipo arreglo de escalares plegadas → su índice en `shared_consts`. Una
+    /// LECTURA (`C[i]`, `C.len()`, `C.contains(x)`) se compila a `SharedConst(k)` en vez de
+    /// reconstruir el literal.
+    shared_slots: HashMap<String, usize>,
+    shared_consts: Vec<Vec<Value>>,
     /// Funciones externas (M41, FFI): nombre → índice en la tabla `externs` del `CompiledProgram`.
     /// Una llamada a uno de estos nombres se baja a `CallExtern(idx, argc)`.
     extern_indices: &'a HashMap<String, usize>,
@@ -340,6 +364,19 @@ impl<'a> Compiler<'a> {
 
     /// ¿El nombre es una variable (local de alguna función de la cadena)? Pura, sin
     /// efectos: sirve para decidir entre llamada directa (a una global) e indirecta.
+    /// M391: si `e` es el nombre de un const arreglo de escalares (no sombreado por una variable),
+    /// emite `SharedConst(k)` y devuelve `true`; si no, no emite nada.
+    fn emit_shared_const(&mut self, e: &Expr, line: usize, col: usize) -> bool {
+        if let ExprKind::Ident(name) = &e.kind
+            && !self.name_is_variable(name)
+            && let Some(&k) = self.shared_slots.get(name)
+        {
+            self.emit(OpCode::SharedConst(k), line, col);
+            return true;
+        }
+        false
+    }
+
     fn name_is_variable(&self, name: &str) -> bool {
         self.scopes.iter().any(|s| s.locals.iter().any(|l| l.name == name))
     }
@@ -1152,7 +1189,10 @@ impl<'a> Compiler<'a> {
             }
 
             ExprKind::Index { array, index } => {
-                self.emit_expr(array)?;
+                // M391: `C[i]` sobre un const arreglo de escalares → el arreglo compartido.
+                if !self.emit_shared_const(array, line, col) {
+                    self.emit_expr(array)?;
+                }
                 self.emit_expr(index)?;
                 self.emit(OpCode::Index, line, col);
             }
@@ -1271,7 +1311,11 @@ impl<'a> Compiler<'a> {
                 }
                 // Builtin: el opcode lo da el registro único (`src/builtins.rs`).
                 if let Some(b) = crate::builtins::lookup(name) {
-                    for arg in args {
+                    for (i, arg) in args.iter().enumerate() {
+                        // M391: `C.len()` / `C.contains(x)` leen el arreglo compartido del const.
+                        if i == 0 && matches!(name.as_str(), "len" | "contains") && self.emit_shared_const(arg, line, col) {
+                            continue;
+                        }
                         self.emit_expr(arg)?;
                     }
                     self.emit(b.opcode.clone(), line, col);
@@ -1440,6 +1484,37 @@ fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
 /// del `int` checked, y los tipos fuera de alcance (string/uint/char). Cada regla es
 /// la MISMA expresión de Rust que ejecuta el fast-path de la VM (y `apply_binary`) →
 /// plegar no cambia ningún resultado observable y el oráculo VM↔intérprete no lo ve.
+/// M391: los tipos de elemento que un `const` arreglo puede compartir sin riesgo: escalares
+/// inmutables, que la VM guarda inline o como `Arc` (ningún handle anidado que un alias pudiera
+/// mutar).
+pub(crate) fn is_shareable_scalar(t: &Type) -> bool {
+    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes)
+}
+
+/// M391: pliega un literal de arreglo de escalares (o el nombre de otro const que lo sea) a sus
+/// elementos ya como valores de la VM. `None` si algún elemento no es plegable (se compila como
+/// literal, igual que antes).
+fn fold_scalar_array(e: &Expr, consts: &HashMap<String, Expr>) -> Option<Vec<Value>> {
+    match &e.kind {
+        ExprKind::ArrayLit(elems) => elems.iter().map(|el| fold_scalar(el, consts)).collect(),
+        ExprKind::Ident(name) => fold_scalar_array(consts.get(name)?, consts),
+        _ => None,
+    }
+}
+
+fn fold_scalar(e: &Expr, consts: &HashMap<String, Expr>) -> Option<Value> {
+    match &e.kind {
+        ExprKind::Str(s) => Some(Value::Str(s.clone())),
+        ExprKind::Char(c) => Some(Value::Char(*c)),
+        ExprKind::Bytes(b) => Some(Value::Bytes(std::rc::Rc::new(b.clone()))),
+        ExprKind::Ident(name) => fold_scalar(consts.get(name)?, consts),
+        _ => match const_fold(e)? {
+            v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_)) => Some(v),
+            _ => None,
+        },
+    }
+}
+
 fn const_fold(e: &Expr) -> Option<Value> {
     use Value::{Bool, Float, Int};
     match &e.kind {

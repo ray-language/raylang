@@ -2328,3 +2328,22 @@ Lo que costó llegar: la comprobación por operación con thread-locals costaba 
 `actor_shard` aunque se ejecutara 1 de cada 64 veces si el thread-local era nuevo; reutilizando
 `WORKER`/`CURRENT` y amortizando el contador en el estado del canal, paridad. `RAYLANG_COOP=0` lo
 apaga.
+
+## 15. M391 (oct 2026): `const` arreglos leídos sin reconstruir — rayplay #157
+
+**Síntoma.** `const BIG: [int]` de 2000 elementos; `BIG[i % 2000]` 10 M veces: 2184 ms en nativo y
+134 s en la VM, frente a 5 ms y 0,46 s con `let tab = BIG;`. Cada acceso construía el literal entero
+(M274: semántica de literal inyectado).
+
+**Cambio.** Las lecturas `C[i]`/`C.len()`/`C.contains(x)` sobre un `const` de arreglo de escalares
+leen un arreglo compartido (VM: `SharedConst(k)` + caché por fibra, plegado en compilación; nativo:
+`NAME__shared()` sobre un `thread_local`). El resto de usos no cambia (DESIGN §364).
+
+| medición (Apple M3 Pro) | antes | después | copia local (`let tab = C`) |
+|---|---:|---:|---:|
+| nativo `--release`, 10 M lecturas | 2234 ms | 31 ms | 10 ms |
+| VM, 1 M lecturas | 12 958 ms | 60 ms | 39 ms |
+| VM, 10 M lecturas | — | 408 ms | 399 ms |
+
+Los ~2 ns por lectura del nativo son el acceso al `thread_local` (la copia local evita hasta eso);
+en la VM el coste restante es el propio `Index`. El intérprete no cambia (oráculo).

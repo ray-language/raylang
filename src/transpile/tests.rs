@@ -146,6 +146,17 @@ fn for_range_bounds_are_evaluated_before_the_loop() {
     let rs = transpile_src("fn zero(s: [int]) -> unit { for i in 0..s.len() { s[i] = 0; } }\nfn main() -> int { var xs: [int] = [1, 2, 3]; zero(xs); for i in 0..xs.len() { xs.push(i); } xs.len() }");
     assert!(rs.contains("let __rt_hi: i64 = "), "{rs}");
     assert!(!rs.contains("for i in ("), "{rs}");
+/// M391 (rayplay #157): un const arreglo de escalares tiene su `NAME__shared()` (thread_local) y
+/// lo usan `C[i]`, `C.len()` y `C.contains(x)`; `let t = C;` y un const de structs no.
+#[test]
+fn scalar_const_arrays_are_read_from_a_shared_thread_local() {
+    let rs = transpile_src("const TAB: [int] = [1, 2, 3];\nconst PS: [(int, int)] = [(1, 2)];\nfn main() -> int { let t = TAB; t.push(4); let (a, _) = PS[0]; TAB[0] + TAB.len() + t.len() + (if (TAB.contains(2)) { 1 } else { 0 }) + a }");
+    assert!(rs.contains("fn TAB__shared()"), "{rs}");
+    assert!(rs.contains("TAB__shared(); let __rt_i"), "{rs}");
+    assert!(rs.contains("TAB__shared().borrow().len()"), "{rs}");
+    assert!(rs.contains("TAB__shared().borrow().iter().any"), "{rs}");
+    assert!(rs.contains("let t = TAB();"), "{rs}");
+    assert!(!rs.contains("fn PS__shared()"), "{rs}");
 }
 
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar

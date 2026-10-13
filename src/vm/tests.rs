@@ -47,6 +47,37 @@ fn oracle_program(src: &str) {
 /// pendientes en la pila. Sin truncar la pila a la base del marco, esos operandos huérfanos
 /// desalineaban los argumentos de la siguiente llamada del llamador (aquí: `caso("b", …)` recibía
 /// basura como `etiqueta` → ICE "combinación operador/operandos" o divergencia con el intérprete).
+/// M391 (rayplay #157): las LECTURAS de un `const` arreglo de escalares (`C[i]`, `C.len()`,
+/// `C.contains(x)`) comparten un arreglo por fibra; cualquier otro uso sigue siendo un literal fresco,
+/// así que mutar un alias no cambia lo que leen los demás. Mismo resultado que el intérprete (que
+/// evalúa el literal en cada uso), también con consts derivados, strings y sombras.
+#[test]
+fn shared_const_arrays_read_like_fresh_literals_oracle() {
+    oracle_program(
+        r#"
+        const TAB: [int] = [10, 20, 30];
+        const NAMES: [string] = ["a", "b"];
+        const OFF: int = 5;
+        const DERIVED: [int] = [OFF + 1, OFF * 2, -OFF];
+        const ALIAS: [int] = TAB;
+        fn bump(xs: [int]) -> unit { xs.push(99); xs[0] = -1; }
+        fn main() -> int {
+            let t = TAB;
+            t.push(40);
+            bump(TAB);
+            print("${TAB.len()} ${TAB[0]} ${t.len()} ${TAB.contains(30)} ${TAB.contains(99)}");
+            print("${NAMES[1]} ${NAMES.len()} ${DERIVED[0]} ${DERIVED[2]} ${ALIAS[1]} ${ALIAS.len()}");
+            var i = 0;
+            var acc = 0;
+            while (i < 10) { acc = acc + TAB[i % 3]; i = i + 1; }
+            let shadow = fn(TAB: [int]) -> int { TAB[0] };
+            print("${acc} ${shadow([7])} ${TAB[2]}");
+            acc
+        }
+        "#,
+    );
+}
+
 #[test]
 fn pending_operands_after_try_err_oracle() {
     oracle_program(

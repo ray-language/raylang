@@ -182,6 +182,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
         structs: Vec::new(),
         enums: Vec::new(),
         main: 0,
+        shared_consts: Vec::new(),
         externs: Vec::new(),
     };
     run_program(&program)
@@ -264,6 +265,7 @@ impl<'a> Vm<'a> {
                 task: None,
                 scopes: Vec::new(),
                 unit_enums: Default::default(),
+                const_cache: Vec::new(),
                 try_markers: Vec::new(),
                 domain: 0,
                 pending_error: None,
@@ -511,6 +513,32 @@ impl<'a> Vm<'a> {
                 OpCode::Constant(idx) => {
                     let v = self.program.functions[func].consts[*idx].clone();
                     self.push(v);
+                }
+                // M391: el arreglo compartido de un const de escalares — se materializa UNA vez por
+                // fibra (en su heap, como raíz) y después es un handle. Solo lo leen `Index`/`Len`/
+                // `Contains`, que no retienen ni mutan.
+                OpCode::SharedConst(k) => {
+                    let h = match self.cur.const_cache.get(*k).copied().flatten() {
+                        Some(h) => h,
+                        None => {
+                            let elems: Vec<HeapValue> = self.program.shared_consts[*k].iter().map(|v| match v {
+                                Value::Int(n) => HeapValue::Int(*n),
+                                Value::Float(f) => HeapValue::Float(*f),
+                                Value::Bool(b) => HeapValue::Bool(*b),
+                                Value::Char(c) => HeapValue::Char(*c),
+                                Value::Str(s) => HeapValue::Str(std::sync::Arc::from(s.as_str())),
+                                Value::Bytes(b) => HeapValue::Bytes(std::sync::Arc::from(b.as_slice())),
+                                _ => crate::ice!("shared const elements are scalars (the compiler folded them)"),
+                            }).collect();
+                            let h = self.cur.heap.allocate(specialize_array(elems));
+                            if self.cur.const_cache.len() <= *k {
+                                self.cur.const_cache.resize(*k + 1, None);
+                            }
+                            self.cur.const_cache[*k] = Some(h);
+                            h
+                        }
+                    };
+                    self.push(HeapValue::Obj(h));
                 }
                 OpCode::True => self.push(HeapValue::Bool(true)),
                 OpCode::False => self.push(HeapValue::Bool(false)),
@@ -1306,7 +1334,7 @@ impl<'a> Vm<'a> {
                         };
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
-                            task, scopes: Vec::new(), unit_enums: Default::default(),
+                            task, scopes: Vec::new(), unit_enums: Default::default(), const_cache: Vec::new(),
                             try_markers: Vec::new(), pending_error: None, prof: Default::default(), domain,
                             select_deadline: None, select_timed_out: false,
                         });
@@ -5062,6 +5090,8 @@ impl<'a> Vm<'a> {
         gather_roots(&self.cur.frames, &self.cur.locals, &self.cur.stack, &mut roots);
         // TA4: los handles canónicos de variantes sin payload son raíces (viven toda la fibra).
         roots.extend(self.cur.unit_enums.values().copied());
+        // M391: los arreglos compartidos de los const viven toda la fibra.
+        roots.extend(self.cur.const_cache.iter().flatten().copied());
 
         for h in roots {
             self.cur.heap.mark(h);

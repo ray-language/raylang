@@ -6514,6 +6514,8 @@ mod tests {
         assert!(w.contains("has no known macOS type (UTI)"), "{w}");
         assert_eq!(super::open_type_warning("audio/wav"), None);
         assert_eq!(super::mime_to_uti("application/octet-stream"), Some("public.data"));
+    }
+
     /// M393 (#119): `install.sh` reescribe `Exec=` a la ubicación real conservando ` %F`, e `Icon=`
     /// solo si existe; se ejecuta de verdad con `sh` en un directorio temporal (HOME redirigido).
     #[cfg(unix)]

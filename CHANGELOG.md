@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.49 — 2026-10-13
 
 - **Nativo: `for i in 0..xs.len()` con `xs[i] = …` o `xs.push(…)` en el cuerpo ya no revienta
   (M388, rayplay #156, issue #521)**: los extremos del rango se evalúan a temporales antes del bucle.

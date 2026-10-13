@@ -146,6 +146,8 @@ fn for_range_bounds_are_evaluated_before_the_loop() {
     let rs = transpile_src("fn zero(s: [int]) -> unit { for i in 0..s.len() { s[i] = 0; } }\nfn main() -> int { var xs: [int] = [1, 2, 3]; zero(xs); for i in 0..xs.len() { xs.push(i); } xs.len() }");
     assert!(rs.contains("let __rt_hi: i64 = "), "{rs}");
     assert!(!rs.contains("for i in ("), "{rs}");
+}
+
 /// M391 (rayplay #157): un const arreglo de escalares tiene su `NAME__shared()` (thread_local) y
 /// lo usan `C[i]`, `C.len()` y `C.contains(x)`; `let t = C;` y un const de structs no.
 #[test]

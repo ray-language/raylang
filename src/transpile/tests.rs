@@ -138,6 +138,16 @@ fn empty_array_concat_and_tuples_with_none_transpile() {
     assert!(rs.contains("fn f("), "{rs}");
 }
 
+/// M388 (rayplay #156): el extremo de un `for` sobre rango se evalúa a un temporal antes del
+/// bucle — `for i in 0..s.len() { s[i] = 0; }` ya no retiene el `borrow()` de `s` durante el cuerpo
+/// (en Rust los temporales del iterador de un `for` viven todo el bucle).
+#[test]
+fn for_range_bounds_are_evaluated_before_the_loop() {
+    let rs = transpile_src("fn zero(s: [int]) -> unit { for i in 0..s.len() { s[i] = 0; } }\nfn main() -> int { var xs: [int] = [1, 2, 3]; zero(xs); for i in 0..xs.len() { xs.push(i); } xs.len() }");
+    assert!(rs.contains("let __rt_hi: i64 = "), "{rs}");
+    assert!(!rs.contains("for i in ("), "{rs}");
+}
+
 /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
 /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
 /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.
@@ -186,7 +196,8 @@ fn transpiles_for_range_loop() {
     let rust = transpile_src(
         "fn main() { var acc: int = 0; for i in 0..100 { acc = acc + i; } print(acc); }",
     );
-    assert!(rust.contains("for i in (0i64)..(100i64)"), "{}", rust);
+    // M388: los extremos van a temporales antes del bucle (ver `for_range_bounds_are_evaluated_before_the_loop`).
+    assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = 100i64; for i in __rt_lo..__rt_hi"), "{}", rust);
     assert!(rust.contains("let mut acc: i64 = 0i64"), "{}", rust); // anotación emitida (pina inferencia)
 }
 
@@ -895,13 +906,13 @@ fn string_index_goes_through_the_char_cache() {
     assert!(rust.contains("Rc::ptr_eq(&e.s, s)"), "identidad por Rc: {}", rust);
 }
 
-/// Los extremos de un `for` de rango se emiten ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
-/// bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten un bloque (`len` de string,
-/// concatenación, `push`). Sin paréntesis, `for i in 0..s.len() { … }` no compilaba.
+/// Los extremos de un `for` de rango se evalúan a TEMPORALES antes del bucle (M388): así un extremo
+/// que emite un bloque (`len` de string, concatenación, `push`) no se confunde con el cuerpo del
+/// `for` de Rust, y el `borrow()` de un `.len()` de arreglo no vive durante el cuerpo.
 #[test]
-fn parenthesizes_the_bounds_of_a_range_loop() {
+fn hoists_the_bounds_of_a_range_loop() {
     let rust = transpile_src("fn main() { let s = \"abc\"; for i in 0..s.len() { print(s[i]); } }");
-    assert!(rust.contains("for i in (0i64)..(__ray_char_len(&(s.clone())))"), "extremos entre parentesis: {}", rust);
+    assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = __ray_char_len(&(s.clone())); for i in __rt_lo..__rt_hi"), "extremos en temporales: {}", rust);
 }
 
 /// El modo de iteración de un `for … in` lo decide el tipo del CONTENEDOR, no el del elemento:

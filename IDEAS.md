@@ -4127,3 +4127,21 @@ o «algo que importar» (→ copia)? Ninguna app lo ha pedido aún (rayplay pidi
 **Restricción**: la firma `Result<Option<string>, string>` de `pick_folder*` se mantiene; en
 Android, si se elige el montaje, la «ruta» devuelta llevará el prefijo virtual y hay que
 documentar que no es un path del SO.
+
+## 108. `()` como literal del valor `unit` (rayplay #158, oct 2026)
+
+**Qué.** Hoy el valor `unit` se escribe `{ }` (el bloque vacío) y `Result.Ok(())` es un error de
+sintaxis («expected an expression, found RParen»), que rayplay se comió dos veces. La doc ya lo dice
+(REFERENCE tabla de tipos, `llms.txt` «Mistakes»). La idea: aceptar `()` como literal de `unit`,
+que es lo que escribe cualquiera que venga de Rust/OCaml/Haskell.
+
+**Cómo.** El parser ya entra por `LParen` para agrupación y tuplas: `()` sin elementos sería un
+tercer caso → `ExprKind::Block` vacío (idéntico a `{ }` para checker, VM, intérprete y
+transpilador: cero cambios aguas abajo) con un sitio registrado (`unit_sites`) para que `ray fmt`
+conserve `()` en vez de reescribirlo a `{ }`. Espejo selfhost en tándem. SPEC §gramática:
+`primario = … | '(' ')'`.
+
+**Impacto.** Bajo: hoy `()` no parsea, así que ningún programa cambia de significado. Lo único que
+compromete decidirlo ahora es la coherencia del formateador (un sitio más que recordar, como
+`paren_sites`). **Restricción**: `()` como PATRÓN (`match (u) { () => … }`) queda fuera — `unit` no
+se matchea.

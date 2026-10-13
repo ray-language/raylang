@@ -796,15 +796,18 @@ impl Transpiler {
                             }
                             write!(out, "    {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
                         } else {
-                            // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
-                            // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
-                            // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
-                            // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
-                            write!(out, "{}for {} in (", lbl, mangle(&var)).unwrap();
+                            // M388 (rayplay #156): los extremos se evalúan a temporales ANTES del
+                            // `for`. En Rust, los temporales de la expresión del iterador viven
+                            // hasta el final del bucle, así que `for i in 0..s.borrow().len()`
+                            // retenía el `borrow()` de `s` durante todo el cuerpo y `s[i] = 0`
+                            // (`borrow_mut`) moría con «RefCell already borrowed» — solo en nativo
+                            // (la VM evalúa el rango una vez y lo suelta). Con el `let` el guard
+                            // muere al terminar la sentencia, como en la VM.
+                            out.push_str("{ let __rt_lo: i64 = ");
                             self.emit_expr(out, start)?;
-                            out.push_str(")..(");
+                            out.push_str("; let __rt_hi: i64 = ");
                             self.emit_expr(out, end)?;
-                            out.push_str(") ");
+                            write!(out, "; {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
                         }
                         self.scopes.push(HashMap::new());
                         self.declare(&var, Type::Int);
@@ -814,9 +817,8 @@ impl Transpiler {
                             for name in arrays {
                                 self.hoisted_borrows.remove(name);
                             }
-                            out.push('}');
                         }
-                        out.push('\n');
+                        out.push_str("}\n");
                     }
                     // `for x in <arreglo>` → itera una copia del Vec (los elementos son Rc → bump barato)
                     // para NO retener el borrow durante el cuerpo (que podría mutar el arreglo).

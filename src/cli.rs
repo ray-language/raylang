@@ -3163,9 +3163,7 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String]
     // el bundle en otro sitio lo arregla con `install.sh` (reescribe `Exec=`/`Icon=` a su
     // ubicación real y lo registra en ~/.local/share/applications). `std/update` hace lo mismo al
     // instalar una actualización.
-    let install = format!(
-        "#!/bin/sh\n# Installs the {name} launcher for the current user, pointing at this directory.\nset -e\nhere=$(cd \"$(dirname \"$0\")\" && pwd)\nchmod 755 \"$here/{name}\"\nsed -e \"s|^Exec=.*|Exec=$here/{name}|\" -e \"s|^Icon=.*|Icon=$here/icon.png|\" \"$here/{name}.desktop\" > \"$here/{name}.desktop.tmp\"\nmv \"$here/{name}.desktop.tmp\" \"$here/{name}.desktop\"\nmkdir -p \"$HOME/.local/share/applications\"\ncp \"$here/{name}.desktop\" \"$HOME/.local/share/applications/\"\necho \"installed: $HOME/.local/share/applications/{name}.desktop -> $here/{name}\"\n"
-    );
+    let install = linux_install_script(name);
     let install_path = dir.join("install.sh");
     if fs::write(&install_path, install).is_ok() {
         #[cfg(unix)]
@@ -3175,6 +3173,15 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String]
         }
     }
     println!("ok: bundle '{}'", dir.display());
+}
+
+/// #119 (ray-sublime): el `install.sh` del bundle de Linux — reescribe `Exec=`/`Icon=` del `.desktop` a
+/// la ubicación real y lo registra en `~/.local/share/applications`. M393 (medido en la VM): el `sed`
+/// de `Exec=` conserva los ARGUMENTOS (` %F` de `[app] opens`): antes sustituía la línea entera. Pura.
+fn linux_install_script(name: &str) -> String {
+    format!(
+        "#!/bin/sh\n# Installs the {name} launcher for the current user, pointing at this directory.\nset -e\nhere=$(cd \"$(dirname \"$0\")\" && pwd)\nchmod 755 \"$here/{name}\"\nsed -e \"s|^Exec=[^ ]*|Exec=$here/{name}|\" -e \"s|^Icon=.*|Icon=$here/icon.png|\" \"$here/{name}.desktop\" > \"$here/{name}.desktop.tmp\"\nmv \"$here/{name}.desktop.tmp\" \"$here/{name}.desktop\"\nmkdir -p \"$HOME/.local/share/applications\"\ncp \"$here/{name}.desktop\" \"$HOME/.local/share/applications/\"\necho \"installed: $HOME/.local/share/applications/{name}.desktop -> $here/{name}\"\n"
+    )
 }
 
 /// §80b: el AppIcon del proyecto iOS — un appiconset de TAMAÑO ÚNICO (1024, "single size":
@@ -6424,6 +6431,30 @@ mod tests {
         assert_eq!(super::desktop_mime_line(&opens), "MimeType=inode/directory;application/x-ray;text/plain;image/png;\n");
         assert_eq!(super::document_types_plist(&[]), "");
         assert_eq!(super::desktop_mime_line(&[]), "");
+    }
+
+    /// M393 (#119): `install.sh` reescribe `Exec=` a la ubicación real conservando ` %F`, e `Icon=`
+    /// solo si existe; se ejecuta de verdad con `sh` en un directorio temporal (HOME redirigido).
+    #[cfg(unix)]
+    #[test]
+    fn linux_install_script_keeps_the_exec_arguments() {
+        let base = std::env::temp_dir().join(format!("ray_install_sh_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("Probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Probe"), "#!/bin/sh\necho probe\n").unwrap();
+        std::fs::write(dir.join("Probe.desktop"), "[Desktop Entry]\nType=Application\nName=Probe\nExec=/build/machine/Probe %F\nMimeType=text/plain;\nTerminal=false\n").unwrap();
+        std::fs::write(dir.join("install.sh"), super::linux_install_script("Probe")).unwrap();
+        let out = std::process::Command::new("sh").arg(dir.join("install.sh")).env("HOME", &base).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let desktop = std::fs::read_to_string(dir.join("Probe.desktop")).unwrap();
+        // (`pwd` devuelve la ruta lógica —en macOS `/var/…`, no `/private/var/…`— así que se mira el sufijo.)
+        assert!(desktop.contains("/Probe/Probe %F\n") && desktop.contains("\nExec=/") && !desktop.contains("/build/machine/"), "{desktop}");
+        assert!(!desktop.contains("Icon="), "{desktop}");
+        assert!(base.join(".local/share/applications/Probe.desktop").is_file());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(dir.join("Probe")).unwrap().permissions().mode() & 0o777, 0o755);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// M375 (ray-sublime #146): un `opens` que el sistema ignorará avisa; los reconocibles, no.

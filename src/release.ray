@@ -72,9 +72,11 @@ fn collect(root: string, rel: string, top: string, out: [ZipEntry]) -> Result<in
             // Ejecutables: lo que está bajo Contents/MacOS o en la raíz del bundle (Linux), o el .exe.
             // #119 (ray-sublime): en la raíz del bundle `rel` es "" (la entrada ya lleva `top/`);
             // la comparación con `top` nunca casaba y el binario de Linux salía sin bit de ejecución.
+            // M393 (#119 medido en la VM de Linux): `install.sh` salía con 644 — un `.sh` también.
             let exe = entry_name.contains("/Contents/MacOS/")
                 || (rel == "" && !name.contains("."))
-                || name.ends_with(".exe");
+                || name.ends_with(".exe")
+                || name.ends_with(".sh");
             out.push(ZipEntry { name: entry_name, is_dir: false, executable: exe, data: data });
             n = n + 1;
         }

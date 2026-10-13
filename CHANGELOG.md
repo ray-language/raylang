@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Bundles de Linux y Windows medidos en las VMs (M393, ray-sublime #119)**: lo que el hallazgo
+  pedía ya estaba (`install.sh` reescribe `Exec=`/`Icon=` al sitio real y registra el lanzador;
+  `std/update` hace lo mismo con el `.desktop` y vuelve a crear el `.lnk` al instalar; el binario
+  del zip de `ray release` lleva 755), y quedaban dos huecos: `install.sh` salía del zip con 644 y
+  su `sed` de `Exec=` borraba el ` %F` de `[app] opens`. Ahora el `.sh` va ejecutable y el `sed`
+  solo cambia la ruta.
+
 ## 1.27.48 — 2026-10-12
 
 - **Selector de archivos del sistema en iOS y Android (M382, rayplay #152, IDEAS §106)**:

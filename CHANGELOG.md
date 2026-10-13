@@ -42,6 +42,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   worker esperaban de 0,5 s a toda la corrida (la cesión cada 32 operaciones no alcanza a una syscall
   de 5 ms). Repro de raykv (50 conexiones × 60 `fs.sync`): peor latencia 1,1–7,9 s → 242–265 ms,
   igual en todos los workers (la cola pura), mismo total. `sync_data` (decenas de µs) sigue inline.
+- **Bundles de Linux y Windows medidos en las VMs (M393, ray-sublime #119)**: lo que el hallazgo
+  pedía ya estaba (`install.sh` reescribe `Exec=`/`Icon=` al sitio real y registra el lanzador;
+  `std/update` hace lo mismo con el `.desktop` y vuelve a crear el `.lnk` al instalar; el binario
+  del zip de `ray release` lleva 755), y quedaban dos huecos: `install.sh` salía del zip con 644 y
+  su `sed` de `Exec=` borraba el ` %F` de `[app] opens`. Ahora el `.sh` va ejecutable y el `sed`
+  solo cambia la ruta.
 
 ## 1.27.48 — 2026-10-12
 

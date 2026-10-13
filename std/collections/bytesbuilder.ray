@@ -1,0 +1,60 @@
+//! Accumulates `bytes` chunks (and single octets) and joins them once with `bytes_concat`, avoiding
+//! the O(n²) cost of `+` on `bytes` in a loop (each `+` copies everything accumulated). Import with
+//! `import std/collections/bytesbuilder;` (or `as bb`) and operate with `bb.new`, `bb.push`,
+//! `bb.push_byte`, `bb.build`, `bb.len`, `bb.count`.
+// std/collections/bytesbuilder — constructor de bytes (M395, raykv #162): el gemelo de stringbuilder.
+//
+// `+` sobre `bytes` copia TODO lo acumulado en cada llamada (8 MB en 65 536 trozos: ~9 s). Aquí los
+// trozos se guardan en un `[bytes]` y se unen UNA vez con `bytes_concat` (una reserva del total). Los
+// octetos sueltos (`push_byte`) se acumulan en un `[int]` que se vuelca como un trozo más cuando llega
+// el siguiente `push` o el `build`, así que mezclar trozos y octetos sigue siendo lineal.
+
+/// A growable sequence of `bytes` chunks joined once by `build`.
+pub struct BytesBuilder {
+    parts: [bytes],
+    pending: [int],
+    total: int,
+}
+
+/// Creates an empty BytesBuilder.
+pub fn new() -> BytesBuilder {
+    BytesBuilder { parts: [], pending: [], total: 0 }
+}
+
+// Vuelca los octetos sueltos acumulados como un trozo más.
+fn flush(b: BytesBuilder) {
+    if (b.pending.len() > 0) {
+        b.parts.push(bytes_of(b.pending));
+        b.pending = [];
+    }
+}
+
+/// Appends a chunk (amortized O(1); does not copy what is already accumulated).
+pub fn push(b: BytesBuilder, chunk: bytes) {
+    flush(b);
+    b.parts.push(chunk);
+    b.total = b.total + chunk.len();
+}
+
+/// Appends a single octet (`0–255`; higher bits are dropped, as in `bytes_of`).
+pub fn push_byte(b: BytesBuilder, octet: int) {
+    b.pending.push(octet);
+    b.total = b.total + 1;
+}
+
+/// Joins everything accumulated into one `bytes` value (O(total), one allocation). The builder
+/// keeps its contents: a later `push` + `build` yields the longer sequence.
+pub fn build(b: BytesBuilder) -> bytes {
+    flush(b);
+    bytes_concat(b.parts)
+}
+
+/// Total number of octets accumulated so far.
+pub fn len(b: BytesBuilder) -> int {
+    b.total
+}
+
+/// Number of chunks accumulated so far (pending single octets count as one chunk).
+pub fn count(b: BytesBuilder) -> int {
+    if (b.pending.len() > 0) { b.parts.len() + 1 } else { b.parts.len() }
+}

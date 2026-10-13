@@ -334,6 +334,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         // --- bytes ---
         "to_bytes" => "Encodes a string as UTF-8 and returns it as `bytes`.",
         "bytes_of" => "Builds a `bytes` value from an `[int]` of octets (each 0–255).",
+        "bytes_concat" => "Concatenates a `[bytes]` into one `bytes` value in a single allocation (linear in the total). Use it instead of `+` in a loop, which copies everything accumulated on every call.",
         "sub_bytes" => "Returns the byte slice `[i, j)` by octet index. Out-of-range indices are clamped, so it never fails at runtime.",
         // --- Crypto (via ring) ---
         "sha256" => "Computes the SHA-256 digest of a bytes value; returns 32 bytes.",
@@ -680,10 +681,36 @@ pub fn bytes_index_of(b: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
+    octet_range(b, i, j).to_vec()
+}
+
+/// M395: el tramo `[i, j)` de `b` por octeto como PRÉSTAMO, con el clamp de `sub_bytes` (`i`/`j` fuera
+/// de rango se recortan; `i > j` → vacío). Lo que `base64_decode_bytes` decodifica sin copiar.
+pub fn octet_range(b: &[u8], i: i64, j: i64) -> &[u8] {
     let n = b.len() as i64;
     let lo = i.clamp(0, n);
     let hi = j.clamp(lo, n); // hi >= lo → rango vacío si i > j
-    b[lo as usize..hi as usize].to_vec()
+    &b[lo as usize..hi as usize]
+}
+
+/// M395 (raykv #162): concatena trozos de bytes en UNA reserva del total (lineal). Helper compartido
+/// por la VM y el intérprete (`bytes_concat`); el nativo emite el mismo bucle en línea.
+pub fn concat_bytes<'a>(parts: impl Iterator<Item = &'a [u8]> + Clone) -> Vec<u8> {
+    let total: usize = parts.clone().map(|p| p.len()).sum();
+    let mut out = Vec::with_capacity(total);
+    for p in parts {
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+/// M395: `__base64_decode_bytes` — el `[bytes]` etiquetado (`ok`/`err`) de decodificar el tramo
+/// `[from, to)` de `data`, compartido por VM e intérprete.
+pub fn base64_decode_range_tagged(data: &[u8], from: i64, to: i64, url: bool) -> Vec<Vec<u8>> {
+    match b64::decode_bytes(octet_range(data, from, to), url) {
+        Ok(d) => vec![b"ok".to_vec(), d],
+        Err(e) => vec![b"err".to_vec(), e.into_bytes()],
+    }
 }
 
 // --- Cripto de PRODUCCIÓN vía `ring` (M43) ---
@@ -4224,6 +4251,16 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bool { return Err((Some(1), format!("__base64_decode expects a bool (url alphabet), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // M395 (rayplay #161): __base64_decode_bytes(datos, from, to, url) -> [bytes]: decodifica el tramo
+    // `[from, to)` (clamp de `sub_bytes`) sin pasar por string. Mismo [bytes] etiquetado que __base64_decode.
+    Builtin { name: "__base64_decode_bytes", opcode: OpCode::Base64DecodeBytes, check: |a| {
+        arity(a, 4, "__base64_decode_bytes", " (data, from, to, url)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__base64_decode_bytes expects bytes (the data), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__base64_decode_bytes expects an int (from), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__base64_decode_bytes expects an int (to), not {}", a[2]))); }
+        if a[3] != Type::Bool { return Err((Some(3), format!("__base64_decode_bytes expects a bool (url alphabet), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     // __base64_encode(datos, url) -> string.
     Builtin { name: "__base64_encode", opcode: OpCode::Base64Encode, check: |a| {
         arity(a, 2, "__base64_encode", " (data, url)")?;
@@ -4345,6 +4382,15 @@ static BUILTINS: &[Builtin] = &[
         match &a[0] {
             Type::Array(el) if **el == Type::Int => Ok(Type::Bytes),
             _ => Err((Some(0), format!("bytes_of expects an [int], not {}", a[0]))),
+        }
+    } },
+    // M395 (raykv #162): bytes_concat(parts) -> bytes — une un [bytes] en una sola reserva (lineal en el
+    // total); `+` sobre bytes copia todo lo acumulado en cada llamada (cuadrático en un bucle).
+    Builtin { name: "bytes_concat", opcode: OpCode::BytesConcat, check: |a| {
+        arity(a, 1, "bytes_concat", " (array of bytes)")?;
+        match &a[0] {
+            Type::Array(el) if **el == Type::Bytes => Ok(Type::Bytes),
+            _ => Err((Some(0), format!("bytes_concat expects a [bytes], not {}", a[0]))),
         }
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
@@ -7049,6 +7095,23 @@ mod tests {
         assert_eq!(char_index_of("añô€x", "€x"), Some(3));
         assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
         assert_eq!(char_index_of("añô", "z"), None);
+    }
+
+    // M395 (raykv #162, rayplay #161): la concatenación en una reserva y el base64 sobre un tramo con
+    // el clamp de `sub_bytes`.
+    #[test]
+    fn bytes_concat_and_base64_range_share_the_sub_bytes_clamp() {
+        let parts: Vec<&[u8]> = vec![b"ab", b"", b"cde", b"f"];
+        assert_eq!(concat_bytes(parts.iter().copied()), b"abcdef");
+        assert_eq!(concat_bytes(std::iter::empty::<&[u8]>()), b"");
+        let data = b"add:name\nQUJD"; // "ABC" en base64 tras el salto de línea
+        let cut = bytes_index_of(data, b"\n").unwrap() as i64 + 1;
+        assert_eq!(base64_decode_range_tagged(data, cut, data.len() as i64, false), vec![b"ok".to_vec(), b"ABC".to_vec()]);
+        assert_eq!(base64_decode_range_tagged(data, cut, 999, false), vec![b"ok".to_vec(), b"ABC".to_vec()]); // clamp
+        assert_eq!(base64_decode_range_tagged(data, 5, 2, false), vec![b"ok".to_vec(), vec![]]); // i > j → vacío
+        let bad = base64_decode_range_tagged(data, 0, cut, false); // "add:name\n" no es base64
+        assert_eq!(bad[0], b"err".to_vec());
+        assert_eq!(octet_range(data, -4, 3), b"add");
     }
 
     // M394 (rayplay #160): el tramo no-ASCII se presta sin materializar el string por caracteres; el

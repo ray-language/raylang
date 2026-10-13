@@ -4,8 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.50 — 2026-10-13
 
+- **`bytes_concat([bytes]) -> bytes` y `std/collections/bytesbuilder` (M395, raykv #162)**: unir
+  muchos trozos de `bytes` en tiempo lineal (una reserva del total). `+` sobre `bytes` copia todo lo
+  acumulado en cada llamada: 8 MB en 65 536 trozos tardaban ~8,2 s en la VM y en nativo; con
+  `bytes_concat`, 3 ms (VM) y 1 ms (nativo). `BytesBuilder` (`new push push_byte build len count`)
+  es el gemelo de `StringBuilder`, con octetos sueltos sin coste cuadrático.
+- **`base64_decode_bytes(b, from, to)` / `base64url_decode_bytes` (M395, rayplay #161)**:
+  decodifican el tramo `[from, to)` de unos `bytes` (clamp de `sub_bytes`) sin copiarlo ni pasar
+  por `string`; mismos errores y estrictez que `base64_decode`.
 - **`substring` sobre un string con caracteres no ASCII ya no materializa el string entero (M394,
   rayplay #160, issue #527)**: el tramo `[i, j)` se corta recorriendo el UTF-8 hasta `j` y se copia
   una sola vez, en la VM y en el binario nativo. Antes el camino no-ASCII construía el `Vec<char>`

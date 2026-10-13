@@ -29,6 +29,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/collections/set", include_str!("../std/collections/set.ray")),
     ("std/collections/deque", include_str!("../std/collections/deque.ray")),
     ("std/collections/stringbuilder", include_str!("../std/collections/stringbuilder.ray")),
+    ("std/collections/bytesbuilder", include_str!("../std/collections/bytesbuilder.ray")), // M395
     // M194 (plan ray-remote C2): cripto LEGADA en raylang puro — para hablar con protocolos que la
     // exigen (MD5, DES/3DES, AES-ECB/CBC), no para diseñar. `std/crypto` (ring) sigue siendo la de
     // producción.

@@ -4170,6 +4170,10 @@ obliga a copiarlo (rayplay se queda con su decodificador propio en raylang porqu
    linear» prometido, pero en la VM el valor es `Arc<[u8]>` (sin capacidad) y harían falta `Vec`
    + capacidad; con 1 y 2 el caso de uso está cubierto sin tocar la representación.
 
+**Estado (M395, 1.27.50).** 1 y 2 entregados (`bytes_concat`, `std/collections/bytesbuilder`) y de 3 la
+parte sin cambio de representación (`base64_decode_bytes`/`base64url_decode_bytes` sobre un tramo).
+Queda abierto el `sub_bytes` O(1) con búfer compartido.
+
 **Impacto.** 1 y 2 son superficie nueva de stdlib (SPEC §stdlib, REFERENCE, llms) sin romper nada; 3
 es el que compromete: cambiar `bytes` a (búfer compartido, offset, len) toca VM, nativo, FFI y
 `sub_bytes`/`to_string`. Mientras, la fila de `bytes` de la REFERENCE debe decir «`+` es O(total) por

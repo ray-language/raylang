@@ -251,7 +251,7 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
 ## Stdlib map — three calling conventions (getting this wrong = 'not declared')
 
 1. **Free global builtins** (no import, called free-form): `print eprint to_string
-   panic assert assert_eq args env platform input parse_int parse_float from_utf8 bytes_of
+   panic assert assert_eq args env platform input parse_int parse_float from_utf8 bytes_of bytes_concat
    sort sort_by sort_by_key get char_code char_from_code try_call` and the concurrency set (`spawn send
    recv try_recv join try_join scope select select_timeout close signals`).
 2. **Method builtins** (RECEIVER form ONLY — the free form is `function 'x' not
@@ -309,7 +309,7 @@ then `{% import site/model %}` for types of other modules (not `from … import`
 (`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
 `ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
-std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,dict}
+std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
 then `login.begin(p, client)` gives a `Pending` (code + PKCE + nonce; redirect the browser to `pending.url`)
@@ -456,7 +456,7 @@ dev` the window live-reloads on asset changes and the webview devtools are on.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map — note `fetch` lives in the Tier-2 package `net`,
-`import net/http;` after `ray add net`, not in `std/net`); `bytes_of([int])` vs `to_bytes(string)`;
+`import net/http;` after `ray add net`, not in `std/net`); `bytes_of([int])` vs `to_bytes(string)`; `+` on `bytes` copies the whole result every call — join many chunks with `bytes_concat([bytes])` or `std/collections/bytesbuilder`, never `acc = acc + chunk` in a loop;
 `join(arr, sep)` vs `join(task)` and `close` (file handle/channel) are the only
 arity/type dualities.
 

@@ -1173,6 +1173,21 @@ fn sub_bytes_oracle() {
 }
 
 #[test]
+/// M395 (raykv #162, rayplay #161): `bytes_concat` y el base64 sobre un tramo coinciden en ambos motores,
+/// incluidos el arreglo vacío, los trozos vacíos y el clamp del rango.
+#[test]
+fn bytes_concat_and_base64_range_oracle() {
+    oracle_int("bytes_concat([b\"ab\", b\"\", b\"cde\"]).len()");                                   // 5
+    oracle_int("bytes_concat([]).len()");                                                            // 0
+    oracle_int("if (bytes_concat([b\"A\", b\"BC\"]) == b\"ABC\") { 1 } else { 0 }");               // 1
+    oracle_int("bytes_concat([bytes_of([1, 2]), b\"\\x03\"])[2]");                                   // 3
+    oracle_int("__base64_decode_bytes(b\"x:QUJD\", 2, 6, false)[1].len()");                          // 3
+    oracle_int("if (__base64_decode_bytes(b\"x:QUJD\", 2, 99, false)[1] == b\"ABC\") { 1 } else { 0 }"); // clamp → 1
+    oracle_int("if (__base64_decode_bytes(b\"x:QUJD\", 0, 6, false)[0] == b\"err\") { 1 } else { 0 }"); // ':' inválido → 1
+    oracle_int("__base64_decode_bytes(b\"QUJD\", 3, 1, true)[1].len()");                             // i > j → vacío → 0
+}
+
+#[test]
 fn bytes_of_oracle() {
     // M19.3c: construir bytes desde [int]. Indexar de vuelta da el mismo octeto.
     oracle_int("bytes_of([72, 105]).len()");                               // 2

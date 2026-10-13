@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.49** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.50** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -625,7 +625,7 @@ sobre el que se escriben las capas 1 y 2.
   (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
   replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes
   parse_int parse_float` · **Arreglos**: `push pop reverse contains position sort map filter fold
-  any all iter` (+ `a + b` concatena) · **Bytes**: `bytes_of sub_bytes index_of starts_with from_utf8` (+ `b1 + b2`,
+  any all iter` (+ `a + b` concatena) · **Bytes**: `bytes_of bytes_concat sub_bytes index_of starts_with from_utf8` (+ `b1 + b2`,
   `to_string` → hex).
 - **Entrada/entorno**: `args() -> [string]` (argumentos del programa), `env(name) ->
   Option<string>`, `input() -> Option<string>` (una línea de stdin), `read_int() ->
@@ -667,7 +667,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 | `std/time` | reloj (`now`, `monotonic`), `sleep`, fechas UTC y formateo (ISO 8601/RFC 1123), constructores de duración a ms (`millis`/`seconds`/`minutes`/`hours`/`days`) |
 | `std/random` | PRNG del proceso: `next`, `below`, `between`, `choice`, `shuffle` y `seed` (semilla explícita → secuencia reproducible) |
 | `std/crypto` | cripto de **producción** respaldada por `ring` (tiempo constante): `sha256 sha512 sha1`, `hmac_sha256`, `ed25519_public_key`/`ed25519_sign`/`ed25519_verify`, `chacha20poly1305_seal`/`_open`, `random_bytes` (CSPRNG) y —acuerdo de claves— `x25519_public_key`/`x25519_shared_secret` (respaldados por `x25519-dalek`), `hkdf_sha256` y `constant_time_eq`. Las versiones escritas en raylang puro (`examples/web/`) son **demostración del lenguaje**, no producción |
-| `std/collections/{set,deque,stringbuilder,dict}` | `Set<T>` y `Dict<K,V>` (claves de usuario vía `Hash`+`Eq`), `Deque<T>` y un constructor de strings que evita el O(n²) de concatenar en bucle |
+| `std/collections/{set,deque,stringbuilder,bytesbuilder,dict}` | `Set<T>` y `Dict<K,V>` (claves de usuario vía `Hash`+`Eq`), `Deque<T>` y los constructores de strings y de `bytes` que evitan el O(n²) de concatenar en bucle |
 | `std/text`, `std/sort`, `std/regex`, `std/csv`, `std/toml`, `std/json`, `std/template`, `std/markdown` | procesamiento de texto y datos (`markdown`: `parse -> [Block]` —AST tipado— y `to_html`; subconjunto CommonMark con tablas GFM, HTML embebido **escapado** y URLs `javascript:` neutralizadas por diseño) |
 | `std/hex`, `std/base64`, `std/url`, `std/uuid`, `std/protobuf` | codificaciones e identificadores |
 | `std/inflate`, `std/deflate`, `std/huffman` | compresión (gzip/zlib/DEFLATE) |

@@ -2365,3 +2365,27 @@ del descriptor; la fibra aparca. `sync_data` sigue inline (DESIGN §365).
 
 Después, la peor latencia es la cola (50 clientes × 4,5 ms ≈ 225 ms) y es igual en todos los
 workers: el worker del actor ya no es especial.
+
+## 17. M395 (oct 2026): unir `bytes` en tiempo lineal — raykv #162, rayplay #161
+
+**Síntoma.** `acc = acc + chunk` copia todo lo acumulado en cada `+` (el valor es `Arc<[u8]>` sin
+capacidad): 8 MB en 65 536 trozos, 8,2 s en ambos motores. REFERENCE decía «lineal amortizado».
+
+**Cambio.** `bytes_concat([bytes])` (una reserva del total) y `std/collections/bytesbuilder`;
+`base64_decode_bytes(b, from, to)` decodifica un tramo sin copiarlo (DESIGN §367).
+
+| 8 MB en 65 536 trozos de 128 B (M3 Pro, `--release`) | VM | nativo |
+|---|---:|---:|
+| `acc = acc + chunk` | 8239 ms | 8242 ms |
+| `bytes_concat(parts)` | 3 ms | 1 ms |
+| `BytesBuilder` (`push` × 65 536 + `build`) | 13 ms | 1 ms |
+| `[int]` + `bytes_of` (octeto a octeto) | 252 ms | 20 ms |
+
+| cuerpo base64 de 78 MB tras `add:ñame\n` | VM | nativo |
+|---|---:|---:|
+| `sub_bytes` + `from_utf8` + `base64_decode` | 149 ms | 142 ms |
+| `base64_decode_bytes(req, cut, req.len())` | 143 ms | 130 ms |
+
+El decode domina el segundo caso; el ahorro es la copia del tramo (78 MB) y su validación UTF-8. El
+`sub_bytes` O(1) con búfer compartido (IDEAS §109 parte 3) queda para un arco propio.
+

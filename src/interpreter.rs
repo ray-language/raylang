@@ -1480,6 +1480,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M395 (rayplay #161): el tramo `[from, to)` de unos bytes, sin pasar por string.
+            "__base64_decode_bytes" => {
+                let (Value::Bytes(data), Value::Int(from), Value::Int(to), Value::Bool(url)) = (&values[0], &values[1], &values[2], &values[3]) else {
+                    unreachable!("the checker guarantees (bytes, int, int, bool)")
+                };
+                let arr = crate::builtins::base64_decode_range_tagged(data, *from, *to, *url)
+                    .into_iter()
+                    .map(|b| Value::Bytes(Rc::new(b)))
+                    .collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__base64_encode" => {
                 let (Value::Bytes(data), Value::Bool(url)) = (&values[0], &values[1]) else {
                     unreachable!("the checker guarantees (bytes, bool)")
@@ -1781,6 +1792,18 @@ impl<'a> Interpreter<'a> {
                         _ => unreachable!("the checker guarantees [int]"),
                     }).collect();
                     Value::Bytes(Rc::new(octets))
+                }
+                _ => unreachable!("the checker guarantees an array"),
+            },
+            // M395 (raykv #162): [bytes] → bytes en una reserva del total.
+            "bytes_concat" => match &values[0] {
+                Value::Array(xs) => {
+                    let xs = xs.borrow();
+                    let out = crate::builtins::concat_bytes(xs.iter().map(|v| match v {
+                        Value::Bytes(b) => &b[..],
+                        _ => unreachable!("the checker guarantees [bytes]"),
+                    }));
+                    Value::Bytes(Rc::new(out))
                 }
                 _ => unreachable!("the checker guarantees an array"),
             },

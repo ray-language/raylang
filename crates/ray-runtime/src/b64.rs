@@ -65,7 +65,12 @@ fn value(c: u8, url: bool) -> Option<u32> {
 /// nada tras el relleno, como mucho dos `=`, bits sobrantes a cero. base64url (`url == true`): sin
 /// relleno (`=` es un carácter inválido), una cola de 1 carácter es imposible, bits sobrantes a cero.
 pub fn decode(s: &str, url: bool) -> Result<Vec<u8>, String> {
-    let bytes = s.as_bytes();
+    decode_bytes(s.as_bytes(), url)
+}
+
+/// M395 (rayplay #161): la misma decodificación sobre un tramo de `bytes` ya en memoria (el cuerpo
+/// de una petición), sin pasar por `string`: ni validación UTF-8 ni copia del tramo.
+pub fn decode_bytes(bytes: &[u8], url: bool) -> Result<Vec<u8>, String> {
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len() / 4 * 3 + 2);
     let mut acc: u32 = 0;
     let mut nbits: u32 = 0;

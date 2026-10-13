@@ -292,7 +292,7 @@ fn gen_map_keys(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
 fn gen_bytes_ops(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
     let k = r.int_in(0, 255);
     let top = format!(
-        "fn probe_{i}() {{\n    let b = b\"ok\\x00\\xff\" + bytes_of([{k}, 65]);\n    print(b.len());\n    print(b[0]);\n    print(b[b.len() - 1]);\n    print(b.sub_bytes(1, 3));\n    match (from_utf8(b\"hola\")) {{ Result.Ok(s) => print(s), Result.Err(e) => print(e), }}\n    match (from_utf8(b\"\\xff\\xfe\")) {{ Result.Ok(s) => print(s), Result.Err(e) => print(\"inv\"), }}\n    print(\"ñu\".to_bytes());\n}}\n"
+        "fn probe_{i}() {{\n    let b = b\"ok\\x00\\xff\" + bytes_of([{k}, 65]);\n    print(b.len());\n    print(b[0]);\n    print(b[b.len() - 1]);\n    print(b.sub_bytes(1, 3));\n    match (from_utf8(b\"hola\")) {{ Result.Ok(s) => print(s), Result.Err(e) => print(e), }}\n    match (from_utf8(b\"\\xff\\xfe\")) {{ Result.Ok(s) => print(s), Result.Err(e) => print(\"inv\"), }}\n    print(\"ñu\".to_bytes());\n    let parts: [bytes] = [b\"ok\", bytes_of([{k}]), b\"\", b.sub_bytes(0, 2)];\n    print(bytes_concat(parts));\n    print(bytes_concat([]).len());\n    print(__base64_decode_bytes(b\"x:QUJD\", 2, 99, false)[1]);\n}}\n"
     );
     (vec![], top)
 }

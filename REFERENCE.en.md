@@ -131,7 +131,7 @@ Reserved (cannot be used as identifiers):
 | `bool` | `true`/`false` |
 | `string` | immutable UTF-8 text; indexable **by character** (`s[i] -> char`) |
 | `char` | one Unicode code point |
-| `bytes` | immutable sequence of octets; `b[i] -> int`. Performance: the buffer is **shared**: loading the variable, passing it, sending it over a channel or indexing it is O(1) whatever its size; `+` on `bytes` COPIES the whole result on every call (linear in the accumulated total, not amortized: gathering 8 MB in 128 chunks ~20 ms, but in 65,536 chunks ~9 s — raykv #162); to accumulate many chunks, collect them in a `[bytes]` and join once at the end (or `[int]` + `bytes_of` octet by octet: VM, 8 KB ~0.27 ms); `+` and `sub_bytes` are for gathering or slicing a FEW chunks already made |
+| `bytes` | immutable sequence of octets; `b[i] -> int`. Performance: the buffer is **shared**: loading the variable, passing it, sending it over a channel or indexing it is O(1) whatever its size; `+` on `bytes` COPIES the whole result on every call (linear in the accumulated total, not amortized: gathering 8 MB in 128 chunks ~20 ms, but in 65,536 chunks ~9 s — raykv #162); to accumulate many chunks, `bytes_concat([bytes])` (one allocation of the total: the same 65,536 chunks, 3 ms) or `std/collections/bytesbuilder`; `+` and `sub_bytes` are for gathering or slicing a FEW chunks already made |
 | `unit` | "no useful value" (return of `print`, etc.). The VALUE is written `{ }` (the empty block): `Result.Ok({ })` in a `-> Result<unit, string>` function; `()` is not an expression ("expected an expression, found RParen") |
 | `[T]` | dynamic array, **reference** semantics |
 | `(A, B, …)` | tuple (immutable aggregate, copied as a value; `t.0 = x` is an error) |
@@ -144,7 +144,7 @@ Reserved (cannot be used as identifiers):
 | `dyn Trait`, `dyn A + B` | trait objects (dynamic dispatch); *upcasting* to a subset of traits; allowed as a struct field and with qualified paths (`dyn m.Trait`, `impl m.Trait for T`); shown as `<dyn Trait>` |
 | `Iter<T>` | lazy iterator (closure-backed) |
 | `ptr` | opaque FFI pointer (not dereferenceable from raylang) |
-| `Set<T>` / `Deque<T>` / `StringBuilder` | from `std/collections` (§10) |
+| `Set<T>` / `Deque<T>` / `StringBuilder` / `BytesBuilder` | from `std/collections` (§10) |
 
 **Casts** with `as`: `float as int` (truncates; saturates at the edge), `int as float`, `char as int`,
 `int as char` (validates the code point), `int ↔ u8/u32/u64` and between unsigned widths (they mask),
@@ -214,6 +214,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | Function | Signature | Description |
 |---|---|---|
 | `bytes_of` | `([int]) -> bytes` | builds bytes from octets 0–255 |
+| `bytes_concat` | `([bytes]) -> bytes` | joins the chunks in ONE allocation (linear in the total; 8 MB in 65,536 chunks: 3 ms vs 8 s with `+` in a loop) |
 | `char_code` | `(char) -> int` | Unicode code point |
 | `char_from_code` | `(int) -> Option<char>` | the inverse; `None` if not a valid code point |
 | `range` | `(a: int, b: int) -> Iter<int>` | half-open iterator `[a, b)` (from the prelude) |
@@ -283,7 +284,7 @@ also exist as free calls (`method(recv, args)`).
 | `b.last_index_of(needle)` | `Option<int>` | octet index of the LAST occurrence (`Some(len)` for an empty needle) |
 | `b.starts_with(prefix)` | `bool` | does it begin with `prefix`? (the empty prefix always matches) |
 | `from_utf8(b)` | `Result<string, string>` | decodes UTF-8 |
-| `b1 + b2` | `bytes` | concatenation |
+| `b1 + b2` | `bytes` | concatenation (copies the whole result: for many chunks, `bytes_concat` or `BytesBuilder`) |
 | `to_string(b)` / `print(b)` | hex | hexadecimal representation |
 
 ### `Map<K, V>`
@@ -421,11 +422,12 @@ A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it
 | `std/collections/set` | `Set<T>` (requires `T: Hash + Eq`): `new add has remove size items` → `set.new()`, `set.add(s, x)`… |
 | `std/collections/deque` | `Deque<T>`: `new len is_empty push_back push_front pop_front pop_back peek_front` · `peek_back` · `get(d, i) -> Option<T>` (0 = front) · `to_array(d) -> [T]` (copy, front→back) · `iter(d) -> Iter<T>` (lazy snapshot: `for x in deque.iter(d)`) |
 | `std/collections/stringbuilder` | `StringBuilder`: `new push build count` (joins once; avoids the O(n²) of `+` in a loop) |
+| `std/collections/bytesbuilder` | `BytesBuilder`: `new push push_byte build len count` — the twin for `bytes` (M395, raykv #162): chunks and single octets, `build` joins with `bytes_concat` (one allocation; the builder keeps its contents) |
 | `std/collections/dict` | `Dict<K, V>` — a GENERIC hash map: USER keys via the `Hash` + `Eq` traits (the builtin `Map<K,V>` requires primitive keys). `new insert get has remove size keys values` (module functions: `dict.insert(d, k, v)`) |
 | `std/kv` | `Store` — persisted key/value state: `open(path) -> Result<Store, _>`/`empty(path)`, and the operations are METHODS of the `StoreOps` trait — `s.get(k) -> Option<bytes>` · `s.set(k, v: bytes)` · `s.get_string(k) -> Option<string>` · `s.set_string(k, v)` · `s.delete(k) -> bool` · `s.keys() -> [string]` · `s.save() -> Result<int, _>` (atomic save: temp + rename) · **`s.incr(k, delta) -> Result<int, _>`** (atomic add; absent = 0; a decimal UTF-8 value, readable with `get_string`; non-integer = Err) · **`s.set_if(k, expected: Option<bytes>, new) -> bool`** (CAS; `None` = only-if-absent) — NOT free functions (`kv.get(s, k)` does not exist). `share`/`open_shared`/`stop` = the ACTOR form for access across fibers (same methods on the handle; `incr`/`set_if` run WHOLE in the owning fiber — atomic under concurrency). Motivated by `ray dev` (sessions/config surviving reloads) |
 | `std/json` | `enum Json` (`JNull JBool JNum JStr JArray JObject`) · `parse -> Result<Json, string>` (M379, rayplay #150: the cursor runs over `bytes` and strings come out in runs — an N MB string costs ~N MB, before 55–85×) · `stringify` (canonical, sorted keys). `\uXXXX` escapes with surrogate pairs · **`parse_relaxed(s)`** accepts `//` `/* */` comments and trailing commas (the dialect of `tsconfig.json`, `.vscode/*.json`, `.sublime-settings`); `parse` stays strict · **bounded depth**: `parse`/`parse_relaxed` return `Err("nesting too deep …")` beyond `max_depth()` (200) levels of arrays/objects — never a stack overflow (on native it used to abort the process) · `Json` implements `ToJson` → `obj().field("d", Json.JNull)` / `.field("x", parse(s)?)` embed a dynamic value in the builder · the builder (`obj()…render()`, `render_arr`) and `@derive(ToJson)` write the same compact form as `stringify` (`{"k":1,"a":[1,2]}`) · `render_pretty(o, indent)` / `render_arr_pretty(a, indent)` / `reindent(text, indent)`: indentation that keeps insertion order (`stringify_pretty(j, indent)` sorts the keys) |
 | `std/hex` | `hex_encode(bytes) -> string` · `hex_decode(string) -> Result<bytes, string>` |
-| `std/base64` | `base64 base64url` (`bytes -> string`) · `base64_decode base64url_decode` (`string -> Result<bytes, string>`; strict, RFC 4648 §3.5) — in Rust since M380 (rayplay #151: one pass, ~1× the input, hundreds of MB/s on all three engines; before `[int]` per octet, ~14× and 15 MB/s) |
+| `std/base64` | `base64 base64url` (`bytes -> string`) · `base64_decode base64url_decode` (`string -> Result<bytes, string>`; strict, RFC 4648 §3.5) · `base64_decode_bytes base64url_decode_bytes` (`(bytes, from, to) -> Result<bytes, string>`: decodes the octet range `[from, to)` —`sub_bytes` clamp— without copying it or going through a `string`; the body of a request received as `bytes`, M395) — in Rust since M380 (rayplay #151: one pass, ~1× the input, hundreds of MB/s on all three engines; before `[int]` per octet, ~14× and 15 MB/s) |
 | `std/url` | `url_encode url_decode parse_query build_query` |
 | `std/regex` | Thompson NFA engine (linear time): `full_match search find find_str find_all replace_all`. Supports `. * + ? \| ( ) [a-z] [^…] \d \w \s ^ $`, `(?:…)`, lazy `*?`, `{n,m}` · **Not supported, and `compile` rejects with a named `Err`**: look-around `(?=` `(?!` `(?<=` `(?<!`, atomic groups `(?>`, inline flags `(?i)`, `\p{…}`, backreferences `\1`/`\k<n>`, `\G` `\A` `\z`, `\h`, possessive quantifiers `*+`, POSIX classes `[:alpha:]` and `&&` (any other escape `\X` is the literal character `X`; `\b` is the letter b) · compiled: `compile -> Result<Regex, string>` + trait `Matcher` (`captures`/`captures_str`) · NAMED groups `(?P<n>…)`/`(?<n>…)`: `group_names(re) -> [string]` · `captures_map(re, s) -> Option<Map<string, string>>` · **ONIGURUMA dialect** (native `fancy-regex` engine on all three engines; the one `.sublime-syntax`/Ruby/TextMate use): `onig(pattern) -> Result<Onig, string>` accepts look-around, backreferences `\1`/`\k<n>`, `\G`, atomic groups `(?>`, possessive quantifiers, `\p{…}`, `\h` (hex digit), inline flags `(?i)`/`(?x)`, `&&`; `^`/`$` are LINE anchors and `.` stops at `\n` unless `(?m)`/`(?s)` · `Onig { pattern, names: [string] }` (handle deduplicated by pattern, lives for the process) · trait `Scanner`: `search_from(text, from) -> Option<Match>` (`\G` = `from`) · `match_at(text, at) -> Option<Match>` (anchored: the match STARTS at `at`) · `is_match(text) -> bool` · `Match { start, end, groups: [Option<(int, int)>] }` (character indices; `groups[0]` = whole match) · `group_str(m, text, i) -> Option<string>` · `group_index(re, name) -> Option<int>` · a catastrophic pattern does not hang: panic `regex: backtrack limit exceeded …` past 10⁶ steps · native binaries need the `regex` feature (with `--without regex`, `onig` falls into the stub) |
 | `std/csv` | `parse_csv -> Result<[[string]], string>` (RFC 4180) · `write_csv` · incremental: `parser()` + `feed(p, chunk) -> [[string]]` (completed rows) + `finish(p) -> Result<[[string]], string>` (the tail; an unclosed quote = Err) — chunks may be cut anywhere |
@@ -702,4 +704,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:0e69150fa1d5 -->
+<!-- sync: sha256:68c76e972aa1 -->

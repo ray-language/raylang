@@ -38,6 +38,20 @@ pub fn base64_decode(s: string) -> Result<bytes, string> {
     decoded(__base64_decode(s, false))
 }
 
+/// Decodes the octet range `[from, to)` of `data` (clamped like `sub_bytes`) as standard base64,
+/// without copying the range or going through a `string`: the body of a request that arrived as
+/// `bytes` is decoded in place (`b.index_of(b"\n")` + `base64_decode_bytes(b, cut + 1, b.len())`).
+/// Same strictness and errors as `base64_decode` (M395, rayplay #161).
+pub fn base64_decode_bytes(data: bytes, from: int, to: int) -> Result<bytes, string> {
+    decoded(__base64_decode_bytes(data, from, to, false))
+}
+
+/// Decodes the octet range `[from, to)` of `data` (clamped like `sub_bytes`) as unpadded base64url,
+/// without copying the range or going through a `string`. Same strictness as `base64url_decode`.
+pub fn base64url_decode_bytes(data: bytes, from: int, to: int) -> Result<bytes, string> {
+    decoded(__base64_decode_bytes(data, from, to, true))
+}
+
 /// Decodes an unpadded base64url string (RFC 4648 §5, `-`/`_` alphabet) into `bytes`.
 /// Strict: rejects characters outside the alphabet (including `=`), a 1-character tail,
 /// and non-zero trailing bits (non-canonical encodings), so each payload has exactly one

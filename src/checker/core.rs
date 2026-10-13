@@ -4088,6 +4088,7 @@ fn builtin_arg_expected(name: &str, first: &Type, i: usize) -> Option<Type> {
 fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
     match (name, i) {
         ("bytes_of", 0) => Some(Type::Array(Box::new(Type::Int))),
+        ("bytes_concat", 0) => Some(Type::Array(Box::new(Type::Bytes))), // M395
         ("join", 0) => Some(Type::Array(Box::new(Type::String))),
         _ => None,
     }

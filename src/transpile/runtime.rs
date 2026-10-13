@@ -884,6 +884,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            Err(e) => vec![std::rc::Rc::<[u8]>::from(&b\"err\"[..]), std::rc::Rc::<[u8]>::from(e.into_bytes())],\n",
             "        };\n",
             "        std::rc::Rc::new(std::cell::RefCell::new(arr))\n",
+            "    }\n",
+            // M395 (rayplay #161): el tramo `[from, to)` con el clamp de `sub_bytes`, decodificado en sitio.
+            "    pub fn decode_range_tagged(b: &[u8], from: i64, to: i64, url: bool) -> std::rc::Rc<std::cell::RefCell<Vec<std::rc::Rc<[u8]>>>> {\n",
+            "        let n = b.len() as i64; let lo = from.clamp(0, n); let hi = to.clamp(lo, n);\n",
+            "        let arr: Vec<std::rc::Rc<[u8]>> = match decode_bytes(&b[lo as usize..hi as usize], url) {\n",
+            "            Ok(d) => vec![std::rc::Rc::<[u8]>::from(&b\"ok\"[..]), std::rc::Rc::<[u8]>::from(d)],\n",
+            "            Err(e) => vec![std::rc::Rc::<[u8]>::from(&b\"err\"[..]), std::rc::Rc::<[u8]>::from(e.into_bytes())],\n",
+            "        };\n",
+            "        std::rc::Rc::new(std::cell::RefCell::new(arr))\n",
             "    }\n}\n",
         ));
     }

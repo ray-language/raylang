@@ -163,6 +163,16 @@ fn stringbuilder_y_deque_ambos_engines() {
     );
 }
 
+/// M395 (raykv #162, rayplay #161): `bytes_concat`, `BytesBuilder` (trozos + octetos sueltos) y
+/// `base64_decode_bytes` sobre un tramo, iguales en ambos motores (el nativo lo cubre native_corpus).
+#[test]
+fn bytesbuilder_and_bytes_concat_both_engines() {
+    ambos_engines_matches(
+        "examples/stdlib/bytes_builder.ray",
+        "20\nGET ñandú HTTP/1.1\n0\n6\n3\n616263646566\nabcdef!\nhola\ninvalid base64 character\n",
+    );
+}
+
 #[test]
 fn global_names_no_longer_exist() {
     // M50.2: la forma global del prelude se retiró; usar los nombres sin importar el submódulo es error.

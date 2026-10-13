@@ -2367,6 +2367,25 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M395 (rayplay #161): base64 sobre el tramo `[from, to)` de unos bytes. Pila: b, from, to, url.
+                OpCode::Base64DecodeBytes => {
+                    let url = match self.pop() {
+                        HeapValue::Bool(b) => b,
+                        _ => unreachable!("the checker guarantees a bool"),
+                    };
+                    let to = self.pop();
+                    let from = self.pop();
+                    let data = self.pop();
+                    let (HeapValue::Bytes(data), HeapValue::Int(from), HeapValue::Int(to)) = (data, from, to) else {
+                        unreachable!("the checker guarantees bytes, int, int");
+                    };
+                    let elems: Vec<HeapValue> = crate::builtins::base64_decode_range_tagged(&data, from, to, url)
+                        .into_iter()
+                        .map(HeapValue::bytes)
+                        .collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::Base64Encode => {
                     let url = match self.pop() {
                         HeapValue::Bool(b) => b,
@@ -2631,6 +2650,17 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees [int]"),
                     }).collect();
                     self.push(HeapValue::bytes(octets));
+                }
+                // M395 (raykv #162): un [bytes] → bytes en una reserva del total.
+                OpCode::BytesConcat => {
+                    let HeapValue::Obj(h) = self.pop() else {
+                        unreachable!("the checker guarantees an array");
+                    };
+                    let out = crate::builtins::concat_bytes(self.as_array(h).iter().map(|v| match v {
+                        HeapValue::Bytes(b) => &b[..],
+                        _ => unreachable!("the checker guarantees [bytes]"),
+                    }));
+                    self.push(HeapValue::bytes(out));
                 }
                 OpCode::Repeat => {
                     let n = self.pop();

@@ -17625,3 +17625,40 @@ entero en cada llamada: lineal en el total acumulado, cuadrático en el bucle (8
 (`bytes_concat`/builder) va en IDEAS §109. De paso, `ray dev --device` avisa una vez si el
 `.gitignore` del proyecto no excluye `.ray-dev` (misma regla que `node_modules/`), y `llms.txt` lo
 nombra.
+
+## 367. M395 — `bytes` sin copias cuadráticas: `bytes_concat`, `BytesBuilder` y base64 sobre un tramo (raykv #162, rayplay #161, oct 2026)
+
+IDEAS §109 partes 1 y 2, más la mitad de la 3 que no toca la representación del valor.
+
+**El problema.** `acc = acc + chunk` sobre `bytes` copia TODO lo acumulado en cada `+`: 8 MB en
+65 536 trozos de 128 B son 8,2 s, igual en la VM y en nativo, porque el valor es un `Arc<[u8]>` /
+`Rc<[u8]>` sin capacidad y no hay forma de unir trozos salvo octeto a octeto (`[int]` + `bytes_of`,
+8 B por octeto y 250 ms en la VM). raykv unía por pares a mano y aun así perdía ~19 % de CPU en
+`memmove`. En paralelo, `base64_decode` solo aceptaba `string`: decodificar el cuerpo de una petición
+que llegó como `bytes` exigía `sub_bytes` + `from_utf8` (dos copias y una validación) antes de empezar.
+
+**Decisión: una primitiva lineal y un builder, sin tocar la representación.** `bytes_concat(parts:
+[bytes]) -> bytes` es un builtin con opcode propio (`BytesConcat`): suma las longitudes, reserva una vez
+y copia cada trozo (`builtins::concat_bytes`, compartido por VM e intérprete; el nativo emite el mismo
+bucle en línea, con el caso `bytes_concat([])` tipado a mano como `bytes_of([])`). Encima,
+`std/collections/bytesbuilder` (`new push push_byte build len count`) es el gemelo de `stringbuilder`:
+los trozos van a un `[bytes]` y los octetos sueltos a un `[int]` pendiente que se vuelca como un trozo
+más en el siguiente `push` o en `build`, así que mezclar trozos y octetos sigue siendo lineal. `build`
+no vacía el builder (como `StringBuilder`). La alternativa de hacer `+` «en sitio» cuando el `Arc`
+no se comparte exigiría `Vec` con capacidad en la representación de la VM y del FFI: descartada aquí,
+el caso de uso queda cubierto sin ese arco.
+
+**Base64 sobre un tramo.** `b64::decode` ya trabajaba sobre `&[u8]`; se extrae `decode_bytes` y un
+builtin `__base64_decode_bytes(data, from, to, url)` decodifica `octet_range(data, from, to)` (el
+clamp de `sub_bytes`, prestado) en sitio. `std/base64` lo envuelve en `base64_decode_bytes` y
+`base64url_decode_bytes` con el mismo `Result` y los mismos mensajes. El `sub_bytes` O(1) con búfer
+compartido (la parte 3 completa de §109) sigue abierto: cambia el valor en tres motores y el FFI.
+
+**Medido** (Apple M3 Pro, `--release`): 8 MB en 65 536 trozos, `+` 8239 ms (VM) / 8242 ms (nativo);
+`bytes_concat` 3 / 1 ms; `BytesBuilder` 13 / 1 ms; `[int]` + `bytes_of` 252 / 20 ms. Un cuerpo de
+78 MB en base64 tras `add:ñame\n`: `sub_bytes` + `from_utf8` + `base64_decode` 149 / 142 ms frente a
+`base64_decode_bytes` 143 / 130 ms (el decode domina; lo que se ahorra es la copia del tramo y la
+validación UTF-8). Guardas: oráculo VM↔intérprete (`bytes_concat_and_base64_range_oracle`), el
+ejemplo `examples/stdlib/bytes_builder.ray` en ambos motores (collections_cli) y en el corpus nativo,
+y la sonda `bytes_ops` del harness diferencial. PERFORMANCE §17.
+

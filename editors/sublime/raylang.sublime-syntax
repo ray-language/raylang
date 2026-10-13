@@ -26,7 +26,7 @@ variables:
   # de RECEPTOR (s.len(), xs.map(f), m.insert(k, v)). Una sola lista, la misma que la gramática de
   # VSCode (builtins y pipeline-target); la guarda tests/sublime_syntax_test.rs la contrasta con
   # llms.txt.
-  builtins: 'print|eprint|to_string|panic|assert|assert_eq|args|env|platform|input|parse_int|parse_float|from_utf8|bytes_of|sort|sort_by|sort_by_key|get|char_code|char_from_code|try_call|exit|spawn|send|recv|try_recv|try_send|join|try_join|scope|select|select_timeout|close|signals|add_to|len|trim|split|chars|contains|replace|starts_with|ends_with|to_upper|to_lower|substring|repeat|index_of|to_bytes|push|pop|reverse|position|map|filter|fold|iter|insert|contains_key|keys|values|sub_bytes|remove'
+  builtins: 'print|eprint|to_string|panic|assert|assert_eq|args|env|platform|input|parse_int|parse_float|from_utf8|bytes_of|bytes_concat|sort|sort_by|sort_by_key|get|char_code|char_from_code|try_call|exit|spawn|send|recv|try_recv|try_send|join|try_join|scope|select|select_timeout|close|signals|add_to|len|trim|split|chars|contains|replace|starts_with|ends_with|to_upper|to_lower|substring|repeat|index_of|to_bytes|push|pop|reverse|position|map|filter|fold|iter|insert|contains_key|keys|values|sub_bytes|remove'
 
 contexts:
   main:

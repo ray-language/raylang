@@ -29,7 +29,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__make_temp_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
-    "__base64_decode", "__base64_encode",
+    "__base64_decode", "__base64_decode_bytes", "__base64_encode",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
     "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__chmod", "__watch", "__watch_next", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
@@ -55,7 +55,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__pbkdf2_hmac_sha256", // M290
     // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
-    "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
+    "__recv", "add_to", "args", "bytes_concat", "bytes_of", "char_code", "close", "eprint", "join",
     "exit", "panic", "print", "scope", "spawn_isolated", "select", "__select_timeout", "try_recv", "try_send", "send", "signals", "spawn", "to_string",
     // M365: actor por worker (emit_call: __ray_spawn_local, __ray_worker_id, __ray_worker_count).
     "spawn_local", "worker_id", "worker_count",

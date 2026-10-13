@@ -1,0 +1,40 @@
+// BytesBuilder y bytes_concat (M395): juntar trozos de `bytes` en tiempo lineal. `+` sobre bytes copia
+// todo lo acumulado en cada llamada; `bytes_concat([bytes])` reserva el total una vez, y el builder
+// acumula trozos y octetos sueltos para unirlos en `build`. Decodificar base64 sobre un tramo de bytes
+// (`base64_decode_bytes`) evita copiar el tramo a un string.
+import std/collections/bytesbuilder as bb;
+import std/base64;
+
+fn main() -> int {
+    // bytes_concat: un lote de respuestas en una sola reserva.
+    let parts: [bytes] = [b"GET ", "ñandú".to_bytes(), b"", b" HTTP/1.1"];
+    let line = bytes_concat(parts);
+    print(line.len());  // 20
+    print(from_utf8(line).unwrap_or("?"));  // GET ñandú HTTP/1.1
+    print(bytes_concat([]).len());  // 0
+
+    // BytesBuilder: trozos y octetos mezclados, lineal.
+    let b = bb.new();
+    bb.push(b, b"ab");
+    bb.push_byte(b, 99);  // 'c'
+    bb.push_byte(b, 256 + 100);  // 'd' (los bits altos se descartan, como bytes_of)
+    bb.push(b, b"ef");
+    print(bb.len(b));  // 6
+    print(bb.count(b));  // 3 (ab, cd, ef)
+    print(bb.build(b));  // 616263646566
+    bb.push(b, b"!");
+    print(from_utf8(bb.build(b)).unwrap_or("?"));  // abcdef!
+
+    // base64_decode_bytes: el cuerpo tras el salto de línea, sin copiarlo.
+    let req = "add:name\n".to_bytes() + base64.base64("hola".to_bytes()).to_bytes();
+    let cut = req.index_of(b"\n").unwrap_or(0 - 1) + 1;
+    match (base64.base64_decode_bytes(req, cut, req.len())) {
+        Result.Ok(d) => print(from_utf8(d).unwrap_or("?")),  // hola
+        Result.Err(e) => print(e),
+    }
+    match (base64.base64_decode_bytes(req, 0, cut)) {
+        Result.Ok(d) => print(d),
+        Result.Err(e) => print(e),  // invalid base64 character
+    }
+    0
+}

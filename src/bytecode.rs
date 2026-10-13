@@ -380,6 +380,9 @@ pub enum OpCode {
     // M380: base64 en Rust (rayplay #151).
     Base64Decode,
     Base64Encode,
+    /// M395 (rayplay #161): saca `url`, `to`, `from` y los `bytes`; decodifica el tramo `[from, to)`
+    /// (con clamp) y empuja el `[bytes]` etiquetado de `Base64Decode`. Primitivo `__base64_decode_bytes`.
+    Base64DecodeBytes,
     /// Saca `datos` (bytes) y la ruta (string); escribe el archivo y empuja `[string]` etiquetado.
     /// Primitivo `__write_file_bytes`; el prelude → `Result<int, string>`.
     WriteFileBytes,
@@ -414,6 +417,9 @@ pub enum OpCode {
     /// Saca un `[int]` (objeto del heap); empuja `bytes` con cada elemento truncado a octeto
     /// (`& 255`). Builtin `bytes_of` (M19.3c); dual del indexado, para construir tramas/cabeceras.
     BytesOf,
+    /// M395 (raykv #162): saca un `[bytes]` (objeto del heap); empuja la concatenación de todos sus
+    /// trozos en UNA reserva (lineal en el total). Builtin `bytes_concat`; `+` copia el acumulado por llamada.
+    BytesConcat,
     /// Saca `n` y el string; empuja el string repetido `n` veces (`n<=0` → `""`). Builtin `repeat`.
     Repeat,
     /// Saca la subcadena y el string; empuja un `[int]` con **0 o 1** elementos: el índice de

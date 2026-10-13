@@ -172,7 +172,7 @@ fn handshake() {
     print("misma firma como si fuera de B: ${forged}");
 
     // El transcript ata las claves a este intercambio (orden fijo y acordado por el protocolo).
-    let transcript = crypto.sha256(bytes_concat(offer_a, offer_b));
+    let transcript = crypto.sha256(bytes_concat([offer_a, offer_b]));
 
     let dh_a = or_empty(crypto.x25519_shared_secret(alice.x_secret, offer_b));
     let dh_b = or_empty(crypto.x25519_shared_secret(bob.x_secret, offer_a));
@@ -213,21 +213,6 @@ fn or_utf8(b: bytes) -> string {
         Result.Ok(s) => s,
         Result.Err(_) => "<no utf-8>",
     }
-}
-
-fn bytes_concat(a: bytes, b: bytes) -> bytes {
-    var out: [int] = [];
-    var i = 0;
-    while (i < a.len()) {
-        out.push(a[i]);
-        i = i + 1;
-    }
-    var j = 0;
-    while (j < b.len()) {
-        out.push(b[j]);
-        j = j + 1;
-    }
-    bytes_of(out)
 }
 
 fn main() -> int {

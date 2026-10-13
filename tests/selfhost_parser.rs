@@ -755,6 +755,7 @@ fn parses_files_reales_equal_what_el_oracle() {
         "mongo_demo.ray", // M54.3: demo del cliente MongoDB (examples/db); usa `for` (M27.2, idem)
         "log.ray", // M70: el escape \uXXXX de controles usa bitops (>> &) — misma clase que sha1
         "redis.ray", // M69: el framing RESP migró a `bytes` (b"") — misma clase que sha256
+        "bytes_builder.ray", // M395: bytes_concat/BytesBuilder sobre literales b"" (idem)
         "sha1.ray", "base64.ray", "base64_demo.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

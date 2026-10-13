@@ -10,7 +10,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   muchos trozos de `bytes` en tiempo lineal (una reserva del total). `+` sobre `bytes` copia todo lo
   acumulado en cada llamada: 8 MB en 65 536 trozos tardaban ~8,2 s en la VM y en nativo; con
   `bytes_concat`, 3 ms (VM) y 1 ms (nativo). `BytesBuilder` (`new push push_byte build len count`)
-  es el gemelo de `StringBuilder`, con octetos sueltos sin coste cuadrático.
+  es el gemelo de `StringBuilder`, con octetos sueltos sin coste cuadrático. Como todo builtin
+  libre, el nombre queda reservado: un programa con su propia `fn bytes_concat` debe renombrarla
+  (o borrarla: el builtin hace lo mismo con `[a, b]`). Las gramáticas de Sublime/VS Code lo colorean.
 - **`base64_decode_bytes(b, from, to)` / `base64url_decode_bytes` (M395, rayplay #161)**:
   decodifican el tramo `[from, to)` de unos `bytes` (clamp de `sub_bytes`) sin copiarlo ni pasar
   por `string`; mismos errores y estrictez que `base64_decode`.

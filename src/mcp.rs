@@ -774,7 +774,10 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
     for f in crate::prelude::functions().iter().filter(|f| f.name == name) {
         let first = f.params.first().map(|p| type_head(&p.ty));
         if recv.is_none() || first.as_deref() == recv {
-            found.push(with_doc(fn_signature(f), doc_above(&format!("fn {name}("), 0)));
+            // #159 (rayplay): desde la línea de la PROPIA función — buscando desde 0, un método de
+            // trait homónimo declarado antes (`BytesOps.index_of`) prestaba su doc a `string.index_of`.
+            let from = f.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1);
+            found.push(with_doc(fn_signature(f), doc_above(&format!("fn {name}("), from)));
         }
     }
     let impls = crate::prelude::impls();
@@ -1118,6 +1121,12 @@ mod tests {
     #[test]
     fn ray_doc_resolves_type_dot_method_and_lists_overloads() {
         assert!(doc_text("string.last_index_of").starts_with("last_index_of(s: string, sub: string) -> Option<int>"));
+        // #159 (rayplay): la doc es la de la función libre (índice de CARÁCTER), no la del método
+        // homónimo de `BytesOps` declarado antes en el prelude.
+        let s = doc_text("string.index_of");
+        assert!(s.contains("character index") && !s.contains("Octet"), "{s}");
+        let l = doc_text("string.last_index_of");
+        assert!(l.contains("character index") && !l.contains("Octet"), "{l}");
         let b = doc_text("bytes.index_of_from");
         assert!(b.starts_with("bytes.index_of_from(self, needle: bytes, start: int) -> Option<int>") && b.contains("BytesOps") && b.contains("at or after `start`"), "{b}");
         assert!(doc_text("Result.map").contains("Result.map(self, f: fn(T) -> U) -> Result<U, E>"));

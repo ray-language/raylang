@@ -620,20 +620,32 @@ pub fn substring_ascii(s: &str, i: i64, j: i64) -> Option<&str> {
     Some(&s[lo as usize..hi as usize])
 }
 
-pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
-    // D1 (bench políglota, jsondeserialize): fast-path ASCII — corte por bytes con el mismo clamp
-    // (sin materializar el `Vec<char>` del string entero por llamada).
-    if s.is_ascii() {
-        let n = s.len() as i64;
-        let lo = i.clamp(0, n);
-        let hi = j.clamp(lo, n);
-        return s[lo as usize..hi as usize].to_string();
+/// M394 (rayplay #160): el tramo `[i, j)` por CARÁCTER como PRÉSTAMO sea o no ASCII. Antes el camino
+/// no-ASCII materializaba el `Vec<char>` del string ENTERO (4 B/carácter) y recogía otro `String`
+/// (~6 B/carácter sobre 78 MB: +474 MB y 137 ms por llamada); ahora recorre `char_indices` hasta `j`
+/// y devuelve el corte del propio string, que el llamador copia una sola vez. Mismo clamp.
+pub fn substring_slice(s: &str, i: i64, j: i64) -> &str {
+    if let Some(ascii) = substring_ascii(s, i, j) {
+        return ascii;
     }
-    let chars: Vec<char> = s.chars().collect();
-    let n = chars.len() as i64;
-    let lo = i.clamp(0, n);
-    let hi = j.clamp(lo, n); // hi >= lo → rango vacío si i > j
-    chars[lo as usize..hi as usize].iter().collect()
+    let lo = i.max(0) as usize;
+    let hi = j.max(0).max(lo as i64) as usize; // hi >= lo → rango vacío si i > j
+    let mut start = s.len();
+    let mut end = s.len();
+    for (k, (at, _)) in s.char_indices().enumerate() {
+        if k == lo {
+            start = at;
+        }
+        if k == hi {
+            end = at;
+            break;
+        }
+    }
+    &s[start..end]
+}
+
+pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
+    substring_slice(s, i, j).to_string()
 }
 
 /// Sub-secuencia `[i, j)` de `bytes` por índice de **octeto**, con *clamp* al rango válido (M19.2): el
@@ -7037,6 +7049,27 @@ mod tests {
         assert_eq!(char_index_of("añô€x", "€x"), Some(3));
         assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
         assert_eq!(char_index_of("añô", "z"), None);
+    }
+
+    // M394 (rayplay #160): el tramo no-ASCII se presta sin materializar el string por caracteres; el
+    // clamp es el de siempre (fuera de rango, `i > j`, negativos, `j` más allá del final).
+    #[test]
+    fn substring_slice_borrows_the_char_range_of_a_non_ascii_string() {
+        let s = "añô€x";
+        assert_eq!(substring_slice(s, 0, 5), s);
+        assert_eq!(substring_slice(s, 0, 99), s);
+        assert_eq!(substring_slice(s, -3, 2), "añ");
+        assert_eq!(substring_slice(s, 3, 4), "€");
+        assert_eq!(substring_slice(s, 4, 5), "x");
+        assert_eq!(substring_slice(s, 5, 9), "");
+        assert_eq!(substring_slice(s, 9, 12), "");
+        assert_eq!(substring_slice(s, 3, 1), "");
+        assert_eq!(substring_slice(s, -5, -1), "");
+        assert_eq!(substring_slice("", 0, 1), "");
+        // Lo que rayplay hacía: cortar tras el primer salto de línea de un texto con acento.
+        let body = "ñombre\nAAAA";
+        let cut = char_index_of(body, "\n").unwrap() as i64;
+        assert_eq!(substring_slice(body, cut + 1, body.chars().count() as i64), "AAAA");
     }
 
     /// M367: la tabla une los orígenes bajo su prefijo y el directorio en vivo solo existe

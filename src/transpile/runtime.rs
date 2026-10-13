@@ -414,11 +414,14 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // el `MapStore` de la VM (P0.1) — SipHash es lento en claves string; con `--without ahash`, el
     // HashMap std puro. Todo el código generado construye con `__RayMap::default()`/`from_iter` (valen
     // para ambos hashers); los registros internos (sockets/TLS, clave i64) siguen en HashMap std.
+    // M394 (rayplay #160): el tramo no-ASCII se corta recorriendo `char_indices` hasta `j`, sin
+    // materializar el string por caracteres (espejo de `builtins::substring_slice`).
     out.push_str("fn __ray_substring(s: &str, i: i64, j: i64) -> Rc<str> {\n");
     out.push_str("    if s.is_ascii() { let n = s.len() as i64; let lo = i.clamp(0, n); let hi = j.clamp(lo, n); return Rc::from(&s[lo as usize..hi as usize]); }\n");
-    out.push_str("    let c: Vec<char> = s.chars().collect(); let n = c.len() as i64;\n");
-    out.push_str("    let lo = i.clamp(0, n); let hi = j.clamp(lo, n);\n");
-    out.push_str("    Rc::from(c[lo as usize..hi as usize].iter().collect::<String>())\n}\n");
+    out.push_str("    let lo = i.max(0) as usize; let hi = j.max(0).max(lo as i64) as usize;\n");
+    out.push_str("    let (mut start, mut end) = (s.len(), s.len());\n");
+    out.push_str("    for (k, (at, _)) in s.char_indices().enumerate() { if k == lo { start = at; } if k == hi { end = at; break; } }\n");
+    out.push_str("    Rc::from(&s[start..end])\n}\n");
     if ahash {
         out.push_str("type __RayMap<K, V> = std::collections::HashMap<K, V, ray_runtime::RandomState>;\n");
     } else {

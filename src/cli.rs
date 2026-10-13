@@ -1592,6 +1592,11 @@ fn cmd_dev_device(args: &[String]) {
             process::exit(70);
         }
     };
+    // M394 (rayplay 1.27.49): la primera vez que nace `.ray-dev` en un proyecto cuyo `.gitignore` no lo
+    // excluye (uno anterior a `ray new` con esa línea), se avisa UNA vez, como con `node_modules/`.
+    if !paired_before && !gitignore_excludes(&root, ".ray-dev") {
+        eprintln!("note: the device link (port + token) lives in .ray-dev; add `.ray-dev` to .gitignore");
+    }
     // En una terminal: la pancarta con el logo, los tres pasos y el QR (M343). En una tubería (los
     // tests leen `device link:` de ahí) la forma plana de siempre.
     let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
@@ -3920,11 +3925,17 @@ pub(crate) fn link_web_packages(m: &Manifest, warn_broken: bool) {
     for note in crate::deps::link_web_packages(&m.root, &packages) {
         eprintln!("warning: {note}");
     }
-    if first
-        && let Ok(gi) = fs::read_to_string(m.root.join(".gitignore"))
-        && !gi.lines().any(|l| l.trim().trim_matches('/') == "node_modules")
-    {
+    if first && !gitignore_excludes(&m.root, "node_modules") {
         eprintln!("note: ray linked the web packages of your dependencies in node_modules/ (for the editor); add `node_modules/` to .gitignore");
+    }
+}
+
+/// ¿Excluye el `.gitignore` de `root` la entrada `name` (con o sin `/`)? Sin `.gitignore` se da por
+/// excluida: el aviso es para quien versiona y se le olvidó la línea, no para quien no versiona.
+fn gitignore_excludes(root: &Path, name: &str) -> bool {
+    match fs::read_to_string(root.join(".gitignore")) {
+        Ok(gi) => gi.lines().any(|l| l.trim().trim_matches('/') == name),
+        Err(_) => true,
     }
 }
 

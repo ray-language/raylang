@@ -4,6 +4,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.54 — 2026-10-14
+
+- **Nativo: reactor por worker por defecto (M399, IDEAS §110, raykv #163, raygate #75/#107)**: cada
+  worker del scheduler sondea su propio kqueue/epoll, así que aparcar una fibra en su socket ya no
+  cruza de hilo (buzón + tubería + condvar por cada E/S en el modelo anterior). El servidor TCP
+  mínimo del hallazgo pasa de 194k a 233k peticiones/s con un worker y a 245k con dos (93 % de
+  Redis, igual que un kqueue por hilo escrito en Rust), y un servidor con 11 workers gasta 131 % de
+  CPU en vez de 406 % para el mismo caudal. `RAYLANG_REACTOR=shared` recupera el hilo reactor único;
+  Windows lo conserva siempre. Tres arreglos del modo local que el prototipo de M358 no medía: un
+  worker con E/S armada no gira (su E/S lista solo la ve su poller); con trabajo ya visible no
+  sondea el poller a timeout 0 (en macOS cuesta 12 µs sin nada listo: el ping-pong de actores entre
+  workers iba a 64k ops/s en vez de 873k); y una fibra que cede va al final de la cola, detrás de su
+  hija de `spawn_local`. El modelo de actores no cambia. Documentado el reactor y el valor por
+  defecto de `RAYLANG_SPIN_US` (10 µs) en REFERENCE y `llms.txt`.
+- **Dependencias: `rustls` 0.23.45 → 0.23.46** (RUSTSEC-2026-0347..0350, publicados el 14 de octubre: datos
+  en búfer tras un rechazo de ECH, descompresión Brotli de certificados sin cota, degradación del
+  intercambio de claves por un `ServerHello` sin autenticar). raylang no usa ECH ni compresión de
+  certificados; se actualiza porque `cargo audit` lo exige y por higiene.
+
 ## 1.27.53 — 2026-10-14
 
 - **`std/audio`: `open_format(rate, channels, format, latency_ms)` con `"s16le" | "s24le" |

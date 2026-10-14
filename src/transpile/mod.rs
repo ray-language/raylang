@@ -94,6 +94,9 @@ struct Transpiler {
     /// Constantes de nivel superior (nombre → tipo). Se bajan a funciones `NAME()` (uniforme para
     /// escalares y strings, que no pueden ser `const` en Rust por el `Rc`); una referencia `NAME` → `NAME()`.
     consts: HashMap<String, Type>,
+    /// M396 (rayplay #168): `(función, índice)` de los parámetros `[T]` de solo lectura
+    /// (`readonly::readonly_array_params`): un const arreglo compartible pasa a ellos como `NAME__shared()`.
+    readonly_params: std::collections::HashSet<(String, usize)>,
     /// Firma de cada método de trait (nombre → (tipos de args SIN `self`, tipo de retorno)). Para bajar
     /// `dyn Trait`: el struct sintetizado `__dyn_T` lleva un campo-closure por método (`Rc<dyn Fn(..)->R>`).
     trait_method_sigs: HashMap<String, (Vec<Type>, Type)>,
@@ -365,6 +368,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         current_ret: None,
         send_convs: Vec::new(),
         consts,
+        readonly_params: crate::readonly::readonly_array_params(prog),
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
         needs_handles: false,

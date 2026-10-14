@@ -18,6 +18,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   workers iba a 64k ops/s en vez de 873k); y una fibra que cede va al final de la cola, detrás de su
   hija de `spawn_local`. El modelo de actores no cambia. Documentado el reactor y el valor por
   defecto de `RAYLANG_SPIN_US` (10 µs) en REFERENCE y `llms.txt`.
+- **Dependencias: `rustls` 0.23.45 → 0.23.46** (RUSTSEC-2026-0347..0350, publicados el 14 de octubre: datos
+  en búfer tras un rechazo de ECH, descompresión Brotli de certificados sin cota, degradación del
+  intercambio de claves por un `ServerHello` sin autenticar). raylang no usa ECH ni compresión de
+  certificados; se actualiza porque `cargo audit` lo exige y por higiene.
 
 ## 1.27.53 — 2026-10-14
 

@@ -146,7 +146,7 @@ Project:
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it (the link — port + token — is kept in `.ray-dev` at the project root, git-ignored by `ray new`; delete the file to rotate it) here)
   check [file]      alias of build: type-check without running (0 ok / 65 error)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release] [--no-stubs | --allow-stubs]]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
@@ -3247,6 +3247,11 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String]
     println!("ok: bundle '{}'", dir.display());
 }
 
+/// Los subsistemas que `--without` (CLI y `[native] without` del ray.toml) acepta. M396 (rayplay #169):
+/// UNA lista, la misma en la validación, en `ray build --help` y en la fila de REFERENCE (lo vigila
+/// `without_list_is_the_same_in_help_and_reference`).
+pub(crate) const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "regex", "bigint", "qr", "deflate", "keychain", "unicode", "watch", "audio", "ui", "process", "mimalloc", "ahash", "fibers"];
+
 /// #119 (ray-sublime): el `install.sh` del bundle de Linux — reescribe `Exec=`/`Icon=` del `.desktop` a
 /// la ubicación real y lo registra en `~/.local/share/applications`. M393 (medido en la VM): el `sed`
 /// de `Exec=` conserva los ARGUMENTOS (` %F` de `[app] opens`): antes sustituía la línea entera. Pura.
@@ -3462,7 +3467,6 @@ fn cmd_build(args: &[String]) {
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
     // M146: `audio` faltaba desde M145 (el help/docs lo anunciaban y la validación lo rechazaba
     // con exit 64) — entra junto a `ui`.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode", "audio", "ui", "bigint", "deflate", "keychain", "qr"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -6530,6 +6534,21 @@ mod tests {
     /// M393 (#119): `install.sh` reescribe `Exec=` a la ubicación real conservando ` %F`, e `Icon=`
     /// solo si existe; se ejecuta de verdad con `sh` en un directorio temporal (HOME redirigido).
     #[cfg(unix)]
+    #[test]
+    // M396 (rayplay #169): la lista de `--without` es una sola — validación, `--help` y REFERENCE.
+    fn without_list_is_the_same_in_help_and_reference() {
+        let joined = super::RT_SUBSYSTEMS.join(",");
+        assert!(super::help_text().contains(&format!("--without {joined}]")), "el help lista exactamente RT_SUBSYSTEMS");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for file in ["REFERENCE.md", "REFERENCE.en.md"] {
+            let text = std::fs::read_to_string(root.join(file)).unwrap();
+            let row = text.lines().find(|l| l.starts_with("| `--without <")).unwrap_or_else(|| panic!("fila --without en {file}"));
+            for name in super::RT_SUBSYSTEMS {
+                assert!(row.contains(&format!("{name}")), "{file}: la fila de --without no nombra '{name}'");
+            }
+        }
+    }
+
     #[test]
     fn linux_install_script_keeps_the_exec_arguments() {
         let base = std::env::temp_dir().join(format!("ray_install_sh_{}", std::process::id()));

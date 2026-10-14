@@ -2094,3 +2094,19 @@ fn a_std_trait_method_on_a_primitive_hints_the_import() {
     let e = check_src("fn main() -> int { 5.frobnicate() }").unwrap_err();
     assert!(!e.msg.contains("declares it"), "{}", e.msg);
 }
+
+/// M396 (rayplay #165): un tipo desconocido en un campo señala el CAMPO (línea y columna del tipo),
+/// no la cabecera del struct; igual el «shadows your struct» de `Channel`, y la variante de un enum.
+#[test]
+fn unknown_field_type_points_at_the_field_not_the_struct_header() {
+    let e = check_src("pub struct S {\n    a: int,\n    b: [Nope],\n}\nfn main() { }").unwrap_err();
+    assert!(e.msg.contains("unknown type: 'Nope' not declared"), "{}", e.msg);
+    assert_eq!((e.line, e.col), (3, 8), "{}", e.msg);
+    let e = check_src("struct Channel { x: int, }\nstruct Stream {\n    name: string,\n    state: [Channel],\n}\nfn main() { }").unwrap_err();
+    assert!(e.msg.contains("'Channel' is a builtin type"), "{}", e.msg);
+    assert_eq!((e.line, e.col), (4, 12), "{}", e.msg);
+    let e = check_src("enum E {\n    A,\n    B(Nope),\n}\nfn main() { }").unwrap_err();
+    assert!(e.msg.contains("'Nope' not declared"), "{}", e.msg);
+    assert_eq!(e.line, 3, "{}", e.msg);
+}
+

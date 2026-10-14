@@ -44,6 +44,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod mirror;
 pub mod raydoc;
+pub mod readonly;
 pub mod manifest;
 pub mod parser;
 pub mod transpile;

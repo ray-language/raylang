@@ -214,20 +214,24 @@ impl Checker {
         }
         // --- Validar los tipos referenciados (ahora que todos están registrados con
         // su aridad), con los parámetros de cada definición en ámbito ---
+        // M396 (rayplay #165): el error de un tipo desconocido señala la VARIANTE o el CAMPO que lo
+        // usa, no la cabecera del enum/struct (160 líneas más arriba en el caso real).
         for e in &program.enums {
             self.type_params = e.type_params.iter().cloned().collect();
             let variants = self.enums.get(&e.name).unwrap_or_else(|| crate::ice!("enum '{}' just registered is not in the table", e.name)).clone();
-            for (_, payload) in &variants {
+            for (i, (_, payload)) in variants.iter().enumerate() {
+                let (line, col) = e.variants.get(i).map(|v| (v.line, v.col)).unwrap_or((e.line, e.col));
                 for t in payload {
-                    self.ensure_type(t, e.line, e.col)?;
+                    self.ensure_type(t, line, col)?;
                 }
             }
         }
         for s in &program.structs {
             self.type_params = s.type_params.iter().cloned().collect();
             let fields = self.structs.get(&s.name).unwrap_or_else(|| crate::ice!("struct '{}' just registered is not in the table", s.name)).clone();
-            for (_, ty) in &fields {
-                self.ensure_type(ty, s.line, s.col)?;
+            for (i, (_, ty)) in fields.iter().enumerate() {
+                let (line, col) = s.field_type_pos.get(i).copied().unwrap_or((s.line, s.col));
+                self.ensure_type(ty, line, col)?;
             }
         }
         // M311: el destino de cada alias se valida con sus parámetros en ámbito (los usos solo

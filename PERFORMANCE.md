@@ -2389,3 +2389,20 @@ capacidad): 8 MB en 65 536 trozos, 8,2 s en ambos motores. REFERENCE decía «li
 El decode domina el segundo caso; el ahorro es la copia del tramo (78 MB) y su validación UTF-8. El
 `sub_bytes` O(1) con búfer compartido (IDEAS §109 parte 3) queda para un arco propio.
 
+## 18. M396 (oct 2026): el `const` arreglo como argumento — rayplay #168
+
+**Síntoma.** `first(TAB, i)` con `const TAB: [int]` de 180 enteros reconstruía la tabla en cada
+llamada (M391 solo compartía las lecturas directas). 100 000 llamadas: 127 ms en la VM frente a 6 con
+una copia local.
+
+**Cambio.** Análisis de solo lectura por parámetro (`src/readonly.rs`, DESIGN §368): si la callee no
+puede mutar ni retener su `[T]`, la llamada pasa la copia compartida (`SharedConst`).
+
+| 100 000 × `first(t, i)`, tabla de 180 (M3 Pro) | antes | después |
+|---|---:|---:|
+| VM, `first(TAB, …)` | 127 ms | 6 ms |
+| VM, `first(local, …)` | 7 ms | 7 ms |
+| nativo `--release`, `first(TAB, …)` | 3–4 ms | 3–4 ms (sin cambio, a propósito) |
+
+El intérprete no cambia (sigue copiando: es el oráculo que comprueba que el const no se corrompe).
+

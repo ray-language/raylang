@@ -927,11 +927,12 @@ impl Transpiler {
             (ExprKind::Int(n, _), Type::UInt(w)) => write!(out, "{}u{}", *n as u64, w).unwrap(),
             (ExprKind::ArrayLit(elems), Type::Array(et)) => {
                 // Mismo izado que el ArrayLit de emit_expr (clase RefCell-en-args, IDEAS §64),
-                // preservando la emisión tipada de cada elemento.
-                let hoist = elems.len() > 1;
+                // preservando la emisión tipada de cada elemento. M396 (rayplay #164): los literales
+                // puros no se izan (3000 `let` en un bloque tumbaban a rustc con SIGBUS).
+                let hoist = needs_hoist(elems);
                 if hoist {
                     out.push_str("{ ");
-                    for (i, el) in elems.iter().enumerate() {
+                    for (i, el) in elems.iter().enumerate().filter(|(_, el)| !is_pure_literal(el)) {
                         write!(out, "let __rt_a{} = ", i).unwrap();
                         self.emit_typed(out, el, et)?;
                         out.push_str("; ");
@@ -946,7 +947,7 @@ impl Transpiler {
                         if i > 0 {
                             out.push_str(", ");
                         }
-                        if hoist {
+                        if hoist && !is_pure_literal(el) {
                             write!(out, "__rt_a{}", i).unwrap();
                         } else {
                             self.emit_typed(out, el, et)?;
@@ -1371,10 +1372,12 @@ impl Transpiler {
             // `borrow()` de un elemento vive hasta el final de la sentencia; un elemento posterior que
             // haga `borrow_mut` del mismo objeto panicaría).
             ExprKind::ArrayLit(elems) => {
-                let hoist = elems.len() > 1;
+                // M396 (rayplay #164): solo se izan los elementos que pueden tomar prestado; un literal
+                // puro (`0`, `1.5`, `"a"`, `-3`) va en línea — 3000 `let` en un bloque tumbaban a rustc.
+                let hoist = needs_hoist(elems);
                 if hoist {
                     out.push_str("{ ");
-                    for (i, el) in elems.iter().enumerate() {
+                    for (i, el) in elems.iter().enumerate().filter(|(_, el)| !is_pure_literal(el)) {
                         write!(out, "let __rt_a{} = ", i).unwrap();
                         self.emit_expr(out, el)?;
                         out.push_str("; ");
@@ -1389,7 +1392,7 @@ impl Transpiler {
                         if i > 0 {
                             out.push_str(", ");
                         }
-                        if hoist {
+                        if hoist && !is_pure_literal(el) {
                             write!(out, "__rt_a{}", i).unwrap();
                         } else {
                             self.emit_expr(out, el)?;
@@ -2640,3 +2643,17 @@ fn rust_literal_pattern(e: &Expr) -> Result<String, String> {
     })
 }
 
+/// M396 (rayplay #164): ¿es un literal escalar puro (sin préstamo posible)? Int/float/bool/char/
+/// string/bytes, con o sin signo delante.
+pub(super) fn is_pure_literal(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => matches!(expr.kind, ExprKind::Int(..) | ExprKind::Float(_)),
+        _ => false,
+    }
+}
+
+/// Un literal de arreglo iza sus elementos solo si hay 2+ y alguno NO es un literal puro.
+pub(super) fn needs_hoist(elems: &[Expr]) -> bool {
+    elems.len() > 1 && elems.iter().any(|e| !is_pure_literal(e))
+}

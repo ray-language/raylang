@@ -17662,3 +17662,49 @@ validación UTF-8). Guardas: oráculo VM↔intérprete (`bytes_concat_and_base64
 ejemplo `examples/stdlib/bytes_builder.ray` en ambos motores (collections_cli) y en el corpus nativo,
 y la sonda `bytes_ops` del harness diferencial. PERFORMANCE §17.
 
+## 368. M396 — rayplay con 1.27.50: literales grandes en nativo, el campo que señala, el `const` compartido como argumento y la lista única de `--without` (oct 2026)
+
+Cuatro arreglos contenidos y dos clasificaciones (IDEAS §111–§112).
+
+**rustc moría con SIGBUS ante un literal de 3000 enteros (#164, issue #530).** El transpilador izaba
+CADA elemento de un literal de arreglo a un `let` propio (la clase RefCell-en-args de IDEAS §64: el
+guard de un `borrow()` de un elemento vive hasta el final de la sentencia y un elemento posterior
+con `borrow_mut` del mismo objeto panicaría). Con 3000 `let` en un bloque, rustc se queda sin pila.
+Un literal puro (`0`, `1.5`, `"a"`, `-3`) no puede tomar prestado nada, así que no hay que izarlo:
+`needs_hoist` iza solo si hay 2+ elementos y alguno NO es literal puro, y en un literal mixto solo se
+izan los no literales. Medido: 3000 y 6400 enteros compilan; el resto de la emisión no cambia.
+Nombrar la función en el error de cargo no es posible cuando quien muere es rustc (sin diagnóstico).
+
+**El error de un campo salía en la cabecera del struct (#165, issue #531).** `StructDef.fields` no
+lleva posiciones; la validación de tipos de los campos usaba `(s.line, s.col)`. El parser guarda
+ahora `field_type_pos` (dónde empezó a leer el tipo de cada campo) y la validación señala eso; las
+variantes de un enum ya tenían su posición y ahora también se usa. El «shadows your struct» de
+`Channel` sale en el campo que lo usa (línea y columna del tipo), que es donde el autor puede
+arreglarlo. El normalizador del test de fmt ignora el campo nuevo (es solo diagnóstico).
+
+**Pasar un `const` arreglo copiaba la tabla en cada llamada (#168).** M391 compartió las LECTURAS
+(`C[i]`, `C.len()`, `C.contains`) pero un `const` como argumento seguía siendo un literal fresco,
+porque la callee podría mutarlo (`push`, `t[i] = v`) o retenerlo. Decisión: un análisis de SOLO
+LECTURA por parámetro (`src/readonly.rs`), conservador y sobre el programa fusionado (prelude
+incluido): un parámetro `[T]` es de solo lectura si todas sus apariciones son lecturas reconocidas
+(base de índice, iterable de `for`, `==`/`!=`/`+`, builtins que no mutan —`__len`, `__contains`,
+`__reverse`, `print`…— o argumento de otra función en una posición también de solo lectura, por
+punto fijo). Cualquier otra aparición (alias con `let`, devolverlo, meterlo en un literal o struct,
+pasarlo a un valor-función/`extern`/`spawn`, `push`/`pop`, asignar un índice) o una redeclaración
+del nombre lo marcan como mutable. Con eso el compilador de la VM emite `SharedConst` para un
+`const` compartible en un parámetro de solo lectura. Solo la VM: en nativo la copia compartida es
+un `thread_local` por worker y un `Rc` que cruzara un aparque de fibra tendría su contador
+compartido entre hilos; además allí la copia costaba 3–4 ms por 100 000 llamadas. Medido (VM,
+180 enteros × 100 000 llamadas): 127 → 6 ms, igual que la copia local; el oráculo VM↔intérprete
+comprueba que `grow(TAB)` sigue sin alterar `TAB`.
+
+**Tres listas de `--without` (#169).** `RT_SUBSYSTEMS` pasa a constante del módulo y un test exige
+que `ray build --help` la liste exactamente y que la fila de REFERENCE (ES/EN) nombre cada
+subsistema; `docs/build.md` y CLAUDE.md la repiten. 16 nombres, agrupados por lo que pasa al
+excluirlos (stub/raylang, runtime no enlazado, defaults de la vía Cargo).
+
+**`close` sobre audio (#166, doc).** El alimentador trata el cierre del handle como EOF: toca lo
+encolado, hace el fundido y termina, sin bloquear al programa; no hay forma de descartar la cola.
+Queda dicho en `ray_doc close`, `std/audio` y REFERENCE; `audio.flush` y los formatos s24/s32/f32
+(#167) van a IDEAS §111, y «Now Playing»/controles del sistema (#170) a §112.
+

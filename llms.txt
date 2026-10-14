@@ -74,7 +74,7 @@ let a = 3;                                       // immutable
 var b = 0;                                       // mutable; b = b + 1; later
 const LIMIT: int = 100;                          // top-level constant: a CONSTANT EXPRESSION (literals, arithmetic, other consts, arrays/tuples)
 const IDLE_MS: int = 8 * 3600 * 1000;            // folded at compile time; calls/variables are not allowed
-const TABLE: [int] = [3, 1, 4, 1, 5];            // an array const is a FRESH array at each use (aliases cannot mutate it);
+const TABLE: [int] = [3, 1, 4, 1, 5];            // an array const is a FRESH array at each use (aliases cannot mutate it), EXCEPT reads — TABLE[i] / TABLE.len() / TABLE.contains(x) and passing it to a function whose [T] parameter is never mutated (1.27.51) — which share one copy;
                                                  // TABLE[i] / TABLE.len() / TABLE.contains(x) read one shared copy: O(1), use it for lookup tables (1.27.49)
 type Pair<T> = (T, T);                           // type alias (1.27.13): a name, not a new type; `pub type` exports it
 

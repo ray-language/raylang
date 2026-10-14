@@ -171,7 +171,7 @@ modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.
 Windows x86_64 el reactor es `WSAPoll`; en Windows ARM64 se apaga solo (corosensei no tiene
 backend para esa arquitectura).
 
-**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui` — para los subsistemas de uso
+**Exclusión.** `--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers` (la lista completa, la misma de `ray build --help` y de la fila `--without` de REFERENCE) — para los subsistemas de uso
 (crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del
 sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native] without =
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para

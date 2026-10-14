@@ -74,7 +74,10 @@ pub fn write(h: int, samples: bytes) -> Result<int, string> {
 
 /// Waits until everything written has been played (queue empty plus the device buffer margin).
 /// Call it before `close(h)` at the end of a session for a gapless ending — `close(h)` (the
-/// ordinary handle close) ends the output; a program that exits right away may cut the tail.
+/// ordinary handle close) ends the output WITHOUT blocking: what is already queued (up to the
+/// latency hint) still plays and ends with a short fade-out, and it cannot be discarded (rayplay
+/// #166). A program that exits right away may cut the tail. To jump or pause without the old
+/// position overlapping the new one, keep the output open and fade your own samples in and out.
 pub fn drain(h: int) -> Result<int, string> {
     let r = __audio_drain(h);
     if (r[0] == "ok") {

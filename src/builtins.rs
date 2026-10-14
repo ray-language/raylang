@@ -391,7 +391,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "try_send" => "Sends into a channel WITHOUT blocking: `true` if the value was delivered or queued, `false` if the channel is closed or full. Never fails: the non-panicking counterpart of `send` for producers whose consumer may be gone.",
         "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
         "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. SIGHUP, SIGQUIT and SIGUSR1/2 keep their OS default unless you ask for them with `process.listen_signal` (std/process). A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
-        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file. For a window handle from `ui.open` (std/ui): closes the window (the event loop reports `closed`; there is no `ui.close`). For an audio output from `audio.open` (std/audio): ends the output WITHOUT blocking — what is already queued (up to the latency hint) still plays, ending with a short fade-out; there is no way to discard it (`audio.drain` waits for it instead). To jump or pause without overlap, keep the output open and fade your own samples.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file. For a window handle from `ui.open` (std/ui): closes the window (the event loop reports `closed`; there is no `ui.close`). For an audio output from `audio.open` (std/audio): ends the output WITHOUT blocking — what is already queued (up to the latency hint) still plays, ending with a short fade-out (`audio.drain` waits for it; `audio.flush` discards it without closing). To jump or pause without overlap, keep the output open and `flush`.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
         "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
@@ -1348,8 +1348,8 @@ const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 
 /// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
 #[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
-pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<i64, String> {
-    let f = ray_runtime::audio::open(sample_rate, channels, latency_ms)?;
+pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<i64, String> {
+    let f = ray_runtime::audio::open(sample_rate, channels, latency_ms, format)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -1357,7 +1357,7 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<i6
     Ok(id)
 }
 #[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
-pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64) -> Result<i64, String> {
+pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64, _format: &str) -> Result<i64, String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 
@@ -1402,6 +1402,20 @@ pub fn audio_drain(h: i64) -> Result<(), String> {
 }
 #[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 pub fn audio_drain(_h: i64) -> Result<(), String> {
+    Err(AUDIO_UNAVAILABLE.to_string())
+}
+
+/// M398 (rayplay #166): descarta lo escrito y aún no sonado en la salida `h`, sin cerrarla.
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn audio_flush(h: i64) -> Result<(), String> {
+    let fd = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::PipeW(f)) => audio_key(f),
+        _ => return Err("audio: not an open audio output".to_string()),
+    };
+    ray_runtime::audio::flush(fd)
+}
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
+pub fn audio_flush(_h: i64) -> Result<(), String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 
@@ -5123,10 +5137,19 @@ static BUILTINS: &[Builtin] = &[
     // de escritura con contrapresión y `close(h)` es el EOF que drena y termina.
     Builtin { name: "__audio_open", opcode: OpCode::AudioOpen, check: |a| {
         // M158: tercer arg latency_ms (0 = default) — el hint dimensiona anillo/buffers/chunk.
-        arity(a, 3, "__audio_open", " (sample_rate, channels, latency_ms)")?;
+        // M398: cuarto arg format ("s16le" | "s24le" | "s32le" | "f32le").
+        arity(a, 4, "__audio_open", " (sample_rate, channels, latency_ms, format)")?;
         for (i, what) in ["sample rate", "channel count", "latency in ms"].iter().enumerate() {
             if a[i] != Type::Int { return Err((Some(i), format!("__audio_open expects an int (the {what}), not {}", a[i]))); }
         }
+        if a[3] != Type::String { return Err((Some(3), format!("__audio_open expects a string (the sample format), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M398 (rayplay #166): __audio_flush(h) -> [string]: ["ok", ""] o ["err", msg]. Descarta lo
+    // encolado (pipe + anillo del backend) sin cerrar la salida.
+    Builtin { name: "__audio_flush", opcode: OpCode::AudioFlush, check: |a| {
+        arity(a, 1, "__audio_flush", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_flush expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __audio_played(h) -> [string] (M158): ["ok", ms] o ["err", msg] — la posición REAL de
@@ -5142,7 +5165,7 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__audio_write", opcode: OpCode::SocketWriteBytes, check: |a| {
         arity(a, 2, "__audio_write", " (handle, samples)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__audio_write expects an int (the handle), not {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("__audio_write expects bytes (the s16le samples), not {}", a[1]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__audio_write expects bytes (the samples), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __audio_drain(h) -> [string] (M145): ["ok", ""] o ["err", msg]. Bloquea hasta que lo

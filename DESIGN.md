@@ -17729,3 +17729,38 @@ camino que ya usaban `C[i]`/`C.len()` desde M391). Medido: tabla de 180, 35 → 
 de 1800, 157 → 4 ms; la copia local, 5 ms. El test del transpilador comprueba las dos ramas
 (`TAB__shared()` al lector, `TAB()` al que hace `push`).
 
+## 370. M398 — `std/audio` v3: formatos s24/s32/f32 y `flush` (IDEAS §111, rayplay #166/#167, oct 2026)
+
+**Formatos.** `std/audio` nació con un solo formato (s16le, el mínimo común de los backends, §142).
+rayplay reproduce FLAC/ALAC/WAV de 24 y 32 bits y tenía que reducir con dither TPDF; el volumen y
+las mezclas perdían resolución. Decisión: un `Format` en el runtime (`s16le | s24le | s32le |
+f32le`, little-endian entrelazado) que viaja con la salida; el pipe, el chunk del alimentador, el
+anillo y la rampa anti-clic se dimensionan en octetos por frame del formato. El dispositivo lo
+recibe NATIVO donde el backend lo acepta — AudioQueue admite los cuatro con la ASBD adecuada
+(enteros empaquetados o `kAudioFormatFlagIsFloat`); ALSA pide `S24_3LE`/`S32_LE`/`FLOAT_LE` y cae
+a s16 si `set_params` lo rechaza; AAudio pide `I24_PACKED`/`I32` (API 31) o `FLOAT` y cae igual — y
+donde no, un sumidero `Convert` traduce a s16le en el hilo alimentador (WASAPI siempre, porque su
+`WAVEFORMATEX` de 16 bits con `AUTOCONVERTPCM` ya funcionaba y no merece negociar). La conversión
+es la obvia (s24/s32 → 16 bits altos; f32 → clamp y escala), sin dither: quien quiera dither lo
+hace antes, como hasta ahora; el camino nativo es el que importa y no convierte nada. La superficie
+nueva es `open_format(rate, channels, format, latency_ms)`; `open`/`open_latency` no cambian.
+
+**`flush`.** §368 documentó que `close` deja sonar la cola y no hay forma de descartarla; rayplay
+saltaba de pista fundiendo a mano para no cerrar. Decisión: `audio.flush(h)` descarta lo escrito y
+aún no sonado SIN cerrar. Mecánica: una bandera `discard` en el `Ctl`; el alimentador la atiende
+(vacía el pipe con lecturas no bloqueantes mientras `FIONREAD` > 0, llama a `Sink::flush`, la baja) y
+el llamador espera a que baje (≤ 1 s). Para verla aunque el programa no escriba nada más, el
+alimentador deja el `read` bloqueante por un `poll(2)` de 20 ms (en Windows el bucle ya sondeaba con
+`PeekNamedPipe`). `Sink::flush` por backend: CoreAudio trunca el anillo a la cola de la rampa, que el
+callback entrega fundida (sin clic) y marca `after_gap` para que lo siguiente entre con rampa; ALSA
+`snd_pcm_drop` + `snd_pcm_prepare`; AAudio `requestPause` → `requestFlush` → `requestStart`; WASAPI
+y el sumidero nulo, nada (sus búferes son pocos ms). Lo que ya está en los búferes del dispositivo
+termina de sonar: `flush` corta en ~lat/4, no en cero.
+
+**Medido** (macOS, 48 kHz mono, seno a −34 dBFS, 300 ms + `flush` + 300 ms, pista 100 ms): los
+cuatro formatos abren y suenan nativos, `RAY_AUDIO_TRACE` da 1 fundido y 0 huecos, `played_ms`
+489 ms (el flush descartó ~110 ms). Con el sumidero nulo (CI): el pacing de f32 es de 4 octetos por
+muestra (300 ms → 9600 octetos a 8000 Hz), y un escritor de 3 s con cinco `flush` acaba en menos de
+2,2 s con la salida viva después (`write`/`drain`), en VM y nativo. Los tests de la batería anterior
+no cambian: s16le sigue siendo el default y el camino sin conversión.
+

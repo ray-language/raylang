@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.53 — 2026-10-14
+
+- **`std/audio`: `open_format(rate, channels, format, latency_ms)` con `"s16le" | "s24le" |
+  "s32le" | "f32le"` (M398, IDEAS §111, rayplay #167)**: un reproductor de FLAC/ALAC de 24 bits ya
+  no tiene que reducir con dither. El formato va nativo al dispositivo donde el backend lo acepta
+  (CoreAudio en macOS/iOS los cuatro; ALSA y AAudio según dispositivo, con caída a s16le) y se
+  convierte a s16le en el hilo alimentador donde no (WASAPI). `open`/`open_latency` siguen siendo
+  s16le. Medido en macOS: los cuatro formatos suenan con un fundido y cero huecos.
+- **`audio.flush(h)` (M398, rayplay #166)**: descarta lo escrito y aún no sonado (cola y anillo)
+  sin cerrar la salida — lo que pide un salto o una pausa; antes había que cerrar y reabrir, y la
+  posición vieja seguía sonando hasta la pista de latencia. El corte lleva la rampa anti-clic
+  (CoreAudio); ALSA hace `drop` + `prepare`, AAudio `pause` → `flush` → `start`. El alimentador
+  espera ahora con `poll` de 20 ms en vez de un `read` bloqueante, para atenderlo aunque el
+  programa no escriba.
+
 ## 1.27.52 — 2026-10-14
 
 - **Nativo: pasar un `const` arreglo a una función que no lo muta tampoco lo copia (M397, rayplay

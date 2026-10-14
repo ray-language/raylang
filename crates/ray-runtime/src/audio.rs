@@ -17,7 +17,10 @@
 //!   - `RAY_AUDIO_SINK=null`: un sumidero que consume a ritmo de tiempo real SIN hardware — la
 //!     vía de los tests (CI no tiene tarjeta de sonido) y de los benchmarks.
 //!
-//! Formato único de v1: PCM **s16le entrelazado** (el mínimo común de los tres backends).
+//! Formato de v1: PCM **s16le entrelazado** (el mínimo común de los backends). M398 (IDEAS §111,
+//! rayplay #167): también `s24le`, `s32le` y `f32le` — nativos donde el backend los acepta
+//! (CoreAudio todos; ALSA/AAudio según dispositivo) y convertidos a s16le en el alimentador
+//! donde no (`Convert`); `flush` (rayplay #166) descarta lo encolado sin cerrar la salida.
 
 //!   - Windows (M178, docs/windows.md W7): WASAPI en modo compartido, COM A MANO (vtables
 //!     transcritas de mmdeviceapi.h/audioclient.h; ole32 y el resto siempre presentes). El pipe
@@ -36,10 +39,22 @@ unsafe extern "C" {
     fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
     fn close(fd: i32) -> i32;
+    /// M398: el alimentador espera con `poll` (20 ms) en vez de un `read` bloqueante, para
+    /// atender la bandera de `flush` aunque el programa no escriba nada más.
+    fn poll(fds: *mut PollFd, n: u32, timeout_ms: i32) -> i32;
     // Variádica a propósito (lección de arm64, como en watch.rs/term).
     #[link_name = "fcntl"]
     fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
 }
+#[cfg(unix)]
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+#[cfg(unix)]
+const POLLIN: i16 = 1;
 #[cfg(unix)]
 const F_GETFL: i32 = 3;
 #[cfg(unix)]
@@ -72,6 +87,93 @@ const SO_RCVBUF: i32 = 0x1002;
 const SO_NOSIGPIPE: i32 = 0x1022;
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 const SO_SNDLOWAT: i32 = 0x1003;
+/// M398 (IDEAS §111, rayplay #167): el formato de muestra de una salida. `write` recibe octetos
+/// entrelazados en este formato; los backends que no lo aceptan nativo reciben s16le vía `Convert`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Format {
+    S16,
+    S24,
+    S32,
+    F32,
+}
+
+impl Format {
+    pub fn parse(name: &str) -> Result<Format, String> {
+        match name {
+            "s16le" => Ok(Format::S16),
+            "s24le" => Ok(Format::S24),
+            "s32le" => Ok(Format::S32),
+            "f32le" => Ok(Format::F32),
+            other => Err(format!("audio: unsupported format '{other}' (s16le, s24le, s32le, f32le)")),
+        }
+    }
+    /// Octetos por muestra (por canal).
+    pub fn sample_bytes(self) -> usize {
+        match self {
+            Format::S16 => 2,
+            Format::S24 => 3,
+            Format::S32 | Format::F32 => 4,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::S16 => "s16le",
+            Format::S24 => "s24le",
+            Format::S32 => "s32le",
+            Format::F32 => "f32le",
+        }
+    }
+}
+
+/// Convierte muestras entrelazadas de `from` a s16le (lo que entienden todos los backends). Un
+/// resto de octetos que no completa una muestra se descarta. Pura.
+pub fn to_s16le(from: Format, data: &[u8], out: &mut Vec<u8>) {
+    match from {
+        Format::S16 => out.extend_from_slice(&data[..data.len() / 2 * 2]),
+        // s24le → los 16 bits altos (octetos 1 y 2 de cada muestra).
+        Format::S24 => {
+            for s in data.chunks_exact(3) {
+                out.extend_from_slice(&[s[1], s[2]]);
+            }
+        }
+        Format::S32 => {
+            for s in data.chunks_exact(4) {
+                out.extend_from_slice(&[s[2], s[3]]);
+            }
+        }
+        Format::F32 => {
+            for s in data.chunks_exact(4) {
+                let v = f32::from_le_bytes([s[0], s[1], s[2], s[3]]).clamp(-1.0, 1.0);
+                out.extend_from_slice(&((v * 32767.0) as i16).to_le_bytes());
+            }
+        }
+    }
+}
+
+/// Escala IN PLACE la muestra `s` (un canal) por `k` en su formato. Para las rampas anti-clic.
+#[allow(dead_code)] // solo CoreAudio tiene rampa propia; el resto de backends no la usa
+fn scale_sample(s: &mut [u8], fmt: Format, k: f32) {
+    match fmt {
+        Format::S16 => {
+            let v = i16::from_le_bytes([s[0], s[1]]);
+            s.copy_from_slice(&((v as f32 * k) as i16).to_le_bytes());
+        }
+        Format::S24 => {
+            let v = (i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8) as f64 * k as f64;
+            let b = (v as i32).to_le_bytes();
+            s.copy_from_slice(&[b[0], b[1], b[2]]);
+        }
+        Format::S32 => {
+            let v = i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64 * k as f64;
+            s.copy_from_slice(&(v as i32).to_le_bytes());
+        }
+        Format::F32 => {
+            let v = f32::from_le_bytes([s[0], s[1], s[2], s[3]]) * k;
+            s.copy_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
 /// M378 (1942 #108): la cola entre el programa y el alimentador en octetos — la mitad de la
 /// latencia pedida y nunca menos de dos chunks del alimentador (el coste por syscall ya lo acota
 /// el suelo de 256 B del chunk). Antes había además un suelo de 2 KiB que a 22 050 Hz mono valía
@@ -97,6 +199,9 @@ pub struct Ctl {
     played_frames: Arc<AtomicI64>,
     /// Frames por segundo (el sample rate), para convertir a ms en `played_ms`.
     sample_rate: i64,
+    /// M398 (rayplay #166): `flush` la levanta; el alimentador descarta lo encolado en el pipe y
+    /// en el backend, y la baja. Mientras está alta, nada de lo escrito suena.
+    discard: std::sync::atomic::AtomicBool,
 }
 
 /// El mapa extremo-de-escritura → control, para que `drain(key)` encuentre su salida. La clave
@@ -118,10 +223,12 @@ fn forget_ctl(key: i64, own: &Arc<Ctl>) {
     }
 }
 
-/// Abre una salida PCM s16le (`sample_rate` Hz, `channels` canales) y devuelve el extremo de
-/// escritura del pipe (no-bloqueante, listo para el registro de handles) — el llamador escribe
-/// samples ahí y el hilo alimentador los toca. `RAY_AUDIO_SINK=null` → sumidero de tiempo real.
-pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs::File, String> {
+/// Abre una salida PCM (`sample_rate` Hz, `channels` canales, muestras en `format` — "s16le",
+/// "s24le", "s32le" o "f32le", M398) y devuelve el extremo de escritura del pipe (no-bloqueante,
+/// listo para el registro de handles) — el llamador escribe samples ahí y el hilo alimentador los
+/// toca. `RAY_AUDIO_SINK=null` → sumidero de tiempo real.
+pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    let fmt = Format::parse(format)?;
     if !(8000..=192000).contains(&sample_rate) {
         return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
     }
@@ -137,11 +244,12 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
     let latency_ms = if latency_ms == 0 { 200 } else { latency_ms };
     let played_frames = Arc::new(AtomicI64::new(-1));
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
-    let sink = make_sink(sample_rate, channels, latency_ms, played_frames.clone())?;
+    let sink = make_sink(sample_rate, channels, latency_ms, fmt, played_frames.clone())?;
 
-    // El chunk del alimentador es ~latencia/4: reactivo sin syscalls de más.
-    let bytes_per_sec = sample_rate * channels * 2;
-    let chunk = ((bytes_per_sec * latency_ms / 4000).max(256) as usize) & !1;
+    // El chunk del alimentador es ~latencia/4: reactivo sin syscalls de más (alineado a frame).
+    let frame_bytes = (channels as usize) * fmt.sample_bytes();
+    let bytes_per_sec = sample_rate * channels * fmt.sample_bytes() as i64;
+    let chunk = ((bytes_per_sec * latency_ms / 4000).max(256) as usize).max(frame_bytes) / frame_bytes * frame_bytes;
     #[cfg(unix)]
     {
         let mut fds = [0i32; 2];
@@ -195,6 +303,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             pipe_r: fd_r as i64,
             played_frames,
             sample_rate,
+            discard: std::sync::atomic::AtomicBool::new(false),
         });
         ctls().lock().unwrap().insert(key, ctl.clone());
         // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
@@ -216,6 +325,25 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             let mut sink = sink;
             let mut buf = vec![0u8; chunk];
             loop {
+                // M398 (rayplay #166): `flush` — vacía el pipe sin tocarlo y descarta lo del backend.
+                if ctl_thread.discard.load(Ordering::SeqCst) {
+                    while pipe_pending(fd_r as i64) > 0 {
+                        // SAFETY: hay octetos pendientes, así que el read no bloquea; buf es nuestro.
+                        if unsafe { read(fd_r, buf.as_mut_ptr(), buf.len()) } <= 0 {
+                            break;
+                        }
+                    }
+                    sink.flush();
+                    ctl_thread.discard.store(false, Ordering::SeqCst);
+                    continue;
+                }
+                // Espera legible con un tope de 20 ms, para volver a mirar la bandera de arriba
+                // aunque el programa no escriba nada más (un `read` bloqueante no la vería).
+                let mut pfd = PollFd { fd: fd_r, events: POLLIN, revents: 0 };
+                // SAFETY: pfd es nuestro y vive durante la llamada.
+                if unsafe { poll(&mut pfd, 1, 20) } <= 0 {
+                    continue; // tiempo agotado o EINTR: nada que leer todavía
+                }
                 // SAFETY: buf vive durante la llamada; fd_r es nuestro hasta el close de abajo.
                 let n = unsafe { read(fd_r, buf.as_mut_ptr(), buf.len()) };
                 if n <= 0 {
@@ -248,6 +376,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             pipe_r: reader.as_raw_handle() as i64,
             played_frames,
             sample_rate,
+            discard: std::sync::atomic::AtomicBool::new(false),
         });
         ctls().lock().unwrap().insert(key, ctl.clone());
         let ctl_thread = ctl.clone();
@@ -256,6 +385,18 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs:
             let mut sink = sink;
             let mut buf = vec![0u8; chunk];
             loop {
+                // M398 (rayplay #166): `flush` — vacía el pipe sin tocarlo y descarta lo del backend.
+                if ctl_thread.discard.load(Ordering::SeqCst) {
+                    while let Ok(n) = peek_pipe(reader_handle) {
+                        let want = n.min(buf.len());
+                        if n == 0 || reader.read(&mut buf[..want]).unwrap_or(0) == 0 {
+                            break;
+                        }
+                    }
+                    sink.flush();
+                    ctl_thread.discard.store(false, Ordering::SeqCst);
+                    continue;
+                }
                 // Los pipes anónimos son SÍNCRONOS: un `ReadFile` bloqueado serializa detrás de él
                 // cualquier `PeekNamedPipe` de otro hilo (el de `drain`) → interbloqueo. Por eso el
                 // alimentador nunca bloquea en la lectura: sondea lo disponible y lee solo eso.
@@ -312,6 +453,27 @@ pub fn drain(key: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// M398 (rayplay #166): descarta lo escrito y aún no sonado — el pipe y lo que el backend tenga
+/// en su anillo (CoreAudio funde la cola con la rampa anti-clic) — SIN cerrar la salida: lo que
+/// se escriba después suena en cuanto llega. Lo que ya está en los búferes del dispositivo
+/// (unos pocos ms) termina de sonar. Bloquea el hilo hasta que el alimentador lo confirma
+/// (como mucho ~un chunk, acotado a 1 s).
+pub fn flush(key: i64) -> Result<(), String> {
+    let ctl = match ctls().lock().unwrap().get(&key) {
+        Some(c) => c.clone(),
+        None => return Err("audio: not an open audio output".to_string()),
+    };
+    ctl.discard.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while ctl.discard.load(Ordering::SeqCst) {
+        if std::time::Instant::now() > deadline {
+            return Err("audio: flush timed out (the output is not being consumed)".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    Ok(())
+}
+
 // Octetos pendientes de lectura en el pipe (FIONREAD), 0 si no se puede saber.
 /// M158 (§79b): la posición REAL de reproducción en ms — lo que el backend confirma sonado
 /// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refrescado por el
@@ -365,49 +527,87 @@ fn peek_pipe(handle: i64) -> Result<usize, ()> {
 
 // ── Los backends ─────────────────────────────────────────────────────────────
 
-/// Un sumidero PCM: recibe s16le entrelazado y lo hace sonar (o lo consume). `play` puede
-/// BLOQUEAR (es la contrapresión: el pipe se llena aguas arriba y la fibra aparca).
+/// Un sumidero PCM: recibe muestras entrelazadas (en el formato con que se abrió) y las hace
+/// sonar (o las consume). `play` puede BLOQUEAR (es la contrapresión: el pipe se llena aguas
+/// arriba y la fibra aparca). `flush` (M398) descarta lo que tenga encolado, si tiene.
 trait Sink: Send {
     fn play(&mut self, data: &[u8]);
     fn finish(&mut self);
+    fn flush(&mut self) {}
 }
 
 fn make_sink(
     rate: i64,
     channels: i64,
     latency_ms: i64,
+    fmt: Format,
     played: Arc<AtomicI64>,
 ) -> Result<Box<dyn Sink>, String> {
     if std::env::var("RAY_AUDIO_SINK").as_deref() == Ok("null") {
         return Ok(Box::new(NullSink {
-            bytes_per_sec: rate * channels * 2,
-            frame_bytes: (channels * 2) as usize,
+            bytes_per_sec: rate * channels * fmt.sample_bytes() as i64,
+            frame_bytes: channels as usize * fmt.sample_bytes(),
             consumed_frames: 0,
             played,
         }));
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        coreaudio::open(rate, channels, latency_ms, played)
+        coreaudio::open(rate, channels, latency_ms, fmt, played)
     }
     #[cfg(target_os = "linux")]
     {
-        alsa::open(rate, channels, latency_ms, played)
+        alsa::open(rate, channels, latency_ms, fmt, played)
     }
     // M158: Android — AAudio por dlopen (API 26+; el patrón ALSA).
     #[cfg(target_os = "android")]
     {
-        aaudio::open(rate, channels, latency_ms, played)
+        aaudio::open(rate, channels, latency_ms, fmt, played)
     }
-    // M178: Windows — WASAPI por COM a mano.
+    // M178: Windows — WASAPI por COM a mano (s16le; otros formatos convertidos en el alimentador).
     #[cfg(windows)]
     {
-        wasapi::open(rate, channels, latency_ms, played)
+        Ok(Convert::wrap(fmt, wasapi::open(rate, channels, latency_ms, played)?))
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
     {
-        let _ = (rate, channels, latency_ms, played);
+        let _ = (rate, channels, latency_ms, fmt, played);
         Err("audio: no backend for this platform (macOS/iOS/Linux/Android/Windows; RAY_AUDIO_SINK=null works anywhere)".to_string())
+    }
+}
+
+/// M398: el sumidero que convierte a s16le en el alimentador, para un backend que no acepta el
+/// formato pedido (ALSA/AAudio según dispositivo, WASAPI siempre). Transparente: `Format::S16`
+/// no envuelve.
+#[allow(dead_code)] // en macOS/iOS CoreAudio acepta los cuatro formatos y no se usa
+struct Convert {
+    inner: Box<dyn Sink>,
+    from: Format,
+    scratch: Vec<u8>,
+}
+
+impl Convert {
+    #[allow(dead_code)]
+    fn wrap(from: Format, inner: Box<dyn Sink>) -> Box<dyn Sink> {
+        if from == Format::S16 {
+            inner
+        } else {
+            Box::new(Convert { inner, from, scratch: Vec::new() })
+        }
+    }
+}
+
+impl Sink for Convert {
+    fn play(&mut self, data: &[u8]) {
+        self.scratch.clear();
+        to_s16le(self.from, data, &mut self.scratch);
+        self.inner.play(&self.scratch);
+    }
+    fn finish(&mut self) {
+        self.inner.finish()
+    }
+    fn flush(&mut self) {
+        self.inner.flush()
     }
 }
 
@@ -539,6 +739,7 @@ mod coreaudio {
     const TS_SAMPLE_TIME_VALID: u32 = 1;
 
     const FORMAT_LINEAR_PCM: u32 = 0x6C70_636D; // 'lpcm'
+    const FLAG_IS_FLOAT: u32 = 1 << 0;
     const FLAG_IS_SIGNED_INTEGER: u32 = 1 << 2;
     const FLAG_IS_PACKED: u32 = 1 << 3;
 
@@ -548,8 +749,11 @@ mod coreaudio {
         ring: Mutex<VecDeque<u8>>,
         space: Condvar,
         cap: usize,
-        /// Octetos por frame (canales × 2): los buffers se entregan SIEMPRE alineados a frame.
+        /// Octetos por frame (canales × octetos por muestra): los buffers se entregan SIEMPRE
+        /// alineados a frame.
         frame_bytes: usize,
+        /// M398: el formato de muestra (la rampa anti-clic escala en ese formato).
+        fmt: super::Format,
         /// El silencio de mantener-viva-la-cola con el anillo seco: ~8 ms, alineado a frame.
         /// Todo lo encolado se INSERTA en la línea de tiempo — el silencio es latencia
         /// permanente, así que se encola el mínimo que evita que la cola muera (rallyx).
@@ -576,30 +780,28 @@ mod coreaudio {
         ramp_frames: usize,
     }
 
-    /// Rampa lineal sobre `frames` fotogramas s16le de `out` desde el fotograma `from`
-    /// (`fade_in`: de 0 a 1; si no, de 1 a 0). Todos los canales del fotograma por igual.
-    fn ramp(out: &mut [u8], frame_bytes: usize, from: usize, frames: usize, fade_in: bool) {
+    /// Rampa lineal sobre `frames` fotogramas de `out` (en el formato `fmt`) desde el fotograma
+    /// `from` (`fade_in`: de 0 a 1; si no, de 1 a 0). Todos los canales del fotograma por igual.
+    fn ramp(out: &mut [u8], fmt: super::Format, frame_bytes: usize, from: usize, frames: usize, fade_in: bool) {
+        let sb = fmt.sample_bytes();
         for i in 0..frames {
             let k = if fade_in { i as f32 / frames as f32 } else { 1.0 - (i + 1) as f32 / frames as f32 };
             let base = (from + i) * frame_bytes;
             let mut off = 0;
-            while off + 1 < frame_bytes {
+            while off + sb <= frame_bytes {
                 let p = base + off;
-                if p + 1 >= out.len() {
+                if p + sb > out.len() {
                     return;
                 }
-                let s = i16::from_le_bytes([out[p], out[p + 1]]);
-                let b = ((s as f32 * k) as i16).to_le_bytes();
-                out[p] = b[0];
-                out[p + 1] = b[1];
-                off += 2;
+                super::scale_sample(&mut out[p..p + sb], fmt, k);
+                off += sb;
             }
         }
     }
 
     #[cfg(test)]
     pub(super) fn ramp_for_tests(out: &mut [u8], frame_bytes: usize, from: usize, frames: usize, fade_in: bool) {
-        ramp(out, frame_bytes, from, frames, fade_in)
+        ramp(out, super::Format::S16, frame_bytes, from, frames, fade_in)
     }
 
     pub struct CoreAudioSink {
@@ -643,12 +845,12 @@ mod coreaudio {
                 drop(ring);
                 let frames = take / fb;
                 if shared.after_gap.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    ramp(out, fb, 0, shared.ramp_frames.min(frames), true);
+                    ramp(out, shared.fmt, fb, 0, shared.ramp_frames.min(frames), true);
                 }
                 if fading_out {
                     shared.fade_outs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let n = shared.ramp_frames.min(frames);
-                    ramp(out, fb, frames - n, n, false);
+                    ramp(out, shared.fmt, fb, frames - n, n, false);
                     shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 (*buf).audio_data_byte_size = take as u32;
@@ -675,18 +877,21 @@ mod coreaudio {
         rate: i64,
         channels: i64,
         latency_ms: i64,
+        fmt: super::Format,
         played: Arc<super::AtomicI64>,
     ) -> Result<Box<dyn Sink>, String> {
-        let bytes_per_frame = (channels * 2) as u32;
+        // M398: AudioQueue acepta los cuatro formatos tal cual (enteros empaquetados o float).
+        let sb = fmt.sample_bytes();
+        let bytes_per_frame = (channels as usize * sb) as u32;
         let desc = AudioStreamBasicDescription {
             sample_rate: rate as f64,
             format_id: FORMAT_LINEAR_PCM,
-            format_flags: FLAG_IS_SIGNED_INTEGER | FLAG_IS_PACKED,
+            format_flags: if fmt == super::Format::F32 { FLAG_IS_FLOAT | FLAG_IS_PACKED } else { FLAG_IS_SIGNED_INTEGER | FLAG_IS_PACKED },
             bytes_per_packet: bytes_per_frame,
             frames_per_packet: 1,
             bytes_per_frame,
             channels_per_frame: channels as u32,
-            bits_per_channel: 16,
+            bits_per_channel: (sb * 8) as u32,
             reserved: 0,
         };
         // M158: el anillo y los buffers se dimensionan con la latencia pedida (default 200 ms).
@@ -694,7 +899,7 @@ mod coreaudio {
         // buffers de AudioQueue ¼ entre los tres (~1/12 cada uno) — porque el socket del programa
         // ya guarda la otra mitad (ver `open`). Suelos: 4 KiB de anillo y 1 KiB por buffer.
         let frame_bytes = bytes_per_frame as usize;
-        let bytes_per_sec = (rate * channels * 2) as usize;
+        let bytes_per_sec = rate as usize * channels as usize * sb;
         // M332 (rayplay en iPhone): en iOS la AudioQueue no perdona búferes de 10 ms con un
         // consumidor que no es de tiempo real — con la latencia por defecto se vaciaba y
         // crepitaba. Y al bloquear o desbloquear la pantalla iOS CONGELA los hilos de la app
@@ -735,6 +940,7 @@ mod coreaudio {
             space: Condvar::new(),
             cap,
             frame_bytes,
+            fmt,
             keepalive_bytes,
             after_gap: std::sync::atomic::AtomicBool::new(true), // la primera salida arranca suave
             silence_bytes: std::sync::atomic::AtomicUsize::new(0),
@@ -800,6 +1006,20 @@ mod coreaudio {
             if st == 0 && ts.flags & TS_SAMPLE_TIME_VALID != 0 && ts.sample_time >= 0.0 {
                 self.played.store(ts.sample_time as i64, super::Ordering::SeqCst);
             }
+        }
+
+        /// M398 (rayplay #166): descarta el anillo salvo la cola de la rampa — el callback la ve
+        /// como «solo queda la cola» y la entrega FUNDIDA (sin clic); lo siguiente que llegue
+        /// arranca con rampa de entrada (`after_gap`). Los búferes ya en la cola de AudioQueue
+        /// (3 × ~lat/12) terminan de sonar.
+        fn flush(&mut self) {
+            let mut ring = self.shared.ring.lock().unwrap();
+            let hold = self.shared.ramp_frames * self.shared.frame_bytes;
+            if ring.len() > hold {
+                ring.truncate(hold);
+            }
+            drop(ring);
+            self.shared.space.notify_all();
         }
 
         fn finish(&mut self) {
@@ -881,10 +1101,23 @@ mod alsa {
     type FnDrain = unsafe extern "C" fn(Pcm) -> i32;
     type FnClose = unsafe extern "C" fn(Pcm) -> i32;
     type FnDelay = unsafe extern "C" fn(Pcm, *mut i64) -> i32;
+    type FnDrop = unsafe extern "C" fn(Pcm) -> i32;
 
     const SND_PCM_STREAM_PLAYBACK: i32 = 0;
     const SND_PCM_FORMAT_S16_LE: i32 = 2;
+    const SND_PCM_FORMAT_S32_LE: i32 = 10;
+    const SND_PCM_FORMAT_FLOAT_LE: i32 = 14;
+    const SND_PCM_FORMAT_S24_3LE: i32 = 32;
     const SND_PCM_ACCESS_RW_INTERLEAVED: i32 = 3;
+
+    fn alsa_format(fmt: super::Format) -> i32 {
+        match fmt {
+            super::Format::S16 => SND_PCM_FORMAT_S16_LE,
+            super::Format::S24 => SND_PCM_FORMAT_S24_3LE,
+            super::Format::S32 => SND_PCM_FORMAT_S32_LE,
+            super::Format::F32 => SND_PCM_FORMAT_FLOAT_LE,
+        }
+    }
 
     pub struct AlsaSink {
         pcm: Pcm,
@@ -893,6 +1126,8 @@ mod alsa {
         drain: FnDrain,
         close: FnClose,
         delay: FnDelay,
+        /// M398: `snd_pcm_drop` + `snd_pcm_prepare` para `flush` (opcionales en la lib).
+        drop_prepare: Option<(FnDrop, FnDrop)>,
         frame_bytes: usize,
         written_frames: i64,
         played: Arc<super::AtomicI64>,
@@ -914,6 +1149,7 @@ mod alsa {
         rate: i64,
         channels: i64,
         latency_ms: i64,
+        fmt: super::Format,
         played: Arc<super::AtomicI64>,
     ) -> Result<Box<dyn Sink>, String> {
         // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
@@ -931,6 +1167,10 @@ mod alsa {
             // M158: la posición real = escritos − delay (frames aún en el búfer del dispositivo).
             let delay: FnDelay = std::mem::transmute(sym(lib, b"snd_pcm_delay\0")?);
             let close: FnClose = std::mem::transmute(sym(lib, b"snd_pcm_close\0")?);
+            let drop_prepare: Option<(FnDrop, FnDrop)> = match (sym(lib, b"snd_pcm_drop\0"), sym(lib, b"snd_pcm_prepare\0")) {
+                (Ok(d), Ok(p)) => Some((std::mem::transmute(d), std::mem::transmute(p))),
+                _ => None,
+            };
             let mut pcm: Pcm = std::ptr::null_mut();
             let st = f_open(&mut pcm, b"default\0".as_ptr(), SND_PCM_STREAM_PLAYBACK, 0);
             if st != 0 {
@@ -943,30 +1183,31 @@ mod alsa {
             } else {
                 ((latency_ms * 1000 / 2).clamp(10_000, 500_000)) as u32
             };
-            let st = f_params(
-                pcm,
-                SND_PCM_FORMAT_S16_LE,
-                SND_PCM_ACCESS_RW_INTERLEAVED,
-                channels as u32,
-                rate as u32,
-                1,
-                dev_latency_us,
-            );
+            // M398: el formato pedido tal cual; si el dispositivo no lo acepta, s16le y se
+            // convierte en el alimentador (`Convert`).
+            let mut native = fmt;
+            let mut st = f_params(pcm, alsa_format(fmt), SND_PCM_ACCESS_RW_INTERLEAVED, channels as u32, rate as u32, 1, dev_latency_us);
+            if st != 0 && fmt != super::Format::S16 {
+                native = super::Format::S16;
+                st = f_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, channels as u32, rate as u32, 1, dev_latency_us);
+            }
             if st != 0 {
                 close(pcm);
                 return Err(format!("audio: snd_pcm_set_params failed ({st})"));
             }
-            Ok(Box::new(AlsaSink {
+            let sink = Box::new(AlsaSink {
                 pcm,
                 writei,
                 recover,
                 drain,
                 close,
                 delay,
-                frame_bytes: channels as usize * 2,
+                drop_prepare,
+                frame_bytes: channels as usize * native.sample_bytes(),
                 written_frames: 0,
                 played,
-            }))
+            });
+            Ok(if native == fmt { sink } else { super::Convert::wrap(fmt, sink) })
         }
     }
 
@@ -994,6 +1235,17 @@ mod alsa {
             if unsafe { (self.delay)(self.pcm, &mut in_device) } == 0 {
                 let played_now = (self.written_frames - in_device).max(0);
                 self.played.store(played_now, super::Ordering::SeqCst);
+            }
+        }
+
+        /// M398: `snd_pcm_drop` vacía el búfer del dispositivo; `prepare` lo deja listo para seguir.
+        fn flush(&mut self) {
+            if let Some((drop, prepare)) = self.drop_prepare {
+                // SAFETY: pcm válido; las dos funciones vienen de la lib cargada.
+                unsafe {
+                    drop(self.pcm);
+                    prepare(self.pcm);
+                }
             }
         }
 
@@ -1031,7 +1283,19 @@ mod aaudio {
     type FnClose = unsafe extern "C" fn(Stream) -> i32;
 
     const AAUDIO_FORMAT_PCM_I16: i32 = 1;
+    const AAUDIO_FORMAT_PCM_FLOAT: i32 = 2;
+    const AAUDIO_FORMAT_PCM_I24_PACKED: i32 = 3; // API 31+
+    const AAUDIO_FORMAT_PCM_I32: i32 = 4; // API 31+
     const AAUDIO_PERFORMANCE_MODE_NONE: i32 = 10;
+
+    fn aaudio_format(fmt: super::Format) -> i32 {
+        match fmt {
+            super::Format::S16 => AAUDIO_FORMAT_PCM_I16,
+            super::Format::S24 => AAUDIO_FORMAT_PCM_I24_PACKED,
+            super::Format::S32 => AAUDIO_FORMAT_PCM_I32,
+            super::Format::F32 => AAUDIO_FORMAT_PCM_FLOAT,
+        }
+    }
     const AAUDIO_PERFORMANCE_MODE_LOW_LATENCY: i32 = 12;
 
     pub struct AAudioSink {
@@ -1040,6 +1304,8 @@ mod aaudio {
         frames_read: FnFramesRead,
         request_stop: FnRequest,
         close: FnClose,
+        /// M398: pause + flush + start para `flush` (opcionales en la lib).
+        pause_flush_start: Option<(FnRequest, FnRequest, FnRequest)>,
         frame_bytes: usize,
         played: Arc<super::AtomicI64>,
     }
@@ -1060,6 +1326,7 @@ mod aaudio {
         rate: i64,
         channels: i64,
         latency_ms: i64,
+        fmt: super::Format,
         played: Arc<super::AtomicI64>,
     ) -> Result<Box<dyn Sink>, String> {
         // SAFETY: dlopen/dlsym con literales; las firmas replican aaudio/AAudio.h (NDK).
@@ -1080,23 +1347,38 @@ mod aaudio {
             let write: FnWrite = std::mem::transmute(sym(lib, b"AAudioStream_write\0")?);
             let frames_read: FnFramesRead = std::mem::transmute(sym(lib, b"AAudioStream_getFramesRead\0")?);
             let close: FnClose = std::mem::transmute(sym(lib, b"AAudioStream_close\0")?);
+            let pause_flush_start: Option<(FnRequest, FnRequest, FnRequest)> =
+                match (sym(lib, b"AAudioStream_requestPause\0"), sym(lib, b"AAudioStream_requestFlush\0")) {
+                    (Ok(p), Ok(f)) => Some((std::mem::transmute(p), std::mem::transmute(f), request_start)),
+                    _ => None,
+                };
 
-            let mut builder: Builder = std::ptr::null_mut();
-            let st = create(&mut builder);
-            if st != 0 {
-                return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
-            }
-            set_rate(builder, rate as i32);
-            set_channels(builder, channels as i32);
-            set_format(builder, AAUDIO_FORMAT_PCM_I16);
-            // M158: el hint decide el modo — por debajo de 50 ms se pide LOW_LATENCY.
-            set_perf(
-                builder,
-                if latency_ms <= 50 { AAUDIO_PERFORMANCE_MODE_LOW_LATENCY } else { AAUDIO_PERFORMANCE_MODE_NONE },
-            );
+            // M398: el formato pedido; si el stream no abre con él (I24/I32 piden API 31), s16le y
+            // conversión en el alimentador (`Convert`).
+            let mut native = fmt;
             let mut stream: Stream = std::ptr::null_mut();
-            let st = open_stream(builder, &mut stream);
-            builder_delete(builder);
+            let mut st;
+            loop {
+                let mut builder: Builder = std::ptr::null_mut();
+                st = create(&mut builder);
+                if st != 0 {
+                    return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
+                }
+                set_rate(builder, rate as i32);
+                set_channels(builder, channels as i32);
+                set_format(builder, aaudio_format(native));
+                // M158: el hint decide el modo — por debajo de 50 ms se pide LOW_LATENCY.
+                set_perf(
+                    builder,
+                    if latency_ms <= 50 { AAUDIO_PERFORMANCE_MODE_LOW_LATENCY } else { AAUDIO_PERFORMANCE_MODE_NONE },
+                );
+                st = open_stream(builder, &mut stream);
+                builder_delete(builder);
+                if st == 0 || native == super::Format::S16 {
+                    break;
+                }
+                native = super::Format::S16;
+            }
             if st != 0 {
                 return Err(format!("audio: AAudioStreamBuilder_openStream failed ({st})"));
             }
@@ -1105,15 +1387,17 @@ mod aaudio {
                 close(stream);
                 return Err(format!("audio: AAudioStream_requestStart failed ({st})"));
             }
-            Ok(Box::new(AAudioSink {
+            let sink = Box::new(AAudioSink {
                 stream,
                 write,
                 frames_read,
                 request_stop,
                 close,
-                frame_bytes: (channels * 2) as usize,
+                pause_flush_start,
+                frame_bytes: channels as usize * native.sample_bytes(),
                 played,
-            }))
+            });
+            Ok(if native == fmt { sink } else { super::Convert::wrap(fmt, sink) })
         }
     }
 
@@ -1142,6 +1426,18 @@ mod aaudio {
             let played_now = unsafe { (self.frames_read)(self.stream) };
             if played_now >= 0 {
                 self.played.store(played_now, super::Ordering::SeqCst);
+            }
+        }
+
+        /// M398: AAudio solo vacía en pausa: pause → flush → start.
+        fn flush(&mut self) {
+            if let Some((pause, flush, start)) = self.pause_flush_start {
+                // SAFETY: stream válido; las funciones vienen de la lib cargada.
+                unsafe {
+                    pause(self.stream);
+                    flush(self.stream);
+                    start(self.stream);
+                }
             }
         }
 
@@ -1450,6 +1746,31 @@ mod wasapi {
 
 #[cfg(all(test, unix))]
 mod budget_tests {
+    // M398: formatos y conversión a s16le (lo que recibe un backend sin el formato nativo).
+    #[test]
+    fn formats_parse_and_convert_to_s16le() {
+        use super::{to_s16le, Format};
+        assert_eq!(Format::parse("f32le"), Ok(Format::F32));
+        assert!(Format::parse("u8").unwrap_err().contains("s16le, s24le, s32le, f32le"));
+        assert_eq!(Format::S24.sample_bytes(), 3);
+        let mut out = Vec::new();
+        to_s16le(Format::F32, &[1.0f32.to_le_bytes(), (-0.5f32).to_le_bytes(), 2.0f32.to_le_bytes()].concat(), &mut out);
+        assert_eq!(out, [32767i16.to_le_bytes(), (-16383i16).to_le_bytes(), 32767i16.to_le_bytes()].concat());
+        out.clear();
+        to_s16le(Format::S24, &[0x00, 0x34, 0x12, 0xff, 0xff, 0x7f, 0xaa], &mut out); // el 0xaa sobrante se descarta
+        assert_eq!(out, vec![0x34, 0x12, 0xff, 0x7f]);
+        out.clear();
+        to_s16le(Format::S32, &0x1234_5678i32.to_le_bytes(), &mut out);
+        assert_eq!(out, 0x1234i16.to_le_bytes());
+        // La rampa escala en cada formato (una muestra a la mitad).
+        let mut s = 0.8f32.to_le_bytes();
+        super::scale_sample(&mut s, Format::F32, 0.5);
+        assert!((f32::from_le_bytes(s) - 0.4).abs() < 1e-6);
+        let mut s = [0x00, 0x00, 0x40]; // 0x400000 en s24
+        super::scale_sample(&mut s, Format::S24, 0.5);
+        assert_eq!(s, [0x00, 0x00, 0x20]);
+    }
+
     use super::queue_budget_bytes;
 
     /// M378 (1942 #108): el presupuesto del socket sigue la pista pedida (½) desde 20 ms; el único

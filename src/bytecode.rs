@@ -691,6 +691,8 @@ pub enum OpCode {
     AudioDrain,
     /// M158: `__audio_played(h)` — la posición real de reproducción en ms (['ok', ms] / ['err', msg]).
     AudioPlayed,
+    /// M398: `__audio_flush(h)` — descarta lo encolado sin cerrar la salida (['ok', ''] / ['err', msg]).
+    AudioFlush,
     /// M146: `__ui_open(title, url, w, h)` — abre una ventana con webview (['ok', h] / ['err', msg]).
     UiOpen,
     /// M210: `__ui_open_with` — 9 argumentos (título, url, ancho, alto, mínimo ancho/alto,

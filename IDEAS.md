@@ -4207,7 +4207,7 @@ rayauth, web). Se hace solo con el banco de #163 (servidor mínimo + `redis-benc
 CPU del servidor) y los de M363/M365 (`actor_ask`, `actor_shard`, raylb p99) como guardas de no
 regresión. Antes de 3 hay que decidir si el reactor por worker es el default (pendiente de M358).
 
-## 111. `std/audio` v3: formatos s24/s32/f32 y descartar la cola (rayplay #166/#167, oct 2026)
+## 111. `std/audio` v3: formatos s24/s32/f32 y descartar la cola (rayplay #166/#167, oct 2026) — ✅ EJECUTADA como M398 (DESIGN §370)
 
 **Qué.** `std/audio` solo acepta s16le entrelazado: un reproductor de FLAC/ALAC a 24 bits tiene que
 reducir con dither (rayplay lo hace con TPDF, siseo a −93 dBFS), y el volumen o las mezclas pierden

@@ -6531,11 +6531,8 @@ mod tests {
         assert_eq!(super::mime_to_uti("application/octet-stream"), Some("public.data"));
     }
 
-    /// M393 (#119): `install.sh` reescribe `Exec=` a la ubicación real conservando ` %F`, e `Icon=`
-    /// solo si existe; se ejecuta de verdad con `sh` en un directorio temporal (HOME redirigido).
-    #[cfg(unix)]
-    #[test]
     // M396 (rayplay #169): la lista de `--without` es una sola — validación, `--help` y REFERENCE.
+    #[test]
     fn without_list_is_the_same_in_help_and_reference() {
         let joined = super::RT_SUBSYSTEMS.join(",");
         assert!(super::help_text().contains(&format!("--without {joined}]")), "el help lista exactamente RT_SUBSYSTEMS");
@@ -6549,6 +6546,9 @@ mod tests {
         }
     }
 
+    /// M393 (#119): `install.sh` reescribe `Exec=` a la ubicación real conservando ` %F`, e `Icon=`
+    /// solo si existe; se ejecuta de verdad con `sh` en un directorio temporal (HOME redirigido).
+    #[cfg(unix)]
     #[test]
     fn linux_install_script_keeps_the_exec_arguments() {
         let base = std::env::temp_dir().join(format!("ray_install_sh_{}", std::process::id()));

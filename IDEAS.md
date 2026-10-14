@@ -4179,7 +4179,15 @@ es el que compromete: cambiar `bytes` a (búfer compartido, offset, len) toca VM
 `sub_bytes`/`to_string`. Mientras, la fila de `bytes` de la REFERENCE debe decir «`+` es O(total) por
 llamada; para juntar trozos usa `bytes_concat`».
 
-## 110. El reactor nativo por petición: `kevent` + pipe cada vez que una fibra aparca (raykv #163, raygate #75/#107, oct 2026)
+## 110. El reactor nativo por petición: `kevent` + pipe cada vez que una fibra aparca (raykv #163, raygate #75/#107, oct 2026) — ✅ EJECUTADA como M399 (DESIGN §371, PERFORMANCE §19)
+
+> **Resultado (M399).** El techo de ~265k no era de raylang: es el de UN hilo de eventos en el Mac (Redis y un
+> kqueue en Rust a mano dan lo mismo, y con 4 hilos Rust también baja a 209k en este banco cerrado por
+> loopback). Los «3,6 µs de `kevent`» eran espera del hilo reactor contada por `sample`, no CPU. Lo que sí era
+> nuestro: el modo compartido (7,8 µs de CPU por petición frente a 4,3), el giro del worker local que no veía su
+> E/S y un sondeo a timeout 0 que en macOS cuesta 12 µs. Hecho: el punto 3 (reactor por worker por defecto) y el
+> 4 (giro solo sin E/S armada, documentado); los puntos 1 y 2 no hacen falta en el modo local (el armado va en
+> lote con el propio `kevent` y no hay tubería por aparcado).
 
 **Qué.** Un servidor TCP mínimo en nativo (una fibra por conexión, `+PONG` por línea) se queda en
 ~200k peticiones/s frente a 260–270k de Redis, y con 11 workers rinde menos que con 1 y gasta 3× la

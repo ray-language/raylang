@@ -440,10 +440,12 @@ fn sched() -> &'static Scheduler {
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n >= 1)
             .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4));
-        // M358: reactor por worker (unix), PROTOTIPO medido (PERFORMANCE.md §M358): +5–8 % de
-        // req/s con 2–4 workers, neutro con 11. `RAYLANG_REACTOR=local` lo activa; el default sigue
-        // siendo el hilo reactor único hasta decidir el diseño con las cifras delante.
-        let local_reactor = cfg!(unix) && matches!(std::env::var("RAYLANG_REACTOR").as_deref(), Ok("local"));
+        // M358: reactor por worker (unix). Prototipo en M358 (PERFORMANCE.md §10: +5–8 % de
+        // req/s con 2–4 workers) y DEFAULT desde M399 (§19, raykv #163): un aparcado de E/S en el
+        // modo compartido costaba buzón + tubería + condvar (7,8 µs de CPU por petición frente a
+        // 4,3), y el servidor mínimo pasa del 73 % al 93 % de Redis. `RAYLANG_REACTOR=shared`
+        // recupera el hilo reactor único; Windows (WSAPoll) conserva siempre ese modelo.
+        let local_reactor = cfg!(unix) && !matches!(std::env::var("RAYLANG_REACTOR").as_deref(), Ok("shared"));
         // M372: cesión cooperativa (RAYLANG_COOP=0 la apaga), copiada en cada cola.
         let coop_enabled = coop_enabled_from_env();
         let mut worker_wake_rd: Vec<i32> = Vec::new();
@@ -1043,6 +1045,9 @@ struct ReactorState {
     /// Vec (cero asignaciones por park en régimen). El mapa queda acotado por el pico de fds
     /// concurrentes (los números de fd se REUTILIZAN), no por el total histórico.
     fds: HashMap<i32, FdWaiters>,
+    /// M399: fibras aparcadas en algún fd (suma de las listas de `fds`). El worker local consulta
+    /// `is_idle` en cada entrada ociosa y recorrer el mapa sería O(fds) por vuelta.
+    armed: usize,
     /// Sleeps: pocos y de vida legítima → Vec con barrido lineal basta.
     sleeps: Vec<(Instant, Task)>,
     /// Pulsos de cancelación de las esperas de lista (F3): barrido lineal, acotado por el número
@@ -1061,6 +1066,7 @@ impl ReactorState {
             poller: sys::Poller::new(wake_rd),
             wake_rd,
             fds: HashMap::new(),
+            armed: 0,
             sleeps: Vec::new(),
             wait_polls: Vec::new(),
             io_deadlines: std::collections::BinaryHeap::new(),
@@ -1071,10 +1077,7 @@ impl ReactorState {
 
     /// ¿Hay algo que esperar (fibras aparcadas en fds o temporizadores vivos)?
     fn is_idle(&self) -> bool {
-        self.sleeps.is_empty()
-            && self.wait_polls.is_empty()
-            && self.io_deadlines.is_empty()
-            && self.fds.values().all(|w| w.read.is_empty() && w.write.is_empty())
+        self.armed == 0 && self.sleeps.is_empty() && self.wait_polls.is_empty() && self.io_deadlines.is_empty()
     }
 
     /// Registra una operación. Un fd que no se puede armar (ya cerrado en carrera) despierta YA
@@ -1091,6 +1094,7 @@ impl ReactorState {
                     Dir::Read => w.read.push((id, has_dl, t)),
                     Dir::Write => w.write.push((id, has_dl, t)),
                 }
+                self.armed += 1;
                 if let Some(at) = deadline {
                     self.io_deadlines.push(Reverse(IoDeadline { at, fd, dir_write: dir == Dir::Write, id }));
                 }
@@ -1103,6 +1107,7 @@ impl ReactorState {
                         Dir::Write => &mut w.write,
                     };
                     if let Some((id, had_dl, t)) = v.pop() {
+                        self.armed -= 1;
                         if had_dl {
                             self.cancelled.insert(id);
                         }
@@ -1150,6 +1155,7 @@ impl ReactorState {
                 let v = if dl.dir_write { &mut w.write } else { &mut w.read };
                 if let Some(pos) = v.iter().position(|(wid, _, _)| *wid == dl.id) {
                     let (_, _, mut t) = v.swap_remove(pos);
+                    self.armed -= 1;
                     t.timed_out = true;
                     out.push(t);
                 }
@@ -1193,6 +1199,7 @@ impl ReactorState {
                     Dir::Write => &mut w.write,
                 };
                 // Drena los waiters SIN liberar la capacidad del Vec (entrada persistente).
+                self.armed -= v.len();
                 for (id, had_dl, t) in v.drain(..) {
                     if had_dl {
                         self.cancelled.insert(id); // su temporizador ya no debe despertar a nadie
@@ -1299,24 +1306,46 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                 match from_queue {
                     Some(t) => t,
                     None => {
-                        // 2) Ocioso: spin breve mirando la cola (M319), luego dormir en el poller.
-                        if spin_us > 0 {
+                        // 2) Ocioso: spin breve mirando la cola (M319) y luego dormir en el poller.
+                        //
+                        // M399 (raykv #163) — dos reglas medidas en macOS (PERFORMANCE.md §19):
+                        // · El giro solo tiene sentido si NO hay E/S armada en este worker. La
+                        //   cola solo la ve el giro; la E/S lista solo la ve el poller, así que
+                        //   un worker de red que gira retrasa su propia E/S 10 µs por vuelta y
+                        //   quema CPU (−5 % de peticiones/s, +15 % de CPU con un worker; con 11
+                        //   workers 480 % de CPU para rendir menos que con 1). Un worker sin fds
+                        //   ni plazos (actores puros) gira como siempre: ahí el giro es lo que
+                        //   convierte el despertar entre workers de 3 µs en 0,5.
+                        // · Un poller con timeout 0 y nada listo cuesta ~12 µs en macOS (XNU pasa
+                        //   por el planificador aunque no espere; con algo listo, 0,2 µs; en Linux
+                        //   epoll es barato en ambos casos). Tras un acierto del giro NO se sondea:
+                        //   la tarea ya está en la cola y la E/S la recoge el sondeo de equidad o
+                        //   el próximo ocioso. Ese sondeo era el 40 % del tiempo del worker en el
+                        //   ping-pong de actores (17 µs/op frente a 1 en el modo compartido).
+                        let io_armed = !rs.is_idle();
+                        if spin_us > 0 && !io_armed {
                             wq.spinning.store(true, std::sync::atomic::Ordering::SeqCst);
                             let until = Instant::now() + Duration::from_micros(spin_us);
                             while wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && Instant::now() < until {
                                 std::thread::yield_now();
                             }
                             wq.spinning.store(false, std::sync::atomic::Ordering::SeqCst);
+                            if wq.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                                last_poll = Instant::now();
+                                continue; // acierto: a la cola sin pasar por el poller
+                            }
                         }
                         s.polling[me].store(true, std::sync::atomic::Ordering::SeqCst);
                         let now = Instant::now();
                         rs.expire(now, &mut woken);
-                        let timeout_ms = if wq.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 || !woken.is_empty() {
-                            0
-                        } else {
-                            rs.next_timeout_ms(now)
-                        };
-                        rs.wait(timeout_ms, &mut woken);
+                        // Con trabajo ya visible (cola o vencidos) no se duerme NI se sondea a
+                        // cero (ver arriba): la E/S armada la recoge el sondeo de equidad (≤ 1 ms
+                        // si la cola no se vacía) o el próximo ocioso real. Un byte que un
+                        // encolador haya dejado en la tubería mientras `polling` estaba a true
+                        // solo adelanta el siguiente despertar: el poller lo drena.
+                        if wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && woken.is_empty() {
+                            rs.wait(rs.next_timeout_ms(now), &mut woken);
+                        }
                         s.polling[me].store(false, std::sync::atomic::Ordering::SeqCst);
                         ready.extend(woken.drain(..));
                         last_poll = Instant::now();
@@ -1362,7 +1391,11 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                         rs.apply(Op::WaitPoll(at, wl.clone(), id), &mut woken);
                     }
                 }
-                Park::Yield => ready.push_back(task),
+                // M399: una fibra que CEDE va al final de la cola compartida, detrás de las que
+                // ya esperaban allí (`spawn_local`, despertares de canal). Volvía a `ready`, que
+                // se sirve antes que la cola, y una madre que cedía en bucle (`coop`) nunca
+                // dejaba correr a su hija del mismo worker.
+                Park::Yield => s.enqueue(task),
             },
             Ok(CoroutineResult::Return(())) => {
                 s.alive[me].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);

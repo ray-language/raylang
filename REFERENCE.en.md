@@ -677,7 +677,7 @@ Environment variables: `SSL_CERT_FILE` (extra CAs for TLS), `RAY_INDEX` (package
 `[registry] index` the official `ray-language/ray-index` is used; empty = no index), `RAY_MIRROR`
 (download mirror), `RAY_KEY` (Ed25519 publishing key), `RAYLANG_THREADS` (number of scheduler worker
 threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fiber in the native binary),
-`RAYLANG_SPIN_US` (µs of yielding spin before parking in the native scheduler; `0` disables it), `RAYLANG_COOP` (`0` disables the cooperative yield of native channels — every 32 ready operations the fiber yields if siblings are ready on its worker; SPEC §concurrency),
+`RAYLANG_REACTOR` (`local`, the default on unix: every worker of the native scheduler polls its own kqueue/epoll and parking on I/O never crosses threads; `shared`: one reactor thread for all workers, the previous model and the only one on Windows), `RAYLANG_SPIN_US` (µs of yielding spin before parking in the native scheduler, 10 by default; `0` disables it; a worker with I/O armed does not spin: only its poller can see its ready I/O), `RAYLANG_COOP` (`0` disables the cooperative yield of native channels — every 32 ready operations the fiber yields if siblings are ready on its worker; SPEC §concurrency),
 `RAYLANG_STACK_CACHE` (max recycled fiber stacks in a native binary; 256 by default, `0` disables the cache),
 `RAYLANG_MAX_DEPTH` (allowed recursion frames; 1024 by default),
 `RAY_SIGN_IDENTITY` / `RAY_NOTARY_PROFILE` / `RAY_SIGN_PFX_PASSWORD` (signing and notarization for `ray bundle`/`ray release`, equivalent to `[app] sign`/`notary` and to the `.pfx` password on Windows),
@@ -704,4 +704,4 @@ threads; `1` = deterministic), `RAY_FIBER_STACK_KIB` (stack reservation per fibe
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:b37ad56c6b88 -->
+<!-- sync: sha256:704dae4332d9 -->

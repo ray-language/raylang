@@ -17764,3 +17764,49 @@ muestra (300 ms → 9600 octetos a 8000 Hz), y un escritor de 3 s con cinco `flu
 2,2 s con la salida viva después (`write`/`drain`), en VM y nativo. Los tests de la batería anterior
 no cambian: s16le sigue siendo el default y el camino sin conversión.
 
+## 371. M399 — el reactor por worker como default y el camino ocioso del worker (raykv #163, oct 2026)
+
+**Qué cambia.** El scheduler nativo (`crates/ray-runtime/src/fibers.rs`) arranca con un reactor
+POR WORKER en unix: cada worker tiene su kqueue/epoll y sus temporizadores (`ReactorState`, el de
+M358), un aparcado de E/S es un armado local y el despertar llega al hilo que reanuda la fibra. El
+hilo reactor único queda como retirada (`RAYLANG_REACTOR=shared`) y como único modelo en Windows
+(`WSAPoll`). No cambia el modelo de actores: fibras fijadas a su worker, canales, `spawn`,
+`spawn_local`, `select_timeout` y la cesión cooperativa son los mismos; lo que cruza hilos (un
+`spawn` a otro worker, el despertar de un canal, el pool bloqueante) sigue entrando por la cola del
+worker destino y, si duerme en su poller, por su tubería (M363).
+
+**Por qué ahora.** raykv #163 medía un servidor mínimo al 73 % de Redis con el modo compartido y
+atribuía el resto a `kevent`. La investigación (PERFORMANCE §19) separó lo que es del banco —el
+techo de ~265k es el de un hilo de eventos en esa máquina, y más hilos rinden menos también en Rust—
+de lo que era nuestro: el viaje buzón + tubería + condvar por aparcado del modo compartido (7,8 µs
+de CPU por petición frente a 4,3), y tres defectos del prototipo local que M358 no había medido
+porque raylb no los ejercitaba:
+
+1. El giro ocioso (M319) miraba solo la cola entre workers, nunca el poller: un socket listo
+   esperaba a que el giro venciera. Regla nueva: **un worker con E/S armada no gira**; sin E/S
+   (actores puros) gira como siempre, que es donde el giro gana (despertar entre workers de 3 µs a
+   0,5).
+2. Tras un acierto del giro el worker sondeaba su poller con timeout 0, que **en macOS cuesta
+   ~12 µs si no hay nada listo** (0,2 µs si lo hay). El ping-pong de actores entre workers iba a
+   64k ops/s en local frente a 914k en shared. Regla nueva: con trabajo ya visible el worker no
+   duerme ni sondea; la E/S armada la recoge el sondeo de equidad (≤ 1 ms, solo si la cola no se
+   vacía) o el siguiente ocioso real.
+3. `Park::Yield` devolvía la fibra a la lista local de listas, servida antes que la cola compartida:
+   una madre que cedía en bucle (`coop`, M372) no dejaba correr a su hija de `spawn_local`. Ahora
+   encola al final de la cola, como el modo compartido.
+
+**Lo que no se hizo y por qué.** Los puntos 1–2 de IDEAS §110 (interés por socket registrado una
+vez, sin tubería por fibra) atacaban el modo compartido; en el local el armado ya va en lote con el
+propio `kevent` (`EV_ONESHOT` incremental, F5) y no hay tubería por aparcado, así que no quedan
+syscalls que quitar por ese lado. Sondear el poller DENTRO del giro (la idea obvia para que un
+worker mixto vea su E/S sin dejar de girar) se descartó por el coste del `kevent(0)` en macOS; un
+worker mixto con la cola siempre llena paga hasta 1 ms de latencia de E/S, el mismo límite que ya
+documentaba M358.
+
+**Medido** (PERFORMANCE §19): el servidor mínimo 194k → 233k req/s con un worker (88 % de Redis),
+245k con dos (93 %, igual que un kqueue por hilo en Rust); con 11 workers y un cliente la CPU baja
+de 406 % a 131 %; los bancos de actores quedan a la par del modo compartido (`rt 1` 873k frente a
+914k; el resto ±2 %). Pruebas: `both_reactor_modes_serve_keep_deadlines_and_schedule_siblings`
+(ambos modos, 1 y 2 workers y el default; servir y apagar, `select_timeout`, la hija de
+`spawn_local`, red + actores + plazos juntos) y las unitarias de `fibers`, que antes fallaban en
+modo local (`a_busy_fiber_yields_to_its_worker_siblings_at_coop_points`).

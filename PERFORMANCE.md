@@ -2416,3 +2416,83 @@ es seguro porque una fibra ejecuta SIEMPRE en su worker de origen (DESIGN §369)
 | tabla de 180 | 35 ms | 4 ms | 5 ms |
 | tabla de 1800 | 157 ms | 4 ms | 5 ms |
 
+## 19. M399 (oct 2026): el reactor por worker como default — raykv #163, el «techo» de 265k
+
+**Síntoma (raykv #163).** Un servidor TCP mínimo en nativo (una fibra por conexión, `+PONG` por
+línea) se quedaba en ~200k peticiones/s frente a 260–270k de Redis; con 11 workers rendía menos que
+con 1 y gastaba 3× la CPU; el perfil atribuía 3,6 µs por petición a `kevent` en el hilo reactor.
+
+**Banco.** El mismo programa compilado con `ray build --native --release`, `redis-benchmark -t
+ping_inline`, 50 conexiones repartidas en 2–4 clientes, M3 Pro de 11 núcleos. Dos referencias en
+Rust puro para separar lo que es de raylang de lo que es de la máquina: un servidor kqueue de un
+hilo y uno con un kqueue por hilo (el principal acepta y reparte round-robin, fd por canal y un
+byte por tubería para despertar al hilo si duerme), la misma forma que el reactor local.
+
+| servidor | req/s | CPU servidor |
+|---|---:|---:|
+| Redis 8 (un hilo) | 265k | 100 % |
+| Rust kqueue, 1 hilo (`EV_CLEAR` o re-armado por evento: igual) | 250–265k | 100 % |
+| Rust kqueue, 2 hilos | 248k | 141 % |
+| Rust kqueue, 4 hilos | **209k** | 183 % |
+| raylang 1.27.53 (`shared`, el default), 1 worker | 194k | 152 % |
+| raylang 1.27.53, 11 workers | 192k | 496 % |
+| raylang 1.27.53 `RAYLANG_REACTOR=local`, 1 worker | 220k | 99 % |
+| **raylang M399 (local, default), 1 worker** | **233k** | 100 % |
+| raylang M399, 2 workers | **245k** | 157 % |
+| raylang M399, 4 workers | 208k | 216 % |
+| raylang M399, 11 workers (2 clientes) | 182–204k | 350 % |
+| raylang M399, 11 workers, 1 cliente | 157–164k (1.27.53: 161k) | **131 %** (1.27.53: 406 %) |
+
+**Lecturas.**
+
+1. **El techo es del hilo único y del banco, no de raylang.** Redis es monohilo y un kqueue en Rust
+   escrito a mano queda en el mismo sitio. «Más hilos rinden menos» le pasa igual a Rust con 4: es
+   el banco cerrado por loopback —con poca carga por hilo cada `kevent` duerme y despierta por
+   petición y manda la latencia de despertar—. Los clientes no eran el límite (45–55 % cada uno).
+2. **Los «3,6 µs de `kevent`» eran una lectura equivocada de `sample`**, que cuenta también los
+   hilos bloqueados: el hilo reactor pasa casi todo el tiempo esperando. El coste real del modo
+   compartido es el viaje buzón + tubería + condvar por aparcado: **7,8 µs de CPU por petición
+   frente a 4,3** en el local (152 % de CPU para 194k frente a 99 % para 220k). Con un worker local
+   los `recvfrom`/`sendto` cuestan lo mismo que en Rust (2,0 + 1,6 µs); el resto es `kevent` por
+   petición (0,27), el giro ocioso (0,28) y el código por petición de la fibra (0,35).
+3. **El giro del worker local no veía su E/S.** `worker_loop_local` giraba `RAYLANG_SPIN_US` (10 µs)
+   mirando SOLO `pending` (la cola entre workers) antes de ir al kqueue: un socket listo durante el
+   giro esperaba a que venciera. Con `RAYLANG_SPIN_US=0`: +5 % de req/s y −15 % de CPU con un worker;
+   con 4 workers, 191k → 211k. Ahora el worker **no gira si tiene E/S armada** (fds o plazos en su
+   `ReactorState`): la cola solo la ve el giro y la E/S solo la ve el poller, y un worker de red casi
+   siempre tiene fds. Un worker sin E/S (actores puros) gira como siempre: ahí el giro es lo que
+   convierte el despertar entre workers de 3 µs en 0,5.
+4. **Un `kevent` con timeout 0 y nada listo cuesta ~12 µs en macOS** (XNU pasa por el planificador
+   aunque no espere; con algo listo, 0,19 µs; `poll(2)` a cero, 6,5 µs; `epoll_wait(0)` en Linux es
+   barato en ambos casos). El worker local lo pagaba tras CADA acierto del giro (y mi primer intento
+   —sondear el kqueue dentro del giro— lo habría pagado por vuelta). Era el 40 % del tiempo del
+   worker en el ping-pong de actores entre workers: `actor_ask rt 1` daba **64k ops/s en local frente
+   a 914k en shared** (17 µs/op: 1,4 s de giro + 1,3 s de `kevent(0)` + 0,6 s de `kevent` bloqueado
+   + 0,1 s de trabajo en 3,4 s). Ahora, con trabajo ya visible (cola o plazos vencidos) el worker no
+   duerme NI sondea; la E/S armada la recoge el sondeo de equidad (≤ 1 ms si la cola no se vacía) o
+   el siguiente ocioso real.
+5. **Una fibra que cedía (`coop`) volvía a la lista local de listas**, que se sirve antes que la
+   cola compartida donde esperaba su hija de `spawn_local`: la hija no corría hasta que la madre
+   terminaba (`a_busy_fiber_yields_to_its_worker_siblings_at_coop_points` fallaba en modo local
+   desde M372). Ahora `Park::Yield` encola al final de la cola, como en el modo compartido.
+
+**Actores, antes/después** (`benchmarks/actor_ask.ray` y `actor_shard.ray`, nativo `--release`,
+11 workers, mediana de 3; ops/s):
+
+| caso | 1.27.53 shared (default) | 1.27.53 local | **M399 local (default)** |
+|---|---:|---:|---:|
+| `ask rt 1 200000` (ping-pong entre workers) | 914k | **64k** | **873k** |
+| `ask rt 64 20000` | 604k | 687k | 608k |
+| `ask oneway 1 200000` | 9,1M | 9,5M | 9,1M |
+| `shard central 8 50000` | 361k | 228k | 358k |
+| `shard local 8 50000` (`spawn_local`) | 6,35M | 6,35M | 6,35M |
+| `shard mixed 8 50000` | 5,97M | 5,88M | 5,88M |
+
+**Decisión.** El reactor por worker es el default en unix (`RAYLANG_REACTOR=shared` lo retira;
+Windows sigue con el hilo único de `WSAPoll`). El servidor mínimo pasa del 73 % al 88 % de Redis
+con un worker y al 93 % con dos (igual que la referencia Rust con dos hilos), y la CPU de un
+servidor con 11 workers y un cliente baja de 406 % a 131 %. Guardas: la prueba
+`both_reactor_modes_serve_keep_deadlines_and_schedule_siblings` (servir y apagar, `select_timeout`,
+la hija de `spawn_local`, red + actores + plazos en el mismo programa; en ambos modos con 1 y 2
+workers y en el default), las unitarias de `fibers` y estos dos bancos. Banco de #163 reproducible
+con el programa del hallazgo (`ray-apps/findings/open/raykv-1.27.49.md`).

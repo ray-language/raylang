@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.53** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.54** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -534,8 +534,10 @@ hasta que cede (E/S, canal, `sleep`, `yield`). Los **plazos** de las demás fibr
 `select_timeout`, `io.read_timeout`, `net.set_read_timeout`, `ui.next_event_timeout`) y sus
 despertares por E/S **no dependen** de que esa fibra ceda mientras haya **otro worker** que pueda
 reanudarlas: en la VM, cualquier worker ocioso atiende los plazos vencidos y la E/S lista (con
-precisión de ~1 ms); en el binario nativo, el reactor los atiende en su propio hilo y la fibra
-reanuda en su worker de origen, que se elige al nacer entre los de **menos fibras vivas**. Con
+precisión de ~1 ms); en el binario nativo, cada worker atiende con su propio poller los plazos y la
+E/S de las fibras que tiene fijadas (en Windows, y con `RAYLANG_REACTOR=shared`, lo hace un hilo
+reactor único) y la fibra reanuda en su worker de origen, que se elige al nacer entre los de
+**menos fibras vivas**. Con
 **N = 1**, o cuando hay más fibras ocupadas en CPU que workers, una fibra que no cede sí retrasa a
 las que comparten su worker: un trabajo largo de CPU que conviva con un bucle de eventos debe
 **ceder periódicamente** (`time.sleep(1)` o `yield`). Las operaciones de **canal** que completan sin

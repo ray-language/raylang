@@ -494,3 +494,25 @@ cambios en `fibers.rs` + el runtime emitido (crónica y medidas en DESIGN §301 
 - **Esperas de lista**: `Park::WaitOn` ya no arma el pulso de 10 ms; la tarea cancelada la
   despierta su cancelador (`parked` en el ctx de la fibra, compartido con `__RayTask`). Queda
   `Park::WaitOnTimeout`/`block_on_timeout` para `select_timeout`.
+
+## 14. Oct 2026 — reactor por worker como default (M358 → M399)
+
+M358 dejó el reactor POR WORKER como prototipo (`RAYLANG_REACTOR=local`): cada worker con su
+kqueue/epoll y sus temporizadores (`ReactorState`, el mismo estado que conduce el hilo reactor
+único), de modo que aparcar una fibra en su fd es un armado local y el despertar llega al hilo
+que la reanuda. M399 lo hace **default en unix** (`shared` = retirada; Windows sigue con el
+hilo único de `WSAPoll`) tras medir raykv #163 (PERFORMANCE.md §19) y corregir tres cosas del
+camino ocioso del worker local:
+
+- **Giro solo sin E/S armada.** La cola entre workers solo la ve el giro (`pending`); la E/S
+  lista solo la ve el poller. Un worker de red que gira retrasa su propia E/S 10 µs por vuelta.
+- **Sin sondeo a cero con trabajo visible.** En macOS `kevent` con timeout 0 y nada listo cuesta
+  ~12 µs (XNU pasa por el planificador); con algo listo, 0,2. Tras un acierto del giro el
+  worker va directo a la cola; la E/S armada la recoge el sondeo de equidad (≤ 1 ms si la cola
+  no se vacía) o el siguiente ocioso real. No sondear el poller dentro del giro por lo mismo.
+- **`Park::Yield` al final de la cola compartida**, no a la lista local de listas (que se sirve
+  antes): una madre que cede en bucle dejaba a su hija de `spawn_local` sin correr.
+
+Lo que cruza hilos no cambia: `spawn` a otro worker, el despertar de un canal y el pool
+bloqueante entran por la cola del destino y, si duerme en su poller, por su tubería (Dekker
+sobre `pending`/`polling`, M358/M363).

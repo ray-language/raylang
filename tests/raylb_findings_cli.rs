@@ -4,7 +4,7 @@
 //! M357: el scheduler y los `scope` (L8, L15) y las señales extra (L1).
 //! M359: los paquetes (L11 `metrics.series`, L6/L7 `serve_options_on` + `with_stop` + `quiet`, L4 toml).
 //! M360: documentación y tooling (R35 sintaxis de dependencias, R36 paquete-librería, L18 perfilador).
-//! M358: el reactor por worker del scheduler nativo (`RAYLANG_REACTOR=local`), prototipo medido.
+//! M358/M399: el reactor por worker del scheduler nativo (default en unix desde M399; `RAYLANG_REACTOR=shared` lo retira).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -670,27 +670,112 @@ fn the_profiler_discounts_its_own_instrumentation() {
     assert!(report.contains("\"name\":\"outer\",\"calls\":50"), "{report}");
 }
 
-/// M358: el binario nativo con reactor POR WORKER (`RAYLANG_REACTOR=local`) sirve, apaga por canal y
-/// mantiene los plazos de `select_timeout`, con dos workers. Mismo programa que la prueba de
-/// `serve_options_on` y la de `select_timeout`; solo cambia el modo del scheduler.
+/// M399: la madre cede (cesión cooperativa de los canales, M372) y su hija de `spawn_local` —el
+/// mismo worker— corre en la primera cesión. Con el reactor por worker, una fibra que cedía volvía a
+/// la lista de listas del worker, que se sirve ANTES que la cola donde esperaba la hija: la hija no
+/// corría hasta que la madre terminaba (`seen` quedaba en −1 tras 100 000 vueltas).
+const LOCAL_SIBLING_PROG: &str = r#"fn main() -> int {
+    let flag: Channel<int> = Channel.bounded(1);
+    let mother = spawn(fn() -> int {
+        let child = spawn_local(fn() { send(flag, 1); });
+        let scratch: Channel<int> = Channel.bounded(1);
+        var i = 0;
+        var seen = 0 - 1;
+        while (i < 100000) {
+            send(scratch, i);
+            let _ = recv(scratch);
+            match (try_recv(flag)) { Received.Got(x) => { seen = i; break; }, _ => {}, }
+            i = i + 1;
+        }
+        join(child);
+        seen
+    });
+    let at = join(mother);
+    print("child ran early=" + to_string(at >= 0 && at < 1000));
+    0
+}
+"#;
+
+/// M399: red + actores + plazos en el MISMO programa: un eco TCP (una fibra por conexión), un actor
+/// que responde por un canal nuevo por petición (despertares entre workers) y `time.sleep` por medio;
+/// el programa cuenta lo que vuelve de cada lado.
+const MIXED_IO_ACTORS_PROG: &str = r#"import std/net;
+import std/time;
+enum Msg { Ask(int, Channel<int>), Stop }
+fn actor(inbox: Channel<Msg>) -> int {
+    var sum = 0;
+    while (true) {
+        match (recv(inbox)) {
+            Option.Some(m) => match (m) {
+                Msg.Ask(x, reply) => { sum = sum + x; send(reply, x * 2); },
+                Msg.Stop => break,
+            },
+            Option.None => break,
+        }
+    }
+    sum
+}
+fn serve(c: int) {
+    while (true) {
+        match (net.socket_read_bytes(c)) {
+            Result.Ok(chunk) => {
+                if (chunk.len() == 0) { break; }
+                if let Result.Err(e) = net.socket_write_bytes(c, chunk) { break; }
+            },
+            Result.Err(e) => break,
+        }
+    }
+    close(c);
+}
+fn main() -> int {
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(srv);
+    spawn(fn() {
+        while (true) {
+            match (net.tcp_accept(srv)) {
+                Result.Ok(c) => { spawn(fn() { serve(c); }); },
+                Result.Err(e) => break,
+            }
+        }
+    });
+    let inbox: Channel<Msg> = Channel.bounded(16);
+    let a = spawn(fn() -> int { actor(inbox) });
+    let conn = net.tcp_connect("127.0.0.1", port).unwrap();
+    var echoed = 0;
+    var answered = 0;
+    for i in 0..300 {
+        net.socket_write(conn, "ping ${i}\n").unwrap();
+        let back = net.socket_read(conn).unwrap();
+        if (back.len() > 0) { echoed = echoed + 1; }
+        let reply: Channel<int> = Channel.bounded(1);
+        send(inbox, Msg.Ask(i, reply));
+        if (recv(reply).unwrap_or(0 - 1) == i * 2) { answered = answered + 1; }
+        if (i % 100 == 99) { time.sleep(1); }
+    }
+    close(conn);
+    send(inbox, Msg.Stop);
+    print("echoed=${echoed} answered=${answered} sum=${join(a)}");
+    0
+}
+"#;
+
+/// M358/M399: el binario nativo sirve, apaga por canal y mantiene los plazos de `select_timeout`
+/// con el reactor POR WORKER (el default en unix desde M399) y con el hilo reactor único
+/// (`RAYLANG_REACTOR=shared`, la retirada), con 1 y 2 workers. Mismos programas que las pruebas de
+/// `serve_options_on` y de `select_timeout`, más la hija de `spawn_local` y el programa mixto de
+/// red + actores: solo cambia el modo del scheduler.
 #[cfg(unix)]
 #[test]
-fn the_per_worker_reactor_serves_and_keeps_deadlines() {
+fn both_reactor_modes_serve_keep_deadlines_and_schedule_siblings() {
     if !has_rustc() {
         return;
     }
     let ray = env!("CARGO_BIN_EXE_ray");
-    let cases: [(&str, &str, &str); 2] = [
-        (
-            "local_reactor_serve",
-            SERVE_OPTIONS_ON_PROG,
-            "200\nserve returned 0 quick=true\ntrue\n",
-        ),
-        (
-            "local_reactor_select",
-            SELECT_TIMEOUTS_PROG,
-            "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n",
-        ),
+    let cases: [(&str, &str, &str); 4] = [
+        ("reactor_serve", SERVE_OPTIONS_ON_PROG, "200\nserve returned 0 quick=true\ntrue\n"),
+        ("reactor_select", SELECT_TIMEOUTS_PROG, "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n"),
+        ("reactor_sibling", LOCAL_SIBLING_PROG, "child ran early=true\n"),
+        ("reactor_mixed", MIXED_IO_ACTORS_PROG, "echoed=300 answered=300 sum=44850\n"),
     ];
     for (name, src, want) in cases {
         let d = project(name);
@@ -698,8 +783,13 @@ fn the_per_worker_reactor_serves_and_keeps_deadlines() {
         let bin = d.join("prog_bin");
         let b = Command::new(ray).args(["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
         assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
-        let out = Command::new(&bin).env("RAYLANG_REACTOR", "local").env("RAYLANG_THREADS", "2").current_dir(&d).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{name}\n{}", String::from_utf8_lossy(&out.stderr));
+        for (mode, threads) in [("local", "2"), ("shared", "2"), ("local", "1"), ("shared", "1")] {
+            let out = Command::new(&bin).env("RAYLANG_REACTOR", mode).env("RAYLANG_THREADS", threads).current_dir(&d).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{name} reactor={mode} threads={threads}\n{}", String::from_utf8_lossy(&out.stderr));
+        }
+        // Y el default (sin la variable): el reactor por worker con todos los núcleos.
+        let out = Command::new(&bin).env_remove("RAYLANG_REACTOR").current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{name} default\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
 

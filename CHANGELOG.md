@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.55 — 2026-10-14
+
+- **`audio.flush` corta con el fundido anti-clic de verdad (M400, rayplay #171/#173)**: `flush`
+  truncaba el anillo a la cola de la rampa y confiaba en que el callback de CoreAudio la fundiera al
+  ver «solo queda la cola»; pero el programa escribe la nueva posición nada más volver `flush`, el
+  callback encontraba cola + datos y cortaba en seco — un chasquido en cada seek a 44,1 y 48 kHz
+  (y desde 1.27.54 a cualquier frecuencia, al cambiar el reparto de tiempos). Ahora `flush` funde la
+  cola en el propio anillo y la siguiente escritura entra con rampa de subida justo detrás, aunque
+  llegue antes de la siguiente vuelta del callback. La traza (`RAY_AUDIO_TRACE=1`) cuenta `flushes N`
+  aparte de los fundidos del callback. Dos pruebas sobre las muestras, no sobre el contador.
+
 ## 1.27.54 — 2026-10-14
 
 - **Nativo: reactor por worker por defecto (M399, IDEAS §110, raykv #163, raygate #75/#107)**: cada

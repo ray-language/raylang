@@ -2402,7 +2402,17 @@ puede mutar ni retener su `[T]`, la llamada pasa la copia compartida (`SharedCon
 |---|---:|---:|
 | VM, `first(TAB, …)` | 127 ms | 6 ms |
 | VM, `first(local, …)` | 7 ms | 7 ms |
-| nativo `--release`, `first(TAB, …)` | 3–4 ms | 3–4 ms (sin cambio, a propósito) |
+| nativo `--release`, `first(TAB, …)` | 3–4 ms | 3–4 ms (sin cambio en 1.27.51; ver abajo) |
 
 El intérprete no cambia (sigue copiando: es el oráculo que comprueba que el const no se corrompe).
+
+**M397 (1.27.52): también en nativo.** rayplay re-midió 1.27.51 con 1 M llamadas: el coste nativo
+era lineal en el tamaño de la tabla (una copia entera por llamada), no «3–4 ms» fijos. Compartir allí
+es seguro porque una fibra ejecuta SIEMPRE en su worker de origen (DESIGN §369), así que el
+`thread_local` no cruza hilos; la llamada pasa `NAME__shared()` al parámetro de solo lectura.
+
+| 1 M × `first(t, i)`, nativo `--release` (M3 Pro) | `const` antes (rayplay) | `const` después | copia local |
+|---|---:|---:|---:|
+| tabla de 180 | 35 ms | 4 ms | 5 ms |
+| tabla de 1800 | 157 ms | 4 ms | 5 ms |
 

@@ -113,6 +113,13 @@ impl Transpiler {
         let sig_params: Vec<Type> = self.funcs.get(name).map(|s| s.params.clone()).unwrap_or_default();
         for (i, a) in eff.iter().enumerate() {
             write!(out, "let __rt_a{} = ", i).unwrap();
+            // M396 (rayplay #168): un const arreglo de escalares a un parámetro de SOLO LECTURA va
+            // compartido (`NAME__shared()`, thread_local): la fibra ejecuta siempre en su worker de
+            // origen (fibers.rs, FIJACIÓN), así que el `Rc` nunca cruza hilos.
+            if self.readonly_params.contains(&(name.to_string(), i)) && self.emit_shared_const(out, a) {
+                out.push_str("; ");
+                continue;
+            }
             // M313: el tipo del parámetro es el esperado del argumento (si no menciona genéricos del callee).
             let no_marked = !marked.contains(&i);
             match sig_params.get(i) {

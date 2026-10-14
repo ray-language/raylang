@@ -17708,3 +17708,24 @@ encolado, hace el fundido y termina, sin bloquear al programa; no hay forma de d
 Queda dicho en `ray_doc close`, `std/audio` y REFERENCE; `audio.flush` y los formatos s24/s32/f32
 (#167) van a IDEAS §111, y «Now Playing»/controles del sistema (#170) a §112.
 
+## 369. M397 — el `const` compartido como argumento, también en nativo (rayplay #168 ⚠️, oct 2026)
+
+§368 dejó el nativo fuera con un argumento equivocado: «la copia compartida es un `thread_local` por
+worker y un `Rc` que cruzara un aparque de fibra tendría su contador compartido entre hilos». rayplay
+re-midió 1.27.51 y el coste nativo era lineal en el tamaño de la tabla (17, 35, 157 y 2570 ns por
+llamada con 18, 180, 1800 y 18 000 elementos): una copia entera por llamada, contra lo que `llms.txt`
+afirmaba sin matizar el motor.
+
+El argumento era falso por el propio contrato del scheduler (`fibers.rs`, FIJACIÓN): una Task cruza
+hilos solo como DATO (worker → reactor → worker) y su código ejecuta siempre en su worker de origen
+(`home`); es lo que hace válidas las direcciones TLS que LLVM cachea a través de una suspensión. Un
+`Rc` clonado del `thread_local` de ese worker vuelve a tocarse, al despertar, en el mismo hilo. Con
+`--without fibers` (hilo por tarea) el `thread_local` es por tarea y tampoco cruza. Y la mutación la
+excluye el mismo análisis de solo lectura de §368, compartido por los dos motores.
+
+Decisión: el transpilador toma el conjunto `readonly_array_params` y, en `emit_user_call_hoisted`,
+un const arreglo compartible en una posición de solo lectura se pasa como `NAME__shared()` (el mismo
+camino que ya usaban `C[i]`/`C.len()` desde M391). Medido: tabla de 180, 35 → 4 ms por 1 M llamadas;
+de 1800, 157 → 4 ms; la copia local, 5 ms. El test del transpilador comprueba las dos ramas
+(`TAB__shared()` al lector, `TAB()` al que hace `push`).
+

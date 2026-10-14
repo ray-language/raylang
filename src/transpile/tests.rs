@@ -1633,6 +1633,13 @@ fn hoists_composite_literal_args_to_temporaries() {
     assert!(pure.contains("vec![1i64, 2i64, __ray_neg(3i64)]") && !pure.contains("__rt_a"), "literales puros en línea: {}", pure);
     let mixed = body_of(&transpile_src("fn main() { let a = 1; print([a, 2]); }"), "fn ray_main");
     assert!(mixed.contains("let __rt_a0") && !mixed.contains("let __rt_a1") && mixed.contains("vec![__rt_a0, 2i64]"), "mixto: solo se iza el no literal: {}", mixed);
+    // M396 (rayplay #168): el const compartido también como ARGUMENTO de un parámetro de solo lectura.
+    let shared = body_of(
+        &transpile_src("const TAB: [int] = [1, 2, 3];\nfn first(t: [int], i: int) -> int { t[i] }\nfn grow(t: [int]) -> int { t.push(1); t.len() }\nfn main() { print(first(TAB, 0)); print(grow(TAB)); }"),
+        "fn ray_main",
+    );
+    assert!(shared.contains("let __rt_a0 = TAB__shared();"), "const a parámetro de solo lectura: compartido: {}", shared);
+    assert!(shared.contains("let __rt_a0 = TAB();"), "const a parámetro que muta: literal fresco: {}", shared);
     let big: Vec<String> = (0..3000).map(|i| i.to_string()).collect();
     let table = body_of(&transpile_src(&format!("fn table() -> [int] {{ [{}] }}\nfn main() {{ print(table().len()); }}", big.join(", "))), "fn table");
     assert!(!table.contains("__rt_a") && table.contains("2999i64"), "3000 enteros sin un solo `let` izado");

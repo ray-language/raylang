@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.52 — 2026-10-14
+
+- **Nativo: pasar un `const` arreglo a una función que no lo muta tampoco lo copia (M397, rayplay
+  #168 ⚠️)**: 1.27.51 lo arregló solo en la VM alegando que la copia compartida por hilo no podía
+  cruzar un aparque de fibra; una fibra ejecuta siempre en su worker de origen, así que es seguro
+  y la llamada pasa `NAME__shared()` al parámetro de solo lectura. Medido (1 M llamadas,
+  `--release`): tabla de 180, 35 → 4 ms; de 1800, 157 → 4 ms (la copia local, 5 ms).
+
 ## 1.27.51 — 2026-10-13
 
 - **Nativo: un literal de array de miles de elementos ya compila (M396, rayplay #164, issue

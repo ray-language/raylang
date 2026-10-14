@@ -71,6 +71,18 @@ fn regex_lite(s: &str) -> String {
             i += 1;
             continue;
         }
+        // M396: la posición del tipo de cada campo (solo diagnósticos), `[(l, c), …]`.
+        if rest.starts_with("field_type_pos: [") {
+            out.push_str("field_type_pos: []");
+            i += "field_type_pos: [".len();
+            let mut depth = 1;
+            while i < b.len() && depth > 0 {
+                if b[i] == b'[' { depth += 1; }
+                if b[i] == b']' { depth -= 1; }
+                i += 1;
+            }
+            continue;
+        }
         out.push(s.as_bytes()[i] as char);
         // OJO: byte a byte solo vale para ASCII; para multibyte, copia el char entero.
         i += 1;

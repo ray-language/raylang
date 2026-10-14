@@ -109,6 +109,13 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     // fresco, así que ningún alias puede alterar lo que leen los demás.
     let mut shared_slots = HashMap::new();
     let mut shared_consts: Vec<Vec<Value>> = Vec::new();
+    // M396 (rayplay #168): con algún const compartible, los parámetros `[T]` que ninguna función
+    // muta reciben la copia compartida en vez de un literal fresco por llamada.
+    let readonly = if program.consts.iter().any(|c| matches!(&c.ty, Type::Array(e) if is_shareable_scalar(e))) {
+        crate::readonly::readonly_array_params(program)
+    } else {
+        std::collections::HashSet::new()
+    };
     for cst in &program.consts {
         if let Type::Array(elem) = &cst.ty
             && is_shareable_scalar(elem)
@@ -138,6 +145,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         scopes: Vec::new(),
         consts,
         shared_slots,
+        readonly,
         shared_consts,
         extern_indices: &extern_indices,
     };
@@ -157,7 +165,7 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let structs = HashMap::new();
     let enums = HashMap::new();
     let extern_indices = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
+    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), readonly: std::collections::HashSet::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -230,6 +238,8 @@ struct Compiler<'a> {
     /// LECTURA (`C[i]`, `C.len()`, `C.contains(x)`) se compila a `SharedConst(k)` en vez de
     /// reconstruir el literal.
     shared_slots: HashMap<String, usize>,
+    /// M396: `(función, índice)` de los parámetros `[T]` de solo lectura (`readonly::readonly_array_params`).
+    readonly: std::collections::HashSet<(String, usize)>,
     shared_consts: Vec<Vec<Value>>,
     /// Funciones externas (M41, FFI): nombre → índice en la tabla `externs` del `CompiledProgram`.
     /// Una llamada a uno de estos nombres se baja a `CallExtern(idx, argc)`.
@@ -1331,7 +1341,11 @@ impl<'a> Compiler<'a> {
                     return Ok(());
                 }
                 if let Some(&idx) = self.indices.get(name) {
-                    for arg in args {
+                    for (i, arg) in args.iter().enumerate() {
+                        // M396 (rayplay #168): un const arreglo a un parámetro de solo lectura va compartido.
+                        if self.readonly.contains(&(name.clone(), i)) && self.emit_shared_const(arg, line, col) {
+                            continue;
+                        }
                         self.emit_expr(arg)?;
                     }
                     self.emit(OpCode::Call(idx, args.len()), line, col);

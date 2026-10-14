@@ -354,6 +354,9 @@ pub struct StructDef {
     /// para acotar un comentario a su campo (los `VariantDef` de un enum ya llevan la suya). Vacío
     /// cuando el struct es sintético (el `dyn` que fabrica el lowering, sin fuente detrás).
     pub field_lines: Vec<usize>,
+    /// M396 (rayplay #165): posición del TIPO de cada campo (donde el parser empezó a leerlo), para
+    /// que «unknown type» señale el campo y no la cabecera. Paralelo a `fields`; vacío si sintético.
+    pub field_type_pos: Vec<(usize, usize)>,
     pub line: usize,
     pub col: usize,
 }

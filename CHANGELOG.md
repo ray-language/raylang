@@ -4,6 +4,28 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.51 — 2026-10-13
+
+- **Nativo: un literal de array de miles de elementos ya compila (M396, rayplay #164, issue
+  #530)**: los literales puros (`0`, `1.5`, `"a"`, `-3`) van en línea en el `vec![…]`; antes cada
+  elemento se izaba a un `let` propio y 3000 de ellos en un bloque tumbaban a rustc con SIGBUS.
+  En un literal mixto solo se izan los elementos que pueden tomar prestado. Medido: 3000 y 6400
+  enteros compilan.
+- **Un tipo desconocido en un campo señala el campo (M396, rayplay #165, issue #531)**: «unknown
+  type» y «'Channel' is a builtin type… shadows your struct» salen en la línea del campo con el
+  cursor en el tipo (y en la variante, en un enum), no en la cabecera del struct que lo usa.
+- **Pasar un `const` arreglo a una función que no lo muta ya no lo copia (M396, rayplay #168)**:
+  un análisis de solo lectura por parámetro (`src/readonly.rs`: índice, `for`, `len`/`contains`,
+  `==`, paso a otra función que tampoco muta; `push`/`pop`/`t[i] = v`/alias lo descartan) deja
+  pasar la copia compartida de M391 en la VM. 100 000 llamadas con una tabla de 180: 127 → 6 ms.
+  El nativo ya costaba 3–4 ms y no cambia.
+- **Docs (rayplay #166, #169)**: `close(h)` sobre una salida de audio no bloquea, lo encolado
+  sigue sonando con un fundido y no se puede descartar (REFERENCE, `ray_doc close`, `std/audio`);
+  la lista de `--without` es una sola en `ray build --help`, REFERENCE y `docs/build.md` (16
+  subsistemas: `crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,
+  process,mimalloc,ahash,fibers`), con un test que las compara. `std/audio` con otros formatos
+  (#167) y «Now Playing»/controles del sistema (#170) quedan clasificados en IDEAS §111–§112.
+
 ## 1.27.50 — 2026-10-13
 
 - **`bytes_concat([bytes]) -> bytes` y `std/collections/bytesbuilder` (M395, raykv #162)**: unir

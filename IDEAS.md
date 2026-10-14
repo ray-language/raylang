@@ -4206,3 +4206,42 @@ que #75/#107 (despertar entre workers 1,75–5,5 µs frente a 0,2 en el mismo wo
 rayauth, web). Se hace solo con el banco de #163 (servidor mínimo + `redis-benchmark` × 2–4 clientes,
 CPU del servidor) y los de M363/M365 (`actor_ask`, `actor_shard`, raylb p99) como guardas de no
 regresión. Antes de 3 hay que decidir si el reactor por worker es el default (pendiente de M358).
+
+## 111. `std/audio` v3: formatos s24/s32/f32 y descartar la cola (rayplay #166/#167, oct 2026)
+
+**Qué.** `std/audio` solo acepta s16le entrelazado: un reproductor de FLAC/ALAC a 24 bits tiene que
+reducir con dither (rayplay lo hace con TPDF, siseo a −93 dBFS), y el volumen o las mezclas pierden
+resolución. CoreAudio, AAudio y ALSA aceptan s24/s32 y float32 directamente. Además `close(h)` deja
+sonar lo encolado con un fundido (M396 lo documenta) y no hay forma de DESCARTARLO: un salto o una
+pausa obligan a mantener la salida abierta y fundir a mano.
+
+**Cómo.** (1) `audio.open_format(rate, channels, format, latency_ms)` con `format` en `"s16le" |
+"s24le" | "s32le" | "f32le"` (o un struct de opciones); el alimentador convierte al formato nativo
+del backend solo donde haga falta (AudioQueue y AAudio aceptan los cuatro; ALSA según la tarjeta) y
+`write` sigue siendo «octetos entrelazados», con el tamaño de muestra del formato. (2) `audio.flush(h)`
+descarta el pipe y el anillo y corta con la rampa anti-clic ya existente: el salto llega sin solape.
+
+**Impacto.** Superficie nueva de stdlib sin romper (`open` y `open_latency` siguen siendo s16le); toca
+los tres backends de `crates/ray-runtime/src/audio.rs` y el `ring`; medible con `RAY_AUDIO_TRACE`.
+
+## 112. «Now Playing» y controles del sistema para programas que suenan (`std/media`, rayplay #170, oct 2026)
+
+**Qué.** Un programa con `std/audio` en iOS/Android no aparece en la pantalla de bloqueo ni en el
+Centro de control, y los botones de reproducir/pausa/siguiente (y los auriculares) van a la última
+app que sí lo hizo. Un reproductor necesita decir qué suena (título, artista, álbum, duración,
+posición, carátula) y recibir las órdenes del sistema. El shell iOS solo configura la sesión
+`playback` (`[ios] background_audio`); el servicio Android `mediaPlayback` saca una notificación
+fija sin `MediaSession`; la página no puede usar `navigator.mediaSession` porque el sonido no sale
+del webview y su JS se suspende en segundo plano.
+
+**Cómo.** Un módulo `std/media`: `now_playing(NowPlaying { title, artist, album, duration_ms,
+position_ms, playing, artwork: bytes })` y los controles como eventos del bucle de `std/ui`
+(`media` con `play`, `pause`, `toggle`, `next`, `previous`, `seek(ms)`) o un canal. Backends:
+`MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` en iOS y macOS (en el shell ObjC generado y en la
+app de escritorio), `MediaSession` en Android (que además da la notificación con controles) y MPRIS
+por D-Bus en Linux. Las órdenes llegan por el mismo cauce que `lifecycle` (`ray_ui_push_event`).
+
+**Impacto.** Arco de plataforma (cuatro backends, shells generados de iOS/Android, eventos nuevos en
+`std/ui`), sin romper nada existente. Depende de §111 solo en la medida en que un reproductor real
+querrá las dos cosas; son independientes.
+

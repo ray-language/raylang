@@ -1175,7 +1175,6 @@ fn sub_bytes_oracle() {
 #[test]
 /// M395 (raykv #162, rayplay #161): `bytes_concat` y el base64 sobre un tramo coinciden en ambos motores,
 /// incluidos el arreglo vacío, los trozos vacíos y el clamp del rango.
-#[test]
 fn bytes_concat_and_base64_range_oracle() {
     oracle_int("bytes_concat([b\"ab\", b\"\", b\"cde\"]).len()");                                   // 5
     oracle_int("bytes_concat([]).len()");                                                            // 0
@@ -1185,6 +1184,24 @@ fn bytes_concat_and_base64_range_oracle() {
     oracle_int("if (__base64_decode_bytes(b\"x:QUJD\", 2, 99, false)[1] == b\"ABC\") { 1 } else { 0 }"); // clamp → 1
     oracle_int("if (__base64_decode_bytes(b\"x:QUJD\", 0, 6, false)[0] == b\"err\") { 1 } else { 0 }"); // ':' inválido → 1
     oracle_int("__base64_decode_bytes(b\"QUJD\", 3, 1, true)[1].len()");                             // i > j → vacío → 0
+}
+
+/// M396 (rayplay #168): un `const` arreglo pasado a un parámetro de SOLO LECTURA va compartido
+/// (`SharedConst`); pasado a uno que muta sigue siendo un literal fresco, así que el const no cambia.
+#[test]
+fn const_array_argument_shares_only_with_readonly_params_oracle() {
+    oracle_program(
+        "const TAB: [int] = [10, 20, 30];\n\
+         fn first(t: [int], i: int) -> int { t[i] }\n\
+         fn total(t: [int]) -> int { var s = 0; for x in t { s = s + x; } s }\n\
+         fn grow(t: [int]) -> int { t.push(1); t.len() }\n\
+         fn via(t: [int]) -> int { first(t, 2) + grow(t) }\n\
+         fn main() -> int {\n\
+         \x20 let a = first(TAB, 0) + total(TAB);\n\
+         \x20 let g = grow(TAB) + grow(TAB) + via(TAB);\n\
+         \x20 a + g + TAB.len() * 1000 + first(TAB, 2)\n\
+         }",
+    );
 }
 
 #[test]

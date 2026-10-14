@@ -424,9 +424,12 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "'{' after the struct name")?;
         let mut fields = Vec::new();
         let mut field_lines = Vec::new();
+        let mut field_type_pos = Vec::new();
         while !self.check(&TokenKind::RBrace) {
             let (fname, fline, _) = self.expect_ident("a field name")?;
             self.expect(&TokenKind::Colon, "':' after the field name")?;
+            let ty_tok = self.peek();
+            field_type_pos.push((ty_tok.line, ty_tok.col));
             let ty = self.parse_type()?;
             fields.push((fname, ty));
             field_lines.push(fline);
@@ -435,7 +438,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' to close the struct")?;
-        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, field_lines, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, field_lines, field_type_pos, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'

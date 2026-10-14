@@ -1615,11 +1615,27 @@ fn hoists_composite_literal_args_to_temporaries() {
          fn main() { let p = P { a: 1, b: 2 }; print(p.a); }",
     );
     assert!(struct_lit.contains("let __rt_a0"), "struct 2+ campos iza: {}", struct_lit);
-    let arr = transpile_src("fn main() { print([1, 2]); }");
-    assert!(arr.contains("let __rt_a0"), "arreglo 2+ elems iza: {}", arr);
+    let arr = transpile_src("fn main() { let a = 1; let b = 2; print([a, b]); }");
+    assert!(arr.contains("let __rt_a0"), "arreglo 2+ elems no literales iza: {}", arr);
     // 1 solo elemento: sin izado (no hay arg posterior que pueda chocar con el guard).
     let single = transpile_src("fn main() { print([7]); }");
     assert!(single.contains("vec![7i64]"), "1 elem se emite directo, sin izar: {}", single);
+    // M396 (rayplay #164): los literales PUROS no se izan (3000 `let` en un bloque tumbaban a rustc con
+    // SIGBUS); en un literal mixto solo se izan los elementos que pueden tomar prestado.
+    // Se mira solo el cuerpo de la función (el prelude emitido también iza y usa `__rt_a`).
+    let body_of = |code: &str, head: &str| -> String {
+        let start = code.find(head).unwrap_or_else(|| panic!("sin `{head}` en: {code}"));
+        let rest = &code[start..];
+        let end = rest[1..].find("\nfn ").map(|i| i + 1).unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    let pure = body_of(&transpile_src("fn main() { print([1, 2, -3]); }"), "fn ray_main");
+    assert!(pure.contains("vec![1i64, 2i64, __ray_neg(3i64)]") && !pure.contains("__rt_a"), "literales puros en línea: {}", pure);
+    let mixed = body_of(&transpile_src("fn main() { let a = 1; print([a, 2]); }"), "fn ray_main");
+    assert!(mixed.contains("let __rt_a0") && !mixed.contains("let __rt_a1") && mixed.contains("vec![__rt_a0, 2i64]"), "mixto: solo se iza el no literal: {}", mixed);
+    let big: Vec<String> = (0..3000).map(|i| i.to_string()).collect();
+    let table = body_of(&transpile_src(&format!("fn table() -> [int] {{ [{}] }}\nfn main() {{ print(table().len()); }}", big.join(", "))), "fn table");
+    assert!(!table.contains("__rt_a") && table.contains("2999i64"), "3000 enteros sin un solo `let` izado");
 }
 
 /// M295: el prólogo de profundidad solo lo emiten las funciones que pueden recurrir (ciclo del

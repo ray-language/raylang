@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "raylang"
-version = "1.27.52"
+version = "1.27.53"
 dependencies = [
  "ahash",
  "libloading",

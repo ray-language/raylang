@@ -2726,6 +2726,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(", ");
                 self.emit_expr(out, eff[2])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[3])?;
+                out.push(')');
+            }
+            // M398: descartar lo encolado sin cerrar.
+            "audio_flush" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_audio_flush(");
+                self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
             "audio_played" if name.starts_with("__") && !self.exclude.contains("audio") => {

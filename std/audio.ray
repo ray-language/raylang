@@ -3,14 +3,15 @@
 // Sobre los primitivos __audio_* del runtime: un pipe del SO + hilo alimentador hacia el
 // dispositivo (AudioQueue en macOS, ALSA por dlopen en Linux; RAY_AUDIO_SINK=null = sumidero de
 // tiempo real para tests/CI). La CONTRAPRESIÓN es el diseño: `write` aparca la fibra cuando el
-// dispositivo va lleno — el pacing del programa sale del consumo real, sin relojes. Formato
-// único de v1: PCM s16le entrelazado (little-endian, 2 octetos por muestra por canal).
+// dispositivo va lleno — el pacing del programa sale del consumo real, sin relojes. Formato por
+// defecto: PCM s16le entrelazado (little-endian, 2 octetos por muestra por canal); M398 (IDEAS
+// §111, rayplay #167) añade s24le/s32le/f32le vía `open_format`, y `flush` (rayplay #166).
 
 /// Opens a PCM output on the default device: `sample_rate` Hz (8000–192000), `channels`
 /// channels (1–8), s16le interleaved samples. Returns the output handle. With
 /// `RAY_AUDIO_SINK=null` in the environment, a real-time null sink plays silently (tests, CI).
 pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
-    let r = __audio_open(sample_rate, channels, 0);
+    let r = __audio_open(sample_rate, channels, 0, "s16le");
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
@@ -33,12 +34,51 @@ pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
 /// more reactive but more underrun-prone; 0 (or plain `open`) = the 200 ms default. On
 /// Android, a hint of 50 ms or less requests the LOW_LATENCY performance mode.
 pub fn open_latency(sample_rate: int, channels: int, latency_ms: int) -> Result<int, string> {
-    let r = __audio_open(sample_rate, channels, latency_ms);
+    let r = __audio_open(sample_rate, channels, latency_ms, "s16le");
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
             Option.None => Result.Err("invalid handle"),
         }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Like `open_latency`, choosing the SAMPLE FORMAT of what you `write`: `"s16le"` (the default
+/// of `open`), `"s24le"` (3 octets per sample), `"s32le"` or `"f32le"` (IEEE float in -1..1),
+/// all little-endian and interleaved. The device gets the format natively where the backend
+/// accepts it (CoreAudio on macOS/iOS: all four; ALSA and AAudio: what the device supports) and
+/// a conversion to s16le in the feeder thread otherwise (WASAPI always) — the program never has
+/// to dither 24-bit material itself. `latency_ms` as in `open_latency` (0 = default). An unknown
+/// format is `Err`.
+pub fn open_format(
+    sample_rate: int,
+    channels: int,
+    format: string,
+    latency_ms: int
+) -> Result<int, string> {
+    let r = __audio_open(sample_rate, channels, latency_ms, format);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Discards what was written but has not sounded yet — the queue between the program and the
+/// device and the backend's ring — WITHOUT closing the output: the next `write` sounds as soon as
+/// it arrives. This is what a seek or a pause wants (with `close` + reopen the old position kept
+/// playing over the new one for up to the latency hint). The cut ends with the anti-click fade;
+/// what already sits in the device buffers (a few ms) finishes playing. Returns when the output
+/// has been emptied (at most ~one feeder chunk).
+pub fn flush(h: int) -> Result<int, string> {
+    let r = __audio_flush(h);
+    if (r[0] == "ok") {
+        Result.Ok(0)
     } else {
         Result.Err(r[1])
     }
@@ -60,7 +100,8 @@ pub fn played_ms(h: int) -> Result<int, string> {
     }
 }
 
-/// Writes interleaved s16le samples to the output. Writes ALL of `samples`, parking the fiber
+/// Writes interleaved samples (in the format the output was opened with; s16le unless
+/// `open_format` said otherwise) to the output. Writes ALL of `samples`, parking the fiber
 /// while the device buffer is full — backpressure IS the pacing: write your audio as fast as
 /// you produce it and the device sets the tempo. `Err` if the output was closed.
 pub fn write(h: int, samples: bytes) -> Result<int, string> {
@@ -75,9 +116,9 @@ pub fn write(h: int, samples: bytes) -> Result<int, string> {
 /// Waits until everything written has been played (queue empty plus the device buffer margin).
 /// Call it before `close(h)` at the end of a session for a gapless ending — `close(h)` (the
 /// ordinary handle close) ends the output WITHOUT blocking: what is already queued (up to the
-/// latency hint) still plays and ends with a short fade-out, and it cannot be discarded (rayplay
-/// #166). A program that exits right away may cut the tail. To jump or pause without the old
-/// position overlapping the new one, keep the output open and fade your own samples in and out.
+/// latency hint) still plays and ends with a short fade-out. A program that exits right away may
+/// cut the tail. To jump or pause without the old position overlapping the new one, keep the
+/// output open and call `flush` (rayplay #166).
 pub fn drain(h: int) -> Result<int, string> {
     let r = __audio_drain(h);
     if (r[0] == "ok") {

@@ -3548,15 +3548,16 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::AudioOpen => {
+                    let format = self.pop();
                     let latency = self.pop();
                     let channels = self.pop();
                     let rate = self.pop();
-                    let (HeapValue::Int(rate), HeapValue::Int(channels), HeapValue::Int(latency)) =
-                        (rate, channels, latency)
+                    let (HeapValue::Int(rate), HeapValue::Int(channels), HeapValue::Int(latency), HeapValue::Str(format)) =
+                        (rate, channels, latency, format)
                     else {
-                        unreachable!("the checker guarantees three ints");
+                        unreachable!("the checker guarantees three ints and a string");
                     };
-                    let elems = match crate::builtins::audio_open(rate, channels, latency) {
+                    let elems = match crate::builtins::audio_open(rate, channels, latency, &format) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3568,6 +3569,18 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees an int");
                     };
                     let elems = match crate::builtins::audio_drain(handle) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M398: descartar lo encolado sin cerrar.
+                OpCode::AudioFlush => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::audio_flush(handle) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(String::new().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };

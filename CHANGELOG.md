@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.57 — 2026-10-15
+
+- **Nativo: el worker ocioso ya no gira cuando un plazo está a menos de 1 ms (M402, raygate #175
+  ⚠️, la causa real)**: el timeout del poller se calculaba truncando a milisegundos, así que un plazo
+  a 0,3 ms daba `0` («no esperes») y el worker sondeaba el poller en bucle hasta que vencía; y los
+  plazos de lectura CANCELADOS (el dato llegó antes) se quedaban en el heap y seguían fijando ese
+  timeout. Con `http` armando un plazo de 5 s por lectura a miles por segundo, siempre había uno a
+  menos de 1 ms y el worker no dormía nunca. Ahora el timeout redondea hacia arriba y los plazos
+  cancelados se retiran del heap. Reproducido en Linux arm64 (Docker, 6 CPU) con un proxy
+  `net/webserver` + `http.Pool` a un upstream de 10 ms y 32 conexiones: 43 % → 16 % de CPU
+  (`shared` 17 %); con 8 conexiones, 14 % → 7 %. 1.27.56 (M401) había quitado otro coste real, el
+  aviso de `close` a todos los workers, pero no era el de raygate, que usa un pool keep-alive.
+
 ## 1.27.56 — 2026-10-14
 
 - **Nativo: `close` ya no despierta a todos los workers (M401, raygate #175 ⚠️ regresión de

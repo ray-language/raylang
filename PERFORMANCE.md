@@ -2537,3 +2537,42 @@ baja al despertar; un fd sin esperas vale 0) y el caso `reactor_close_parked` de
 `both_reactor_modes_serve_keep_deadlines_and_schedule_siblings` (otra fibra cierra el socket en el
 que una lectora aparca: despierta con error en seguida, en ambos modos y con 1 y 2 workers), más
 200 conexiones de ida y vuelta cerradas sin que nadie espere.
+
+## 21. M402 (oct 2026): el plazo a menos de 1 ms que no dejaba dormir al worker — raygate #175, la causa real
+
+**Qué faltaba.** raygate re-midió 1.27.56 y seguía en 124–141 % de CPU (1.27.19: 39–42 %). M401
+(§20) había quitado un coste real —el `poke` de `close` a todos los workers— pero no el suyo: su
+ruta `cart` va al upstream por un `http.Pool` keep-alive y no cierra un socket por petición. El
+repro de §20 (una conexión por petición) no era el de raygate, y en el Mac el repro con pool no
+mostraba nada: local 33 % frente a shared 39 %.
+
+**Repro en Linux** (`~/.claude/jobs/62a6eff2/tmp/f175/`, contenedor Docker arm64 `rust:1-slim-trixie`
+con 6 CPU, release 1.27.56 de Linux): el mismo upstream de 10 ms, un proxy `net/webserver` +
+`http.pool(64)` + `pool_request_bytes(…, 5000)` como raygate, y un generador keep-alive en raylang
+(`conns` fibras sobre un pool). CPU del proxy por `/proc/<pid>/stat` en 5 s:
+
+| conexiones | 1.27.56 `local` | 1.27.56 `shared` | **M402 `local`** | M402 `shared` |
+|---:|---:|---:|---:|---:|
+| 8 | 14 % | 9 % | **7 %** | 9 % |
+| 32 | **43 %** | 15 % | **16 %** | 17 % |
+
+**Dónde se iba.** `strace -c` no lo veía: casi los mismos syscalls en los dos modos (149k frente a
+184k en 5 s, `futex` el 80 %). Por hilo (`/proc/<pid>/task/*/stat`): cada worker local gastaba 4×
+el user Y el sys de uno del modo compartido con MENOS cambios de contexto — trabajaba más por
+despertar, no despertaba más. `perf` (contenedor `--privileged`; sin él `perf_event_open` falla):
+en local, el 20 % en `__kernel_clock_gettime` (vdso) y el 23 % en la entrada de syscall, sin
+`sched_yield`: un bucle apretado de `Instant::now()` + `epoll_wait`. Es el camino ocioso del worker:
+`next_timeout_ms` truncaba a milisegundos, un plazo a 0,3 ms daba `0`, `epoll_wait(0)` volvía al
+instante, se recalculaba `0`… hasta que el plazo vencía. Y los plazos de E/S CANCELADOS (`http` arma
+uno de 5 s por lectura y el dato llega antes) seguían en el heap fijando ese timeout. A ~3 000
+peticiones/s, con 5 s de plazo, hay ~15 000 plazos vivos en los heaps: siempre uno a menos de 1 ms.
+La comprobación directa: con `pool_request_bytes(…, 60000)` o sin plazo (`0`), el proxy de 1.27.56
+en local baja a 15–16 %.
+
+**Arreglo.** `next_timeout_ms` redondea hacia arriba (un plazo a 0,3 ms → 1 ms; `0` solo si ya
+venció) y retira los plazos cancelados de la cima del heap antes de mirar el próximo
+(`drop_cancelled_deadlines`). Vale para los dos conductores del `ReactorState` (worker local e hilo
+reactor único). Test: `the_poller_timeout_rounds_up_and_ignores_cancelled_deadlines`.
+
+**Por qué el modo compartido no lo sufría tanto** no quedó medido: el hilo reactor pasa por el mismo
+cálculo. Lo que sí: con el arreglo los dos modos quedan iguales en CPU y el local despacha lo mismo.

@@ -261,6 +261,11 @@ pub fn launch_paths() -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+/// M403: una orden de los controles multimedia del sistema → `("media", 0, tag)`.
+pub(crate) fn push_media_event(tag: &str) {
+    push_event("media", 0, tag);
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let ev = events();
@@ -368,7 +373,7 @@ fn start_headless_exit_watchdog() {
 static EVENT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// M217: `RAY_UI_TRACE=1` — trazas del backend headless en stderr.
-fn ui_trace() -> bool {
+pub(crate) fn ui_trace() -> bool {
     std::env::var_os("RAY_UI_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
@@ -1957,6 +1962,51 @@ fn single_instance_listen(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// M403: `media_now_playing` (`arg` = `título\nartista\nálbum\nduración_ms\nposición_ms\n0|1\ncarátula_base64`),
+/// `media_clear` y `media_controls` (`arg` = órdenes separadas por coma). Lo publica
+/// `crate::media` (MediaPlayer en macOS/iOS); el resto de plataformas, `Err`.
+fn media_op(op: &str, arg: &str) -> Result<(), String> {
+    // macOS: MediaPlayer trabaja en la cola principal, que solo drena el run loop de NSApp.
+    #[cfg(target_os = "macos")]
+    ensure_app()?;
+    match op {
+        "media_now_playing" => crate::media::now_playing(parse_now_playing(arg)?),
+        "media_clear" => crate::media::clear(),
+        _ => crate::media::controls(parse_media_controls(arg)?),
+    }
+}
+
+/// Los campos de `media.now_playing` tal como los serializa `std/media` (una línea por campo).
+fn parse_now_playing(arg: &str) -> Result<crate::media::NowPlaying, String> {
+    let mut it = arg.split('\n');
+    let title = it.next().unwrap_or("").to_string();
+    let artist = it.next().unwrap_or("").to_string();
+    let album = it.next().unwrap_or("").to_string();
+    let num = |s: Option<&str>, what: &str| -> Result<i64, String> {
+        s.unwrap_or("0").trim().parse::<i64>().map_err(|_| format!("media: {what} must be an integer number of milliseconds, not '{}'", s.unwrap_or("")))
+    };
+    let duration_ms = num(it.next(), "duration_ms")?;
+    let position_ms = num(it.next(), "position_ms")?;
+    let playing = it.next().unwrap_or("0").trim() == "1";
+    let artwork = match it.next().unwrap_or("") {
+        "" => Vec::new(),
+        b64 => crate::b64::decode(b64, false).map_err(|e| format!("media: artwork is not valid base64 ({e})"))?,
+    };
+    if title.trim().is_empty() {
+        return Err("media: now_playing needs a title".to_string());
+    }
+    Ok(crate::media::NowPlaying { title, artist, album, duration_ms, position_ms, playing, artwork })
+}
+
+/// Las órdenes de `media.controls`, validadas contra las que existen.
+fn parse_media_controls(arg: &str) -> Result<Vec<String>, String> {
+    let cmds: Vec<String> = arg.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
+    if let Some(bad) = cmds.iter().find(|c| !crate::media::COMMAND_NAMES.contains(&c.as_str())) {
+        return Err(format!("media: unknown command '{bad}' (play, pause, toggle, next, previous, stop, seek)"));
+    }
+    Ok(cmds)
+}
+
 /// M371: operaciones de APP (sin ventana): `notify` (`arg` = `título\ncuerpo\ntag\nsonido`),
 /// `badge` (`arg` = el texto del Dock / barra de tareas; vacío = quitar) y `request_attention`.
 /// Una notificación pulsada emite `("notification", 0, tag)`. Headless: traza `RAY_UI_TRACE`.
@@ -1976,6 +2026,15 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
                     eprintln!("[ui] notify {title:?} {body:?} tag={tag:?}");
                 }
                 "badge" => eprintln!("[ui] badge {arg:?}"),
+                "media_now_playing" => {
+                    let np = parse_now_playing(arg)?;
+                    eprintln!(
+                        "[ui] media now playing {:?} by {:?} on {:?} {}/{} ms playing={} artwork={} B",
+                        np.title, np.artist, np.album, np.position_ms, np.duration_ms, np.playing, np.artwork.len()
+                    );
+                }
+                "media_clear" => eprintln!("[ui] media clear"),
+                "media_controls" => eprintln!("[ui] media controls {arg:?}"),
                 _ => eprintln!("[ui] request attention"),
             }
         }
@@ -1984,7 +2043,28 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
             let tag = arg.split('\n').nth(2).unwrap_or("");
             push_event("notification", 0, tag);
         }
+        // M403: la validación de los argumentos corre también en headless (CI sin MediaPlayer).
+        if op == "media_now_playing" {
+            parse_now_playing(arg)?;
+        }
+        if op == "media_controls" {
+            let cmds = parse_media_controls(arg)?;
+            // Inyector: RAY_UI_MEDIA=play,seek:1500 → esas órdenes «llegan» al declarar los controles
+            // (solo las declaradas; las demás el sistema no las entregaría).
+            if let Ok(list) = std::env::var("RAY_UI_MEDIA") {
+                for tag in list.split(',').filter(|t| !t.is_empty()) {
+                    let name = tag.split(':').next().unwrap_or(tag);
+                    if cmds.iter().any(|c| c == name) {
+                        push_media_event(tag);
+                    }
+                }
+            }
+        }
         return Ok(());
+    }
+    // M403: Now Playing y controles del sistema — antes del shell móvil (en iOS SÍ existen).
+    if op.starts_with("media_") {
+        return media_op(op, arg);
     }
     #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
     if shell::active() {
@@ -2048,7 +2128,7 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     if op == "single_instance" {
         return single_instance(arg);
     }
-    if matches!(op, "notify" | "badge" | "request_attention") {
+    if matches!(op, "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls") {
         return app_op(op, arg);
     }
     if op == "intercept_quit" {
@@ -7744,6 +7824,32 @@ pub(crate) fn utf8_to_mutf8(s: &str) -> Vec<u8> {
 // M159: la política del cap se prueba sobre una VecDeque LOCAL (enforce_queue_cap es pura
 // sobre la cola que recibe): la cola real es global de proceso — un test que la tocara
 // obligaría a serializar todos los tests futuros del crate que la usen.
+#[cfg(test)]
+mod media_arg_tests {
+    use super::{parse_media_controls, parse_now_playing};
+
+    /// M403: los campos de `media.now_playing` viajan una línea por campo; la carátula en base64.
+    #[test]
+    fn now_playing_fields_parse_and_validate() {
+        let np = parse_now_playing("Blue in Green\nMiles Davis\nKind of Blue\n337000\n12000\n1\nAAEC").unwrap();
+        assert_eq!((np.title.as_str(), np.artist.as_str(), np.album.as_str()), ("Blue in Green", "Miles Davis", "Kind of Blue"));
+        assert_eq!((np.duration_ms, np.position_ms, np.playing), (337000, 12000, true));
+        assert_eq!(np.artwork, vec![0, 1, 2]);
+        let live = parse_now_playing("Radio\n\n\n0\n0\n0\n").unwrap();
+        assert!(live.artist.is_empty() && live.duration_ms == 0 && !live.playing && live.artwork.is_empty());
+        assert!(parse_now_playing("\nX\n\n0\n0\n1\n").unwrap_err().contains("needs a title"));
+        assert!(parse_now_playing("T\n\n\nabc\n0\n1\n").unwrap_err().contains("duration_ms"));
+        assert!(parse_now_playing("T\n\n\n0\n0\n1\n!!!").unwrap_err().contains("base64"));
+    }
+
+    #[test]
+    fn media_controls_accept_known_commands_only() {
+        assert_eq!(parse_media_controls("play, pause,seek").unwrap(), vec!["play", "pause", "seek"]);
+        assert!(parse_media_controls("").unwrap().is_empty());
+        assert!(parse_media_controls("play,dance").unwrap_err().contains("unknown command 'dance'"));
+    }
+}
+
 #[cfg(test)]
 mod queue_cap_tests {
     use super::{enforce_queue_cap, Event, UI_EVENT_QUEUE_CAP};

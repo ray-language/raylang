@@ -52,6 +52,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/kv", include_str!("../std/kv.ray")),
     // M145: salida de audio PCM (pipe + hilo alimentador; contrapresión por aparcado).
     ("std/audio", include_str!("../std/audio.ray")),
+    ("std/media", include_str!("../std/media.ray")),
     // M146: ventana + webview (IDEAS §80 F1; AppKit/WKWebView a mano, headless para tests).
     ("std/ui", include_str!("../std/ui.ray")),
     // M147: assets del proyecto ([native] embed): en vivo en VM/interp, horneados en nativo.

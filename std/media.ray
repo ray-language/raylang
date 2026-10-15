@@ -1,0 +1,74 @@
+//! System "Now Playing" and media controls (M403, rayplay #170): tell the OS what the program is
+//! playing — title, artist, album, duration, position, state and artwork — so it shows up in the
+//! Control Center, the lock screen and the Now Playing widget, and receive the system's media
+//! commands (headphone buttons, keyboard media keys, the watch, CarPlay) as `"media"` events on
+//! the `std/ui` event queue: `tag` is `"play"`, `"pause"`, `"toggle"`, `"next"`, `"previous"`,
+//! `"stop"` or `"seek:<ms>"`, `window` is 0. Backends: MediaPlayer (macOS and iOS; on iOS the app
+//! needs `[ios] background_audio = true` so its audio session is `playback`). Android
+//! (`MediaSession`) and Linux (MPRIS) are not available yet (`Err`). Headless: `Ok` + trace
+//! (`RAY_UI_TRACE=1`), and `RAY_UI_MEDIA=play,seek:1500` injects those commands when `controls`
+//! declares them (tests).
+
+/// What is playing. `duration_ms` 0 = unknown/live; `artwork` is PNG or JPEG bytes (empty = none).
+pub struct NowPlaying {
+    title: string,
+    artist: string,
+    album: string,
+    duration_ms: int,
+    position_ms: int,
+    playing: bool,
+    artwork: bytes,
+}
+
+/// A `NowPlaying` with just the names; set the rest with the fields.
+pub fn track(title: string, artist: string, album: string) -> NowPlaying {
+    NowPlaying {
+        title: title,
+        artist: artist,
+        album: album,
+        duration_ms: 0,
+        position_ms: 0,
+        playing: true,
+        artwork: b""
+    }
+}
+
+/// Publishes `info` as the system's Now Playing item (replaces the previous one). Call it again
+/// on every change the system should see: a new track, pause/resume (`playing`), a seek
+/// (`position_ms`); the system extrapolates the position while `playing` is true, so there is
+/// no need to call it every second. `Err` if the title is empty or the platform has no backend.
+pub fn now_playing(info: NowPlaying) -> Result<int, string> {
+    let r = __ui_window(
+        0,
+        "media_now_playing",
+        info.title.replace("\n", " ")
+            + "\n"
+            + info.artist.replace("\n", " ")
+            + "\n"
+            + info.album.replace("\n", " ")
+            + "\n"
+            + to_string(info.duration_ms)
+            + "\n"
+            + to_string(info.position_ms)
+            + "\n"
+            + if (info.playing) { "1" } else { "0" }
+            + "\n"
+            + if (info.artwork.len() == 0) { "" } else { __base64_encode(info.artwork, false) }
+    );
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Removes the program from Now Playing (stop, end of the playlist).
+pub fn clear() -> Result<int, string> {
+    let r = __ui_window(0, "media_clear", "");
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Declares which commands the program handles — any of `"play"`, `"pause"`, `"toggle"`,
+/// `"next"`, `"previous"`, `"stop"`, `"seek"` — and starts receiving them as `"media"` events;
+/// the others are shown disabled by the system. Call it once, before `now_playing`; an empty
+/// list stops receiving commands. `Err` on an unknown name.
+pub fn controls(commands: [string]) -> Result<int, string> {
+    let r = __ui_window(0, "media_controls", commands.join(","));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}

@@ -320,7 +320,7 @@ then `{% import site/model %}` for types of other modules (not `from … import`
 `{% if flag %}`/`{% for x in items %}`/`{{ x.name }}`/`{{& raw }}`; conditions must be `bool`
 (`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
 `ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
-std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/ui std/embed
+std/markdown std/inflate std/deflate std/zip std/update std/huffman std/image std/audio std/media std/ui std/embed
 std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
@@ -423,6 +423,13 @@ freeze in the background, so a sequencer belongs in the raylang program, not in 
 `audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio
 (macOS/iOS; `platform()` returns `"ios"`/`"android"` on the phone) — ALSA/AAudio/WASAPI drop
 without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`;
+a player also belongs in the system's Now Playing (lock screen, Control Center, headphone and
+keyboard buttons): `import std/media;` `media.controls(["play", "pause", "next", "seek"])` once,
+then `media.now_playing(t)` with `var t = media.track(title, artist, album); t.duration_ms = …;
+t.position_ms = …; t.playing = true; t.artwork = png_bytes;` on every change (new track, pause,
+seek — not every second), `media.clear()` at the end; the commands arrive as `"media"` events
+of `ui.next_event()` (`tag` "play"/"pause"/"toggle"/"next"/"previous"/"stop"/"seek:<ms>").
+macOS and iOS (iOS needs `[ios] background_audio = true`); Android/Linux return `Err` for now;
 `[app.plist]` values may be strings, booleans or string arrays; menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's

@@ -17896,3 +17896,33 @@ conexión por petición, cuando raygate usa un pool) y en el Mac, donde el repro
 La regresión solo se vio en Linux: el repro tiene que ser el de la app y correr donde corre la app.
 Queda el contenedor y los scripts (`linux_run.sh`, `linux_strace.sh`, `linux_threads.sh`,
 `linux_perf.sh`) para el próximo hallazgo de este tipo.
+
+## 375. M403 — `std/media`: «Now Playing» y controles del sistema (IDEAS §112, rayplay #170, oct 2026)
+
+**Qué.** Un programa que suena con `std/audio` no existía para el sistema: ni pantalla de bloqueo,
+ni Centro de control, y los botones de auriculares y teclado iban a la última app que sí lo hizo.
+`std/media` añade las dos piezas: `now_playing(NowPlaying)` (título, artista, álbum, duración,
+posición, `playing`, carátula) y `controls([...])`, que declara las órdenes que el programa atiende
+y las recibe como eventos `("media", 0, "play" | … | "seek:<ms>")` por la cola de `std/ui`;
+`clear()` retira el programa.
+
+**Decisiones.** (1) Sin opcode nuevo: las tres operaciones viajan por el despacho genérico
+`__ui_window(0, "media_*", arg)` de M371, con el argumento serializado una línea por campo y la
+carátula en base64; así los tres motores y el checker no cambian, y el runtime valida (título,
+enteros, base64, nombres de orden) en un sitio. (2) Un solo backend Rust para macOS e iOS
+(`crates/ray-runtime/src/media.rs`): `objc_msgSend` tipado por sitio sobre MediaPlayer —el patrón
+de `ui.rs`—, una clase ObjC creada en caliente (`RayMediaTarget`) con un método por orden para
+`addTarget:action:` (sin bloques por orden), y UN bloque global para `MPMediaItemArtwork
+initWithBoundsSize:requestHandler:` que devuelve la imagen retenida; todo despachado a la cola
+principal con `dispatch_async_f` (en macOS tras `ensure_app`, que es quien arranca el run loop de
+NSApp; en iOS lo drena UIKit). En macOS además `playbackState`, que allí fija el estado el
+programa. (3) El inyector headless `RAY_UI_MEDIA=play,seek:1500` entrega solo las órdenes
+DECLARADAS, como haría el sistema, para probar el bucle de eventos sin MediaPlayer (CI Linux).
+(4) Android (`MediaSession`) y Linux (MPRIS por D-Bus) devuelven `Err` claro: la segunda entrega;
+el shell de iOS enlaza `-framework MediaPlayer` siempre (coste nulo).
+
+**Medido.** En el Mac, `ray run` del programa de prueba con `RAY_UI_TRACE=1`: `media now playing
+published: 6 keys` (relectura de `nowPlayingInfo` tras publicar), sin ventana ni `.app`. Las
+órdenes reales (teclas multimedia, auriculares) no se pueden simular desde la terminal: lo
+comprueba rayplay en el iPhone. Pruebas: `media_now_playing_and_controls_trace_in_headless_and_commands_are_events`
+(tres motores) y las unitarias de los parsers.

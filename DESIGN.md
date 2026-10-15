@@ -17841,3 +17841,34 @@ nuevo y la subida detrás. La traza añade `flushes N`. ALSA y AAudio siguen des
 
 **Medido** (Mac, repro A/B de rayplay a 192 kHz y 44,1 kHz, VM y nativo): `flushes 5, fade-outs 1,
 gaps 0` en las tres; la batería de `audio_cli` sin cambios. La escucha la confirma rayplay.
+
+## 373. M401 — el aviso de `close` al reactor, dirigido al fd (raygate #175, oct 2026)
+
+**Qué pasaba.** F2 introdujo el `poke`: al cerrar un handle, el binario nativo toca la tubería del
+reactor para que re-arme sus intereses, porque el knote de kqueue (o el registro de epoll) de un fd
+cerrado muere en silencio y una fibra aparcada en ese fd —el `accept` sobre el listener que el
+apagado cierra— no despertaría nunca. M358 lo extendió al reactor por worker de la forma obvia:
+tocar la tubería de TODOS los workers, y que cada uno re-arme todos sus fds. Con un reactor único
+era un despertar y un re-armado por `close`; con N workers son N y N, y el re-armado es O(fibras
+aparcadas). Un proxy que abre una conexión al upstream por petición cierra un socket por petición:
+raygate #175 lo midió como 3× la CPU en la ruta con esperas largas, invisible en la ruta rápida.
+M399 hizo ese modo el default sin medir un `close` por petición (los bancos de M399 no cerraban).
+
+**Decisión.** El aviso lleva el fd y solo llega a quien espera en él. Una tabla global `fd →
+máscara de reactores` (`AtomicU64`, bit i = worker i; bit 0 = el hilo reactor en modo compartido;
+un bit «todos» para más de 63 workers y para fds fuera de la tabla de 64 Ki): el reactor dueño
+pone su bit al armar un fd y lo quita cuando su lista de esperas de ese fd queda vacía (al
+despertar por readiness, por plazo o por fallo de armado); como solo él toca su bit, basta
+`fetch_or`/`fetch_and`. `__ray_close` llama a `poke_fd(fd)` para `Tcp`/`Listener`/`Udp`; un archivo
+no se arma y no avisa; un handle con fd que no conocemos (proceso, watch) conserva el poke global.
+En el caso normal —cerrar un fd en el que nadie espera— no se despierta a nadie, en ninguno de los
+dos modos. La carrera «otra fibra arma el fd entre el `poke_fd` y el `close`» no existe para
+sockets: `__ray_close` hace `shutdown(Both)` antes, y una lectura posterior devuelve EOF sin aparcar.
+
+De paso, el worker local que decide no dormir porque ya ve trabajo vacía su tubería (`drain_wake`,
+re-armando si el byte era un POKE): el encolador que lo vio en `polling` había dejado un byte y el
+siguiente `kevent` bloqueante volvía vacío — el 70 % de los despertares en el repro.
+
+**Medido** (PERFORMANCE §20): el proxy mínimo con 32 conexiones pasa de 53 % a 32 % de CPU en modo
+local, por debajo del compartido (45 %). Guardas: la unitaria de la máscara y el caso
+`reactor_close_parked` de la prueba de ambos modos.

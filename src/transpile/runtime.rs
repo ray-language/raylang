@@ -653,7 +653,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // F2: evict del ctx de ESTA fibra (la dueña de la conexión) + poke al reactor — si otra
             // fibra estuviera aparcada en el fd (el caso real: el accept sobre el listener cerrado
             // en el apagado), el re-registro del siguiente ciclo lo devuelve como error/listo.
-            "__ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); }); ray_runtime::fibers::poke(); "
+            // M401 (raygate #175): poke DIRIGIDO al fd que se cierra — solo despierta a los reactores
+            // con fibras aparcadas en él (ninguno, en el caso normal). Un archivo no se arma en el
+            // poller: sin poke. Otro handle con fd (proceso, watch): poke global, como antes.
+            "__ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); }); match &__e { Some(__RayHandle::Tcp(s)) => ray_runtime::fibers::poke_fd(__ray_fd(&**s)), Some(__RayHandle::Listener(l)) => ray_runtime::fibers::poke_fd(__ray_fd(l)), Some(__RayHandle::Udp(u)) => ray_runtime::fibers::poke_fd(__ray_fd(u)), Some(__RayHandle::Reader(_)) | Some(__RayHandle::Writer(_)) | None => {}, _ => ray_runtime::fibers::poke() } "
         } else if t.needs_net {
             "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {

@@ -671,6 +671,49 @@ pub fn poke() {
     }
 }
 
+/// M401 (raygate #175): fds con fibras aparcadas → máscara de los reactores que las tienen (bit i =
+/// worker i en modo local; bit 0 = el hilo reactor en modo compartido; `FD_ALL` = «algún reactor
+/// sin bit propio», más de 63 workers). La pone y la quita SOLO el reactor dueño de la fibra (en su
+/// `ReactorState`), así que basta un `fetch_or`/`fetch_and`; `poke_fd` la lee. Tabla fija de 64 Ki
+/// entradas (512 KiB de páginas que solo se tocan si se usan); un fd mayor cae al poke global.
+const FD_TABLE: usize = 1 << 16;
+const FD_ALL: u64 = 1 << 63;
+static FD_WAITERS: OnceLock<Vec<std::sync::atomic::AtomicU64>> = OnceLock::new();
+fn fd_waiters() -> &'static [std::sync::atomic::AtomicU64] {
+    FD_WAITERS.get_or_init(|| (0..FD_TABLE).map(|_| std::sync::atomic::AtomicU64::new(0)).collect())
+}
+
+/// Bits que tiene puestos un fd (0 = ninguna fibra aparcada en él). Para tests y diagnóstico.
+pub fn fd_waiter_mask(fd: i32) -> u64 {
+    if fd < 0 || fd as usize >= FD_TABLE {
+        return FD_ALL;
+    }
+    fd_waiters()[fd as usize].load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// M401: el `poke` de un `close` DIRIGIDO. El knote/registro de un fd cerrado muere en silencio, así
+/// que quien cierra avisa a los reactores con fibras aparcadas en ESE fd para que lo re-armen y la
+/// fibra despierte al error real. Hasta M399 `poke()` despertaba a TODOS los workers en cada
+/// `close` y cada uno re-armaba todos sus fds: con una conexión al upstream por petición, un
+/// proxy pagaba N despertares + N re-armados por petición (raygate #175: 3× la CPU con 6 workers,
+/// PERFORMANCE.md §20). El caso normal —cerrar un fd en el que nadie espera— ahora no despierta a
+/// nadie. Un fd fuera de la tabla (o `-1`, handle sin fd conocido) conserva el poke global.
+pub fn poke_fd(fd: i32) {
+    let mask = fd_waiter_mask(fd);
+    if mask == 0 {
+        return;
+    }
+    let s = sched();
+    if mask & FD_ALL != 0 || !s.local_reactor {
+        return poke();
+    }
+    for (i, &wr) in s.worker_wake_wr.iter().enumerate() {
+        if i < 63 && mask & (1u64 << i) != 0 {
+            sys::wake(wr, 2);
+        }
+    }
+}
+
 /// Acceso al almacén FIBER-LOCAL de la fibra en ejecución: `None` si este hilo no está ejecutando
 /// una fibra ahora mismo (el llamador cae a su thread-local de siempre). El slot es un
 /// `Box<dyn Any>` que el binario transpilado puebla con su contexto (cancelación/scopes/try).
@@ -1058,13 +1101,35 @@ struct ReactorState {
     io_deadlines: std::collections::BinaryHeap<std::cmp::Reverse<IoDeadline>>,
     cancelled: std::collections::HashSet<u64>,
     next_id: u64,
+    /// M401: el bit de ESTE reactor en `FD_WAITERS` (ver `poke_fd`).
+    home_bit: u64,
+}
+
+/// M401: publica en `FD_WAITERS` si el reactor con bit `home_bit` tiene (o deja de tener) fibras
+/// aparcadas en `fd`. Solo ese reactor toca su bit.
+fn sync_fd_bit(home_bit: u64, fd: i32, w: &FdWaiters) {
+    if fd < 0 || fd as usize >= FD_TABLE {
+        return;
+    }
+    let cell = &fd_waiters()[fd as usize];
+    if w.read.is_empty() && w.write.is_empty() {
+        cell.fetch_and(!home_bit, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        cell.fetch_or(home_bit, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl ReactorState {
-    fn new(wake_rd: i32) -> ReactorState {
+    fn new(wake_rd: i32, home: Option<usize>) -> ReactorState {
+        let home_bit = match home {
+            Some(i) if i < 63 => 1u64 << i,
+            Some(_) => FD_ALL,
+            None => 1, // el hilo reactor único (modo compartido)
+        };
         ReactorState {
             poller: sys::Poller::new(wake_rd),
             wake_rd,
+            home_bit,
             fds: HashMap::new(),
             armed: 0,
             sleeps: Vec::new(),
@@ -1114,6 +1179,7 @@ impl ReactorState {
                         out.push(t);
                     }
                 }
+                sync_fd_bit(self.home_bit, fd, &self.fds[&fd]);
             }
             Op::Timer(at, t) => self.sleeps.push((at, t)),
             Op::WaitPoll(at, wl, id) => self.wait_polls.push((at, wl, id)),
@@ -1159,6 +1225,7 @@ impl ReactorState {
                     t.timed_out = true;
                     out.push(t);
                 }
+                sync_fd_bit(self.home_bit, dl.fd, &self.fds[&dl.fd]);
             }
         }
         if self.cancelled.len() > 8192 {
@@ -1180,12 +1247,36 @@ impl ReactorState {
         }
     }
 
+    /// M401: vacía la tubería de despertar sin esperar (y re-arma todo si traía un POKE). Lo usa el
+    /// worker local cuando NO va a dormir porque ya tiene trabajo visible: un encolador que vio
+    /// `polling` a true pudo dejar un byte que, de quedarse, haría volver vacío al siguiente
+    /// `kevent` bloqueante (una vuelta entera de más por despertar; medido en el 70 % de ellos).
+    fn drain_wake(&mut self) {
+        if sys::drain(self.wake_rd) {
+            self.rearm_all();
+        }
+    }
+
+    /// Re-arma el interés de todos los fds con fibras aparcadas (tras un POKE: el knote/registro
+    /// de un fd cerrado muere en silencio; re-armado, el fd muerto vuelve como error/listo).
+    fn rearm_all(&mut self) {
+        for (&fd, w) in self.fds.iter() {
+            if !w.read.is_empty() {
+                let _ = self.poller.arm(fd, Dir::Read);
+            }
+            if !w.write.is_empty() {
+                let _ = self.poller.arm(fd, Dir::Write);
+            }
+        }
+    }
+
     /// Espera readiness hasta `timeout_ms` y despierta por `out` a las fibras de los fds listos.
     /// Devuelve `true` si la tubería trajo un POKE (un `close`): ya re-armó todos los intereses
     /// vivos (el knote/registro de un fd cerrado muere en silencio; re-armado, el fd muerto
     /// vuelve como error/listo y su fibra despierta al error real).
     fn wait(&mut self, timeout_ms: i32, out: &mut Vec<Task>) -> bool {
         let mut rearm_all = false;
+        let home_bit = self.home_bit;
         for &(fd, dir) in self.poller.wait(timeout_ms) {
             if fd == self.wake_rd {
                 if sys::drain(self.wake_rd) {
@@ -1206,17 +1297,11 @@ impl ReactorState {
                     }
                     out.push(t);
                 }
+                sync_fd_bit(home_bit, fd, &self.fds[&fd]);
             }
         }
         if rearm_all {
-            for (&fd, w) in self.fds.iter() {
-                if !w.read.is_empty() {
-                    let _ = self.poller.arm(fd, Dir::Read);
-                }
-                if !w.write.is_empty() {
-                    let _ = self.poller.arm(fd, Dir::Write);
-                }
-            }
+            self.rearm_all();
         }
         rearm_all
     }
@@ -1226,7 +1311,7 @@ impl ReactorState {
 /// reactor y devuelve las fibras despertadas a la cola de su worker de origen, agrupadas por
 /// worker (una toma de lock por cola y por ciclo).
 fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
-    let mut rs = ReactorState::new(wake_rd);
+    let mut rs = ReactorState::new(wake_rd, None);
     // Buffers reutilizados (F5): el buzón se intercambia por swap (el buffer hace ping-pong y no
     // se libera nunca → sin churn cruzado de hilos).
     let mut ops: Vec<Op> = Vec::new();
@@ -1270,7 +1355,7 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
     WORKER.with(|w| w.set(me as isize));
     let wq = &s.queues[me];
     let spin_us: u64 = std::env::var("RAYLANG_SPIN_US").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_SPIN_US);
-    let mut rs = ReactorState::new(wake_rd);
+    let mut rs = ReactorState::new(wake_rd, Some(me));
     // Fibras despertadas por el reactor local, listas para correr (FIFO).
     let mut ready: VecDeque<Task> = VecDeque::new();
     let mut woken: Vec<Task> = Vec::new();
@@ -1345,6 +1430,8 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                         // solo adelanta el siguiente despertar: el poller lo drena.
                         if wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && woken.is_empty() {
                             rs.wait(rs.next_timeout_ms(now), &mut woken);
+                        } else {
+                            rs.drain_wake();
                         }
                         s.polling[me].store(false, std::sync::atomic::Ordering::SeqCst);
                         ready.extend(woken.drain(..));
@@ -2556,6 +2643,49 @@ mod tests {
         }
         // Fuera de fibra no hay slot: el llamador cae a su thread-local.
         assert!(with_local(|_| ()).is_none());
+    }
+
+    /// M401 (raygate #175): una fibra aparcada en un fd deja su worker anotado en `FD_WAITERS`
+    /// (así `close` solo despierta a quien espera en ESE fd) y la anotación se borra al despertar;
+    /// un fd en el que nadie espera tiene la máscara a cero (su `close` no despierta a nadie).
+    #[test]
+    fn a_parked_fiber_marks_its_fd_and_the_mark_clears_on_wake() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(addr).expect("connect");
+        let (server_side, _) = listener.accept().expect("accept");
+        server_side.set_nonblocking(true).expect("nonblocking");
+        let fd = server_side.as_raw_fd();
+        assert_eq!(fd_waiter_mask(fd), 0, "nadie espera todavía");
+        let got = Arc::new(Mutex::new(0u8));
+        let got2 = got.clone();
+        let reader = spawn(move || {
+            let mut s = server_side;
+            let mut b = [0u8; 1];
+            loop {
+                match s.read(&mut b) {
+                    Ok(_) => {
+                        *got2.lock().unwrap() = b[0];
+                        return;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => park_readable(s.as_raw_fd()),
+                    Err(e) => panic!("{e}"),
+                }
+            }
+        });
+        let t0 = Instant::now();
+        while fd_waiter_mask(fd) == 0 && t0.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mask = fd_waiter_mask(fd);
+        assert!(mask != 0 && mask.count_ones() == 1, "un reactor anotado: {mask:#x}");
+        client.write_all(&[7]).unwrap();
+        reader.join().expect("termina");
+        assert_eq!(*got.lock().unwrap(), 7);
+        assert_eq!(fd_waiter_mask(fd), 0, "al despertar, la anotación se borra");
+        assert_eq!(fd_waiter_mask(listener.as_raw_fd()), 0, "el listener nunca se armó");
+        assert_eq!(fd_waiter_mask(-1), FD_ALL, "sin fd conocido: poke global");
     }
 
     #[test]

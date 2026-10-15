@@ -1969,6 +1969,26 @@ fn media_op(op: &str, arg: &str) -> Result<(), String> {
     // macOS: MediaPlayer trabaja en la cola principal, que solo drena el run loop de NSApp.
     #[cfg(target_os = "macos")]
     ensure_app()?;
+    // Android (M404): lo hace el shell (MediaSession + notificación MediaStyle) vía RayBridge.onMedia;
+    // los argumentos se validan aquí antes de cruzar a Java.
+    #[cfg(target_os = "android")]
+    {
+        match op {
+            "media_now_playing" => {
+                parse_now_playing(arg)?;
+            }
+            "media_controls" => {
+                parse_media_controls(arg)?;
+            }
+            _ => {}
+        }
+        return if android::media(op, arg) {
+            Ok(())
+        } else {
+            Err("media: this Android shell predates std/media; regenerate it with `ray bundle --android`".to_string())
+        };
+    }
+    #[allow(unreachable_code)]
     match op {
         "media_now_playing" => crate::media::now_playing(parse_now_playing(arg)?),
         "media_clear" => crate::media::clear(),
@@ -7466,6 +7486,7 @@ mod android {
     static MID_OPEN: AtomicUsize = AtomicUsize::new(0);
     static MID_EVAL: AtomicUsize = AtomicUsize::new(0);
     static MID_PICK: AtomicUsize = AtomicUsize::new(0); // M382: 0 = shell anterior, sin selector
+    static MID_MEDIA: AtomicUsize = AtomicUsize::new(0); // M404: 0 = shell anterior, sin std/media
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -7504,6 +7525,13 @@ mod android {
                 clear(env);
             } else {
                 MID_PICK.store(pick as usize, Ordering::SeqCst);
+            }
+            // M404: `onMedia` existe desde 1.27.59 (std/media en Android); misma limpieza.
+            let media = get_static(env, bridge, c"onMedia".as_ptr(), c"(Ljava/lang/String;Ljava/lang/String;)V".as_ptr());
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_MEDIA.store(media as usize, Ordering::SeqCst);
             }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
@@ -7594,6 +7622,17 @@ mod android {
     extern "C" fn pick_handler(id: i64, kind: *const c_char, title: *const c_char, multiple: i32, exts: *const c_char) {
         let spec = format!("{id}\n{}\n{}\n{multiple}\n{}", cstr_owned(kind), cstr_owned(title), cstr_owned(exts));
         call_bridge(MID_PICK.load(Ordering::SeqCst), &[&spec]);
+    }
+
+    /// M404: `std/media` → `RayBridge.onMedia(op, arg)` (MediaSession + notificación MediaStyle en
+    /// el shell). `false` si el shell es anterior a std/media (sin `onMedia`).
+    pub(super) fn media(op: &str, arg: &str) -> bool {
+        let mid = MID_MEDIA.load(Ordering::SeqCst);
+        if mid == 0 {
+            return false;
+        }
+        call_bridge(mid, &[op, arg]);
+        true
     }
 
     fn cstr_owned(p: *const c_char) -> String {

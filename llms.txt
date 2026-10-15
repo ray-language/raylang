@@ -429,7 +429,8 @@ then `media.now_playing(t)` with `var t = media.track(title, artist, album); t.d
 t.position_ms = …; t.playing = true; t.artwork = png_bytes;` on every change (new track, pause,
 seek — not every second), `media.clear()` at the end; the commands arrive as `"media"` events
 of `ui.next_event()` (`tag` "play"/"pause"/"toggle"/"next"/"previous"/"stop"/"seek:<ms>").
-macOS and iOS (iOS needs `[ios] background_audio = true`); Android/Linux return `Err` for now;
+macOS, iOS (needs `[ios] background_audio = true`), Android (MediaSession, regenerate the shell with
+`ray bundle --android`) and Linux (MPRIS over D-Bus, needs GLib); Windows returns `Err` for now;
 `[app.plist]` values may be strings, booleans or string arrays; menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's

@@ -4232,7 +4232,7 @@ descarta el pipe y el anillo y corta con la rampa anti-clic ya existente: el sal
 **Impacto.** Superficie nueva de stdlib sin romper (`open` y `open_latency` siguen siendo s16le); toca
 los tres backends de `crates/ray-runtime/src/audio.rs` y el `ring`; medible con `RAY_AUDIO_TRACE`.
 
-## 112. «Now Playing» y controles del sistema para programas que suenan (`std/media`, rayplay #170, oct 2026) — ✅ EJECUTADA (macOS e iOS) como M403 (DESIGN §375); Android (`MediaSession`) y Linux (MPRIS) pendientes
+## 112. «Now Playing» y controles del sistema para programas que suenan (`std/media`, rayplay #170, oct 2026) — ✅ EJECUTADA: macOS e iOS en M403 (DESIGN §375), Android y Linux en M404 (DESIGN §376)
 
 **Qué.** Un programa con `std/audio` en iOS/Android no aparece en la pantalla de bloqueo ni en el
 Centro de control, y los botones de reproducir/pausa/siguiente (y los auriculares) van a la última

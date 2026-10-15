@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.59 — 2026-10-15
+
+- **`std/media` en Android y Linux (M404, IDEAS §112, rayplay #170, segunda entrega)**: en Android
+  el shell de `ray bundle --android` publica una `MediaSession` con metadatos, estado y acciones, y
+  una notificación `MediaStyle` ligada a ella (lo que pinta los controles en la pantalla de bloqueo y
+  en los ajustes rápidos desde Android 13); las órdenes vuelven como eventos `"media"`. Regenera el
+  shell: uno anterior devuelve `Err`. En Linux, MPRIS por D-Bus (`org.mpris.MediaPlayer2.<programa>.
+  instance<pid>`) con GIO cargado en caliente y un hilo propio, sin GTK ni ventana: `playerctl`, los
+  applets del escritorio y las teclas multimedia ven el programa (metadatos, posición extrapolada,
+  carátula por `file://`) y le mandan `Play/Pause/PlayPause/Next/Previous/Stop/Seek/SetPosition`.
+  Windows sigue en `Err`.
+
 ## 1.27.58 — 2026-10-15
 
 - **`std/media`: «Now Playing» y controles multimedia del sistema (M403, IDEAS §112, rayplay #170)**:

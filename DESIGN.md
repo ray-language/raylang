@@ -17926,3 +17926,33 @@ published: 6 keys` (relectura de `nowPlayingInfo` tras publicar), sin ventana ni
 órdenes reales (teclas multimedia, auriculares) no se pueden simular desde la terminal: lo
 comprueba rayplay en el iPhone. Pruebas: `media_now_playing_and_controls_trace_in_headless_and_commands_are_events`
 (tres motores) y las unitarias de los parsers.
+
+## 376. M404 — `std/media` en Android (MediaSession) y Linux (MPRIS) (IDEAS §112, rayplay #170, oct 2026)
+
+**Android.** El runtime ya tenía un camino Rust → Java para pedir cosas al shell (`call_bridge`,
+M382: `RayBridge.onPick`); `std/media` lo reutiliza con `RayBridge.onMedia(op, arg)` —methodID
+cacheado en `init` con la misma limpieza de `NoSuchMethodError` para shells anteriores, que así
+devuelven un `Err` que dice «regenera el shell»— y los argumentos se validan en Rust antes de
+cruzar. El shell (`RayMedia.java`, sin AndroidX) mantiene una `MediaSession` del framework con
+`MediaMetadata` (título, artista, álbum, duración, carátula) y `PlaybackState` (estado, posición,
+acciones declaradas), y publica una notificación `MediaStyle` ligada a la sesión: desde Android 13
+los controles de la pantalla de bloqueo y de los ajustes rápidos solo salen de ahí, y las
+notificaciones de una sesión activa están exentas del permiso `POST_NOTIFICATIONS`. El botón de
+auriculares llega como `onPlay`/`onPause` según el estado: un programa que solo declaró `toggle` lo
+recibe como `toggle`. Sin dispositivo a mano, la verificación es de tipos: el shell generado compila
+con `javac` contra `android.jar` (API 35) y `androidx.webkit`.
+
+**Linux.** MPRIS es D-Bus, y el proyecto no quiere una dependencia de D-Bus: GIO va por `dlopen`
+(`libgio-2.0.so.0`, el patrón de GTK en `ui.rs`), con un hilo propio y su `GMainContext` para que
+un reproductor de terminal sin ventana también aparezca (no hace falta GTK ni `DISPLAY`). Se usan
+solo constructores NO variádicos de GVariant (`g_variant_new_dict_entry`/`_array`/`_tuple`/
+`_variant`…), porque llamar a una función variádica por un puntero de tipo fijo no es ABI estable.
+El objeto `/org/mpris/MediaPlayer2` expone las dos interfaces con introspección XML; las
+propiedades se sirven desde el estado bajo `Mutex` (la posición se extrapola si `playing`), cada
+`now_playing`/`controls`/`clear` emite `PropertiesChanged` en el hilo del bus vía
+`g_main_context_invoke_full`, y los métodos (`Play`, `Pause`, `PlayPause`, `Next`, `Previous`,
+`Stop`, `Seek`, `SetPosition`) se traducen a los eventos `"media"` respetando lo declarado
+(`Play` sin `play` declarado pero con `toggle` → `toggle`). La carátula va como `file://` en
+`$XDG_RUNTIME_DIR`. Nombre del bus: `org.mpris.MediaPlayer2.<programa>.instance<pid>` (varios
+reproductores a la vez). Verificado en un contenedor Debian con `dbus-daemon --session` y
+`playerctl` (metadatos, estado, posición, y los seis comandos como eventos).

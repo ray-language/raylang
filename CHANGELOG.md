@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.56 — 2026-10-14
+
+- **Nativo: `close` ya no despierta a todos los workers (M401, raygate #175 ⚠️ regresión de
+  1.27.54)**: cerrar un socket avisaba al reactor para que re-armara sus intereses (el registro de un
+  fd cerrado muere en silencio y una fibra aparcada en él no despertaría), y con el reactor por
+  worker ese aviso iba a TODOS los workers, cada uno re-armando todos sus fds. Un proxy con una
+  conexión al upstream por petición pagaba N despertares y N re-armados por petición: raygate medía
+  3× la CPU de 1.27.19 en la ruta con upstream lento. Ahora cada fd lleva anotado qué reactores
+  tienen fibras aparcadas en él y `close` solo avisa a esos (a nadie, en el caso normal); y un
+  worker que no va a dormir vacía su tubería de despertar para no volver a despertarse en vano. El
+  repro mínimo (proxy `net/webserver` + `http.fetch` a un upstream de 10 ms, 32 conexiones) pasa de
+  53 % a 32 % de CPU en modo local, por debajo del modo compartido (45 %).
+
 ## 1.27.55 — 2026-10-14
 
 - **`audio.flush` corta con el fundido anti-clic de verdad (M400, rayplay #171/#173)**: `flush`

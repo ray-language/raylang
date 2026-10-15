@@ -759,7 +759,42 @@ fn main() -> int {
 }
 "#;
 
-/// M358/M399: el binario nativo sirve, apaga por canal y mantiene los plazos de `select_timeout`
+/// M401 (raygate #175): una fibra aparcada leyendo un socket cuyo handle CIERRA otra fibra (en otro
+/// worker) despierta con un error en seguida — el `close` avisa al reactor que tiene fibras en ese
+/// fd (antes avisaba a todos los workers en cada `close`, con lo que costaba). Y cerrar sockets en
+/// los que nadie espera (lo normal: 200 conexiones de ida y vuelta) no rompe nada.
+const CLOSE_UNDER_PARKED_READER_PROG: &str = r#"import std/net;
+import std/time;
+fn main() -> int {
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(srv);
+    let client = net.tcp_connect("127.0.0.1", port).unwrap();
+    let conn = net.tcp_accept(srv).unwrap();
+    let done: Channel<string> = Channel.bounded(1);
+    spawn(fn() {
+        let t0 = time.monotonic();
+        let r = net.socket_read(conn);
+        send(done, "reader woke err=" + to_string(r.is_err()) + " fast=" + to_string(time.monotonic() - t0 < 2000));
+    });
+    time.sleep(50);
+    close(conn);
+    print(recv(done).unwrap_or("no reader"));
+    close(client);
+    var ok = 0;
+    for i in 0..200 {
+        let c = net.tcp_connect("127.0.0.1", port).unwrap();
+        let s = net.tcp_accept(srv).unwrap();
+        net.socket_write(c, "x").unwrap();
+        if (net.socket_read(s).unwrap_or("") == "x") { ok = ok + 1; }
+        close(s);
+        close(c);
+    }
+    print("round trips ${ok}");
+    0
+}
+"#;
+
+/// M358/M399/M401: el binario nativo sirve, apaga por canal y mantiene los plazos de `select_timeout`
 /// con el reactor POR WORKER (el default en unix desde M399) y con el hilo reactor único
 /// (`RAYLANG_REACTOR=shared`, la retirada), con 1 y 2 workers. Mismos programas que las pruebas de
 /// `serve_options_on` y de `select_timeout`, más la hija de `spawn_local` y el programa mixto de
@@ -771,7 +806,8 @@ fn both_reactor_modes_serve_keep_deadlines_and_schedule_siblings() {
         return;
     }
     let ray = env!("CARGO_BIN_EXE_ray");
-    let cases: [(&str, &str, &str); 4] = [
+    let cases: [(&str, &str, &str); 5] = [
+        ("reactor_close_parked", CLOSE_UNDER_PARKED_READER_PROG, "reader woke err=true fast=true\nround trips 200\n"),
         ("reactor_serve", SERVE_OPTIONS_ON_PROG, "200\nserve returned 0 quick=true\ntrue\n"),
         ("reactor_select", SELECT_TIMEOUTS_PROG, "[woke after 0, woke after 2, woke after 30, woke after 9]\n9\n"),
         ("reactor_sibling", LOCAL_SIBLING_PROG, "child ran early=true\n"),

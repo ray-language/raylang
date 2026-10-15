@@ -2496,3 +2496,44 @@ servidor con 11 workers y un cliente baja de 406 % a 131 %. Guardas: la prueba
 la hija de `spawn_local`, red + actores + plazos en el mismo programa; en ambos modos con 1 y 2
 workers y en el default), las unitarias de `fibers` y estos dos bancos. Banco de #163 reproducible
 con el programa del hallazgo (`ray-apps/findings/open/raykv-1.27.49.md`).
+
+## 20. M401 (oct 2026): el `poke` de `close` a todos los workers — raygate #175
+
+**Síntoma.** raygate, migrado a 1.27.55, medía en su ruta `cart` (JWT + upstream de 3–25 ms) un
+126–146 % de CPU frente a 27–47 % con 1.27.19, sin despachar más; `browse` (upstream de ~1 ms) no
+cambiaba; `RAYLANG_REACTOR=shared` lo quitaba del todo. Es decir: el reactor por worker de M399.
+
+**Repro mínimo** (`~/.claude/jobs/62a6eff2/tmp/f175/`): un upstream `net/webserver` que duerme 10 ms
+por petición y delante un proxy `net/webserver` + `http.fetch` (una conexión al upstream por
+petición, como raygate con net 0.4); `oha -z 8s -c N` keep-alive contra el proxy; CPU del proxy a
+mitad de carga (`ps`). Nativo `--release`, M3 Pro, 11 workers. Mediana de 3:
+
+| conexiones | 1.27.55 local | **M401 local** | M401 `shared` |
+|---:|---:|---:|---:|
+| 8 (~660 req/s) | 27 % | **20 %** | 22 % |
+| 32 (~2300 req/s) | 53 % | **32 %** | 45 % |
+
+**Dónde se iba.** Contadores en el bucle del worker local: cada worker hacía ~1300 `kevent`/s y el
+60 % volvían SOLO con el byte de la tubería; incluso los workers sin ninguna fibra despertaban
+~800 veces por segundo — la tasa de `close` del proxy. `__ray_close` llama a `fibers::poke()` para
+que el reactor re-arme sus intereses (el knote de un fd cerrado muere en silencio y una fibra
+aparcada en él no despertaría nunca); en modo local, `poke()` escribía en la tubería de TODOS los
+workers y cada uno re-armaba TODOS sus fds (`rearm_all`, O(fds armados)). Con una conexión por
+petición: N despertares de hilo + N re-armados por petición, y el re-armado crece con las fibras
+aparcadas — por eso `cart` (muchas esperas largas) y no `browse`. Comprobado apagando el poke:
+64 % → 30 % con 32 conexiones.
+
+**Arreglo.** Una tabla global `fd → máscara de reactores con fibras aparcadas` (64 Ki entradas de
+`AtomicU64`; el bit lo pone y quita solo el reactor dueño al armar y al vaciar la lista del fd) y
+`poke_fd(fd)` desde `__ray_close`, que avisa solo a esos reactores — a ninguno en el caso normal
+(cerrar un fd en el que nadie espera). Handles sin fd conocido conservan el poke global; los
+archivos no se arman y no avisan. Segundo coste, menor: un worker que no iba a dormir porque ya
+tenía trabajo visible dejaba en su tubería el byte de un encolador que lo vio en `polling`, y el
+siguiente `kevent` bloqueante volvía vacío (el 70 % de los despertares): ahora drena la tubería al
+saltarse la espera (`drain_wake`).
+
+**Guardas.** `a_parked_fiber_marks_its_fd_and_the_mark_clears_on_wake` (la máscara sube al aparcar y
+baja al despertar; un fd sin esperas vale 0) y el caso `reactor_close_parked` de
+`both_reactor_modes_serve_keep_deadlines_and_schedule_siblings` (otra fibra cierra el socket en el
+que una lectora aparca: despierta con error en seguida, en ambos modos y con 1 y 2 workers), más
+200 conexiones de ida y vuelta cerradas sin que nadie espere.

@@ -769,6 +769,14 @@ mod coreaudio {
         /// M378: transiciones dato → silencio (huecos). Un flujo limpio tiene exactamente uno:
         /// la cola final. Cada hueco a mitad de flujo es un underrun audible.
         gaps: std::sync::atomic::AtomicUsize,
+        /// M400 (rayplay #171/#173): cortes de `flush` (la traza los cuenta aparte de `fade_outs`,
+        /// que solo cuenta las colas fundidas por el callback al quedarse sin datos).
+        flushes: std::sync::atomic::AtomicUsize,
+        /// M400: octetos de cola YA FUNDIDA que el callback debe dejar pasar antes de aplicar la
+        /// rampa de entrada de `after_gap`. Tras un `flush` el anillo guarda la cola atenuada y,
+        /// detrás, lo nuevo que el programa escriba: la rampa de entrada va sobre lo nuevo, no
+        /// sobre la cola (que ya es ~silencio). Lo pone `flush_ring` y lo consume el callback.
+        fade_in_skip: std::sync::atomic::AtomicUsize,
         /// M332: fotogramas de la rampa anti-clic (10 ms). Un corte a mitad de onda — `close`,
         /// cambio de pista, o el anillo vaciándose porque iOS congeló el proceso al bloquear la
         /// pantalla — suena como un clic; atenuado a cero en unos milisegundos es un silencio
@@ -804,6 +812,55 @@ mod coreaudio {
         ramp(out, super::Format::S16, frame_bytes, from, frames, fade_in)
     }
 
+    /// M400: un anillo de pruebas (s16le estéreo, rampa de `ramp_frames`) sin AudioQueue, y las dos
+    /// operaciones que lo tocan, para probar `flush` sobre las MUESTRAS.
+    #[cfg(test)]
+    pub(super) struct TestRing(Arc<Shared>);
+    #[cfg(test)]
+    impl TestRing {
+        pub(super) fn new(ramp_frames: usize, cap_frames: usize) -> TestRing {
+            TestRing(Arc::new(Shared {
+                ring: Mutex::new(VecDeque::new()),
+                space: Condvar::new(),
+                cap: cap_frames * 4,
+                frame_bytes: 4,
+                fmt: super::Format::S16,
+                keepalive_bytes: 64,
+                after_gap: std::sync::atomic::AtomicBool::new(false),
+                silence_bytes: std::sync::atomic::AtomicUsize::new(0),
+                fade_outs: std::sync::atomic::AtomicUsize::new(0),
+                gaps: std::sync::atomic::AtomicUsize::new(0),
+                flushes: std::sync::atomic::AtomicUsize::new(0),
+                fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
+                ramp_frames,
+            }))
+        }
+        /// Encola `frames` fotogramas estéreo con el valor `v` en ambos canales.
+        pub(super) fn push(&self, frames: usize, v: i16) {
+            let mut ring = self.0.ring.lock().unwrap();
+            for _ in 0..frames {
+                ring.extend(v.to_le_bytes());
+                ring.extend(v.to_le_bytes());
+            }
+        }
+        pub(super) fn flush(&self) {
+            flush_ring(&self.0)
+        }
+        /// Una vuelta del callback con un búfer de `cap_frames`: los fotogramas (canal izquierdo).
+        pub(super) fn fill(&self, cap_frames: usize) -> Vec<i16> {
+            let mut out = vec![0u8; cap_frames * 4];
+            let n = fill(&self.0, &mut out);
+            (0..n / 4).map(|i| i16::from_le_bytes([out[i * 4], out[i * 4 + 1]])).collect()
+        }
+        pub(super) fn queued_frames(&self) -> usize {
+            self.0.ring.lock().unwrap().len() / 4
+        }
+        pub(super) fn counters(&self) -> (usize, usize) {
+            use std::sync::atomic::Ordering::Relaxed;
+            (self.0.flushes.load(Relaxed), self.0.fade_outs.load(Relaxed))
+        }
+    }
+
     pub struct CoreAudioSink {
         q: AudioQueueRef,
         shared: Arc<Shared>,
@@ -821,56 +878,104 @@ mod coreaudio {
         unsafe {
             let cap = (*buf).audio_data_bytes_capacity as usize;
             let out = std::slice::from_raw_parts_mut((*buf).audio_data, cap);
-            let mut ring = shared.ring.lock().unwrap();
-            // byte_size = EXACTAMENTE lo tomado, alineado a frame — jamás rellenar un buffer
-            // parcial con silencio: todo octeto encolado se inserta en la línea de tiempo y un
-            // relleno es LATENCIA PERMANENTE (hallazgo de rallyx: 150 ms de cebado + 50 ms por
-            // underrun con el diseño anterior).
-            let fb = shared.frame_bytes;
-            let avail = (ring.len() / fb) * fb;
-            let hold = shared.ramp_frames * fb;
-            // M332: si esta vuelta vaciaría el anillo, retén la cola de la rampa (salvo que ya
-            // sea solo la cola: entonces es el fin o un hueco real, y sale fundida).
-            let (take, fading_out) = if avail > cap {
-                (cap / fb * fb, false)
-            } else if avail > hold {
-                (avail - hold, false)
-            } else {
-                (avail, avail > 0)
-            };
-            if take > 0 {
-                for slot in out.iter_mut().take(take) {
-                    *slot = ring.pop_front().unwrap_or(0);
-                }
-                drop(ring);
-                let frames = take / fb;
-                if shared.after_gap.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    ramp(out, shared.fmt, fb, 0, shared.ramp_frames.min(frames), true);
-                }
-                if fading_out {
-                    shared.fade_outs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let n = shared.ramp_frames.min(frames);
-                    ramp(out, shared.fmt, fb, frames - n, n, false);
-                    shared.after_gap.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-                (*buf).audio_data_byte_size = take as u32;
-            } else {
-                drop(ring);
-                // Anillo seco: el MÍNIMO de silencio que mantiene viva la cola (~8 ms) — un
-                // buffer sin encolar sale de la rotación y la cola muere.
-                let silence = shared.keepalive_bytes.min(cap).max(fb);
-                shared.silence_bytes.fetch_add(silence, std::sync::atomic::Ordering::Relaxed);
-                for slot in out.iter_mut().take(silence) {
-                    *slot = 0;
-                }
-                if !shared.after_gap.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    shared.gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                (*buf).audio_data_byte_size = silence as u32;
-            }
-            shared.space.notify_all();
+            (*buf).audio_data_byte_size = fill(shared, out) as u32;
             AudioQueueEnqueueBuffer(q, buf, 0, std::ptr::null());
         }
+    }
+
+    /// El cuerpo del callback, sin AudioQueue (así se prueba sobre muestras): saca del anillo a
+    /// `out` y devuelve los octetos escritos. byte_size = EXACTAMENTE lo tomado, alineado a
+    /// frame — jamás rellenar un buffer parcial con silencio: todo octeto encolado se inserta en
+    /// la línea de tiempo y un relleno es LATENCIA PERMANENTE (hallazgo de rallyx: 150 ms de
+    /// cebado + 50 ms por underrun con el diseño anterior).
+    fn fill(shared: &Shared, out: &mut [u8]) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        let cap = out.len();
+        let mut ring = shared.ring.lock().unwrap();
+        let fb = shared.frame_bytes;
+        let avail = (ring.len() / fb) * fb;
+        let hold = shared.ramp_frames * fb;
+        // M332: si esta vuelta vaciaría el anillo, retén la cola de la rampa (salvo que ya
+        // sea solo la cola: entonces es el fin o un hueco real, y sale fundida).
+        let (take, fading_out) = if avail > cap {
+            (cap / fb * fb, false)
+        } else if avail > hold {
+            (avail - hold, false)
+        } else {
+            (avail, avail > 0)
+        };
+        if take > 0 {
+            for slot in out.iter_mut().take(take) {
+                *slot = ring.pop_front().unwrap_or(0);
+            }
+            drop(ring);
+            let frames = take / fb;
+            if shared.after_gap.swap(false, Relaxed) {
+                // M400: tras un `flush`, los primeros `skip` octetos son la cola ya fundida; la
+                // rampa de entrada empieza donde empieza lo nuevo. Si esta vuelta no pasa de la
+                // cola, la entrada queda pendiente para la siguiente.
+                let skip = shared.fade_in_skip.swap(0, Relaxed);
+                if skip >= take {
+                    shared.after_gap.store(true, Relaxed);
+                    shared.fade_in_skip.store(skip - take, Relaxed);
+                } else {
+                    let from = skip / fb;
+                    ramp(out, shared.fmt, fb, from, shared.ramp_frames.min(frames - from), true);
+                }
+            }
+            if fading_out {
+                shared.fade_outs.fetch_add(1, Relaxed);
+                let n = shared.ramp_frames.min(frames);
+                ramp(out, shared.fmt, fb, frames - n, n, false);
+                shared.after_gap.store(true, Relaxed);
+                shared.fade_in_skip.store(0, Relaxed);
+            }
+            shared.space.notify_all();
+            take
+        } else {
+            drop(ring);
+            // Anillo seco: el MÍNIMO de silencio que mantiene viva la cola (~8 ms) — un
+            // buffer sin encolar sale de la rotación y la cola muere.
+            let silence = shared.keepalive_bytes.min(cap).max(fb);
+            shared.silence_bytes.fetch_add(silence, Relaxed);
+            for slot in out.iter_mut().take(silence) {
+                *slot = 0;
+            }
+            if !shared.after_gap.swap(true, Relaxed) {
+                shared.gaps.fetch_add(1, Relaxed);
+            }
+            shared.fade_in_skip.store(0, Relaxed);
+            shared.space.notify_all();
+            silence
+        }
+    }
+
+    /// M400 (rayplay #171/#173): el corte de `flush`. Descarta el anillo salvo la cola de la rampa
+    /// y la FUNDE AQUÍ, en el anillo, antes de que el callback la toque; lo siguiente que llegue
+    /// arranca con rampa de entrada justo detrás (`after_gap` + `fade_in_skip`). M398 solo
+    /// truncaba y confiaba en que el callback viera «solo queda la cola» y la fundiera: pero el
+    /// programa escribe lo nuevo nada más volver `flush`, el callback encontraba cola + datos y
+    /// cortaba en seco — un clic a cualquier frecuencia (a 88,2 kHz y más lo salvaba el azar del
+    /// reparto de tiempos, y dejó de salvarlo con el scheduler de 1.27.54).
+    fn flush_ring(shared: &Shared) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut ring = shared.ring.lock().unwrap();
+        let fb = shared.frame_bytes;
+        let hold = shared.ramp_frames * fb;
+        if ring.len() > hold {
+            ring.truncate(hold);
+        }
+        let kept = ring.len() / fb * fb;
+        ring.truncate(kept);
+        if kept > 0 {
+            let tail = ring.make_contiguous();
+            ramp(tail, shared.fmt, fb, 0, kept / fb, false);
+        }
+        shared.fade_in_skip.store(kept, Relaxed);
+        shared.after_gap.store(true, Relaxed);
+        shared.flushes.fetch_add(1, Relaxed);
+        drop(ring);
+        shared.space.notify_all();
     }
 
     pub fn open(
@@ -946,6 +1051,8 @@ mod coreaudio {
             silence_bytes: std::sync::atomic::AtomicUsize::new(0),
             fade_outs: std::sync::atomic::AtomicUsize::new(0),
             gaps: std::sync::atomic::AtomicUsize::new(0),
+            flushes: std::sync::atomic::AtomicUsize::new(0),
+            fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
             ramp_frames: (rate as usize * ramp_ms / 1000).max(16),
         });
         let user = Arc::into_raw(shared.clone()) as *mut std::ffi::c_void;
@@ -1008,18 +1115,11 @@ mod coreaudio {
             }
         }
 
-        /// M398 (rayplay #166): descarta el anillo salvo la cola de la rampa — el callback la ve
-        /// como «solo queda la cola» y la entrega FUNDIDA (sin clic); lo siguiente que llegue
-        /// arranca con rampa de entrada (`after_gap`). Los búferes ya en la cola de AudioQueue
-        /// (3 × ~lat/12) terminan de sonar.
+        /// M398 (rayplay #166) / M400 (#171, #173): descarta el anillo salvo la cola de la rampa,
+        /// que sale fundida (ver `flush_ring`); lo siguiente que llegue arranca con rampa de
+        /// entrada. Los búferes ya en la cola de AudioQueue (3 × ~lat/12) terminan de sonar.
         fn flush(&mut self) {
-            let mut ring = self.shared.ring.lock().unwrap();
-            let hold = self.shared.ramp_frames * self.shared.frame_bytes;
-            if ring.len() > hold {
-                ring.truncate(hold);
-            }
-            drop(ring);
-            self.shared.space.notify_all();
+            flush_ring(&self.shared);
         }
 
         fn finish(&mut self) {
@@ -1033,10 +1133,11 @@ mod coreaudio {
             live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
             if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                 eprintln!(
-                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, gaps {} (1 = only the tail)",
+                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, gaps {} (1 = only the tail)",
                     self.shared.cap,
                     self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
+                    self.shared.flushes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.gaps.load(std::sync::atomic::Ordering::Relaxed)
                 );
             }
@@ -1052,6 +1153,64 @@ mod coreaudio {
 // ── Linux: ALSA por dlopen (sin headers de build; sin libasound → Err claro) ────
 #[cfg(all(test, any(target_os = "macos", target_os = "ios")))]
 mod coreaudio_tests {
+    use super::coreaudio::TestRing;
+
+    /// M400 (rayplay #171/#173): `flush` deja en el anillo SOLO la cola de la rampa, ya fundida a
+    /// cero, y lo que el programa escriba después entra con rampa de subida detrás de esa cola —
+    /// aunque llegue antes de que el callback dé la vuelta (el caso real: `flush` y la escritura
+    /// de la nueva posición van seguidas). Antes el callback encontraba cola + datos nuevos, no
+    /// fundía nada y el corte se oía como un clic.
+    #[test]
+    fn flush_fades_the_tail_in_the_ring_and_the_next_data_fades_in_after_it() {
+        let ring = TestRing::new(16, 512);
+        ring.push(400, 1000); // un «tono» constante: 400 fotogramas a 1000
+        ring.flush();
+        assert_eq!(ring.queued_frames(), 16, "solo queda la cola de la rampa");
+        assert_eq!(ring.counters(), (1, 0), "un flush, ningún fundido del callback");
+        // Lo nuevo llega ANTES de la siguiente vuelta del callback.
+        ring.push(100, 1000);
+        let out = ring.fill(512); // avail 116 > hold 16 → entrega 100 (retiene la cola de 16)
+        assert_eq!(out.len(), 100);
+        let tail = &out[..16];
+        assert!(tail[0] < 1000 && tail[0] > tail[8] && tail[8] > tail[15], "cola decreciente: {tail:?}");
+        assert!(tail[15].abs() <= 1000 / 16, "la cola termina ~en silencio: {}", tail[15]);
+        let head = &out[16..32];
+        assert_eq!(head[0], 0, "la entrada arranca desde cero justo detrás de la cola");
+        assert!(head[1] > 0 && head[1] < head[8] && head[8] < head[15], "entrada creciente: {head:?}");
+        assert_eq!(out[32], 1000, "tras la rampa de entrada, la señal íntegra");
+        assert_eq!(ring.counters(), (1, 0));
+    }
+
+    /// M400: si el callback da una vuelta corta que no pasa de la cola fundida, la rampa de
+    /// entrada queda pendiente y se aplica a lo nuevo en la vuelta siguiente; y un `flush` con el
+    /// anillo casi vacío no inventa nada: funde lo que haya y lo siguiente entra en rampa.
+    #[test]
+    fn the_pending_fade_in_survives_a_short_callback_round_and_an_empty_flush() {
+        let ring = TestRing::new(16, 512);
+        ring.push(400, 1000);
+        ring.flush();
+        ring.push(200, 1000);
+        let first = ring.fill(8); // solo 8 fotogramas: todos de la cola fundida
+        assert_eq!(first.len(), 8);
+        assert!(first.iter().all(|&v| v < 1000), "todo cola: {first:?}");
+        let second = ring.fill(512); // 8 de cola + 184 nuevos (retiene 16)
+        assert_eq!(second.len(), 192);
+        assert_eq!(second[8], 0, "la entrada empieza donde empieza lo nuevo");
+        assert!(second[9] > 0 && second[9] < second[20], "y sube: {:?}", &second[8..24]);
+        assert_eq!(second[40], 1000);
+        // Flush con menos de una rampa en el anillo (4 fotogramas).
+        let small = TestRing::new(16, 512);
+        small.push(4, 1000);
+        small.flush();
+        assert_eq!(small.queued_frames(), 4);
+        small.push(50, 1000);
+        let out = small.fill(512);
+        assert_eq!(out.len(), 38); // 54 − 16 retenidos
+        assert!(out[3] < 500, "los 4 de cola, fundidos: {:?}", &out[..4]);
+        assert_eq!(out[4], 0, "entrada detrás de la cola corta");
+        assert_eq!(out[30], 1000);
+        assert_eq!(small.counters().0, 1);
+    }
     /// M332: la rampa atenúa a cero (salida) o desde cero (entrada) sin mover un octeto, por
     /// fotograma y para todos los canales.
     #[test]

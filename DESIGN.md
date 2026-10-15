@@ -17810,3 +17810,34 @@ de 406 % a 131 %; los bancos de actores quedan a la par del modo compartido (`rt
 (ambos modos, 1 y 2 workers y el default; servir y apagar, `select_timeout`, la hija de
 `spawn_local`, red + actores + plazos juntos) y las unitarias de `fibers`, que antes fallaban en
 modo local (`a_busy_fiber_yields_to_its_worker_siblings_at_coop_points`).
+
+## 372. M400 — el corte de `flush` funde la cola en el anillo (rayplay #171/#173, oct 2026)
+
+**Síntoma.** rayplay oía un chasquido en cada seek hecho con `audio.flush` a 44,1 y 48 kHz
+(1.27.53) y, con 1.27.54, a cualquier frecuencia; la traza no sumaba fundidos por `flush`. Su A/B
+lo aislaba: el mismo salto con un fundido de 10 ms escrito por el programa sonaba limpio.
+
+**Causa.** M398 implementó `flush` en CoreAudio como «truncar el anillo a la cola de la rampa» y
+delegó el fundido en el callback, que funde la cola solo cuando ve que es lo ÚNICO que queda (la
+regla de M332 para fin de flujo o hueco). Pero un reproductor escribe la nueva posición en cuanto
+`flush` devuelve, y el alimentador la mete en el anillo antes de la siguiente vuelta del callback:
+este encontraba cola + datos nuevos, no fundía nada, y la onda saltaba de un punto cualquiera a
+otro. Que a 88,2 kHz y más «funcionara» en 1.27.53 era el reparto de tiempos: con anillos grandes
+el callback a veces daba la vuelta antes de que llegara lo nuevo. M399 aceleró el camino de
+escritura del programa (reactor local) y ese azar desapareció — por eso rayplay lo vio como una
+regresión de 1.27.54. El contador `fade-outs` tampoco medía esto: cuenta las colas fundidas por el
+callback, no los cortes de `flush`.
+
+**Decisión.** El corte es responsabilidad de `flush`, no del callback: `flush_ring` trunca a la
+cola de la rampa, la funde a cero EN EL ANILLO (bajo el mismo lock que el callback, así que no hay
+carrera) y deja anotado cuántos octetos de cola fundida hay (`fade_in_skip`) para que la rampa de
+entrada de `after_gap` se aplique a lo nuevo, justo detrás, y no a la cola. Si una vuelta del
+callback no pasa de la cola, la entrada queda pendiente para la siguiente. El cuerpo del callback
+pasa a una función pura sobre el slice (`fill`), que es lo que permite probarlo con muestras: dos
+tests construyen un anillo sin AudioQueue, encolan un tono, hacen `flush`, encolan datos nuevos
+ANTES de la vuelta del callback y comprueban la cola decreciente, el cero exacto donde empieza lo
+nuevo y la subida detrás. La traza añade `flushes N`. ALSA y AAudio siguen descartando sin rampa
+(sus `drop`/`requestFlush`), como documenta `std/audio`.
+
+**Medido** (Mac, repro A/B de rayplay a 192 kHz y 44,1 kHz, VM y nativo): `flushes 5, fade-outs 1,
+gaps 0` en las tres; la batería de `audio_cli` sin cambios. La escucha la confirma rayplay.

@@ -29,8 +29,8 @@ pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
 /// ~50 ms in total (a 20 ms socket, three 5 ms device buffers and a ring that keeps the
 /// anti-click ramp plus three buffers); from 50 ms up the queue follows the hint. iOS floor:
 /// ~240 ms (the system freezes the app for ~200 ms on lock/unlock). `RAY_AUDIO_TRACE=1` prints
-/// the ring size, the keepalive silence inserted, fade-outs and gaps when the output closes
-/// (a clean stream has 1 fade-out and 0 gaps). Smaller =
+/// the ring size, the keepalive silence inserted, fade-outs, flushes and gaps when the output
+/// closes (a clean stream has 1 fade-out, 0 gaps, and one flush per `flush` call). Smaller =
 /// more reactive but more underrun-prone; 0 (or plain `open`) = the 200 ms default. On
 /// Android, a hint of 50 ms or less requests the LOW_LATENCY performance mode.
 pub fn open_latency(sample_rate: int, channels: int, latency_ms: int) -> Result<int, string> {
@@ -72,9 +72,11 @@ pub fn open_format(
 /// Discards what was written but has not sounded yet — the queue between the program and the
 /// device and the backend's ring — WITHOUT closing the output: the next `write` sounds as soon as
 /// it arrives. This is what a seek or a pause wants (with `close` + reopen the old position kept
-/// playing over the new one for up to the latency hint). The cut ends with the anti-click fade;
-/// what already sits in the device buffers (a few ms) finishes playing. Returns when the output
-/// has been emptied (at most ~one feeder chunk).
+/// playing over the new one for up to the latency hint). The cut ends with the anti-click fade
+/// applied to the ring itself at any sample rate, and the next data fades in right behind it
+/// (CoreAudio; the other backends drop their buffers without a ramp); what already sits in the
+/// device buffers (a few ms) finishes playing. Returns when the output has been emptied (at most
+/// ~one feeder chunk). Check it with `RAY_AUDIO_TRACE=1`: `flushes N`.
 pub fn flush(h: int) -> Result<int, string> {
     let r = __audio_flush(h);
     if (r[0] == "ok") {

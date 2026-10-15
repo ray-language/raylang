@@ -1403,9 +1403,11 @@ match (ui.next_event()) {
 ```
 
 El sistema extrapola la posición mientras `playing` es `true`: no hace falta publicar cada
-segundo, solo cuando algo cambia. Hoy funciona en macOS e iOS (en iOS con
-`[ios] background_audio = true`, que activa la sesión `playback`); en Android y Linux las
-llamadas devuelven `Err` hasta que lleguen `MediaSession` y MPRIS.
+segundo, solo cuando algo cambia. Funciona en macOS e iOS (en iOS con
+`[ios] background_audio = true`, que activa la sesión `playback`), en Android (una `MediaSession`
+y la notificación de reproducción del shell de `ray bundle --android`; regenera el shell si es de
+antes de 1.27.59) y en Linux (MPRIS por D-Bus: `playerctl`, los applets del escritorio y las
+teclas multimedia; hace falta GLib y un bus de sesión). En Windows las llamadas devuelven `Err`.
 
 ### Sonido (`std/audio`)
 

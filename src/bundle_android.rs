@@ -432,6 +432,173 @@ public class RayPlaybackService extends Service {
 }
 "#;
 
+/// M404 (rayplay #170): `std/media` en Android — un `MediaSession` del framework (API 21, sin
+/// AndroidX) con metadatos, estado y acciones, y una notificación `MediaStyle` ligada a la sesión:
+/// es lo que pinta los controles en la pantalla de bloqueo y en los ajustes rápidos (desde
+/// Android 13 solo aparecen por una notificación MediaStyle; las notificaciones de una sesión
+/// activa están exentas del permiso POST_NOTIFICATIONS). Las órdenes vuelven como eventos
+/// `("media", 0, tag)` por `RayBridge.pushEvent`; `KEYCODE_MEDIA_PLAY_PAUSE` llega como
+/// onPlay/onPause según el estado, así que un programa que solo declara "toggle" lo recibe así.
+/// Todo en el main thread (lo postea `RayBridge.onMedia`).
+const RAY_MEDIA_JAVA: &str = r#"package org.raylang.shell;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.media.MediaMetadata;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
+import android.os.Build;
+import android.util.Base64;
+
+final class RayMedia {
+    static final String CHANNEL = "ray_media";
+    static final int NOTIFICATION_ID = 2;
+
+    private static MediaSession session;
+    private static long actions = 0;
+    private static boolean wantsPlay, wantsPause, wantsToggle;
+    private static String title = "", artist = "", album = "";
+    private static long durationMs = 0, positionMs = 0;
+    private static boolean playing = false;
+    private static Bitmap art;
+
+    static void apply(String op, String arg) {
+        MainActivity a = MainActivity.rayCurrent;
+        if (a == null) {
+            return;
+        }
+        Context c = a.getApplicationContext();
+        switch (op) {
+            case "media_controls": controls(c, arg); break;
+            case "media_now_playing": nowPlaying(c, arg); break;
+            case "media_clear": clear(c); break;
+            default: break;
+        }
+    }
+
+    private static MediaSession session(Context c) {
+        if (session == null) {
+            session = new MediaSession(c, "ray");
+            session.setCallback(new MediaSession.Callback() {
+                @Override public void onPlay() { RayBridge.pushEvent("media", 0, wantsPlay ? "play" : "toggle"); }
+                @Override public void onPause() { RayBridge.pushEvent("media", 0, wantsPause ? "pause" : "toggle"); }
+                @Override public void onSkipToNext() { RayBridge.pushEvent("media", 0, "next"); }
+                @Override public void onSkipToPrevious() { RayBridge.pushEvent("media", 0, "previous"); }
+                @Override public void onStop() { RayBridge.pushEvent("media", 0, "stop"); }
+                @Override public void onSeekTo(long pos) { RayBridge.pushEvent("media", 0, "seek:" + pos); }
+            });
+            session.setActive(true);
+        }
+        return session;
+    }
+
+    private static void controls(Context c, String list) {
+        long a = 0;
+        wantsPlay = wantsPause = wantsToggle = false;
+        for (String cmd : list.split(",")) {
+            switch (cmd.trim()) {
+                case "play": a |= PlaybackState.ACTION_PLAY; wantsPlay = true; break;
+                case "pause": a |= PlaybackState.ACTION_PAUSE; wantsPause = true; break;
+                case "toggle": a |= PlaybackState.ACTION_PLAY_PAUSE; wantsToggle = true; break;
+                case "next": a |= PlaybackState.ACTION_SKIP_TO_NEXT; break;
+                case "previous": a |= PlaybackState.ACTION_SKIP_TO_PREVIOUS; break;
+                case "stop": a |= PlaybackState.ACTION_STOP; break;
+                case "seek": a |= PlaybackState.ACTION_SEEK_TO; break;
+                default: break;
+            }
+        }
+        if (wantsToggle) { a |= PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE; }
+        actions = a;
+        updateState(c);
+    }
+
+    private static void nowPlaying(Context c, String arg) {
+        String[] f = arg.split("\n", -1);
+        title = f.length > 0 ? f[0] : "";
+        artist = f.length > 1 ? f[1] : "";
+        album = f.length > 2 ? f[2] : "";
+        durationMs = f.length > 3 ? parseLong(f[3]) : 0;
+        positionMs = f.length > 4 ? parseLong(f[4]) : 0;
+        playing = f.length > 5 && "1".equals(f[5].trim());
+        art = null;
+        if (f.length > 6 && !f[6].isEmpty()) {
+            try {
+                byte[] png = Base64.decode(f[6], Base64.DEFAULT);
+                art = BitmapFactory.decodeByteArray(png, 0, png.length);
+            } catch (IllegalArgumentException e) {
+                art = null;
+            }
+        }
+        MediaMetadata.Builder m = new MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, album);
+        if (durationMs > 0) { m.putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs); }
+        if (art != null) { m.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art); }
+        session(c).setMetadata(m.build());
+        updateState(c);
+        notifyNowPlaying(c);
+    }
+
+    private static void updateState(Context c) {
+        if (session == null && title.isEmpty()) {
+            return; // controls antes de now_playing: la sesión nace con los metadatos
+        }
+        PlaybackState st = new PlaybackState.Builder()
+            .setActions(actions)
+            .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, positionMs, playing ? 1f : 0f)
+            .build();
+        session(c).setPlaybackState(st);
+    }
+
+    private static void notifyNowPlaying(Context c) {
+        NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) {
+            return;
+        }
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Now Playing", NotificationManager.IMPORTANCE_LOW));
+            b = new Notification.Builder(c, CHANNEL);
+        } else {
+            b = new Notification.Builder(c);
+        }
+        Intent open = new Intent(c, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        b.setContentTitle(title)
+            .setContentText(artist.isEmpty() ? album : (album.isEmpty() ? artist : artist + " — " + album))
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(PendingIntent.getActivity(c, 0, open, PendingIntent.FLAG_IMMUTABLE))
+            .setOngoing(playing)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setStyle(new Notification.MediaStyle().setMediaSession(session(c).getSessionToken()));
+        if (art != null) { b.setLargeIcon(art); }
+        nm.notify(NOTIFICATION_ID, b.build());
+    }
+
+    private static void clear(Context c) {
+        NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) { nm.cancel(NOTIFICATION_ID); }
+        if (session != null) {
+            session.setActive(false);
+            session.release();
+            session = null;
+        }
+        title = ""; art = null; playing = false;
+    }
+
+    private static long parseLong(String s) {
+        try { return Long.parseLong(s.trim()); } catch (NumberFormatException e) { return 0; }
+    }
+}
+"#;
+
 /// El puente al `.so`: los natives resuelven contra los símbolos JNI emitidos DENTRO del
 /// cdylib; onOpen/onEval llegan DESDE el hilo del programa raylang → Handler al main thread.
 const RAY_BRIDGE_JAVA: &str = r#"package org.raylang.shell;
@@ -500,6 +667,11 @@ public final class RayBridge {
                 webView.evaluateJavascript(js, null);
             }
         });
+    }
+
+    // M404: `std/media` — Now Playing y controles del sistema (MediaSession), en el main thread.
+    public static void onMedia(String op, String arg) {
+        MAIN.post(() -> RayMedia.apply(op, arg));
     }
 
     // M382: `ui.pick_file*` — el programa pide el selector; la Activity lo presenta.
@@ -838,6 +1010,7 @@ pub fn write_project(
     write("app/src/main/java/org/raylang/shell/RayPlaybackService.java", RAY_PLAYBACK_SERVICE_JAVA)?;
     write("app/src/main/java/org/raylang/shell/RayBridge.java", &RAY_BRIDGE_JAVA.replace("/*RAY_DEV_NATIVE*/", &dev_native))?;
     write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayMedia.java", RAY_MEDIA_JAVA)?;
     write("README.md", README)?;
     Ok(())
 }
@@ -919,6 +1092,22 @@ mod tests {
             assert!(MAIN_ACTIVITY_JAVA.contains(&format!("WindowInsets.Type.{kind}")), "{kind}");
         }
         assert!(MAIN_ACTIVITY_JAVA.contains("Build.VERSION.SDK_INT >= 30"), "la API de insets es de la 30");
+    }
+
+    /// M404 (rayplay #170): el shell trae `RayMedia.java` (MediaSession + notificación MediaStyle)
+    /// y `RayBridge.onMedia`, el camino por el que `std/media` entra al shell.
+    #[test]
+    fn the_shell_ships_the_media_session_bridge() {
+        assert!(RAY_BRIDGE_JAVA.contains("public static void onMedia(String op, String arg)"));
+        assert!(RAY_BRIDGE_JAVA.contains("RayMedia.apply(op, arg)"));
+        assert!(RAY_MEDIA_JAVA.contains("new MediaSession(c, \"ray\")"));
+        assert!(RAY_MEDIA_JAVA.contains("Notification.MediaStyle().setMediaSession"));
+        for tag in ["\"play\"", "\"pause\"", "\"next\"", "\"previous\"", "\"stop\"", "\"seek:\" + pos"] {
+            assert!(RAY_MEDIA_JAVA.contains(&format!("RayBridge.pushEvent(\"media\", 0, {tag})")) || RAY_MEDIA_JAVA.contains(tag), "{tag}");
+        }
+        for op in ["media_controls", "media_now_playing", "media_clear"] {
+            assert!(RAY_MEDIA_JAVA.contains(&format!("case \"{op}\"")), "{op}");
+        }
     }
 
     /// M324 (ray808 #18): `[android] background_audio` declara el servicio de reproducción con sus

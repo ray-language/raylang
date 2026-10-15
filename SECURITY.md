@@ -369,7 +369,11 @@ documentada:
   (MediaPlayer.framework, enlazado; mismo patrón que `ui.rs`), una clase ObjC creada en caliente con un
   método por orden (`class_addMethod`, firma `q@:@`), un bloque global (`_NSConcreteGlobalBlock`) que
   devuelve la carátula retenida, y `dispatch_async_f` a la cola principal. Solo toca estado propio
-  (`Mutex`) y encola eventos por `ui::push_event`; sin I/O.
+  (`Mutex`) y encola eventos por `ui::push_event`; sin I/O. **Linux** (M404, `mod linux`): MPRIS por
+  D-Bus con GIO cargado por `dlopen` (`libgio-2.0.so.0`, patrón GTK de `ui.rs`; sin la lib → `Err`), un
+  hilo propio con su `GMainContext`, y solo constructores NO variádicos de GVariant; la carátula se
+  escribe en `$XDG_RUNTIME_DIR/raylang-media-<pid>.{png,jpg}` (la única escritura). En **Android** no
+  hay `unsafe` nuevo: `std/media` cruza a Java por el `call_bridge` de M382 (`RayBridge.onMedia`).
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
   pipe + `read`/`close`/`fcntl` variádico del hilo alimentador (M332: y `pthread_set_qos_class_self_np` sobre
   el propio hilo en Apple; M398: `poll(2)` de 20 ms sobre el propio fd para atender `flush`) e `ioctl(FIONREAD)` del drain; en

@@ -1236,14 +1236,39 @@ impl ReactorState {
     }
 
     /// Milisegundos hasta el plazo más próximo (`-1` = sin plazos: espera infinita).
-    fn next_timeout_ms(&self, now: Instant) -> i32 {
+    ///
+    /// M402 (raygate #175): REDONDEA HACIA ARRIBA. Truncar daba `0` con un plazo a menos de 1 ms, y
+    /// `0` es «no esperes»: el worker sondeaba el poller, volvía, recalculaba `0` y así hasta que el
+    /// plazo vencía — hasta 1 ms de CPU al 100 % por plazo. Con plazos de lectura por petición
+    /// (`http` arma uno de 5 s en cada lectura) a miles por segundo, SIEMPRE hay uno a menos de
+    /// 1 ms: el worker ocioso no dormía nunca (43 % de CPU frente a 15 % en un proxy con upstream
+    /// lento, PERFORMANCE §21). Y los plazos CANCELADOS (el readiness ganó) se saltan: no deben
+    /// acortar la espera de nadie.
+    fn next_timeout_ms(&mut self, now: Instant) -> i32 {
         use std::cmp::Reverse;
+        self.drop_cancelled_deadlines();
         let next_sleep = self.sleeps.iter().map(|(at, _)| *at).min();
         let next_io = self.io_deadlines.peek().map(|Reverse(dl)| dl.at);
         let next_poll = self.wait_polls.iter().map(|(at, _, _)| *at).min();
         match [next_sleep, next_io, next_poll].into_iter().flatten().min() {
             None => -1,
-            Some(at) => at.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32,
+            Some(at) => {
+                let ns = at.saturating_duration_since(now).as_nanos();
+                ns.div_ceil(1_000_000).min(i32::MAX as u128) as i32
+            }
+        }
+    }
+
+    /// M402: saca del heap los plazos de E/S cancelados que estén en la cima (borrado perezoso:
+    /// `cancelled` los marca cuando el readiness gana; aquí se retiran en cuanto son el próximo).
+    fn drop_cancelled_deadlines(&mut self) {
+        use std::cmp::Reverse;
+        while let Some(Reverse(dl)) = self.io_deadlines.peek() {
+            if self.cancelled.remove(&dl.id) {
+                self.io_deadlines.pop();
+            } else {
+                break;
+            }
         }
     }
 
@@ -1429,7 +1454,8 @@ fn worker_loop_local(s: &'static Scheduler, me: usize, wake_rd: i32) {
                         // encolador haya dejado en la tubería mientras `polling` estaba a true
                         // solo adelanta el siguiente despertar: el poller lo drena.
                         if wq.pending.load(std::sync::atomic::Ordering::SeqCst) == 0 && woken.is_empty() {
-                            rs.wait(rs.next_timeout_ms(now), &mut woken);
+                            let timeout_ms = rs.next_timeout_ms(now);
+                            rs.wait(timeout_ms, &mut woken);
                         } else {
                             rs.drain_wake();
                         }
@@ -2643,6 +2669,31 @@ mod tests {
         }
         // Fuera de fibra no hay slot: el llamador cae a su thread-local.
         assert!(with_local(|_| ()).is_none());
+    }
+
+    /// M402 (raygate #175): el timeout del poller nunca es `0` por un plazo a menos de 1 ms (se
+    /// redondea hacia arriba: `0` significa «no esperes» y hacía girar al worker hasta el plazo), y
+    /// un plazo de E/S CANCELADO —el readiness ganó— no acorta la espera: se retira del heap.
+    #[test]
+    fn the_poller_timeout_rounds_up_and_ignores_cancelled_deadlines() {
+        use std::cmp::Reverse;
+        let (rd, _wr) = sys::wake_pipe();
+        let mut rs = ReactorState::new(rd, Some(0));
+        let now = Instant::now();
+        assert_eq!(rs.next_timeout_ms(now), -1, "sin plazos: espera infinita");
+        // Un plazo vivo a 5 s, y otro ya cancelado (el readiness ganó) a 300 µs en la cima del heap.
+        rs.io_deadlines.push(Reverse(IoDeadline { at: now + Duration::from_secs(5), fd: 3, dir_write: false, id: 8 }));
+        rs.io_deadlines.push(Reverse(IoDeadline { at: now + Duration::from_micros(300), fd: 4, dir_write: false, id: 7 }));
+        rs.cancelled.insert(7);
+        assert_eq!(rs.next_timeout_ms(now), 5_000, "el cancelado no acorta la espera");
+        assert_eq!(rs.io_deadlines.len(), 1, "y se retira del heap");
+        assert!(rs.cancelled.is_empty());
+        // A 300 µs del plazo vivo: 1 ms, nunca 0 (0 = «no esperes» = girar hasta el plazo).
+        assert_eq!(rs.next_timeout_ms(now + Duration::from_millis(4_999) + Duration::from_micros(700)), 1);
+        assert_eq!(rs.next_timeout_ms(now + Duration::from_millis(4_999)), 1);
+        assert_eq!(rs.next_timeout_ms(now + Duration::from_millis(4_998)), 2);
+        // Vencido: 0 está bien (expire lo va a atender).
+        assert_eq!(rs.next_timeout_ms(now + Duration::from_secs(6)), 0);
     }
 
     /// M401 (raygate #175): una fibra aparcada en un fd deja su worker anotado en `FD_WAITERS`

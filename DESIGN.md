@@ -17872,3 +17872,27 @@ siguiente `kevent` bloqueante volvía vacío — el 70 % de los despertares en e
 **Medido** (PERFORMANCE §20): el proxy mínimo con 32 conexiones pasa de 53 % a 32 % de CPU en modo
 local, por debajo del compartido (45 %). Guardas: la unitaria de la máscara y el caso
 `reactor_close_parked` de la prueba de ambos modos.
+
+## 374. M402 — el timeout del poller nunca es cero por un plazo cercano (raygate #175, oct 2026)
+
+**Qué pasaba.** `ReactorState::next_timeout_ms` convertía «tiempo hasta el próximo plazo» a
+milisegundos truncando: un plazo a 300 µs daba `0`, y `0` para `kevent`/`epoll_wait` significa «no
+esperes». El worker ocioso sondeaba, volvía sin nada, recalculaba `0` y repetía hasta que el plazo
+vencía: hasta 1 ms de CPU al 100 % por plazo. Además los plazos de E/S cancelados —el readiness ganó
+la carrera, F2 los marca en `cancelled` y los borra perezosamente al vencer— seguían en la cima del
+heap y fijaban ese timeout. Con `http` armando un plazo de 5 s por lectura, un proxy a miles de
+peticiones por segundo tiene siempre un plazo a menos de 1 ms: el worker no dormía nunca (raygate
+#175, PERFORMANCE §21). Es un defecto de F2 (jul 2026) que el reactor por worker de M399 hizo
+visible: antes lo pagaba un solo hilo reactor; ahora cada worker.
+
+**Decisión.** Redondear hacia arriba (`div_ceil`), de modo que `0` solo salga con un plazo ya
+vencido (y entonces `expire` lo atiende en esa misma vuelta), y retirar del heap los plazos
+cancelados que estén en la cima antes de calcular el próximo. Nada cambia en la semántica de los
+plazos: un `select_timeout(…, 5)` sigue despertando a los 5 ms (la precisión del poller ya era de
+1 ms); lo que cambia es que un worker sin trabajo duerme de verdad.
+
+**Lección de método.** M401 arregló un coste real medido con un repro que NO era el de raygate (una
+conexión por petición, cuando raygate usa un pool) y en el Mac, donde el repro con pool no reproduce.
+La regresión solo se vio en Linux: el repro tiene que ser el de la app y correr donde corre la app.
+Queda el contenedor y los scripts (`linux_run.sh`, `linux_strace.sh`, `linux_threads.sh`,
+`linux_perf.sh`) para el próximo hallazgo de este tipo.

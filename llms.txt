@@ -223,6 +223,16 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 //   plain spawn in the VM). worker_id() -> int (0..worker_count()), worker_count() -> int: the
 //   building blocks of per-worker state — one actor per worker, each handler asks inboxes[worker_id()]
 //   (3–13× the queries/s of a single central actor; state is sharded, so approximate counters only)
+// Request/reply to an actor: the message carries its reply channel, messages carry data (never fns):
+//   enum Msg { Ask(int, Channel<int>), Stop }
+//   fn actor(inbox: Channel<Msg>) { while (true) { match (recv(inbox)) {
+//       Option.Some(m) => match (m) { Msg.Ask(x, reply) => send(reply, x * 2), Msg.Stop => break },
+//       Option.None => break } } }
+//   let reply: Channel<int> = Channel.bounded(1); send(inbox, Msg.Ask(21, reply)); recv(reply)
+//   Round trip, native: ~0.4 µs same worker (spawn_local), ~1.2–1.6 µs across workers (spawn).
+// RAYLANG_THREADS: one worker per core by default. A network server with few connections per worker
+//   does MORE with fewer workers (50 conns: 2 workers 279k req/s @145 % CPU, 11 workers 205k @344 %):
+//   start at 2–4 and raise it only when the workers' CPU saturates.
 if let Option.Some(v) = recv(ch) { print(v); }   // recv -> Option<T> (None = closed)
 
 let r = scope(fn() -> int {                      // structured: scope joins its tasks
@@ -410,6 +420,9 @@ only loads `http://127.0.0.1:<port>` from the embedded server — use `web.liste
 `[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes) and/or
 `[android] background_audio = true` (foreground service) in ray.toml — the webview's JS timers
 freeze in the background, so a sequencer belongs in the raylang program, not in the page;
+`audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio
+(macOS/iOS; `platform()` returns `"ios"`/`"android"` on the phone) — ALSA/AAudio/WASAPI drop
+without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`;
 `[app.plist]` values may be strings, booleans or string arrays; menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's

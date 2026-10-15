@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.58 — 2026-10-15
+
+- **`std/media`: «Now Playing» y controles multimedia del sistema (M403, IDEAS §112, rayplay #170)**:
+  `media.now_playing(NowPlaying)` publica título, artista, álbum, duración, posición, estado y
+  carátula en la pantalla de bloqueo, el Centro de control y el widget de Now Playing;
+  `media.controls([...])` declara qué órdenes atiende el programa y desde entonces los botones de
+  los auriculares, las teclas multimedia, el reloj o CarPlay llegan como eventos `"media"` de
+  `std/ui` (`play`, `pause`, `toggle`, `next`, `previous`, `stop`, `seek:<ms>`); `media.clear()`
+  retira el programa. Backend MediaPlayer en macOS e iOS (el shell de `ray bundle --ios` enlaza el
+  framework; hace falta `[ios] background_audio = true`); Android y Linux devuelven `Err` hasta
+  `MediaSession` y MPRIS. Headless: traza y el inyector `RAY_UI_MEDIA` para pruebas.
+
 ## 1.27.57 — 2026-10-15
 
 - **Nativo: el worker ocioso ya no gira cuando un plazo está a menos de 1 ms (M402, raygate #175

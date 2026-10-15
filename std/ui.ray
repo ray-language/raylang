@@ -28,7 +28,9 @@ from std/json import Json;
 /// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
 /// still gets its launch arguments in `args()`) or "notification" (M371: the user
 /// clicked a notification shown with `notify`/`notify_with`; `tag` is the notification's tag,
-/// `window` is 0). In the iOS/Android shells of
+/// `window` is 0) or "media" (M403: a system media command for a program that declared them
+/// with `media.controls` — `tag` is "play", "pause", "toggle", "next", "previous", "stop" or
+/// "seek:<ms>"; `window` is 0). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.

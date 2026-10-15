@@ -1375,6 +1375,38 @@ capabilities ya lo detecta). Para lo que la superficie no cubre (animación, z-i
 `kitty_chunks(control, payload)` es el ladrillo puro: monta cualquier comando del protocolo
 con el troceo reglamentario. Demo: `ray run examples/term/sprite.ray`.
 
+### «Now Playing» y controles del sistema (`std/media`)
+
+Un reproductor no solo suena: aparece en la pantalla de bloqueo y el Centro de control, y
+obedece a los botones de los auriculares y del teclado. Dos llamadas y un evento:
+
+```rust
+import std/ui;
+import std/media;
+
+media.controls(["play", "pause", "next", "previous", "seek"])?;   // una vez, antes de sonar
+var t = media.track("Blue in Green", "Miles Davis", "Kind of Blue");
+t.duration_ms = 337000;
+t.artwork = cover_png;                 // PNG/JPEG; vacío = sin carátula
+media.now_playing(t)?;                 // y otra vez en cada cambio: pausa, salto, pista nueva
+// En el bucle de eventos de std/ui:
+match (ui.next_event()) {
+    Result.Ok(e) => if (e.kind == "media") {
+        match (e.tag) {              // "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek:<ms>"
+            "toggle" => toggle_pause(),
+            "next" => next_track(),
+            _ => if (e.tag.starts_with("seek:")) { seek_to(e.tag.substring(5, e.tag.len())) },
+        }
+    },
+    Result.Err(_) => {},
+}
+```
+
+El sistema extrapola la posición mientras `playing` es `true`: no hace falta publicar cada
+segundo, solo cuando algo cambia. Hoy funciona en macOS e iOS (en iOS con
+`[ios] background_audio = true`, que activa la sesión `playback`); en Android y Linux las
+llamadas devuelven `Err` hasta que lleguen `MediaSession` y MPRIS.
+
 ### Sonido (`std/audio`)
 
 Salida PCM al dispositivo, con la **contrapresión como pacing**: `write` aparca la fibra cuando

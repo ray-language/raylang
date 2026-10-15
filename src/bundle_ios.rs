@@ -460,6 +460,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
         sign.push_str("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n");
     }
     // M324 (ray808 #18): std/audio en iOS es AudioQueue (AudioToolbox); la sesión de fondo, AVFoundation.
+    // M403 (rayplay #170): std/media es MPNowPlayingInfoCenter/MPRemoteCommandCenter (MediaPlayer), siempre.
     let avf = if opts.background_audio { " -framework AVFoundation" } else { "" };
     format!(
         "// Generado por `ray bundle --ios` — ajusta aquí, no en el pbxproj.\n\
@@ -479,7 +480,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox{avf} -lobjc\n\
+         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework MediaPlayer{avf} -lobjc\n\
          {sign}"
     )
 }

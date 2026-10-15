@@ -1868,6 +1868,48 @@ fn single_instance_forwards_a_later_launchs_arguments_as_open_events() {
     }
 }
 
+/// M403 (rayplay #170): `std/media` en headless — `controls`/`now_playing`/`clear` dan `Ok` + traza,
+/// los argumentos se validan igual que con el backend real (orden desconocida, título vacío) y
+/// RAY_UI_MEDIA inyecta las órdenes DECLARADAS como eventos `"media"` (las no declaradas no llegan,
+/// como no las entregaría el sistema). En los tres motores.
+#[test]
+fn media_now_playing_and_controls_trace_in_headless_and_commands_are_events() {
+    let base = tmp("media");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\nimport std/media;\nfn main() {\n    match (media.controls([\"play\", \"pause\", \"seek\"])) { Result.Ok(_) => print(\"controls ok\"), Result.Err(e) => print(e) }\n    var t = media.track(\"Blue in Green\", \"Miles Davis\", \"Kind of Blue\");\n    t.duration_ms = 337000;\n    t.position_ms = 12000;\n    t.artwork = b\"\\x89PNG\";\n    match (media.now_playing(t)) { Result.Ok(_) => print(\"now playing ok\"), Result.Err(e) => print(e) }\n    match (media.controls([\"dance\"])) { Result.Ok(_) => print(\"ok?!\"), Result.Err(e) => print(e) }\n    t.title = \"\";\n    match (media.now_playing(t)) { Result.Ok(_) => print(\"ok?!\"), Result.Err(e) => print(e) }\n    var n = 0;\n    while (n < 3) {\n        match (ui.next_event_timeout(2000)) {\n            Result.Ok(Option.Some(e)) => { print(e.kind + \" \" + to_string(e.window) + \" [\" + e.tag + \"]\"); n = n + 1; },\n            _ => { print(\"timeout\"); n = 3; },\n        }\n    }\n    match (media.clear()) { Result.Ok(_) => print(\"clear ok\"), Result.Err(e) => print(e) }\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "controls ok\nnow playing ok\nmedia: unknown command 'dance' (play, pause, toggle, next, previous, stop, seek)\nmedia: now_playing needs a title\nmedia 0 [play]\nmedia 0 [seek:1500]\ntimeout\nclear ok\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(engine)
+            .current_dir(&base)
+            .env("RAY_UI_BACKEND", "headless")
+            .env("RAY_UI_TRACE", "1")
+            .env("RAY_UI_MEDIA", "play,seek:1500,next")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] media controls \"play,pause,seek\""), "{engine:?}\n{err}");
+        assert!(err.contains("[ui] media now playing \"Blue in Green\" by \"Miles Davis\" on \"Kind of Blue\" 12000/337000 ms playing=true artwork=4 B"), "{engine:?}\n{err}");
+        assert!(err.contains("[ui] media clear"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").env("RAY_UI_MEDIA", "play,seek:1500,next").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 /// M371: `notify`/`notify_with`/`badge`/`request_attention` en headless: `Ok` + traza, y con
 /// RAY_UI_NOTIFY_CLICK=1 cada notificación "se pulsa" → evento `"notification"` con su tag.
 #[test]

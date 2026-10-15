@@ -12,6 +12,7 @@ pub mod audio;
 pub mod b64;
 pub mod bigint;
 pub mod keychain;
+pub mod media;
 pub mod deflate;
 pub mod qr;
 pub mod rsa_keygen;

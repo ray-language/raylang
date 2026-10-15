@@ -364,6 +364,12 @@ documentada:
   `AssignProcessToJobObject`/`TerminateJobObject` sobre handles propios), `GenerateConsoleCtrlEvent` al
   grupo del hijo, `WaitForSingleObject` sobre el handle que posee `Child`, y `PeekNamedPipe` sobre un
   pipe propio pidiendo solo el contador de octetos.
+- **`crates/ray-runtime/src/media.rs`** (M403) — «Now Playing» y controles del sistema de `std/media` en
+  macOS e iOS: `objc_msgSend` tipado por sitio sobre `MPNowPlayingInfoCenter`/`MPRemoteCommandCenter`
+  (MediaPlayer.framework, enlazado; mismo patrón que `ui.rs`), una clase ObjC creada en caliente con un
+  método por orden (`class_addMethod`, firma `q@:@`), un bloque global (`_NSConcreteGlobalBlock`) que
+  devuelve la carátula retenida, y `dispatch_async_f` a la cola principal. Solo toca estado propio
+  (`Mutex`) y encola eventos por `ui::push_event`; sin I/O.
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
   pipe + `read`/`close`/`fcntl` variádico del hilo alimentador (M332: y `pthread_set_qos_class_self_np` sobre
   el propio hilo en Apple; M398: `poll(2)` de 20 ms sobre el propio fd para atender `flush`) e `ioctl(FIONREAD)` del drain; en

@@ -17987,3 +17987,30 @@ título, artista, álbum, `Playing`, posición 0:12 y fin 5:37; `TryTogglePlayPa
 produce evento: Windows filtra Play/Pause por el estado publicado, así que un programa debe mantener
 `playing` al día en `now_playing` (documentado en `std/media`). Toggle llega como `pause` cuando el
 programa declaró `pause` y suena: es el botón que Windows pulsa.
+
+## 378. M406 — el puente Rust → Java del shell Android sale por un hilo propio (rayplay #176, oct 2026)
+
+**Síntoma.** Con el shell de 1.27.59, `media.controls` desde una fibra de `spawn` mataba la app a
+los ~2 s (señal 11; en 1.27.60 logcat añadía «stack corruption detected (-fstack-protector)» en
+el hilo del worker); desde `main` funcionaba. Y rayplay publica desde su actor de audio, que vive
+en su fibra: en Android `std/media` no servía tal cual.
+
+**Causa.** `call_bridge` (M382) ejecutaba la llamada JNI (`CallStaticVoidMethodA` sobre
+`RayBridge.onX`) en el hilo que la pedía, adjuntándolo a la JVM si hacía falta. Pero quien la pide
+es una FIBRA: corre sobre una pila propia de 128 KiB reservada con `mmap` (corosensei), no sobre la
+pila del hilo del SO. ART, al adjuntar un hilo, toma los límites de pila del hilo (`pthread_getattr_np`)
+y los usa para sus comprobaciones y para la pila de los marcos Java que ejecute; con el puntero de
+pila en la fibra, ese código corre «fuera de pila» para ART y pisa lo que no debe. El mismo defecto
+afectaba a `onOpen`, `onEval` y `onPick` cuando se llamaban desde una fibra que no fuera `main` (que
+tiene otra pila), pero nadie lo había hecho hasta `std/media`.
+
+**Decisión.** Un hilo del SO propio, `ray-jni`, adjuntado una vez como daemon, recibe por un canal
+todas las llamadas Rust → Java del shell y las ejecuta en orden (FIFO, un solo hilo). Es asíncrono,
+pero ya lo era: el shell postea cada una a su main thread. No cambia la API ni el shell generado (un
+shell de 1.27.59 vale). La alternativa —adjuntar la fibra con sus límites— no existe en JNI.
+
+**Verificado en el emulador** (`rayavd`, Android 15 arm64, shell regenerado con `ray bundle --android`
+y APK de Gradle): con el repro de #176, desde una fibra de `spawn`, `controls -> true`,
+`now_playing -> true`, «still alive after media calls from a fiber», sin nada en el buffer `crash`;
+`dumpsys media_session` muestra la sesión `ray` del paquete `active=true` con `metadata: size=4,
+description=Only a title, Ray Ensemble, Album`. Con 1.27.60 el mismo repro moría a los ~2 s.

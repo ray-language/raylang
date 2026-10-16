@@ -1407,7 +1407,8 @@ segundo, solo cuando algo cambia. Funciona en macOS e iOS (en iOS con
 `[ios] background_audio = true`, que activa la sesión `playback`), en Android (una `MediaSession`
 y la notificación de reproducción del shell de `ray bundle --android`; regenera el shell si es de
 antes de 1.27.59) y en Linux (MPRIS por D-Bus: `playerctl`, los applets del escritorio y las
-teclas multimedia; hace falta GLib y un bus de sesión). En Windows las llamadas devuelven `Err`.
+teclas multimedia; hace falta GLib y un bus de sesión) y en Windows (los System Media Transport
+Controls: el panel que aparece junto al volumen y las teclas multimedia).
 
 ### Sonido (`std/audio`)
 

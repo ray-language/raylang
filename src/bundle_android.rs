@@ -71,11 +71,11 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
   <application
       android:label="@string/app_name"{icon_attr}
       android:networkSecurityConfig="@xml/network_security_config"
-      android:theme="@android:style/Theme.Material.Light.NoActionBar">
+      android:theme="@style/RayTheme">
     <activity
         android:name=".MainActivity"
         android:exported="true"{launch_mode}
-        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
@@ -86,6 +86,21 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
 "#
     )
 }
+
+/// rayplay #177: el tema de la Activity sigue al modo claro/oscuro del sistema por el
+/// calificador `values-night/`. El WebView deriva `prefers-color-scheme` del atributo
+/// `isLightTheme` del tema (API 33+), así que la página lo ve como en iOS y el escritorio.
+const STYLES_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="RayTheme" parent="@android:style/Theme.Material.Light.NoActionBar" />
+</resources>
+"#;
+
+const STYLES_NIGHT_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="RayTheme" parent="@android:style/Theme.Material.NoActionBar" />
+</resources>
+"#;
 
 /// Cleartext SOLO para el loopback (el patrón del proyecto: el webserver embebido en
 /// 127.0.0.1) — jamás `usesCleartextTraffic` global.
@@ -104,6 +119,7 @@ const MAIN_ACTIVITY_JAVA: &str = r#"package org.raylang.shell;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
@@ -114,6 +130,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 import java.util.Collections;
@@ -132,6 +149,7 @@ public class MainActivity extends Activity {
     // El <input type="file"> de la página abre el selector del sistema.
     private static final int RAY_FILE_CHOOSER = 7001;
     private ValueCallback<Uri[]> rayFileCallback = null;
+    private WebView rayWeb = null;
     // M382: `ui.pick_file*` del programa → ACTION_OPEN_DOCUMENT; lo elegido se COPIA al cacheDir
     // de la app (un content:// no es una ruta) y las rutas vuelven por RayBridge.pickResult.
     private static final int RAY_PICK = 7002;
@@ -218,6 +236,29 @@ public class MainActivity extends Activity {
     // en segundo plano, para que el sistema no mate el proceso (y con él std/audio).
     static final boolean RAY_BACKGROUND_AUDIO = /*RAY_BACKGROUND_AUDIO*/false;
 
+    // rayplay #177: la página sigue al sistema con `prefers-color-scheme`, como en iOS y el
+    // escritorio. Desde la API 33 el WebView lo deriva del atributo `isLightTheme` del tema
+    // (RayTheme: `values/` claro, `values-night/` oscuro) y basta con no recrear la Activity
+    // (`uiMode` en configChanges). En la 29–32 hay que pedirlo con force dark, y SOLO para las
+    // páginas que traen tema oscuro propio: sin oscurecer algorítmicamente las demás.
+    @SuppressWarnings("deprecation")
+    private static void rayApplyDarkMode(WebView web, Configuration cfg) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) { return; }
+        boolean night = (cfg.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
+            WebSettingsCompat.setForceDarkStrategy(web.getSettings(), WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY);
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+            WebSettingsCompat.setForceDark(web.getSettings(), night ? WebSettingsCompat.FORCE_DARK_ON : WebSettingsCompat.FORCE_DARK_OFF);
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (rayWeb != null) { rayApplyDarkMode(rayWeb, newConfig); }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -234,6 +275,8 @@ public class MainActivity extends Activity {
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(true);
+        rayWeb = web;
+        rayApplyDarkMode(web, getResources().getConfiguration());
         /*RAY_DEVTOOLS*/
         web.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -984,6 +1027,8 @@ pub fn write_project(
     write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
+    write("app/src/main/res/values/styles.xml", STYLES_XML)?;
+    write("app/src/main/res/values-night/styles.xml", STYLES_NIGHT_XML)?;
     // M231: `--devtools` → depuración remota desde chrome://inspect (Chrome del escritorio).
     let devtools_line = if devtools { "WebView.setWebContentsDebuggingEnabled(true); // ray bundle --devtools" } else { "" };
     // M324 (ray808 #18): el flag de audio en segundo plano va como constante de la clase.
@@ -1092,6 +1137,23 @@ mod tests {
             assert!(MAIN_ACTIVITY_JAVA.contains(&format!("WindowInsets.Type.{kind}")), "{kind}");
         }
         assert!(MAIN_ACTIVITY_JAVA.contains("Build.VERSION.SDK_INT >= 30"), "la API de insets es de la 30");
+    }
+
+    /// rayplay #177: el tema sigue al sistema (claro/oscuro) y la Activity no se recrea al
+    /// cambiar el modo; en API 29–32 el WebView recibe force dark «solo tema web».
+    #[test]
+    fn the_shell_theme_follows_the_system_dark_mode() {
+        let manifest = android_manifest(false, false, None);
+        assert!(manifest.contains("android:theme=\"@style/RayTheme\""));
+        assert!(!manifest.contains("Theme.Material.Light.NoActionBar"), "el tema claro fijo era la causa de #177");
+        assert!(manifest.contains("|uiMode\""), "sin uiMode en configChanges el cambio de modo recrea la Activity y recarga la página");
+        assert!(STYLES_XML.contains("Theme.Material.Light.NoActionBar"));
+        assert!(STYLES_NIGHT_XML.contains("Theme.Material.NoActionBar"));
+        assert!(!STYLES_NIGHT_XML.contains("Light"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("rayApplyDarkMode(web, getResources().getConfiguration());"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("public void onConfigurationChanged(Configuration newConfig)"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("DARK_STRATEGY_WEB_THEME_DARKENING_ONLY"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("SDK_INT >= 33) { return; }"), "desde la 33 manda isLightTheme del tema");
     }
 
     /// M404 (rayplay #170): el shell trae `RayMedia.java` (MediaSession + notificación MediaStyle)

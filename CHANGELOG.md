@@ -4,6 +4,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.62 — 2026-10-16
+
+- **Android: la página sigue al modo claro/oscuro del sistema (M407, rayplay #177)**: el shell de
+  `ray bundle --android` fijaba un tema claro (`Theme.Material.Light`), y el WebView deriva
+  `prefers-color-scheme` del tema de la Activity, así que una página con tokens claro/oscuro
+  (ray-elements, por ejemplo) se quedaba en claro con el sistema en oscuro; en iOS y el escritorio
+  ya seguía al sistema. Ahora el tema es `RayTheme` (`values/` claro, `values-night/` oscuro), el
+  cambio de modo en caliente no recrea la Activity (`uiMode` en `configChanges`: la página recibe el
+  `change` de `matchMedia` sin recargarse) y en API 29–32 el WebView recibe force dark «solo tema
+  web» según el modo noche, sin oscurecer algorítmicamente páginas sin tema oscuro. Regenera el
+  shell (`ray bundle --android`) para recibirlo. Handbook «App móvil» §11.
+
 ## 1.27.61 — 2026-10-15
 
 - **Android: `std/media` (y toda llamada del programa al shell) ya no tumba la app desde una fibra

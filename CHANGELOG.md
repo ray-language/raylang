@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.60 — 2026-10-15
+
+- **`std/media` en Windows (M405, IDEAS §112, rayplay #170, tercera entrega)**: System Media
+  Transport Controls por WinRT desde una ventana oculta del hilo de `std/ui`: título, artista,
+  álbum, carátula, estado y línea de tiempo en el panel del volumen del sistema, y las teclas
+  multimedia y sus botones llegan como eventos `"media"` (Play/Pause como `toggle` si solo se declaró
+  `toggle`; `seek:<ms>` desde la línea de tiempo). Con esto `std/media` cubre las cinco plataformas.
+
 ## 1.27.59 — 2026-10-15
 
 - **`std/media` en Android y Linux (M404, IDEAS §112, rayplay #170, segunda entrega)**: en Android

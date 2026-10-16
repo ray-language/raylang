@@ -261,6 +261,14 @@ pub fn launch_paths() -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+/// M405: ejecuta `f` en el hilo 1 de Windows (el de las ventanas y el bucle de mensajes), arrancando
+/// el host si hace falta: `std/media` crea ahí su ventana oculta y habla con WinRT.
+#[cfg(all(windows, feature = "ui"))]
+pub(crate) fn win_main_sync<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    ensure_app()?;
+    win::on_main_sync(f)
+}
+
 /// M403: una orden de los controles multimedia del sistema → `("media", 0, tag)`.
 pub(crate) fn push_media_event(tag: &str) {
     push_event("media", 0, tag);
@@ -8290,7 +8298,7 @@ mod win {
         }
     }
     /// Despacha al hilo 1 y ESPERA el resultado, con plazo (espejo de mac/GTK).
-    fn on_main_sync<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    pub(super) fn on_main_sync<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
         let slot = Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
         let slot2 = slot.clone();
         on_main(move || {

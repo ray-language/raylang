@@ -163,4 +163,8 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    # M405 (std/media en Windows): System Media Transport Controls (WinRT) + miniatura por stream.
+    "Media",
+    "Storage_Streams",
+    "Win32_System_WinRT",
 ] }

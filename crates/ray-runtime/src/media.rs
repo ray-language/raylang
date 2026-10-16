@@ -886,6 +886,186 @@ mod linux {
     }
 }
 
+
+#[cfg(all(feature = "ui", windows))]
+mod smtc {
+    //! Windows (M405): System Media Transport Controls (WinRT `Windows.Media`) vía el crate `windows`
+    //! que la feature `ui` ya trae. SMTC se obtiene PARA UNA VENTANA (`ISystemMediaTransportControlsInterop
+    //! ::GetForWindow`): se crea una ventana oculta de nivel superior en el hilo 1 (el de `std/ui`),
+    //! y todo se ejecuta ahí (`ui::win_main_sync`). Los botones llegan por `ButtonPressed` (hilo de
+    //! WinRT) y se encolan con `ui::push_media_event`; `PlaybackPositionChangeRequested` da el seek.
+    use std::sync::Mutex;
+    use windows::core::{Ref, HSTRING};
+    use windows::Foundation::{TimeSpan, TypedEventHandler};
+    use windows::Media::{
+        MediaPlaybackStatus, MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs, SystemMediaTransportControls,
+        SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
+        SystemMediaTransportControlsTimelineProperties,
+    };
+    use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream, RandomAccessStreamReference};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::WinRT::ISystemMediaTransportControlsInterop;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, RegisterClassW, HWND_DESKTOP, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
+    };
+
+    /// El SMTC del proceso (uno por ventana oculta), vivo mientras el proceso.
+    struct Host {
+        smtc: SystemMediaTransportControls,
+    }
+    // SAFETY: los objetos WinRT del crate `windows` son ágiles (Send + Sync); se usan solo desde el hilo 1.
+    unsafe impl Send for Host {}
+    static HOST: Mutex<Option<Host>> = Mutex::new(None);
+    /// Las órdenes declaradas (para traducir Play/Pause a "toggle" si solo se declaró toggle).
+    static COMMANDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn err(e: windows::core::Error) -> String {
+        format!("media: {e}")
+    }
+
+    fn declared(cmd: &str) -> bool {
+        COMMANDS.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|c| c == cmd)
+    }
+
+    extern "system" fn host_proc(hwnd: windows::Win32::Foundation::HWND, msg: u32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+        // SAFETY: procedimiento de ventana por defecto para una ventana que nunca se muestra.
+        unsafe { DefWindowProcW(hwnd, msg, w, l) }
+    }
+
+    /// En el hilo 1: crea (una vez) la ventana oculta y el SMTC con sus handlers.
+    fn ensure() -> Result<(), String> {
+        let mut host = HOST.lock().unwrap_or_else(|e| e.into_inner());
+        if host.is_some() {
+            return Ok(());
+        }
+        // SAFETY: registro de clase + ventana oculta en el hilo 1 (el que tiene el bucle de mensajes);
+        // GetForWindow es la vía documentada para apps de escritorio.
+        let smtc = unsafe {
+            let instance = GetModuleHandleW(None).map_err(err)?;
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(host_proc),
+                hInstance: instance.into(),
+                lpszClassName: windows::core::w!("RayMediaHost"),
+                ..Default::default()
+            };
+            let _ = RegisterClassW(&wc); // 0 si ya existe: no es un error aquí
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                windows::core::w!("RayMediaHost"),
+                windows::core::w!("ray media"),
+                WS_OVERLAPPED,
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_DESKTOP),
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .map_err(err)?;
+            let interop: ISystemMediaTransportControlsInterop =
+                windows::core::factory::<SystemMediaTransportControls, ISystemMediaTransportControlsInterop>().map_err(err)?;
+            interop.GetForWindow::<SystemMediaTransportControls>(hwnd).map_err(err)?
+        };
+        smtc.SetIsEnabled(true).map_err(err)?;
+        smtc.ButtonPressed(&TypedEventHandler::<SystemMediaTransportControls, SystemMediaTransportControlsButtonPressedEventArgs>::new(
+            |_, args: Ref<SystemMediaTransportControlsButtonPressedEventArgs>| {
+                let button = args.ok()?.Button()?;
+                let tag = match button {
+                    SystemMediaTransportControlsButton::Play => if declared("play") { "play" } else { "toggle" },
+                    SystemMediaTransportControlsButton::Pause => if declared("pause") { "pause" } else { "toggle" },
+                    SystemMediaTransportControlsButton::Stop => "stop",
+                    SystemMediaTransportControlsButton::Next => "next",
+                    SystemMediaTransportControlsButton::Previous => "previous",
+                    _ => return Ok(()),
+                };
+                crate::ui::push_media_event(tag);
+                Ok(())
+            },
+        ))
+        .map_err(err)?;
+        smtc.PlaybackPositionChangeRequested(&TypedEventHandler::<SystemMediaTransportControls, PlaybackPositionChangeRequestedEventArgs>::new(
+            |_, args: Ref<PlaybackPositionChangeRequestedEventArgs>| {
+                let pos = args.ok()?.RequestedPlaybackPosition()?;
+                crate::ui::push_media_event(&format!("seek:{}", (pos.Duration / 10_000).max(0)));
+                Ok(())
+            },
+        ))
+        .map_err(err)?;
+        *host = Some(Host { smtc });
+        Ok(())
+    }
+
+    fn with_smtc<T>(f: impl FnOnce(&SystemMediaTransportControls) -> Result<T, String>) -> Result<T, String> {
+        ensure()?;
+        let host = HOST.lock().unwrap_or_else(|e| e.into_inner());
+        f(&host.as_ref().expect("ensure").smtc)
+    }
+
+    fn apply_controls(smtc: &SystemMediaTransportControls) -> Result<(), String> {
+        let toggle = declared("toggle");
+        smtc.SetIsPlayEnabled(declared("play") || toggle).map_err(err)?;
+        smtc.SetIsPauseEnabled(declared("pause") || toggle).map_err(err)?;
+        smtc.SetIsStopEnabled(declared("stop")).map_err(err)?;
+        smtc.SetIsNextEnabled(declared("next")).map_err(err)?;
+        smtc.SetIsPreviousEnabled(declared("previous")).map_err(err)?;
+        Ok(())
+    }
+
+    pub(super) fn controls(enabled: Vec<String>) -> Result<(), String> {
+        *COMMANDS.lock().unwrap_or_else(|e| e.into_inner()) = enabled;
+        crate::ui::win_main_sync(|| with_smtc(apply_controls))
+    }
+
+    pub(super) fn now_playing(info: super::NowPlaying) -> Result<(), String> {
+        crate::ui::win_main_sync(move || {
+            with_smtc(|smtc| {
+                smtc.SetIsEnabled(true).map_err(err)?;
+                apply_controls(smtc)?;
+                let du = smtc.DisplayUpdater().map_err(err)?;
+                du.SetType(MediaPlaybackType::Music).map_err(err)?;
+                let mp = du.MusicProperties().map_err(err)?;
+                mp.SetTitle(&HSTRING::from(&info.title)).map_err(err)?;
+                mp.SetArtist(&HSTRING::from(&info.artist)).map_err(err)?;
+                mp.SetAlbumTitle(&HSTRING::from(&info.album)).map_err(err)?;
+                if !info.artwork.is_empty() {
+                    // La miniatura va por un stream en memoria (PNG/JPEG tal cual).
+                    let stream = InMemoryRandomAccessStream::new().map_err(err)?;
+                    let writer = DataWriter::CreateDataWriter(&stream).map_err(err)?;
+                    writer.WriteBytes(&info.artwork).map_err(err)?;
+                    writer.StoreAsync().map_err(err)?.join().map_err(err)?;
+                    writer.DetachStream().map_err(err)?;
+                    stream.Seek(0).map_err(err)?;
+                    du.SetThumbnail(&RandomAccessStreamReference::CreateFromStream(&stream).map_err(err)?).map_err(err)?;
+                }
+                du.Update().map_err(err)?;
+                smtc.SetPlaybackStatus(if info.playing { MediaPlaybackStatus::Playing } else { MediaPlaybackStatus::Paused }).map_err(err)?;
+                let tl = SystemMediaTransportControlsTimelineProperties::new().map_err(err)?;
+                let end = TimeSpan { Duration: info.duration_ms.max(0) * 10_000 };
+                tl.SetStartTime(TimeSpan { Duration: 0 }).map_err(err)?;
+                tl.SetMinSeekTime(TimeSpan { Duration: 0 }).map_err(err)?;
+                tl.SetEndTime(end).map_err(err)?;
+                tl.SetMaxSeekTime(end).map_err(err)?;
+                tl.SetPosition(TimeSpan { Duration: info.position_ms.max(0) * 10_000 }).map_err(err)?;
+                smtc.UpdateTimelineProperties(&tl).map_err(err)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub(super) fn clear() -> Result<(), String> {
+        crate::ui::win_main_sync(|| {
+            with_smtc(|smtc| {
+                smtc.DisplayUpdater().map_err(err)?.ClearAll().map_err(err)?;
+                smtc.SetPlaybackStatus(MediaPlaybackStatus::Stopped).map_err(err)?;
+                smtc.SetIsEnabled(false).map_err(err)?;
+                Ok(())
+            })
+        })
+    }
+}
+
 /// Lo que suena: los campos de `media.now_playing` ya parseados.
 #[derive(Debug)]
 pub struct NowPlaying {
@@ -949,18 +1129,35 @@ pub fn controls(enabled: Vec<String>) -> Result<(), String> {
     linux::controls(enabled)
 }
 
-#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux"))))]
-const UNAVAILABLE: &str = "media: Now Playing is not available on this platform yet (macOS, iOS, Android and Linux only)";
+/// Windows (M405): System Media Transport Controls.
+#[cfg(all(feature = "ui", windows))]
+pub fn now_playing(info: NowPlaying) -> Result<(), String> {
+    smtc::now_playing(info)
+}
+#[cfg(all(feature = "ui", windows))]
+pub fn clear() -> Result<(), String> {
+    smtc::clear()
+}
+#[cfg(all(feature = "ui", windows))]
+pub fn controls(enabled: Vec<String>) -> Result<(), String> {
+    if let Some(bad) = enabled.iter().find(|e| !COMMAND_NAMES.contains(&e.as_str())) {
+        return Err(format!("media: unknown command '{bad}' (play, pause, toggle, next, previous, stop, seek)"));
+    }
+    smtc::controls(enabled)
+}
 
-#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux"))))]
+#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux", windows))))]
+const UNAVAILABLE: &str = "media: Now Playing is not available on this platform (needs the ui feature)";
+
+#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux", windows))))]
 pub fn now_playing(_info: NowPlaying) -> Result<(), String> {
     Err(UNAVAILABLE.to_string())
 }
-#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux"))))]
+#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux", windows))))]
 pub fn clear() -> Result<(), String> {
     Err(UNAVAILABLE.to_string())
 }
-#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux"))))]
+#[cfg(not(all(feature = "ui", any(target_os = "macos", target_os = "ios", target_os = "linux", windows))))]
 pub fn controls(enabled: Vec<String>) -> Result<(), String> {
     if let Some(bad) = enabled.iter().find(|e| !COMMAND_NAMES.contains(&e.as_str())) {
         return Err(format!("media: unknown command '{bad}' (play, pause, toggle, next, previous, stop, seek)"));

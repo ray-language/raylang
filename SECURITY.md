@@ -373,7 +373,10 @@ documentada:
   D-Bus con GIO cargado por `dlopen` (`libgio-2.0.so.0`, patrón GTK de `ui.rs`; sin la lib → `Err`), un
   hilo propio con su `GMainContext`, y solo constructores NO variádicos de GVariant; la carátula se
   escribe en `$XDG_RUNTIME_DIR/raylang-media-<pid>.{png,jpg}` (la única escritura). En **Android** no
-  hay `unsafe` nuevo: `std/media` cruza a Java por el `call_bridge` de M382 (`RayBridge.onMedia`).
+  hay `unsafe` nuevo: `std/media` cruza a Java por el `call_bridge` de M382 (`RayBridge.onMedia`). En
+  **Windows** (M405, `mod smtc`): `RegisterClassW`/`CreateWindowExW` de una ventana oculta en el hilo 1 y
+  `ISystemMediaTransportControlsInterop::GetForWindow` (WinRT por el crate `windows`, features `Media`,
+  `Storage_Streams`, `Win32_System_WinRT`); el resto es API segura del crate.
 - **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
   pipe + `read`/`close`/`fcntl` variádico del hilo alimentador (M332: y `pthread_set_qos_class_self_np` sobre
   el propio hilo en Apple; M398: `poll(2)` de 20 ms sobre el propio fd para atender `flush`) e `ioctl(FIONREAD)` del drain; en

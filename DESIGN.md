@@ -17956,3 +17956,28 @@ propiedades se sirven desde el estado bajo `Mutex` (la posición se extrapola si
 `$XDG_RUNTIME_DIR`. Nombre del bus: `org.mpris.MediaPlayer2.<programa>.instance<pid>` (varios
 reproductores a la vez). Verificado en un contenedor Debian con `dbus-daemon --session` y
 `playerctl` (metadatos, estado, posición, y los seis comandos como eventos).
+
+## 377. M405 — `std/media` en Windows: System Media Transport Controls (IDEAS §112, rayplay #170, oct 2026)
+
+**Qué.** La tercera entrega de `std/media`: en Windows el equivalente de Now Playing es el panel de
+los System Media Transport Controls (SMTC), el que aparece junto al volumen y recibe las teclas
+multimedia. Es WinRT (`Windows.Media.SystemMediaTransportControls`), y el crate `windows` que la
+feature `ui` ya trae lo expone con tres features más (`Media`, `Storage_Streams`,
+`Win32_System_WinRT`).
+
+**Decisiones.** (1) SMTC se obtiene PARA UNA VENTANA (`ISystemMediaTransportControlsInterop::
+GetForWindow`), y un reproductor de terminal no tiene ninguna: se crea una ventana oculta de nivel
+superior (`RayMediaHost`, `WS_OVERLAPPED`, nunca mostrada) en el hilo 1 de `std/ui` —el que ya corre
+el bucle de mensajes y tiene COM inicializado— y todo `std/media` se ejecuta ahí vía un
+`win_main_sync` nuevo (que arranca el host si hacía falta, como `ensure_app`). (2) Sin bloques ni
+clases en caliente: los handlers son `TypedEventHandler` del crate, que llegan en el hilo de WinRT y
+solo encolan por `ui::push_media_event`. (3) SMTC no tiene botón «toggle»: se habilitan Play y
+Pause y cada uno se traduce a `toggle` si el programa solo declaró `toggle`, como en Android y MPRIS.
+(4) La carátula va por un `InMemoryRandomAccessStream` escrito con `DataWriter` (síncrono con
+`join()` en el hilo 1: son unos KB). (5) La línea de tiempo (`TimelineProperties`) se publica en cada
+`now_playing`, y el seek del panel llega por `PlaybackPositionChangeRequested` como `seek:<ms>`.
+
+**Verificación.** Compilado en cruzado para `x86_64-pc-windows-msvc` y el `build · smoke (windows)`
+del CI; la VM de Windows estaba apagada al entregar, así que la prueba en vivo (panel, teclas,
+seek) queda para el usuario o la siguiente sesión con la VM — igual que Android, donde solo se pudo
+compilar el shell.

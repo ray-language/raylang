@@ -6,7 +6,8 @@
 //! `"stop"` or `"seek:<ms>"`, `window` is 0. Backends: MediaPlayer (macOS and iOS; on iOS the app
 //! needs `[ios] background_audio = true` so its audio session is `playback`), `MediaSession` plus a
 //! media notification in the Android shell (regenerate it with `ray bundle --android`), and MPRIS
-//! over D-Bus on Linux (needs GLib and a session bus). Windows is not available yet (`Err`). Headless: `Ok` + trace
+//! over D-Bus on Linux (needs GLib and a session bus), and the System Media Transport Controls on
+//! Windows. Headless: `Ok` + trace
 //! (`RAY_UI_TRACE=1`), and `RAY_UI_MEDIA=play,seek:1500` injects those commands when `controls`
 //! declares them (tests).
 

@@ -10,7 +10,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   Transport Controls por WinRT desde una ventana oculta del hilo de `std/ui`: título, artista,
   álbum, carátula, estado y línea de tiempo en el panel del volumen del sistema, y las teclas
   multimedia y sus botones llegan como eventos `"media"` (Play/Pause como `toggle` si solo se declaró
-  `toggle`; `seek:<ms>` desde la línea de tiempo). Con esto `std/media` cubre las cinco plataformas.
+  `toggle`; `seek:<ms>` desde la línea de tiempo). Verificado en Windows 11 ARM64 con el gestor de
+  sesiones multimedia de WinRT. Con esto `std/media` cubre las cinco plataformas.
 
 ## 1.27.59 — 2026-10-15
 

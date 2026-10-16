@@ -17977,7 +17977,13 @@ Pause y cada uno se traduce a `toggle` si el programa solo declaró `toggle`, co
 `join()` en el hilo 1: son unos KB). (5) La línea de tiempo (`TimelineProperties`) se publica en cada
 `now_playing`, y el seek del panel llega por `PlaybackPositionChangeRequested` como `seek:<ms>`.
 
-**Verificación.** Compilado en cruzado para `x86_64-pc-windows-msvc` y el `build · smoke (windows)`
-del CI; la VM de Windows estaba apagada al entregar, así que la prueba en vivo (panel, teclas,
-seek) queda para el usuario o la siguiente sesión con la VM — igual que Android, donde solo se pudo
-compilar el shell.
+**Verificado en Windows 11 ARM64** (VM UTM, toolchain compilada allí sin `ring`/SQLite por falta de
+compilador de C, con `ui` y `audio`): la prueba corre como tarea programada INTERACTIVA (`schtasks
+/IT`), porque SMTC vive en la sesión de escritorio y desde `ssh` el gestor de sesiones multimedia
+no responde. `GlobalSystemMediaTransportControlsSessionManager` ve la sesión de `ray.exe` con
+título, artista, álbum, `Playing`, posición 0:12 y fin 5:37; `TryTogglePlayPause`, `TrySkipNext`,
+`TrySkipPrevious`, `TryPause` y `TryChangePlaybackPosition(90 s)` llegan al programa como
+`pause`, `next`, `previous`, `pause` y `seek:90000`. `TryPlay` con el estado ya en `Playing` no
+produce evento: Windows filtra Play/Pause por el estado publicado, así que un programa debe mantener
+`playing` al día en `now_playing` (documentado en `std/media`). Toggle llega como `pause` cuando el
+programa declaró `pause` y suena: es el botón que Windows pulsa.

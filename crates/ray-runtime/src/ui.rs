@@ -7671,8 +7671,39 @@ mod android {
         }
     }
 
-    /// Llama un método estático void de RayBridge con args String (MUTF-8, ver abajo).
+    /// M406 (rayplay #176): TODA llamada Rust → Java del shell sale por un hilo propio (`ray-jni`),
+    /// nunca desde el hilo que la pide. Los handlers llegan desde FIBRAS (corosensei: una pila
+    /// propia de 128 KiB por `mmap`, fuera de la pila del hilo), y ART, al adjuntar un hilo, toma
+    /// como límites de pila los del hilo del SO: el código Java/ART corriendo sobre la pila de la
+    /// fibra queda «fuera de pila» para sus comprobaciones y sus propios marcos — SIGSEGV y «stack
+    /// corruption detected (-fstack-protector)» en el worker al llamar `media.controls` desde un
+    /// `spawn` (desde `main` funcionaba por el tamaño de su pila). El relay se adjunta UNA vez como
+    /// daemon con su pila normal y entrega en orden (FIFO, un hilo); el shell ya posteaba todo al
+    /// main thread de Android, así que la llamada era asíncrona de todos modos.
     fn call_bridge(mid: usize, args: &[&str]) {
+        use std::sync::mpsc::{channel, Sender};
+        use std::sync::OnceLock;
+        static RELAY: OnceLock<std::sync::Mutex<Sender<(usize, Vec<String>)>>> = OnceLock::new();
+        let tx = RELAY.get_or_init(|| {
+            let (tx, rx) = channel::<(usize, Vec<String>)>();
+            std::thread::Builder::new()
+                .name("ray-jni".into())
+                .spawn(move || {
+                    for (mid, args) in rx {
+                        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                        call_bridge_here(mid, &refs);
+                    }
+                })
+                .expect("could not start the JNI relay thread");
+            std::sync::Mutex::new(tx)
+        });
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let _ = tx.lock().unwrap_or_else(|e| e.into_inner()).send((mid, owned));
+    }
+
+    /// Llama un método estático void de RayBridge con args String (MUTF-8, ver abajo) EN ESTE
+    /// hilo (debe ser un hilo del SO con su pila: el relay de `call_bridge`).
+    fn call_bridge_here(mid: usize, args: &[&str]) {
         let (Some(env), bridge) = (current_env(), BRIDGE.load(Ordering::SeqCst)) else { return };
         if mid == 0 || bridge == 0 {
             return;

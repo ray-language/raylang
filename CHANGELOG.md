@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.61 — 2026-10-15
+
+- **Android: `std/media` (y toda llamada del programa al shell) ya no tumba la app desde una fibra
+  (M406, rayplay #176)**: las llamadas Rust → Java del shell (`onOpen`, `onEval`, `onPick`,
+  `onMedia`) se hacían en el hilo que las pedía, y desde una fibra de `spawn` eso es ejecutar código
+  Java/ART sobre la pila de la fibra (128 KiB por `mmap`, fuera de los límites que ART registró al
+  adjuntar el hilo): SIGSEGV y «stack corruption detected». Ahora salen por un hilo propio (`ray-jni`),
+  adjuntado una vez, en orden; el shell ya las posteaba a su main thread, así que nada cambia de cara
+  al programa salvo que `media.now_playing` desde el actor de audio funciona.
+
 ## 1.27.60 — 2026-10-15
 
 - **`std/media` en Windows (M405, IDEAS §112, rayplay #170, tercera entrega)**: System Media

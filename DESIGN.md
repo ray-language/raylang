@@ -18014,3 +18014,46 @@ y APK de Gradle): con el repro de #176, desde una fibra de `spawn`, `controls ->
 `now_playing -> true`, «still alive after media calls from a fiber», sin nada en el buffer `crash`;
 `dumpsys media_session` muestra la sesión `ray` del paquete `active=true` con `metadata: size=4,
 description=Only a title, Ray Ensemble, Album`. Con 1.27.60 el mismo repro moría a los ~2 s.
+
+## 379. M407 — el shell Android sigue al modo claro/oscuro del sistema (rayplay #177, oct 2026)
+
+**Síntoma.** rayplay migró su página a ray-elements, cuyo tema sigue a `prefers-color-scheme`. En
+el Mac y en el iPhone la página cambia con la apariencia del sistema; en la app Android, con el
+sistema en oscuro (`cmd uimode night yes`) y la app relanzada, `matchMedia('(prefers-color-scheme:
+dark)').matches` seguía siendo `false`.
+
+**Causa.** El manifiesto del shell fijaba `@android:style/Theme.Material.Light.NoActionBar`. El
+WebView de Android no consulta el modo noche del sistema: desde la API 33 deriva
+`prefers-color-scheme` del atributo `isLightTheme` del tema de la Activity, y en la 29–32 de la
+configuración de force dark. Con un tema claro fijo, la página nunca podía saber que el sistema
+estaba en oscuro.
+
+**Decisión.** Un tema propio, `RayTheme`, con dos definiciones por calificador de recursos:
+`values/styles.xml` hereda de `Theme.Material.Light.NoActionBar` y `values-night/styles.xml` de
+`Theme.Material.NoActionBar`. Es la forma portable desde la API 24 (minSdk del shell): no hace
+falta `Theme.DeviceDefault.DayNight` (API 29) ni AppCompat, y `isLightTheme` sale correcto en cada
+modo porque lo fija el padre. Dos complementos:
+
+- **`uiMode` en `configChanges`.** Sin él, cambiar el modo con la app abierta recrea la Activity:
+  WebView nuevo, página recargada, estado de JavaScript perdido (en rayplay, la vista del
+  reproductor). Con él la Activity sigue viva y el WebView re-evalúa el tema solo; la página recibe
+  el evento `change` de `matchMedia` como en el escritorio. Verificado en el emulador (Android 15):
+  mismo PID antes y después del cambio, `dark=false` → `dark=true` → `dark=false` sin recarga.
+- **API 29–32: force dark «solo tema web».** Ahí el tema no basta; `onCreate` y
+  `onConfigurationChanged` llaman a `rayApplyDarkMode`, que pone `FORCE_DARK_ON`/`OFF` según el modo
+  noche con `DARK_STRATEGY_WEB_THEME_DARKENING_ONLY`: solo las páginas que declaran tema oscuro
+  (`color-scheme` / `prefers-color-scheme`) cambian; el resto no se oscurece algorítmicamente, que
+  es lo que haría la estrategia por defecto y rompería páginas con colores propios. Desde la 33
+  la función no hace nada (esas APIs están deprecadas y el tema manda). Esta rama no se ha podido
+  ejecutar (el emulador disponible es API 35); se compila con el `androidx.webkit` 1.12.1 que ya
+  traía el shell.
+
+**Lo que no se hace.** No se expone una opción en `ray.toml` para fijar claro u oscuro: la página
+ya decide con CSS, como en los otros dos sistemas, y la plataforma dicta el default. Tampoco se
+toca el escritorio ni iOS, que ya seguían al sistema.
+
+**Verificado en el emulador** (`rayavd`, Android 15 arm64, shell regenerado y APK de Gradle) con
+una página mínima que informa de la media query por el puente IPC: arranque en claro `dark=false`;
+`cmd uimode night yes` con la app abierta → `dark=true` a los pocos segundos y el mismo PID; vuelta
+a claro → `dark=false`; arranque con el sistema en oscuro → `dark=true`. Buffer `crash` vacío.
+Test unitario `the_shell_theme_follows_the_system_dark_mode` en `src/bundle_android.rs`.

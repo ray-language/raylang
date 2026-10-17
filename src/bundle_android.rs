@@ -92,13 +92,18 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
 /// `isLightTheme` del tema (API 33+), así que la página lo ve como en iOS y el escritorio.
 const STYLES_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <style name="RayTheme" parent="@android:style/Theme.Material.Light.NoActionBar" />
+  <style name="RayTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <!-- rayplay #181: iconos oscuros en la barra de estado sobre el fondo claro -->
+    <item name="android:windowLightStatusBar">true</item>
+  </style>
 </resources>
 "#;
 
 const STYLES_NIGHT_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <style name="RayTheme" parent="@android:style/Theme.Material.NoActionBar" />
+  <style name="RayTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowLightStatusBar">false</item>
+  </style>
 </resources>
 "#;
 
@@ -241,10 +246,32 @@ public class MainActivity extends Activity {
     // (RayTheme: `values/` claro, `values-night/` oscuro) y basta con no recrear la Activity
     // (`uiMode` en configChanges). En la 29–32 hay que pedirlo con force dark, y SOLO para las
     // páginas que traen tema oscuro propio: sin oscurecer algorítmicamente las demás.
+    // rayplay #181: los iconos de las barras del sistema (hora, batería, navegación) siguen al
+    // modo — oscuros sobre el fondo claro, claros sobre el oscuro. El tema lo pide al arrancar
+    // (`windowLightStatusBar`), pero como la Activity no se recrea al cambiar de modo hay que
+    // reaplicarlo a mano: API 30+ por WindowInsetsController; antes, por los flags de systemUi.
     @SuppressWarnings("deprecation")
-    private static void rayApplyDarkMode(WebView web, Configuration cfg) {
-        if (android.os.Build.VERSION.SDK_INT >= 33) { return; }
+    private void rayApplyTheme(Configuration cfg) {
         boolean night = (cfg.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        android.view.View decor = getWindow().getDecorView();
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController c = decor.getWindowInsetsController();
+            if (c != null) {
+                int light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                c.setSystemBarsAppearance(night ? 0 : light, light);
+            }
+        } else {
+            int flags = decor.getSystemUiVisibility();
+            int light = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (android.os.Build.VERSION.SDK_INT >= 26) { light |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; }
+            decor.setSystemUiVisibility(night ? (flags & ~light) : (flags | light));
+        }
+        if (rayWeb != null) { rayApplyDarkMode(rayWeb, night); }
+    }
+
+    private static void rayApplyDarkMode(WebView web, boolean night) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) { return; }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
             WebSettingsCompat.setForceDarkStrategy(web.getSettings(), WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY);
         }
@@ -256,7 +283,7 @@ public class MainActivity extends Activity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        if (rayWeb != null) { rayApplyDarkMode(rayWeb, newConfig); }
+        rayApplyTheme(newConfig);
     }
 
     @Override
@@ -276,7 +303,6 @@ public class MainActivity extends Activity {
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(true);
         rayWeb = web;
-        rayApplyDarkMode(web, getResources().getConfiguration());
         /*RAY_DEVTOOLS*/
         web.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -350,6 +376,7 @@ public class MainActivity extends Activity {
             });
         }
         setContentView(frame);
+        rayApplyTheme(getResources().getConfiguration()); // tras setContentView: ya hay decor view
         RayBridge.attach(web);
         rayCurrent = this;
         if (RayBridge.lastUrl != null) {
@@ -1149,8 +1176,14 @@ mod tests {
         assert!(manifest.contains("|uiMode\""), "sin uiMode en configChanges el cambio de modo recrea la Activity y recarga la página");
         assert!(STYLES_XML.contains("Theme.Material.Light.NoActionBar"));
         assert!(STYLES_NIGHT_XML.contains("Theme.Material.NoActionBar"));
-        assert!(!STYLES_NIGHT_XML.contains("Light"));
-        assert!(MAIN_ACTIVITY_JAVA.contains("rayApplyDarkMode(web, getResources().getConfiguration());"));
+        assert!(!STYLES_NIGHT_XML.contains("Theme.Material.Light"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("rayApplyTheme(getResources().getConfiguration());"));
+        // rayplay #181: iconos de las barras del sistema según el modo, al arrancar y al cambiar.
+        assert!(STYLES_XML.contains("android:windowLightStatusBar\">true"));
+        assert!(STYLES_NIGHT_XML.contains("android:windowLightStatusBar\">false"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("APPEARANCE_LIGHT_STATUS_BARS"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("SYSTEM_UI_FLAG_LIGHT_STATUS_BAR"), "API 24–29");
+        assert!(MAIN_ACTIVITY_JAVA.contains("rayApplyTheme(newConfig);"));
         assert!(MAIN_ACTIVITY_JAVA.contains("public void onConfigurationChanged(Configuration newConfig)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("DARK_STRATEGY_WEB_THEME_DARKENING_ONLY"));
         assert!(MAIN_ACTIVITY_JAVA.contains("SDK_INT >= 33) { return; }"), "desde la 33 manda isLightTheme del tema");

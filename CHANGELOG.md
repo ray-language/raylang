@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.64 — 2026-10-17
+
+- **Android: los iconos de la barra de estado se ven en modo claro (M409, rayplay #181)**: la shell
+  arrancada en claro pintaba la hora, la wifi y la batería en blanco sobre el fondo casi blanco. El
+  tema claro no pedía iconos oscuros, y como desde 1.27.62 la Activity no se recrea al cambiar de
+  modo, tampoco había quien los reaplicara. Ahora el tema claro lleva `windowLightStatusBar` y la
+  shell fija la apariencia de las barras de estado y de navegación según el modo al arrancar y en
+  cada cambio (API 30+ por `WindowInsetsController`, antes por los flags de systemUi). Regenera el
+  shell (`ray bundle --android`) para recibirlo.
+
 ## 1.27.63 — 2026-10-17
 
 - **`ray test <archivo>` con ruta relativa volvía «no tests (@test) in the project» (M408,

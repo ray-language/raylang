@@ -475,7 +475,7 @@ El mismo `main` corre en los tres sitios, pero el sistema que hay debajo no se c
 | La página se carga desde | `ray://app/…` | `ray://app/…` | `https://app.ray.invalid/…` |
 | Lo que imprime el programa | la terminal | `simctl launch --console-pty`, o la consola de Xcode | `adb logcat -s ray` |
 | Inspeccionar la página | `ray dev`, o `ray run --devtools` | Safari, menú Develop, con `--devtools` | `chrome://inspect`, con `--devtools` |
-| Modo claro/oscuro | `prefers-color-scheme` sigue al sistema | sigue al sistema | sigue al sistema (shell de 1.27.62+; regenera el shell si es anterior) |
+| Modo claro/oscuro | `prefers-color-scheme` sigue al sistema | sigue al sistema | sigue al sistema, iconos de las barras del sistema incluidos (shell de 1.27.64+; regenera el shell si es anterior) |
 
 Lo que eso obliga a hacer:
 

@@ -18057,3 +18057,40 @@ una página mínima que informa de la media query por el puente IPC: arranque en
 `cmd uimode night yes` con la app abierta → `dark=true` a los pocos segundos y el mismo PID; vuelta
 a claro → `dark=false`; arranque con el sistema en oscuro → `dark=true`. Buffer `crash` vacío.
 Test unitario `the_shell_theme_follows_the_system_dark_mode` en `src/bundle_android.rs`.
+
+## 380. M408 — `ray test <archivo>` relativo, `hash_clone` y la doc de `min`/`max` (takeit #178–#180, oct 2026)
+
+Tres hallazgos de la subida de takeit (transferencias reanudables) a 1.27.61.
+
+**#180 — `ray test src/util.ray` no corría nada (tipo B).** `foreign_module_dirs` (M390) separa los
+módulos del proyecto de los de sus dependencias buscando el `ray.toml` que contiene a la primera
+suite: `Manifest::find(first.parent())`. Con la entrada implícita la ruta llega absoluta y funciona;
+con una suite explícita llega tal cual la escribió el usuario, `src/util.ray`, cuyo padre es `src`,
+y `Path::parent` de una ruta relativa de un solo componente es `""`: `find` no puede subir, no
+encuentra el manifiesto y `own` queda en `None`. Sin «propio» que excluir, el directorio del
+proyecto entra en la lista de ajenos y `collect_tests` descarta todos sus `@test` como de una
+dependencia: «no tests (@test) in the project», un mensaje además falso. Arreglo: canonizar la
+carpeta antes de buscar (`""` = el directorio actual), que es lo que ya hacía con los paquetes para
+compararlos. Test `explicit_relative_file_runs_its_tests` (archivo del módulo y la propia entrada).
+
+**#179 — `hash_clone` (tipo E).** Un protocolo con reanudación necesita, de los primeros `n` bytes,
+el digest del prefijo (para comprobar que lo que tiene el receptor es un prefijo del archivo) y un
+hasher que siga hasta el total; `hash_final` consume el handle, así que takeit alimentaba dos
+hashers en paralelo o releía el prefijo. `ring::digest::Context` es `Clone`: `hasher_clone(h)`
+copia el contexto bajo un handle nuevo y deja `h` abierto. Superficie: `crypto.hash_clone(h) ->
+Result<int, string>`, `Err` con un handle inválido o ya consumido. Mismo camino que el resto del
+hasher (`__hasher_clone` → opcode `HasherClone` en VM, intérprete por el wrapper de `builtins`,
+nativo por `ray_runtime::crypto`), y la fixture `crypto_hasher.ray` asevera prefijo y total en los
+tres motores. No se añade `hash_peek`: el clon lo cubre y no exige otro camino de finalización.
+
+**#178 — la doc de `min`/`max` (tipo D).** `builtins::signature`/`doc` conservaban `min`/`max`
+como «the smaller of two numbers» de cuando eran builtins; hoy son funciones del prelude (los
+terminales de iterador, M90.5) y `ray doc` tomaba la entrada de la tabla antes de mirar el prelude.
+Se retiran las entradas; `ray doc min` muestra la firma real y su `///`, que ahora remite a
+`math.min(a, b)`. Al hacerlo asomó el bug de debajo: `prelude_doc_text` buscaba la línea
+`fn min(` para leer las `///` de encima, y las genéricas se declaran `fn min<T: Ord>(`, así que
+NINGUNA función genérica del prelude (`min`, `max`, `sort`…) llevaba doc en `ray doc`/MCP: solo la
+firma. Ahora acepta `fn name(` y `fn name<`. La sugerencia de takeit de que el error de aridad
+(«'min' expects 1 argument(s), received 2») remita a `math.min` queda fuera: es el mensaje genérico
+de aridad, compartido con el espejo selfhost byte a byte, y con la doc corregida ya no contradice
+nada.

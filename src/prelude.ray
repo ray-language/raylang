@@ -663,6 +663,7 @@ fn sum(it: Iter<int>) -> int {
 // TERMINAL (M90.5): el mínimo de un iterador, o None si está vacío. Genérico acotado
 // (`T: Ord`, como `sort`): vale para int/float/string/char/bool/bytes y tipos con `impl Ord`.
 /// Terminal: the smallest element of the iterator, or None if it is empty.
+/// Not the smaller of two values: for that use `math.min(a, b)` (`import std/math`).
 fn min<T: Ord>(it: Iter<T>) -> Option<T> {
     var best: Option<T> = Option.None;
     var keep_going = true;
@@ -685,6 +686,7 @@ fn min<T: Ord>(it: Iter<T>) -> Option<T> {
 // TERMINAL (M90.5): el máximo de un iterador, o None si está vacío. Ante empates devuelve
 // el PRIMERO (solo cambia con tipos de usuario cuyo `less` no distinga valores distintos).
 /// Terminal: the largest element of the iterator, or None if it is empty.
+/// Not the larger of two values: for that use `math.max(a, b)` (`import std/math`).
 fn max<T: Ord>(it: Iter<T>) -> Option<T> {
     var best: Option<T> = Option.None;
     var keep_going = true;

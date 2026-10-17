@@ -53,5 +53,34 @@ fn main() -> int {
         Result.Ok(d) => print(d == crypto.sha512("abc".to_bytes())),
         Result.Err(e) => print(e),
     }
+    // takeit #179: el clon da el digest del PREFIJO y el original sigue hasta el total.
+    let h4 = match (crypto.sha256_init()) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print(e);
+            return 1;
+        },
+    };
+    let _ = crypto.hash_update(h4, "ab".to_bytes());
+    let fork = match (crypto.hash_clone(h4)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print(e);
+            return 1;
+        },
+    };
+    match (crypto.hash_final(fork)) {
+        Result.Ok(d) => print(d == crypto.sha256("ab".to_bytes())),
+        Result.Err(e) => print(e),
+    }
+    let _ = crypto.hash_update(h4, "c".to_bytes());
+    match (crypto.hash_final(h4)) {
+        Result.Ok(d) => print(hex_encode(d)),
+        Result.Err(e) => print(e),
+    }
+    match (crypto.hash_clone(h4)) {
+        Result.Ok(_) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
     0
 }

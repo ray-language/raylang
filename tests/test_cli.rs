@@ -192,6 +192,25 @@ fn discovers_tests_directory() {
 }
 
 #[test]
+fn explicit_relative_file_runs_its_tests() {
+    // takeit #180: `ray test src/util.ray` (ruta RELATIVA) respondía «no tests (@test) in the
+    // project»: `foreign_module_dirs` no encontraba el ray.toml subiendo desde `src` y tomaba el
+    // propio proyecto por dependencia ajena. También la propia entrada (`src/main.ray`).
+    let files = [
+        ("ray.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
+        ("src/util.ray", "pub fn twice(x: int) -> int { x * 2 }\n\n@test\nfn twice_doubles() { assert_eq(twice(3), 6); }\n"),
+        ("src/main.ray", "import util;\n\nfn main() -> int { util.twice(2) - 4 }\n\n@test\nfn entry_ok() -> bool { true }\n"),
+    ];
+    let (out, code) = run_project("ray_test_proj_relative_file", &files, &["src/util.ray"]);
+    assert!(out.contains("ok    twice_doubles"), "la @test del archivo explícito corre\n{out}");
+    assert!(out.contains("result: 1 test(s), all passed"), "{out}");
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = run_project("ray_test_proj_relative_entry", &files, &["src/main.ray"]);
+    assert!(out.contains("ok    entry_ok"), "la entrada explícita también\n{out}");
+    assert_eq!(code, 0, "{out}");
+}
+
+#[test]
 fn integration_suite_does_not_duplicate_module_tests() {
     // M101: las @test inline de un módulo importado corren en la suite del PROYECTO; una suite de
     // tests/ que importe ese módulo no las repite.

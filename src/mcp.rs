@@ -757,10 +757,16 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
         None => (None, symbol),
     };
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
-    // Las `///` contiguas encima de la primera línea >= `from` que empieza por `head`.
-    let doc_above = |head: &str, from: usize| -> String {
+    // Las `///` contiguas encima de la primera línea >= `from` que declara `fn name(` o `fn name<`
+    // (takeit #178: las genéricas —`min<T: Ord>(…)`, `sort<T: Ord>(…)`— quedaban sin doc).
+    let doc_above = |name: &str, from: usize| -> String {
         let mut doc_lines: Vec<&str> = Vec::new();
-        if let Some(i) = lines.iter().skip(from).position(|l| l.trim_start().starts_with(head)) {
+        let plain = format!("fn {name}(");
+        let generic = format!("fn {name}<");
+        if let Some(i) = lines.iter().skip(from).position(|l| {
+            let l = l.trim_start();
+            l.starts_with(&plain) || l.starts_with(&generic)
+        }) {
             let mut j = i + from;
             while j > 0 && lines[j - 1].trim_start().starts_with("///") {
                 j -= 1;
@@ -777,7 +783,7 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
             // #159 (rayplay): desde la línea de la PROPIA función — buscando desde 0, un método de
             // trait homónimo declarado antes (`BytesOps.index_of`) prestaba su doc a `string.index_of`.
             let from = f.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1);
-            found.push(with_doc(fn_signature(f), doc_above(&format!("fn {name}("), from)));
+            found.push(with_doc(fn_signature(f), doc_above(name, from)));
         }
     }
     let impls = crate::prelude::impls();
@@ -793,7 +799,7 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
             continue;
         }
         // Las posiciones del prelude viven en su banda alta (`LINE_BASE`): se vuelve a la línea real.
-        let doc = doc_above(&format!("fn {name}("), t.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1));
+        let doc = doc_above(name, t.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1));
         for target in targets {
             found.push(with_doc(format!("{target}.{}", trait_method_signature(&t.name, m)), doc.clone()));
         }

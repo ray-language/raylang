@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.65 — 2026-10-17
+
+- **Android: la barra de estado sigue al cambio de modo con la app abierta (M410, rayplay #181,
+  segunda vuelta)**: con 1.27.64 los iconos cambiaban pero el fondo de la ventana —lo que se ve tras
+  la barra con targetSdk 35— se quedaba con el color del arranque, y los iconos volvían a no verse.
+  La shell vuelve a resolver `colorBackground` del tema vigente y lo fija en cada cambio de modo.
+- **iOS: los errores de la página llegan a la consola sin `--devtools` (rayround #182)**: la shell
+  reenvía a stderr los errores no capturados, los rechazos de promesas y `console.error`/`console.warn`
+  con prefijo `[page] …` (mensaje y `archivo:línea:columna`), que es lo que muestran `simctl launch
+  --console-pty` y Xcode. En Android ya salían en `adb logcat -s ray` por el propio WebView; se
+  documenta. Handbook «App móvil» §11.
+- **`min(a, b)`/`max(a, b)` explican el error (takeit #178, parte E)**: «'min' expects 1 argument(s),
+  received 2 (min is the iterator terminal; for the smaller of two values use math.min after import
+  std/math)». Mismo texto en el espejo selfhost.
+
 ## 1.27.64 — 2026-10-17
 
 - **Android: los iconos de la barra de estado se ven en modo claro (M409, rayplay #181)**: la shell

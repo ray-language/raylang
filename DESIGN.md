@@ -18127,3 +18127,35 @@ CSS, como en los otros dos sistemas; quien quiera una barra de otro color sigue 
 enseña hora y batería oscuras sobre fondo claro; `cmd uimode night yes` en vivo → sin
 `LIGHT_STATUS_BARS`, iconos blancos sobre oscuro; de vuelta a claro → otra vez oscuros. Test
 `the_shell_theme_follows_the_system_dark_mode` ampliado.
+
+## 382. M410 — la barra de estado en el cambio de modo en vivo, los errores de la página en la shell iOS y la pista de `min(a, b)` (rayplay #181, rayround #182, takeit #178; oct 2026)
+
+**rayplay #181, segunda vuelta.** M409 arregló el arranque, pero rayplay midió el cambio de modo con
+la app abierta y salió peor: la página y los iconos cambiaban y el fondo de la barra no, así que los
+iconos dejaban de verse en los dos sentidos. Causa: con `uiMode` en `configChanges` (M407) la
+Activity no se recrea, y el fondo de la ventana —un drawable instanciado del tema del arranque, que
+es lo que se ve tras la barra transparente de targetSdk 35— no se vuelve a resolver aunque el tema
+sí se rebase. `rayApplyTheme` resuelve ahora `android.R.attr.colorBackground` del tema vigente en
+cada llamada y lo fija con `setBackgroundDrawable`. Verificado en el emulador en las cuatro
+transiciones (arranque claro, →oscuro en vivo, arranque oscuro, →claro en vivo): fondo e iconos
+coherentes. Lección: cuando se evita la recreación de la Activity, TODO lo que el tema fijaba en
+`onCreate` pasa a ser responsabilidad de `onConfigurationChanged`.
+
+**rayround #182.** Una página rota a medias en el simulador no dejaba rastro: ni `console-pty` ni
+`log show`; hubo que montar un puente a mano. La doc solo ofrecía `--devtools`, que exige otra shell y
+tener el inspector abierto antes del fallo. La shell iOS inyecta ahora un segundo user script al
+arranque del documento que engancha `error`, `unhandledrejection`, `console.error` y `console.warn`
+y los manda al handler `rayLog`, que escribe en stderr `[page] <mensaje> @<archivo>:<línea>:<col>`.
+Es stderr del proceso, así que llega a `simctl launch --console-pty`, a Xcode y a `ray dev --device`
+(la consola remota). Se dejó fuera `console.log`: es ruido de desarrollo y para eso está el
+inspector. En Android se midió antes de tocar nada: el WebView de Chromium ya vuelca la consola de la
+página (`[INFO:CONSOLE(n)] "…", source: …`), incluidos los `Uncaught`, al stderr que el runtime
+redirige a logcat con el tag `ray`; un shim allí duplicaba cada línea y se retiró. Documentado en
+REFERENCE (`std/ui`) y en el handbook móvil (fila nueva de la tabla de §11).
+
+**takeit #178, parte E.** Con la doc corregida (M408) quedaba el mensaje: «'min' expects 1
+argument(s), received 2» no dice por qué. El mensaje de aridad sale ahora de `arity_message`, que
+para `'min'`/`'max'` con dos argumentos añade «(min is the iterator terminal; for the smaller of two
+values use math.min after import std/math)». Solo esos dos nombres y solo con dos argumentos: es la
+confusión medida, no una pista genérica. Espejo en `selfhost/checker.ray::arity_message`, byte a byte
+(la suite `selfhost_checker` lo comprueba).

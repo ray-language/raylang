@@ -254,6 +254,13 @@ public class MainActivity extends Activity {
     private void rayApplyTheme(Configuration cfg) {
         boolean night = (cfg.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         android.view.View decor = getWindow().getDecorView();
+        // El fondo de la ventana (lo que se ve tras las barras del sistema con targetSdk 35) se
+        // instanció con el tema del arranque y no sigue al cambio de modo: se vuelve a resolver
+        // `colorBackground` del tema vigente y se fija a mano (rayplay #181, segunda vuelta).
+        android.util.TypedValue tv = new android.util.TypedValue();
+        if (getTheme().resolveAttribute(android.R.attr.colorBackground, tv, true)) {
+            getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(tv.data));
+        }
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             android.view.WindowInsetsController c = decor.getWindowInsetsController();
             if (c != null) {

@@ -566,6 +566,12 @@ fn print_builtin() {
     assert!(check_src("fn main() { print(42); print(\"hello\"); print(true); }").is_ok());
     err_contains("fn main() { print(); }", "expects 1 argument");
     err_contains("fn main() { print(1, 2); }", "expects 1 argument");
+    // takeit #178: `min(a, b)` es el error de aridad del terminal de iteradores, con la pista de math.min.
+    err_contains(
+        "fn main() -> int { min(3, 5) }",
+        "'min' expects 1 argument(s), received 2 (min is the iterator terminal; for the smaller of two values use math.min after import std/math)",
+    );
+    err_contains("fn main() -> int { max(3, 5) }", "for the larger of two values use math.max");
 }
 
 #[test]

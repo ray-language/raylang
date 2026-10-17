@@ -473,6 +473,7 @@ The same `main` runs in all three places, but the system underneath does not beh
 | `std/process` | yes | does not exist | does not exist |
 | The page loads from | `ray://app/…` | `ray://app/…` | `https://app.ray.invalid/…` |
 | What the program prints | the terminal | `simctl launch --console-pty`, or the Xcode console | `adb logcat -s ray` |
+| Page errors and `console.error` | the inspector (`--devtools`) | the same console, prefixed `[page]` (shell from 1.27.65 on) | `adb logcat -s ray` |
 | Inspecting the page | `ray dev`, or `ray run --devtools` | Safari, Develop menu, with `--devtools` | `chrome://inspect`, with `--devtools` |
 | Light/dark mode | `prefers-color-scheme` follows the system | follows the system | follows the system, system bar icons included (shell from 1.27.64 on; regenerate an older shell) |
 
@@ -535,4 +536,4 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:50f64cfaf10f -->
+<!-- sync: sha256:afa7abc449f8 -->

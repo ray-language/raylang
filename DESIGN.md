@@ -18094,3 +18094,36 @@ firma. Ahora acepta `fn name(` y `fn name<`. La sugerencia de takeit de que el e
 («'min' expects 1 argument(s), received 2») remita a `math.min` queda fuera: es el mensaje genérico
 de aridad, compartido con el espejo selfhost byte a byte, y con la doc corregida ya no contradice
 nada.
+
+## 381. M409 — los iconos de las barras del sistema siguen al modo en la shell Android (rayplay #181, oct 2026)
+
+**Síntoma.** Con la shell de 1.27.62 (y ya con la de 1.27.61) arrancada con el sistema en claro, la
+barra de estado quedaba casi blanca con los iconos (hora, wifi, batería) también blancos: invisibles.
+En oscuro, bien. Y si la app arrancaba en oscuro y el sistema pasaba a claro con ella abierta, los
+iconos salían oscuros; en el repro arrancado en claro, pasado a oscuro y vuelto a claro, seguían
+blancos. La página no puede arreglarlo: el WebView de Android no tiene `theme-color` ni API de la
+barra de estado.
+
+**Causa.** Dos mitades. (1) `Theme.Material.Light.NoActionBar` no fija `windowLightStatusBar`, así
+que con targetSdk 35 (borde a borde, barra transparente sobre nuestro fondo claro) los iconos son
+los por defecto: blancos. (2) Desde M407 la Activity no se recrea al cambiar de modo (`uiMode` en
+`configChanges`), así que nadie reevalúa la apariencia de las barras; la asimetría observada
+(oscuro→claro en vivo sí se veía) la daba el propio sistema al cambiar el fondo de la ventana, no un
+camino nuestro.
+
+**Decisión.** El tema claro lleva `android:windowLightStatusBar = true` (API 23+, dentro del minSdk
+24) y el oscuro lo fija a `false`, para el primer frame; y `rayApplyTheme(cfg)`, llamada tras
+`setContentView` (hace falta el decor view) y desde `onConfigurationChanged`, fija la apariencia de
+las barras de estado Y de navegación según el modo: API 30+ con
+`WindowInsetsController.setSystemBarsAppearance(APPEARANCE_LIGHT_STATUS_BARS |
+APPEARANCE_LIGHT_NAVIGATION_BARS)`, antes con `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` (+
+`…_NAVIGATION_BAR` desde la 26). La misma función aplica el force dark del WebView de M407 en API
+29–32. No se expone ninguna opción: el modo lo dicta el sistema y la página decide sus colores con
+CSS, como en los otros dos sistemas; quien quiera una barra de otro color sigue sin tenerlo (no hay
+`theme-color` en WebView) y es una idea aparte si alguna app lo pide.
+
+**Verificado en el emulador** (`rayavd`, Android 15 arm64, shell regenerado): arranque en claro →
+`dumpsys window` muestra `mLastAppearance=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS` y la captura
+enseña hora y batería oscuras sobre fondo claro; `cmd uimode night yes` en vivo → sin
+`LIGHT_STATUS_BARS`, iconos blancos sobre oscuro; de vuelta a claro → otra vez oscuros. Test
+`the_shell_theme_follows_the_system_dark_mode` ampliado.

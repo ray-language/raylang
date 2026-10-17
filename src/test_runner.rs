@@ -265,8 +265,14 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
 /// carpeta) y toda caché `.ray-deps/`. Canonizados, para compararlos con las rutas del loader.
 fn foreign_module_dirs(first: Option<&Path>, dep_roots: &loader::DepRoots) -> Vec<PathBuf> {
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    // takeit #180: con una suite RELATIVA (`ray test src/util.ray`) `Manifest::find` no podía subir
+    // más allá de `src` (el padre de una ruta relativa es ""), no encontraba el `ray.toml` y el propio
+    // proyecto quedaba entre los directorios ajenos: todos sus `@test` se descartaban como de una
+    // dependencia. Se canoniza la carpeta antes de buscar (""/"." = el directorio actual).
     let own = first.and_then(|f| f.parent()).map(|dir| {
-        crate::manifest::Manifest::find(dir)
+        let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+        let dir = canon(dir);
+        crate::manifest::Manifest::find(&dir)
             .and_then(|toml| toml.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| dir.to_path_buf())
     }).map(|d| canon(&d));

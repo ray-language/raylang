@@ -15,6 +15,9 @@ const EXPECTED: &[&str] = &[
     "invalid hasher handle: 2",                                         // segundo final
     "invalid hasher handle: 2",                                         // update tras final
     "true",                                                             // sha512 troceado == una pasada
+    "true",                                                             // el clon = digest del prefijo (takeit #179)
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", // el original siguió hasta "abc"
+    "invalid hasher handle: 4",                                         // clonar un handle consumido
 ];
 
 fn run(flags: &[&str]) -> Vec<String> {

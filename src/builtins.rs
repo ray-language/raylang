@@ -263,7 +263,6 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         }
         "pow" => (vec!["base: float", "exp: float"], "float"),
         "abs" => (vec!["x: float"], "float"), // ad-hoc: también int → int
-        "min" | "max" => (vec!["a: float", "b: float"], "float"), // ad-hoc: también int
         "pi" | "e" | "random" => (vec![], "float"),
         "now" | "monotonic" | "monotonic_nanos" => (vec![], "int"),
         "sleep" => (vec!["ms: int"], "unit"),
@@ -362,8 +361,6 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "round" => "Nearest integer value to the float, as float (half away from zero).",
         "pow" => "Raises `base` to the power `exp` (floats).",
         "abs" => "Absolute value. Works on int (returns int) and float (returns float).",
-        "min" => "The smaller of two numbers. Works on two ints or two floats.",
-        "max" => "The larger of two numbers. Works on two ints or two floats.",
         "pi" => "The constant π as a float.",
         "e" => "The constant e (Euler's number) as a float.",
         // --- Tiempo / azar ---
@@ -2426,6 +2423,10 @@ pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
 pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
     ray_runtime::crypto::hasher_final(h)
 }
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hasher_clone(h: i64) -> Result<i64, String> {
+    ray_runtime::crypto::hasher_clone(h)
+}
 /// M347 (rayauth R1): clave pública (ECDSA P-256, RSA) — ver ray_runtime::crypto::pk_op.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn pk_op(name: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> {
@@ -2502,6 +2503,10 @@ pub fn hasher_update(_h: i64, _chunk: &[u8]) -> Result<(), String> {
 }
 #[cfg(target_arch = "wasm32")]
 pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> {
+    Err("incremental hashing is not available on this platform".to_string())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn hasher_clone(_h: i64) -> Result<i64, String> {
     Err("incremental hashing is not available on this platform".to_string())
 }
 
@@ -4088,6 +4093,11 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__hasher_final", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__hasher_final expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__hasher_clone", opcode: OpCode::HasherClone, check: |a| {
+        arity(a, 1, "__hasher_clone", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__hasher_clone expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;

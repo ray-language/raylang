@@ -1034,7 +1034,7 @@ impl<'a> Interpreter<'a> {
                     if !crate::builtins::net_tls_available()
                         && matches!(name.as_str(),
                             "__crypto_random_bytes" | "__sha256" | "__sha512" | "__sha1"
-                            | "__hasher_new" | "__hasher_update" | "__hasher_final"
+                            | "__hasher_new" | "__hasher_update" | "__hasher_final" | "__hasher_clone"
                             | "__hmac_sha256" | "__hmac" | "__pk_op" | "__ed25519_public_key" | "__ed25519_sign"
                             | "__ed25519_verify" | "__chacha20poly1305_seal"
                             | "__chacha20poly1305_open" | "__x25519_public_key"
@@ -1287,6 +1287,16 @@ impl<'a> Interpreter<'a> {
                     let arr = match crate::builtins::hasher_final(*h) {
                         Ok(d) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(d))],
                         Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            "__hasher_clone" => match &values[0] {
+                Value::Int(h) => {
+                    let arr = match crate::builtins::hasher_clone(*h) {
+                        Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     };
                     Value::Array(Rc::new(RefCell::new(arr)))
                 }

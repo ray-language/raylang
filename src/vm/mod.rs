@@ -2033,7 +2033,7 @@ impl<'a> Vm<'a> {
                 // desde su stub (el programa puede hacer fallback, como con sqlite). Con la
                 // feature activa el guard es false constante y el compilador elimina el brazo.
                 OpCode::CryptoRandomBytes | OpCode::Sha256 | OpCode::Sha512 | OpCode::Sha1
-                | OpCode::HasherNew | OpCode::HasherUpdate | OpCode::HasherFinal
+                | OpCode::HasherNew | OpCode::HasherUpdate | OpCode::HasherFinal | OpCode::HasherClone
                 | OpCode::HmacSha256 | OpCode::Hmac | OpCode::PkOp | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
                 | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
                 | OpCode::X25519PublicKey | OpCode::X25519SharedSecret | OpCode::HkdfSha256
@@ -2165,6 +2165,17 @@ impl<'a> Vm<'a> {
                         let elems = match crate::builtins::hasher_final(handle) {
                             Ok(d) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(d)],
                             Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    }
+                    _ => unreachable!("the checker guarantees an int"),
+                },
+                OpCode::HasherClone => match self.pop() {
+                    HeapValue::Int(handle) => {
+                        let elems = match crate::builtins::hasher_clone(handle) {
+                            Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
+                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                         };
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));

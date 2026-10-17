@@ -4,6 +4,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.63 — 2026-10-17
+
+- **`ray test <archivo>` con ruta relativa volvía «no tests (@test) in the project» (M408,
+  takeit #180)**: `ray test src/util.ray` —y hasta `ray test src/main.ray`, la propia entrada— no
+  corría nada aunque el archivo tuviera `@test`. El filtro de módulos ajenos (M390) buscaba el
+  `ray.toml` subiendo desde la carpeta de la suite, pero con una ruta relativa no puede subir más
+  allá de `src`, no lo encontraba y tomaba el propio proyecto por dependencia: todos sus tests se
+  descartaban. Ahora la carpeta se canoniza antes de buscar.
+- **`std/crypto.hash_clone(h)` (takeit #179)**: bifurca un hasher incremental — un handle nuevo con
+  el mismo estado mientras el original sigue abierto. El digest de un prefijo y el del archivo
+  entero salen de una sola pasada (transferencias reanudables, checkpoints), sin alimentar dos
+  hashers ni releer el prefijo. Igual en los tres motores (ring `Context` es `Clone`).
+- **`ray doc min`/`max` (y el MCP) describían «the smaller of two numbers» (takeit #178)**: eran
+  entradas heredadas de cuando `min`/`max` eran builtins; hoy son los terminales de iterador del
+  prelude (`Iter<T: Ord> -> Option<T>`) y `min(3, 5)` falla por aridad. La doc es ahora la del
+  prelude, que remite a `math.min`/`math.max` para dos valores. De paso, `ray doc` no encontraba la
+  doc `///` de NINGUNA función genérica del prelude (buscaba `fn min(` y la firma es `fn min<`):
+  `min`, `max`, `sort`… salían solo con la firma.
+
 ## 1.27.62 — 2026-10-16
 
 - **Android: la página sigue al modo claro/oscuro del sistema (M407, rayplay #177)**: el shell de

@@ -1945,7 +1945,7 @@ canal cifrado entre dos pares:
 | **acuerdo de claves** | `x25519_public_key(secret)`, `x25519_shared_secret(secret, peer_public)` |
 | **derivación** | `hkdf_sha256(salt, ikm, info, len)` |
 | cifrado autenticado | `chacha20poly1305_seal(key, nonce, aad, plain)`, `..._open(…)` |
-| hashing (una pasada e **incremental**) | `sha256(b)`/`sha512(b)`; por trozos (archivos grandes sin cargarlos enteros): `sha256_init()` → `hash_update(h, chunk)`* → `hash_final(h)` — digest idéntico al de una pasada |
+| hashing (una pasada e **incremental**) | `sha256(b)`/`sha512(b)`; por trozos (archivos grandes sin cargarlos enteros): `sha256_init()` → `hash_update(h, chunk)`* → `hash_final(h)` — digest idéntico al de una pasada; `hash_clone(h)` bifurca el hasher (el digest de un prefijo y el del total en una sola pasada, para reanudaciones y checkpoints) |
 
 Las claves privadas —la semilla Ed25519 y el secreto X25519— son **32 octetos cualesquiera**, así que
 se crean con `crypto.random_bytes(32)` y se pueden guardar: la identidad de un nodo sobrevive al

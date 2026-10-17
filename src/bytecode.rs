@@ -307,6 +307,8 @@ pub enum OpCode {
     HasherNew,
     HasherUpdate,
     HasherFinal,
+    /// takeit #179: `__hasher_clone(h)` → `[string]` (un handle nuevo con el mismo estado).
+    HasherClone,
     Sha256,
     Sha512,
     Sha1,

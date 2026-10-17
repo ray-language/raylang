@@ -316,6 +316,23 @@ pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
 #[cfg(not(feature = "crypto"))]
 pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> { Err("crypto is not compiled in".to_string()) }
 
+/// takeit #179: bifurca el hasher `h` — un handle NUEVO con el mismo estado (ring `Context` es
+/// `Clone`). El original sigue vivo: el digest de un prefijo y el del total en una sola pasada.
+#[cfg(feature = "crypto")]
+pub fn hasher_clone(h: i64) -> Result<i64, String> {
+    let mut reg = hasher_registry().lock().unwrap();
+    let ctx = match reg.1.get(&h) {
+        Some(ctx) => ctx.clone(),
+        None => return Err(format!("invalid hasher handle: {h}")),
+    };
+    let id = reg.0;
+    reg.0 += 1;
+    reg.1.insert(id, ctx);
+    Ok(id)
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hasher_clone(_h: i64) -> Result<i64, String> { Err("crypto is not compiled in".to_string()) }
+
 // --- M347 (rayauth R1): clave pública — ECDSA P-256 y RSA (PKCS#1 v1.5 y PSS), sobre ring ---
 //
 // Un solo primitivo `pk_op(op, a, b, c) -> Result<Vec<u8>, String>` (como `bigint::op`): las claves

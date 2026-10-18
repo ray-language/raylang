@@ -3588,10 +3588,7 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check_args_recv(&mut self, params: &[Type], ret: Type, args: &[Expr], label: &str, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
         if args.len() != params.len() {
-            return Err(self.err(line, col, format!(
-                "{} expects {} argument(s), received {}",
-                label, params.len(), args.len()
-            )));
+            return Err(self.err(line, col, arity_message(label, params.len(), args.len())));
         }
         for (i, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
             // El tipo del parámetro es el esperado del argumento (propaga a `None`,
@@ -3629,10 +3626,7 @@ impl Checker {
         recv: Option<&Type>,
     ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
-            return Err(self.err(line, col, format!(
-                "{} expects {} argument(s), received {}",
-                label, params.len(), args.len()
-            )));
+            return Err(self.err(line, col, arity_message(label, params.len(), args.len())));
         }
         // σ: parámetro de tipo → tipo concreto inferido.
         let mut sigma: HashMap<String, Type> = HashMap::new();
@@ -4108,4 +4102,17 @@ fn type_contains_tuple(t: &Type) -> bool {
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_contains_tuple),
         _ => false,
     }
+}
+
+/// El mensaje de aridad de una llamada. `min(a, b)`/`max(a, b)` añaden la pista (takeit #178): el
+/// `min` global es el terminal de iteradores y quien escribe dos argumentos busca `math.min`.
+/// ⚠️ Espejo selfhost (`selfhost/checker.ray::arity_message`): mismo texto byte a byte.
+pub(super) fn arity_message(label: &str, expected: usize, got: usize) -> String {
+    let mut m = format!("{label} expects {expected} argument(s), received {got}");
+    if got == 2 && (label == "'min'" || label == "'max'") {
+        let name = label.trim_matches('\'');
+        let which = if name == "min" { "smaller" } else { "larger" };
+        m.push_str(&format!(" ({name} is the iterator terminal; for the {which} of two values use math.{name} after import std/math)"));
+    }
+    m
 }

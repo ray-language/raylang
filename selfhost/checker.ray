@@ -2915,6 +2915,25 @@ fn check_named_call(
 // Una llamada a una función GENÉRICA (M14.3c). Infiere los parámetros de tipo unificando los tipos
 // de los parámetros con los de los argumentos, y devuelve el retorno ya sustituido. Si algún
 // parámetro de tipo no queda determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
+// El mensaje de aridad; `min(a, b)`/`max(a, b)` añaden la pista de `math.min`/`math.max`
+// (takeit #178). Espejo de `checker::core::arity_message`: mismo texto byte a byte.
+fn arity_message(label: string, expected: int, got: int) -> string {
+    var m = label + " expects " + to_string(expected) + " argument(s), received " + to_string(got);
+    if (got == 2 && (label == "'min'" || label == "'max'")) {
+        let name = if (label == "'min'") { "min" } else { "max" };
+        let which = if (label == "'min'") { "smaller" } else { "larger" };
+        m = m
+            + " ("
+            + name
+            + " is the iterator terminal; for the "
+            + which
+            + " of two values use math."
+            + name
+            + " after import std/math)";
+    }
+    m
+}
+
 fn check_generic_call(
     c: Checker,
     type_params: [string],
@@ -2927,17 +2946,7 @@ fn check_generic_call(
     col: int
 ) -> Result<Type, TypeError> {
     if (cargs.len() != params.len()) {
-        return Result.Err(
-            terr(
-                line,
-                col,
-                label
-                    + " expects "
-                    + to_string(params.len())
-                    + " argument(s), received "
-                    + to_string(cargs.len())
-            )
-        );
+        return Result.Err(terr(line, col, arity_message(label, params.len(), cargs.len())));
     }
     let sigma: Map<string, Type> = Map.new();
     var i = 0;
@@ -3716,17 +3725,7 @@ fn check_args(
     col: int
 ) -> Result<Type, TypeError> {
     if (cargs.len() != params.len()) {
-        return Result.Err(
-            terr(
-                line,
-                col,
-                label
-                    + " expects "
-                    + to_string(params.len())
-                    + " argument(s), received "
-                    + to_string(cargs.len())
-            )
-        );
+        return Result.Err(terr(line, col, arity_message(label, params.len(), cargs.len())));
     }
     var i = 0;
     while (i < cargs.len()) {

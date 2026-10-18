@@ -206,6 +206,28 @@ static NSString *const rayJsShim =
     @"_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}},"
     @"_deliver_json:function(i,t){var r=p[i];if(r){delete p[i];r(JSON.parse(t))}}}})();";
 
+// rayround #182: sin --devtools los errores de la página no se veían en ningún sitio. Los
+// errores no capturados, los rechazos de promesas y console.error/warn llegan aquí y salen por
+// stderr —la consola de `simctl launch --console-pty` y de Xcode— con prefijo `[page]`.
+@interface RayLogHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation RayLogHandler
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.body isKindOfClass:[NSString class]]) {
+        return;
+    }
+    fprintf(stderr, "%s\n", [(NSString *)message.body UTF8String]);
+    fflush(stderr);
+}
+@end
+
+static NSString *const rayLogShim =
+    @"(function(){function l(s){window.webkit.messageHandlers.rayLog.postMessage(String(s))}"
+    @"window.addEventListener('error',function(e){l('[page] '+(e.message||String(e.error||e))+' @'+(e.filename||'')+':'+(e.lineno||0)+':'+(e.colno||0))});window.addEventListener('unhandledrejection',function(e){var r=e.reason;l('[page] unhandled rejection: '+(r&&r.message||String(r))+(r&&r.stack?' @'+r.stack.split('\\n')[0]:''))});var ce=console.error,cw=console.warn;console.error=function(){l('[page] console.error: '+[].slice.call(arguments).join(' '));ce.apply(console,arguments)};console.warn=function(){l('[page] console.warn: '+[].slice.call(arguments).join(' '));cw.apply(console,arguments)};"
+    @"})();";
+
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;
 
@@ -295,6 +317,11 @@ static void ray_eval(const char *js) {
     [cfg.userContentController addScriptMessageHandler:[RayMsgHandler new] name:@"ray"];
     [cfg.userContentController
         addUserScript:[[WKUserScript alloc] initWithSource:rayJsShim
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                          forMainFrameOnly:YES]];
+    [cfg.userContentController addScriptMessageHandler:[RayLogHandler new] name:@"rayLog"];
+    [cfg.userContentController
+        addUserScript:[[WKUserScript alloc] initWithSource:rayLogShim
                                              injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                           forMainFrameOnly:YES]];
     rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds configuration:cfg];
@@ -716,6 +743,17 @@ mod tests {
         let guard = SCENE_DELEGATE_M.find("isMainFrame").unwrap();
         let body = SCENE_DELEGATE_M.find("message.body").unwrap();
         assert!(guard < body, "the frame guard precedes the body read");
+    }
+
+    /// rayround #182: los errores de la página salen por stderr sin --devtools.
+    #[test]
+    fn the_shell_forwards_page_errors_to_stderr() {
+        assert!(SCENE_DELEGATE_M.contains("messageHandlers.rayLog.postMessage(String(s))"));
+        assert!(SCENE_DELEGATE_M.contains("addScriptMessageHandler:[RayLogHandler new] name:@\"rayLog\""));
+        assert!(SCENE_DELEGATE_M.contains("initWithSource:rayLogShim"));
+        assert!(SCENE_DELEGATE_M.contains("addEventListener('error'"));
+        assert!(SCENE_DELEGATE_M.contains("addEventListener('unhandledrejection'"));
+        assert!(SCENE_DELEGATE_M.contains("fprintf(stderr, \"%s\\n\""));
     }
 
     /// M322: el shell registra el WKURLSchemeHandler de `ray` ANTES de crear el webview y

@@ -32,7 +32,7 @@ Every chapter of the handbook has apps that take the same idea further:
 
 | If you just read | Look next at | What they add |
 |---|---|---|
-| [Mobile app](mobile.en.md) and [cross-platform](cross-platform.en.md) | [ray808](https://github.com/ray-language/ray808), [rayplay](https://github.com/ray-language/rayplay), [raydesk](https://github.com/ray-language/raydesk) | real-time and background audio, and an app with more screens |
+| [Mobile app](mobile.en.md) and [cross-platform](cross-platform.en.md) | [ray808](https://github.com/ray-language/ray808), [rayplay](https://github.com/ray-language/rayplay), [rayround](https://github.com/ray-language/rayround), [raydesk](https://github.com/ray-language/raydesk) | real-time and background audio, the lock screen with `std/media`, an interface with [ray-elements](https://elements.raylang.dev) and an app with more screens |
 | [Windows in depth](windows.en.md) | [raynote](https://github.com/ray-language/raynote), [raystage](https://github.com/ray-language/raystage) | an editor with real documents and every window kind |
 | [Server-rendered site](ssr.en.md) and [with React](web-react.en.md) | [store](https://github.com/ray-language/store), [raysite](https://github.com/ray-language/raysite) | a shop with a separate frontend and a site generator |
 | [Web API](api.en.md) | [raygate](https://github.com/ray-language/raygate), [raycall](https://github.com/ray-language/raycall), [raymart](https://github.com/ray-language/raymart) | a gateway, traces across services and a whole system |
@@ -56,4 +56,4 @@ For any function, the [reference](../REFERENCE.en.md) has its signature, and the
 [manual](../MANUAL.md) (Spanish) explains the language in depth. The [overview](index.en.md)
 gathers every chapter.
 
-<!-- sync: sha256:4e6fd5263a63 -->
+<!-- sync: sha256:99086288436b -->

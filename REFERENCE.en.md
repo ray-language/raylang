@@ -457,6 +457,10 @@ Tier 2: they do **not** ship in the binary; they are declared in `ray.toml` —a
 `net = "^0.10"` (an index version; `ray add net` writes it), `oidc = "path:../oidc"` (a local
 directory, relative to the root) or `geo = "git+https://host/geo@v1.0"`; no inline tables— and
 imported the same way (`import net/http;` → `http.fetch(…)`). They live in the repo's `packages/`.
+The interface of `std/ui` apps has its own package: `elements` ([ray-elements](https://elements.raylang.dev),
+web components with tokens and light/dark theme; `ray add elements` + `import elements/bridge;`
+serves `@raylang/elements` to the page by its npm name, without npm, and gives the components
+native dialogs, confirmations and menus; `@raylang/react` and `@raylang/vue` wrappers).
 
 **How a dependency is imported (M383).** The first segment of the `import` is the **key** in
 `[dependencies]` and what follows is the module file at the **package root** (not under `src/`):
@@ -705,4 +709,4 @@ threads, one per core by default; `1` = deterministic. A network server with few
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:41a039d85866 -->
+<!-- sync: sha256:a64f4c5b125b -->

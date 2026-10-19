@@ -543,7 +543,12 @@ data)`, `recv_from(h) -> Result<Packet{host, port, data}, string>`, yields the f
 only, so UDP needs `ray add net`), `web` (an Express-style app framework
 over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
 the recommended base for servers and for desktop/mobile app backends with `std/ui`),
-`rpc` and `db`. Signatures live in REFERENCE.md/reference.md. Connections are NOT shared
+`rpc`, `db` and `elements` (ray-elements, the web-components design system for `std/ui`
+pages: `ray add elements` + `import elements/bridge;` in the program serves `@raylang/elements`
+to the page by its npm name without npm — `<link href="/node_modules/@raylang/elements/tokens.css">`,
+`import { enableRaylang } from "@raylang/elements"` — with light/dark theme, native file dialogs,
+confirmations and menus through the bridge; React/Vue wrappers `@raylang/react`/`@raylang/vue`;
+docs at https://elements.raylang.dev). Signatures live in REFERENCE.md/reference.md. Connections are NOT shared
 between fibers (isolated heaps): to reuse them across requests use the pools — `net/pool`
 (generic), `http.pool(size)`, `redis.pool(host, port, size)`, `postgres.pool(...)`,
 `mysql.pool(...)`, `mongo.pool(...)` (`pool_query`/`pool_exec`/`pool_tx`/`pool_with`) and

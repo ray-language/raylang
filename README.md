@@ -24,7 +24,8 @@ Español · [English](README.en.md)
 concurrencia multicore por actores, un ecosistema de herramientas y **tres motores que coinciden byte a
 byte** — una VM de bytecode para desarrollar, un **binario nativo** para desplegar y un intérprete como
 oráculo de validación. Además se **compila a sí mismo** (self-hosting) y corre **en el navegador** vía
-WebAssembly.
+WebAssembly. Las apps de escritorio y móvil (`std/ui`) tienen su sistema de componentes,
+[ray-elements](https://elements.raylang.dev).
 
 El anfitrión es **Rust**. La política de dependencias es *mínima y deliberada*: una dependencia entra
 solo cuando hacerla a mano sería peor ingeniería (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, el

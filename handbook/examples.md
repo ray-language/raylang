@@ -34,7 +34,7 @@ Cada capítulo del handbook tiene apps que llevan la misma idea más lejos:
 
 | Si acabas de leer | Mira después | Qué añaden |
 |---|---|---|
-| [App móvil](mobile.md) y [multiplataforma](cross-platform.md) | [ray808](https://github.com/ray-language/ray808), [rayplay](https://github.com/ray-language/rayplay), [raydesk](https://github.com/ray-language/raydesk) | audio en tiempo real y en segundo plano, y una app con más pantallas |
+| [App móvil](mobile.md) y [multiplataforma](cross-platform.md) | [ray808](https://github.com/ray-language/ray808), [rayplay](https://github.com/ray-language/rayplay), [rayround](https://github.com/ray-language/rayround), [raydesk](https://github.com/ray-language/raydesk) | audio en tiempo real y en segundo plano, la pantalla de bloqueo con `std/media`, una interfaz con [ray-elements](https://elements.raylang.dev) y una app con más pantallas |
 | [Ventanas a fondo](windows.md) | [raynote](https://github.com/ray-language/raynote), [raystage](https://github.com/ray-language/raystage) | un editor con documentos de verdad y todos los tipos de ventana |
 | [Sitio con plantillas](ssr.md) y [con React](web-react.md) | [store](https://github.com/ray-language/store), [raysite](https://github.com/ray-language/raysite) | una tienda con frontend aparte y un generador de sitios |
 | [API web](api.md) | [raygate](https://github.com/ray-language/raygate), [raycall](https://github.com/ray-language/raycall), [raymart](https://github.com/ray-language/raymart) | un gateway, trazas entre servicios y un sistema entero |

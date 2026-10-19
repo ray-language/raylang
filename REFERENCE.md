@@ -458,7 +458,11 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 Tier 2: **no** van en el binario; se declaran en `ray.toml` —siempre una cadena: `net = "^0.10"`
 (versión del índice; `ray add net` la escribe), `oidc = "path:../oidc"` (directorio local, relativo
 a la raíz) o `geo = "git+https://host/geo@v1.0"`; sin tablas inline— y se importan igual
-(`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
+(`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo. La interfaz de las apps
+`std/ui` tiene su paquete: `elements` ([ray-elements](https://elements.raylang.dev), componentes web
+con tokens y tema claro/oscuro; `ray add elements` + `import elements/bridge;` sirve
+`@raylang/elements` a la página por su nombre npm, sin npm, y da a los componentes diálogos,
+confirmaciones y menús nativos; envoltorios `@raylang/react` y `@raylang/vue`).
 
 **Cómo se importa una dependencia (M383).** El primer segmento del `import` es la **clave** de
 `[dependencies]` y lo que sigue, el archivo de módulo en la **raíz del paquete** (no bajo `src/`):

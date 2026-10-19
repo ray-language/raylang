@@ -137,6 +137,10 @@ a Postgres como en el capítulo de la API.
 
 ## 3. El frontend
 
+Si la app es de escritorio o móvil (`std/ui`), los componentes de la interfaz pueden venir de
+[ray-elements](https://elements.raylang.dev), con su envoltorio `@raylang/react`. Aquí, un sitio
+web servido por HTTP, basta con React.
+
 El frontend es una app de React normal. Habla con el programa por `fetch` con rutas relativas, que
 funcionan igual en desarrollo y en producción:
 

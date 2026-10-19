@@ -260,6 +260,11 @@ el mismo `main` sirve para el escritorio y para el móvil.
 
 ## 6. La interfaz en React
 
+Para los componentes de la interfaz —botones, formularios, diálogos, con tema claro/oscuro y
+diálogos nativos a través del puente— está [ray-elements](https://elements.raylang.dev)
+(`ray add elements`), que funciona en HTML plano, React o Vue; rayround y rayplay lo usan. Notes
+se queda en React a secas para que el puente se vea entero.
+
 El frontend es una app de React normal. Todo lo que sabe de raylang está en un módulo pequeño que
 envuelve `window.ray.request` con tipos:
 

@@ -241,6 +241,10 @@ a.app span, div.app span { display: block; color: var(--muted); font-size: .87re
     vertical-align: middle;
     white-space: nowrap;
 }
+/* «Hecho con raylang»: cuatro grupos, cada uno con su rejilla; las plataformas van en la tarjeta. */
+.eco h3.group { font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 1.4rem 0 .6rem; }
+.eco h3.group:first-of-type { margin-top: 0; }
+.app i.on { display: block; font-style: normal; font-size: .74rem; color: var(--accent); margin-top: .35rem; opacity: .85; }
 .eco p.note { color: var(--muted); font-size: .9rem; max-width: 64rem; }
 .eco p.note a { color: var(--accent); }
 /* Desktop y móvil: las cuatro plataformas + los comandos que las producen. */
@@ -448,6 +452,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <div class="app"><b>Windows</b><span>the same command leaves the desktop <code>.exe</code> (no console on double-click, embedded icon and version) with its shortcut; window and webview on Win32/WebView2, audio through WASAPI.</span></div>
             <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> generates the Xcode project with the program compiled to a static library; persistent signing for device and simulator.</span></div>
             <div class="app"><b>Android</b><span><code>ray bundle --android</code> generates the Gradle project with the native <code>.so</code>, launcher icon and release signing; audio through AAudio.</span></div>
+            <a class="app" href="https://elements.raylang.dev"><b>ray-elements</b><span>the interface components: web components with tokens, light/dark theme and native dialogs, confirmations and menus through the bridge; plain HTML, React or Vue. <code>ray add elements</code> →</span></a>
         </div>
         <div class="chips">
             <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
@@ -466,6 +471,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             <div class="app"><b>Windows</b><span>el mismo comando deja el <code>.exe</code> de escritorio (sin consola al doble clic, icono y versión embebidos) con su acceso directo; ventana y webview sobre Win32/WebView2, audio por WASAPI.</span></div>
             <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> genera el proyecto Xcode con el programa compilado a librería estática; firma persistente para dispositivo y simulador.</span></div>
             <div class="app"><b>Android</b><span><code>ray bundle --android</code> genera el proyecto Gradle con el <code>.so</code> nativo, icono launcher y firma de release; audio por AAudio.</span></div>
+            <a class="app" href="https://elements.raylang.dev"><b>ray-elements</b><span>los componentes de la interfaz: web components con tokens, tema claro/oscuro y diálogos, confirmaciones y menús nativos por el puente; HTML plano, React o Vue. <code>ray add elements</code> →</span></a>
         </div>
         <div class="chips">
             <span class="chip"><b>ray bundle</b> · .app / .desktop / .exe</span>
@@ -610,11 +616,13 @@ section.engines { padding: 2.5rem 0 4rem; }
             </div>
             <div class="card">
                 <div class="ico">/</div>
-{% if en %}                <h3>Web framework</h3>
+{% if en %}                <h3>Web framework and components</h3>
                 <p>A production HTTP server with an Express-style framework, SSR with compiled,
-                typed templates (<code>.ray.html</code>), WebSocket and streaming.</p>{% else %}                <h3>Framework web</h3>
+                typed templates (<code>.ray.html</code>), WebSocket and streaming — and
+                <a href="https://elements.raylang.dev">ray-elements</a> for the interface of desktop and mobile apps.</p>{% else %}                <h3>Framework web y componentes</h3>
                 <p>Servidor HTTP de producción con framework estilo Express, SSR con templates
-                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming.</p>{% endif %}
+                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming — y
+                <a href="https://elements.raylang.dev">ray-elements</a> para la interfaz de las apps de escritorio y móvil.</p>{% endif %}
             </div>
             <div class="card">
                 <div class="ico">✓</div>
@@ -631,43 +639,81 @@ section.engines { padding: 2.5rem 0 4rem; }
 <section class="eco" id="ecosistema">
     <div class="wrap">
 {% if en %}        <h2 class="sec">Built <span class="grad">with raylang</span></h2>
-        <p class="lead">An LLM coding agent, a desktop app, servers and tools — real dogfood, published in the
-        organization.</p>
+        <p class="lead">Mobile and desktop apps, terminal games, servers under load and P2P tools — real
+        dogfood, published in the organization. Every one is a raylang project you can clone and run.</p>
+        <h3 class="group">Mobile and desktop</h3>
         <div class="apps">
-            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>coding agent and REPL for the terminal</span></a>
-            <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>service monitor with an SSE dashboard</span></a>
-            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>personal media server: Range streaming, live library, synced rooms</span></a>
-            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
-            <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>at-least-once queue broker with a write-ahead log</span></a>
-            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>serverless P2P chat: signed gossip, Ed25519 and X25519</span></a>
-            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>end-to-end encrypted P2P file transfer</span></a>
-            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>desktop notepad: native menus, dialogs and close interception</span></a>
-            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>and more →</b><span>raykv, raypass, raygame, raysite, raytop, raymail, raysync…</span></a>
+            <a class="app" href="https://github.com/ray-language/ray808"><b>ray808</b><span>TR-808 rhythm composer in React: one source for desktop, iPhone and Android</span><i class="on">macOS · Linux · Windows · iOS · Android</i></a>
+            <a class="app" href="https://github.com/ray-language/rayplay"><b>rayplay</b><span>audio player: sound from the program, background playback, Now Playing on the lock screen</span><i class="on">iOS · Android · desktop</i></a>
+            <a class="app" href="https://github.com/ray-language/rayround"><b>rayround</b><span>boxing round timer on ray-elements: background audio and lock-screen controls</span><i class="on">iOS · Android</i></a>
+            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>desktop notepad: native menus, dialogs, documents and close interception</span><i class="on">macOS · Linux · Windows</i></a>
+        </div>
+        <h3 class="group">Terminal</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/1942"><b>1942</b><span>Capcom's vertical shooter at 30 fps: kitty graphics and <code>std/audio</code> music</span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/rallyx"><b>rallyx</b><span>Rally-X at 30 fps: sprites and reactive WSG music</span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>LLM coding agent and REPL, on the <code>mcp</code>/<code>llm</code>/<code>agent</code> packages</span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/raytop"><b>raytop</b><span>htop-lite process viewer</span><i class="on">terminal</i></a>
+        </div>
+        <h3 class="group">Servers and systems</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/raymart"><b>raymart</b><span>distributed e-commerce: hexagonal services behind raygate, over rpc and gRPC</span><i class="on">native binaries</i></a>
+            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>personal media server: Range streaming, live library, synced rooms</span><i class="on">native binary</i></a>
+            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>Redis-compatible RESP2 key-value server, measured against Redis</span><i class="on">native binary</i></a>
+            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: routing, rate limit, circuit breaker, streaming</span><i class="on">native binary</i></a>
+        </div>
+        <h3 class="group">Peer-to-peer and crypto</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>end-to-end encrypted P2P file transfer, resumable</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>serverless P2P chat: signed gossip, Ed25519 and X25519</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>encrypted secrets vault with sealed-box sharing</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>and more →</b><span>rayq, raywatch, raysite, raymail, raysync, raytetris, raystage…</span><i class="on"></i></a>
         </div>
         <p class="libs">The libraries too: the networking and formats stack
         (<code>net</code> — HTTP/1.1 and 2, DNS, WebSocket, TLS —, <code>web</code>,
         <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) lives in
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
-        written in raylang (TLS and SQLite come from the runtime's <code>rustls</code>/<code>rusqlite</code>), and community packages are published in the
+        written in raylang (TLS and SQLite come from the runtime's <code>rustls</code>/<code>rusqlite</code>);
+        the interface components live in <a href="https://elements.raylang.dev">ray-elements</a> (<code>elements</code> in the
+        registry, <code>@raylang/elements</code> on npm); and community packages are published in the
         <a href="https://github.com/ray-language/ray-index">registry</a> with hashes and signatures.</p>{% else %}        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
-        <p class="lead">Un agente de código LLM, una app de escritorio, servidores y herramientas — dogfood real,
-        publicado en la organización.</p>
+        <p class="lead">Apps móviles y de escritorio, juegos de terminal, servidores bajo carga y herramientas
+        P2P — dogfood real, publicado en la organización. Cada una es un proyecto raylang que puedes clonar y correr.</p>
+        <h3 class="group">Móvil y escritorio</h3>
         <div class="apps">
-            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>agente de código y REPL para la terminal</span></a>
-            <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>monitor de servicios con dashboard SSE</span></a>
-            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>servidor de medios personal: streaming con Range, biblioteca viva, salas sincronizadas</span></a>
-            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
-            <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>broker de colas at-least-once con write-ahead log</span></a>
-            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>chat P2P sin servidor: gossip firmado, Ed25519 y X25519</span></a>
-            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>transferencia de archivos P2P cifrada extremo a extremo</span></a>
-            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>bloc de notas de escritorio: menús nativos, diálogos e intercepción del cierre</span></a>
-            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>raykv, raypass, raygame, raysite, raytop, raymail, raysync…</span></a>
+            <a class="app" href="https://github.com/ray-language/ray808"><b>ray808</b><span>caja de ritmos TR-808 en React: un fuente para escritorio, iPhone y Android</span><i class="on">macOS · Linux · Windows · iOS · Android</i></a>
+            <a class="app" href="https://github.com/ray-language/rayplay"><b>rayplay</b><span>reproductor de audio: el sonido sale del programa, sigue en segundo plano y aparece en la pantalla de bloqueo</span><i class="on">iOS · Android · escritorio</i></a>
+            <a class="app" href="https://github.com/ray-language/rayround"><b>rayround</b><span>temporizador de rounds de boxeo sobre ray-elements: audio en segundo plano y controles en la pantalla de bloqueo</span><i class="on">iOS · Android</i></a>
+            <a class="app" href="https://github.com/ray-language/raynote"><b>raynote</b><span>bloc de notas de escritorio: menús nativos, diálogos, documentos e intercepción del cierre</span><i class="on">macOS · Linux · Windows</i></a>
+        </div>
+        <h3 class="group">Terminal</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/1942"><b>1942</b><span>el matamarcianos vertical de Capcom a 30 fps: gráficos kitty y música por <code>std/audio</code></span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/rallyx"><b>rallyx</b><span>Rally-X a 30 fps: sprites y música WSG reactiva</span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>agente de código LLM y REPL, sobre los paquetes <code>mcp</code>/<code>llm</code>/<code>agent</code></span><i class="on">terminal</i></a>
+            <a class="app" href="https://github.com/ray-language/raytop"><b>raytop</b><span>visor de procesos tipo htop</span><i class="on">terminal</i></a>
+        </div>
+        <h3 class="group">Servidores y sistemas</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/raymart"><b>raymart</b><span>e-commerce distribuido: servicios hexagonales tras raygate, sobre rpc y gRPC</span><i class="on">binarios nativos</i></a>
+            <a class="app" href="https://github.com/ray-language/raystream"><b>raystream</b><span>servidor de medios personal: streaming con Range, biblioteca viva, salas sincronizadas</span><i class="on">binario nativo</i></a>
+            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>servidor clave-valor RESP2 compatible con Redis, medido contra Redis</span><i class="on">binario nativo</i></a>
+            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: enrutado, rate limit, circuit breaker, streaming</span><i class="on">binario nativo</i></a>
+        </div>
+        <h3 class="group">P2P y criptografía</h3>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>transferencia de archivos P2P cifrada extremo a extremo, reanudable</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/ray-language/msg"><b>msg</b><span>chat P2P sin servidor: gossip firmado, Ed25519 y X25519</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>bóveda de secretos cifrada con compartición sealed-box</span><i class="on">CLI</i></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>rayq, raywatch, raysite, raymail, raysync, raytetris, raystage…</span><i class="on"></i></a>
         </div>
         <p class="libs">Las librerías también: la pila de red y formatos
         (<code>net</code> — HTTP/1.1 y 2, DNS, WebSocket, TLS —, <code>web</code>,
         <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) vive en
         <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
-        escrita en raylang (TLS y SQLite vienen del runtime, <code>rustls</code>/<code>rusqlite</code>), y los paquetes de la comunidad se publican en el
+        escrita en raylang (TLS y SQLite vienen del runtime, <code>rustls</code>/<code>rusqlite</code>);
+        los componentes de la interfaz viven en <a href="https://elements.raylang.dev">ray-elements</a> (<code>elements</code> en el
+        registro, <code>@raylang/elements</code> en npm); y los paquetes de la comunidad se publican en el
         <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>{% endif %}
     </div>
 </section>

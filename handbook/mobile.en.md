@@ -259,6 +259,11 @@ is why the same `main` works on the desktop and on mobile.
 
 ## 6. The interface in React
 
+For the interface components —buttons, forms, dialogs, with light/dark theme and native dialogs
+through the bridge— there is [ray-elements](https://elements.raylang.dev) (`ray add elements`),
+which works in plain HTML, React or Vue; rayround and rayplay use it. Notes stays on bare React so
+the whole bridge is visible.
+
 The frontend is a normal React app. Everything it knows about raylang is in a small module that
 wraps `window.ray.request` with types:
 
@@ -536,4 +541,4 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:afa7abc449f8 -->
+<!-- sync: sha256:5230c239fe4b -->

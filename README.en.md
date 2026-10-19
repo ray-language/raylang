@@ -23,7 +23,8 @@
 **raylang** is written like a script and shipped as a binary: generics, traits, pattern matching, multicore
 actor concurrency, a tooling ecosystem and **three engines that agree byte for byte** — a bytecode VM
 for development, a **native binary** for deployment and an interpreter as a validation oracle. It also
-**compiles itself** (self-hosting) and runs **in the browser** via WebAssembly.
+**compiles itself** (self-hosting) and runs **in the browser** via WebAssembly. Desktop and mobile apps (`std/ui`) have their own component system,
+[ray-elements](https://elements.raylang.dev).
 
 The host is **Rust**. The dependency policy is *minimal and deliberate*: a dependency comes in only when
 hand-writing it would be worse engineering (TLS/`rustls`, crypto/`ring`, SQLite/`rusqlite`, the fiber
@@ -360,4 +361,4 @@ Dual-licensed, at your option:
 <sub>The brand identity (logo, variations, colors) lives in <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">brand book</a>.</sub>
 </div>
 
-<!-- sync: sha256:496d05817bb0 -->
+<!-- sync: sha256:93b0a31fbb2c -->

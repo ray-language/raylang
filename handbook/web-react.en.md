@@ -137,6 +137,10 @@ Postgres as in the API chapter.
 
 ## 3. The frontend
 
+If the app is a desktop or mobile one (`std/ui`), the interface components can come from
+[ray-elements](https://elements.raylang.dev), through its `@raylang/react` wrapper. Here, a web
+site served over HTTP, React alone is enough.
+
 The frontend is a normal React app. It talks to the program with `fetch` and relative URLs, which
 work the same in development and in production:
 
@@ -314,4 +318,4 @@ the API are never left on different versions.
 From the browser to the terminal: a [**command-line tool**](cli.en.md), the smallest thing raylang
 ships.
 
-<!-- sync: sha256:c2bb6ba0bd78 -->
+<!-- sync: sha256:6cf36c00b2d0 -->

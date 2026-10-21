@@ -455,8 +455,20 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
         // M202 (feedback 21 de ray-remote): también los TIPOS públicos del módulo — `ui.MenuItem`
         // devolvía "no existe" y el agente tenía que adivinar los campos compilando a ciegas. Un
         // struct muestra sus campos con tipo; un enum, sus variantes con payload.
+        // raymcp #221: un tipo traído con `from llm/config import Config` se muestra con su módulo
+        // (`-> llm/config.Config`): es lo que hay que importar para anotarlo.
+        let imported: std::collections::HashMap<String, String> = prog
+            .from_imports
+            .iter()
+            .flat_map(|fi| fi.names.iter().map(move |n| (n.alias.clone().unwrap_or_else(|| n.name.clone()), format!("{}.{}", fi.module, n.name))))
+            .collect();
         let sig = if let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) {
-            fn_signature(f)
+            let mut f = f.clone();
+            f.return_type = qualify_type(&f.return_type, &imported);
+            for p in &mut f.params {
+                p.ty = qualify_type(&p.ty, &imported);
+            }
+            fn_signature(&f)
         } else if let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
             t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
         }) {
@@ -515,6 +527,24 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
 /// constante pública); si no, la firma sin valor.
 fn const_signature(c: &crate::ast::ConstDef) -> String {
     crate::raydoc::const_signature(c) // M326: una sola firma para raydoc y el MCP
+}
+
+/// Renombra los tipos nominales de `t` que `imported` conoce (`Config` → `llm/config.Config`),
+/// recursivamente; lo demás queda igual.
+fn qualify_type(t: &crate::ast::Type, imported: &std::collections::HashMap<String, String>) -> crate::ast::Type {
+    use crate::ast::Type;
+    let q = |x: &Type| qualify_type(x, imported);
+    match t {
+        Type::Struct(n, args) => Type::Struct(imported.get(n).cloned().unwrap_or_else(|| n.clone()), args.iter().map(q).collect()),
+        Type::Enum(n, args) => Type::Enum(imported.get(n).cloned().unwrap_or_else(|| n.clone()), args.iter().map(q).collect()),
+        Type::Array(e) => Type::Array(Box::new(q(e))),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(q).collect()),
+        Type::Map(k, v) => Type::Map(Box::new(q(k)), Box::new(q(v))),
+        Type::Channel(e) => Type::Channel(Box::new(q(e))),
+        Type::Task(e) => Type::Task(Box::new(q(e))),
+        Type::Fn(ps, r) => Type::Fn(ps.iter().map(q).collect(), Box::new(q(r))),
+        other => other.clone(),
+    }
 }
 
 /// `trait Nombre<T> { fn m(self, …) -> R; … }` (raydata #205): la forma que se implementa.

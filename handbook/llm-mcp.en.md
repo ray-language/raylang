@@ -276,8 +276,9 @@ follows from the two:
 | `EXEC`: does something that cannot be taken back | asks | asks | runs |
 
 `read_file` is `READ` and `write_file` is `WRITE`. Of the `ray mcp` ones, those the server
-declares read-only (`ray_fmt`, `ray_doc`) are `READ`; the rest are `EXEC`, because a server that
-says nothing is treated as if it changed everything.
+declares read-only (`ray_fmt`, `ray_doc`) are `READ`; one the server declares reversible
+(`destructiveHint: false`, what `serve.write_tool` registers) is `WRITE`; the rest are `EXEC`,
+because a server that says nothing is treated as if it changed everything.
 
 Whatever must be asked is asked of a function of yours:
 
@@ -652,4 +653,4 @@ in front of users, it helps to know what is missing:
 [**Performance**](performance.en.md): how to measure a program, find where the time goes and make
 it fast.
 
-<!-- sync: sha256:25fa4866007e -->
+<!-- sync: sha256:19016a0ad791 -->

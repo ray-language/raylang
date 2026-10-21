@@ -26,6 +26,9 @@ pub struct ToolDef {
     schema: Json,
     /// Declared to clients as `annotations.readOnlyHint`: the tool changes nothing.
     read_only: bool,
+    /// Declared as `annotations.destructiveHint: false`: what the tool changes can be undone
+    /// (a client in an "edits run by themselves" mode may run it without asking).
+    reversible: bool,
     run: fn(Json) -> Result<string, string>,
 }
 
@@ -64,6 +67,7 @@ fn add_tool(
     description: string,
     schema: string,
     read_only: bool,
+    reversible: bool,
     run: fn(Json) -> Result<string, string>
 ) {
     let parsed = if (schema.trim() == "") {
@@ -85,6 +89,7 @@ fn add_tool(
             description: description,
             schema: parsed,
             read_only: read_only,
+            reversible: reversible,
             run: run
         }
     );
@@ -101,7 +106,21 @@ pub fn tool(
     schema: string,
     run: fn(Json) -> Result<string, string>
 ) {
-    add_tool(p, name, description, schema, false, run);
+    add_tool(p, name, description, schema, false, false, run);
+}
+
+/// Like `tool`, for one that changes something that can be undone (writes a file, adds a
+/// record): declared with `annotations.destructiveHint: false`, so a client that runs
+/// reversible edits by itself (the `agent` package in `EDITS`) does not ask. Keep `tool` for
+/// what cannot be undone: deleting, sending, spending.
+pub fn write_tool(
+    p: Provider,
+    name: string,
+    description: string,
+    schema: string,
+    run: fn(Json) -> Result<string, string>
+) {
+    add_tool(p, name, description, schema, false, true, run);
 }
 
 /// Like `tool`, for one that only reads: clients may run it without asking the user.
@@ -112,7 +131,7 @@ pub fn read_only_tool(
     schema: string,
     run: fn(Json) -> Result<string, string>
 ) {
-    add_tool(p, name, description, schema, true, run);
+    add_tool(p, name, description, schema, true, false, run);
 }
 
 /// Adds a resource: `read` returns its text each time a client asks for `uri`. A URI already
@@ -191,6 +210,14 @@ fn listed_tools(p: Provider) -> Json {
         item.insert("inputSchema", t.schema);
         if (t.read_only) {
             item.insert("annotations", protocol.object(["readOnlyHint"], [Json.JBool(true)]));
+        } else if (t.reversible) {
+            item.insert(
+                "annotations",
+                protocol.object(
+                    ["readOnlyHint", "destructiveHint"],
+                    [Json.JBool(false), Json.JBool(false)]
+                )
+            );
         }
         items.push(Json.JObject(item));
     }

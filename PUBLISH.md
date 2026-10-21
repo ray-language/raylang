@@ -238,10 +238,11 @@ Lo que hace, en orden:
 1. clona el espejo (o lo inicia si el repo remoto está vacío) y comprueba que `v<versión>`
    **no existe** — las versiones son inmutables: para publicar de nuevo, sube `version`;
 2. vuelca el paquete sobre el clon (todo menos `.git`, `.ray-deps/` y `ray.lock`);
-3. reescribe en `ray.toml` las dependencias **hermanas por ruta** (`net = "path:../net"`) a
-   su git pinneado a la versión que el hermano declara ahora
-   (`net = "git+https://github.com/ray-language/net@v0.10.1"`): el espejo es autocontenido,
-   el consumidor no tiene el monorepo al lado — publica primero los hermanos;
+3. reescribe en `ray.toml` las dependencias **hermanas por ruta** (`net = "path:../net"`) al
+   requisito del índice con la versión que el hermano declara ahora (`net = "^0.10.1"`): el
+   espejo es autocontenido, el consumidor no tiene el monorepo al lado, y el rango deja que el
+   índice unifique una sola `net` con lo que pida el proyecto (desde 1.27.67; antes era un tag
+   git exacto y un `llm` viejo arrastraba `net` v0.5.0) — publica primero los hermanos;
 4. el README público: las mismas dependencias reescritas, los bloques ```` ```raylang ````
    etiquetados `rust` (GitHub aún no colorea raylang) y, tras el título, el aviso de espejo
    con `ray add <pkg>` y la dependencia git directa;

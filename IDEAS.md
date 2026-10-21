@@ -4280,7 +4280,7 @@ paquetes:
 5. **FFI por plataforma** (rayffi #215): elegir el nombre de la biblioteca por SO (`extern "z"
    windows "zlib1" { … }` o una tabla en `ray.toml`) y comprobar si una biblioteca está
    (`ffi.library_available("z") -> bool`), para no descubrirlo con un pánico en la primera llamada.
-6. **Paquetes de agentes** (raymcp #219–#221): `ray registry mirror` fija cada dependencia hermana a
+6. ✅ EJECUTADA como M412 (DESIGN §384, 1.27.67; `llm`/`mcp`/`agent` 0.2.1). **Paquetes de agentes** (raymcp #219–#221): `ray registry mirror` fija cada dependencia hermana a
    su tag git del momento, así que `llm`/`mcp` 0.2.0 arrastran `net` v0.5.0. Opciones: publicar
    0.2.1 (pinneadas a `net` 0.10.x) y que el espejo escriba un rango del índice (`^0.10`) en vez de un
    tag; que `ray fetch` avise cuando un requisito exacto queda sustituido; `serve.write_tool` con
@@ -4289,4 +4289,9 @@ paquetes:
 7. **`ray test` parado deja huérfano su binario de test** (raystat #207, nota): parar `ray test
    --native` por su PID no se lleva al hijo. Un grupo de procesos propio para el binario (y
    reenviar SIGTERM) lo resolvería.
+8. **`ray fmt` no es idempotente en un caso** (visto en M412): un `if (…) { a } else if (…) { b }
+   else { c }` en una línea, como valor de un campo de un literal de struct que va de argumento
+   (`xs.push(T { risk: if … })`), tarda DOS pasadas en estabilizarse: la primera expande el `if` y
+   deja el literal con la envoltura larga, la segunda vuelve a pegar el literal a la llamada. La
+   guarda `fmt_policy` lo detecta como «el formateador no converge». Bug de `src/fmt.rs`, chico.
 

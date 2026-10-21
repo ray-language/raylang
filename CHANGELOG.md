@@ -4,6 +4,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.67 — 2026-10-21
+
+Los paquetes de agentes (raymcp #219–#221, M412). `llm`, `mcp` y `agent` **0.2.1** publicados.
+
+- **`ray registry mirror` escribe rangos del índice** (`net = "^0.10.1"`) para las dependencias
+  hermanas, en vez de un tag git exacto: `ray add agent` ya no arrastra `net` v0.5.0, y el proyecto
+  que pida `net ^0.10` comparte una sola copia (#219). `ray fetch` dice ahora **quién pedía qué**
+  cuando una versión fijada por una dependencia queda sustituida por otra mayor («note: 'net' is
+  pinned to v0.5.0 by llm … but v0.10.1 is used»).
+- **`mcp/serve.write_tool`** declara una herramienta que cambia algo reversible
+  (`destructiveHint: false`); el cliente lee `destructiveHint` en `Tool.destructive` y
+  **`agent.connect` la trata como `WRITE`**: en `EDITS` corre sin preguntar (#220).
+- **`llm` y `mcp` reexportan sus tipos**: `llm.Config`, `llm.ToolCall`, `llm.Reply`, `mcp.Tool`…
+  valen como anotación sin adivinar el módulo (#221). **`ray doc`** muestra los tipos importados con
+  su módulo: `for_anthropic(model, api_key) -> llm/config.Config`.
+
 ## 1.27.66 — 2026-10-21
 
 Las seis apps nuevas de ray-apps (rayzip, raycron, raydata, raystat, rayffi, raymcp) ejercitan

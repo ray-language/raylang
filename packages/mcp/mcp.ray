@@ -20,7 +20,7 @@ import net/http;
 import net/sse;
 import mcp/protocol;
 from std/json import Json;
-from mcp/protocol import Tool, Resource;
+pub from mcp/protocol import Tool, Resource;
 
 /// How long a server is given to start and answer `initialize`.
 pub const START_TIMEOUT_MS: int = 15000;

@@ -109,6 +109,8 @@ nombres `tool_name(server, tool)` = `mcp__<server>__<tool>` con su inversa `spli
   log no se quede bloqueado.
 - **Una herramienta que falla es un `Err`**, con el texto que devolvió. Un bloque que no es texto
   se resume: `[image 12 KiB]`.
+- **`destructive`** es `annotations.destructiveHint` (ausente = `true`): `false` promete que lo que la
+  herramienta cambia se puede deshacer.
 - **`read_only` es lo que el servidor declara** en `annotations.readOnlyHint`: una pista, no una
   garantía. Sin declaración, vale `false`.
 
@@ -175,7 +177,8 @@ Por HTTP, el mismo `build` se sirve con `serve.http(build, "127.0.0.1", 8765)`.
 |---|---|
 | `provider(name, version) -> Provider` | un proveedor vacío; `instructions` y `token` son campos |
 | `tool(p, name, description, schema, run)` | añade una herramienta; `schema` es el JSON Schema de sus argumentos como texto, `""` si no tiene |
-| `read_only_tool(…)` | lo mismo, declarada como de solo lectura |
+| `read_only_tool(…)` | lo mismo, declarada como de solo lectura (`readOnlyHint`) |
+| `write_tool(…)` | lo mismo, declarada como un cambio que se puede deshacer (`destructiveHint: false`): el paquete `agent` la trata como `WRITE` y en `EDITS` no pregunta |
 | `resource(p, uri, name, description, mime, read)` | añade un recurso |
 | `stdio(p) -> int` | sirve por la entrada y la salida estándar hasta que el cliente cierra |
 | `http(build, host, port) -> Result<int, string>` | sirve por Streamable HTTP |
@@ -214,6 +217,6 @@ herramienta es texto de un tercero; trátalo como dato, no como instrucciones.
 
 Del lado servidor, una herramienta es código tuyo que un modelo decide cuándo llamar y con qué
 argumentos: valida lo que recibe como validarías la entrada de un formulario. Marca
-`read_only_tool` solo lo que de verdad no cambia nada, porque es la pista con la que un cliente
-decide ejecutarla sin preguntar. Un servidor HTTP debe escuchar en `127.0.0.1`, y llevar `token`
+`read_only_tool` solo lo que de verdad no cambia nada, y `write_tool` solo lo que se puede
+deshacer, porque son las pistas con las que un cliente decide ejecutarla sin preguntar. Un servidor HTTP debe escuchar en `127.0.0.1`, y llevar `token`
 si escucha en cualquier otra dirección.

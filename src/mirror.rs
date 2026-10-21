@@ -10,10 +10,12 @@
 //! 1. clonar el espejo (o iniciarlo si el repo remoto está vacío) y comprobar que `v<versión>` no
 //!    existe (las versiones son inmutables: para publicar de nuevo se sube la versión);
 //! 2. volcar el paquete — todo menos `.git`, `.ray-deps/` y `ray.lock` — sobre el clon vacío;
-//! 3. reescribir en `ray.toml` las dependencias hermanas por ruta (`x = "path:../x"`) a su URL git
-//!    pública al tag de la versión ACTUAL del hermano (el espejo es autocontenido: el consumidor
-//!    no tiene el monorepo al lado); lo mismo en el README, que además recibe el bloque de
-//!    instalación (`ray add <pkg>` / dependencia git directa) y el aviso de espejo;
+//! 3. reescribir en `ray.toml` las dependencias hermanas por ruta (`x = "path:../x"`) al requisito
+//!    `^<versión ACTUAL del hermano>` del índice (el espejo es autocontenido: el consumidor no
+//!    tiene el monorepo al lado; raymcp #219: antes era un tag git exacto, y `llm` 0.2.0 arrastraba
+//!    `net` v0.5.0 mientras el consumidor pedía 0.10 — el rango deja al índice unificar); lo mismo
+//!    en el README, que además recibe el bloque de instalación (`ray add <pkg>` / dependencia git
+//!    directa) y el aviso de espejo;
 //! 4. commit `"<pkg> <versión> (from <repo fuente>@<sha>)"`, tag `v<versión>`, push de `main` y
 //!    del tag;
 //! 5. con `--index URL`: clonar ese índice, correr el `publish` normal contra el clon del espejo
@@ -133,16 +135,6 @@ fn public_url_of(repo: &str) -> Option<String> {
     None
 }
 
-/// La URL pública de un paquete HERMANO en la misma organización que el espejo
-/// (`https://host/org/x` → `https://host/org/<name>`; se conserva el sufijo `.git` si lo hay).
-fn sibling_public_url(public: &str, name: &str) -> String {
-    let suffix = if public.ends_with(".git") { ".git" } else { "" };
-    match public.rsplit_once('/') {
-        Some((org, _)) => format!("{org}/{name}{suffix}"),
-        None => format!("{public}/{name}{suffix}"),
-    }
-}
-
 fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let mut cmd = Command::new("git");
     if let Some(d) = cwd {
@@ -247,9 +239,9 @@ fn sibling_versions(m: &Manifest) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
-/// Reescribe en un texto (ray.toml o README) cada `name = "path:…"` a su dependencia git pública
-/// pinneada: `name = "git+https://host/org/name@vX"`. Línea a línea; pura.
-fn rewrite_path_deps(text: &str, public: &str, siblings: &[(String, String)]) -> String {
+/// Reescribe en un texto (ray.toml o README) cada `name = "path:…"` al requisito del índice
+/// `name = "^X.Y.Z"` (la versión actual del hermano). Línea a línea; pura.
+fn rewrite_path_deps(text: &str, siblings: &[(String, String)]) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim_start();
@@ -261,7 +253,7 @@ fn rewrite_path_deps(text: &str, public: &str, siblings: &[(String, String)]) ->
             {
                 let indent = &line[..line.len() - trimmed.len()];
                 let eol = if line.ends_with('\n') { "\n" } else { "" };
-                replaced = Some(format!("{indent}{key} = \"git+{}@v{v}\"{eol}", sibling_public_url(public, key)));
+                replaced = Some(format!("{indent}{key} = \"^{v}\"{eol}"));
             }
         }
         out.push_str(replaced.as_deref().unwrap_or(line));
@@ -275,7 +267,7 @@ const MIRROR_MARKERS: [&str; 2] = ["Read-only mirror", "Espejo de solo lectura"]
 /// raylang), las dependencias por ruta reescritas y, tras el título, el aviso de espejo con las
 /// instrucciones de instalación. Idempotente (el aviso se añade una vez). Pura.
 fn public_readme(text: &str, name: &str, version: &str, public: &str, source: Option<&str>, siblings: &[(String, String)]) -> String {
-    let body = rewrite_path_deps(text, public, siblings).replace("\n```raylang\n", "\n```rust\n");
+    let body = rewrite_path_deps(text, siblings).replace("\n```raylang\n", "\n```rust\n");
     let body = if body.starts_with("```raylang\n") { body.replacen("```raylang\n", "```rust\n", 1) } else { body };
     if MIRROR_MARKERS.iter().any(|m| body.contains(m)) {
         return body;
@@ -347,9 +339,9 @@ fn mirror(m: &Manifest, opts: &Opts, work: &Path) -> Result<(), String> {
         if !siblings.is_empty() {
             let toml = dir.join("ray.toml");
             let text = std::fs::read_to_string(&toml).map_err(|e| format!("could not read ray.toml: {e}"))?;
-            std::fs::write(&toml, rewrite_path_deps(&text, &opts.public, &siblings)).map_err(|e| format!("could not write ray.toml: {e}"))?;
+            std::fs::write(&toml, rewrite_path_deps(&text, &siblings)).map_err(|e| format!("could not write ray.toml: {e}"))?;
             for (name, v) in &siblings {
-                println!("{}: dependency {name} -> git+{}@v{v}", m.name, sibling_public_url(&opts.public, name));
+                println!("{}: dependency {name} -> ^{v}", m.name);
             }
         }
         write_readme(m, opts, &dir, &siblings)?;
@@ -433,17 +425,15 @@ mod tests {
         assert_eq!(public_url_of("ssh://git@github.com/ray-language/web").as_deref(), Some("https://github.com/ray-language/web"));
         assert_eq!(public_url_of("https://github.com/ray-language/web.git").as_deref(), Some("https://github.com/ray-language/web"));
         assert_eq!(public_url_of("/tmp/local/repo"), None);
-        assert_eq!(sibling_public_url("https://github.com/ray-language/web", "net"), "https://github.com/ray-language/net");
-        assert_eq!(sibling_public_url("file:///tmp/org/web.git", "net"), "file:///tmp/org/net.git");
     }
 
     #[test]
     fn path_dependencies_become_pinned_git_dependencies() {
         let toml = "[dependencies]\nnet = \"path:../net\"\nother = \"^1.0\"\n  db = \"path:../db\"\n";
-        let out = rewrite_path_deps(toml, "https://github.com/ray-language/web", &[("net".into(), "0.10.1".into()), ("db".into(), "0.5.1".into())]);
+        let out = rewrite_path_deps(toml, &[("net".into(), "0.10.1".into()), ("db".into(), "0.5.1".into())]);
         assert_eq!(
             out,
-            "[dependencies]\nnet = \"git+https://github.com/ray-language/net@v0.10.1\"\nother = \"^1.0\"\n  db = \"git+https://github.com/ray-language/db@v0.5.1\"\n"
+            "[dependencies]\nnet = \"^0.10.1\"\nother = \"^1.0\"\n  db = \"^0.5.1\"\n"
         );
     }
 
@@ -455,7 +445,7 @@ mod tests {
         assert!(out.contains("> web = \"^0.6.0\"\n"), "{out}");
         assert!(out.contains("`web = \"git+https://github.com/ray-language/web@v0.6.0\"`"), "{out}");
         assert!(out.contains("\n```rust\nimport web/framework;\n```\n"), "{out}");
-        assert!(out.contains("net = \"git+https://github.com/ray-language/net@v0.10.1\"\n"), "{out}");
+        assert!(out.contains("net = \"^0.10.1\"\n"), "{out}");
         // Idempotente: una segunda pasada no añade otro aviso.
         let again = public_readme(&out, "web", "0.6.0", "https://github.com/ray-language/web", None, &[]);
         assert_eq!(again, out);

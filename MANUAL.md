@@ -2385,7 +2385,8 @@ Cada herramienta declara su riesgo (`READ`, `WRITE` o `EXEC`) y el agente tiene 
 autonomía (`ASK`, `EDITS` o `AUTO`). Lo que solo lee corre siempre; lo que cambia cosas se
 pregunta primero, con `agent.on_approve`, salvo que el nivel lo deje pasar. Sin nadie a quien
 preguntar, no corre. `agent.connect(a, "nombre", sesión)` añade las herramientas de un servidor
-MCP, y `agent.on_event` cuenta lo que va pasando para que lo muestres como quieras. El README del
+MCP (de solo lectura → `READ`, reversibles —`serve.write_tool`— → `WRITE`, el resto → `EXEC`), y
+`agent.on_event` cuenta lo que va pasando para que lo muestres como quieras. El README del
 paquete trae la tabla de qué corre solo en cada nivel.
 
 ### Bases de datos (`packages/db`, dependencia)

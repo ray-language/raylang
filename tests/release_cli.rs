@@ -31,7 +31,9 @@ fn main() -> int {
     let m = fs.read_file_bytes("dist/update.json").unwrap();
     let sig = fs.read_file("dist/update.json.sig").unwrap();
     print(update.verify_signature(m, sig, pk));
-    print(update.verify_signature(m, sig, "00" + pk.substring(2, pk.len())));
+    // Otra clave: se cambia el primer octeto (si ya era 00, a 11 — si no, la «otra» sería la misma).
+    let other = if (pk.starts_with("00")) { "11" } else { "00" };
+    print(update.verify_signature(m, sig, other + pk.substring(2, pk.len())));
     let r = update.parse_manifest(from_utf8(m).unwrap(), update.platform_key()).unwrap();
     print(r.version + " " + r.url + " " + r.notes + " " + r.min_version);
     let data = fs.read_file_bytes("dist/" + r.url).unwrap();

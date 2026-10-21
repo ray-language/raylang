@@ -146,6 +146,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     if matches!(
         name,
         "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos" | "std::time::sleep"
+            | "std::time::local_offset_ms"
     )
         || matches!(name, "std::random::next" | "std::random::below" | "std::random::seed")
         // rayffi #210: `ffi.errno()` lo intercepta emit_call (__ray_ffi_errno); su cuerpo raylang

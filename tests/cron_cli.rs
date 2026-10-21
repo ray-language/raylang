@@ -178,6 +178,11 @@ fn main() -> int {{
     // El SOLAPE de otoño (25-10-2026: 02:30 ocurre dos veces) → solo la PRIMERA
     // (02:30 CEST = 00:30 UTC); el día siguiente ya en CET (01:30 UTC).
     secuencia(mad, "30 2 * * *", 1792843200000, 2);
+    // M416 (raycron #202): un schedule HORARIO dispara en las DOS pasadas del solape (02:00 CEST
+    // = 00:00 UTC y 02:00 CET = 01:00 UTC), así el espaciado real sigue siendo de una hora.
+    secuencia(mad, "0 * * * *", 1792884600000, 4);
+    // …pero una hora fijada sigue disparando solo la primera vez.
+    secuencia(mad, "0 2 * * *", 1792884600000, 2);
     0
 }}
 "#,
@@ -187,7 +192,9 @@ fn main() -> int {{
 
     let expected = "30 2 * * * → 2026-07-11T00:30:00Z(CEST)\n\
 30 2 * * * → 2026-03-29T01:00:00Z(CEST) 2026-03-30T00:30:00Z(CEST)\n\
-30 2 * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-26T01:30:00Z(CET)\n";
+30 2 * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-26T01:30:00Z(CET)\n\
+0 * * * * → 2026-10-25T00:00:00Z(CEST) 2026-10-25T01:00:00Z(CET) 2026-10-25T02:00:00Z(CET) 2026-10-25T03:00:00Z(CET)\n\
+0 2 * * * → 2026-10-25T00:00:00Z(CEST) 2026-10-26T01:00:00Z(CET)\n";
 
     let (o_in, c_in) = run(&app, &[]);
     let (o_vm, c_vm) = run(&app, &["--vm"]);

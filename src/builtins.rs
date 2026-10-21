@@ -87,6 +87,92 @@ pub fn monotonic_nanos() -> i64 {
     monotonic_start().elapsed().as_nanos() as i64
 }
 
+/// M416 (rayzip #200): el desplazamiento UTC de la zona horaria LOCAL del sistema en el instante
+/// `ms` (epoch-ms), en milisegundos y con el DST de esa fecha. Es lo que `std/time` no tenía (su
+/// `DateTime` es siempre UTC) y lo que en Windows, sin zoneinfo, es la ÚNICA fuente de hora local:
+/// unix pregunta a `localtime_r` (honra `TZ`, `tzset` antes), Windows convierte el instante con
+/// `SystemTimeToTzSpecificLocalTime` (la zona activa del sistema, con sus reglas de DST). Un
+/// fallo del SO da 0 (UTC). El binario nativo lleva el mismo código (`__ray_local_offset_ms`).
+pub fn local_offset_ms(ms: i64) -> i64 {
+    local_offset_ms_impl(ms)
+}
+
+#[cfg(unix)]
+fn local_offset_ms_impl(ms: i64) -> i64 {
+    use std::ffi::{c_char, c_int, c_long};
+    // El `struct tm` de glibc/musl/bionic/BSD/Darwin: los nueve `int` de C y, detrás,
+    // `tm_gmtoff` (long) y `tm_zone` (char*) — el orden es el mismo en todos ellos.
+    #[repr(C)]
+    struct Tm {
+        tm_sec: c_int,
+        tm_min: c_int,
+        tm_hour: c_int,
+        tm_mday: c_int,
+        tm_mon: c_int,
+        tm_year: c_int,
+        tm_wday: c_int,
+        tm_yday: c_int,
+        tm_isdst: c_int,
+        tm_gmtoff: c_long,
+        tm_zone: *const c_char,
+    }
+    unsafe extern "C" {
+        fn tzset();
+        fn localtime_r(t: *const c_long, tm: *mut Tm) -> *mut Tm;
+    }
+    let secs = ms.div_euclid(1000) as c_long;
+    let mut tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0, tm_gmtoff: 0, tm_zone: std::ptr::null() };
+    // SAFETY: `tzset` relee TZ; `localtime_r` escribe en nuestro `Tm` (layout de `struct tm` de las
+    // libc soportadas) y lee un `time_t` propio; ninguna de las dos retiene los punteros.
+    let ok = unsafe {
+        tzset();
+        !localtime_r(&secs, &mut tm).is_null()
+    };
+    if ok { tm.tm_gmtoff as i64 * 1000 } else { 0 }
+}
+
+#[cfg(windows)]
+fn local_offset_ms_impl(ms: i64) -> i64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct SystemTime { year: u16, month: u16, dow: u16, day: u16, hour: u16, minute: u16, second: u16, millis: u16 }
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime { lo: u32, hi: u32 }
+    unsafe extern "system" {
+        fn FileTimeToSystemTime(ft: *const FileTime, st: *mut SystemTime) -> i32;
+        fn SystemTimeToTzSpecificLocalTime(tz: *const u8, utc: *const SystemTime, local: *mut SystemTime) -> i32;
+        fn SystemTimeToFileTime(st: *const SystemTime, ft: *mut FileTime) -> i32;
+    }
+    // FILETIME: intervalos de 100 ns desde 1601-01-01.
+    const EPOCH_DIFF_MS: i64 = 11_644_473_600_000;
+    let ft100 = (ms + EPOCH_DIFF_MS).saturating_mul(10_000);
+    if ft100 < 0 {
+        return 0;
+    }
+    let ft = FileTime { lo: ft100 as u32, hi: (ft100 >> 32) as u32 };
+    let mut utc = SystemTime::default();
+    let mut local = SystemTime::default();
+    let mut back = FileTime::default();
+    // SAFETY: estructuras `repr(C)` propias con el layout de minwinbase.h, vivas durante cada
+    // llamada; `tz` nulo = la zona activa del sistema (contrato documentado de la API).
+    let ok = unsafe {
+        FileTimeToSystemTime(&ft, &mut utc) != 0
+            && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+            && SystemTimeToFileTime(&local, &mut back) != 0
+    };
+    if !ok {
+        return 0;
+    }
+    let local100 = ((back.hi as i64) << 32) | back.lo as i64;
+    (local100 - ft100) / 10_000
+}
+
+#[cfg(not(any(unix, windows)))]
+fn local_offset_ms_impl(_ms: i64) -> i64 {
+    0
+}
+
 /// Duerme el hilo `ms` milisegundos (`ms<=0` → no duerme). Builtin `sleep`.
 ///
 /// M119: usa la espera PRECISA de `poll(2)` (ver `crate::poll::sleep_ms`), no `thread::sleep` —
@@ -4872,6 +4958,12 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic_nanos", opcode: OpCode::MonotonicNanos, check: |a| { nullary(a, "__monotonic_nanos")?; Ok(Type::Int) } },
+    // M416 (rayzip #200): el desplazamiento de la zona local del SO en un instante (std/time.local_offset_ms).
+    Builtin { name: "__local_offset", opcode: OpCode::LocalOffset, check: |a| {
+        arity(a, 1, "__local_offset", " (instant_ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__local_offset expects an int (epoch-ms), not {}", a[0]))); }
+        Ok(Type::Int)
+    } },
     Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
     Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
         arity(a, 1, "__sleep", "")?;

@@ -910,6 +910,14 @@ impl Transpiler {
                 self.needs_time_rng = true;
                 out.push_str("__ray_monotonic_nanos()");
             }
+            // M416 (rayzip #200): el desplazamiento de la zona local del SO (helper con el mismo
+            // código que `builtins::local_offset_ms`).
+            "local_offset_ms" => {
+                self.needs_local_offset = true;
+                out.push_str("__ray_local_offset_ms(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "sleep" => {
                 // F2 (--fibers): dentro de una fibra, dormir el HILO retendría un worker; se
                 // duerme la fibra (timer del reactor). Fuera de fibra (main), duerme el hilo.
@@ -1298,7 +1306,7 @@ impl Transpiler {
         // `std::time::{now,monotonic,sleep}`/`std::random::{next,below,seed}` → reloj + PRNG de Rust (no
         // deterministas → casan por propiedades). El resto de std/time|random es raylang puro → pasa de largo.
         if let Some(tfn) = name.strip_prefix("std::time::") {
-            if matches!(tfn, "now" | "monotonic" | "monotonic_millis" | "monotonic_nanos" | "sleep") {
+            if matches!(tfn, "now" | "monotonic" | "monotonic_millis" | "monotonic_nanos" | "sleep" | "local_offset_ms") {
                 return self.emit_time(out, tfn, &eff);
             }
         }
@@ -3377,7 +3385,7 @@ impl Transpiler {
                 // Solo las funciones-primitivo; el resto de std/time|random (raylang puro) → ruta genérica.
                 match n {
                     "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos"
-                    | "std::random::below" | "std::ffi::errno" => return Ok(Type::Int),
+                    | "std::time::local_offset_ms" | "std::random::below" | "std::ffi::errno" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),

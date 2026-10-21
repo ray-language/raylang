@@ -349,7 +349,10 @@ Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durat
 currency): `from std/time import seconds; time.sleep(30.seconds());`. Sizes in
 `std/units` — `kb mb gb` → **bytes**, binary convention (1 KB = 1024): `64.kb()`.
 With only `import std/time;` use the qualified form `time.seconds(30)` (UFCS does not
-reach qualified names).
+reach qualified names). `DateTime` is always UTC; the system's LOCAL time is
+`time.local_offset_ms(ms)` (the OS offset at that instant, DST included — works on Windows),
+`time.to_local(ms)` and `time.now_local()`. Named IANA zones and DST ambiguity as a value:
+the `tz` package (`tz.system()` falls back to the OS zone where there is no zoneinfo).
 
 OS processes (`import std/process;`, no shell — argv is typed; a pipeline is written
 `process.run("sh", ["-c", ...])`): `process.run(program, args) -> Result<Output, string>`

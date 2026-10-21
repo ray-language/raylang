@@ -11,7 +11,10 @@
 //   civil ocurre DOS veces) o `Gap` (el hueco de primavera: no ocurre nunca).
 // - **Zona del sistema sin primitivo nuevo**: `system()` prueba `env("TZ")` como nombre
 //   y cae a leer `/etc/localtime` POR CONTENIDO (es un TZif válido, aunque sin nombre).
-// - **Windows honesto**: sin zoneinfo, `load` devuelve Err claro; UTC (std/time) sigue.
+// - **Windows honesto**: sin zoneinfo, `load` devuelve Err claro. M416 (rayzip #200): `system()`
+//   cae a la ZONA DEL SO (`from_os()`): offsets por `time.local_offset_ms` — la zona activa de
+//   Windows con sus reglas de DST; `to_utc` resuelve Gap/Ambiguous igual que con un TZif. Sin
+//   nombre IANA ni abreviaturas (se dan como `UTC+01:00`).
 // - Alcance v1: transiciones EXPLÍCITAS del archivo (tzdata estándar las trae hasta
 //   ~2037); más allá se extrapola el último tipo. El footer TZ-string (reglas POSIX
 //   perpetuas) queda diferido (M85b). Pre-1970 hereda el límite de std/time.
@@ -57,6 +60,54 @@ pub struct Zone {
     abbrevs: [string],
     first_type: int,
     foot: Foot,
+    os: bool,
+}
+
+// M416: la zona del sistema operativo — sin tabla; cada consulta pregunta al SO.
+/// A zone backed by the operating system's local time rules (`time.local_offset_ms`): what
+/// `system()` returns when there is no TZif to read (Windows). Offsets and DST follow the
+/// active system zone for any instant; `name` is "system" and abbreviations are `UTC±HH:MM`.
+pub fn from_os() -> Zone {
+    Zone {
+        name: "system",
+        trans: [],
+        trans_type: [],
+        utoffs: [0],
+        isdsts: [false],
+        abbrevs: ["UTC"],
+        first_type: 0,
+        foot: Foot {
+            valid: false,
+            std_off: 0,
+            std_abbr: "",
+            has_dst: false,
+            dst_off: 0,
+            dst_abbr: "",
+            sm: 0,
+            sw: 0,
+            sd: 0,
+            ssecs: 0,
+            em: 0,
+            ew: 0,
+            ed: 0,
+            esecs: 0
+        },
+        os: true
+    }
+}
+
+// `UTC+01:00` / `UTC-03:00` / `UTC` a partir de un offset en ms.
+fn offset_label(off_ms: int) -> string {
+    if (off_ms == 0) {
+        return "UTC";
+    }
+    let sign = if (off_ms < 0) { "-" } else { "+" };
+    let mins = if (off_ms < 0) { 0 - off_ms } else { off_ms } / 60000;
+    let h = mins / 60;
+    let m = mins % 60;
+    let hh = if (h < 10) { "0" + to_string(h) } else { to_string(h) };
+    let mm = if (m < 10) { "0" + to_string(m) } else { to_string(m) };
+    "UTC" + sign + hh + ":" + mm
 }
 
 // El tipo vigente ANTES de la primera transición (RFC 8536: el primer tipo no-DST,
@@ -127,17 +178,26 @@ fn load_named(path: string, name: string) -> Result<Zone, string> {
 // La zona del sistema: `TZ` del entorno (como nombre IANA) o `/etc/localtime` (por
 // contenido — es un TZif válido aunque no conozcamos su nombre).
 /// The system's local zone: tries the `TZ` environment variable as an IANA name, then
-/// falls back to reading `/etc/localtime` by content.
+/// `/etc/localtime` by content, and finally the operating system's own rules (`from_os`) —
+/// so it always succeeds; on Windows, where there is no zoneinfo, that is what you get.
 pub fn system() -> Result<Zone, string> {
     match (env("TZ")) {
         Option.Some(tz) => {
             if (tz.len() > 0 && valid_name(tz)) {
-                return load(tz);
+                match (load(tz)) {
+                    Result.Ok(z) => {
+                        return Result.Ok(z);
+                    },
+                    Result.Err(_) => { },
+                }
             }
         },
         Option.None => { },
     }
-    load_named("/etc/localtime", "local")
+    match (load_named("/etc/localtime", "local")) {
+        Result.Ok(z) => Result.Ok(z),
+        Result.Err(_) => Result.Ok(from_os()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +381,8 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
             isdsts: isdsts,
             abbrevs: abbrevs,
             first_type: first,
-            foot: foot
+            foot: foot,
+            os: false
         }
     )
 }
@@ -593,6 +654,9 @@ fn type_at(z: Zone, secs: int) -> int {
 /// The zone's UTC offset at `instant_ms` (epoch-ms), in milliseconds. Past the last
 /// explicit transition, the TZif footer's perpetual rules apply (M85b).
 pub fn offset_at(z: Zone, instant_ms: int) -> int {
+    if (z.os) {
+        return time.local_offset_ms(instant_ms);
+    }
     let secs = floor_div(instant_ms, 1000);
     if (foot_rules(z, secs)) {
         return foot_type(z, secs).0 * 1000;
@@ -603,6 +667,9 @@ pub fn offset_at(z: Zone, instant_ms: int) -> int {
 // La abreviatura vigente en un instante (`CET`, `CEST`, `EST`…).
 /// The zone abbreviation in effect at `instant_ms` (e.g. "CET", "CEST").
 pub fn abbrev_at(z: Zone, instant_ms: int) -> string {
+    if (z.os) {
+        return offset_label(offset_at(z, instant_ms));
+    }
     let secs = floor_div(instant_ms, 1000);
     if (foot_rules(z, secs)) {
         return foot_type(z, secs).2;
@@ -613,6 +680,12 @@ pub fn abbrev_at(z: Zone, instant_ms: int) -> string {
 // ¿Está la zona en horario de verano en un instante?
 /// Whether daylight saving time is in effect at `instant_ms`.
 pub fn is_dst_at(z: Zone, instant_ms: int) -> bool {
+    if (z.os) {
+        // Sin tabla: es verano si el offset supera al de medio año antes o después.
+        let o = offset_at(z, instant_ms);
+        let half = 183 * 86400000;
+        return o > offset_at(z, instant_ms - half) || o > offset_at(z, instant_ms + half);
+    }
     let secs = floor_div(instant_ms, 1000);
     if (foot_rules(z, secs)) {
         return foot_type(z, secs).1;

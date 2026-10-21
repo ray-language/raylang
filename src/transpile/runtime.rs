@@ -2719,6 +2719,35 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // hilos no repitan la misma secuencia. `random_seed` fija la semilla del hilo LLAMADOR
     // (semántica más simple que antes, no peor: ya no había reproducibilidad entre hilos con el
     // Mutex global tampoco, un `send`/mutación concurrente entre hilos competía igual por orden).
+    // M416 (rayzip #200): `time.local_offset_ms` — el mismo código que `builtins::local_offset_ms`
+    // (localtime_r en unix; SystemTimeToTzSpecificLocalTime en Windows; 0 en lo demás).
+    if t.needs_local_offset {
+        out.push_str(concat!(
+            "#[cfg(unix)]\n",
+            "fn __ray_local_offset_ms(ms: i64) -> i64 {\n",
+            "    use std::ffi::{c_char, c_int, c_long};\n",
+            "    #[repr(C)] struct Tm { tm_sec: c_int, tm_min: c_int, tm_hour: c_int, tm_mday: c_int, tm_mon: c_int, tm_year: c_int, tm_wday: c_int, tm_yday: c_int, tm_isdst: c_int, tm_gmtoff: c_long, tm_zone: *const c_char }\n",
+            "    unsafe extern \"C\" { fn tzset(); fn localtime_r(t: *const c_long, tm: *mut Tm) -> *mut Tm; }\n",
+            "    let secs = ms.div_euclid(1000) as c_long;\n",
+            "    let mut tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0, tm_gmtoff: 0, tm_zone: std::ptr::null() };\n",
+            "    let ok = unsafe { tzset(); !localtime_r(&secs, &mut tm).is_null() };\n",
+            "    if ok { tm.tm_gmtoff as i64 * 1000 } else { 0 }\n}\n",
+            "#[cfg(windows)]\n",
+            "fn __ray_local_offset_ms(ms: i64) -> i64 {\n",
+            "    #[repr(C)] #[derive(Default)] struct St { year: u16, month: u16, dow: u16, day: u16, hour: u16, minute: u16, second: u16, millis: u16 }\n",
+            "    #[repr(C)] #[derive(Default)] struct Ft { lo: u32, hi: u32 }\n",
+            "    unsafe extern \"system\" { fn FileTimeToSystemTime(ft: *const Ft, st: *mut St) -> i32; fn SystemTimeToTzSpecificLocalTime(tz: *const u8, utc: *const St, local: *mut St) -> i32; fn SystemTimeToFileTime(st: *const St, ft: *mut Ft) -> i32; }\n",
+            "    let ft100 = (ms + 11_644_473_600_000i64).saturating_mul(10_000);\n",
+            "    if ft100 < 0 { return 0; }\n",
+            "    let ft = Ft { lo: ft100 as u32, hi: (ft100 >> 32) as u32 };\n",
+            "    let (mut utc, mut local, mut back) = (St::default(), St::default(), Ft::default());\n",
+            "    let ok = unsafe { FileTimeToSystemTime(&ft, &mut utc) != 0 && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0 && SystemTimeToFileTime(&local, &mut back) != 0 };\n",
+            "    if !ok { return 0; }\n",
+            "    ((((back.hi as i64) << 32) | back.lo as i64) - ft100) / 10_000\n}\n",
+            "#[cfg(not(any(unix, windows)))]\n",
+            "fn __ray_local_offset_ms(_ms: i64) -> i64 { 0 }\n",
+        ));
+    }
     if t.needs_time_rng {
         out.push_str(concat!(
             "fn __ray_monotonic_start() -> std::time::Instant {\n",

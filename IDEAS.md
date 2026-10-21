@@ -4272,7 +4272,7 @@ paquetes:
 3. **`std/zip` completo** (rayzip #193): lector sobre un handle de archivo (directorio central desde
    la cola, entradas por streaming, ZIP64) y escritor. rayzip ya tiene ~940 líneas que lo hacen;
    lo natural es un paquete `zip` a partir de ellas más que crecer la stdlib.
-4. **Hora local** (rayzip #200, raycron #202): `time.local_offset_ms(instant_ms)` (localtime_r /
+4. ✅ EJECUTADA como M416 (DESIGN §388, 1.27.71; `tz`/`cron` 0.2.0). **Hora local** (rayzip #200, raycron #202): `time.local_offset_ms(instant_ms)` (localtime_r /
    GetTimeZoneInformationForYear) en `std/time`, `tz.system()` en Windows por el nombre de zona de
    Windows y la tabla `windowsZones.xml` de CLDR, y `cron.next_after_in(s, zone, ms)` en el paquete
    `cron` con la política de raycron (salto de primavera: dispara en el salto; repetición de otoño:

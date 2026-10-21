@@ -37,6 +37,25 @@ pub fn monotonic_millis() -> int { __monotonic() }
 /// (`next = next + budget`) over summing sleeps.
 pub fn sleep(ms: int) { __sleep(ms) }
 
+// --- Hora LOCAL del sistema (M416, rayzip #200) ---
+// `DateTime` sigue siendo UTC; esto es el DESPLAZAMIENTO de la zona local del SO en un instante,
+// con el DST de esa fecha. Es la única hora local disponible en Windows (sin zoneinfo para `tz`),
+// y en unix lo que diga `localtime_r` (honra `TZ`). Para zonas por nombre y la ambigüedad del DST
+// como valor, el paquete `tz` (cuyo `system()` cae a esto cuando no hay TZif).
+/// The system's local time zone offset from UTC at `instant_ms` (epoch-ms), in milliseconds,
+/// daylight saving included — e.g. 3_600_000 for Madrid in winter, -10_800_000 for Santiago in
+/// October. Comes from the OS (`localtime_r`; the active Windows time zone), so it works without a
+/// zoneinfo database. 0 when the OS cannot tell.
+pub fn local_offset_ms(instant_ms: int) -> int { __local_offset(instant_ms) }
+
+/// The civil LOCAL time of an instant (epoch-ms) in the system's time zone: `from_epoch_millis`
+/// shifted by `local_offset_ms`. The result is a plain `DateTime` (no offset field): format it
+/// yourself or keep the offset alongside.
+pub fn to_local(instant_ms: int) -> DateTime { from_epoch_millis(instant_ms + local_offset_ms(instant_ms)) }
+
+/// The current civil local time (`to_local(now())`).
+pub fn now_local() -> DateTime { to_local(now()) }
+
 // --- Constructores de duración (azúcar UFCS: `30.seconds()`) ---
 // La moneda de duración de la stdlib es el int en MILISEGUNDOS; estas funciones convierten a esa
 // moneda desde la unidad que se lee natural. Importadas sin calificar (`from std/time import

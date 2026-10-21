@@ -4,10 +4,13 @@
 // tz. El consumidor que quiera hora local declara AMBOS paquetes (cron y tz, hermanos
 // de path o del índice) e importa `cron/local`.
 //
-// Política DST (IDEAS §42, fijada en la clasificación):
+// Política DST (IDEAS §42; M416 afina el solape con la de raycron #202):
 // - una hora civil que cae en el HUECO de primavera (no existe) dispara al TERMINAR el
 //   hueco — la primera hora local válida;
-// - una hora civil del SOLAPE de otoño (ocurre dos veces) dispara solo la PRIMERA vez.
+// - una hora civil del SOLAPE de otoño (ocurre dos veces) dispara solo la PRIMERA vez si
+//   el schedule fija la hora (`30 2 * * *`: «a las 2:30» es un evento del día), y en LAS
+//   DOS pasadas si corre cada hora (`0 * * * *`, `*/15 * * * *`): así el espaciado se
+//   mantiene en tiempo real (sin un hueco de dos horas la noche del cambio).
 import cron/cron;
 import tz/tz;
 import std/time;
@@ -16,11 +19,53 @@ import std/time;
 // (epoch-ms), estrictamente posterior a `ms`.
 /// The next fire time of the schedule evaluated in the zone's CIVIL local time, as a
 /// UTC instant (epoch-ms) strictly after `ms`. DST policy: a civil time falling in the
-/// spring-forward gap fires when the gap ends; one in the fall-back overlap fires only
-/// on its first occurrence.
+/// spring-forward gap fires when the gap ends; one in the fall-back overlap fires only on
+/// its first occurrence when the schedule pins the hour, and on both occurrences when it
+/// runs every hour (`0 * * * *`), so the real-time spacing is kept.
 pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, string> {
-    // El cursor del matcher avanza en tiempo civil NAIVE de la zona.
-    var naive = ms + tz.offset_at(z, ms);
+    // La búsqueda normal: el cursor civil arranca en la hora local de `ms` y el solape de
+    // otoño cuenta solo su primera ocurrencia.
+    let main = civil_search(s, z, ms, ms + tz.offset_at(z, ms))?;
+    if (!every_hour(s)) {
+        return Result.Ok(main);
+    }
+    // M416 (raycron #202): schedule horario. Si estamos en las horas previas a un retraso del
+    // reloj (otoño), la SEGUNDA pasada de la hora repetida también dispara: se busca con el
+    // cursor civil retrasado al offset de después del cambio, aceptando solo segundas
+    // ocurrencias (`Ambiguous(_, b)` con `b > ms`), y gana la más temprana.
+    let later = tz.offset_at(z, ms + 3 * 3600000);
+    let current = tz.offset_at(z, ms);
+    if (later >= current) {
+        return Result.Ok(main);
+    }
+    var naive = ms + later;
+    let limit = ms + current;
+    var guard = 0;
+    while (guard < 240) {
+        let cand = cron.next_after(s, naive)?;
+        if (cand > limit) {
+            return Result.Ok(main);
+        }
+        match (tz.to_utc(z, time.from_epoch_millis(cand))) {
+            tz.LocalResult.Ambiguous(a, b) => {
+                if (b > ms && b < main) {
+                    return Result.Ok(b);
+                }
+            },
+            tz.LocalResult.Single(t) => { },
+            tz.LocalResult.Gap => { },
+        }
+        naive = cand;
+        guard = guard + 1;
+    }
+    Result.Ok(main)
+}
+
+// La búsqueda civil desde el cursor `naive` (hora local ingenua): el matcher puro avanza en
+// tiempo civil y cada candidato se resuelve a UTC con la política del hueco y del solape
+// (primera ocurrencia).
+fn civil_search(s: cron.Schedule, z: tz.Zone, ms: int, start: int) -> Result<int, string> {
+    var naive = start;
     var guard = 0;
     while (guard < 8) {
         let cand = cron.next_after(s, naive)?;  // el matcher puro, sobre el civil local
@@ -33,7 +78,7 @@ pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, strin
             },
             tz.LocalResult.Ambiguous(a, b) => {
                 // Solo la PRIMERA ocurrencia; si ya pasó, este disparo civil ya corrió
-                // (no se repite en la segunda) → seguir buscando el siguiente.
+                // (la segunda, para los horarios, la aporta `next_after_in`).
                 if (a > ms) {
                     return Result.Ok(a);
                 }
@@ -68,6 +113,18 @@ pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, strin
         guard = guard + 1;
     }
     Result.Err("cron: no trigger found in local time (impossible expression?)")
+}
+
+// ¿Corre el schedule a cada hora (campo hora = `*`)? Entonces el solape de otoño dispara dos veces.
+fn every_hour(s: cron.Schedule) -> bool {
+    var i = 0;
+    while (i < s.hours.len()) {
+        if (!s.hours[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
 }
 
 // Corre `job` en cada disparo LOCAL de `s` en la zona `z`, para siempre (cede la fibra

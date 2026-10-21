@@ -18510,3 +18510,42 @@ transpilador (los `cfg_attr` y el helper), y `findings_1_27_72_cli` en los tres 
 nombre para otra plataforma no afecta al sistema en curso; `library_available` con `m`, `c` y una
 inexistente; el mensaje de la biblioteca ausente en la VM).
 
+## 391. M419 — el paquete `zip`: leer y escribir ZIP sobre el disco (rayzip #193, oct 2026)
+
+`std/zip` (M219) nació para leer un `.sublime-package` en memoria: todo el archivo en un `bytes`,
+sin ZIP64, sin escritura. rayzip necesitó lo otro —crear archivos, leer de disco por partes, ZIP64,
+permisos, fechas— y lo escribió: ~940 líneas que ya leían `unzip`, `tar.exe` y `Expand-Archive`.
+El hallazgo #193 pedía que eso viviera en la stdlib. La decisión (IDEAS §113 #3) fue un **paquete**:
+la stdlib embebida es la que viaja en el binario y en el playground, y un escritor de ZIP con
+ZIP64 y streaming es una biblioteca con vida propia, no un primitivo. `packages/zip` nace del
+código de rayzip con tres cambios que el lenguaje hizo posibles entretanto:
+
+- **Sin `tz`.** rayzip necesitaba el paquete `tz` para la hora DOS (hora local) y en Windows caía
+  a UTC (#200). Con `time.local_offset_ms` (M416) el reloj de `zip/dostime` pregunta al SO: cero
+  dependencias y la misma hora local en las tres plataformas.
+- **Sin `crc.ray`.** rayzip componía la CRC de los trozos con `crc32_combine` (una matriz GF(2)) porque
+  solo había `crc32(data)`; `inflate.crc32_update` (M411) la encadena directamente.
+- **Streaming rápido.** Las entradas de más de 64 MiB pasan por `inflate_stream`, que desde M415
+  corre en el runtime: lo que en rayzip era la vía lenta ya no lo es.
+
+**Superficie.** Lector: `open(path)` lee los registros finales (localizador y registro ZIP64 si
+están) y el directorio central; `entries`/`find`/`read`/`read_with`/`mtime_ms`/`comment`/`close`.
+`read` acota la salida al tamaño declarado (bombas) y verifica tamaño y CRC; `read_with` entrega
+trozos a un `sink` con memoria acotada. Escritor: `create`/`create_with(Options { level,
+deflate_limit, clock })`, `add_bytes[_at]`, `add_file` (fecha y permisos del archivo; por encima de
+`deflate_limit` se almacena por trozos y la CRC vuelve a la cabecera local), `add_dir[_at]`,
+`finish` (directorio central y registros finales, ZIP64 cuando la cuenta o un tamaño desbordan;
+escribe en `<path>.zip-tmp` y renombra: un fallo nunca deja medio archivo) y `abort`. Lo que se
+deja a la app, a propósito: extraer a disco (nombres hostiles, symlinks, permisos — rayzip lo hace
+con cuidado y es su valor), cifrado y métodos distintos de stored/deflate (`Err` claro), y la
+compresión en paralelo (rayzip reparte archivos entre fibras; el paquete escribe en orden).
+
+**Nombres.** `dos_time`/`dos_date` de rayzip pasaron a `msdos_time`/`msdos_date`: la guarda de
+identificadores en inglés toma `dos` por «dos» (castellano), y MS-DOS es más preciso igualmente.
+
+Tests: `zip_cli` — ida y vuelta en los tres motores (texto que comprime, ruido que no, una entrada
+vacía, un nombre con ñ, un directorio, un archivo del disco con su fecha y modo), leído de vuelta
+con el paquete y con `std/zip` como lector independiente, `unzip -t` del sistema cuando existe, y
+70 000 entradas (los registros ZIP64; `std/zip` los rechaza, el paquete los lee). El espejo del
+paquete (`ray registry mirror`) se publica como `zip` 0.1.0.
+

@@ -1,0 +1,496 @@
+// packages/zip/format.ray — los registros de un ZIP (APPNOTE.TXT 6.3): cabecera local, cabecera
+// del directorio central, fin del directorio central y sus formas ZIP64. Los codificadores producen
+// los octetos y los decodificadores los leen de un búfer; ninguno toca archivos. Nace de rayzip
+// (M419): el mismo código que ya probaron `unzip`, `tar.exe` y `Expand-Archive`.
+//! The ZIP records (APPNOTE.TXT 6.3): local file header, central directory header, end of
+//! central directory and their ZIP64 forms. Encoders build bytes, decoders read them back out of
+//! a buffer; neither touches files. Little-endian helpers included.
+
+import std/collections/bytesbuilder;
+import std/inflate;
+from std/collections/bytesbuilder import BytesBuilder;
+
+/// Signature of a local file header.
+pub const LOCAL_SIG: int = 0x04034B50;
+
+/// Signature of a central directory header.
+pub const CENTRAL_SIG: int = 0x02014B50;
+
+/// Signature of the end of central directory record.
+pub const EOCD_SIG: int = 0x06054B50;
+
+/// Signature of the ZIP64 end of central directory record.
+pub const ZIP64_EOCD_SIG: int = 0x06064B50;
+
+/// Signature of the ZIP64 end of central directory locator.
+pub const ZIP64_LOCATOR_SIG: int = 0x07064B50;
+
+/// Fixed length of a local file header (before name and extra fields).
+pub const LOCAL_LEN: int = 30;
+
+/// Fixed length of a central directory header (before name, extra and comment).
+pub const CENTRAL_LEN: int = 46;
+
+/// Fixed length of the end of central directory record (before the comment).
+pub const EOCD_LEN: int = 22;
+
+/// Length of the ZIP64 end of central directory record this package writes.
+pub const ZIP64_EOCD_LEN: int = 56;
+
+/// Length of the ZIP64 end of central directory locator.
+pub const ZIP64_LOCATOR_LEN: int = 20;
+
+/// Compression methods: 0 = stored, 8 = deflate (the only two this package reads and writes).
+pub const STORED: int = 0;
+
+/// Compression method 8: deflate.
+pub const DEFLATED: int = 8;
+
+/// General-purpose flags: encrypted, sizes in a trailing data descriptor, UTF-8 name.
+pub const FLAG_ENCRYPTED: int = 1;
+
+/// General-purpose flag: sizes and CRC follow the data in a descriptor.
+pub const FLAG_DESCRIPTOR: int = 8;
+
+/// General-purpose flag: the name and comment are UTF-8.
+pub const FLAG_UTF8: int = 0x800;
+
+/// A 32-bit field at this value (16-bit: 0xFFFF) means "see the ZIP64 record".
+pub const MAX32: int = 0xFFFFFFFF;
+
+/// A 16-bit field at this value means "see the ZIP64 record".
+pub const MAX16: int = 0xFFFF;
+
+const EXTRA_ZIP64: int = 0x0001;
+
+const EXTRA_TIME: int = 0x5455;
+
+const EXTRA_UNICODE_PATH: int = 0x7075;
+
+// «Version made by»: octeto alto 3 = Unix (los atributos externos llevan el modo), octeto bajo la
+// versión de la especificación (4.5, la primera con ZIP64).
+const MADE_BY_UNIX: int = (3 << 8) | 45;
+
+const S_IFDIR: int = 0x4000;
+
+const S_IFREG: int = 0x8000;
+
+const S_IFLNK: int = 0xA000;
+
+// --- Enteros little-endian: ZIP es little-endian de principio a fin. ---
+
+/// Appends `v` as one little-endian byte.
+pub fn put_u8(b: BytesBuilder, v: int) {
+    bytesbuilder.push_byte(b, v & 0xFF);
+}
+
+/// Appends `v` as a 16-bit little-endian integer.
+pub fn put_u16(b: BytesBuilder, v: int) {
+    bytesbuilder.push_byte(b, v & 0xFF);
+    bytesbuilder.push_byte(b, (v >> 8) & 0xFF);
+}
+
+/// Appends `v` as a 32-bit little-endian integer.
+pub fn put_u32(b: BytesBuilder, v: int) {
+    put_u16(b, v & 0xFFFF);
+    put_u16(b, (v >> 16) & 0xFFFF);
+}
+
+/// Appends `v` as a 64-bit little-endian integer.
+pub fn put_u64(b: BytesBuilder, v: int) {
+    put_u32(b, v & 0xFFFFFFFF);
+    put_u32(b, (v >> 32) & 0xFFFFFFFF);
+}
+
+/// The 16-bit little-endian integer at `b[i..i+2]`.
+pub fn u16_at(b: bytes, i: int) -> int {
+    b[i] | (b[i + 1] << 8)
+}
+
+/// The 32-bit little-endian integer at `b[i..i+4]`.
+pub fn u32_at(b: bytes, i: int) -> int {
+    u16_at(b, i) | (u16_at(b, i + 2) << 16)
+}
+
+/// The 64-bit little-endian integer at `b[i..i+8]`.
+pub fn u64_at(b: bytes, i: int) -> int {
+    u32_at(b, i) | (u32_at(b, i + 4) << 32)
+}
+
+/// One entry as the central directory describes it. `name` uses `/` separators (a directory
+/// ends in `/`); `size` is uncompressed, `compressed` what the archive holds; `offset` is the
+/// local header's position; `msdos_time`/`msdos_date` the MS-DOS timestamp (local time, 2-second
+/// resolution) and `unix_time` the extended-timestamp field (UTC seconds) when the archive has it;
+/// `mode` the Unix st_mode (0 when the creator was not Unix).
+pub struct Entry {
+    name: string,
+    method: int,
+    flags: int,
+    crc: int,
+    compressed: int,
+    size: int,
+    offset: int,
+    msdos_time: int,
+    msdos_date: int,
+    unix_time: Option<int>,
+    mode: int,
+    is_dir: bool,
+}
+
+/// Whether the entry is a symbolic link (Unix mode S_IFLNK); its data is the link target.
+pub fn is_symlink(e: Entry) -> bool {
+    (e.mode & 0xF000) == S_IFLNK
+}
+
+/// The permission bits to restore: 0 when the archive does not carry them.
+pub fn permissions(e: Entry) -> int {
+    e.mode & 0o777
+}
+
+/// A directory st_mode with the permission bits `perm`.
+pub fn dir_mode(perm: int) -> int {
+    S_IFDIR | perm
+}
+
+/// A regular-file st_mode with the permission bits `perm`.
+pub fn file_mode(perm: int) -> int {
+    S_IFREG | perm
+}
+
+fn needs_zip64(e: Entry) -> bool {
+    e.size >= MAX32 || e.compressed >= MAX32
+}
+
+fn version_needed(e: Entry) -> int {
+    if (needs_zip64(e) || e.offset >= MAX32) {
+        45
+    } else if (e.method == DEFLATED || e.is_dir) {
+        20
+    } else {
+        10
+    }
+}
+
+fn put_time_extra(b: BytesBuilder, e: Entry) {
+    if let Option.Some(secs) = e.unix_time {
+        put_u16(b, EXTRA_TIME);
+        put_u16(b, 5);
+        // Flags: bit 0, sigue la fecha de modificación.
+        put_u8(b, 1);
+        put_u32(b, secs);
+    }
+}
+
+/// The local file header, name and extra fields that precede an entry's data.
+pub fn local_header(e: Entry) -> bytes {
+    let name = e.name.to_bytes();
+    let z64 = needs_zip64(e);
+    let extra = bytesbuilder.new();
+    if (z64) {
+        put_u16(extra, EXTRA_ZIP64);
+        put_u16(extra, 16);
+        put_u64(extra, e.size);
+        put_u64(extra, e.compressed);
+    }
+    put_time_extra(extra, e);
+    let ex = bytesbuilder.build(extra);
+    let b = bytesbuilder.new();
+    put_u32(b, LOCAL_SIG);
+    put_u16(b, version_needed(e));
+    put_u16(b, e.flags);
+    put_u16(b, e.method);
+    put_u16(b, e.msdos_time);
+    put_u16(b, e.msdos_date);
+    put_u32(b, e.crc);
+    put_u32(b, if (z64) { MAX32 } else { e.compressed });
+    put_u32(b, if (z64) { MAX32 } else { e.size });
+    put_u16(b, name.len());
+    put_u16(b, ex.len());
+    bytesbuilder.push(b, name);
+    bytesbuilder.push(b, ex);
+    bytesbuilder.build(b)
+}
+
+/// The entry's central directory header.
+pub fn central_header(e: Entry) -> bytes {
+    let name = e.name.to_bytes();
+    // Extra ZIP64: solo los campos cuyo hueco de 32 bits desborda, en este orden.
+    let z = bytesbuilder.new();
+    if (e.size >= MAX32) {
+        put_u64(z, e.size);
+    }
+    if (e.compressed >= MAX32) {
+        put_u64(z, e.compressed);
+    }
+    if (e.offset >= MAX32) {
+        put_u64(z, e.offset);
+    }
+    let z64 = bytesbuilder.build(z);
+    let extra = bytesbuilder.new();
+    if (z64.len() > 0) {
+        put_u16(extra, EXTRA_ZIP64);
+        put_u16(extra, z64.len());
+        bytesbuilder.push(extra, z64);
+    }
+    put_time_extra(extra, e);
+    let ex = bytesbuilder.build(extra);
+    let b = bytesbuilder.new();
+    put_u32(b, CENTRAL_SIG);
+    put_u16(b, MADE_BY_UNIX);
+    put_u16(b, version_needed(e));
+    put_u16(b, e.flags);
+    put_u16(b, e.method);
+    put_u16(b, e.msdos_time);
+    put_u16(b, e.msdos_date);
+    put_u32(b, e.crc);
+    put_u32(b, clamp32(e.compressed));
+    put_u32(b, clamp32(e.size));
+    put_u16(b, name.len());
+    put_u16(b, ex.len());
+    // Longitud del comentario, número de disco, atributos internos.
+    put_u16(b, 0);
+    put_u16(b, 0);
+    put_u16(b, 0);
+    // Atributos externos: st_mode en la mitad alta, el bit de directorio de MS-DOS en la baja.
+    put_u32(b, (e.mode << 16) | if (e.is_dir) { 0x10 } else { 0 });
+    put_u32(b, clamp32(e.offset));
+    bytesbuilder.push(b, name);
+    bytesbuilder.push(b, ex);
+    bytesbuilder.build(b)
+}
+
+fn clamp32(v: int) -> int {
+    if (v >= MAX32) { MAX32 } else { v }
+}
+
+/// The end of the archive: the ZIP64 record and locator when any count, size or offset
+/// overflows the classic record, then the classic record (with 0xFFFF.. in the overflowing
+/// fields). `cd_offset` is where the central directory starts, `cd_size` its length.
+pub fn end_records(count: int, cd_offset: int, cd_size: int) -> bytes {
+    let b = bytesbuilder.new();
+    let z64 = count >= MAX16 || cd_offset >= MAX32 || cd_size >= MAX32;
+    if (z64) {
+        let record_at = cd_offset + cd_size;
+        put_u32(b, ZIP64_EOCD_SIG);
+        // Tamaño del resto del registro.
+        put_u64(b, ZIP64_EOCD_LEN - 12);
+        put_u16(b, MADE_BY_UNIX);
+        put_u16(b, 45);
+        put_u32(b, 0);
+        put_u32(b, 0);
+        put_u64(b, count);
+        put_u64(b, count);
+        put_u64(b, cd_size);
+        put_u64(b, cd_offset);
+        put_u32(b, ZIP64_LOCATOR_SIG);
+        put_u32(b, 0);
+        put_u64(b, record_at);
+        put_u32(b, 1);
+    }
+    let n16 = if (count >= MAX16) { MAX16 } else { count };
+    put_u32(b, EOCD_SIG);
+    put_u16(b, 0);
+    put_u16(b, 0);
+    put_u16(b, n16);
+    put_u16(b, n16);
+    put_u32(b, clamp32(cd_size));
+    put_u32(b, clamp32(cd_offset));
+    put_u16(b, 0);
+    bytesbuilder.build(b)
+}
+
+/// Where the central directory is: what the end records say.
+pub struct Directory {
+    count: int,
+    offset: int,
+    size: int,
+    comment: string,
+}
+
+/// Finds the end of central directory record in `tail`, the last bytes of the archive
+/// (up to 64 KiB + 22, the longest comment). Returns its position in `tail` and the record.
+pub fn find_eocd(tail: bytes) -> Result<(int, Directory), string> {
+    var i = tail.len() - EOCD_LEN;
+    while (i >= 0) {
+        if (tail[i] == 0x50 && tail[i + 1] == 0x4B && u32_at(tail, i) == EOCD_SIG) {
+            let comment_len = u16_at(tail, i + 20);
+            if (i + EOCD_LEN + comment_len <= tail.len()) {
+                let disk = u16_at(tail, i + 4);
+                let cd_disk = u16_at(tail, i + 6);
+                if (disk != 0 || cd_disk != 0) {
+                    return Result.Err("multi-disk archives are not supported");
+                }
+                let comment = text_of(tail.sub_bytes(i + EOCD_LEN, i + EOCD_LEN + comment_len));
+                let d = Directory {
+                    count: u16_at(tail, i + 10),
+                    size: u32_at(tail, i + 12),
+                    offset: u32_at(tail, i + 16),
+                    comment: comment
+                };
+                return Result.Ok((i, d));
+            }
+        }
+        i = i - 1;
+    }
+    Result.Err("not a zip file (no end of central directory record)")
+}
+
+/// Whether the classic record has an overflowing field: the ZIP64 record then rules.
+pub fn wants_zip64(d: Directory) -> bool {
+    d.count == MAX16 || d.size == MAX32 || d.offset == MAX32
+}
+
+/// Reads the ZIP64 locator (the 20 bytes right before the classic record): the absolute
+/// position of the ZIP64 end record, if there is one.
+pub fn zip64_locator(b: bytes) -> Option<int> {
+    if (b.len() < ZIP64_LOCATOR_LEN || u32_at(b, 0) != ZIP64_LOCATOR_SIG) {
+        return Option.None;
+    }
+    Option.Some(u64_at(b, 8))
+}
+
+/// Decodes the ZIP64 end of central directory record at `b`, keeping the classic record's comment.
+pub fn zip64_eocd(b: bytes, d: Directory) -> Result<Directory, string> {
+    if (b.len() < ZIP64_EOCD_LEN || u32_at(b, 0) != ZIP64_EOCD_SIG) {
+        return Result.Err("corrupt ZIP64 end of central directory record");
+    }
+    Result.Ok(
+        Directory {
+            count: u64_at(b, 32),
+            size: u64_at(b, 40),
+            offset: u64_at(b, 48),
+            comment: d.comment
+        }
+    )
+}
+
+/// Decodes `count` central directory headers from `cd`.
+pub fn central_entries(cd: bytes, count: int) -> Result<[Entry], string> {
+    let out: [Entry] = [];
+    var p = 0;
+    for _ in 0..count {
+        if (p + CENTRAL_LEN > cd.len() || u32_at(cd, p) != CENTRAL_SIG) {
+            return Result.Err("corrupt central directory (entry ${out.len() + 1})");
+        }
+        let made_by = u16_at(cd, p + 4);
+        let flags = u16_at(cd, p + 8);
+        let name_len = u16_at(cd, p + 28);
+        let extra_len = u16_at(cd, p + 30);
+        let comment_len = u16_at(cd, p + 32);
+        let external = u32_at(cd, p + 38);
+        let end = p + CENTRAL_LEN + name_len + extra_len + comment_len;
+        if (end > cd.len()) {
+            return Result.Err("corrupt central directory (entry ${out.len() + 1})");
+        }
+        let name_bytes = cd.sub_bytes(p + CENTRAL_LEN, p + CENTRAL_LEN + name_len);
+        let name = if ((flags & FLAG_UTF8) != 0) {
+            from_utf8(name_bytes).unwrap_or(cp437(name_bytes))
+        } else {
+            text_of(name_bytes)
+        };
+        let unix = (made_by >> 8) == 3;
+        let mode = if (unix) { external >> 16 } else { 0 };
+        let e = Entry {
+            name: name,
+            method: u16_at(cd, p + 10),
+            flags: flags,
+            crc: u32_at(cd, p + 16),
+            compressed: u32_at(cd, p + 20),
+            size: u32_at(cd, p + 24),
+            offset: u32_at(cd, p + 42),
+            msdos_time: u16_at(cd, p + 12),
+            msdos_date: u16_at(cd, p + 14),
+            unix_time: Option.None,
+            mode: mode,
+            is_dir: name.ends_with("/") || name.ends_with("\\") || (external & 0x10) == 0x10
+        };
+        let extra_at = p + CENTRAL_LEN + name_len;
+        read_extras(e, name_bytes, cd.sub_bytes(extra_at, extra_at + extra_len))?;
+        out.push(e);
+        p = end;
+    }
+    Result.Ok(out)
+}
+
+fn read_extras(e: Entry, raw_name: bytes, ex: bytes) -> Result<int, string> {
+    var p = 0;
+    while (p + 4 <= ex.len()) {
+        let id = u16_at(ex, p);
+        let len = u16_at(ex, p + 2);
+        let body_at = p + 4;
+        if (body_at + len > ex.len()) {
+            break;
+        }
+        if (id == EXTRA_ZIP64) {
+            // Solo están los campos cuyo hueco clásico está saturado, en este orden.
+            var q = body_at;
+            if (e.size == MAX32) {
+                if (q + 8 > body_at + len) {
+                    return Result.Err("${e.name}: truncated ZIP64 field");
+                }
+                e.size = u64_at(ex, q);
+                q = q + 8;
+            }
+            if (e.compressed == MAX32) {
+                if (q + 8 > body_at + len) {
+                    return Result.Err("${e.name}: truncated ZIP64 field");
+                }
+                e.compressed = u64_at(ex, q);
+                q = q + 8;
+            }
+            if (e.offset == MAX32) {
+                if (q + 8 > body_at + len) {
+                    return Result.Err("${e.name}: truncated ZIP64 field");
+                }
+                e.offset = u64_at(ex, q);
+            }
+        } else if (id == EXTRA_TIME && len >= 5 && (ex[body_at] & 1) == 1) {
+            e.unix_time = Option.Some(u32_at(ex, body_at + 1));
+        } else if (id == EXTRA_UNICODE_PATH && len > 5 && ex[body_at] == 1) {
+            // La copia UTF-8 del nombre de Info-ZIP; vale solo mientras la CRC del nombre de la
+            // cabecera coincida (una herramienta que renombró sin actualizarla deja una copia vieja).
+            if (inflate.crc32(raw_name) == u32_at(ex, body_at + 1)) {
+                if let Result.Ok(n) = from_utf8(ex.sub_bytes(body_at + 5, body_at + len)) {
+                    e.name = n;
+                }
+            }
+        }
+        p = body_at + len;
+    }
+    Result.Ok(0)
+}
+
+/// The data offset of an entry, from its local header (whose name and extra lengths may differ
+/// from the central directory's).
+pub fn data_offset(local: bytes, header_at: int) -> Result<int, string> {
+    if (local.len() < LOCAL_LEN || u32_at(local, 0) != LOCAL_SIG) {
+        return Result.Err("bad local header at ${header_at}");
+    }
+    Result.Ok(header_at + LOCAL_LEN + u16_at(local, 26) + u16_at(local, 28))
+}
+
+// Octetos 0x80–0xFF de la página de códigos 437, el juego de los nombres sin la marca UTF-8.
+const CP437_HIGH: string = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ";
+
+/// A name or comment as text: UTF-8 when it is valid, otherwise code page 437 (what the spec
+/// says for names without the UTF-8 flag, and what Windows' tar and Compress-Archive write).
+/// Valid UTF-8 wins even without the flag: Info-ZIP on Unix writes UTF-8 and does not set it.
+pub fn text_of(b: bytes) -> string {
+    match (from_utf8(b)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => cp437(b),
+    }
+}
+
+/// Decodes code page 437 bytes to text.
+pub fn cp437(b: bytes) -> string {
+    let out: [string] = [];
+    for o in b {
+        if (o < 128) {
+            out.push(to_string(char_from_code(o).unwrap_or('?')));
+        } else {
+            out.push(to_string(CP437_HIGH[o - 128]));
+        }
+    }
+    join(out, "")
+}

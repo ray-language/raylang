@@ -1,0 +1,67 @@
+// packages/zip/dostime.ray — la fecha y hora MS-DOS del ZIP: hora LOCAL, resolución de dos
+// segundos, años 1980–2107. La hora local la da el sistema operativo (`time.local_offset_ms`, con el
+// DST de cada fecha): sin paquete `tz`, así que vale igual en Windows. Nace de rayzip (M419).
+//! MS-DOS date and time, the ZIP header's timestamp: local time, two-second resolution, years
+//! 1980–2107. The clock decides which zone timestamps are written and read in: the system's local
+//! zone (`std/time.local_offset_ms`, DST included, Windows too) or UTC.
+
+import std/time;
+
+/// The zone timestamps are written and read in: the system's local time or UTC.
+pub struct Clock {
+    utc: bool,
+}
+
+/// The system's local time (what `zip` and the Explorer use).
+pub fn local() -> Clock {
+    Clock { utc: false }
+}
+
+/// UTC: reproducible archives, the same bytes on every machine.
+pub fn utc() -> Clock {
+    Clock { utc: true }
+}
+
+fn offset(c: Clock, ms: int) -> int {
+    if (c.utc) { 0 } else { time.local_offset_ms(ms) }
+}
+
+/// The DOS (time, date) pair of an instant in epoch milliseconds, clamped to 1980–2107.
+pub fn encode(c: Clock, ms: int) -> (int, int) {
+    let t = time.from_epoch_millis(ms + offset(c, ms));
+    if (t.year < 1980) {
+        return (0, (1 << 5) | 1);
+    }
+    if (t.year > 2107) {
+        return ((23 << 11) | (59 << 5) | 29, (127 << 9) | (12 << 5) | 31);
+    }
+    let msdos_time = (t.hour << 11) | (t.minute << 5) | (t.second / 2);
+    let msdos_date = ((t.year - 1980) << 9) | (t.month << 5) | t.day;
+    (msdos_time, msdos_date)
+}
+
+/// The instant (epoch-ms) of a DOS (time, date) pair read in the clock's zone. A civil time that
+/// falls in a daylight-saving gap or overlap is read with the offset in force a day earlier.
+pub fn decode(c: Clock, msdos_time: int, msdos_date: int) -> int {
+    let civil = time.DateTime {
+        year: 1980 + (msdos_date >> 9),
+        month: max_int((msdos_date >> 5) & 15, 1),
+        day: max_int(msdos_date & 31, 1),
+        hour: msdos_time >> 11,
+        minute: (msdos_time >> 5) & 63,
+        second: (msdos_time & 31) * 2,
+        weekday: 0
+    };
+    let naive = time.to_epoch_millis(civil);
+    if (c.utc) {
+        return naive;
+    }
+    // El offset vigente alrededor de ese instante: un día antes esquiva el cambio de hora del día.
+    let guess = naive - time.local_offset_ms(naive - 86400000);
+    let off = time.local_offset_ms(guess);
+    naive - off
+}
+
+fn max_int(a: int, b: int) -> int {
+    if (a > b) { a } else { b }
+}

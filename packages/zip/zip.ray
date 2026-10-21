@@ -1,0 +1,514 @@
+// packages/zip — archivos ZIP sobre un handle de archivo (M419, rayzip #193). `std/zip` lee un
+// archivo entero en memoria y sin ZIP64; esto lee del disco por partes (la cola y el directorio
+// central con `fs.seek`, cada entrada por trozos) y ESCRIBE (deflate o stored, lo que ocupe menos;
+// ZIP64 cuando hace falta; hora local del sistema; modo Unix; nombres UTF-8). Nace del código de
+// rayzip, que ya leían `unzip`, `tar.exe` y `Expand-Archive`.
+//! ZIP archives on a file handle: a reader that never loads the whole file (end records and central
+//! directory from the tail, each entry streamed and verified) and a writer (deflate or stored,
+//! ZIP64 when needed, Unix mode, UTF-8 names, local or UTC timestamps). `import zip/zip;`.
+//! Entries are `zip.Entry` (see `zip/format`): `name`, `size`, `compressed`, `method`, `crc`,
+//! `is_dir`, `mode`; `zip.mtime_ms(e)` gives the modification time.
+
+import std/collections/bytesbuilder;
+import std/deflate;
+import std/fs;
+import std/inflate;
+import std/time;
+import zip/dostime;
+import zip/format;
+from zip/format import Entry;
+
+pub type Entry = format.Entry;
+
+/// An open archive: its entries in central-directory order and the file handle the data is read
+/// from. Close it with `close` when done.
+pub struct Archive {
+    path: string,
+    handle: int,
+    entries: [Entry],
+    comment: string,
+}
+
+/// Entries whose compressed data is at most this big are read and inflated in one call; bigger
+/// ones go through `std/inflate`'s incremental decoder with bounded memory.
+pub const WHOLE_LIMIT: int = 64 * 1024 * 1024;
+
+const CHUNK: int = 1024 * 1024;
+
+/// Opens the archive at `path`: reads the end records (ZIP64 included) and the central directory.
+/// `Err` on a file that is not a zip, is multi-disk or has a corrupt directory.
+pub fn open(path: string) -> Result<Archive, string> {
+    let size = fs.file_size(path)?;
+    let h = fs.open(path, "r")?;
+    match (read_directory(h, size)) {
+        Result.Ok((entries, comment)) => Result.Ok(Archive { path: path, handle: h, entries: entries, comment: comment }),
+        Result.Err(e) => {
+            close_handle(h);
+            Result.Err(e)
+        },
+    }
+}
+
+/// Closes the archive's file handle.
+pub fn close(a: Archive) {
+    close_handle(a.handle);
+}
+
+fn close_handle(h: int) {
+    builtin.close(h);
+}
+
+/// The entries, in central-directory order.
+pub fn entries(a: Archive) -> [Entry] {
+    a.entries
+}
+
+/// The archive comment ("" when there is none).
+pub fn comment(a: Archive) -> string {
+    a.comment
+}
+
+/// The entry named exactly `name` (with `/` separators; a directory ends in `/`).
+pub fn find(a: Archive, name: string) -> Option<Entry> {
+    for e in a.entries {
+        if (e.name == name) {
+            return Option.Some(e);
+        }
+    }
+    Option.None
+}
+
+/// The entry's modification time in epoch-ms: the extended timestamp (UTC) when the archive has
+/// it, otherwise the DOS time read as local time.
+pub fn mtime_ms(e: Entry) -> int {
+    match (e.unix_time) {
+        Option.Some(secs) => secs * 1000,
+        Option.None => dostime.decode(dostime.local(), e.msdos_time, e.msdos_date),
+    }
+}
+
+fn read_directory(h: int, size: int) -> Result<([Entry], string), string> {
+    let tail_len = if (size < 65536 + format.EOCD_LEN) { size } else { 65536 + format.EOCD_LEN };
+    let tail_at = size - tail_len;
+    let tail = read_at(h, tail_at, tail_len)?;
+    let (eocd_at, classic) = format.find_eocd(tail)?;
+    var d = classic;
+    let locator_at = tail_at + eocd_at - format.ZIP64_LOCATOR_LEN;
+    if (locator_at >= 0) {
+        let loc = read_at(h, locator_at, format.ZIP64_LOCATOR_LEN)?;
+        if let Option.Some(record_at) = format.zip64_locator(loc) {
+            d = format.zip64_eocd(read_at(h, record_at, format.ZIP64_EOCD_LEN)?, classic)?;
+        } else if (format.wants_zip64(classic)) {
+            return Result.Err("corrupt archive: ZIP64 fields without a ZIP64 record");
+        }
+    }
+    if (d.offset + d.size > size) {
+        return Result.Err("corrupt archive: the central directory lies past the end of the file");
+    }
+    let cd = read_at(h, d.offset, d.size)?;
+    let entries = format.central_entries(cd, d.count)?;
+    Result.Ok((entries, d.comment))
+}
+
+// Exactamente `n` octetos desde `at`, o Err si el archivo acaba antes.
+fn read_at(h: int, at: int, n: int) -> Result<bytes, string> {
+    fs.seek(h, at)?;
+    let b = bytesbuilder.new();
+    while (bytesbuilder.len(b) < n) {
+        match (fs.read_bytes(h, n - bytesbuilder.len(b))?) {
+            Option.Some(chunk) => bytesbuilder.push(b, chunk),
+            Option.None => return Result.Err("unexpected end of file at ${at + bytesbuilder.len(b)}"),
+        }
+    }
+    Result.Ok(bytesbuilder.build(b))
+}
+
+fn check_supported(e: Entry) -> Result<int, string> {
+    if ((e.flags & format.FLAG_ENCRYPTED) != 0) {
+        return Result.Err("${e.name}: encrypted entries are not supported");
+    }
+    if (e.method != format.STORED && e.method != format.DEFLATED) {
+        return Result.Err("${e.name}: compression method ${e.method} is not supported");
+    }
+    Result.Ok(0)
+}
+
+/// Reads one entry whole, verifying its size and CRC-32. The output is capped at the declared size
+/// (a lying entry cannot expand without bound). For a big entry prefer `read_with`.
+pub fn read(a: Archive, e: Entry) -> Result<bytes, string> {
+    let out = bytesbuilder.new();
+    read_with(a, e, fn(chunk: bytes) -> Result<int, string> {
+        bytesbuilder.push(out, chunk);
+        Result.Ok(0)
+    })?;
+    Result.Ok(bytesbuilder.build(out))
+}
+
+/// Reads one entry's data, verifying size and CRC-32, and hands it to `sink` in order (a chunk at
+/// a time for big entries, so memory stays bounded). `sink` returns `Err` to abort. Returns the
+/// number of bytes produced.
+pub fn read_with(
+    a: Archive,
+    e: Entry,
+    sink: fn(bytes) -> Result<int, string>
+) -> Result<int, string> {
+    check_supported(e)?;
+    let local = read_at(a.handle, e.offset, format.LOCAL_LEN)?;
+    let data_at = format.data_offset(local, e.offset)?;
+    if (e.compressed <= WHOLE_LIMIT) {
+        let raw = read_at(a.handle, data_at, e.compressed)?;
+        let data = if (e.method == format.STORED) {
+            raw
+        } else {
+            inflate.inflate_raw_limit(raw, e.size)
+                .map_err(fn(m: string) -> string { "${e.name}: ${m}" })?
+        };
+        if (data.len() != e.size) {
+            return Result.Err("${e.name}: size ${data.len()} instead of ${e.size}");
+        }
+        if (inflate.crc32(data) != e.crc) {
+            return Result.Err("${e.name}: CRC-32 mismatch");
+        }
+        sink(data)?;
+        return Result.Ok(data.len());
+    }
+    stream_entry(a, e, data_at, sink)
+}
+
+fn stream_entry(
+    a: Archive,
+    e: Entry,
+    data_at: int,
+    sink: fn(bytes) -> Result<int, string>
+) -> Result<int, string> {
+    var sum = 0;
+    let z = inflate.inflate_stream();
+    inflate.stream_set_limit(z, e.size);
+    var read_so_far = 0;
+    var produced = 0;
+    fs.seek(a.handle, data_at)?;
+    while (read_so_far < e.compressed) {
+        let want = if (e.compressed - read_so_far < CHUNK) {
+            e.compressed - read_so_far
+        } else {
+            CHUNK
+        };
+        let chunk = match (fs.read_bytes(a.handle, want)?) {
+            Option.Some(c) => c,
+            Option.None => return Result.Err("${e.name}: truncated data"),
+        };
+        read_so_far = read_so_far + chunk.len();
+        let out = if (e.method == format.STORED) {
+            chunk
+        } else {
+            inflate.stream_push(z, chunk).map_err(fn(m: string) -> string { "${e.name}: ${m}" })?
+        };
+        if (out.len() > 0) {
+            produced = produced + out.len();
+            if (produced > e.size) {
+                inflate.stream_close(z);
+                return Result.Err("${e.name}: more data than the declared ${e.size} bytes");
+            }
+            sum = inflate.crc32_update(sum, out);
+            sink(out)?;
+        }
+    }
+    if (e.method == format.DEFLATED && !inflate.stream_finished(z)) {
+        inflate.stream_close(z);
+        return Result.Err("${e.name}: truncated deflate stream");
+    }
+    inflate.stream_close(z);
+    if (produced != e.size) {
+        return Result.Err("${e.name}: size ${produced} instead of ${e.size}");
+    }
+    if (sum != e.crc) {
+        return Result.Err("${e.name}: CRC-32 mismatch");
+    }
+    Result.Ok(produced)
+}
+
+// ---------------------------------------------------------------------------
+// Escritura
+// ---------------------------------------------------------------------------
+
+/// How an archive is written. `level` is the deflate level (1–9; 0 stores everything);
+/// `deflate_limit` is the file size above which `add_file` stores the file streamed in chunks
+/// instead of deflating it in memory; `clock` decides the zone of the DOS timestamps.
+pub struct Options {
+    level: int,
+    deflate_limit: int,
+    clock: dostime.Clock,
+}
+
+/// The clock of `options()`: DOS timestamps in the system's local time (what `zip` does).
+pub fn dostime_local() -> dostime.Clock {
+    dostime.local()
+}
+
+/// A UTC clock for `Options.clock`: reproducible archives, the same bytes on every machine.
+pub fn dostime_utc() -> dostime.Clock {
+    dostime.utc()
+}
+
+/// The defaults: level 6, files over 512 MiB stored, timestamps in the system's local time.
+pub fn options() -> Options {
+    Options { level: 6, deflate_limit: 512 * 1024 * 1024, clock: dostime.local() }
+}
+
+/// What `finish` reports: entries written, bytes before and after compression.
+pub struct Summary {
+    entries: int,
+    bytes_in: int,
+    bytes_out: int,
+}
+
+/// An archive being written: a temporary file next to `path`, renamed on `finish` (a failure
+/// never leaves half an archive behind).
+pub struct Writer {
+    path: string,
+    tmp: string,
+    handle: int,
+    offset: int,
+    central: bytesbuilder.BytesBuilder,
+    count: int,
+    bytes_in: int,
+    opts: Options,
+    open: bool,
+}
+
+/// Starts writing an archive at `path` with the default options.
+pub fn create(path: string) -> Result<Writer, string> {
+    create_with(path, options())
+}
+
+/// Starts writing an archive at `path`.
+pub fn create_with(path: string, o: Options) -> Result<Writer, string> {
+    let tmp = "${path}.zip-tmp";
+    let h = fs.open(tmp, "w")?;
+    Result.Ok(
+        Writer {
+            path: path,
+            tmp: tmp,
+            handle: h,
+            offset: 0,
+            central: bytesbuilder.new(),
+            count: 0,
+            bytes_in: 0,
+            opts: o,
+            open: true
+        }
+    )
+}
+
+fn put(w: Writer, b: bytes) -> Result<int, string> {
+    fs.write_bytes(w.handle, b)?;
+    w.offset = w.offset + b.len();
+    Result.Ok(b.len())
+}
+
+fn name_flags(name: string) -> int {
+    for c in name.chars() {
+        if (char_code(c) > 127) {
+            return format.FLAG_UTF8;
+        }
+    }
+    0
+}
+
+/// The archive name of a path or name as given: `\` read as `/`, no drive letter, no leading
+/// `/` or `./`, no `.`/`..` components (what `zip` does).
+pub fn archive_name(path: string) -> string {
+    let parts: [string] = [];
+    for p in path.replace("\\", "/").split("/") {
+        let drive = parts.len() == 0 && p.len() == 2 && p[1] == ':';
+        if (p != "" && p != "." && p != ".." && !drive) {
+            parts.push(p);
+        }
+    }
+    join(parts, "/")
+}
+
+fn entry_for(w: Writer, name: string, size: int, mtime_ms: int, mode: int, is_dir: bool) -> Entry {
+    let (t, d) = dostime.encode(w.opts.clock, mtime_ms);
+    Entry {
+        name: name,
+        method: format.STORED,
+        flags: name_flags(name),
+        crc: 0,
+        compressed: 0,
+        size: size,
+        offset: w.offset,
+        msdos_time: t,
+        msdos_date: d,
+        unix_time: Option.Some(mtime_ms / 1000),
+        mode: if (is_dir) { format.dir_mode(mode & 0o777) } else { format.file_mode(mode & 0o777) },
+        is_dir: is_dir
+    }
+}
+
+fn add(w: Writer, e: Entry, payload: bytes) -> Result<int, string> {
+    if (!w.open) {
+        return Result.Err("the archive writer is closed");
+    }
+    put(w, format.local_header(e))?;
+    put(w, payload)?;
+    bytesbuilder.push(w.central, format.central_header(e));
+    w.count = w.count + 1;
+    w.bytes_in = w.bytes_in + e.size;
+    Result.Ok(e.size)
+}
+
+/// Adds `data` as the entry `name` (modification time now, mode 0644). Deflated at the writer's
+/// level unless that does not shrink it (already-compressed data goes in as is).
+pub fn add_bytes(w: Writer, name: string, data: bytes) -> Result<int, string> {
+    add_bytes_at(w, name, data, time.now(), 0o644)
+}
+
+/// Adds `data` as the entry `name` with an explicit modification time (epoch-ms) and Unix mode.
+pub fn add_bytes_at(
+    w: Writer,
+    name: string,
+    data: bytes,
+    mtime_ms: int,
+    mode: int
+) -> Result<int, string> {
+    let e = entry_for(w, archive_name(name), data.len(), mtime_ms, mode, false);
+    e.crc = inflate.crc32(data);
+    if (w.opts.level <= 0 || data.len() == 0) {
+        e.compressed = data.len();
+        return add(w, e, data);
+    }
+    let packed = deflate.deflate_raw_level(data, w.opts.level);
+    if (packed.len() >= data.len()) {
+        e.compressed = data.len();
+        return add(w, e, data);
+    }
+    e.method = format.DEFLATED;
+    e.compressed = packed.len();
+    add(w, e, packed)
+}
+
+/// Adds a directory entry (`name` gets its trailing `/`; mode 0755, modification time now).
+pub fn add_dir(w: Writer, name: string) -> Result<int, string> {
+    add_dir_at(w, name, time.now(), 0o755)
+}
+
+/// Adds a directory entry with an explicit modification time (epoch-ms) and Unix mode.
+pub fn add_dir_at(w: Writer, name: string, mtime_ms: int, mode: int) -> Result<int, string> {
+    let e = entry_for(w, archive_name(name) + "/", 0, mtime_ms, mode, true);
+    add(w, e, b"")
+}
+
+/// Adds the file at `src` as the entry `name`, with its modification time and permission bits.
+/// A file bigger than the writer's `deflate_limit` is stored, streamed in chunks (bounded memory).
+pub fn add_file(w: Writer, name: string, src: string) -> Result<int, string> {
+    let st = fs.stat(src)?;
+    if (st.size <= w.opts.deflate_limit) {
+        let data = fs.read_file_bytes(src)?;
+        return add_bytes_at(
+            w,
+            name,
+            data,
+            st.mtime_ms,
+            if (st.mode == 0) { 0o644 } else { st.mode }
+        );
+    }
+    add_streamed(
+        w,
+        archive_name(name),
+        src,
+        st.size,
+        st.mtime_ms,
+        if (st.mode == 0) { 0o644 } else { st.mode }
+    )
+}
+
+// Un archivo grande, almacenado por trozos; la CRC se conoce al final y vuelve a la cabecera local
+// (desplazamiento 14).
+fn add_streamed(
+    w: Writer,
+    name: string,
+    src: string,
+    size: int,
+    mtime_ms: int,
+    mode: int
+) -> Result<int, string> {
+    if (!w.open) {
+        return Result.Err("the archive writer is closed");
+    }
+    let e = entry_for(w, name, size, mtime_ms, mode, false);
+    e.compressed = size;
+    let header_at = w.offset;
+    put(w, format.local_header(e))?;
+    let h = fs.open(src, "r")?;
+    var sum = 0;
+    var copied = 0;
+    var failed = "";
+    while (failed == "") {
+        match (fs.read_bytes(h, CHUNK)) {
+            Result.Ok(Option.Some(chunk)) => {
+                sum = inflate.crc32_update(sum, chunk);
+                copied = copied + chunk.len();
+                match (put(w, chunk)) {
+                    Result.Ok(_) => { },
+                    Result.Err(m) => failed = m,
+                }
+            },
+            Result.Ok(Option.None) => break,
+            Result.Err(m) => failed = "${src}: ${m}",
+        }
+    }
+    close_handle(h);
+    if (failed != "") {
+        return Result.Err(failed);
+    }
+    if (copied != size) {
+        return Result.Err("${src}: changed while being read (${copied} bytes, not ${size})");
+    }
+    e.crc = sum;
+    let end = w.offset;
+    fs.seek(w.handle, header_at + 14)?;
+    let patch = bytesbuilder.new();
+    format.put_u32(patch, e.crc);
+    fs.write_bytes(w.handle, bytesbuilder.build(patch))?;
+    fs.seek(w.handle, end)?;
+    bytesbuilder.push(w.central, format.central_header(e));
+    w.count = w.count + 1;
+    w.bytes_in = w.bytes_in + size;
+    Result.Ok(size)
+}
+
+/// Writes the central directory and end records (ZIP64 when needed), closes the file and renames
+/// it to its final path. The writer is closed afterwards.
+pub fn finish(w: Writer) -> Result<Summary, string> {
+    if (!w.open) {
+        return Result.Err("the archive writer is closed");
+    }
+    let cd = bytesbuilder.build(w.central);
+    let cd_at = w.offset;
+    let written = match (put(w, cd)) {
+        Result.Ok(_) => put(w, format.end_records(w.count, cd_at, cd.len())),
+        Result.Err(m) => Result.Err(m),
+    };
+    close_handle(w.handle);
+    w.open = false;
+    match (written) {
+        Result.Ok(_) => {
+            fs.rename(w.tmp, w.path)?;
+            Result.Ok(Summary { entries: w.count, bytes_in: w.bytes_in, bytes_out: w.offset })
+        },
+        Result.Err(m) => {
+            let _ = fs.remove_file(w.tmp);
+            Result.Err(m)
+        },
+    }
+}
+
+/// Abandons the archive: closes and removes the temporary file. Harmless after `finish`.
+pub fn abort(w: Writer) {
+    if (w.open) {
+        close_handle(w.handle);
+        w.open = false;
+        let _ = fs.remove_file(w.tmp);
+    }
+}

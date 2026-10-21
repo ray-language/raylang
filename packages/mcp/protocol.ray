@@ -23,6 +23,9 @@ pub struct Tool {
     /// What the server CLAIMS: a hint, not a guarantee. A server that says nothing is treated
     /// as if the tool changed things.
     read_only: bool,
+    /// What the server claims in `annotations.destructiveHint`: `false` means what the tool
+    /// changes can be undone. Absent = `true` (the MCP default): treated as irreversible.
+    destructive: bool,
 }
 
 /// One resource a server publishes: something that can be read by URI.
@@ -148,6 +151,14 @@ fn read_only_hint(item: Json) -> bool {
     }
 }
 
+// `annotations.destructiveHint` (raymcp #220). Ausente = true, como dice el protocolo.
+fn destructive_hint(item: Json) -> bool {
+    match (json.member(item, "annotations")) {
+        Option.Some(a) => json.get_bool(a, "destructiveHint").unwrap_or(true),
+        Option.None => true,
+    }
+}
+
 /// The tools a `tools/list` result declares. A tool without a schema gets an empty object
 /// schema, which every model provider accepts.
 pub fn parse_tools(result: Json) -> Result<[Tool], string> {
@@ -174,7 +185,8 @@ pub fn parse_tools(result: Json) -> Result<[Tool], string> {
                 name: name,
                 description: json.get_string(item, "description").unwrap_or(""),
                 schema: schema,
-                read_only: read_only_hint(item)
+                read_only: read_only_hint(item),
+                destructive: destructive_hint(item)
             }
         );
     }

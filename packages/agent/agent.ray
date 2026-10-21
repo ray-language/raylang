@@ -204,7 +204,8 @@ pub fn tool(
 
 /// Offers the model the tools of an MCP server: `session` is a connection made with the `mcp`
 /// package, and `name` is how the server is called in the tool names the model sees
-/// (`mcp__<name>__<tool>`). A tool the server declares read-only is `READ`; any other is
+/// (`mcp__<name>__<tool>`). A tool the server declares read-only is `READ`; one it declares
+/// non-destructive (`destructiveHint: false`, `serve.write_tool`) is `WRITE`; any other is
 /// `EXEC`, because a server that says nothing is treated as if it changed everything. The
 /// server's instructions join the system prompt. Returns how many tools were added.
 pub fn connect(a: Agent, name: string, session: mcp.Session) -> Result<int, string> {
@@ -215,16 +216,20 @@ pub fn connect(a: Agent, name: string, session: mcp.Session) -> Result<int, stri
         if (taken(a, exposed)) {
             return Result.Err("tool '${exposed}' is already registered");
         }
-        a.remote.push(
-            RemoteTool {
-                exposed: exposed,
-                name: t.name,
-                description: t.description,
-                schema: t.schema,
-                risk: if (t.read_only) { READ } else { EXEC },
-                session: session
-            }
-        );
+        a.remote.push(RemoteTool {
+            exposed: exposed,
+            name: t.name,
+            description: t.description,
+            schema: t.schema,
+            risk: if (t.read_only) {
+                READ
+            } else if (!t.destructive) {
+                WRITE
+            } else {
+                EXEC
+            },
+            session: session
+        });
         added = added + 1;
     }
     let said = mcp.instructions(session);

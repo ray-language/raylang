@@ -139,7 +139,8 @@ fn main() -> int {
 ```
 
 El modelo las ve como `mcp__ray__ray_check`, `mcp__ray__ray_run`… Una que el servidor declara de
-solo lectura es `READ`. Cualquier otra es `EXEC`: un servidor que no dice nada se trata como si
+solo lectura es `READ`; una declarada reversible (`destructiveHint: false`, `serve.write_tool` del
+paquete `mcp`) es `WRITE`. Cualquier otra es `EXEC`: un servidor que no dice nada se trata como si
 lo cambiara todo. Las instrucciones que declare el servidor se suman al prompt de sistema.
 
 ## Ver lo que pasa

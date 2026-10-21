@@ -18,8 +18,10 @@ import llm/message;
 import llm/anthropic;
 import llm/openai;
 from std/json import Json;
-from llm/config import Config;
-from llm/message import Message, ToolCall, Reply, Tool;
+// raymcp #221: los tipos de la API se reexportan — `llm.Config`, `llm.ToolCall` valen como tipos
+// sin saber en qué módulo viven.
+pub from llm/config import Config;
+pub from llm/message import Message, ToolCall, Reply, Tool, Usage;
 
 /// How long a provider may ask to be left alone before the request gives up instead.
 pub const MAX_RATE_WAIT_MS: int = 60000;

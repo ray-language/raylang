@@ -276,8 +276,9 @@ llamada corre sin preguntar:
 | `EXEC`: hace algo que no se puede deshacer | pregunta | pregunta | corre |
 
 `read_file` es `READ` y `write_file` es `WRITE`. De las de `ray mcp`, las que el servidor declara
-de solo lectura (`ray_fmt`, `ray_doc`) son `READ`; el resto son `EXEC`, porque un servidor que no
-dice nada se trata como si lo cambiara todo.
+de solo lectura (`ray_fmt`, `ray_doc`) son `READ`; una que el servidor declara reversible
+(`destructiveHint: false`, lo que registra `serve.write_tool`) es `WRITE`; el resto son `EXEC`,
+porque un servidor que no dice nada se trata como si lo cambiara todo.
 
 Lo que haya que preguntar se le pregunta a una función tuya:
 

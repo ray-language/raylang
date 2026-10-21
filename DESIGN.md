@@ -18262,3 +18262,31 @@ lectura sobre handle y ZIP64 (#193), la hora local (#200, y con ella la zona del
 el nombre de biblioteca por plataforma (#215), y lo de los paquetes de agentes (#219–#221), que
 necesita publicar versiones nuevas de `llm`/`mcp`/`agent`.
 
+## 384. M412 — los paquetes de agentes: rangos en el espejo, `write_tool` y tipos reexportados (raymcp #219–#221, oct 2026)
+
+**#219.** `ray registry mirror` reescribía cada dependencia hermana por ruta (`net = "path:../net"`)
+al tag git exacto de la versión que el hermano tenía en ese momento. Era lo autocontenido y
+reproducible, pero fosilizaba: `llm` 0.2.0 y `mcp` 0.2.0 salieron con `net@v0.5.0`, y cinco
+versiones de `net` después, `ray add agent` seguía trayendo la 0.5.0 (sin `webserver.options`).
+Cuando raymcp añadió `net ^0.10.1`, el MVS eligió la mayor en silencio. Dos cambios: el espejo
+escribe ahora el **requisito del índice** `^<versión actual del hermano>` (el índice ya resuelve
+rangos para todo lo demás, y el paquete publicado sigue siendo autocontenido: la versión mínima
+está en el índice), y `ensure` lleva en su cola **quién pidió cada versión**: cuando un requisito
+exacto (git, `=X`) queda por debajo de lo elegido, imprime la nota con el solicitante perdedor y el
+ganador. Los rangos no la provocan — unificar es su trabajo.
+
+**#220.** `mcp/serve` solo sabía decir «solo lee» (`readOnlyHint`), y `agent.connect` convertía
+todo lo demás en `EXEC`. MCP tiene `destructiveHint` justo para el escalón intermedio: `write_tool`
+lo declara `false` (y `readOnlyHint: false`), el cliente lo lee en `Tool.destructive` (ausente =
+`true`, el default del protocolo) y el agente lo mapea a `WRITE`. Una herramienta propia y una
+remota con la misma promesa reciben ahora el mismo trato en `EDITS`.
+
+**#221.** `llm.Config` «no existía» porque `llm/llm` lo importaba sin reexportarlo. `pub from`
+sobre `Config`, `Message`, `ToolCall`, `Reply`, `Tool` y `Usage` (y `Tool`/`Resource` en `mcp`): la
+cara del paquete tiene sus tipos. Y `ray doc`, que mostraba `-> Config` sin decir de dónde, resuelve
+los nombres del `from … import` del módulo y escribe `-> llm/config.Config` — con eso se sabe qué
+importar aunque el paquete no reexporte.
+
+Versiones: `llm`, `mcp` y `agent` 0.2.1, publicadas con el espejo nuevo (así `agent` pide
+`llm = "^0.2.1"` y `mcp = "^0.2.1"`, y estos `net = "^0.10.1"`).
+

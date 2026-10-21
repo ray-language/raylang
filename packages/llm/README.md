@@ -137,7 +137,8 @@ Las herramientas de un servidor MCP se ofrecen igual: el paquete
 
 ## Superficie
 
-`import llm/llm;`
+`import llm/llm;` (los tipos `Config`, `Message`, `ToolCall`, `Reply`, `Tool` y `Usage` se
+reexportan: `llm.Config` vale como anotación sin saber en qué módulo vive cada uno)
 
 | Función | Qué hace |
 |---|---|

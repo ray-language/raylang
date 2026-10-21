@@ -1065,7 +1065,7 @@ fn a_stale_cache_is_redownloaded_instead_of_reported_as_tampering() {
 
 /// M368 (ray-ds #140): `ray registry mirror` publica un paquete que vive dentro de otro repo (un
 /// monorepo) como espejo propio — el paquete en la raíz, tag `v<versión>`, las dependencias
-/// hermanas por ruta reescritas a git pinneado, el README público — y su entrada en un índice
+/// hermanas por ruta reescritas al requisito del índice, el README público — y su entrada en un índice
 /// clonado. Todo con repos `file://` locales: primero el hermano `net`, luego `web` que depende
 /// de él (el `publish` del índice resuelve `net` desde SU espejo).
 #[test]
@@ -1116,20 +1116,20 @@ fn registry_mirror_publishes_a_monorepo_package_as_its_own_repository_and_in_the
     assert_eq!(code, 0, "net: {err}\n{out}");
     assert!(out.contains("net: mirrored as v0.1.0"), "{out}");
     assert!(out.contains("index updated: net@0.1.0"), "{out}");
-    // web: su dependencia hermana queda pinneada al tag del espejo de net.
+    // web: su dependencia hermana queda como requisito del índice (M412: antes, un tag git exacto).
     let (out, err, code) = ray_plain(
         &mono.join("packages/web"),
         &["registry", "mirror", &public("web"), "--public", &public("web"), "--index", &index_url],
     );
     assert_eq!(code, 0, "web: {err}\n{out}");
-    assert!(out.contains(&format!("web: dependency net -> git+{}@v0.1.0", public("net"))), "{out}");
+    assert!(out.contains("web: dependency net -> ^0.1.0"), "{out}");
     assert!(out.contains("index updated: web@0.2.0"), "{out}");
 
     // Lo publicado: un clon del espejo de web en su tag.
     let check = base.join("check-web");
     git(&base, &["clone", "-q", "--branch", "v0.2.0", public("web").as_str(), check.to_str().unwrap()]);
     let toml = std::fs::read_to_string(check.join("ray.toml")).unwrap();
-    assert!(toml.contains(&format!("net = \"git+{}@v0.1.0\"", public("net"))), "{toml}");
+    assert!(toml.contains("net = \"^0.1.0\""), "{toml}");
     assert!(!toml.contains("path:"), "{toml}");
     assert!(check.join("framework.ray").is_file());
     assert!(!check.join("ray.lock").exists(), "ray.lock no viaja");
@@ -1137,7 +1137,7 @@ fn registry_mirror_publishes_a_monorepo_package_as_its_own_repository_and_in_the
     assert!(readme.starts_with("# `web`\n\n> **Read-only mirror**"), "{readme}");
     assert!(readme.contains("> web = \"^0.2.0\"\n"), "{readme}");
     assert!(readme.contains("```rust\nimport web/framework;"), "{readme}");
-    assert!(readme.contains(&format!("net = \"git+{}@v0.1.0\"", public("net"))), "{readme}");
+    assert!(readme.contains("net = \"^0.1.0\""), "{readme}");
     let log = Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&check).output().unwrap();
     assert!(String::from_utf8_lossy(&log.stdout).starts_with("web 0.2.0 (from mono@"), "{}", String::from_utf8_lossy(&log.stdout));
 

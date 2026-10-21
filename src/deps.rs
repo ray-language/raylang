@@ -440,11 +440,17 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     // verificar el contenido descargado contra lo que el índice avala (cierra el TOFU del lock).
     let mut index_hash: std::collections::HashMap<String, (GitSpec, String)> =
         std::collections::HashMap::new();
-    let mut queue: std::collections::VecDeque<(String, GitSpec)> = std::collections::VecDeque::new();
+    // raymcp #219: cada entrada de la cola lleva QUIÉN la pidió (`ray.toml` o el nombre de la
+    // dependencia) y con qué requisito, para avisar cuando el MVS sube una versión por encima de
+    // lo que uno de ellos pidió (antes `llm` pedía `net@v0.5.0`, el proyecto `^0.10.1`, y la
+    // sustitución ocurría en silencio).
+    let mut queue: std::collections::VecDeque<(String, GitSpec, String, String)> = std::collections::VecDeque::new();
+    let mut requested: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
     let mut downloaded = 0usize;
     let enqueue = |n: &str,
                    s: &str,
-                   queue: &mut std::collections::VecDeque<(String, GitSpec)>,
+                   by: &str,
+                   queue: &mut std::collections::VecDeque<(String, GitSpec, String, String)>,
                    index_hash: &mut std::collections::HashMap<String, (GitSpec, String)>,
                    index: &mut LazyIndex<'_>|
      -> Result<(), String> {
@@ -452,7 +458,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
         if let Some(h) = h {
             index_hash.insert(n.to_string(), (gs.clone(), h));
         }
-        queue.push_back((n.to_string(), gs));
+        queue.push_back((n.to_string(), gs, by.to_string(), s.to_string()));
         Ok(())
     };
     for (n, s) in &manifest.dependencies {
@@ -462,16 +468,32 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
-        enqueue(n, s, &mut queue, &mut index_hash, &mut index)?;
+        enqueue(n, s, "ray.toml", &mut queue, &mut index_hash, &mut index)?;
     }
 
-    while let Some((name, spec)) = queue.pop_front() {
+    while let Some((name, spec, by, req)) = queue.pop_front() {
         // Elegir el spec: nuevo, o MVS con el ya elegido si difieren (conflicto).
         let chosen_spec = match chosen.get(&name) {
             None => spec,
             Some(prev) if *prev == spec => prev.clone(),
-            Some(prev) => mvs(&name, prev, &spec)?,
+            Some(prev) => {
+                let picked = mvs(&name, prev, &spec)?;
+                // Un requisito EXACTO (`git+…@vX`, `=X`) que queda por debajo de lo elegido se
+                // sustituye: se dice quién lo pedía y qué se usa, para que no sea una sorpresa.
+                let (prev_by, prev_req) = requested.get(&name).cloned().unwrap_or_default();
+                let (lost_by, lost_req, lost) = if picked == *prev { (by.as_str(), req.as_str(), &spec) } else { (prev_by.as_str(), prev_req.as_str(), prev) };
+                if is_exact_requirement(lost_req) {
+                    eprintln!(
+                        "  note: '{name}' is pinned to {} by {lost_by} ('{lost_req}') but {} is used (the newest version requested; the other requester was {})",
+                        lost.git_ref, picked.git_ref, if picked == *prev { prev_by.as_str() } else { by.as_str() }
+                    );
+                }
+                picked
+            }
         };
+        if !chosen.contains_key(&name) || chosen.get(&name) != Some(&chosen_spec) {
+            requested.insert(name.clone(), (by.clone(), req.clone()));
+        }
         let unchanged = chosen.get(&name) == Some(&chosen_spec);
         chosen.insert(name.clone(), chosen_spec.clone());
         if unchanged && cached.get(&name) == Some(&chosen_spec) {
@@ -528,7 +550,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             if path_of_path_dep(&ds).is_some() {
                 continue;
             }
-            enqueue(&dn, &ds, &mut queue, &mut index_hash, &mut index)?;
+            enqueue(&dn, &ds, &name, &mut queue, &mut index_hash, &mut index)?;
         }
     }
 
@@ -602,6 +624,16 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
          irreconcilable (different URLs or non-semver refs). Pin a single version.",
         a.url, a.git_ref, b.url, b.git_ref
     ))
+}
+
+/// ¿El requisito fija UNA versión (una dep git `git+…@ref`, o `=X.Y.Z`/`X.Y.Z` del índice), en vez
+/// de un rango (`^1.2`, `~1.2`, `>=…`)? Solo esos merecen la nota al ser sustituidos por el MVS.
+fn is_exact_requirement(spec: &str) -> bool {
+    if spec.starts_with("git+") {
+        return true;
+    }
+    let s = spec.trim().trim_start_matches('=').trim();
+    !s.is_empty() && s.chars().next().is_some_and(|c| c.is_ascii_digit()) && !s.contains('*')
 }
 
 /// Parsea un ref semver `vX.Y.Z[-pre]` / `X.Y.Z[-pre]` a una [`crate::semver::Version`] completa

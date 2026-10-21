@@ -83,10 +83,10 @@ fn main() -> int {
     print(show(protocol.reply_with_id(`{"jsonrpc":"2.0","id":3}`, 3)));
     // tools/list
     let listed = json.parse(
-        `{"tools":[{"name":"read","description":"Reads","inputSchema":{"type":"object","required":["path"]},"annotations":{"readOnlyHint":true}},{"name":"bare"}]}`
+        `{"tools":[{"name":"read","description":"Reads","inputSchema":{"type":"object","required":["path"]},"annotations":{"readOnlyHint":true}},{"name":"bare"},{"name":"note","annotations":{"readOnlyHint":false,"destructiveHint":false}}]}`
     ).unwrap();
     for t in protocol.parse_tools(listed).unwrap() {
-        print("${t.name} | ${t.description} | ${json.stringify(t.schema)} | ${t.read_only}");
+        print("${t.name} | ${t.description} | ${json.stringify(t.schema)} | ${t.read_only} | ${t.destructive}");
     }
     print(protocol.parse_tools(json.parse(`{"tools":[{"description":"nameless"}]}`).unwrap()).is_err());
     print(protocol.parse_tools(json.parse("{}").unwrap()).is_err());
@@ -135,8 +135,9 @@ not the reply
 not the reply
 err the server answered an error: nope (code -32601)
 err the reply has neither "result" nor "error"
-read | Reads | {"required":["path"],"type":"object"} | true
-bare |  | {"properties":{},"type":"object"} | false
+read | Reads | {"required":["path"],"type":"object"} | true | true
+bare |  | {"properties":{},"type":"object"} | false | true
+note |  | {"properties":{},"type":"object"} | false | false
 true
 true
 doc://a | A | First | text/plain
@@ -413,6 +414,8 @@ fn build() -> Provider {
         panic("boom");
         Result.Ok("unreachable")
     });
+    // raymcp #220: una herramienta que escribe pero se puede deshacer.
+    serve.write_tool(p, "note", "Appends a note", "", fn(args: Json) -> Result<string, string> { Result.Ok("noted") });
     serve.resource(
         p,
         "demo://greeting",
@@ -476,7 +479,7 @@ Result.Err(mcp/serve: resource 'demo://greeting' is already registered)
 {"id":"a","jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2024-11-05","serverInfo":{"name":"demo","version":"1.0.0"}}}
 (no reply)
 {"id":2,"jsonrpc":"2.0","result":{}}
-{"id":3,"jsonrpc":"2.0","result":{"tools":[{"annotations":{"readOnlyHint":true},"description":"Upper-cases a text","inputSchema":{"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"shout"},{"description":"Always aborts","inputSchema":{"properties":{},"type":"object"},"name":"crash"}]}}
+{"id":3,"jsonrpc":"2.0","result":{"tools":[{"annotations":{"readOnlyHint":true},"description":"Upper-cases a text","inputSchema":{"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"shout"},{"description":"Always aborts","inputSchema":{"properties":{},"type":"object"},"name":"crash"},{"annotations":{"destructiveHint":false,"readOnlyHint":false},"description":"Appends a note","inputSchema":{"properties":{},"type":"object"},"name":"note"}]}}
 {"id":4,"jsonrpc":"2.0","result":{"content":[{"text":"HOLA","type":"text"}],"isError":false}}
 {"id":5,"jsonrpc":"2.0","result":{"content":[{"text":"'text' is required","type":"text"}],"isError":true}}
 {"id":6,"jsonrpc":"2.0","result":{"content":[{"text":"the tool failed: boom","type":"text"}],"isError":true}}

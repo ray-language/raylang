@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.70 — 2026-10-21
+
+- **`std/inflate` incremental en el runtime** (M415, rayzip #189): `inflate_stream`/`zlib_stream` +
+  `stream_push` usan un decodificador de miniz por stream cuando el build trae `deflate` (el
+  código raylang sigue de respaldo). Medido con un stream zlib de 2000 mensajes con `Z_SYNC_FLUSH`
+  (387 KB → 2,8 MB, pushes de 4 KiB): VM 2140 ms → 16 ms; nativo 169 ms → 23 ms. Nuevo
+  `stream_close(z)` para liberar un stream de sesión abandonado a medias (uno que terminó o falló se
+  libera solo). Cambios visibles: `stream_push` devuelve lo decodificado hasta el momento (también
+  de un bloque a medias; cada mensaje con `Z_SYNC_FLUSH` sigue saliendo entero en su push) y un
+  stream corrupto dice `corrupt DEFLATE stream`.
+
 ## 1.27.69 — 2026-10-21
 
 Las dos notas menores que dejó la revisión de las apps nuevas (IDEAS §113 #7 y #8, M414).

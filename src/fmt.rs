@@ -1738,6 +1738,19 @@ fn delimited_list<'a>(
     }
 }
 
+/// ¿Sale `e` multilínea SIEMPRE, se reparta o no su contenedor? Una forma con bloque lo es por sí
+/// misma; un literal de struct lo es si alguno de sus campos lo es (M309 lo emite un campo por
+/// línea). M414 (IDEAS §113 #8): `could_wrap_list` miraba solo la forma del elemento, así que
+/// `xs.push(Item { risk: if … { } else if … { } })` se repartía como lista en la pasada que venía
+/// de una fuente de una línea (el `if` aún cabía) y se pegaba a la llamada en la siguiente (el `if`
+/// ya venía expandido): dos pasadas hasta converger. Mirando a través del struct, la llamada nunca
+/// es repartible y el literal se pega a ella desde la primera.
+fn forces_multiline(e: &Expr) -> bool {
+    is_multiline_form(e)
+        || matches!(&e.kind, ExprKind::StructLit { fields, .. }
+            if fields.iter().any(|(_, v)| forces_multiline(v) && !matches!(v.kind, ExprKind::Func(_))))
+}
+
 /// ¿Es `e` una lista delimitada repartible? Se descarta si algún elemento es ya multilínea por su
 /// cuenta (`spawn(fn() { … })`, `print(match … )`): repartir la lista además desplazaría una forma que
 /// el formateador ya sabe indentar y que nadie escribe de otra manera.
@@ -1746,16 +1759,16 @@ fn could_wrap_list(e: &Expr) -> bool {
         ExprKind::Call { args, .. } => args,
         ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => xs,
         ExprKind::MapLit(ps) => return !ps.is_empty()
-            && !ps.iter().any(|(k, v)| is_multiline_form(k) || is_multiline_form(v)),
+            && !ps.iter().any(|(k, v)| forces_multiline(k) || forces_multiline(v)),
         // M309 (findings #43): un campo con un CLOSURE no impide repartir el literal — un campo por
         // línea, y el cuerpo del closure indentado bajo su campo (antes salía todo en una línea con
         // los cuerpos abiertos en medio). Las formas con bloque (if/match/while) siguen fuera.
         ExprKind::StructLit { fields, .. } => {
-            return !fields.is_empty() && !fields.iter().any(|(_, v)| is_multiline_form(v) && !matches!(v.kind, ExprKind::Func(_)))
+            return !fields.is_empty() && !fields.iter().any(|(_, v)| forces_multiline(v) && !matches!(v.kind, ExprKind::Func(_)))
         }
         _ => return false,
     };
-    if elems.is_empty() || elems.iter().any(is_multiline_form) {
+    if elems.is_empty() || elems.iter().any(forces_multiline) {
         return false;
     }
     // La excepción de M105: un único argumento que es cadena mantiene la forma compacta.
@@ -2218,6 +2231,16 @@ mod tests {
 
     /// M316 (findings #82): al repartir una concatenación larga, una interpolación es UN operando —
     /// antes se reescribía como sus piezas (`+ to_string(mark)`, `+ to_string(to_string(n))`).
+    #[test]
+    fn a_struct_literal_with_an_if_chain_field_hugs_its_call_in_one_pass() {
+        // M414 (IDEAS §113 #8): antes tardaba dos pasadas (lista repartida → literal pegado).
+        let src = "struct Item {\n    name: string,\n    risk: string,\n}\n\nfn classify(xs: List<Item>, n: int, label: string) {\n    xs.push(Item { name: label, risk: if (n > 10) { \"high\" } else if (n > 5) { \"medium\" } else { \"low\" } })\n}\n";
+        let once = fmt(src);
+        assert!(once.contains("    xs.push(Item {\n        name: label,\n        risk: if (n > 10) {\n"), "{once}");
+        assert!(once.contains("        }\n    })\n"), "{once}");
+        assert_eq!(fmt(&once), once);
+    }
+
     #[test]
     fn a_wrapped_concat_keeps_its_interpolation() {
         let src = "fn main() -> int {\n    let mark = \"x\";\n    let n = 3;\n    let cached = 1;\n    print(\"  input   ${mark}${to_string(n)} tokens with a long enough tail\" + if (cached > 0) { \" (${to_string(cached)} from cache)\" } else { \"\" });\n    0\n}\n";

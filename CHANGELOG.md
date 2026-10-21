@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.69 — 2026-10-21
+
+Las dos notas menores que dejó la revisión de las apps nuevas (IDEAS §113 #7 y #8, M414).
+
+- **Parar `ray test --native` se lleva al binario de prueba** (raystat #207, nota): el runner
+  corría cada prueba con un `Command::output` sin registrarla, así que un Ctrl-C o un SIGTERM a
+  `ray test` dejaba el binario huérfano (colgado para siempre si la prueba lo estaba). Ahora corre
+  bajo el mismo supervisor que `ray dev`: el pid se registra mientras vive y el handler de cierre
+  le reenvía SIGTERM (CTRL_BREAK + Job Object en Windows) antes de salir con 130.
+- **`ray fmt` converge en una pasada** con un literal de struct cuyo campo es un `if … else if …`
+  dentro de una llamada (`xs.push(Item { risk: if … })`): la decisión de repartir la llamada miraba
+  solo la forma del argumento, no lo que llevaba dentro, y el resultado dependía de si los bloques
+  del `if` venían en una línea en la fuente (dos pasadas distintas). El literal se pega a la
+  llamada desde la primera.
+
 ## 1.27.68 — 2026-10-21
 
 - **Windows: una fibra en `net.tcp_accept` paraba su worker entero en el binario nativo x86_64

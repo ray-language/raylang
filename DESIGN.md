@@ -18323,3 +18323,43 @@ con datos o el otro extremo cerrado). Repro de raymcp en la VM: de 15 274 ms a 2
 corre en el job de Windows x86_64 del CI, donde antes habría dado 13/16) y el caso de la tubería
 en `process_windows_cli`.
 
+## 386. M414 — `ray test --native` parado se lleva a su binario; `ray fmt` converge con un `if` en un campo de literal (IDEAS §113 #7 y #8, oct 2026)
+
+Dos notas que quedaron al margen del barrido de las apps nuevas (§383–§385), sin diseño que
+decidir pero con un bug cada una.
+
+**El huérfano de `ray test --native`** (raystat #207, nota). Al depurar la fibra colgada de
+#207, un `ray test --native` parado por su pid dejó vivo `…/ray_test_native_82263/zz_debug_test_0`.
+`run_one_native` lanzaba el binario de la prueba con `Command::output`: una espera ciega, sin pid
+registrado en ningún sitio, así que ni Ctrl-C ni SIGTERM al runner alcanzaban al hijo, y si la
+prueba estaba colgada el hijo lo seguía estando para siempre. `ray dev` y `ray test --watch` ya
+tenían el supervisor que hacía falta (`dev_host`, M172/M263): preparar el `Command` (grupo de
+consola propio en Windows), adoptar al hijo (Job Object `KILL_ON_JOB_CLOSE`), registrar su pid en
+un atómico `'static` y un handler de SIGINT/SIGTERM (consola en Windows) que reenvía el cierre al
+pid registrado y sale con 130. El runner usa exactamente eso: `TEST_CHILD` guarda el pid del
+binario mientras corre, `install_cleanup_on_death(&TEST_CHILD)` se instala una vez cuando la
+corrida es nativa, y `spawn_test_binary` sustituye al `output` (misma recogida de stderr y
+estado). Lo que NO hace el handler: borrar el directorio temporal de los binarios (no es
+async-signal-safe); un `ray test` parado deja la carpeta `ray_test_native_<pid>` en el temporal,
+como cualquier proceso matado a medias. Test: `stopping_ray_test_native_takes_its_test_binary_with_it`
+(unix) lanza una suite con una prueba que duerme en bucle, espera a ver el binario en `ps`, manda
+SIGTERM al runner, exige 130 y que el binario desaparezca en ≤ 5 s. Con el runner anterior el
+test fallaba (el runner moría por la señal sin código y el binario seguía vivo).
+
+**La segunda pasada de `ray fmt`** (visto al formatear `packages/agent` en M412). La sentencia
+`xs.push(Item { name: label, risk: if (a) { x } else if (b) { y } else { z } })` tardaba dos
+pasadas en estabilizarse: de una fuente en UNA línea salía la llamada repartida como lista (`xs.push(\n
+Item {…}\n)`); de esa salida, el literal pegado a la llamada (`xs.push(Item {\n …\n})`). La causa
+está en `could_wrap_list`: para decidir si una llamada es repartible miraba si algún argumento es
+una *forma multilínea* (`if`/`match`/bloque/closure), y un literal de struct no lo es… aunque M309
+lo emita siempre un campo por línea cuando uno de sus campos sí lo es. Y la medición de la pasada
+plana dependía de la fuente: `fmt_block` conserva un bloque inline (`{ x }`) solo si en la fuente
+cabía en una línea, así que con la fuente de una línea el `if` aún se medía plano (la sentencia no
+cabía → se repartía la lista) y con la fuente ya expandida el `if` salía multilínea en la pasada
+plana (todas las líneas cabían → se aceptaba la forma pegada). `forces_multiline` mira a través del
+struct (un literal con un campo que es forma multilínea cuenta como multilínea, recursivamente,
+con la misma excepción del closure de M309), y `could_wrap_list` lo usa para argumentos, elementos,
+pares de Map y campos. La llamada deja de ser repartible y el literal se pega a ella desde la
+primera pasada, que es la forma que ya se consideraba canónica (es la que producía la segunda).
+`fmt_policy` (todo `.ray` del repo converge) sigue en verde.
+

@@ -4286,10 +4286,10 @@ paquetes:
    tag; que `ray fetch` avise cuando un requisito exacto queda sustituido; `serve.write_tool` con
    `destructiveHint: false` que `agent.connect` lea como `WRITE` (#220); `llm/llm` reexportando
    `Config`/`ToolCall` y `ray doc` mostrando el módulo del tipo de retorno (#221).
-7. **`ray test` parado deja huérfano su binario de test** (raystat #207, nota): parar `ray test
+7. ✅ EJECUTADA como M414 (DESIGN §386, 1.27.69). **`ray test` parado deja huérfano su binario de test** (raystat #207, nota): parar `ray test
    --native` por su PID no se lleva al hijo. Un grupo de procesos propio para el binario (y
    reenviar SIGTERM) lo resolvería.
-8. **`ray fmt` no es idempotente en un caso** (visto en M412): un `if (…) { a } else if (…) { b }
+8. ✅ EJECUTADA como M414 (DESIGN §386, 1.27.69). **`ray fmt` no es idempotente en un caso** (visto en M412): un `if (…) { a } else if (…) { b }
    else { c }` en una línea, como valor de un campo de un literal de struct que va de argumento
    (`xs.push(T { risk: if … })`), tarda DOS pasadas en estabilizarse: la primera expande el `if` y
    deja el literal con la envoltura larga, la segunda vuelve a pegar el literal a la llamada. La

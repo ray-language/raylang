@@ -49,6 +49,8 @@ la FFI, la compresión, UDP, los procesos y Windows ARM64 (M411, hallazgos #188�
   como bajo `ray test` (raymcp #217).
 - **Docs**: `llms.txt` con una sección de FFI, la nota de `ToJson` y la de `==` frente a `Eq`;
   `std/huffman` es solo el código estático de HPACK (rayzip #196).
+- **Seguridad**: `rustls-webpki` 0.103.16 y `webpki-roots` 1.0.10 (RUSTSEC-2026-0382 y -0381:
+  intermedios emSign desconfiados).
 
 ## 1.27.65 — 2026-10-17
 

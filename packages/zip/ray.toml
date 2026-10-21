@@ -1,0 +1,8 @@
+# Manifiesto del paquete-librería `zip` (sin entry: los imports `zip/…` se resuelven contra el
+# directorio padre — ver deps::dependency_roots_for). Lectura y escritura de archivos ZIP sobre un
+# handle de archivo (ZIP64, streaming); nace de rayzip (M419).
+[package]
+name = "zip"
+version = "0.1.0"
+license = "Apache-2.0"
+entry = "zip.ray"

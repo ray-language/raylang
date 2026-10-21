@@ -2239,6 +2239,26 @@ pub fn watch_has_pending(_h: i64) -> Option<bool> {
     None
 }
 
+/// raystat #222 (Windows): ¿la tubería de un proceso hijo tiene algo que leer (datos o el otro
+/// extremo cerrado)? `None` si `h` no es una tubería. Lo consulta el scheduler para despertar una
+/// fibra aparcada en ella sin fd: en Windows los pipes no entran en `WSAPoll`, y con un socket
+/// aparcado a la vez el poller esperaba por plazos sin volver a mirarlas.
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn pipe_has_pending(h: i64) -> Option<bool> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Pipe(f)) => Some(match ray_runtime::process::pipe_available(f) {
+            Ok(n) => n > 0,
+            Err(_) => true,
+        }),
+        _ => None,
+    }
+}
+#[cfg(not(all(windows, not(target_arch = "wasm32"))))]
+pub fn pipe_has_pending(_h: i64) -> Option<bool> {
+    None
+}
+
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);

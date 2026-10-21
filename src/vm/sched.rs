@@ -886,10 +886,14 @@ impl<'a> Vm<'a> {
         let mut i = 0;
         while i < shared.io_parked.len() {
             let p = &shared.io_parked[i];
+            // raystat #222: también la tubería de un proceso hijo (Windows: sin fd, fuera del
+            // poller) con datos o cerrada — con un socket aparcado a la vez, `mcp.connect` no
+            // recibía nunca la respuesta del hijo.
             let ready = p.fd < 0
                 && p.handle >= 0
                 && ((p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE && crate::builtins::ui_has_event())
-                    || crate::builtins::watch_has_pending(p.handle) == Some(true));
+                    || crate::builtins::watch_has_pending(p.handle) == Some(true)
+                    || crate::builtins::pipe_has_pending(p.handle) == Some(true));
             if ready {
                 woken.push(shared.io_parked.remove(i));
             } else {

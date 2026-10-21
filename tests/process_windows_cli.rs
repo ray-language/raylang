@@ -197,3 +197,38 @@ fn writable_stdin_keeps_a_session_alive_on_windows() {
         assert_eq!(String::from_utf8_lossy(&native.stdout), SESSION_EXPECTED, "nativo ≡ VM");
     }
 }
+
+/// raystat #222 (la cara de raymcp): con un socket aparcado a la vez (el `accept` de un servidor),
+/// la fibra que lee la tubería de un hijo que responde TARDE —aparca antes de que haya datos— no
+/// despertaba nunca: los pipes no entran en WSAPoll y el poller, acotado a 10 ms, solo
+/// re-despertaba las esperas sin fd de UI y watch. `mcp.connect` agotaba sus 15 s.
+#[test]
+fn a_child_pipe_wakes_its_reader_while_a_socket_is_parked() {
+    let base = tmp("pipe_vs_accept");
+    std::fs::write(
+        base.join("prog.ray"),
+        r#"import std/net;
+import std/time;
+import std/process;
+
+fn main() -> int {
+    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    spawn(fn() { let _ = net.tcp_accept(listener); });
+    time.sleep(200);
+    let p = process.cmd("cmd", ["/c", "ping -n 2 127.0.0.1 >nul && echo hi"]).stream().unwrap();
+    let got = match (select_timeout([p.out], 8000)) {
+        Option.Some(_) => match (recv(p.out)) { Option.Some(b) => to_string(b.len() > 0), Option.None => "closed" },
+        Option.None => "timeout",
+    };
+    print(got);
+    let _ = p.wait();
+    0
+}
+"#,
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["--vm", "prog.ray"], 60);
+    assert_eq!(code, Some(0), "exit 0\nstdout={out}\nstderr={err}");
+    assert_eq!(out.trim(), "true", "el lector de la tubería despierta con el accept aparcado\n{err}");
+}
+

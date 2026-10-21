@@ -535,3 +535,42 @@ fn main() -> int {
 "#,
     );
 }
+
+/// raystat #222: una fibra aparcada en `tcp_accept` no retiene el hilo de su worker — las
+/// fibras que caen en ese worker siguen corriendo (en Windows x86_64, con el reactor WSAPoll,
+/// el worker entero se quedaba parado y el censo daba 13/16).
+#[test]
+fn a_fiber_parked_in_accept_does_not_hold_its_worker() {
+    assert_fibers_matches_vm(
+        "accept_census",
+        r#"
+import std/net;
+import std/time;
+
+fn main() -> int {
+    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    spawn(fn() { let _ = net.tcp_accept(listener); });
+    time.sleep(200);
+    let ch: Channel<int> = Channel.new();
+    for i in 0..16 {
+        spawn(fn() { send(ch, worker_id()); });
+    }
+    var got = 0;
+    while (got < 16) {
+        match (select_timeout([ch], 3000)) {
+            Option.Some(_) => {
+                let _ = ch.recv().unwrap();
+                got = got + 1;
+            },
+            Option.None => {
+                break;
+            },
+        }
+    }
+    print("${got}/16");
+    if (got == 16) { 0 } else { 1 }
+}
+"#,
+    );
+}
+

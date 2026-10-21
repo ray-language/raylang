@@ -5448,7 +5448,7 @@ pub(crate) fn publish_in_index(m: &Manifest, repo_override: Option<&str>, index:
     // M51d: validar y hashear el **contenido de la ref publicada** (clon limpio del repo local en
     // el tag), no el working tree — el hash del índice debe corresponder a lo que el consumidor
     // descargará; cambios sin commitear o archivos sueltos no cuentan.
-    let hash = published_hash(m, &git_spec)?;
+    let hash = published_hash(m, &git_spec, index)?;
     // M83b/c: firmar la publicación y reclamar (o verificar) el dueño del nombre.
     let sig = if sign { Some(sign_publication(index, &m.name, &m.version, &hash)?) } else { None };
     crate::index::append_version(index, &m.name, &m.version, &git_spec, Some(&hash), sig.as_deref())?;
@@ -5487,7 +5487,7 @@ pub(crate) fn publish_in_index(m: &Manifest, repo_override: Option<&str>, index:
 /// lo verifica con el checker, sin exigir `main`). Devuelve su `deps::hash_package` — calculado
 /// ANTES de resolver las deps del clon, que escriben `.ray-deps/`/`ray.lock` dentro y no son parte
 /// del contenido. El clon temporal se borra siempre.
-fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
+fn published_hash(m: &crate::manifest::Manifest, git_spec: &str, index: &Path) -> Result<String, String> {
     let spec = crate::deps::parse_spec(git_spec)?;
     // M134: el clon vive como `<base>/<nombre>` para que el check cargue el paquete EXACTAMENTE
     // como lo verá un consumidor (`.ray-deps/<nombre>`): los imports internos calificados con el
@@ -5531,7 +5531,7 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
         }
         // El hash, ANTES del check: resolver deps escribe `.ray-deps/`/`ray.lock` dentro del clon.
         let hash = crate::deps::hash_package(&tmp)?;
-        check_published(&tmp, &face)?;
+        check_published(&tmp, &face, index)?;
         Ok(hash)
     })();
     let _ = fs::remove_dir_all(&base);
@@ -5543,11 +5543,15 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
 /// clon temporal), carga la cara con el loader (imports internos + deps + `std/` embebida) y la
 /// verifica con `check_all_modulo` (el checker SIN exigir `main`: un paquete es una librería).
 /// Un error se reporta contra su archivo y línea local (vía `Loaded::locate`).
-fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
+fn check_published(tmp: &Path, face: &Path, index: &Path) -> Result<(), String> {
     let mut roots = crate::loader::DepRoots::default();
     if tmp.join("ray.toml").is_file()
-        && let Ok(Some(mc)) = crate::manifest::Manifest::load(tmp)
+        && let Ok(Some(mut mc)) = crate::manifest::Manifest::load(tmp)
     {
+        // M412 (raymcp #219): las dependencias por nombre del paquete (`net = "^0.10.1"`, lo que
+        // escribe `ray registry mirror`) se resuelven contra el índice AL QUE SE PUBLICA — es donde
+        // están sus hermanos recién publicados —, no contra el del entorno.
+        mc.registry_index = Some(index.to_string_lossy().into_owned());
         if mc.dependencies.iter().any(|(_, s)| crate::deps::path_of_path_dep(s).is_none()) {
             crate::deps::ensure(&mc).map_err(|e| {
                 format!("could not resolve the package dependencies for the check: {e}")

@@ -352,7 +352,9 @@ pub(super) fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, 
     );
     let toks = crate::lexer::lex(&src).unwrap_or_else(|e| crate::ice!("the derived impl does not lex: {e}"));
     let mut prog = crate::parser::parse(toks).unwrap_or_else(|e| crate::ice!("the derived impl does not parse: {e}"));
-    prog.impls.remove(0)
+    let mut imp = prog.impls.remove(0);
+    imp.synthetic = true; // M418: un derive es estructural; `==` no lo necesita
+    imp
 }
 
 /// Cuerpo de `igual` para un struct: conjunción de la igualdad de cada campo (sin campos →

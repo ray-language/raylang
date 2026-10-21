@@ -455,6 +455,10 @@ pub struct ImplBlock {
     pub bounds: Vec<(String, String)>,
     pub target: Type,
     pub methods: Vec<Function>,
+    /// M418 (raydata #206): `true` si el impl NO lo escribió el programa — un `@derive` o el
+    /// prelude. `==`/`!=` despachan solo a un `impl Eq` escrito a mano; los sintéticos son
+    /// estructurales por construcción y el operador sigue siendo la igualdad estructural rápida.
+    pub synthetic: bool,
     pub line: usize,
     pub col: usize,
 }

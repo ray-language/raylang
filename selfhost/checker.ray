@@ -344,6 +344,27 @@ fn is_comparable(t: Type) -> bool {
     }
 }
 
+// M418: ¿es `t` un parámetro de tipo de la función en curso con el bound `Eq`? Entonces `==` vale.
+fn is_eq_bounded_param(c: Checker, t: Type) -> bool {
+    match (t) {
+        Type.TNamed(n, args) => {
+            if (args.len() != 0 || !contains_str(c.tparams, n)) {
+                return false;
+            }
+            var i = 0;
+            while (i < c.bounds.len()) {
+                let b = c.bounds[i];
+                if (b.param == n && b.trait_name == "Eq") {
+                    return true;
+                }
+                i = i + 1;
+            }
+            false
+        },
+        _ => false,
+    }
+}
+
 fn is_array(t: Type) -> bool {
     match (t) {
         Type.TArray(_) => true,
@@ -2085,13 +2106,14 @@ fn check_binary(
             )
         }
     } else if (kind == 2) {
-        if (type_eq(lt, rt) && is_comparable(lt)) {
+        // M418 (raydata #206): sobre un `T: Eq` el operador vale (despacha al bound); espejo del Rust.
+        if (type_eq(lt, rt) && (is_comparable(lt) || is_eq_bounded_param(c, lt))) {
             Result.Ok(Type.TBool)
         } else {
             // raydata #206: espejo de la pista de `check_binary` en Rust.
             let hint = match (lt) {
                 Type.TNamed(n, args) => if (type_eq(lt, rt) && args.len() == 0 && contains_str(c.tparams, n)) {
-                    "; compare a type parameter with its Eq bound: a.eq(b)"
+                    "; a type parameter compares with == only under an Eq bound (fn f<T: Eq>)"
                 } else {
                     ""
                 },

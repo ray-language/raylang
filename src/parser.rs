@@ -636,7 +636,7 @@ impl Parser {
             methods.push(self.impl_method()?);
         }
         self.expect(&TokenKind::RBrace, "'}' to close the impl")?;
-        Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, line: kw.line, col: kw.col })
+        Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, synthetic: false, line: kw.line, col: kw.col })
     }
 
     /// impl_method = 'fn' IDENT [ '<' type_params '>' ] '(' [ method_params ] ')' [ '->' type ] block

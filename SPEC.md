@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.72** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.73** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -476,12 +476,19 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   despacho estático.)
 - **Operadores sobrecargables**: `+ - * /` binarios y `-` unario sobre un tipo de usuario que
   implemente `Add/Sub/Mul/Div/Neg` (`fn add(self, otro: Self) -> Self`, etc.), ambos operandos
-  del mismo tipo. `==`/`<` no son sobrecargables (usar `igual`/`menor` de `Eq`/`Ord`).
+  del mismo tipo. `<` no es sobrecargable (usar `less` de `Ord`); `==`/`!=` despachan a `Eq` según
+  el punto siguiente.
 - **Igualdad `==`/`!=`**: primitivos, `string`, `char`, `bytes`, `u*` (mismo ancho) y
   **estructural** para arreglos, tuplas, structs (mismo tipo, campo a campo) y enums (misma
   variante, payload a payload). Un `Map` suelto no se compara con `==`; dentro de un struct/enum
   (`Json.JObject`) se compara estructuralmente, sin orden. Un tipo con funciones dentro no es
-  comparable. `@derive(Eq)`/`impl Eq` sirven para los *bounds* (`T: Eq`), vía `igual`. Una
+  comparable. **`impl Eq` a mano** (1.27.73): sobre un struct o enum cuyo `impl Eq` escribió el
+  programa, `a == b` ES `a.eq(b)` y `a != b` es `!a.eq(b)` (los operandos directos; un arreglo o
+  tupla que los contenga sigue comparándose estructuralmente, y también `contains`/`index_of`); un
+  `@derive(Eq)` y los impls del prelude (`Option`, `Result`) son estructurales por construcción y el
+  operador no pasa por ellos. Sobre un parámetro de tipo `T: Eq`, `a == b` es la igualdad del bound;
+  sin el bound, `T` no es comparable (error). `@derive(Eq)`/`impl Eq` sirven además para los
+  *bounds* (`T: Eq`), vía `eq`. Una
   **tupla** satisface los bounds `Eq` y `Show` cuando todos
   sus elementos los satisfacen (M302: `assert_eq(f(), ("h", 81))`; `show` da `(h, 81)`); no
   tiene impl propio ni satisface otros traits. **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),

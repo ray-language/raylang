@@ -2789,6 +2789,13 @@ Reglas (tabla completa en [`REFERENCE.md` §13](REFERENCE.md#13-ffi-tipos-marsha
 - Fuera de contrato: variádicas (`printf`), structs por valor, callbacks.
 - No disponible en el playground web (wasm).
 
+**¿La biblioteca se llama distinto en cada sistema?** Nómbrala por plataforma tras el nombre general:
+`extern "z" windows "zlib1" { … }` (palabras `windows macos linux android ios freebsd`); el sistema en
+curso usa la suya. Y antes de llamar a una biblioteca opcional, pregunta: `ffi.library_available("z")`
+(`import std/ffi;`) dice si se puede cargar — una llamada a una biblioteca ausente es un error de
+ejecución. El binario nativo enlaza sus bibliotecas **al compilar** (`-l<nombre>`): necesita los
+archivos de desarrollo en la máquina que compila.
+
 **¿La función C bloquea?** Márcala: `extern "c" blocking { … }`. En el binario nativo la concurrencia
 corre sobre fibras fijadas a pocos workers; una llamada C que bloquea (E/S, una C-lib lenta) dejaría
 varadas a las demás fibras de su worker. Con `blocking`, la llamada corre en un hilo de un pool aparte

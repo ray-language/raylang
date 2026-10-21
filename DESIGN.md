@@ -18456,3 +18456,57 @@ CEST), 01:00Z (02:00 CET), 02:00Z, 03:00Z; `0 2 * * *` sigue dando solo la prime
 
 `tz` y `cron` pasan a 0.2.0 (campo nuevo en `Zone`, función nueva, política afinada).
 
+## 389. M417 — la FFI por plataforma: `extern "z" windows "zlib1"` y `ffi.library_available` (rayffi #215, oct 2026)
+
+rayffi quería zlib en los tres sistemas y descubrió tres cosas que §13 no contaba: que el nativo
+enlaza al compilar (`-l<nombre>`, así que `"libz.1.dylib"` o una ruta no le sirven y hacen falta
+los archivos de desarrollo), que no había forma de nombrar la biblioteca por plataforma (zlib es
+`libz` en macOS/Linux y `zlib1.dll` en Windows, y un `extern` ni se repite ni se elige con
+`platform()`), y que una biblioteca ausente en la VM no se nota hasta la primera llamada, con un
+pánico que habla del símbolo y no de la biblioteca. M411 ya había documentado lo primero; esto
+cierra lo demás.
+
+**Sintaxis.** Entre el nombre general y `blocking` caben pares `plataforma "nombre"`:
+`extern "z" windows "zlib1" { … }`. Las plataformas son palabras **contextuales** (como `blocking`),
+exactamente los nombres que devuelve `platform()` —`windows macos linux android ios freebsd`—, y
+el parser las reconoce solo cuando les sigue un string (un identificador `windows` sigue siendo un
+identificador en cualquier otro sitio). Una plataforma desconocida (`plan9`) o repetida es error de
+sintaxis con posición. Se descartó la alternativa de una tabla en `ray.toml`: la biblioteca es un
+hecho del bloque que la declara, no del proyecto, y un paquete que envuelve una C-lib debe poder
+llevarla consigo. El `ExternFn` guarda `libs: Vec<(so, nombre)>` en orden de declaración.
+
+**Resolución.** En la VM y el intérprete, `ffi::desc_of` elige `platform_lib(ext)`: la entrada de
+`std::env::consts::OS` o, sin ella, `lib` —una sola vez, al construir el descriptor—. El nativo
+emite por cada plataforma nombrada un `#[cfg_attr(target_os = "windows", link(name = "zlib1"))]` y
+el general bajo `#[cfg_attr(not(any(…)), link(name = "z"))]`; `rustc` elige para el target, así
+que un `ray build --native --target x86_64-pc-windows-msvc` desde macOS enlaza `zlib1`. Los nombres
+pasan por `native_link_name` como siempre. La agrupación de declaraciones `extern "C"` toma los
+nombres por plataforma como parte de la identidad del bloque (dos bloques `"z"` con y sin
+`windows "zlib1"` son dos bloques), igual que el formateador, que los reemite en su orden.
+
+**`ffi.library_available(lib) -> bool`.** Lo que faltaba para hacer opcional una dependencia C.
+En la VM prueba los mismos nombres de archivo que `open_lib` (`lib_filenames`) sin caer al handle
+del proceso —salvo `c`/`m`, que siempre están— y, si la biblioteca ya se abrió, dice si fue de
+verdad o por el respaldo del proceso. El nativo emite `__ray_ffi_lib_available`: `dlopen`/`dlclose`
+en unix, `LoadLibraryA`/`FreeLibrary` en Windows, sobre la misma lista de nombres; es la única
+carga dinámica del binario nativo (el resto va enlazado), y queda en el inventario de SECURITY. En
+wasm y en los builds sin `ffi`, `false`.
+
+**El mensaje de la biblioteca ausente.** `open_lib` recuerda qué bibliotecas cayeron al handle del
+proceso; cuando un símbolo no aparece en una de ellas (y no es `c`/`m`), el error dice `library
+'nosuchlib' not found (tried libnosuchlib.dylib, nosuchlib.dylib, nosuchlib); symbol 'foo' is not in
+the process either`, con la posición de la llamada como todo error de ejecución. Sigue siendo un
+error en la primera llamada —resolver al cargar el programa cambiaría la semántica de un `extern`
+que no se usa—; `library_available` es la forma de preguntar antes.
+
+**Verificado en Windows** (VM arm64): `extern "m" windows "ucrtbase"` elige `ucrtbase` y la VM lo
+carga como `ucrtbase.dll`; `library_available("m")`/`("c")` dicen `true` y una inexistente `false`;
+la biblioteca ausente se reporta con los nombres probados (`nosuchlib.dll, libnosuchlib.dll,
+nosuchlib`). Nota para el nativo en Windows: el nombre es el de la biblioteca de **importación**
+(`zlib1` → `zlib1.lib`; la CRT es `ucrt`, no `ucrtbase`) — lo mismo que exige `-l` en los demás.
+
+Tests: parser (nombres, desconocido, repetido), formateador (ida y vuelta, bloques distintos),
+transpilador (los `cfg_attr` y el helper), y `findings_1_27_72_cli` en los tres motores (un
+nombre para otra plataforma no afecta al sistema en curso; `library_available` con `m`, `c` y una
+inexistente; el mensaje de la biblioteca ausente en la VM).
+

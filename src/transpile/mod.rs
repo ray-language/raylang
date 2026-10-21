@@ -124,6 +124,8 @@ struct Transpiler {
     needs_local_offset: bool,
     /// ¿Usa `std::ffi::errno`? Se anexa el helper `__ray_ffi_errno` (lectura del errno del hilo).
     pub(super) needs_ffi_errno: bool,
+    /// M417: ¿usa `std::ffi::library_available`? Se anexa `__ray_ffi_lib_available` (dlopen/LoadLibrary).
+    pub(super) needs_ffi_lib_available: bool,
     pub(super) needs_fs_meta: bool,
     /// M115.4: el programa usa fs.watch → feature `watch` de ray-runtime (crate notify).
     pub(super) needs_rt_watch: bool,
@@ -401,6 +403,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_time_rng: false,
         needs_local_offset: false,
         needs_ffi_errno: false,
+        needs_ffi_lib_available: false,
         needs_fs_meta: false,
         needs_rt_watch: false,
         needs_rt_audio: false,

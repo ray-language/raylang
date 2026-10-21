@@ -584,18 +584,29 @@ fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
 fn extern_libs_in_order(externs: &[ExternFn]) -> Vec<(String, bool, usize)> {
     let mut seen: Vec<(String, bool, usize)> = Vec::new();
     for e in externs {
-        if !seen.iter().any(|(l, b, _)| *l == e.lib && *b == e.blocking) {
-            seen.push((e.lib.clone(), e.blocking, e.line));
+        let key = extern_key(e);
+        if !seen.iter().any(|(l, b, _)| *l == key && *b == e.blocking) {
+            seen.push((key, e.blocking, e.line));
         }
     }
     seen
 }
 
-/// Formatea un bloque `extern "lib" [blocking] { fn …; … }` con todas las firmas de esa librería
-/// y esa marca. (M41)
+/// La identidad de un bloque `extern` (M417): el nombre general más sus nombres por plataforma,
+/// tal como se escriben tras `extern`: `"z" windows "zlib1"`.
+fn extern_key(e: &ExternFn) -> String {
+    let mut k = format!("{:?}", e.lib);
+    for (os, name) in &e.libs {
+        k.push_str(&format!(" {} {:?}", os, name));
+    }
+    k
+}
+
+/// Formatea un bloque `extern "lib" [os "lib"…] [blocking] { fn …; … }` con todas las firmas de
+/// esa librería y esa marca. (M41; `lib` es la clave de `extern_key`)
 fn fmt_extern_block(lib: &str, blocking: bool, externs: &[ExternFn]) -> String {
-    let mut s = format!("extern {:?}{} {{\n", lib, if blocking { " blocking" } else { "" });
-    for e in externs.iter().filter(|e| e.lib == lib && e.blocking == blocking) {
+    let mut s = format!("extern {}{} {{\n", lib, if blocking { " blocking" } else { "" });
+    for e in externs.iter().filter(|e| extern_key(e) == lib && e.blocking == blocking) {
         s.push_str(&format!(
             "{}fn {}({}){};\n",
             INDENT, e.name, fmt_params(&e.params), fmt_return(&e.return_type)
@@ -2280,6 +2291,13 @@ mod tests {
         assert_eq!(fmt(src), src);
         let src2 = "fn g(c: char, b: bool) -> int {\n    match ((c, b)) {\n        ('a', true) => 1,\n        (_, false) => 0,\n        _ => 2,\n    }\n}\n";
         assert_eq!(fmt(src2), src2);
+    }
+
+    #[test]
+    fn extern_platform_names_roundtrip_and_keep_their_own_block() {
+        // M417: los nombres por plataforma son parte de la identidad del bloque y se reemiten en orden.
+        let src = "extern \"z\" windows \"zlib1\" linux \"z\" {\n    fn zlibVersion() -> Option<string>;\n}\n\nextern \"z\" {\n    fn crc32(c: u64, b: bytes, n: int) -> u64;\n}\n\nfn main() -> int {\n    0\n}\n";
+        assert_eq!(fmt(src), src);
     }
 
     #[test]

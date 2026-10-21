@@ -4692,6 +4692,10 @@ impl<'a> Vm<'a> {
                 // errno del hilo actual (std/ffi.errno): las fibras de la VM no se mueven de hilo
                 // dentro de una secuencia sin cesión → leído justo tras la extern, es el suyo.
                 OpCode::FfiErrno => self.push(HeapValue::Int(crate::ffi::errno())),
+                OpCode::FfiLibAvailable => match self.pop() {
+                    HeapValue::Str(lib) => self.push(HeapValue::Bool(crate::ffi::library_available(&lib))),
+                    _ => unreachable!("the checker guarantees a string"),
+                },
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
                 OpCode::MonotonicNanos => self.push(HeapValue::Int(crate::builtins::monotonic_nanos())),
                 OpCode::LocalOffset => match self.pop() {

@@ -297,7 +297,11 @@ documentada:
 
 - **`src/ffi.rs`** — la frontera FFI: `transmute` del puntero de función al tipo declarado por la
   firma y `CStr::from_ptr` sobre punteros no-NULL con la `CString` viva. La *carga* ya no lleva
-  `unsafe` propio: la hace `libloading`.
+  `unsafe` propio: la hace `libloading` (también en `library_available`, M417: abre y suelta la
+  librería para saber si está; cargarla ejecuta sus inicializadores, el mismo contrato que llamarla).
+  El binario nativo emite para `ffi.library_available` un `dlopen`/`dlclose` (unix) o
+  `LoadLibraryA`/`FreeLibrary` (Windows) declarados a mano sobre una `CString` propia viva durante la
+  llamada (`__ray_ffi_lib_available`).
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
   mano para no traer `libc`; y (M119) `poll(2)` con lista **nula** y `nfds = 0` para dormir el hilo
   con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga. En Windows (M174):

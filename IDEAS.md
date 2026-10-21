@@ -4277,7 +4277,7 @@ paquetes:
    Windows y la tabla `windowsZones.xml` de CLDR, y `cron.next_after_in(s, zone, ms)` en el paquete
    `cron` con la política de raycron (salto de primavera: dispara en el salto; repetición de otoño:
    una vez si la hora es fija, en las dos pasadas si va cada hora).
-5. **FFI por plataforma** (rayffi #215): elegir el nombre de la biblioteca por SO (`extern "z"
+5. ✅ EJECUTADA como M417 (DESIGN §389, 1.27.72). **FFI por plataforma** (rayffi #215): elegir el nombre de la biblioteca por SO (`extern "z"
    windows "zlib1" { … }` o una tabla en `ray.toml`) y comprobar si una biblioteca está
    (`ffi.library_available("z") -> bool`), para no descubrirlo con un pánico en la primera llamada.
 6. ✅ EJECUTADA como M412 (DESIGN §384, 1.27.67; `llm`/`mcp`/`agent` 0.2.1). **Paquetes de agentes** (raymcp #219–#221): `ray registry mirror` fija cada dependencia hermana a

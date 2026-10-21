@@ -40,7 +40,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__local_offset", "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
-    "__ffi_errno",
+    "__ffi_errno", "__ffi_lib_available",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
     "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_keepalive", "__socket_set_buffer", "__socket_set_nodelay", "__socket_set_read_timeout", "__socket_shutdown_write",
     "__peer_addr", "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_connect_timeout", "__tcp_listen",
@@ -770,6 +770,31 @@ fn ffi_errno_emits_the_thread_errno_helper() {
     assert!(with.contains("fn __ray_ffi_errno() -> i64"), "helper emitido: {}", with);
     let without = transpile_src("fn main() { print(0); }");
     assert!(!without.contains("__ray_ffi_errno"), "sin uso no se emite: {}", without);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn extern_platform_names_become_cfg_attr_links_and_library_available_emits_its_helper() {
+    // M417 (rayffi #215): un `cfg_attr(target_os = …, link(name = …))` por plataforma nombrada y el
+    // nombre general bajo `not(any(…))`; `ffi.library_available` → helper `__ray_ffi_lib_available`.
+    let dir = std::env::temp_dir().join(format!("ray_ffi_platform_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = "import std/ffi;\nextern \"z\" windows \"zlib1\" { fn zlibVersion() -> Option<string>; }\n\
+               extern \"m\" { fn sqrt(x: float) -> float; }\n\
+               fn main() -> int { print(ffi.library_available(\"z\")); print(sqrt(4.0)); 0 }\n";
+    std::fs::write(dir.join("main.ray"), src).unwrap();
+    let loaded = match crate::loader::load(&dir.join("main.ray")) {
+        Ok(l) => l,
+        Err(_) => panic!("no se pudo cargar el programa de std/ffi"),
+    };
+    let mut prog = loaded.program;
+    crate::checker::check(&mut prog).expect("check");
+    let rust = transpile(&prog).expect("transpile").source;
+    assert!(rust.contains("#[cfg_attr(target_os = \"windows\", link(name = \"zlib1\"))]"), "{rust}");
+    assert!(rust.contains("#[cfg_attr(not(any(target_os = \"windows\")), link(name = \"z\"))]"), "{rust}");
+    assert!(rust.contains("#[cfg_attr(not(windows), link(name = \"m\"))]"), "{rust}");
+    assert!(rust.contains("__ray_ffi_lib_available(&"), "{rust}");
+    assert!(rust.contains("fn __ray_ffi_lib_available(lib: &str) -> bool"), "{rust}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

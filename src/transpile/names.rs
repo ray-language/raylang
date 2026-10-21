@@ -152,6 +152,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         // rayffi #210: `ffi.errno()` lo intercepta emit_call (__ray_ffi_errno); su cuerpo raylang
         // (`__ffi_errno()`) salía como stub que entra en pánico y rompía `--release`.
         || name == "std::ffi::errno"
+        || name == "std::ffi::library_available"
     {
         return true;
     }

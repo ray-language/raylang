@@ -4,6 +4,24 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.72 — 2026-10-21
+
+La FFI por plataforma (M417, rayffi #215).
+
+- **Nombres de biblioteca por plataforma** en los bloques `extern`: `extern "z" windows "zlib1"
+  linux "z" { … }` (palabras contextuales `windows macos linux android ios freebsd`, las de
+  `platform()`; desconocida o repetida = error de sintaxis). La VM y el intérprete eligen la del
+  sistema en curso; el binario nativo emite un `#[cfg_attr(target_os = …, link(name = …))]` por
+  plataforma y el nombre general bajo `not(any(…))`. El formateador los conserva en su orden.
+- **`std/ffi.library_available(lib) -> bool`**: si la biblioteca se puede cargar en este sistema
+  (los mismos nombres de archivo que probaría la `extern`; `c`/`m` siempre), sin llamar a nada —
+  la forma de hacer opcional una dependencia C.
+- **Mensaje de biblioteca ausente**: en la VM, llamar a una `extern` cuya biblioteca no existe dice
+  `library 'x' not found (tried libx.dylib, x.dylib, x); symbol 'f' is not in the process either`
+  (antes hablaba solo del símbolo).
+- SPEC (gramática y §FFI), REFERENCE §13 y MANUAL §16 explican cómo se resuelve el nombre en cada
+  motor y qué pide el nativo al compilar.
+
 ## 1.27.71 — 2026-10-21
 
 Hora local del sistema (M416, rayzip #200 y raycron #202). `tz` y `cron` **0.2.0** publicados.

@@ -582,8 +582,14 @@ if none loads, looks the symbol up in the process itself (libc, libm): a missing
 at the first call. The **native binary** links it **at build time** (`-l<name>`): it needs the
 development files (`libz.so`/`libz.dylib`; on Windows the import `.lib`), and the name is reduced to
 what the linker expects (`"libz.1.dylib"` → `z`; a path loses its directory). The same name does not
-work on every platform (zlib is `libz` on macOS/Linux and `zlib1.dll` on Windows) and there is no way
-yet to pick it per platform.
+work on every platform (zlib is `libz` on macOS/Linux and `zlib1.dll` on Windows): pick it **per
+platform** after the general name — `extern "z" windows "zlib1" { … }` (the words `windows macos
+linux android ios freebsd`, those of `platform()`; the running system uses its own name, the general
+one without an entry; natively each becomes a `#[cfg_attr(target_os = …, link(name = …))]`). **Is the
+library there?** `ffi.library_available("z") -> bool` (`import std/ffi;`) looks it up with the same
+file names without calling anything: the way to make a C dependency optional. A missing library that
+is called anyway fails on the VM with `library 'x' not found (tried libx.dylib, x.dylib, x); symbol
+'f' is not in the process either` (it used to mention only the symbol).
 
 | raylang type | In C (argument) | In C (return) |
 |---|---|---|
@@ -733,4 +739,4 @@ threads, one per core by default; `1` = deterministic. A network server with few
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:cc428ae352bf -->
+<!-- sync: sha256:78884262e533 -->

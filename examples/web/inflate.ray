@@ -496,6 +496,38 @@ pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     }
 }
 
+// rayzip #191: además de la salida, cuántos octetos de entrada ocupó el stream — lo que va detrás
+// (el tráiler de un miembro gzip, el siguiente miembro, el resto de una entrada zip) se puede leer.
+/// Like `inflate_raw`, and also returns how many input bytes the DEFLATE stream used: whatever
+/// follows its final block (a gzip trailer, the next gzip member, the rest of a zip entry with a
+/// data descriptor) starts at that offset. `inflate_raw` ignores trailing bytes silently.
+pub fn inflate_raw_consumed(data: bytes) -> Result<(bytes, int), string> {
+    inflate_raw_consumed_limit(data, default_limit())
+}
+
+/// Like `inflate_raw_consumed`, with an explicit output cap (decompression-bomb protection).
+pub fn inflate_raw_consumed_limit(data: bytes, max_out: int) -> Result<(bytes, int), string> {
+    let fast = __deflate_op("inflate_consumed", data, max_out);
+    if (fast.len() == 1) {
+        let r = fast[0];
+        var used = 0;
+        var i = 0;
+        while (i < 8) {
+            used = used << 8 | r[i];
+            i = i + 1;
+        }
+        return Result.Ok((r.sub_bytes(8, r.len()), used));
+    }
+    var s = Inflater { data: data, pos: 0, bitpos: 0, out: [], limit: max_out };
+    match (inflate_blocks(s)) {
+        Result.Ok(_) => {
+            let used = if (s.bitpos > 0) { s.pos + 1 } else { s.pos };
+            Result.Ok((bytes_of(s.out), used))
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
 // --- CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320) para verificar gzip. ---
 // M90.4: por TABLA de 256 entradas (un octeto por paso, ~8× menos trabajo que bit a bit).
 // raylang no tiene estado de módulo → la tabla se construye en cada llamada (2048 pasos,
@@ -564,10 +596,32 @@ pub fn crc32(data: bytes) -> int {
     crc ^ 4294967295
 }
 
+// rayzip #192: la CRC encadenable (la `crc32(crc, buf, len)` de zlib) para sumar por trozos.
+/// Continues a CRC-32: `crc32_update(crc32(a), b) == crc32(a + b)`, and `crc32_update(0, x) ==
+/// crc32(x)`. Sums a large file chunk by chunk (bounded memory) or verifies data as it streams.
+pub fn crc32_update(crc: int, chunk: bytes) -> int {
+    let fast = __deflate_op("crc32_update", chunk, crc & 4294967295);
+    if (fast.len() == 1) {
+        let r = fast[0];
+        return r[0] << 24 | r[1] << 16 | r[2] << 8 | r[3];
+    }
+    let table: [int] = crc32_table();
+    var c = (crc & 4294967295) ^ 4294967295;
+    var i = 0;
+    while (i < chunk.len()) {
+        c = table[(c ^ chunk[i]) & 255] ^ c >> 8;
+        i = i + 1;
+    }
+    c ^ 4294967295
+}
+
 // Descomprime un archivo gzip (RFC 1952): cabecera + DEFLATE + tráiler (CRC32 + ISIZE). Verifica el CRC.
 /// Decompresses a gzip file (RFC 1952): parses the header (including optional FEXTRA/FNAME/
-/// FCOMMENT/FHCRC fields), inflates the DEFLATE body, and verifies the trailer CRC-32.
-/// Returns `Err` on bad magic, unsupported method, corrupt data, or CRC mismatch.
+/// FCOMMENT/FHCRC fields), inflates the DEFLATE body, and verifies the trailer CRC-32 and size.
+/// A file with several members (`cat a.gz b.gz`, or a compressor that writes one member per
+/// chunk) decompresses to their concatenation, as `gzip -d` does; bytes after the last member
+/// that do not start another one are ignored. Returns `Err` on bad magic, unsupported method,
+/// corrupt data, or CRC mismatch.
 /// The decompressed output is capped at 64 MiB; use `gunzip_limit` for a custom cap.
 pub fn gunzip(data: bytes) -> Result<bytes, string> {
     gunzip_limit(data, default_limit())
@@ -577,20 +631,42 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
 /// Like `gunzip`, but caps the decompressed output at `max_out` bytes (decompression-bomb
 /// protection).
 pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
-    if (data.len() < 18) {
+    // rayzip #188: un archivo gzip es una SERIE de miembros (RFC 1952 §2.2); antes se leía el
+    // primero y se comparaba su CRC con el tráiler del último.
+    var out = b"";
+    var at = 0;
+    var first = true;
+    while (first || (at + 1 < data.len() && data[at] == 31 && data[at + 1] == 139)) {
+        match (gunzip_member(data, at, max_out - out.len())) {
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+            Result.Ok(m) => {
+                out = if (first) { m.0 } else { out + m.0 };
+                at = m.1;
+            },
+        }
+        first = false;
+    }
+    Result.Ok(out)
+}
+
+// Un miembro gzip que empieza en `start`: su salida y el offset donde acaba (tras su tráiler).
+fn gunzip_member(data: bytes, start: int, max_out: int) -> Result<(bytes, int), string> {
+    if (data.len() - start < 18) {
         return Result.Err("gzip too short");
     }
-    if (data[0] != 31 || data[1] != 139) {
+    if (data[start] != 31 || data[start + 1] != 139) {
         return Result.Err("invalid gzip magic");
     }
-    if (data[2] != 8) {
+    if (data[start + 2] != 8) {
         return Result.Err("unsupported gzip compression method");
     }
-    let flg = data[3];
+    let flg = data[start + 3];
     // M64.1: la cabecera variable se recorre con BOUNDS — el cuerpo + tráiler (8 octetos)
     // deben caber tras ella; antes, un FNAME sin NUL o un xlen gigante indexaban fuera.
-    let tope = data.len() - 8;  // primer octeto del tráiler: la cabecera debe quedar antes
-    var pos = 10;  // cabecera fija de 10 octetos
+    let tope = data.len() - 8;  // primer octeto del último tráiler posible: la cabecera va antes
+    var pos = start + 10;  // cabecera fija de 10 octetos
     if ((flg & 4) != 0) {
         // FEXTRA
         if (pos + 2 > tope) {
@@ -629,19 +705,26 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if (pos > tope) {
         return Result.Err("gzip header truncated");
     }
-    let comprimido = data.sub_bytes(pos, data.len() - 8);
-    match (inflate_raw_limit(comprimido, max_out)) {
+    // El cuerpo acaba donde lo diga el propio stream DEFLATE; el tráiler (CRC-32 + ISIZE, LSB-first)
+    // va justo detrás.
+    match (inflate_raw_consumed_limit(data.sub_bytes(pos, data.len()), max_out)) {
         Result.Err(e) => Result.Err(e),
-        Result.Ok(salida) => {
-            // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).
-            let n = data.len();
-            let crc_expected = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
-            let crc_real = crc32(salida);
-            if ((crc_real & 4294967295) != (crc_expected & 4294967295)) {
-                Result.Err("CRC32 mismatch (corrupt gzip)")
-            } else {
-                Result.Ok(salida)
+        Result.Ok(r) => {
+            let out = r.0;
+            let t = pos + r.1;
+            if (t + 8 > data.len()) {
+                return Result.Err("gzip truncated (missing trailer)");
             }
+            let crc_expected = data[t] | data[t + 1] << 8 | data[t + 2] << 16 | data[t + 3] << 24;
+            let crc_real = crc32(out);
+            if ((crc_real & 4294967295) != (crc_expected & 4294967295)) {
+                return Result.Err("CRC32 mismatch (corrupt gzip)");
+            }
+            let isize = data[t + 4] | data[t + 5] << 8 | data[t + 6] << 16 | data[t + 7] << 24;
+            if ((out.len() & 4294967295) != isize) {
+                return Result.Err("ISIZE mismatch (corrupt gzip)");
+            }
+            Result.Ok((out, t + 8))
         },
     }
 }
@@ -834,8 +917,19 @@ pub fn stream_push(z: InflateStream, chunk: bytes) -> Result<bytes, string> {
     z.pending = z.pending.sub_bytes(committed_pos, z.pending.len());
     z.bitpos = committed_bitpos;
     if (z.finished) {
-        z.pending = b"";
+        // rayzip #191: lo que sigue al bloque final se conserva (`stream_remaining`), alineado a
+        // octeto: el último bloque termina a mitad de un octeto que ya es suyo.
+        if (z.bitpos > 0 && z.pending.len() > 0) {
+            z.pending = z.pending.sub_bytes(1, z.pending.len());
+        }
         z.bitpos = 0;
     }
     Result.Ok(bytes_of(produced))
+}
+
+/// After the final block (`stream_finished(z)`), the input bytes that followed it in the chunks
+/// pushed so far — a gzip trailer, the next member, the rest of a container. Empty before the end.
+/// Input pushed after the stream finished is not kept.
+pub fn stream_remaining(z: InflateStream) -> bytes {
+    if (z.finished) { z.pending } else { b"" }
 }

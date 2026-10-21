@@ -21,9 +21,10 @@ ray build --native fib.ray      # deploy: un binario nativo './fib'
 ```
 
 `--native` acepta `-o <ruta>` (nombre de salida; por defecto el *stem* del archivo) y
-`--release`, un tier de optimización más agresivo (`opt-level=3 + lto=fat + codegen-units=1 +
-target-cpu=native`) que da ~10 % extra en cargas de asignación a cambio de ~9× de tiempo de
-compilación y un binario no portable (usa las instrucciones de la CPU del host). El tier por
+`--release`, un tier de optimización más agresivo (`opt-level=3 + lto=fat + codegen-units=1`)
+que da ~10 % extra en cargas de asignación a cambio de ~9× de tiempo de compilación. El binario
+sigue siendo portable a toda máquina del target; `--cpu native` añade las instrucciones de la CPU
+del host (y entonces deja de serlo). El tier por
 defecto (`-O`) compila un programa pequeño en ~0,2 s y es portable — el mejor equilibrio para
 el día a día.
 

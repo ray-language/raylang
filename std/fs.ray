@@ -384,6 +384,22 @@ pub fn symlink(target: string, link: string) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// The text a symbolic link points to (readlink), as it was written — NOT resolved: a relative
+/// link gives the relative target (`real_path` gives the absolute, fully resolved one). `Err` if
+/// `path` is not a symlink or does not exist.
+pub fn read_link(path: string) -> Result<string, string> {
+    let r = __read_link(path);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
+/// Sets the last-modification time of a file or directory to `ms` (epoch-ms UTC, the unit of
+/// `stat(path).mtime_ms` and `time.now()`); the access time is left alone. Follows symlinks.
+/// `Ok(0)` or `Err(message)`.
+pub fn set_mtime(path: string, ms: int) -> Result<int, string> {
+    let r = __set_mtime(path, ms.to_string());
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// Whether `inner` lives under `outer` once BOTH are resolved to their real paths — the check a
 /// program needs before touching a path a user or a model asked for: a symlink inside the folder
 /// that points outside it fails here even though its name looks internal. `Err` if either path
@@ -395,7 +411,8 @@ pub fn is_within_real(inner: string, outer: string) -> Result<bool, string> {
 }
 
 /// Sets the file's permission bits (chmod, the low 12 bits); `Ok(0)` or `Err(message)`.
-/// The mode is a plain int: 384 is 0o600 (owner read/write), 493 is 0o755.
+/// The mode is a plain int: 384 is 0o600 (owner read/write), 493 is 0o755. On Windows (no POSIX
+/// permission bits) it is always `Err("chmod is not supported on this platform")`.
 pub fn chmod(path: string, mode: int) -> Result<int, string> {
     let r = __chmod(path, mode);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

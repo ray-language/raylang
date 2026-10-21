@@ -4253,3 +4253,40 @@ por D-Bus en Linux. Las órdenes llegan por el mismo cauce que `lifecycle` (`ray
 `std/ui`), sin romper nada existente. Depende de §111 solo en la medida en que un reproductor real
 querrá las dos cosas; son independientes.
 
+## 113. Lo que dejaron abierto rayzip, raycron, raydata, raystat, rayffi y raymcp (#188–#221, oct 2026)
+
+M411 (DESIGN §383) arregló lo que era del lenguaje. Esto pide diseño, un paquete o una release de
+paquetes:
+
+1. **`==` despacha a `impl Eq`** (raydata #206). Hoy `==` es estructural por SPEC §7 y un `impl Eq`
+   a mano solo vale con `.eq()`. Rust, Swift y Kotlin hacen que `==` sea el `Eq` del tipo, y lo
+   que espera quien escribe `impl Eq` es eso. Coste: cambio de semántica (un programa que hoy
+   compara estructuralmente un tipo con `impl Eq` distinto cambiaría), bajada `a == b` →
+   `a.eq(b)` en el checker cuando el tipo tiene impl de usuario, `contains` con el diccionario, y
+   `==` sobre `T: Eq`. Impacto: **alto** (semántica de un operador); decisión del usuario.
+2. **Inflate incremental en el runtime** (rayzip #189): `stream_push` es raylang puro, 15× más lento
+   que `inflate_raw` en nativo y 1350× en la VM. Un `InflateState` de miniz por handle exige
+   liberarlo (`stream_close`) — los streams de un servidor WebSocket viven una sesión entera, y sin
+   destructores un handle olvidado es memoria perdida. Diseño: handle explícito + liberación al
+   terminar el stream + el respaldo raylang actual para `--without deflate`.
+3. **`std/zip` completo** (rayzip #193): lector sobre un handle de archivo (directorio central desde
+   la cola, entradas por streaming, ZIP64) y escritor. rayzip ya tiene ~940 líneas que lo hacen;
+   lo natural es un paquete `zip` a partir de ellas más que crecer la stdlib.
+4. **Hora local** (rayzip #200, raycron #202): `time.local_offset_ms(instant_ms)` (localtime_r /
+   GetTimeZoneInformationForYear) en `std/time`, `tz.system()` en Windows por el nombre de zona de
+   Windows y la tabla `windowsZones.xml` de CLDR, y `cron.next_after_in(s, zone, ms)` en el paquete
+   `cron` con la política de raycron (salto de primavera: dispara en el salto; repetición de otoño:
+   una vez si la hora es fija, en las dos pasadas si va cada hora).
+5. **FFI por plataforma** (rayffi #215): elegir el nombre de la biblioteca por SO (`extern "z"
+   windows "zlib1" { … }` o una tabla en `ray.toml`) y comprobar si una biblioteca está
+   (`ffi.library_available("z") -> bool`), para no descubrirlo con un pánico en la primera llamada.
+6. **Paquetes de agentes** (raymcp #219–#221): `ray registry mirror` fija cada dependencia hermana a
+   su tag git del momento, así que `llm`/`mcp` 0.2.0 arrastran `net` v0.5.0. Opciones: publicar
+   0.2.1 (pinneadas a `net` 0.10.x) y que el espejo escriba un rango del índice (`^0.10`) en vez de un
+   tag; que `ray fetch` avise cuando un requisito exacto queda sustituido; `serve.write_tool` con
+   `destructiveHint: false` que `agent.connect` lea como `WRITE` (#220); `llm/llm` reexportando
+   `Config`/`ToolCall` y `ray doc` mostrando el módulo del tipo de retorno (#221).
+7. **`ray test` parado deja huérfano su binario de test** (raystat #207, nota): parar `ray test
+   --native` por su PID no se lleva al hijo. Un grupo de procesos propio para el binario (y
+   reenviar SIGTERM) lo resolvería.
+

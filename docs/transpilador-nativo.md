@@ -29,9 +29,10 @@ fuente → [loader] → [checker] → AST bajado → [transpile.rs] → .rs → 
   (`$TMP/ray_native_<stem>_<pid>.rs`, PID para builds concurrentes) y lo compila con **`rustc`
   directamente** (sin Cargo).
 - **Tiers medidos** (PERFORMANCE.md fase 33): por defecto `-O` (opt-level=2, ~0.2 s, portable);
-  `--release` = `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native` (~10 % extra solo
-  en cargas de asignación/Map, 9× de tiempo de compilación, binario no portable). PGO descartado
-  por medición.
+  `--release` = `opt-level=3 + lto=fat + codegen-units=1` (~10 % extra solo en cargas de
+  asignación/Map, 9× de tiempo de compilación); `target-cpu` solo con `--cpu <nombre>` (desde
+  1.27.66, rayffi #216: antes `--release` fijaba `native` y el binario no era portable). PGO
+  descartado por medición.
 
 ### 2.2 El transpilador (`src/transpile.rs`, ~4.300 líneas)
 
@@ -392,8 +393,7 @@ codegen-units = 1
 
 y corre `cargo build` con un **`CARGO_TARGET_DIR` compartido** (p. ej. `~/.ray/native-cache/`):
 rustls/ring compilan **una vez por máquina**; los builds siguientes solo compilan el `main.rs`
-(~1 s, no minutos). `target-cpu=native` del tier `--release` va vía `RUSTFLAGS` (no es clave de
-perfil).
+(~1 s, no minutos). El `target-cpu` de `--cpu` va vía `RUSTFLAGS` (no es clave de perfil).
 
 ### 4.6 Distribución del runtime: **incrustar las fuentes en el binario `ray`** (decidido)
 

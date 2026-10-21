@@ -538,6 +538,9 @@ impl Checker {
         for imp in &program.impls {
             let trait_methods = match self.traits.get(&imp.trait_name) {
                 Some(ms) => ms.clone(),
+                // raydata #203: `ToJson` es el único derivable que no está en el preludio.
+                None if imp.trait_name == "ToJson" => return Err(self.err(imp.line, imp.col,
+                    "trait 'ToJson' not declared: it lives in std/json, import it with `from std/json import ToJson;`".to_string())),
                 None => return Err(self.err(imp.line, imp.col, format!("trait '{}' not declared", imp.trait_name))),
             };
             // M9.2b: los parámetros de tipo del impl entran en ámbito mientras se resuelve el
@@ -2822,9 +2825,12 @@ impl Checker {
                 if lt == rt && is_comparable(&lt) {
                     Ok(Type::Bool)
                 } else {
+                    // raydata #206: `==` es estructural y no despacha a `Eq`; sobre un parámetro de tipo
+                    // la igualdad es la del bound.
+                    let hint = if lt == rt && matches!(lt, Type::Var(_)) { "; compare a type parameter with its Eq bound: a.eq(b)" } else { "" };
                     Err(self.err(line, col, format!(
-                        "the operator '{}' requires both operands of the same comparable type, not {} and {}",
-                        bin_op_str(op), lt, rt
+                        "the operator '{}' requires both operands of the same comparable type, not {} and {}{}",
+                        bin_op_str(op), lt, rt, hint
                     )))
                 }
             }

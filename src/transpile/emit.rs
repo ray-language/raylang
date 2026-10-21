@@ -158,6 +158,23 @@ impl Transpiler {
     /// llama al símbolo dentro de `unsafe`, y marshala el retorno (`c_int`→bool, `char*`→`Option<...>`
     /// copiando hasta el NUL, etc.). Espejo conductual de `src/ffi.rs`. Es la frontera insegura.
     pub(super) fn emit_externs(&self, out: &mut String, prog: &Program) -> Result<(), String> {
+        // rayffi #215: el nativo enlaza con `-l<nombre>` al compilar; la VM acepta también `"libz"`,
+        // `"libz.dylib"` o una ruta (dlopen). Se reduce al nombre que espera el enlazador (`z`).
+        fn native_link_name(lib: &str) -> String {
+            let base = lib.rsplit(['/', '\\']).next().unwrap_or(lib);
+            let mut name = base;
+            for ext in [".dylib", ".so", ".dll", ".lib", ".a"] {
+                if let Some(i) = name.find(ext) {
+                    name = &name[..i];
+                }
+            }
+            // Versión de la biblioteca (`libz.1`, `libssl.so.3` ya cortado): fuera los `.N` finales.
+            while let Some((head, tail)) = name.rsplit_once('.') {
+                if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) { name = head } else { break }
+            }
+            let name = if name != base || lib.starts_with("lib") { name.strip_prefix("lib").unwrap_or(name) } else { name };
+            name.to_string()
+        }
         if prog.externs.is_empty() {
             return Ok(());
         }
@@ -177,7 +194,7 @@ impl Transpiler {
                 // va enlazada (el espejo de M165, donde la VM resuelve "m" a ucrtbase.dll).
                 out.push_str("#[cfg_attr(not(windows), link(name = \"m\"))]\n");
             } else if *lib != "c" {
-                writeln!(out, "#[link(name = {:?})]", lib).unwrap();
+                writeln!(out, "#[link(name = {:?})]", native_link_name(lib)).unwrap();
             }
             out.push_str("unsafe extern \"C\" {\n");
             for e in fns {
@@ -187,7 +204,7 @@ impl Transpiler {
                     .enumerate()
                     .map(|(i, p)| ffi_c_arg_ty(&p.ty).map(|c| format!("__a{}: {}", i, c)))
                     .collect::<Result<_, _>>()?;
-                writeln!(out, "    #[link_name = {:?}]", e.name).unwrap(); // escapado (ver #[link] arriba)
+                writeln!(out, "    #[link_name = {:?}]", e.symbol).unwrap(); // escapado (ver #[link] arriba)
                 writeln!(
                     out,
                     "    fn __ffi_{}({}) -> {};",
@@ -220,11 +237,11 @@ impl Transpiler {
             let mut passes = Vec::new();
             for (i, p) in e.params.iter().enumerate() {
                 match normalize_type(&p.ty) {
-                    Type::Int | Type::Float => passes.push(format!("__p{}", i)),
+                    Type::Int | Type::Float | Type::UInt(64) => passes.push(format!("__p{}", i)),
                     Type::Bool => passes.push(format!("(__p{} as std::os::raw::c_int)", i)),
                     Type::String => {
                         // mismo texto que la VM (src/ffi.rs; allí es error de ejecución, aquí panic).
-                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"the string argument of '{}' contains an interior NUL\");", i, i, e.name).unwrap();
+                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"the string argument of '{}' contains an interior NUL\");", i, i, e.symbol).unwrap();
                         if blocking {
                             // Captura Send: la dirección como usize; el CString vive en este marco.
                             writeln!(out, "    let __rt_a{} = __rt_c{}.as_ptr() as usize;", i, i).unwrap();
@@ -250,7 +267,7 @@ impl Transpiler {
             if blocking {
                 // Conversión DENTRO del closure a un tipo Send (los punteros crudos no lo son).
                 let inner = match normalize_type(&e.return_type) {
-                    Type::Int | Type::Float | Type::Bool | Type::Unit => raw_call,
+                    Type::Int | Type::Float | Type::Bool | Type::Unit | Type::UInt(64) => raw_call,
                     Type::Ptr => format!("({}) as i64", raw_call),
                     Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
                         // char* → Option<Vec<u8>>: la copia hasta el NUL se hace en el hilo del pool.
@@ -269,7 +286,8 @@ impl Transpiler {
             let ret_expr = match normalize_type(&e.return_type) {
                 // `__rt_r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
                 Type::Int => "__rt_r as i64".to_string(),
-                Type::Float => "__rt_r".to_string(),
+                // rayffi #209: `u64` ↔ `long`/`size_t` de 64 bits, sin conversión (como la VM).
+                Type::Float | Type::UInt(64) => "__rt_r".to_string(),
                 Type::Bool => "__rt_r != 0".to_string(),
                 Type::Unit => "()".to_string(),
                 Type::Ptr if blocking => "__rt_r".to_string(),
@@ -983,6 +1001,22 @@ impl Transpiler {
     /// Emite un literal de función. `boxed` = envuelto en `Rc::new(...)` (la repr ordinaria de un
     /// valor-función); `false` (H21-N5c) = el closure PELADO, para un argumento a un param MARCADO
     /// (genérico `__F: Fn + Send + ...`) — si sus capturas no son Send, rustc lo rechaza (honesto).
+    /// rayffi #213: `parse_int` (y demás funciones del prelude interceptadas) como valor — el mismo
+    /// closure que el checker sintetiza para un builtin (M315): `fn($bv0: T) -> R { name($bv0) }`.
+    fn emit_prelude_value(&mut self, out: &mut String, name: &str, params: Vec<crate::ast::Param>, ret: Type, line: usize, col: usize) -> Result<(), String> {
+        let at = |kind: ExprKind| Expr { kind, line, col };
+        let fparams: Vec<crate::ast::Param> = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| crate::ast::Param { name: format!("__bv{i}"), ty: p.ty.clone(), line, col })
+            .collect();
+        let args: Vec<Expr> = fparams.iter().map(|p| at(ExprKind::Ident(p.name.clone()))).collect();
+        let call = at(ExprKind::Call { callee: Box::new(at(ExprKind::Ident(name.to_string()))), args });
+        let body = crate::ast::Block { statements: vec![], tail: Some(Box::new(call)), line, col, end_line: line };
+        let fnexpr = crate::ast::FnExpr { id: usize::MAX, params: fparams, return_type: ret, body, line, col };
+        self.emit_func_literal(out, &fnexpr, true)
+    }
+
     pub(super) fn emit_func_literal(&mut self, out: &mut String, fnexpr: &crate::ast::FnExpr, boxed: bool) -> Result<(), String> {
         // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
         // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
@@ -1220,6 +1254,10 @@ impl Transpiler {
                         Some(dyn_ty) => write!(out, "(Rc::new({}) as {})", mangle(name), dyn_ty).unwrap(),
                         None => write!(out, "Rc::new({})", mangle(name)).unwrap(),
                     }
+                } else if let Some((params, ret)) = self.prelude_values.get(name).cloned() {
+                    // rayffi #213: función del prelude interceptada por `emit_call` usada como VALOR →
+                    // closure que la llama (su definición no se emite).
+                    self.emit_prelude_value(out, name, params, ret, e.line, e.col)?;
                 } else {
                     out.push_str(&mangle(name));
                 }

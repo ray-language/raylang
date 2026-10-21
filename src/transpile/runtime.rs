@@ -515,11 +515,24 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<__RayMap<K, V>>> { fn ray_show(&self) -> String { let __rt_m = self.borrow(); let mut __parts: Vec<String> = __rt_m.iter().map(|(__k, __rt_v)| format!(\"{}: {}\", __k.ray_show(), __rt_v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
     out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__rt_v) => format!(\"Option.Some({})\", __rt_v.ray_show()), None => \"Option.None\".to_string() } } }\n");
     out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__rt_v) => format!(\"Result.Ok({})\", __rt_v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
-    // Tuplas (2 y 3 elementos): `(a, b)`. El checker no deja `print`ar una tupla, así que esto rara vez
-    // se llama; hace falta para satisfacer el bound `T: RayShow` de un `Iter<(k, v)>` (los adaptadores
-    // `enumerate`/`zip` generados por el trait Iterator, aun cuando queden como stubs).
-    out.push_str("impl<A: RayShow, B: RayShow> RayShow for (A, B) { fn ray_show(&self) -> String { format!(\"({}, {})\", self.0.ray_show(), self.1.ray_show()) } }\n");
-    out.push_str("impl<A: RayShow, B: RayShow, C: RayShow> RayShow for (A, B, C) { fn ray_show(&self) -> String { format!(\"({}, {}, {})\", self.0.ray_show(), self.1.ray_show(), self.2.ray_show()) } }\n");
+    // Tuplas (2 a 12 elementos, el máximo de los traits de tupla de Rust): `(a, b)`. `print` de una
+    // tupla baja a su diccionario `Show`; esto satisface el bound `T: RayShow` de un `Iter<(k, v)>`
+    // y de un `Option<(…)>` (raymcp #218: con 4 elementos `is_none()` no compilaba).
+    for n in 2..=12usize {
+        let tps: Vec<String> = (0..n).map(|i| format!("A{i}")).collect();
+        let bounds: Vec<String> = tps.iter().map(|t| format!("{t}: RayShow")).collect();
+        let holes = vec!["{}"; n].join(", ");
+        let shows: Vec<String> = (0..n).map(|i| format!("self.{i}.ray_show()")).collect();
+        writeln!(
+            out,
+            "impl<{}> RayShow for ({},) {{ fn ray_show(&self) -> String {{ format!(\"({})\", {}) }} }}",
+            bounds.join(", "),
+            tps.join(", "),
+            holes,
+            shows.join(", ")
+        )
+        .unwrap();
+    }
     // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
     out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __rt_s = String::with_capacity(self.len() * 2); for __rt_b in self.iter() { __rt_s.push_str(&format!(\"{:02x}\", __rt_b)); } __rt_s } }\n\n");
 }
@@ -560,8 +573,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             init.push_str(" cancel: None, parked: None, scopes: Vec::new(),");
         }
         if t.needs_net {
-            fields.push_str(" socks: std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>, rd_to: std::collections::HashMap<i64, i64>,");
-            init.push_str(" socks: std::collections::HashMap::new(), rd_to: std::collections::HashMap::new(),");
+            fields.push_str(" socks: std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>,");
+            init.push_str(" socks: std::collections::HashMap::new(),");
         }
         if t.needs_rt_tls {
             // F4: la caché TLS también viaja con la fibra (mismo motivo que socks: una entrada en
@@ -656,7 +669,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M401 (raygate #175): poke DIRIGIDO al fd que se cierra — solo despierta a los reactores
             // con fibras aparcadas en él (ninguno, en el caso normal). Un archivo no se arma en el
             // poller: sin poke. Otro handle con fd (proceso, watch): poke global, como antes.
-            "__ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); }); match &__e { Some(__RayHandle::Tcp(s)) => ray_runtime::fibers::poke_fd(__ray_fd(&**s)), Some(__RayHandle::Listener(l)) => ray_runtime::fibers::poke_fd(__ray_fd(l)), Some(__RayHandle::Udp(u)) => ray_runtime::fibers::poke_fd(__ray_fd(u)), Some(__RayHandle::Reader(_)) | Some(__RayHandle::Writer(_)) | None => {}, _ => ray_runtime::fibers::poke() } "
+            "{ __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); }; match &__e { Some(__RayHandle::Tcp(s)) => ray_runtime::fibers::poke_fd(__ray_fd(&**s)), Some(__RayHandle::Listener(l)) => ray_runtime::fibers::poke_fd(__ray_fd(l)), Some(__RayHandle::Udp(u)) => ray_runtime::fibers::poke_fd(__ray_fd(u)), Some(__RayHandle::Reader(_)) | Some(__RayHandle::Writer(_)) | None => {}, _ => ray_runtime::fibers::poke() } "
         } else if t.needs_net {
             "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {
@@ -821,9 +834,22 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    #[cfg(unix)]\n",
             "    let r = std::os::unix::fs::symlink(target, link);\n",
             "    #[cfg(windows)]\n",
-            "    let r = { let is_dir = std::path::Path::new(link).parent().map(|d| d.join(target)).filter(|p| p.is_dir()).is_some() || std::path::Path::new(target).is_dir(); if is_dir { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) } };\n",
+            "    let r = { let target = &target.replace('/', \"\\\\\"); let is_dir = std::path::Path::new(link).parent().map(|d| d.join(target)).filter(|p| p.is_dir()).is_some() || std::path::Path::new(target).is_dir(); if is_dir { std::os::windows::fs::symlink_dir(target, link) } else { std::os::windows::fs::symlink_file(target, link) } };\n",
             "    #[cfg(not(any(unix, windows)))]\n",
             "    let r: std::io::Result<()> = { let _ = (target, link); Err(std::io::Error::other(\"symlink is not supported on this platform\")) };\n",
+            "    __ray_tagged(match r { Ok(()) => vec![\"ok\".to_string()], Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
+            // rayzip #195/#194: byte-idénticos a builtins::fs_tagged(ReadLink/SetMtime).
+            "fn __ray_read_link_prim(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    __ray_tagged(match std::fs::read_link(path) { Ok(p) => vec![\"ok\".to_string(), p.to_string_lossy().into_owned()], Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
+            "fn __ray_set_mtime_prim(path: &str, ms: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r: std::io::Result<()> = match ms.parse::<i64>() {\n",
+            "        Err(_) => Err(std::io::Error::other(\"set_mtime: the time is not an integer\")),\n",
+            "        Ok(ms) => (|| {\n",
+            "            let when = if ms >= 0 { std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64) } else { std::time::UNIX_EPOCH - std::time::Duration::from_millis(ms.unsigned_abs()) };\n",
+            "            #[cfg(windows)] let f = { use std::os::windows::fs::OpenOptionsExt; std::fs::OpenOptions::new().access_mode(0x100).custom_flags(0x0200_0000).open(path)? };\n",
+            "            #[cfg(not(windows))] let f = std::fs::File::open(path)?;\n",
+            "            f.set_modified(when) })(),\n",
+            "    };\n",
             "    __ray_tagged(match r { Ok(()) => vec![\"ok\".to_string()], Err(e) => vec![\"err\".to_string(), e.to_string()] })\n}\n",
             "fn __ray_chmod_prim(path: &str, mode: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    #[cfg(unix)]\n",
@@ -1210,7 +1236,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // M306 (#14): `set_read_timeout(listener, ms)` acota también el accept (el plazo
                 // vive en el park, como en las lecturas) → "read timeout".
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
-                "    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n",
+                "    let to = __ray_rd_to(h);\n",
                 "    let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "    loop {\n",
                 "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
@@ -1278,10 +1304,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // préstamo no puede cruzar la cesión — otra fibra del MISMO worker lo pediría y
             // reventaría el RefCell). El MutexGuard de la sesión SÍ cruza el park: es sólido
             // porque la fibra está FIJADA a su worker (el guard nunca cambia de hilo) y la sesión
-            // es fiber-privada (solo su dueña la toca). Timeout M56.4 desde el ctx (rd_to);
+            // es fiber-privada (solo su dueña la toca). Timeout M56.4 del handle (__ray_rd_to);
             // vencido → "read timeout", byte-idéntico a la VM.
             (
-                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0)); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
                 "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all_wait(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else if t.needs_rt_tls {
@@ -1320,7 +1346,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // préstamo de __RAY_RDBUF y el park FUERA (una fibra puede reanudar en otro worker; el
             // préstamo no debe cruzar la cesión). El timeout de lectura (M56.4) vive aquí: en un
             // socket no-bloqueante SO_RCVTIMEO es inerte → plazo total por lectura contra el ctx
-            // (rd_to), vencimiento = Err("read timeout"), byte-idéntico a la VM (READ_TIMEOUT_MSG).
+            // (__ray_rd_to), vencimiento = Err("read timeout"), byte-idéntico a la VM (READ_TIMEOUT_MSG).
             // EINTR también aparca: si había datos, el readiness dispara de inmediato.
             // M361 (raylb, PERFORMANCE.md §10): antes de aparcar NO se consulta el registro (su
             // mutex global costaba un 2,9 % de la CPU del worker por lectura): `__ray_close` hace
@@ -1332,7 +1358,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // handle"), como la VM. El camino caliente (n > 0) no toca el lock global.
             let read_loop = |ok_expr: &str| {
                 format!(
-                    "    let fd = __ray_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some((n, Ok({ok_expr}))),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some((1, Err(Rc::<str>::from(e.to_string())))) }} }});\n        if let Some((n, v)) = res {{\n            if n == 0 && !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n            return v;\n        }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
+                    "    let fd = __ray_fd(&*s);\n    let to = __ray_rd_to(h);\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some((n, Ok({ok_expr}))),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some((1, Err(Rc::<str>::from(e.to_string())))) }} }});\n        if let Some((n, v)) = res {{\n            if n == 0 && !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n            return v;\n        }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
                 )
             };
             write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    {tls_rds}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())")).unwrap();
@@ -1379,11 +1405,31 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "#[cfg(windows)] fn __ray_keepalive_raw(s: &std::net::TcpStream, on: bool) { use std::os::windows::io::AsRawSocket; #[link(name = \"ws2_32\")] unsafe extern \"system\" { fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32; }\n",
             "    let v: i32 = if on { 1 } else { 0 }; unsafe { setsockopt(s.as_raw_socket() as usize, 0xffff, 0x0008, &v as *const i32 as *const u8, 4); } }\n",
             "fn __ray_set_keepalive(h: i64, on: bool) { let reg = __ray_reg().lock().unwrap(); if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { __ray_keepalive_raw(s, on); } }\n",
+            // raystat #208: SO_SNDBUF/SO_RCVBUF — byte-idéntico a builtins::socket_set_buffer.
+            "#[cfg(unix)] fn __ray_sock_buffer_raw(fd: i32, send: bool, bytes: i64) -> i64 { unsafe extern \"C\" { fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32; fn getsockopt(fd: i32, level: i32, name: i32, value: *mut core::ffi::c_void, len: *mut u32) -> i32; }\n",
+            "    #[cfg(any(target_os = \"linux\", target_os = \"android\"))] const OPTS: (i32, i32, i32) = (1, 7, 8); #[cfg(not(any(target_os = \"linux\", target_os = \"android\")))] const OPTS: (i32, i32, i32) = (0xffff, 0x1001, 0x1002);\n",
+            "    let name = if send { OPTS.1 } else { OPTS.2 }; let v: i32 = bytes.clamp(0, i32::MAX as i64) as i32; let mut got: i32 = 0; let mut len: u32 = 4;\n",
+            "    unsafe { if setsockopt(fd, OPTS.0, name, &v as *const i32 as *const core::ffi::c_void, 4) != 0 { return -1; } if getsockopt(fd, OPTS.0, name, &mut got as *mut i32 as *mut core::ffi::c_void, &mut len) != 0 { return -1; } } got as i64 }\n",
+            "#[cfg(windows)] fn __ray_sock_buffer_raw(sock: usize, send: bool, bytes: i64) -> i64 { #[link(name = \"ws2_32\")] unsafe extern \"system\" { fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32; fn getsockopt(s: usize, level: i32, name: i32, value: *mut u8, len: *mut i32) -> i32; }\n",
+            "    let name = if send { 0x1001 } else { 0x1002 }; let v: i32 = bytes.clamp(0, i32::MAX as i64) as i32; let mut got: i32 = 0; let mut len: i32 = 4;\n",
+            "    unsafe { if setsockopt(sock, 0xffff, name, &v as *const i32 as *const u8, 4) != 0 { return -1; } if getsockopt(sock, 0xffff, name, &mut got as *mut i32 as *mut u8, &mut len) != 0 { return -1; } } got as i64 }\n",
+            "#[allow(dead_code)] fn __ray_sock_buffer(h: i64, send: bool, bytes: i64) -> i64 { let reg = __ray_reg().lock().unwrap();\n",
+            "    #[cfg(unix)] { use std::os::fd::AsRawFd; let fd = match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.as_raw_fd(), Some(__RayHandle::Udp(s)) => s.as_raw_fd(), _ => return -1 }; __ray_sock_buffer_raw(fd, send, bytes) }\n",
+            "    #[cfg(windows)] { use std::os::windows::io::AsRawSocket; let fd = match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.as_raw_socket() as usize, Some(__RayHandle::Udp(s)) => s.as_raw_socket() as usize, _ => return -1 }; __ray_sock_buffer_raw(fd, send, bytes) }\n",
+            "    #[cfg(not(any(unix, windows)))] { let _ = (reg, send, bytes); -1 } }\n",
         ));
         if t.fibers {
-            // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda en el ctx (rd_to) y
+            // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda por handle (__ray_rd_to) y
             // lo aplica el park de la lectura (wait_readable_timeout). ms <= 0 lo quita, como hoy.
-            out.push_str("fn __ray_set_read_timeout(h: i64, ms: i64) { __ray_ctx(|c| { if ms <= 0 { c.rd_to.remove(&h); } else { c.rd_to.insert(h, ms); } }); }\n");
+            // raystat #207: el plazo es del HANDLE (lo pone una fibra y lo respeta la que lee en otro
+            // worker), no del ctx de la fibra. Sin plazos puestos, la lectura no toca el lock.
+            out.push_str(concat!(
+                "static __RAY_RD_TO_N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+                "fn __ray_rd_to_map() -> &'static std::sync::RwLock<std::collections::HashMap<i64, i64>> { static M: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<i64, i64>>> = std::sync::OnceLock::new(); M.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new())) }\n",
+                "fn __ray_rd_to(h: i64) -> i64 { if __RAY_RD_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return 0; } __ray_rd_to_map().read().unwrap().get(&h).copied().unwrap_or(0) }\n",
+                "fn __ray_rd_to_clear(h: i64) { if __RAY_RD_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return; } let mut m = __ray_rd_to_map().write().unwrap(); if m.remove(&h).is_some() { __RAY_RD_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } }\n",
+                "fn __ray_set_read_timeout(h: i64, ms: i64) { let mut m = __ray_rd_to_map().write().unwrap(); if ms <= 0 { if m.remove(&h).is_some() { __RAY_RD_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } } else if m.insert(h, ms).is_none() { __RAY_RD_TO_N.fetch_add(1, std::sync::atomic::Ordering::AcqRel); } }\n",
+            ));
         } else {
             out.push_str(concat!(
             "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
@@ -1429,13 +1475,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
                 "            Err(e) => break Err(e.to_string()) } } }, None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
                 "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
-                // M121: el timeout de lectura por handle (rd_to del ctx, como TCP) — sin plazo,
+                // M121: el timeout de lectura por handle (__ray_rd_to, como TCP) — sin plazo,
                 // aparcado indefinido (wait_readable); con plazo, wait_readable_timeout y al vencer
                 // el error estable "read timeout" (byte-idéntico a VM/intérprete).
                 "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    match __ray_udp_clone(h) {\n",
                 "        Some(s) => { let fd = __ray_fd(&s); let mut buf = vec![0u8; 65536];\n",
-                "            let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n",
+                "            let to = __ray_rd_to(h);\n",
                 "            let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "            loop {\n",
                 "            match s.recv_from(&mut buf) {\n",
@@ -1561,7 +1607,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         ));
         // La higiene de la caché de sockets según el modelo: ctx de fibra (--fibers) o thread-local.
         if t.fibers {
-            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); __ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); });\n");
+            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); { __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); };\n");
         } else {
             out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n");
         }
@@ -1642,9 +1688,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     }
     // Helper de procesos del SO (M100, IDEAS §53.8), solo si el programa usa `__run`. Llama al MISMO
     // `ray_runtime::process` que la VM (run_opts_from_flat/run_encoded) → paridad por construcción;
-    // aquí solo el marshalling de los tipos transpilados. Interinamente BLOQUEA el hilo del worker
-    // (como SQLite; también bajo fibras) — el aparcado sobre los fds de los pipes es una fase
-    // posterior de M100.
+    // aquí solo el marshalling de los tipos transpilados. raycron #201: bajo fibras, la espera al hijo
+    // va al pool bloqueante (como `fs.sync`) y la fibra se aparca; antes bloqueaba el hilo del worker
+    // y congelaba a las fibras hermanas mientras durase el proceso.
     if t.needs_rt_process {
         out.push_str(concat!(
             "#[allow(clippy::too_many_arguments)]\n",
@@ -1652,7 +1698,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, false, timeout_ms, max_output, merge_output);\n",
-            "    let elems: Vec<Rc<[u8]>> = ray_runtime::process::run_encoded(program, &args, &opts).into_iter().map(|b| Rc::<[u8]>::from(&b[..])).collect();\n",
+        ));
+        if t.fibers {
+            out.push_str("    let program = program.to_string();\n    let encoded = ray_runtime::fibers::run_blocking(move || ray_runtime::process::run_encoded(&program, &args, &opts));\n");
+        } else {
+            out.push_str("    let encoded = ray_runtime::process::run_encoded(program, &args, &opts);\n");
+        }
+        out.push_str(concat!(
+            "    let elems: Vec<Rc<[u8]>> = encoded.into_iter().map(|b| Rc::<[u8]>::from(&b[..])).collect();\n",
             "    Rc::new(std::cell::RefCell::new(elems)) }\n",
         ));
         // M100 v2 (IDEAS §53.9): el gemelo nativo de los primitivos del streaming. Los tags y los
@@ -2255,6 +2308,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // M296: `spawn` hereda el dominio de handles; `spawn_isolated` estrena uno.
                 "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain()) }\n",
                 "fn __ray_spawn_isolated<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_fresh_domain()) }\n",
+                // rayzip #197: sin fibras (Windows arm64, `--without fibers`) no hay workers M:N: un hilo
+                // por tarea. `spawn_local` es un `spawn`, `worker_id()` vale 0 y `worker_count()` da los
+                // hilos disponibles (lo que un programa usa para dimensionar su paralelismo).
+                "fn __ray_spawn_local<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> { __ray_spawn_in(f, __ray_domain()) }\n",
+                "fn __ray_worker_id() -> i64 { 0 }\n",
+                "fn __ray_worker_count() -> i64 { std::thread::available_parallelism().map(|c| c.get() as i64).unwrap_or(1) }\n",
                 "fn __ray_spawn_in<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F, domain: u64) -> __RayTask<T> {\n",
                 "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), parked: __ray_parked_new() };\n",
                 "    let t = task.clone();\n",

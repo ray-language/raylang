@@ -2025,8 +2025,8 @@ fn build_native_string_channel_matches_the_vm() {
 
 #[test]
 fn build_native_release_produces_correct_binary() {
-    // `ray build --native --release` usa el tier agresivo (opt3+lto+cgu1+target-cpu=native): compila más
-    // lento y no-portable, pero el binario da la MISMA salida que el default y la VM (solo cambia rustc).
+    // `ray build --native --release` usa el tier agresivo (opt3+lto+cgu1; portable desde rayffi #216):
+    // compila más lento, pero el binario da la MISMA salida que el default y la VM (solo cambia rustc).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando build_native --release: rustc no disponible");
         return;
@@ -2037,7 +2037,7 @@ fn build_native_release_produces_correct_binary() {
     let (out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "--release", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native --release sale 0\nstdout={out}\nstderr={err}");
-    assert!(out.contains("release: opt3+lto+native"), "reporta el tier release\n{out}");
+    assert!(out.contains("(release: opt3+lto)"), "reporta el tier release, sin target-cpu\n{out}");
     assert!(bin.is_file(), "el binario existe");
     let native = Command::new(&bin).output().expect("corre el binario release");
     assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "14", "2 + 3*4 = 14");

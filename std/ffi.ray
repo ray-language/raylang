@@ -5,3 +5,13 @@
 /// between: any operation that parks the fiber lets its siblings run on the same thread, and they
 /// may overwrite it. Returns 0 in the wasm playground (no FFI there).
 pub fn errno() -> int { __ffi_errno() }
+
+// rayffi #211: el búfer de salida de una extern (`uLongf *destLen`, el `dest` de compress). Una
+// copia propia: escribir en él no toca ningún otro valor.
+/// `n` zero bytes in a buffer of their own: the output buffer for an extern that writes through a
+/// pointer (`compress(dest, &dest_len, …)`). C may write into a `bytes` argument and the program
+/// sees the write (and so does every alias of the value); it must not write past `n` or keep the
+/// pointer after the call. `n <= 0` gives an empty buffer.
+pub fn buffer(n: int) -> bytes {
+    if (n <= 0) { b"" } else { "\0".repeat(n).to_bytes() }
+}

@@ -516,7 +516,7 @@ impl Parser {
             self.expect(&TokenKind::RParen, "')'")?;
             let return_type = if self.eat(&TokenKind::Arrow) { self.parse_type()? } else { Type::Unit };
             self.expect(&TokenKind::Semicolon, "';' at the end of the extern signature (it has no body)")?;
-            acc.externs.push(ExternFn { name, lib: lib.clone(), params, return_type, blocking, line: kw.line, col: kw.col });
+            acc.externs.push(ExternFn { symbol: name.clone(), name, lib: lib.clone(), params, return_type, blocking, line: kw.line, col: kw.col });
         }
         self.expect(&TokenKind::RBrace, "'}' to close the extern block")?;
         Ok(())

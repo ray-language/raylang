@@ -282,3 +282,28 @@ pub fn set_nodelay(h: int, on: bool) {
 pub fn set_keepalive(h: int, on: bool) {
     __socket_set_keepalive(h, on);
 }
+
+// raystat #208: una ráfaga UDP que llega más rápido de lo que se lee se pierde en el búfer del
+// kernel; los servidores statsd lo agrandan.
+/// Asks the OS for a receive buffer of `size` bytes on socket `h` (`SO_RCVBUF`; TCP or UDP) and returns
+/// the size it actually set, or `Err` when `h` is not a socket or the OS refused. The kernel may
+/// adjust it: Linux doubles the request and caps it at `net.core.rmem_max`, macOS at
+/// `kern.ipc.maxsockbuf`. A bigger buffer absorbs UDP bursts that would otherwise be dropped.
+pub fn set_recv_buffer(h: int, size: int) -> Result<int, string> {
+    let n = __socket_set_buffer(h, false, size);
+    if (n < 0) {
+        Result.Err("set_recv_buffer: not a socket, or the OS refused the size")
+    } else {
+        Result.Ok(n)
+    }
+}
+
+/// Like `set_recv_buffer`, for the send buffer (`SO_SNDBUF`).
+pub fn set_send_buffer(h: int, size: int) -> Result<int, string> {
+    let n = __socket_set_buffer(h, true, size);
+    if (n < 0) {
+        Result.Err("set_send_buffer: not a socket, or the OS refused the size")
+    } else {
+        Result.Ok(n)
+    }
+}

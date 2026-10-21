@@ -1969,7 +1969,7 @@ impl<'a> Interpreter<'a> {
             // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
             // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
             "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__stat" | "__rename" | "__copy_file"
-            | "__remove_all" | "__temp_dir" | "__make_temp_dir" | "__real_path" | "__symlink" => {
+            | "__remove_all" | "__temp_dir" | "__make_temp_dir" | "__real_path" | "__symlink" | "__read_link" | "__set_mtime" => {
                 use crate::bytecode::FsOp;
                 let op = match name {
                     "__mkdir" => FsOp::Mkdir,
@@ -1984,6 +1984,8 @@ impl<'a> Interpreter<'a> {
                     "__rename" => FsOp::Rename,
                     "__copy_file" => FsOp::CopyFile,
                     "__symlink" => FsOp::Symlink,
+                    "__read_link" => FsOp::ReadLink,
+                    "__set_mtime" => FsOp::SetMtime,
                     _ => unreachable!(),
                 };
                 let args: Vec<String> = values
@@ -2886,6 +2888,11 @@ impl<'a> Interpreter<'a> {
                     Value::Unit
                 }
                 _ => unreachable!("the checker guarantees int, bool"),
+            },
+            // raystat #208: SO_SNDBUF/SO_RCVBUF del socket.
+            "__socket_set_buffer" => match (&values[0], &values[1], &values[2]) {
+                (Value::Int(h), Value::Bool(send), Value::Int(bytes)) => Value::Int(crate::builtins::socket_set_buffer(*h, *send, *bytes)),
+                _ => unreachable!("the checker guarantees int, bool, int"),
             },
             // M207: SO_KEEPALIVE del socket (total).
             "__socket_set_keepalive" => match (&values[0], &values[1]) {

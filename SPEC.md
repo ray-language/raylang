@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.65** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.66** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -117,7 +117,9 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   `P/mod.ray`) y **encapsula** su subárbol: importar `P/interno` desde fuera de `P/` es error.
   `P.ray` y `P/mod.ray` a la vez es error (forma canónica única).
 - Los **tipos** se namespacan por módulo (dos módulos pueden definir `Node`); las funciones
-  también. `main` vive en el módulo de entrada.
+  también, y las `extern fn` (1.27.66): cada una es del módulo que la declara —se llama por su
+  nombre dentro y calificada desde fuera— y su símbolo C es aparte, así que dos módulos pueden
+  declarar la misma función C. `main` vive en el módulo de entrada.
 - **Anotaciones** (conjunto cerrado): `@test` sobre funciones `() -> bool` o `() -> unit`;
   `@derive(Eq, Show, Hash, ToJson, Clone)` sobre structs/enums **no genéricos** — `Clone` genera
   `clone(self) -> Self`, una copia **superficial** (M221: los campos por valor se copian; los de
@@ -235,9 +237,10 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   evalúa el arreglo de nuevo (un arreglo fresco por evaluación), así que mutarlo a través de un
   alias no afecta a otros usos; en un bucle caliente conviene izarlo a un local.
 - **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
-  cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
-  carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
-  resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
+  cuerpo**; su nombre es el identificador en raylang (del módulo, §2) y el símbolo a resolver. En la
+  VM la librería se carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre
+  corto `"m"` se resuelve al archivo de plataforma o al proceso); el binario nativo la enlaza al
+  compilar con el nombre corto (`"libz.1.dylib"` → `z`). Los tipos deben ser **marshalables**: los primitivos
   `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
   (aridad 0..=6 — límite del checker, idéntico en todos los motores), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
   (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` o, con seguridad de tipos, como **`ptr`**
@@ -247,6 +250,9 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de
   ejecución) (M41.3). Un `string`/`bytes` **pelado** de retorno es error (un `char*` puede ser NULL y no
   hay `null`). Una firma fuera del catálogo, o un tipo no marshalable, es error.
+  Un argumento `bytes` pasa como puntero a su búfer, sin copia: C puede escribir en él (parámetro de
+  salida) y la escritura la ven el valor y sus alias; cada evaluación de un literal `b"…"` es un
+  búfer propio. Un `ptr` cruza tareas y canales como un entero (la dirección).
   Llamar a una `extern fn` se ve como cualquier llamada. **Declarar una `extern fn` es la única
   operación insegura del lenguaje**: cruzar a C anula las garantías (memoria, firmas); todo lo demás es
   seguro por construcción.

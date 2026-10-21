@@ -4,6 +4,52 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.66 — 2026-10-21
+
+Las seis apps nuevas de ray-apps (rayzip, raycron, raydata, raystat, rayffi, raymcp) ejercitan
+la FFI, la compresión, UDP, los procesos y Windows ARM64 (M411, hallazgos #188–#221).
+
+- **Binario nativo, lo que la VM ya hacía**: `ffi.errno()` (era un stub y `--release` no compilaba,
+  rayffi #210); `u64` en una `extern fn` (rayffi #209); `parse_int` y demás funciones del prelude
+  como valor, `.and_then(parse_int)` (rayffi #213); un `Option` de una tupla de 4 o más elementos
+  (raymcp #218); un `ptr` —solo o dentro de un struct— por un canal o capturado por `spawn` (antes
+  pánico en el runtime, rayffi #214); `worker_count()`/`worker_id()` sin fibras, en Windows ARM64
+  (rayzip #197); `print` de un `Result<bytes, _>`; y `assert_eq` sobre un tipo con `impl Eq`/`Show`
+  propio (raydata #206).
+- **`process.run()` ya no bloquea el worker** en un binario nativo (raycron #201): espera al hijo en
+  el pool bloqueante y la fibra aparca, como `fs.sync`. Antes, con un job largo en el mismo worker,
+  el programador se congelaba mientras durase.
+- **`net.set_read_timeout` es del handle** también en nativo (raystat #207): puesto en una fibra,
+  `recv_from` en otra esperaba para siempre.
+- **`ray build --native --release` es portable** (rayffi #216): ya no fija `target-cpu=native`, que
+  rompía `ring` en el runner `macos-14` de GitHub y daba binarios que podían no arrancar en otra
+  máquina. `--cpu native` (o un modelo concreto) lo pide.
+- **`extern fn` por módulo** (rayffi #212): dos módulos —o dos paquetes— pueden declarar la misma
+  función C; desde otro módulo se llama calificada (`zpool.compress2(…)`). El nativo acepta también
+  `extern "libz"`/`"libz.1.dylib"` (rayffi #215). La REFERENCE §13 explica cómo se encuentra la
+  biblioteca en cada motor, que C puede escribir en un `bytes` (parámetro de salida) y el nuevo
+  `ffi.buffer(n)`; en la VM un literal `b"…"` ya no cambia si C escribe en él (rayffi #211).
+- **Checker**: un `match` sobre una tupla con variantes del enum del propio módulo dejaba de compilar
+  cuando otro módulo lo importaba (raydata #204); `@derive(ToJson)` sin el import señala el `@derive`
+  y dice qué importar (raydata #203); `a == b` sobre un `T: Eq` sugiere `a.eq(b)`. `==`/`!=` siguen
+  siendo estructurales: la REFERENCE decía que `impl Eq` los cambiaba y no era así (raydata #206).
+- **`ray doc Ord`** (y `Eq`, `Hash`, `Show`, `ToJson`…) da la firma del trait y quién lo implementa
+  (raydata #205).
+- **Compresión**: `inflate.gunzip` lee archivos gzip de varios miembros, como `gzip -d`, y verifica
+  CRC e ISIZE de cada uno (rayzip #188); `inflate_raw_consumed` dice cuánta entrada usó el stream y
+  `stream_remaining` lo que siguió al bloque final (#191); `crc32_update` para sumar por trozos
+  (#192); `deflate.deflate_raw_level` (nivel 0–10) y `deflate_raw_chunk`, trozos de un mismo stream
+  con memoria acotada y comprimibles en paralelo (#190).
+- **`std/fs`**: `read_link(path)` (#195) y `set_mtime(path, ms)` (#194); `symlink` en Windows con un
+  destino con `/` creaba un enlace que no se podía seguir (#198); la doc de `chmod` dice que en
+  Windows es `Err` y `Stat.mode` vale 0 (#199).
+- **`std/net`**: `set_recv_buffer`/`set_send_buffer` (`SO_RCVBUF`/`SO_SNDBUF`) para absorber
+  ráfagas UDP (raystat #208).
+- **`ray test --native`**: `launch_mode()` dice `"test"` y `self_command()` es `[binario, "test"]`,
+  como bajo `ray test` (raymcp #217).
+- **Docs**: `llms.txt` con una sección de FFI, la nota de `ToJson` y la de `==` frente a `Eq`;
+  `std/huffman` es solo el código estático de HPACK (rayzip #196).
+
 ## 1.27.65 — 2026-10-17
 
 - **Android: la barra de estado sigue al cambio de modo con la app abierta (M410, rayplay #181,

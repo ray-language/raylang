@@ -289,18 +289,42 @@ fn find_match(lz: Lz, i: int) -> Match {
 /// build has it (`deflate` feature); otherwise a single fixed-Huffman block (BTYPE=01, BFINAL=1)
 /// with LZ77 back-reference matching (zlib-style hash chains, 32 KiB window).
 pub fn deflate_raw(data: bytes) -> bytes {
-    let fast = __deflate_op("deflate", data, 6);
+    deflate_raw_level(data, 6)
+}
+
+// rayzip #190: el nivel de compresión.
+/// Like `deflate_raw`, with a compression level: 0 (stored, no compression) to 10 (smallest,
+/// slowest); 6 is the default. Without the runtime compressor the level is ignored.
+pub fn deflate_raw_level(data: bytes, level: int) -> bytes {
+    let fast = __deflate_op("deflate", data, level);
     if (fast.len() == 1) {
         return fast[0];
     }
-    deflate_raw_pure(data)
+    deflate_raw_pure(data, true)
 }
 
-// El encoder escrito en raylang (respaldo y referencia).
-fn deflate_raw_pure(data: bytes) -> bytes {
+// rayzip #190: compresión por trozos con memoria acotada (y en paralelo, como pigz).
+/// Compresses one chunk of a raw DEFLATE stream that continues: the output ends with a sync flush
+/// and does NOT mark the final block, so `deflate_raw_chunk(a) + deflate_raw_chunk(b) +
+/// deflate_raw_level(c, level)` is ONE valid stream that inflates to `a + b + c`. Each chunk starts
+/// with an empty dictionary — slightly less compression than one call, but memory stays bounded by
+/// the chunk size and chunks can be compressed in parallel. End the stream with a final
+/// `deflate_raw_level` (an empty one is fine) and wrap it as needed (gzip header + trailer with
+/// `crc32_update` of std/inflate).
+pub fn deflate_raw_chunk(data: bytes, level: int) -> bytes {
+    let fast = __deflate_op("deflate_sync", data, level);
+    if (fast.len() == 1) {
+        return fast[0];
+    }
+    deflate_raw_pure(data, false)
+}
+
+// El encoder escrito en raylang (respaldo y referencia). `last = false`: el bloque no es el final y
+// se cierra con el flush de sincronización (un bloque almacenado vacío: 000, alineado, 00 00 FF FF).
+fn deflate_raw_pure(data: bytes, last: bool) -> bytes {
     let n = data.len();
     var w = BitWriter { out: [], cur: 0, nbits: 0 };
-    write_bit(w, 1);  // BFINAL = 1 (último bloque)
+    write_bit(w, if (last) { 1 } else { 0 });  // BFINAL
     write_bits(w, 1, 2);  // BTYPE = 01 (Huffman fijo)
 
     // Estado LZ: head lleno de -1, prev lleno de -1.
@@ -337,6 +361,14 @@ fn deflate_raw_pure(data: bytes) -> bytes {
         }
     }
     emit_litlen(w, 256);  // fin de bloque
+    if (!last) {
+        write_bits(w, 0, 3);  // BFINAL = 0, BTYPE = 00 (almacenado)
+        flush(w);
+        w.out.push(0);
+        w.out.push(0);
+        w.out.push(255);
+        w.out.push(255);
+    }
     flush(w);
     bytes_of(w.out)
 }

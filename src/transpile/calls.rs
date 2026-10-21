@@ -273,7 +273,7 @@ impl Transpiler {
             return Ok(format!("__RaySendConv::__to_send({expr})"));
         }
         Ok(match self.classify(t) {
-            Type::Int => format!("__RaySend::I({expr})"),
+            Type::Int | Type::Ptr => format!("__RaySend::I({expr})"),
             Type::Float => format!("__RaySend::F({expr})"),
             Type::Bool => format!("__RaySend::B({expr})"),
             Type::Char => format!("__RaySend::C({expr})"),
@@ -343,7 +343,7 @@ impl Transpiler {
             return Ok(format!("<{rty} as __RaySendConv>::__from_send({expr})"));
         }
         Ok(match self.classify(t) {
-            Type::Int => format!("match {expr} {{ __RaySend::I(__sx) => __sx, {un} }}"),
+            Type::Int | Type::Ptr => format!("match {expr} {{ __RaySend::I(__sx) => __sx, {un} }}"),
             Type::Float => format!("match {expr} {{ __RaySend::F(__sx) => __sx, {un} }}"),
             Type::Bool => format!("match {expr} {{ __RaySend::B(__sx) => __sx, {un} }}"),
             Type::Char => format!("match {expr} {{ __RaySend::C(__sx) => __sx, {un} }}"),
@@ -1291,7 +1291,7 @@ impl Transpiler {
         // M235: copy_all es raylang puro sobre is_dir/mkdir/list_dir/copy_file → su cuerpo se emite.
         // M265: real_path/is_within_real se emiten sobre el primitivo `__real_path` (como stat).
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real" | "symlink") {
+            if !fs_wrapper_emitted(ffn) {
                 return self.emit_fs(out, ffn, &eff);
             }
         }
@@ -2374,6 +2374,23 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(") { __ray_rt_err(\"assertion failed\") }");
             }
+            // raydata #206: sobre un tipo de usuario, `assert_eq` compara con su `impl Eq` y muestra con
+            // su `impl Show` — los diccionarios que el lowering añade como args 3 y 4 — como la VM
+            // (el `==` de Rust es el estructural derivado).
+            "assert_eq"
+                if eff.len() >= 4
+                    && matches!(self.classify(&self.type_of(eff[0])?), Type::Struct(ref n, _) | Type::Enum(ref n, _) if n != "Option" && n != "Result") =>
+            {
+                out.push_str("{ let __rt_a = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_b = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_eq = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; let __rt_sh = ");
+                self.emit_expr(out, eff[3])?;
+                out.push_str("; if !__rt_eq(__rt_a.clone(), __rt_b.clone()) { __ray_rt_err(&format!(\"assert_eq failed: {} != {}\", __rt_sh(__rt_a), __rt_sh(__rt_b))) } }");
+            }
             "assert_eq" => {
                 out.push_str("{ let __rt_a = ");
                 self.emit_expr(out, eff[0])?;
@@ -2695,6 +2712,30 @@ impl Transpiler {
             "symlink" if name.starts_with("__") => {
                 self.needs_fs_meta = true;
                 out.push_str("__ray_symlink_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "socket_set_buffer" if name.starts_with("__") => {
+                self.needs_net = true;
+                out.push_str("__ray_sock_buffer(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "read_link" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_read_link_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "set_mtime" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_set_mtime_prim(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &*");
                 self.emit_expr(out, eff[1])?;
@@ -3135,9 +3176,13 @@ impl Transpiler {
             }
             "self_command" if name.starts_with("__") => {
                 // Nativo/bundle: el propio ejecutable. (Bajo `ray run` es la VM quien responde.)
-                out.push_str(
-                    "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default())]))",
-                );
+                // raymcp #217: el binario de `ray test --native` añade "test", como `ray test`.
+                let test = if super::native_test_mode() { ", Rc::<str>::from(\"test\")" } else { "" };
+                write!(
+                    out,
+                    "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()){test}]))"
+                )
+                .unwrap();
             }
             "proc_spawn_pty" if name.starts_with("__") && !self.exclude.contains("process") => {
                 self.needs_rt_process = true;
@@ -3235,6 +3280,8 @@ impl Transpiler {
                 } else if let Some(s) = self.funcs.get(n) {
                     // Función como valor → su tipo Fn.
                     Type::Fn(s.params.clone(), Box::new(s.ret.clone()))
+                } else if let Some((params, ret)) = self.prelude_values.get(n) {
+                    Type::Fn(params.iter().map(|p| normalize_type(&p.ty)).collect(), Box::new(normalize_type(ret)))
                 } else {
                     return Err(format!("variable '{}' has no known type", n));
                 }
@@ -3301,7 +3348,7 @@ impl Transpiler {
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
                 // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
                 if let Some(ffn) = n.strip_prefix("std::fs::")
-                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all" | "real_path" | "is_within_real" | "symlink")
+                    && !fs_wrapper_emitted(ffn)
                 {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
@@ -3330,7 +3377,7 @@ impl Transpiler {
                 // Solo las funciones-primitivo; el resto de std/time|random (raylang puro) → ruta genérica.
                 match n {
                     "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos"
-                    | "std::random::below" => return Ok(Type::Int),
+                    | "std::random::below" | "std::ffi::errno" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),

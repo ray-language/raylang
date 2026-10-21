@@ -35,14 +35,18 @@ pub enum FsOp {
     RealPath,
     /// M304 (IDEAS §97 #25): crea un enlace simbólico `link` → `target` (`fs.symlink`).
     Symlink,
+    /// rayzip #195: el texto de un enlace simbólico (`fs.read_link`, readlink).
+    ReadLink,
+    /// rayzip #194: fija la fecha de modificación (`fs.set_mtime(path, ms)`; el ms viaja como texto).
+    SetMtime,
 }
 
 impl FsOp {
     /// Nº de argumentos string (rutas) que saca de la pila.
     pub fn argc(self) -> usize {
         match self {
-            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath => 1,
-            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink => 2,
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath | FsOp::ReadLink => 1,
+            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink | FsOp::SetMtime => 2,
             FsOp::TempDir => 0,
         }
     }
@@ -864,6 +868,9 @@ pub enum OpCode {
     /// Saca `on` (bool) y el handle (int); activa/desactiva `SO_KEEPALIVE` en el socket y empuja
     /// `unit`. Total. Primitivo `__socket_set_keepalive` (M207); envoltorio `net.set_keepalive`.
     SocketSetKeepalive,
+    /// Saca `bytes` (int), `send` (bool) y el handle (int); fija SO_SNDBUF/SO_RCVBUF y empuja el
+    /// tamaño efectivo (int, -1 si no se pudo). Primitivo `__socket_set_buffer` (raystat #208).
+    SocketSetBuffer,
     /// Saca `port` (int) y `host` (string); enlaza un socket UDP y empuja un `[string]` etiquetado.
     /// Primitivo `__udp_bind`; la lib udp.ray → `Result<int,string>` (M20.8).
     UdpBind,

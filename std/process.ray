@@ -55,7 +55,8 @@ pub struct Cmd {
 /// launch mode (see `launch_mode`): a native binary or a bundled app gives `[exe]`; `ray run` and
 /// `ray dev` give `[ray, "run", entry]` (with `--interp` before the entry when that engine is in
 /// use); `ray test` gives `[ray, "test"]` (since 1.27.38; before it was `[ray]`, which looked like
-/// an installed binary — #114). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
+/// an installed binary — #114), and the test binary of `ray test --native` gives `[binary, "test"]`
+/// (since 1.27.66). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
 pub fn self_command() -> [string] { __self_command() }
 
 /// How this program was launched: `"native"` (a binary or bundled app), `"run"` (`ray run` /

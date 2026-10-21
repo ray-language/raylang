@@ -258,7 +258,11 @@ pub enum InterpSeg {
 /// insegura; llamarla luego se ve como cualquier función.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternFn {
+    /// Nombre raylang: el del símbolo en el módulo de entrada, `modulo::nombre` en un importado
+    /// (rayffi #212: una `extern fn` es del módulo que la declara, como una `fn`).
     pub name: String,
+    /// El símbolo C que se resuelve (dlsym / `#[link_name]`): el nombre tal como se declaró.
+    pub symbol: String,
     /// Nombre corto de la librería (`"m"` → `libm`); lo resuelve `ffi` al archivo de plataforma o al
     /// handle global del proceso (donde viven libc/libm ya enlazadas).
     pub lib: String,

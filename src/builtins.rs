@@ -422,6 +422,9 @@ pub fn symlink(target: &str, link: &str) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
+        // rayzip #198: el kernel no traduce `/` en el destino de un enlace (sí en el resto de rutas):
+        // `sub/a.txt` daba un enlace que no se podía seguir (os error 123).
+        let target = &target.replace('/', "\\");
         let is_dir = std::path::Path::new(link)
             .parent()
             .map(|d| d.join(target))
@@ -435,6 +438,25 @@ pub fn symlink(target: &str, link: &str) -> std::io::Result<()> {
         let _ = (target, link);
         Err(std::io::Error::other("symlink is not supported on this platform"))
     }
+}
+
+/// rayzip #194: fija la fecha de modificación de `path` (archivo o directorio) a `ms` epoch-ms UTC
+/// (byte-idéntico al `__ray_set_mtime_prim` del nativo). La de acceso no se toca.
+pub fn set_mtime(path: &str, ms: i64) -> std::io::Result<()> {
+    let when = if ms >= 0 {
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64)
+    } else {
+        std::time::UNIX_EPOCH - std::time::Duration::from_millis(ms.unsigned_abs())
+    };
+    #[cfg(windows)]
+    let f = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES basta para SetFileTime; BACKUP_SEMANTICS deja abrir un directorio.
+        std::fs::OpenOptions::new().access_mode(0x100).custom_flags(0x0200_0000).open(path)?
+    };
+    #[cfg(not(windows))]
+    let f = std::fs::File::open(path)?;
+    f.set_modified(when)
 }
 
 pub fn real_path_display(p: &std::path::Path) -> String {
@@ -505,6 +527,17 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
         // M304: `symlink(target, link)`. En Windows el tipo del enlace se elige por el destino
         // (directorio → symlink_dir); un destino inexistente se enlaza como archivo.
         FsOp::Symlink => symlink(&args[0], &args[1]),
+        // rayzip #195: ["ok", destino] — el texto del enlace, sin resolverlo (readlink).
+        FsOp::ReadLink => {
+            return match std::fs::read_link(&args[0]) {
+                Ok(p) => vec!["ok".to_string(), p.to_string_lossy().into_owned()],
+                Err(e) => vec!["err".to_string(), e.to_string()],
+            };
+        }
+        FsOp::SetMtime => match args[1].parse::<i64>() {
+            Ok(ms) => set_mtime(&args[0], ms),
+            Err(_) => Err(std::io::Error::other("set_mtime: the time is not an integer")),
+        },
         // M265: ["ok", ruta_real] — `canonicalize` (symlinks seguidos, `.`/`..` resueltos; la ruta
         // debe existir). En Windows se quita el prefijo `\\?\` que añade el kernel para que la
         // ruta sea comparable con lo que el programa escribe.
@@ -3341,6 +3374,88 @@ fn set_keepalive_raw(s: &std::net::TcpStream, on: bool) {
 #[cfg(not(any(unix, windows)))]
 fn set_keepalive_raw(_s: &std::net::TcpStream, _on: bool) {}
 
+/// raystat #208: pide `bytes` de búfer de envío (`send`) o de recepción (SO_SNDBUF/SO_RCVBUF) para el
+/// socket `h` (TCP o UDP) y devuelve el tamaño que el kernel dejó (Linux lo dobla y lo acota a
+/// `net.core.rmem_max`); `-1` si el handle no es un socket o el SO lo rechaza. Builtin
+/// `__socket_set_buffer`; el nativo emite el mismo código (`__ray_sock_buffer`).
+pub fn socket_set_buffer(h: i64, send: bool, bytes: i64) -> i64 {
+    let reg = registry().lock().unwrap();
+    #[cfg(unix)]
+    use std::os::fd::AsRawFd as _;
+    #[cfg(windows)]
+    use std::os::windows::io::AsRawSocket as _;
+    #[cfg(unix)]
+    let fd = match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.as_raw_fd(),
+        Some(OpenHandle::Udp(s)) => s.as_raw_fd(),
+        _ => return -1,
+    };
+    #[cfg(windows)]
+    let fd = match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.as_raw_socket() as usize,
+        Some(OpenHandle::Udp(s)) => s.as_raw_socket() as usize,
+        _ => return -1,
+    };
+    #[cfg(any(unix, windows))]
+    {
+        sock_buffer_raw(fd, send, bytes)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (reg, send, bytes);
+        -1
+    }
+}
+
+#[cfg(unix)]
+fn sock_buffer_raw(fd: i32, send: bool, bytes: i64) -> i64 {
+    unsafe extern "C" {
+        fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
+        fn getsockopt(fd: i32, level: i32, name: i32, value: *mut core::ffi::c_void, len: *mut u32) -> i32;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const OPTS: (i32, i32, i32) = (1, 7, 8);
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    const OPTS: (i32, i32, i32) = (0xffff, 0x1001, 0x1002);
+    let name = if send { OPTS.1 } else { OPTS.2 };
+    let v: i32 = bytes.clamp(0, i32::MAX as i64) as i32;
+    let mut got: i32 = 0;
+    let mut len: u32 = 4;
+    // SAFETY: fd válido mientras viva el socket del registro; punteros a i32 locales del tamaño declarado.
+    unsafe {
+        if setsockopt(fd, OPTS.0, name, &v as *const i32 as *const core::ffi::c_void, 4) != 0 {
+            return -1;
+        }
+        if getsockopt(fd, OPTS.0, name, &mut got as *mut i32 as *mut core::ffi::c_void, &mut len) != 0 {
+            return -1;
+        }
+    }
+    got as i64
+}
+
+#[cfg(windows)]
+fn sock_buffer_raw(sock: usize, send: bool, bytes: i64) -> i64 {
+    #[link(name = "ws2_32")]
+    unsafe extern "system" {
+        fn setsockopt(s: usize, level: i32, name: i32, value: *const u8, len: i32) -> i32;
+        fn getsockopt(s: usize, level: i32, name: i32, value: *mut u8, len: *mut i32) -> i32;
+    }
+    let name = if send { 0x1001 } else { 0x1002 };
+    let v: i32 = bytes.clamp(0, i32::MAX as i64) as i32;
+    let mut got: i32 = 0;
+    let mut len: i32 = 4;
+    // SAFETY: socket válido mientras viva en el registro; punteros a i32 locales del tamaño declarado.
+    unsafe {
+        if setsockopt(sock, 0xffff, name, &v as *const i32 as *const u8, 4) != 0 {
+            return -1;
+        }
+        if getsockopt(sock, 0xffff, name, &mut got as *mut i32 as *mut u8, &mut len) != 0 {
+            return -1;
+        }
+    }
+    got as i64
+}
+
 /// Fija (ms > 0) o quita (ms <= 0) el timeout de lectura del socket `h`. Total: un handle que no
 /// es un socket se ignora. Builtin `__socket_set_read_timeout`.
 pub fn socket_set_read_timeout(h: i64, ms: i64) {
@@ -4986,6 +5101,19 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__symlink expects a string (the link path), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __read_link(path) -> [string] (rayzip #195): ["ok", destino] o ["err", msg].
+    Builtin { name: "__read_link", opcode: OpCode::FsTagged(FsOp::ReadLink), check: |a| {
+        arity(a, 1, "__read_link", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__read_link expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __set_mtime(path, ms) -> [string] (rayzip #194): ms como texto (las ops etiquetadas son de strings).
+    Builtin { name: "__set_mtime", opcode: OpCode::FsTagged(FsOp::SetMtime), check: |a| {
+        arity(a, 2, "__set_mtime", " (path, ms)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__set_mtime expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__set_mtime expects a string (the epoch-ms), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     Builtin { name: "__copy_file", opcode: OpCode::FsTagged(FsOp::CopyFile), check: |a| {
         arity(a, 2, "__copy_file", " (origen, target)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__copy_file expects a string (the source), not {}", a[0]))); }
@@ -5560,6 +5688,15 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_nodelay expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::Bool { return Err((Some(1), format!("__socket_set_nodelay expects a bool, not {}", a[1]))); }
         Ok(Type::Unit)
+    } },
+    // __socket_set_buffer(h, send, bytes) -> int (raystat #208): SO_SNDBUF/SO_RCVBUF; el tamaño
+    // efectivo o -1. Envoltorios net.set_recv_buffer/set_send_buffer.
+    Builtin { name: "__socket_set_buffer", opcode: OpCode::SocketSetBuffer, check: |a| {
+        arity(a, 3, "__socket_set_buffer", " (handle, send, bytes)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_buffer expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__socket_set_buffer expects a bool (send), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__socket_set_buffer expects an int (the size in bytes), not {}", a[2]))); }
+        Ok(Type::Int)
     } },
     // __socket_set_keepalive(h, on) -> unit (M207): SO_KEEPALIVE del socket. Total. Envoltorio net.set_keepalive.
     Builtin { name: "__socket_set_keepalive", opcode: OpCode::SocketSetKeepalive, check: |a| {

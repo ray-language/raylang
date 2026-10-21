@@ -167,7 +167,14 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     "Clone" => new_impls.push(parse_derived_impl("Clone", &s.name, "fn clone(self) -> Self", &struct_clone_body(&s.name, &s.fields))),
                     // M93.5: el trait ToJson vive en std/json → el módulo debe tenerlo en ámbito
                     // (`from std/json import ToJson;`); si no, el impl generado da "unknown trait".
-                    "ToJson" => new_impls.push(parse_derived_impl("ToJson", &s.name, "fn to_json(self) -> string", &struct_tojson_body(a, &s.fields)?)),
+                    // raydata #203: el impl lleva la posición del `@derive` — sin el import, el error
+                    // señalaba la línea 1 del archivo.
+                    "ToJson" => {
+                        let mut imp = parse_derived_impl("ToJson", &s.name, "fn to_json(self) -> string", &struct_tojson_body(a, &s.fields)?);
+                        imp.line = a.line;
+                        imp.col = a.col;
+                        new_impls.push(imp);
+                    }
                     _ => crate::ice!("validate_derive guarantees a known trait"),
                 }
             }

@@ -511,7 +511,13 @@ impl<'a> Vm<'a> {
         macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             match instr {
                 OpCode::Constant(idx) => {
-                    let v = self.program.functions[func].consts[*idx].clone();
+                    let v = match &self.program.functions[func].consts[*idx] {
+                        // rayffi #211: cada evaluación de un literal `b"…"` es un búfer propio (como en
+                        // nativo): una extern que escribe en él (parámetro de salida) no cambia el
+                        // literal para las evaluaciones siguientes.
+                        HeapValue::Bytes(b) => HeapValue::Bytes(std::sync::Arc::from(&b[..])),
+                        v => v.clone(),
+                    };
                     self.push(v);
                 }
                 // M391: el arreglo compartido de un const de escalares — se materializa UNA vez por
@@ -4581,6 +4587,16 @@ impl<'a> Vm<'a> {
                     };
                     crate::builtins::socket_set_nodelay(handle, on);
                     self.push(HeapValue::Unit);
+                }
+                // raystat #208: SO_SNDBUF/SO_RCVBUF del socket.
+                OpCode::SocketSetBuffer => {
+                    let bytes = self.pop();
+                    let send = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bool(send), HeapValue::Int(bytes)) = (handle, send, bytes) else {
+                        unreachable!("the checker guarantees int, bool, int");
+                    };
+                    self.push(HeapValue::Int(crate::builtins::socket_set_buffer(handle, send, bytes)));
                 }
                 // M207: SO_KEEPALIVE del socket (total).
                 OpCode::SocketSetKeepalive => {

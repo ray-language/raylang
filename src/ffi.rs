@@ -179,7 +179,7 @@ pub fn ret_ckind(ty: &crate::ast::Type) -> Option<CKind> {
 pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
     let arg_kinds: Option<Vec<CKind>> = ext.params.iter().map(|p| ckind(&p.ty)).collect();
     Some(ExternDesc {
-        name: ext.name.clone(),
+        name: ext.symbol.clone(),
         lib: ext.lib.clone(),
         arg_kinds: arg_kinds?,
         ret_kind: ret_ckind(&ext.return_type)?,

@@ -7,7 +7,10 @@
 //!
 //! Una sola primitiva `op(nombre, data, n)`: `"deflate"` (n = nivel 0..10), `"inflate"` (n = tope de
 //! salida en octetos, anti-bomba), `"crc32"` y `"adler32"` (4 octetos big-endian). Determinista →
-//! oráculo VM↔nativo por byte-identidad.
+//! oráculo VM↔nativo por byte-identidad. rayzip (#188–#192): `"deflate_sync"` (un trozo que acaba en
+//! un flush de sincronización, sin BFINAL: los trozos se concatenan en un solo stream),
+//! `"inflate_consumed"` (los octetos de entrada usados, 8 octetos BE, delante de la salida) y
+//! `"crc32_update"` (n = la CRC acumulada; sigue sumando `data`).
 
 #[cfg(feature = "deflate")]
 pub fn op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
@@ -25,6 +28,14 @@ pub fn op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
             let limit = n.max(0) as usize;
             miniz_oxide::inflate::decompress_to_vec_with_limit(data, limit).ok()
         }
+        "deflate_sync" => Some(deflate_sync(data, n.clamp(0, 10) as i32)),
+        "inflate_consumed" => {
+            let (out, used) = inflate_consumed(data, n.max(0) as usize)?;
+            let mut r = (used as u64).to_be_bytes().to_vec();
+            r.extend_from_slice(&out);
+            Some(r)
+        }
+        "crc32_update" => Some(crc32_with((n & 0xFFFF_FFFF) as u32, data).to_be_bytes().to_vec()),
         "crc32" => Some(crc32(data).to_be_bytes().to_vec()),
         "adler32" => Some(adler32(data).to_be_bytes().to_vec()),
         _ => None,
@@ -36,9 +47,65 @@ pub fn op(_name: &str, _data: &[u8], _n: i64) -> Option<Vec<u8>> {
     None
 }
 
+/// rayzip #190: comprime `data` como un trozo de un stream DEFLATE crudo terminado en un flush de
+/// sincronización (un bloque almacenado vacío, alineado a octeto) y SIN el bit BFINAL: la
+/// concatenación de trozos, cerrada por uno normal (`"deflate"`), es un único stream válido. Cada
+/// trozo empieza con el diccionario vacío (como `pigz` sin `--independent` en sentido contrario):
+/// algo menos de compresión a cambio de memoria acotada y trozos comprimibles en paralelo.
+#[cfg(feature = "deflate")]
+fn deflate_sync(data: &[u8], level: i32) -> Vec<u8> {
+    use miniz_oxide::deflate::core::{compress_to_output, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush};
+    let mut c = CompressorOxide::new(create_comp_flags_from_zip_params(level, -15, 0));
+    let mut out = Vec::with_capacity(data.len() / 2 + 64);
+    let _ = compress_to_output(&mut c, data, TDEFLFlush::Sync, |chunk| {
+        out.extend_from_slice(chunk);
+        true
+    });
+    out
+}
+
+/// rayzip #191: como `"inflate"`, y además cuántos octetos de entrada ocupó el stream (lo que va
+/// detrás —el tráiler de un miembro gzip y el siguiente miembro— queda sin tocar).
+#[cfg(feature = "deflate")]
+fn inflate_consumed(mut input: &[u8], limit: usize) -> Option<(Vec<u8>, usize)> {
+    use miniz_oxide::inflate::core::{decompress, inflate_flags, DecompressorOxide};
+    use miniz_oxide::inflate::TINFLStatus;
+    let flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
+    let mut out: Vec<u8> = vec![0; input.len().saturating_mul(2).clamp(1, limit.max(1))];
+    let mut d = Box::<DecompressorOxide>::default();
+    let (mut out_pos, mut used) = (0usize, 0usize);
+    loop {
+        let (status, in_consumed, out_consumed) = decompress(&mut d, input, &mut out, out_pos, flags);
+        out_pos += out_consumed;
+        used += in_consumed;
+        match status {
+            TINFLStatus::Done => {
+                if out_pos > limit {
+                    return None;
+                }
+                out.truncate(out_pos);
+                return Some((out, used));
+            }
+            TINFLStatus::HasMoreOutput if in_consumed <= input.len() && out.len() < limit => {
+                input = &input[in_consumed..];
+                let new_len = out.len().saturating_mul(2).min(limit);
+                out.resize(new_len, 0);
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320), un octeto por paso sobre una tabla de 256.
 #[cfg(feature = "deflate")]
 fn crc32(data: &[u8]) -> u32 {
+    crc32_with(0, data)
+}
+
+/// rayzip #192: continúa la CRC-32 `prev` (la de lo ya sumado; 0 al empezar) con `data` — la forma
+/// encadenable de zlib (`crc32(crc, buf, len)`): `crc32_with(crc32(a), b) == crc32(a ++ b)`.
+#[cfg(feature = "deflate")]
+fn crc32_with(prev: u32, data: &[u8]) -> u32 {
     let mut table = [0u32; 256];
     for (i, slot) in table.iter_mut().enumerate() {
         let mut c = i as u32;
@@ -47,7 +114,7 @@ fn crc32(data: &[u8]) -> u32 {
         }
         *slot = c;
     }
-    let mut crc = 0xFFFF_FFFFu32;
+    let mut crc = !prev;
     for &b in data {
         crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
     }
@@ -97,5 +164,21 @@ mod tests {
         assert!(op("inflate", &z, 10).is_none(), "over the cap → None (the raylang path reports the error)");
         assert!(op("inflate", b"\xff\xff\xff", 0).is_none());
         assert!(op("nope", b"", 0).is_none());
+    }
+
+    #[test]
+    fn sync_chunks_concatenate_into_one_stream_and_consumed_stops_at_its_end() {
+        let a = b"first chunk, first chunk, first chunk ".repeat(20);
+        let b = b"second and last".to_vec();
+        let mut stream = op("deflate_sync", &a, 6).expect("sync chunk");
+        stream.extend(op("deflate", &b, 6).expect("final chunk"));
+        let whole = [a.clone(), b.clone()].concat();
+        assert_eq!(op("inflate", &stream, 1 << 20).expect("one stream"), whole);
+        let tail = b"TRAILING";
+        let r = op("inflate_consumed", &[stream.clone(), tail.to_vec()].concat(), 1 << 20).expect("consumed");
+        let used = u64::from_be_bytes(r[..8].try_into().unwrap()) as usize;
+        assert_eq!(used, stream.len(), "the bytes after the final block are not consumed");
+        assert_eq!(&r[8..], &whole[..]);
+        assert_eq!(crc32_with(crc32(&a), &b), crc32(&whole));
     }
 }

@@ -469,6 +469,9 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             // M305 (IDEAS §97 #11): las CONSTANTES públicas también son superficie
             // (`crypto.PASSWORD_ITERATIONS` existía y ray_doc lo negaba).
             const_signature(c)
+        } else if let Some(t) = prog.traits.iter().find(|t| t.is_pub && t.name == func) {
+            // raydata #205: el trait mismo (`ToJson`), con la firma de sus métodos.
+            trait_signature(t)
         } else if let Some(a) = prog.type_aliases.iter().find(|a| a.is_pub && a.name == func) {
             // M354 (rayauth R29): los ALIAS de tipo públicos también (`framework.ListenOptions`
             // «no existía» y había que provocar un error de tipos para descubrir el struct).
@@ -487,6 +490,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             format!("pub enum {func} "), format!("pub enum {func}<"),
             format!("pub const {func}:"), format!("pub const {func} "),
             format!("pub type {func} "), format!("pub type {func}<"),
+            format!("pub trait {func} "), format!("pub trait {func}<"),
         ];
         if let Some(i) = lines.iter().position(|l| {
             let t = l.trim_start();
@@ -511,6 +515,31 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
 /// constante pública); si no, la firma sin valor.
 fn const_signature(c: &crate::ast::ConstDef) -> String {
     crate::raydoc::const_signature(c) // M326: una sola firma para raydoc y el MCP
+}
+
+/// `trait Nombre<T> { fn m(self, …) -> R; … }` (raydata #205): la forma que se implementa.
+fn trait_signature(t: &crate::ast::TraitDef) -> String {
+    let tparams = if t.type_params.is_empty() { String::new() } else { format!("<{}>", t.type_params.join(", ")) };
+    let methods: Vec<String> = t
+        .methods
+        .iter()
+        .map(|m| {
+            let params: Vec<String> = m
+                .params
+                .iter()
+                .map(|p| match &p.ty {
+                    crate::ast::Type::SelfType if p.name == "self" => p.name.clone(),
+                    ty => format!("{}: {ty}", p.name),
+                })
+                .collect();
+            let ret = match &m.return_type {
+                crate::ast::Type::Unit => String::new(),
+                ty => format!(" -> {ty}"),
+            };
+            format!("fn {}({}){ret};", m.name, params.join(", "))
+        })
+        .collect();
+    format!("trait {}{tparams} {{ {} }}", t.name, methods.join(" "))
 }
 
 /// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).
@@ -757,6 +786,34 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
         None => (None, symbol),
     };
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
+    // raydata #205: un trait del preludio (`Ord`, `Eq`, `Hash`…): su firma, su doc y quién lo
+    // implementa — lo que hace falta para escribir un `impl` a mano.
+    if recv.is_none()
+        && let Some(t) = crate::prelude::traits().iter().find(|t| t.name == name)
+    {
+        let at = t.line.saturating_sub(crate::prelude::LINE_BASE).saturating_sub(1);
+        let mut doc_lines: Vec<&str> = Vec::new();
+        let mut j = at.min(lines.len());
+        while j > 0 && lines[j - 1].trim_start().starts_with("///") {
+            j -= 1;
+            doc_lines.insert(0, lines[j].trim_start().trim_start_matches("///").trim());
+        }
+        let mut targets: Vec<String> = crate::prelude::impls()
+            .iter()
+            .filter(|i| i.trait_name == t.name)
+            .map(|i| type_head(&i.target))
+            .collect();
+        targets.dedup();
+        let mut text = format!("prelude: {}", trait_signature(t));
+        if !doc_lines.is_empty() {
+            text.push('\n');
+            text.push_str(&doc_lines.join(" "));
+        }
+        if !targets.is_empty() {
+            text.push_str(&format!("\nimplemented by: {}", targets.join(", ")));
+        }
+        return Some(text);
+    }
     // Las `///` contiguas encima de la primera línea >= `from` que declara `fn name(` o `fn name<`
     // (takeit #178: las genéricas —`min<T: Ord>(…)`, `sort<T: Ord>(…)`— quedaban sin doc).
     let doc_above = |name: &str, from: usize| -> String {

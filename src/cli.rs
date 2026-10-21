@@ -7,7 +7,7 @@
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
 //!                             con `--native [-o <salida>] [--release]` transpila a Rust y compila con
 //!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
-//!                             codegen-units=1+target-cpu=native (más lento de compilar, no portable).
+//!                             codegen-units=1 (más lento de compilar); `--cpu native` = la CPU del host.
 //!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M99).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1); `--watch` re-corre ante cambios (M140).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
@@ -3427,14 +3427,18 @@ fn cmd_build(args: &[String]) {
     // `--lib` (§80b): emite una LIBRERÍA estática con la entrada C `ray_start()` en vez de un
     // binario — lo que un shell móvil (o cualquier host C) linkea. Exige --native.
     let lib_mode = args.iter().any(|a| a == "--lib");
+    // rayffi #216: `--cpu <nombre>` (`native` = la CPU de esta máquina) fija `target-cpu`. Sin él, el
+    // binario es portable a toda máquina del target (antes `--release` usaba la CPU del host y un
+    // runner virtualizado sin las extensiones de la base rompía ring al compilar).
+    let cpu_arg = args.iter().position(|a| a == "--cpu").and_then(|i| args.get(i + 1)).cloned();
+    set_native_cpu(cpu_arg.clone());
     // M231: `--devtools` hornea el inspector del webview en el binario (decisión de build).
     if args.iter().any(|a| a == "--devtools") {
         crate::transpile::set_native_devtools(true);
     }
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
-    // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
-    // `target-cpu=native` (sería la CPU del host, no la del target) → binario release PORTABLE al target.
+    // tener el target instalado: `rustup target add <triple>`).
     let target = args.iter().position(|a| a == "--target").and_then(|i| args.get(i + 1)).cloned();
     // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite/mimalloc/ahash) del
     // binario nativo. Un subsistema de USO (crypto/…) excluido cae en un stub que panica; `mimalloc` (N1) y
@@ -3502,6 +3506,7 @@ fn cmd_build(args: &[String]) {
                 && Some(a.as_str()) != without_arg.as_deref()
                 && Some(a.as_str()) != target.as_deref()
                 && Some(a.as_str()) != embed_arg.as_deref()
+                && Some(a.as_str()) != cpu_arg.as_deref()
         })
         .map(String::as_str);
     // M360 (rayauth R36): `ray check` de un paquete-librería verifica cada módulo como módulo.
@@ -3559,6 +3564,32 @@ fn cmd_build(args: &[String]) {
     }
 }
 
+/// rayffi #216: la CPU de `--cpu` (`target-cpu` de rustc); `None` = la base del target (portable).
+static NATIVE_CPU: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn set_native_cpu(cpu: Option<String>) {
+    *NATIVE_CPU.lock().unwrap() = cpu;
+}
+
+fn native_cpu() -> Option<String> {
+    NATIVE_CPU.lock().unwrap().clone()
+}
+
+/// La etiqueta del tier que imprime `ok: native binary …`.
+fn build_tier(release: bool, target: Option<&str>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if release {
+        parts.push("release: opt3+lto".to_string());
+    }
+    if let Some(c) = native_cpu() {
+        parts.push(format!("cpu: {c}"));
+    }
+    if let Some(t) = target {
+        parts.push(format!("target: {t}"));
+    }
+    if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
+}
+
 /// `ray build --native [--release]` (P2.b, transpilar-a-Rust): transpila el programa **ya chequeado** a
 /// Rust, lo escribe a un `.rs` temporal y lo compila con rustc → binario nativo. El nombre por defecto es
 /// el *stem* del archivo de entrada en el directorio actual; `-o <ruta>` lo cambia. Requiere `rustc` en el
@@ -3566,9 +3597,9 @@ fn cmd_build(args: &[String]) {
 ///
 /// **Tiers de optimización** (elegidos por medición — ver PERFORMANCE.md §P2 fase 33):
 /// - por defecto: `-O` (opt-level=2). Compila rápido (~0.2 s) y PORTABLE; el mejor equilibrio para dev.
-/// - `--release`: `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native`. ~10 % más rápido en
-///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
-///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
+/// - `--release`: `opt-level=3 + lto=fat + codegen-units=1`. ~10 % más rápido en cargas de
+///   asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación. Portable
+///   a toda máquina del target; `--cpu native` añade `target-cpu=native` (rayffi #216: antes iba siempre). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
 /// M169: los subsistemas del runtime nativo que no existen en Windows (sus módulos en
@@ -3801,7 +3832,10 @@ pub(crate) fn native_test_options(release: bool, stubs: StubPolicy) -> NativeTes
 pub(crate) fn build_native_test_binary(program: &crate::ast::Program, suite_path: &str, out_bin: &str, opts: &NativeTestOptions) -> String {
     let embed = collect_embed(suite_path, None);
     configure_native_app_info(suite_path);
-    build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, opts.stubs, opts.fibers, &embed, false)
+    crate::transpile::set_native_test_mode(true);
+    let r = build_native_checked(program, suite_path, Some(out_bin), opts.release, &opts.exclude, None, false, opts.stubs, opts.fibers, &embed, false);
+    crate::transpile::set_native_test_mode(false);
+    r
 }
 
 /// M186: la extensión que Windows EXIGE en el nombre de salida — `.exe` para un binario, `.lib` para
@@ -3956,7 +3990,7 @@ fn native_cache_dir() -> std::path::PathBuf {
 }
 
 /// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
-/// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto+native (release).
+/// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto (release; `--cpu` añade target-cpu).
 /// Coloca el binario recién construido en `out_bin` reemplazando el inode (`rename`) en vez de
 /// sobrescribirlo in-place. Si el rename falla, el `.tmp` se limpia para no dejar artefactos.
 fn replace_output_binary(tmp_bin: &str, out_bin: &str) -> std::io::Result<()> {
@@ -4179,15 +4213,15 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
         process::exit(65);
     }
     // Flags de rustc según el tier (`-A warnings` silencia los warnings de estilo del código generado).
-    // Con `--target` (cross-compile), `target-cpu=native` no aplica (sería la CPU del host) → release
-    // PORTABLE al target.
-    let flags: Vec<&str> = if release && target.is_none() {
-        vec!["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-C", "target-cpu=native", "-A", "warnings"]
-    } else if release {
+    let cpu_flag = native_cpu().map(|c| format!("target-cpu={c}"));
+    let mut flags: Vec<&str> = if release {
         vec!["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-A", "warnings"]
     } else {
         vec!["-O", "-A", "warnings"]
     };
+    if let Some(c) = &cpu_flag {
+        flags.extend(["-C", c.as_str()]);
+    }
     // M171: `rustc` resuelto por el orden RAY_RUSTC → PATH → toolchain privada (`src/toolchain.rs`).
     let Some(mut cmd) = crate::toolchain::command("rustc") else {
         eprintln!("native build: rustc not found (RAY_RUSTC, PATH, {})", crate::toolchain::home().display());
@@ -4214,12 +4248,7 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
                 eprintln!("native build: could not place the binary at '{out_bin}': {e}");
                 process::exit(65);
             }
-            let tier = match (release, target) {
-                (true, Some(t)) => format!(" (release: opt3+lto, target: {t})"),
-                (true, None) => " (release: opt3+lto+native)".to_string(),
-                (false, Some(t)) => format!(" (target: {t})"),
-                (false, None) => String::new(),
-            };
+            let tier = build_tier(release, target);
             println!("ok: native binary '{out_bin}'{tier}");
         }
         Ok(s) => {
@@ -4473,11 +4502,11 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         cmd.env(format!("AR_{env_arch}"), ndk_bin.join("llvm-ar"));
         extra_rustflags.push_str(" -C link-arg=-Wl,-z,max-page-size=16384");
     }
-    // `target-cpu=native` solo en release SIN cross-compile (con `--target` sería la CPU del host → no
-    // portable al target).
-    if release && target.is_none() {
-        cmd.arg("--release").env("RUSTFLAGS", format!("-C target-cpu=native -A warnings{extra_rustflags}"));
-    } else if release {
+    // rayffi #216: `target-cpu` solo si se pide con `--cpu`; por defecto, la CPU base del target.
+    if let Some(c) = native_cpu() {
+        extra_rustflags.push_str(&format!(" -C target-cpu={c}"));
+    }
+    if release {
         cmd.arg("--release").env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
     } else {
         cmd.env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
@@ -4523,12 +4552,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
                 eprintln!("native build: could not copy the binary ({}): {e}", produced.display());
                 process::exit(65);
             }
-            let tier = match (release, target) {
-                (true, Some(t)) => format!(" (release: opt3+lto, target: {t})"),
-                (true, None) => " (release: opt3+lto+native)".to_string(),
-                (false, Some(t)) => format!(" (target: {t})"),
-                (false, None) => String::new(),
-            };
+            let tier = build_tier(release, target);
             println!("ok: native binary '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
         }
         Ok((s, log)) => {

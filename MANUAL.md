@@ -1674,7 +1674,14 @@ match (fs.stat(path)) {
 
 `st.mode` son los 12 bits de permiso. Con los literales octales se escriben directamente:
 `0o600` (dueño rw), `0o755` (rwxr-xr-x). `fs.chmod(path, mode)` los cambia — el gesto de una
-bóveda de secretos: `fs.chmod("vault.db", 0o600)` la restringe a su dueño.
+bóveda de secretos: `fs.chmod("vault.db", 0o600)` la restringe a su dueño. En Windows no hay bits
+POSIX: `chmod` es siempre `Err` y `st.mode` vale 0, así que un programa portable lo salta allí.
+
+Un extractor o un sincronizador que quiera reproducir el árbol tal cual tiene dos piezas más:
+`fs.set_mtime(path, ms)` devuelve a un archivo (o directorio) su fecha de modificación —en epoch-ms
+UTC, la misma unidad de `st.mtime_ms`— y `fs.read_link(path)` da el texto de un symlink tal como se
+escribió (`"../lib/a.so"`), sin resolverlo como hace `real_path`. Con `fs.symlink(target, link)`
+se vuelve a crear; en Windows un `/` del destino se traduce a `\`.
 
 Para **reaccionar a cambios** (rebuilds, `tail -f`, sync) está `fs.watch`: eventos de **kernel**
 (FSEvents/inotify/ReadDirectoryChangesW), no sondeo de mtimes — la fibra aparca en `next_event` y el proceso duerme de
@@ -2816,7 +2823,48 @@ fn main() -> int {
 
 La regla: lee `ffi.errno()` **inmediatamente** después de la extern, sin E/S de raylang en medio
 (cualquier operación que aparque la fibra deja correr a sus hermanas, que pueden pisarlo). Funciona
-igual tras una extern `blocking` (el runtime trae el errno del hilo del pool de vuelta).
+igual tras una extern `blocking` (el runtime trae el errno del hilo del pool de vuelta), en la VM y
+en nativo.
+
+**Parámetros de salida.** Muchas APIs C devuelven datos escribiendo en un búfer que les pasas (el
+`dest` y el `destLen` de `compress` de zlib). Un `bytes` va como puntero a su propio búfer, sin
+copia, así que C puede escribir ahí y el programa lo ve después. `ffi.buffer(n)` reserva n octetos
+a cero para eso:
+
+```rust
+import std/ffi;
+
+extern "z" {
+    fn compress(dest: bytes, dest_len: bytes, src: bytes, src_len: u64) -> int;
+    fn compressBound(n: u64) -> u64;
+}
+
+// Un uLongf de 64 bits little-endian: entrada (la capacidad) y salida (lo escrito).
+fn u64_le(n: int) -> bytes {
+    bytes_of([n & 255, n >> 8 & 255, n >> 16 & 255, n >> 24 & 255, 0, 0, 0, 0])
+}
+
+fn zlib_compress(src: bytes) -> Result<bytes, string> {
+    let cap = compressBound(src.len() as u64) as int;
+    let dest = ffi.buffer(cap);
+    let len = u64_le(cap);
+    if (compress(dest, len, src, src.len() as u64) != 0) {
+        return Result.Err("compress failed");
+    }
+    let n = len[0] | len[1] << 8 | len[2] << 16 | len[3] << 24;   // C escribió el tamaño aquí
+    Result.Ok(dest.sub_bytes(0, n))
+}
+```
+
+Lo que C escriba lo ven también los alias del valor (`let d2 = dest;` comparte el búfer), y cada
+evaluación de un literal `b"…"` es un búfer propio. C no debe escribir más allá de la longitud ni
+quedarse con el puntero.
+
+**Módulos y bibliotecas.** Una `extern fn` es del módulo que la declara, como una `fn`: fuera se
+llama calificada (`zlib.compress(…)`), y dos módulos o dos paquetes pueden declarar la misma
+función C. La VM carga la biblioteca al ejecutar (acepta `"z"`, `"libz"`, `"libz.dylib"` o una ruta);
+el binario nativo la **enlaza al compilar** con `-l<nombre>`, así que necesita los archivos de
+desarrollo de la biblioteca en la máquina que compila.
 
 **Pila**: en el binario nativo con fibras, tu llamada C corre sobre la pila de la fibra. Con externs
 declaradas, el default sube solo a **1 MiB** por fibra (de los 128 KiB habituales; reserva virtual,
@@ -2867,7 +2915,8 @@ cuatro, empatando con ambos en otros dos (medido 22 sep 2026; tablas en `benchma
 ```sh
 ray build --native fib.ray            # → binario './fib' (rustc -O, ~0,2 s, portable)
 ray build --native fib.ray -o bin/fib # nombre de salida a medida
-ray build --native fib.ray --release  # tier opt3+lto+target-cpu=native (~10% extra en alloc, binario no portable)
+ray build --native fib.ray --release  # tier opt3+lto (~10% extra en alloc; corre en toda máquina del target)
+ray build --native fib.ray --release --cpu native  # además, las extensiones de ESTA CPU (no portable)
 ```
 
 Transpila el **lenguaje completo** (genéricos, traits, `dyn`, closures, `Map`, `match`…) + toda la I/O de

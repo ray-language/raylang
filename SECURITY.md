@@ -316,7 +316,9 @@ documentada:
   (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única, y `fcntl(F_SETFD,
   FD_CLOEXEC)` inmediato para que los procesos hijos del programa no hereden el listener); la lectura de
   stdin por bytes de `std/io` (M107.2: `poll(2)` + `read(2)` crudos sobre el fd 0, buffers propios
-  bien formados que la llamada no retiene); y el terminal de `std/term` (M107.3:
+  bien formados que la llamada no retiene); `setsockopt`/`getsockopt` de `SO_KEEPALIVE` y (1.27.66,
+  `net.set_recv_buffer`) `SO_RCVBUF`/`SO_SNDBUF` sobre el socket del registro, con `i32` locales del
+  tamaño declarado; y el terminal de `std/term` (M107.3:
   `isatty`/`tcgetattr`/`tcsetattr`/`cfmakeraw`/`ioctl(TIOCGWINSZ)`/`atexit` — el `termios` se
   maneja como buffer opaco de 128 bytes, mayor que el de cualquier plataforma soportada, y el
   original solo se lee para restaurar tras publicarse completo). En Windows (M173), lo mismo por

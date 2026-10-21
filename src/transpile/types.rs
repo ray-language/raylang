@@ -192,7 +192,9 @@ pub(super) fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tpa
     match normalize_type(t) {
         Type::String => Ok("std::sync::Arc<str>".to_string()),
         Type::Bytes => Ok("std::sync::Arc<[u8]>".to_string()),
-        Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) => rust_ty(t, enums, tparams),
+        // rayffi #214: un `ptr` es su dirección (`i64`): cruza como un entero, como en la VM. Qué hilo
+        // puede usar el recurso C es contrato de la biblioteca, no del valor.
+        Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) | Type::Ptr => rust_ty(t, enums, tparams),
         // H21-N5a: los compuestos cruzan como el árbol Send universal (deep copy, semántica M38).
         ty if send_is_tree(&ty) => Ok("__RaySend".to_string()),
         other => Err(format!(
@@ -250,6 +252,7 @@ pub(super) fn enum_subst(
 pub(super) fn ffi_c_arg_ty(t: &Type) -> Result<&'static str, String> {
     Ok(match normalize_type(t) {
         Type::Int => "i64",                              // long
+        Type::UInt(64) => "u64",                         // unsigned long / size_t (rayffi #209)
         Type::Float => "f64",                            // double
         Type::Bool => "std::os::raw::c_int",             // int (0/1)
         Type::String => "*const std::os::raw::c_char",   // char* (NUL-terminado)
@@ -267,6 +270,7 @@ pub(super) fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
         // `long`, pero un `-> int` FFI se lee como el `int` de C y se extiende el signo. Declararlo `i64`
         // rompería el ABI (los 32 bits altos de `rax` son basura → p. ej. el EOF -1 de `fgetc` se vería +).
         Type::Int => "std::os::raw::c_int",
+        Type::UInt(64) => "u64",
         Type::Float => "f64",
         Type::Bool => "std::os::raw::c_int",
         Type::Unit => "()",

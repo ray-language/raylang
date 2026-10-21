@@ -79,8 +79,9 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
     if matches!(method, "eq" | "show" | "less") {
         return matches!(
             key,
-            "bytes" | "uint" | "unit" | "[]" | "Map" | "Channel" | "Task"
+            "uint" | "unit" | "[]" | "Map" | "Channel" | "Task"
         ); // M356: `u8`/`u32`/`u64` ya tienen impls en el prelude y se emiten, como `int`.
+           // rayzip: `bytes` también (`print` de un `Result<bytes, _>` pedía `bytes#show`).
     }
     let builtin_key = matches!(
         key,
@@ -136,13 +137,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     // M115.4: watch/next_event/next_event_timeout — como stat/chmod, sus wrappers se EMITEN (el
     // struct WatchEvent vive en raylang) y el intercept es a nivel de primitivo __watch/__watch_next.
     if name.starts_with("std::math::")
-        || (name.starts_with("std::fs::")
-            && !matches!(
-                name,
-                "std::fs::stat" | "std::fs::chmod" | "std::fs::watch" | "std::fs::next_event" | "std::fs::next_event_timeout" | "std::fs::copy_all"
-                    | "std::fs::real_path" | "std::fs::is_within_real" // M265: emitidos sobre el primitivo __real_path
-                    | "std::fs::symlink" // M304: emitida sobre el primitivo __symlink
-            ))
+        || name.strip_prefix("std::fs::").is_some_and(|f| !fs_wrapper_emitted(f))
     {
         return true;
     }
@@ -153,6 +148,9 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos" | "std::time::sleep"
     )
         || matches!(name, "std::random::next" | "std::random::below" | "std::random::seed")
+        // rayffi #210: `ffi.errno()` lo intercepta emit_call (__ray_ffi_errno); su cuerpo raylang
+        // (`__ffi_errno()`) salía como stub que entra en pánico y rompía `--release`.
+        || name == "std::ffi::errno"
     {
         return true;
     }
@@ -182,6 +180,19 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         // primitivos `__len`/`__push`/… o son azúcar del prelude) ---
             | "len" | "push" | "split" | "chars" | "contains_key" | "keys" | "values" | "insert"
             | "unwrap" | "unwrap_or"
+    )
+}
+
+/// Las funciones de `std/fs` cuyo envoltorio raylang SE EMITE (sobre su primitivo `__stat`/`__chmod`/
+/// `__watch`/`__real_path`/`__symlink`/…, interceptado en emit_call); las demás las intercepta
+/// `emit_fs` por nombre. Una sola lista para el registro, la emisión y `type_of`.
+pub(super) fn fs_wrapper_emitted(ffn: &str) -> bool {
+    matches!(
+        ffn,
+        "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout" | "copy_all"
+            | "real_path" | "is_within_real" // M265: sobre el primitivo __real_path
+            | "symlink" // M304: sobre __symlink
+            | "read_link" | "set_mtime" // rayzip #194/#195: sobre __read_link/__set_mtime
     )
 }
 

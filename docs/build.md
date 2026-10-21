@@ -114,7 +114,8 @@ a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capít
 
 ```sh
 ray build --native prog.ray            # rustc -O (opt2), ~0,2 s, portable
-ray build --native prog.ray --release  # opt3+lto+cu1+target-cpu=native (no portable)
+ray build --native prog.ray --release  # opt3+lto+cu1, portable a todo el target (1.27.66)
+ray build --native prog.ray --release --cpu native  # + target-cpu=native (no portable)
 ray build --native prog.ray --fast     # int wrapping (sin check de overflow; div/0 sí se chequea)
 ray build --native prog.ray -o bin/app # nombre de salida
 ray build --native prog.ray --target x86_64-unknown-linux-gnu   # cross-compile (H20)
@@ -124,7 +125,9 @@ ray build --native prog.ray --target x86_64-unknown-linux-gnu   # cross-compile 
 el target debe estar instalado (`ray toolchain add-target <triple>`, que es `rustup target add`
 sobre la toolchain que `ray` usa) y, para targets con
 linker cruzado (p. ej. Linux desde macOS), el linker configurado (`~/.cargo/config.toml`).
-Con `--target`, `--release` omite `target-cpu=native` (release **portable** al target).
+`--release` no fija `target-cpu` (desde 1.27.66; antes añadía `native`, y en un runner de CI
+virtualizado sin las extensiones de la base `ring` no compilaba — rayffi #216): `--cpu <nombre>` lo
+pide explícitamente, también con `--target`.
 
 **Crates de producción bajo demanda.** El código de TLS/cripto/SQLite vive en el crate
 del workspace `crates/ray-runtime` (features `tls`/`crypto`/`sqlite`), del que dependen

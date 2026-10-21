@@ -454,10 +454,13 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         }
         merged.traits.append(&mut m.program.traits);
         merged.impls.append(&mut m.program.impls);
-        // M41: las funciones externas (FFI) NO se namespacan: su `name` es a la vez el identificador
-        // raylang y el símbolo C a resolver con dlsym. Se fusionan tal cual (efectivamente globales por
-        // su símbolo). Colisiones de símbolo entre módulos → diferido.
-        merged.externs.append(&mut m.program.externs);
+        // rayffi #212: las funciones externas (FFI) se namespacan como las funciones (`modulo::nombre`);
+        // el símbolo C a resolver va aparte (`symbol`). Dos módulos pueden declarar la misma función C
+        // (una normal y otra `blocking`, o dos paquetes que envuelven la misma biblioteca).
+        for mut e in std::mem::take(&mut m.program.externs) {
+            e.name = global_fn(&prefix, &e.name);
+            merged.externs.push(e);
+        }
         merged.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
         merged.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
         merged.type_name_sites.append(&mut m.program.type_name_sites);
@@ -540,6 +543,13 @@ pub fn shift_program(program: &mut Program, delta: usize) {
             shift_function(m, delta);
         }
     }
+    // rayffi #212: sin desplazar, un error de una `extern fn` se atribuía a otro módulo.
+    for e in &mut program.externs {
+        e.line += delta;
+        for p in &mut e.params {
+            p.line += delta;
+        }
+    }
 }
 
 fn shift_function(f: &mut Function, delta: usize) {
@@ -604,6 +614,13 @@ fn shift_pattern(p: &mut Pattern, delta: usize) {
                 shift_pattern(sub, delta);
             }
         }
+        // raydata #204: los sub-patrones de una tupla también viajan con su módulo.
+        PatternKind::Tuple(subs) => {
+            for sub in subs {
+                shift_pattern(sub, delta);
+            }
+        }
+        PatternKind::Literal(e) => shift_expr(e, delta),
         _ => {}
     }
 }
@@ -974,6 +991,11 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
                 s.values.insert(f.name.clone(), global_fn(&prefix, &f.name));
             }
         }
+        // rayffi #212: una `extern fn` (sin `pub` en la gramática) se llama calificada desde fuera
+        // (`zpool.compress2(…)`), como antes de namespacarlas se llamaba desde cualquier módulo.
+        for e in &m.program.externs {
+            s.values.insert(e.name.clone(), global_fn(&prefix, &e.name));
+        }
         // M49.1c: los `pub const` entran en la cara de valores del módulo → acceso calificado `M.CONST`.
         for c in &m.program.consts {
             if c.is_pub {
@@ -1204,6 +1226,9 @@ impl<'a> Resolver<'a> {
         let mut own = HashMap::new();
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
+        }
+        for e in &m.program.externs {
+            own.insert(e.name.clone(), global_fn(&prefix, &e.name));
         }
         // M49.1c: una referencia propia a un `const` del módulo se reescribe a su nombre global (como
         // las funciones), para que el `const` quede namespacado y solo sea accesible calificado (`M.CONST`).
@@ -1694,6 +1719,12 @@ impl<'a> TypeRewriter<'a> {
             PatternKind::Struct { name, fields } => {
                 self.rewrite_name(name); // M40.1d: namespacar el nombre del struct
                 for (_, sub) in fields {
+                    self.rewrite_pattern(sub);
+                }
+            }
+            // raydata #204: `(Shape.Line(x), _)` nombra el enum del módulo dentro de la tupla.
+            PatternKind::Tuple(subs) => {
+                for sub in subs {
                     self.rewrite_pattern(sub);
                 }
             }

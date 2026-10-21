@@ -31,7 +31,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__is_dir", "__is_file", "__list_dir", "__make_temp_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__base64_decode", "__base64_decode_bytes", "__base64_encode",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
-    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__chmod", "__watch", "__watch_next", "__remove_dir",
+    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__read_link", "__set_mtime", "__chmod", "__watch", "__watch_next", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",
@@ -42,7 +42,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
     "__ffi_errno",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
-    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_keepalive", "__socket_set_nodelay", "__socket_set_read_timeout", "__socket_shutdown_write",
+    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_keepalive", "__socket_set_buffer", "__socket_set_nodelay", "__socket_set_read_timeout", "__socket_shutdown_write",
     "__peer_addr", "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_connect_timeout", "__tcp_listen",
     "__udp_bind", "__udp_recv_from", "__udp_send_to",
     // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).

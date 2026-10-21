@@ -44,6 +44,9 @@ struct FnSig {
 
 struct Transpiler {
     funcs: HashMap<String, FnSig>,
+    /// rayffi #213: funciones del prelude cuya definición se salta (`skip_fn_def`: las intercepta
+    /// `emit_call`) y que se pueden usar como VALOR (`.and_then(parse_int)`). Solo las no genéricas.
+    prelude_values: HashMap<String, (Vec<crate::ast::Param>, Type)>,
     /// M295: funciones que emiten el prólogo de profundidad (las que pueden recurrir, por
     /// `analysis::depth_checked_fns`); vacío con `--fast`.
     depth_fns: std::collections::HashSet<String>,
@@ -266,6 +269,18 @@ pub fn set_native_devtools(on: bool) {
     NATIVE_DEVTOOLS.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// raymcp #217: el binario de `ray test --native` responde `self_command() == [exe, "test"]` (y por
+/// tanto `launch_mode() == "test"`), la misma forma que `ray test` en la VM.
+static NATIVE_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_native_test_mode(on: bool) {
+    NATIVE_TEST_MODE.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn native_test_mode() -> bool {
+    NATIVE_TEST_MODE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// M247: `[id, version, public_key]` que `ray build --native`/`ray bundle` hornean como literal
 /// de `__app_info()` (del `ray.toml` del proyecto); sin fijar, tres vacíos (programa suelto).
 static NATIVE_APP_INFO: std::sync::Mutex<Option<[String; 3]>> = std::sync::Mutex::new(None);
@@ -281,8 +296,12 @@ pub fn native_app_info() -> [String; 3] {
 pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
+    let mut prelude_values = HashMap::new();
     for f in &prog.functions {
         if skip_fn_def(f) {
+            if f.line >= crate::prelude::LINE_BASE && f.type_params.is_empty() && !f.name.contains("::") && !f.name.starts_with("__") && !f.name.contains('#') {
+                prelude_values.insert(f.name.clone(), (f.params.clone(), f.return_type.clone()));
+            }
             continue;
         }
         // Se NORMALIZAN los tipos de la firma (Struct("Map"/"Channel"/"Task"/"Option"/"Result") → su
@@ -349,6 +368,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     }
     let mut t = Transpiler {
         funcs,
+        prelude_values,
         depth_fns,
         depth_closures,
         depth_active: false,

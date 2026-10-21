@@ -18159,3 +18159,106 @@ para `'min'`/`'max'` con dos argumentos añade «(min is the iterator terminal; 
 values use math.min after import std/math)». Solo esos dos nombres y solo con dos argumentos: es la
 confusión medida, no una pista genérica. Espejo en `selfhost/checker.ray::arity_message`, byte a byte
 (la suite `selfhost_checker` lo comprueba).
+
+## 383. M411 — las apps nuevas ejercitan la FFI, la compresión, UDP, procesos y Windows (rayzip, raycron, raydata, raystat, rayffi, raymcp: #188–#221; oct 2026)
+
+Seis apps nuevas, cada una sobre una parte del lenguaje que ninguna otra había tocado a fondo:
+rayzip (zip/gzip completos, también en Windows ARM64), raycron (un cron con zona horaria), raydata
+(consultas sobre CSV con `impl Eq`/`Ord`), raystat (statsd sobre UDP), rayffi (zlib por FFI) y
+raymcp (un agente con servidor MCP propio). 34 hallazgos; este arco arregla los que son del lenguaje
+y deja anotados en IDEAS §113 los que piden diseño o un paquete nuevo.
+
+**Backend nativo.** Casi todos los B salieron de lo mismo: algo que la VM hacía y el transpilador no
+cubría, sin que `ray check` lo viera.
+- `ffi.errno()` (#210): la llamada se interceptaba, pero el CUERPO raylang de `std::ffi::errno`
+  (`__ffi_errno()`) se emitía como stub, y `--release` rechaza stubs. Ahora la definición se salta
+  como la de cualquier envoltorio interceptado y `type_of` conoce su retorno.
+- `u64` en un `extern` (#209): la tabla de §13 lo daba por bueno y la VM lo marshalaba; el nativo
+  no tenía la fila. `u64` ↔ `u64` de Rust sin conversión, argumento y retorno.
+- Funciones del prelude como valor (#213): `.and_then(parse_int)` funciona en la VM porque
+  `parse_int` es una función raylang; el nativo SALTA su definición (la intercepta `emit_call`), así
+  que como valor no había a qué apuntar. El transpilador guarda las firmas de esas funciones y, usada
+  como valor, emite el mismo closure que el checker sintetiza para un builtin (M315).
+- Tuplas de 4+ elementos (#218): `RayShow` solo estaba para 2 y 3, y un `Option<(…×4)>` lo exige por
+  su `impl`. Se generan de 2 a 12 (el máximo de los traits de tupla de Rust).
+- `ptr` entre fibras (#214): un struct con un `ptr` compilaba y entraba en pánico al cruzar, y un
+  `Channel<ptr>` se rechazaba. Pero en nativo un `ptr` ES un `i64`: cruza como entero, igual que en
+  la VM. Que el recurso C sea usable desde otro hilo es contrato de la biblioteca, no del valor.
+- `worker_count()`/`worker_id()`/`spawn_local` en el modelo hilo-por-tarea (#197, Windows ARM64):
+  esos helpers solo se emitían con fibras. Ahora existen en los dos modelos: `spawn_local` = `spawn`,
+  `worker_id()` = 0, `worker_count()` = hilos disponibles (lo que el programa usa para dimensionar).
+- `process.run()` bloqueaba el worker (#201): con un worker, cuatro `sleep 1` en fibras tardaban
+  4 s y la fibra principal no avanzaba. La espera al hijo va ahora al pool bloqueante (como `fs.sync`)
+  y la fibra aparca: 1 s y la principal sigue con sus ticks.
+- `net.set_read_timeout` en otra fibra (#207): el plazo vivía en el ctx de la FIBRA que lo ponía; la
+  doc dice «per-handle». Ahora es un mapa global por handle, con un contador atómico delante para
+  que un programa sin plazos no toque el lock en cada lectura.
+- `--release` y `target-cpu=native` (#216): en el runner `macos-14` de GitHub (Apple Silicon
+  virtualizado) `ring` no compila con la CPU del host porque le faltan extensiones que da por hechas
+  en `aarch64-apple-darwin`; y un binario «native» puede no arrancar en otra máquina. `--release`
+  deja de fijar `target-cpu`; `--cpu <nombre>` lo pide (`--cpu native` recupera lo de antes). El
+  ~10 % del tier release venía de lto/codegen-units, no de la CPU (PERFORMANCE §P2 fase 33).
+- `bytes#show`/`#eq`/`#less` (de paso): `print` de un `Result<bytes, _>` pedía `bytes#show`, que el
+  transpilador saltaba como «no transpilable». Lo es: se emite como los de `int`.
+- `assert_eq` con `impl Eq` (#206, la parte de divergencia): la VM comparaba con el `impl` (el
+  prelude es `a.eq(b)`) y el nativo con el `==` de Rust. Sobre un tipo de usuario el nativo usa ahora
+  los diccionarios `Eq`/`Show` que el lowering ya le pasaba.
+
+**FFI.** Además de los dos bugs:
+- `extern fn` por módulo (#212): el nombre de una `extern fn` era global — el identificador raylang
+  ERA el símbolo C — y dos módulos que declaraban `compress2` chocaban, con el error en otro archivo
+  (las externs ni siquiera se desplazaban a la banda de líneas de su módulo). Ahora `ExternFn` lleva
+  `name` (namespacado como una `fn`: `zpool::compress2`) y `symbol` (lo que se resuelve con dlsym /
+  `#[link_name]`). Dentro del módulo se llama por su nombre; desde fuera, calificada — se publican en
+  la superficie del módulo, porque antes cualquier módulo las alcanzaba. Rompe solo el uso sin
+  calificar desde OTRO módulo, que era accidental (ningún paquete ni ejemplo lo hacía).
+- El enlazado nativo (#215): `-l<lib>` con lo escrito en el `extern` fallaba para `"libz"` o
+  `"libz.1.dylib"`, que la VM acepta. El nativo reduce ahora el nombre al del enlazador. La elección
+  por plataforma (`zlib1` en Windows) y una comprobación «¿está la biblioteca?» quedan en IDEAS §113.
+- Búferes de salida (#211): C escribe en el búfer del `bytes` que recibe, y rayffi lo usa para los
+  parámetros de salida. Se documenta como contrato (lo ven el valor y sus alias) y se añade
+  `ffi.buffer(n)`. La sorpresa era de la VM: `Constant` empujaba el MISMO `Arc` del pool en cada
+  evaluación, así que escribir en un `b"…"` cambiaba el literal; ahora cada evaluación copia (el
+  nativo ya creaba un `Rc` por evaluación). Coste: una asignación por literal de bytes evaluado en
+  la VM.
+
+**Checker.**
+- Patrón de tupla con variantes del propio módulo (#204): `shift_pattern` y `rewrite_pattern` del
+  loader no bajaban a los sub-patrones de `PatternKind::Tuple`, así que `(Shape.Line(x), _)` se
+  quedaba con el nombre local y la línea sin desplazar en cuanto otro módulo importaba el archivo.
+- `@derive(ToJson)` sin importar el trait (#203): el impl generado llevaba la posición 1:1. Ahora
+  lleva la del `@derive` y el mensaje dice de dónde importarlo.
+- `==` sobre `T: Eq` (#206): sigue sin compilar —`==` es estructural por SPEC §7, no despacha a
+  `Eq`— pero el error sugiere `a.eq(b)` (también en el espejo selfhost). Que `==` despache a un
+  `impl Eq` a mano es un cambio de lenguaje que queda para decidir (IDEAS §113): la REFERENCE decía
+  «enables `==`/`!=`» y era falso; corregido en los dos idiomas.
+- `ray doc Ord` (#205): los traits del preludio (y los públicos de la stdlib, como `ToJson`) no eran
+  símbolo. Ahora dan su firma, su doc y quién los implementa.
+
+**std.**
+- `gunzip` de varios miembros (#188): leía el primero y comparaba su CRC con el tráiler del último.
+  Recorre ahora los miembros con `inflate_raw_consumed` (#191: cuántos octetos usó el stream, en el
+  runtime con el `in_consumed` de miniz y en raylang con el cursor del `Inflater`) y verifica CRC e
+  ISIZE de cada uno. `stream_remaining(z)` da lo que siguió al bloque final del modo incremental.
+- `crc32_update(crc, chunk)` (#192) — la forma encadenable de zlib.
+- `deflate_raw_level` y `deflate_raw_chunk` (#190): el nivel, y un trozo que acaba en flush de
+  sincronización sin BFINAL — los trozos concatenados son un único stream, con memoria acotada y
+  comprimibles en paralelo. Las tres operaciones nuevas son nombres de la primitiva única
+  `__deflate_op`, así que no tocan la VM ni el transpilador; el respaldo raylang cubre `--without
+  deflate`.
+- `fs.read_link` y `fs.set_mtime` (#195/#194), dos `FsOp` etiquetadas más; `fs.symlink` traduce
+  `/` a `\` en el destino en Windows (#198); la doc de `chmod`/`Stat.mode` dice lo de Windows (#199).
+- `net.set_recv_buffer`/`set_send_buffer` (#208): `SO_RCVBUF`/`SO_SNDBUF` por `setsockopt` a mano
+  (como `SO_KEEPALIVE`) y `getsockopt` para devolver lo que el kernel dejó.
+- `ray test --native` (#217): el binario de test responde `self_command() == [binario, "test"]` y por
+  tanto `launch_mode() == "test"`, la forma de `ray test`.
+
+**Docs.** `llms.txt` gana una sección de FFI (rayffi la conoció solo por §13), la nota de que
+`ToJson` se importa, la de `==` frente a `Eq` y la de `std/huffman` (#196: es solo el código estático
+de HPACK).
+
+**Lo que queda fuera** (IDEAS §113): el inflate incremental en el runtime (#189), escritor de zip,
+lectura sobre handle y ZIP64 (#193), la hora local (#200, y con ella la zona del paquete `cron`, #202),
+el nombre de biblioteca por plataforma (#215), y lo de los paquetes de agentes (#219–#221), que
+necesita publicar versiones nuevas de `llm`/`mcp`/`agent`.
+

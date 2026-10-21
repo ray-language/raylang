@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.71 — 2026-10-21
+
+Hora local del sistema (M416, rayzip #200 y raycron #202). `tz` y `cron` **0.2.0** publicados.
+
+- **`std/time`**: `local_offset_ms(instant_ms) -> int` (el desplazamiento UTC de la zona local del
+  SO en ese instante, con su DST: `localtime_r` en unix —honra `TZ`—, la zona activa en Windows),
+  `to_local(ms) -> DateTime` y `now_local()`. `DateTime` sigue siendo UTC; esto es lo único que da
+  hora local en Windows, donde `tz` no tiene zoneinfo. Los tres motores.
+- **`tz` 0.2.0**: `from_os() -> Zone` (zona respaldada por el SO: `offset_at`, `to_utc` con
+  `Gap`/`Ambiguous`, `is_dst_at`, abreviaturas `UTC±HH:MM`) y `system()` que ya no falla nunca
+  (`TZ`, `/etc/localtime` y, sin TZif, `from_os()`). `load(name)` en Windows sigue dando `Err`.
+- **`cron` 0.2.0**: `cron/local.next_after_in` dispara en las DOS pasadas del solape de otoño para
+  un schedule horario (`0 * * * *`, `*/15 * * * *`) y solo en la primera si fija la hora.
+- Test `release_cli` sin la carrera de la clave mutada (1 de cada 256 claves empezaba por `00`).
+
 ## 1.27.70 — 2026-10-21
 
 - **`std/inflate` incremental en el runtime** (M415, rayzip #189): `inflate_stream`/`zlib_stream` +

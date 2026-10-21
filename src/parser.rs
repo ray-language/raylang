@@ -485,14 +485,18 @@ impl Parser {
         })
     }
 
-    /// extern_block = 'extern' STRING [ 'blocking' ] '{' { extern_sig } '}'   (M41, FFI)
+    /// extern_block = 'extern' STRING { OS STRING } [ 'blocking' ] '{' { extern_sig } '}'   (M41, FFI)
     /// extern_sig   = 'fn' IDENT '(' [ params ] ')' [ '->' type ] ';'
+    /// OS           = 'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'freebsd'
     ///
     /// Declara funciones C de una librería. Cada firma va sin cuerpo (termina en `;`); su nombre es a
     /// la vez el identificador en raylang y el símbolo a resolver con `dlsym`. El nombre de la librería
     /// es el string literal tras `extern` (`extern "m"` → `libm`). `blocking` es una palabra
     /// CONTEXTUAL (no reservada: un identificador `blocking` sigue siendo válido) que marca todas las
-    /// firmas del bloque como llamadas bloqueantes de verdad (ver `ExternFn::blocking`).
+    /// firmas del bloque como llamadas bloqueantes de verdad (ver `ExternFn::blocking`). M417
+    /// (rayffi #215): entre el nombre y `blocking` caben nombres POR PLATAFORMA — `extern "z" windows
+    /// "zlib1" { … }` —, pares de palabra contextual (los nombres de `platform()`) y string; un SO
+    /// repetido o desconocido es error de sintaxis.
     fn extern_block(&mut self, acc: &mut Program) -> Result<(), ParseError> {
         self.expect(&TokenKind::Extern, "'extern'")?;
         let lib_tok = self.advance();
@@ -503,6 +507,34 @@ impl Parser {
                 line: lib_tok.line, col: lib_tok.col, len: 1,
             }),
         };
+        let mut libs: Vec<(String, String)> = Vec::new();
+        const PLATFORMS: [&str; 6] = ["windows", "macos", "linux", "android", "ios", "freebsd"];
+        while let TokenKind::Ident(word) = &self.peek().kind {
+            let next_is_str = matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Str(_)));
+            if word == "blocking" || !next_is_str {
+                break;
+            }
+            let os_tok = self.advance();
+            let os = match &os_tok.kind {
+                TokenKind::Ident(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            if !PLATFORMS.contains(&os.as_str()) {
+                return Err(ParseError {
+                    msg: format!("unknown platform '{os}' in the extern block (expected one of: windows, macos, linux, android, ios, freebsd)"),
+                    line: os_tok.line, col: os_tok.col, len: os.chars().count(),
+                });
+            }
+            if libs.iter().any(|(o, _)| *o == os) {
+                return Err(ParseError {
+                    msg: format!("platform '{os}' is named twice in the extern block"),
+                    line: os_tok.line, col: os_tok.col, len: os.chars().count(),
+                });
+            }
+            let name_tok = self.advance();
+            let TokenKind::Str(name) = &name_tok.kind else { unreachable!() };
+            libs.push((os, name.clone()));
+        }
         let blocking = matches!(&self.peek().kind, TokenKind::Ident(s) if s == "blocking");
         if blocking {
             self.advance();
@@ -516,7 +548,7 @@ impl Parser {
             self.expect(&TokenKind::RParen, "')'")?;
             let return_type = if self.eat(&TokenKind::Arrow) { self.parse_type()? } else { Type::Unit };
             self.expect(&TokenKind::Semicolon, "';' at the end of the extern signature (it has no body)")?;
-            acc.externs.push(ExternFn { symbol: name.clone(), name, lib: lib.clone(), params, return_type, blocking, line: kw.line, col: kw.col });
+            acc.externs.push(ExternFn { symbol: name.clone(), name, lib: lib.clone(), libs: libs.clone(), params, return_type, blocking, line: kw.line, col: kw.col });
         }
         self.expect(&TokenKind::RBrace, "'}' to close the extern block")?;
         Ok(())
@@ -2313,6 +2345,20 @@ mod tests {
         let prog = parse_prog("fn slice(bits: [int], from: int, to: int) -> [int] { let from = from + 1; bits }\nfrom std/fs import read_file;\nfn main() -> int { 0 }");
         assert_eq!(prog.functions[0].params[1].name, "from");
         assert_eq!(prog.from_imports.len(), 1);
+    }
+
+    #[test]
+    fn extern_block_accepts_platform_names_and_rejects_unknown_or_repeated_ones() {
+        // M417 (rayffi #215): `extern "z" windows "zlib1" linux "z" blocking { … }`.
+        let prog = parse_prog("extern \"z\" windows \"zlib1\" linux \"z\" blocking { fn zlibVersion() -> Option<string>; }\nfn main() -> int { 0 }");
+        let e = &prog.externs[0];
+        assert_eq!(e.lib, "z");
+        assert_eq!(e.libs, vec![("windows".to_string(), "zlib1".to_string()), ("linux".to_string(), "z".to_string())]);
+        assert!(e.blocking);
+        let err = parse(crate::lexer::lex("extern \"z\" plan9 \"libz\" { fn f() -> int; }\nfn main() -> int { 0 }").unwrap()).unwrap_err();
+        assert!(err.msg.contains("unknown platform 'plan9'"), "{}", err.msg);
+        let err = parse(crate::lexer::lex("extern \"z\" windows \"a\" windows \"b\" { fn f() -> int; }\nfn main() -> int { 0 }").unwrap()).unwrap_err();
+        assert!(err.msg.contains("platform 'windows' is named twice"), "{}", err.msg);
     }
 
     #[test]

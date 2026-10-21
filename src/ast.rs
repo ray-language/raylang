@@ -266,6 +266,10 @@ pub struct ExternFn {
     /// Nombre corto de la librería (`"m"` → `libm`); lo resuelve `ffi` al archivo de plataforma o al
     /// handle global del proceso (donde viven libc/libm ya enlazadas).
     pub lib: String,
+    /// M417 (rayffi #215): nombres por plataforma, `extern "z" windows "zlib1" { … }` — pares
+    /// (SO como lo nombra `platform()`, nombre de la librería) en orden de declaración. El SO en
+    /// curso elige el suyo (`ffi::platform_lib`); sin entrada para él, rige `lib`.
+    pub libs: Vec<(String, String)>,
     pub params: Vec<Param>,
     pub return_type: Type,
     /// ¿El bloque se declaró `extern "lib" blocking { … }`? Marca las llamadas como bloqueantes de

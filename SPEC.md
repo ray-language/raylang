@@ -194,7 +194,8 @@ impl     = 'impl' [ genericos ] nombre_trait [ '<' tipo … '>' ] 'for' tipo '{'
 const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
 alias_tipo = 'type' IDENT [ '<' IDENT { ',' IDENT } '>' ] '=' tipo ';' ;   (* 'type' es contextual: solo abre ítem (M311) *)
 const_valor = expresion_constante ;   (* literal, aritmética/bits/concatenación sobre literales y otras const, arreglo/tupla de ellas; M345 *)
-extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
+extern   = 'extern' STRING { PLATAFORMA STRING } [ 'blocking' ] '{' { firma_extern } '}' ;
+PLATAFORMA = 'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'freebsd' ;   (* contextuales *)
 firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 ```
 
@@ -240,7 +241,12 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   cuerpo**; su nombre es el identificador en raylang (del módulo, §2) y el símbolo a resolver. En la
   VM la librería se carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre
   corto `"m"` se resuelve al archivo de plataforma o al proceso); el binario nativo la enlaza al
-  compilar con el nombre corto (`"libz.1.dylib"` → `z`). Los tipos deben ser **marshalables**: los primitivos
+  compilar con el nombre corto (`"libz.1.dylib"` → `z`). **Nombres por plataforma** (1.27.72): tras el
+  nombre general caben pares `plataforma "nombre"` —`extern "z" windows "zlib1" { … }`—, con las
+  palabras contextuales de `platform()` (`windows macos linux android ios freebsd`); el sistema en
+  curso usa el suyo y, sin entrada, el general. Una plataforma desconocida o repetida es error de
+  sintaxis. `std/ffi.library_available(lib) -> bool` dice si la librería se puede cargar en este
+  sistema (los mismos nombres de archivo que probaría la `extern`; `"c"`/`"m"` siempre). Los tipos deben ser **marshalables**: los primitivos
   `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
   (aridad 0..=6 — límite del checker, idéntico en todos los motores), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
   (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` o, con seguridad de tipos, como **`ptr`**

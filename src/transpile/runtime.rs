@@ -2697,6 +2697,40 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // std/ffi.errno (revisión FFI jul 2026): lectura del errno del hilo actual. Mismo trío de
     // plataformas que src/ffi.rs (la impl de la VM) → mismo valor en ambos motores. Con externs
     // `blocking`, run_blocking (ray-runtime) ya repone en el worker el errno del hilo del pool.
+    // M417 (rayffi #215): `ffi.library_available(lib)` — los mismos nombres de archivo que prueba la
+    // VM (src/ffi.rs `lib_filenames`), con dlopen/LoadLibraryA y cierre inmediato; `c`/`m` siempre.
+    if t.needs_ffi_lib_available {
+        out.push_str(concat!(
+            "fn __ray_ffi_lib_available(lib: &str) -> bool {\n",
+            "    if lib == \"c\" || lib == \"m\" { return true; }\n",
+            "    let names: Vec<String> = if cfg!(target_os = \"macos\") { vec![format!(\"lib{lib}.dylib\"), format!(\"{lib}.dylib\"), lib.to_string()] }\n",
+            "        else if cfg!(windows) { vec![format!(\"{lib}.dll\"), format!(\"lib{lib}.dll\"), lib.to_string()] }\n",
+            "        else { vec![format!(\"lib{lib}.so\"), format!(\"lib{lib}.so.6\"), lib.to_string()] };\n",
+            "    #[cfg(unix)]\n",
+            "    {\n",
+            "        unsafe extern \"C\" { fn dlopen(path: *const std::ffi::c_char, flags: i32) -> *mut std::ffi::c_void; fn dlclose(h: *mut std::ffi::c_void) -> i32; }\n",
+            "        for n in names {\n",
+            "            let Ok(c) = std::ffi::CString::new(n) else { continue };\n",
+            "            let h = unsafe { dlopen(c.as_ptr(), 1) };\n",
+            "            if !h.is_null() { unsafe { dlclose(h); } return true; }\n",
+            "        }\n",
+            "        false\n",
+            "    }\n",
+            "    #[cfg(windows)]\n",
+            "    {\n",
+            "        unsafe extern \"system\" { fn LoadLibraryA(name: *const u8) -> *mut std::ffi::c_void; fn FreeLibrary(h: *mut std::ffi::c_void) -> i32; }\n",
+            "        for n in names {\n",
+            "            let Ok(c) = std::ffi::CString::new(n) else { continue };\n",
+            "            let h = unsafe { LoadLibraryA(c.as_ptr() as *const u8) };\n",
+            "            if !h.is_null() { unsafe { FreeLibrary(h); } return true; }\n",
+            "        }\n",
+            "        false\n",
+            "    }\n",
+            "    #[cfg(not(any(unix, windows)))]\n",
+            "    { let _ = names; false }\n",
+            "}\n",
+        ));
+    }
     if t.needs_ffi_errno {
         out.push_str(concat!(
             "fn __ray_ffi_errno() -> i64 {\n",

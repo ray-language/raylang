@@ -2952,6 +2952,10 @@ impl<'a> Interpreter<'a> {
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
             "__now" => Value::Int(crate::builtins::now_millis()),
             "__ffi_errno" => Value::Int(crate::ffi::errno()),
+            "__ffi_lib_available" => match &values[0] {
+                Value::Str(lib) => Value::Bool(crate::ffi::library_available(lib)),
+                _ => unreachable!("the checker guarantees a string"),
+            },
             "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
             "__monotonic_nanos" => Value::Int(crate::builtins::monotonic_nanos()),
             "__local_offset" => match &values[0] {

@@ -580,7 +580,14 @@ una biblioteca que falta solo se nota en la primera llamada. El **binario nativo
 compilar** (`-l<nombre>`): necesita los archivos de desarrollo (`libz.so`/`libz.dylib`; en Windows la
 `.lib` de importación), y el nombre se reduce al que espera el enlazador (`"libz.1.dylib"` → `z`;
 una ruta pierde el directorio). El mismo nombre no vale en todas las plataformas (zlib es `libz` en
-macOS/Linux y `zlib1.dll` en Windows) y hoy no hay forma de elegirlo por plataforma.
+macOS/Linux y `zlib1.dll` en Windows): se elige **por plataforma** tras el nombre general —
+`extern "z" windows "zlib1" { … }` (palabras `windows macos linux android ios freebsd`, las de
+`platform()`; el sistema en curso usa su nombre, sin entrada el general; en el nativo cada una es un
+`#[cfg_attr(target_os = …, link(name = …))]`). **¿Está la biblioteca?** `ffi.library_available("z")
+-> bool` (`import std/ffi;`) la busca con los mismos nombres de archivo, sin llamar a nada: la forma de
+hacer opcional una dependencia C. Una biblioteca ausente que sí se llama da en la VM `library 'x' not
+found (tried libx.dylib, x.dylib, x); symbol 'f' is not in the process either` (antes solo hablaba
+del símbolo).
 
 | Tipo raylang | En C (argumento) | En C (retorno) |
 |---|---|---|

@@ -6,6 +6,15 @@
 /// may overwrite it. Returns 0 in the wasm playground (no FFI there).
 pub fn errno() -> int { __ffi_errno() }
 
+// rayffi #215: saber si una librería está ANTES de llamarla (y recibir un pánico del símbolo).
+/// Whether the C library `lib` (a short name, as in `extern "lib"`: `"z"`, `"sqlite3"`) can be
+/// loaded on this system — the same file names an `extern` block tries (`libz.dylib`, `libz.so`,
+/// `z.dll`…). `"c"` and `"m"` are always available. Check it before calling into an optional
+/// library; a call into a missing one is a runtime error. In a native binary the libraries of its
+/// `extern` blocks are linked at build time (they exist by construction); this still asks the OS
+/// for any name. `false` in the web playground and in builds without FFI.
+pub fn library_available(lib: string) -> bool { __ffi_lib_available(lib) }
+
 // rayffi #211: el búfer de salida de una extern (`uLongf *destLen`, el `dest` de compress). Una
 // copia propia: escribir en él no toca ningún otro valor.
 /// `n` zero bytes in a buffer of their own: the output buffer for an extern that writes through a

@@ -4954,6 +4954,12 @@ static BUILTINS: &[Builtin] = &[
     // solo los primitivos internos `__now`/`__monotonic`/`__sleep`/`__random`/`__random_int`. ---
     // --- FFI (M41 + revisión jul 2026): errno del hilo, envuelto por `std/ffi.errno()`. ---
     Builtin { name: "__ffi_errno", opcode: OpCode::FfiErrno, check: |a| { nullary(a, "__ffi_errno")?; Ok(Type::Int) } },
+    // M417 (rayffi #215): ¿se puede cargar la librería? (std/ffi.library_available).
+    Builtin { name: "__ffi_lib_available", opcode: OpCode::FfiLibAvailable, check: |a| {
+        arity(a, 1, "__ffi_lib_available", " (lib)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ffi_lib_available expects a string (the library name), not {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
 
     Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },

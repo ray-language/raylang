@@ -180,11 +180,40 @@ pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
     let arg_kinds: Option<Vec<CKind>> = ext.params.iter().map(|p| ckind(&p.ty)).collect();
     Some(ExternDesc {
         name: ext.symbol.clone(),
-        lib: ext.lib.clone(),
+        lib: platform_lib(ext).to_string(),
         arg_kinds: arg_kinds?,
         ret_kind: ret_ckind(&ext.return_type)?,
         blocking: ext.blocking,
     })
+}
+
+/// M417 (rayffi #215): la librería que toca en ESTE sistema — la entrada de `platform()` en los
+/// nombres por plataforma del bloque (`extern "z" windows "zlib1"`) o, sin ella, el nombre general.
+pub fn platform_lib(ext: &crate::ast::ExternFn) -> &str {
+    let os = std::env::consts::OS;
+    ext.libs.iter().find(|(o, _)| o == os).map(|(_, l)| l.as_str()).unwrap_or(ext.lib.as_str())
+}
+
+/// M417 (rayffi #215, `ffi.library_available`): ¿se puede cargar la librería `lib` en este
+/// sistema? Prueba los mismos nombres de archivo que una `extern fn` (`lib<x>.dylib`/`.so`/`.dll`…),
+/// sin caer al handle del proceso — salvo para `c`/`m`, que siempre están. Antes la única forma de
+/// saberlo era llamar y recibir un pánico que hablaba del símbolo, no de la librería.
+#[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
+pub fn library_available(lib: &str) -> bool {
+    if lib == "c" || lib == "m" {
+        return true;
+    }
+    if let Some(l) = handles().lock().unwrap().get(lib) {
+        let _ = l;
+        return !fallbacks().lock().unwrap().contains(lib);
+    }
+    // SAFETY: cargar una librería ejecuta sus inicializadores; es el mismo contrato que `open_lib`
+    // (quien pregunta por una librería es quien va a llamarla).
+    lib_filenames(lib).iter().any(|name| unsafe { libloading::Library::new(name) }.is_ok())
+}
+#[cfg(any(not(feature = "ffi"), target_arch = "wasm32"))]
+pub fn library_available(_lib: &str) -> bool {
+    false
 }
 
 /// Un argumento en la frontera FFI. Los primitivos van por valor; `Str`/`Bytes` se toman **prestados**
@@ -293,6 +322,15 @@ fn handles() -> &'static Mutex<HashMap<String, &'static libloading::Library>> {
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+// M417: las librerías que NO se encontraron como archivo y cayeron al handle del proceso (libc y
+// libm viven ahí a propósito; cualquier otra es, casi seguro, una librería ausente — y el error
+// de un símbolo que no aparece debe decirlo).
+#[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
+fn fallbacks() -> &'static Mutex<std::collections::HashSet<String>> {
+    static FALLBACKS: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    FALLBACKS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
 // Nombres de archivo candidatos para una librería corta, según la plataforma.
 #[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
 fn lib_filenames(short: &str) -> Vec<String> {
@@ -345,7 +383,10 @@ fn open_lib(lib: &str) -> Result<&'static libloading::Library, String> {
     let l = match opened {
         Some(l) => l,
         // Handle global del proceso: símbolos ya cargados (libc/libm que enlaza el propio binario).
-        None => this_process().map_err(|e| format!("could not load library '{lib}': {e}"))?,
+        None => {
+            fallbacks().lock().unwrap().insert(lib.to_string());
+            this_process().map_err(|e| format!("could not load library '{lib}': {e}"))?
+        }
     };
     // La librería vive para siempre (los punteros a símbolos que retiene la VM lo exigen).
     let l: &'static libloading::Library = Box::leak(Box::new(l));
@@ -360,9 +401,18 @@ fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
     // SAFETY: pedimos el símbolo como puntero crudo y lo interpretará el catálogo de moldes según la
     // firma DECLARADA — el mismo contrato de confianza de siempre. La librería es 'static (leak).
     let sym: libloading::Symbol<'static, *mut c_void> = unsafe {
-        library
-            .get(symbol.as_bytes())
-            .map_err(|e| format!("symbol '{symbol}' not found in library '{lib}': {e}"))?
+        library.get(symbol.as_bytes()).map_err(|e| {
+            // M417 (rayffi #215): si la librería no se encontró como archivo, el problema es ella,
+            // no el símbolo — se dice qué nombres se probaron.
+            if lib != "c" && lib != "m" && fallbacks().lock().unwrap().contains(lib) {
+                format!(
+                    "library '{lib}' not found (tried {}); symbol '{symbol}' is not in the process either: {e}",
+                    lib_filenames(lib).join(", ")
+                )
+            } else {
+                format!("symbol '{symbol}' not found in library '{lib}': {e}")
+            }
+        })?
     };
     Ok(*sym)
 }

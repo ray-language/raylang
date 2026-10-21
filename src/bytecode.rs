@@ -213,6 +213,9 @@ pub enum OpCode {
     /// Builtin `__ffi_errno` (std/ffi.errno): empuja el `errno` del hilo actual como int — el
     /// motivo del último fallo de una extern C estilo POSIX. Leer inmediatamente tras la llamada.
     FfiErrno,
+    /// Builtin `__ffi_lib_available` (std/ffi.library_available, M417): saca el nombre corto de una
+    /// librería (string) y empuja si se puede cargar en este sistema (bool).
+    FfiLibAvailable,
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 

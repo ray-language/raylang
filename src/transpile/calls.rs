@@ -1234,6 +1234,14 @@ impl Transpiler {
             out.push_str("__ray_ffi_errno()");
             return Ok(());
         }
+        // M417 (rayffi #215): `ffi.library_available(lib)` → helper que prueba dlopen/LoadLibrary.
+        if name == "std::ffi::library_available" {
+            self.needs_ffi_lib_available = true;
+            out.push_str("__ray_ffi_lib_available(&");
+            self.emit_expr(out, eff[0])?;
+            out.push(')');
+            return Ok(());
+        }
         // R5 (bench regex): las funciones INTERNAS `run_*` de std/regex (reciben el `Prog`, que
         // retiene el patrón FUENTE ya validado por el parser raylang) se ejecutan con el crate
         // `regex` de ray-runtime — la validación y sus errores siguen siendo los de std/regex
@@ -3387,6 +3395,7 @@ impl Transpiler {
                     "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos"
                     | "std::time::local_offset_ms" | "std::random::below" | "std::ffi::errno" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
+                    "std::ffi::library_available" => return Ok(Type::Bool),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
                     "std::net::set_read_timeout" | "std::net::set_nodelay" | "std::net::set_keepalive" => return Ok(Type::Unit),

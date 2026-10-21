@@ -39,19 +39,20 @@ fn three_engines(dir: &PathBuf, want: &str) {
     }
 }
 
-/// rayffi #215 (M417): un nombre para OTRA plataforma no afecta al sistema en curso (`"m"` sigue
-/// siendo libm aquí, aunque Windows diga `ucrtbase`); `blocking` convive con los nombres;
-/// `ffi.library_available` responde sin llamar a nada (`m` y `c` siempre; una inexistente, `false`).
+/// rayffi #215 (M417): el sistema en curso usa SU nombre (aquí el mismo `m`/`c`, dado explícito
+/// para macOS y Linux) y un nombre para otra plataforma (`freebsd "nosuch"`) no le afecta; `blocking`
+/// convive con los nombres; `ffi.library_available` responde sin llamar a nada (`m` y `c` siempre;
+/// una inexistente, `false`). En Windows no hay nombres propios: rige el general (`m` → la CRT).
 #[test]
 fn platform_library_names_and_library_available_on_all_engines() {
     let d = tmp("ffi_platform");
     std::fs::write(
         d.join("prog.ray"),
         r#"import std/ffi;
-extern "m" windows "ucrtbase" {
+extern "m" macos "m" linux "m" freebsd "nosuch_m" {
     fn sqrt(x: float) -> float;
 }
-extern "c" windows "ucrtbase" blocking {
+extern "c" freebsd "nosuch_c" blocking {
     fn abs(n: int) -> int;
 }
 fn main() -> int {

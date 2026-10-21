@@ -18499,6 +18499,12 @@ the process either`, con la posición de la llamada como todo error de ejecució
 error en la primera llamada —resolver al cargar el programa cambiaría la semántica de un `extern`
 que no se usa—; `library_available` es la forma de preguntar antes.
 
+**Verificado en Windows** (VM arm64): `extern "m" windows "ucrtbase"` elige `ucrtbase` y la VM lo
+carga como `ucrtbase.dll`; `library_available("m")`/`("c")` dicen `true` y una inexistente `false`;
+la biblioteca ausente se reporta con los nombres probados (`nosuchlib.dll, libnosuchlib.dll,
+nosuchlib`). Nota para el nativo en Windows: el nombre es el de la biblioteca de **importación**
+(`zlib1` → `zlib1.lib`; la CRT es `ucrt`, no `ucrtbase`) — lo mismo que exige `-l` en los demás.
+
 Tests: parser (nombres, desconocido, repetido), formateador (ida y vuelta, bloques distintos),
 transpilador (los `cfg_attr` y el helper), y `findings_1_27_72_cli` en los tres motores (un
 nombre para otra plataforma no afecta al sistema en curso; `library_available` con `m`, `c` y una

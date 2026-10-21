@@ -159,6 +159,12 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
     }
     // M312: un binario por suite, en un directorio temporal propio (se borra al terminar).
     let native_dir = native.as_ref().map(|_| std::env::temp_dir().join(format!("ray_test_native_{}", std::process::id())));
+    // M414 (raystat #207, nota): parar `ray test --native` (Ctrl-C, SIGTERM/CTRL_BREAK a su pid)
+    // debe llevarse al binario de prueba en curso, que de otro modo quedaba huérfano colgado.
+    // El mismo supervisor que `ray dev`: el handler reenvía el cierre al pid registrado y sale.
+    if native.is_some() {
+        crate::dev_host::install_cleanup_on_death(&TEST_CHILD);
+    }
     let multi_suite = suites.iter().filter(|s| !s.tests.is_empty()).count() > 1;
     let mut failures = 0;
     let mut ran = 0;
@@ -393,13 +399,7 @@ fn build_suite_binary(suite: &Suite, idx: usize, dir: &Path, opts: &crate::cli::
 /// devolvió `false`, 70 = error de ejecución (`runtime error: …` en stderr, sin posición: el
 /// nativo no lleva traza), 66 = nombre desconocido (no debería pasar). stdout pasa tal cual.
 fn run_one_native(binary: &Path, test: &Test) -> Result<(), Vec<String>> {
-    let output = match std::process::Command::new(binary)
-        .arg(&test.global)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
+    let output = match spawn_test_binary(binary, test) {
         Ok(o) => o,
         Err(e) => return Err(vec![format!("could not run the test binary '{}': {e}", binary.display())]),
     };
@@ -433,6 +433,34 @@ fn run_one_native(binary: &Path, test: &Test) -> Result<(), Vec<String>> {
             Err(lines)
         }
     }
+}
+
+/// M414: pid del binario de prueba en curso (0 = ninguno), que lee el handler de cierre del
+/// supervisor (`dev_host::install_cleanup_on_death`) para arrastrarlo al parar `ray test`.
+static TEST_CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Lanza el binario de una prueba como hijo SUPERVISADO (grupo de consola propio y Job Object en
+/// Windows; pid registrado en `TEST_CHILD` mientras corre) y recoge su stderr y su estado — lo
+/// que antes hacía `Command::output`, pero sin dejarlo huérfano si paran a `ray test` entre medias.
+fn spawn_test_binary(binary: &Path, test: &Test) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering;
+    let mut cmd = std::process::Command::new(binary);
+    cmd.arg(&test.global)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped());
+    crate::dev_host::prepare(&mut cmd);
+    let mut child = cmd.spawn()?;
+    crate::dev_host::adopt(&child);
+    TEST_CHILD.store(child.id() as i32, Ordering::SeqCst);
+    let mut stderr = Vec::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_end(&mut stderr);
+    }
+    let status = child.wait();
+    TEST_CHILD.store(0, Ordering::SeqCst);
+    Ok(std::process::Output { status: status?, stdout: Vec::new(), stderr })
 }
 
 /// El cuerpo del `main` sintético de una prueba (compartido por la VM y el nativo).

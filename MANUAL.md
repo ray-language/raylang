@@ -3035,7 +3035,9 @@ cada prueba corre como un proceso aparte (aislada, como en la VM). El informe y 
 salida son los mismos; la única diferencia es que un fallo no trae la línea `at módulo:línea:col`
 (el nativo no lleva traza). Honra `[native] without`, los assets embebidos y `[app]` del
 proyecto; `--release` usa el perfil optimizado. Úsalo en CI junto al `ray test` normal: es la
-forma de cazar una divergencia VM/nativo antes de que la vea un usuario del binario.
+forma de cazar una divergencia VM/nativo antes de que la vea un usuario del binario. Parar el
+runner (Ctrl-C, o SIGTERM a su pid) termina también el binario de prueba en curso: una prueba
+colgada no deja un proceso huérfano.
 
 ### Templates compilados (`.ray.html`)
 

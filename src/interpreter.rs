@@ -2954,6 +2954,10 @@ impl<'a> Interpreter<'a> {
             "__ffi_errno" => Value::Int(crate::ffi::errno()),
             "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
             "__monotonic_nanos" => Value::Int(crate::builtins::monotonic_nanos()),
+            "__local_offset" => match &values[0] {
+                Value::Int(ms) => Value::Int(crate::builtins::local_offset_ms(*ms)),
+                _ => unreachable!("the checker guarantees an int"),
+            },
             "__sleep" => match &values[0] {
                 Value::Int(ms) => {
                     crate::builtins::sleep_millis(*ms);

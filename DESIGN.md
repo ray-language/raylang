@@ -18404,3 +18404,55 @@ línea; `findings_1_27_70_cli` cubre cortes arbitrarios, tope por push, `stream_
 **Medido** (un stream zlib de 2000 mensajes con `Z_SYNC_FLUSH`, 387 KB → 2,8 MB, pushes de 4 KiB):
 VM 2140 ms → 16 ms; nativo 169 ms → 23 ms. PERFORMANCE §22.
 
+## 388. M416 — hora local del sistema: `time.local_offset_ms`, la zona del SO en `tz` y el solape horario de `cron/local` (rayzip #200, raycron #202; oct 2026)
+
+Dos apps chocaron con el mismo muro desde lados distintos. rayzip (#200) escribe la hora DOS de
+cada entrada, que es hora local; en macOS y Linux la saca de `tz.system()`, pero en Windows `tz`
+no tiene de dónde leer (`/usr/share/zoneinfo` no existe) y `std/time` solo sabe UTC, así que el
+zip salía con tres horas de desfase en la VM de Chile. raycron (#202) quería «a las 9» en hora
+local y encontró `cron/local` (M86b) con una política de otoño distinta de la suya.
+
+**La decisión de fondo: `std/time` sigue siendo UTC, pero pregunta al SO.** `DateTime` no gana un
+offset ni `std/time` una base de zonas (eso es el paquete `tz`, IDEAS §42): lo que faltaba era el
+PRIMITIVO que todo SO tiene y raylang no exponía — el desplazamiento de la zona local en un
+instante. `__local_offset(ms)` (un opcode, `LocalOffset`) lo pide a `localtime_r` en unix (con
+`tzset` antes, así honra `TZ`, lo que además lo hace testeable: `TZ=Europe/Madrid` y
+`TZ=America/Santiago` dan los offsets de enero y julio con su DST en los tres motores) y en
+Windows convierte el instante con `SystemTimeToTzSpecificLocalTime` (la zona activa y sus reglas
+de DST; `FILETIME` ↔ epoch con el desfase de 1601). `std/time` lo envuelve como
+`local_offset_ms(instant_ms)` y añade `to_local(ms)`/`now_local()` como vistas civiles (un
+`DateTime` plano: el usuario sabe que es local porque lo pidió así). El transpilador intercepta
+`std::time::local_offset_ms` como a `now`/`sleep` y emite el mismo código Rust que `builtins`
+(`__ray_local_offset_ms`, bajo `needs_local_offset`); el resto de la superficie es raylang puro
+que llama a esa función, así que no hay más cruces.
+
+**`tz.system()` deja de fallar.** En vez de la tabla CLDR `windowsZones.xml` (nombre de Windows →
+IANA), que habría dado un nombre sin TZif que leer, `tz` gana una `Zone` respaldada por el SO
+(`from_os()`, campo `os`): `offset_at` delega en `time.local_offset_ms`, `abbrev_at` da
+`UTC±HH:MM`, `is_dst_at` compara con el offset de medio año antes y después, y `to_utc` funciona
+tal cual — ya estaba escrito sobre `offset_at` con candidatos a un día de distancia, así que
+`Gap`/`Ambiguous` salen igual que con un TZif (verificado: con `TZ=Europe/Madrid`, el 29-03 02:30
+es `Gap` y el 25-10 02:30 es `Ambiguous` con una hora de separación). `system()` prueba `TZ`,
+`/etc/localtime` y cae a `from_os()`: siempre `Ok`. `load(name)` en Windows sigue siendo `Err`
+honesto. La tabla CLDR queda para cuando alguien necesite nombres IANA en Windows; hoy nadie los
+pidió.
+
+**El solape de otoño en `cron/local`.** La política de M86b (primera ocurrencia, siempre) es la
+correcta para «a las 2:30» —un evento del día— y la incorrecta para «cada hora», donde deja un
+hueco de dos horas reales la noche del cambio. La de raycron distingue ambas y se adopta:
+`every_hour(s)` (el campo hora es `*`) dispara también en la segunda pasada. La implementación no
+podía ser «en `Ambiguous`, devolver `b` si `a` pasó»: tras disparar en `a`, el cursor civil
+(`ms + offset_at(ms)`) ya está más allá de la hora repetida y el matcher nunca la vuelve a ver. Por
+eso `next_after_in` hace la búsqueda normal y, solo para schedules horarios y solo si el offset
+dentro de tres horas es MENOR que el actual (vamos hacia un retraso del reloj), una segunda
+búsqueda con el cursor civil retrasado al offset de después del cambio, acotada al tramo entre los
+dos cursores y aceptando únicamente segundas ocurrencias (`Ambiguous(_, b)` con `b > ms`); gana la
+más temprana. El test de `cron_cli` lo fija con el fixture de Madrid: `0 * * * *` da 00:00Z (02:00
+CEST), 01:00Z (02:00 CET), 02:00Z, 03:00Z; `0 2 * * *` sigue dando solo la primera.
+
+**Verificado en Windows** (VM arm64, zona «Pacific SA Standard Time»): `time.local_offset_ms` da
+−3 h en enero y −4 h en julio (el DST de Chile), `tz.system()` resuelve a la zona del SO y
+`to_utc` responde `Single` fuera de los cambios, en la VM y en el binario nativo arm64.
+
+`tz` y `cron` pasan a 0.2.0 (campo nuevo en `Zone`, función nueva, política afinada).
+

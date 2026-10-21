@@ -808,6 +808,9 @@ pub enum OpCode {
     /// No saca nada; empuja los nanosegundos del mismo reloj monótono (`int`, misma ancla que
     /// `Monotonic`). Builtin `monotonic_nanos`.
     MonotonicNanos,
+    /// Saca `ms` (int, epoch-ms UTC); empuja el desplazamiento de la zona horaria LOCAL del
+    /// sistema en ese instante, en ms (DST incluido). Builtin `__local_offset` (M416).
+    LocalOffset,
     /// Saca `ms` (int); duerme el hilo ese tiempo y empuja unit. Builtin `sleep`.
     Sleep,
     /// No saca nada; empuja un `float` en `[0, 1)`. Builtin `random`.

@@ -325,7 +325,12 @@ documentada:
   la Console API declarada a mano: `GetConsoleMode`/`SetConsoleMode` (u32 propios),
   `GetConsoleScreenBufferInfo` y `PeekConsoleInputW` sobre estructuras `repr(C)` propias con el
   layout de wincon.h, `ReadConsoleW`/`ReadFile`/`PeekNamedPipe` sobre buffers propios cuyo tamaño
-  viaja en la llamada, y `atexit` del CRT para restaurar los modos.
+  viaja en la llamada, y `atexit` del CRT para restaurar los modos. M416 (`time.local_offset_ms`):
+  `tzset` + `localtime_r` sobre un `struct tm` propio con el layout común de glibc/musl/bionic/BSD/
+  Darwin (los nueve `int` y detrás `tm_gmtoff`/`tm_zone`) y un `time_t` propio; en Windows
+  `FileTimeToSystemTime`/`SystemTimeToTzSpecificLocalTime`/`SystemTimeToFileTime` sobre
+  `SYSTEMTIME`/`FILETIME` `repr(C)` propios (zona nula = la activa). El binario nativo emite el
+  mismo código (`__ray_local_offset_ms`).
 - **`src/vm/stop.rs`** — la parada cooperativa de la VM (M330 D1): un *self-pipe* propio
   (`pipe`/`fcntl` no bloqueante + `FD_CLOEXEC` al crearlo; `write` de un octeto y `read` hasta EAGAIN
   sobre esos fds, buffers propios que la llamada no retiene), el mismo patrón que el canal de

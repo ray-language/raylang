@@ -17,7 +17,10 @@ match (tz.to_utc(mad, civil)) {               // la inversa NO es total (DST):
 }
 ```
 
-- **Windows**: sin zoneinfo, `load` devuelve `Err` claro (UTC de `std/time` sigue).
+- **Windows**: sin zoneinfo, `load(name)` devuelve `Err` claro; pero `system()` SIEMPRE resuelve:
+  `TZ`, `/etc/localtime` y, si no hay TZif, la **zona del sistema operativo** (`from_os()`, 0.2.0):
+  offsets por `time.local_offset_ms` (la zona activa de Windows con su DST), `to_utc` con
+  `Gap`/`Ambiguous` igual, nombre `system` y abreviaturas `UTC±HH:MM`.
 - **M85b**: pasado el horizonte de transiciones explícitas rigen las **reglas perpetuas
   del footer** TZ-string (`CET-1CEST,M3.5.0,M10.5.0/3`; solo la forma `Mm.w.d[/hora]`,
   la que emite zic — un footer no soportado degrada a extrapolar el último tipo).

@@ -4694,6 +4694,10 @@ impl<'a> Vm<'a> {
                 OpCode::FfiErrno => self.push(HeapValue::Int(crate::ffi::errno())),
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
                 OpCode::MonotonicNanos => self.push(HeapValue::Int(crate::builtins::monotonic_nanos())),
+                OpCode::LocalOffset => match self.pop() {
+                    HeapValue::Int(ms) => self.push(HeapValue::Int(crate::builtins::local_offset_ms(ms))),
+                    _ => unreachable!("the checker guarantees an int"),
+                },
                 OpCode::Sleep => match self.pop() {
                     HeapValue::Int(ms) => {
                         // M57.2: dormir es COOPERATIVO — la fibra se aparca con un deadline sin fd

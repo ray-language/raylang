@@ -120,6 +120,8 @@ struct Transpiler {
     /// ¿Usa `std::time::monotonic`/`std::random::*`? Si es cierto, se anexa el PRNG (SplitMix64) + el
     /// reloj monotónico (necesitan estado global; `now`/`sleep` son inline y no lo activan).
     needs_time_rng: bool,
+    /// M416: el programa usa `std::time::local_offset_ms` → helper `__ray_local_offset_ms`.
+    needs_local_offset: bool,
     /// ¿Usa `std::ffi::errno`? Se anexa el helper `__ray_ffi_errno` (lectura del errno del hilo).
     pub(super) needs_ffi_errno: bool,
     pub(super) needs_fs_meta: bool,
@@ -397,6 +399,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_stdin: false,
         needs_term: false,
         needs_time_rng: false,
+        needs_local_offset: false,
         needs_ffi_errno: false,
         needs_fs_meta: false,
         needs_rt_watch: false,

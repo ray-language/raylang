@@ -517,7 +517,7 @@ impl Parser {
             let os_tok = self.advance();
             let os = match &os_tok.kind {
                 TokenKind::Ident(s) => s.clone(),
-                _ => unreachable!(),
+                _ => crate::ice!("the extern platform word was peeked as an identifier"),
             };
             if !PLATFORMS.contains(&os.as_str()) {
                 return Err(ParseError {
@@ -532,7 +532,7 @@ impl Parser {
                 });
             }
             let name_tok = self.advance();
-            let TokenKind::Str(name) = &name_tok.kind else { unreachable!() };
+            let TokenKind::Str(name) = &name_tok.kind else { crate::ice!("the extern platform name was peeked as a string") };
             libs.push((os, name.clone()));
         }
         let blocking = matches!(&self.peek().kind, TokenKind::Ident(s) if s == "blocking");

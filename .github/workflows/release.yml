@@ -13,6 +13,12 @@ on:
   push:
     tags: ["v[0-9]*"]
 
+# Un mismo tag ha disparado DOS runs a 1,5 s (v1.27.23, v1.27.66): el segundo corre en cola, no en
+# paralelo (sin cancelar al primero, que está subiendo assets).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   RAYLANG_RELEASE_BUILD: "1"
@@ -30,12 +36,17 @@ jobs:
       - name: Crear la Release (idempotente)
         env:
           GH_TOKEN: ${{ github.token }}
+        # Tolera la carrera de dos runs del mismo tag: si el `create` falla con 422 («tag_name
+        # already exists») porque el otro run se adelantó, la Release está y se sigue (los assets
+        # se suben con --clobber).
         run: |
-          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 \
-            || gh release create "${{ github.ref_name }}" \
-                 --repo "${{ github.repository }}" \
-                 --title "raylang ${{ github.ref_name }}" \
-                 --generate-notes
+          exists() { gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; }
+          exists && exit 0
+          gh release create "${{ github.ref_name }}" \
+               --repo "${{ github.repository }}" \
+               --title "raylang ${{ github.ref_name }}" \
+               --generate-notes \
+            || { sleep 5; exists; }
 
   # M171 (IDEAS §85): el vendor de las dependencias de `ray-runtime` (todas las features + su
   # Cargo.lock), para que `ray toolchain install` deje al equipo listo para `ray build --native`

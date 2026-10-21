@@ -10,41 +10,55 @@ import std/collections/bytesbuilder;
 import std/inflate;
 from std/collections/bytesbuilder import BytesBuilder;
 
+/// Signature of a local file header.
 pub const LOCAL_SIG: int = 0x04034B50;
 
+/// Signature of a central directory header.
 pub const CENTRAL_SIG: int = 0x02014B50;
 
+/// Signature of the end of central directory record.
 pub const EOCD_SIG: int = 0x06054B50;
 
+/// Signature of the ZIP64 end of central directory record.
 pub const ZIP64_EOCD_SIG: int = 0x06064B50;
 
+/// Signature of the ZIP64 end of central directory locator.
 pub const ZIP64_LOCATOR_SIG: int = 0x07064B50;
 
+/// Fixed length of a local file header (before name and extra fields).
 pub const LOCAL_LEN: int = 30;
 
+/// Fixed length of a central directory header (before name, extra and comment).
 pub const CENTRAL_LEN: int = 46;
 
+/// Fixed length of the end of central directory record (before the comment).
 pub const EOCD_LEN: int = 22;
 
+/// Length of the ZIP64 end of central directory record this package writes.
 pub const ZIP64_EOCD_LEN: int = 56;
 
+/// Length of the ZIP64 end of central directory locator.
 pub const ZIP64_LOCATOR_LEN: int = 20;
 
 /// Compression methods: 0 = stored, 8 = deflate (the only two this package reads and writes).
 pub const STORED: int = 0;
 
+/// Compression method 8: deflate.
 pub const DEFLATED: int = 8;
 
 /// General-purpose flags: encrypted, sizes in a trailing data descriptor, UTF-8 name.
 pub const FLAG_ENCRYPTED: int = 1;
 
+/// General-purpose flag: sizes and CRC follow the data in a descriptor.
 pub const FLAG_DESCRIPTOR: int = 8;
 
+/// General-purpose flag: the name and comment are UTF-8.
 pub const FLAG_UTF8: int = 0x800;
 
 /// A 32-bit field at this value (16-bit: 0xFFFF) means "see the ZIP64 record".
 pub const MAX32: int = 0xFFFFFFFF;
 
+/// A 16-bit field at this value means "see the ZIP64 record".
 pub const MAX16: int = 0xFFFF;
 
 const EXTRA_ZIP64: int = 0x0001;
@@ -65,33 +79,40 @@ const S_IFLNK: int = 0xA000;
 
 // --- Enteros little-endian: ZIP es little-endian de principio a fin. ---
 
+/// Appends `v` as one little-endian byte.
 pub fn put_u8(b: BytesBuilder, v: int) {
     bytesbuilder.push_byte(b, v & 0xFF);
 }
 
+/// Appends `v` as a 16-bit little-endian integer.
 pub fn put_u16(b: BytesBuilder, v: int) {
     bytesbuilder.push_byte(b, v & 0xFF);
     bytesbuilder.push_byte(b, (v >> 8) & 0xFF);
 }
 
+/// Appends `v` as a 32-bit little-endian integer.
 pub fn put_u32(b: BytesBuilder, v: int) {
     put_u16(b, v & 0xFFFF);
     put_u16(b, (v >> 16) & 0xFFFF);
 }
 
+/// Appends `v` as a 64-bit little-endian integer.
 pub fn put_u64(b: BytesBuilder, v: int) {
     put_u32(b, v & 0xFFFFFFFF);
     put_u32(b, (v >> 32) & 0xFFFFFFFF);
 }
 
+/// The 16-bit little-endian integer at `b[i..i+2]`.
 pub fn u16_at(b: bytes, i: int) -> int {
     b[i] | (b[i + 1] << 8)
 }
 
+/// The 32-bit little-endian integer at `b[i..i+4]`.
 pub fn u32_at(b: bytes, i: int) -> int {
     u16_at(b, i) | (u16_at(b, i + 2) << 16)
 }
 
+/// The 64-bit little-endian integer at `b[i..i+8]`.
 pub fn u64_at(b: bytes, i: int) -> int {
     u32_at(b, i) | (u32_at(b, i + 4) << 32)
 }
@@ -126,10 +147,12 @@ pub fn permissions(e: Entry) -> int {
     e.mode & 0o777
 }
 
+/// A directory st_mode with the permission bits `perm`.
 pub fn dir_mode(perm: int) -> int {
     S_IFDIR | perm
 }
 
+/// A regular-file st_mode with the permission bits `perm`.
 pub fn file_mode(perm: int) -> int {
     S_IFREG | perm
 }

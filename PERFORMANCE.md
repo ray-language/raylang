@@ -2576,3 +2576,21 @@ reactor único). Test: `the_poller_timeout_rounds_up_and_ignores_cancelled_deadl
 
 **Por qué el modo compartido no lo sufría tanto** no quedó medido: el hilo reactor pasa por el mismo
 cálculo. Lo que sí: con el arreglo los dos modos quedan iguales en CPU y el local despacha lo mismo.
+
+## 22. M415 (oct 2026): el inflate incremental al runtime — rayzip #189
+
+`stream_push` de `std/inflate` era raylang puro (el port de `puff.c`, M193) mientras `inflate_raw`
+ya pasaba por miniz (M253). rayzip lo midió en 15× (nativo) y 1350× (VM) respecto a `inflate_raw`.
+M415 le da al stream un `InflateState` de miniz por handle (DESIGN §387). Banco: un stream zlib de
+2000 mensajes terminados en `Z_SYNC_FLUSH` (387 KB comprimidos, 2,8 MB en claro), alimentado en
+pushes de 4 KiB, Mac M-series, `ray run` y `ray build --native`:
+
+| | antes (raylang) | M415 (runtime) |
+|---|---|---|
+| VM | 2140 ms | 16 ms |
+| nativo | 169 ms | 23 ms |
+
+El nativo queda por detrás de la VM por la concatenación `out = out + b` del banco (una copia por
+push sobre `Rc<[u8]>`), no por el decodificador. Sin `deflate` en el build el camino raylang sigue
+siendo el de siempre.
+

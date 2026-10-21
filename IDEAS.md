@@ -4264,7 +4264,7 @@ paquetes:
    compara estructuralmente un tipo con `impl Eq` distinto cambiaría), bajada `a == b` →
    `a.eq(b)` en el checker cuando el tipo tiene impl de usuario, `contains` con el diccionario, y
    `==` sobre `T: Eq`. Impacto: **alto** (semántica de un operador); decisión del usuario.
-2. **Inflate incremental en el runtime** (rayzip #189): `stream_push` es raylang puro, 15× más lento
+2. ✅ EJECUTADA como M415 (DESIGN §387, 1.27.70). **Inflate incremental en el runtime** (rayzip #189): `stream_push` es raylang puro, 15× más lento
    que `inflate_raw` en nativo y 1350× en la VM. Un `InflateState` de miniz por handle exige
    liberarlo (`stream_close`) — los streams de un servidor WebSocket viven una sesión entera, y sin
    destructores un handle olvidado es memoria perdida. Diseño: handle explícito + liberación al

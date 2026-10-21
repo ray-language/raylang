@@ -2,7 +2,8 @@
 // escrita EN raylang: bit-stream sobre `bytes` + los operadores bit a bit (M19.3a). M253: `inflate_raw`
 // (y sus formas `_limit`) y `crc32` prueban PRIMERO la primitiva del runtime (`__deflate_op`,
 // miniz_oxide); cuando no está, o el stream es inválido, responde el código de abajo — así los mensajes
-// de error siguen siendo los de siempre. El modo incremental (`inflate_stream`) es solo raylang.
+// de error siguen siendo los de siempre. M415 (rayzip #189): el modo incremental (`inflate_stream`)
+// también usa el runtime cuando está (un `InflateState` por handle, ver abajo).
 // Importable: `from inflate import inflate_raw, gunzip, zlib_inflate, crc32;`.
 //
 // Es el algoritmo más complejo de la stdlib de raylang: decodificación Huffman canónica + referencias
@@ -777,6 +778,10 @@ fn window_size() -> int {
 // referencias hacia atrás del siguiente bloque pueden apuntar. `pending`: la entrada aún no
 // consumida; `bitpos`: el bit del primer octeto de `pending` por el que se sigue (un bloque puede
 // terminar a mitad de octeto). `header`: `true` mientras falte consumir la cabecera zlib.
+// M415 (rayzip #189): `handle` > 0 es un stream del runtime (`__deflate_op("stream_*")`, miniz): el
+// estado vive allí y `window`/`bitpos` no se usan; `pending` guarda solo la cabecera zlib a medias y,
+// al terminar, lo que seguía al bloque final. `handle` = 0 es el decodificador raylang de abajo
+// (builds sin `deflate`, wasm).
 pub struct InflateStream {
     window: [int],
     pending: bytes,
@@ -785,13 +790,43 @@ pub struct InflateStream {
     finished: bool,
     failed: Option<string>,
     limit: int,
+    handle: int,
+}
+
+// Los 8 primeros octetos de `b`, big-endian, como entero.
+fn be64(b: bytes) -> int {
+    var n = 0;
+    var i = 0;
+    while (i < 8) {
+        n = n << 8 | b[i];
+        i = i + 1;
+    }
+    n
+}
+
+fn be64_bytes(n: int) -> bytes {
+    bytes_of(
+        [
+            (n >> 56) & 255,
+            (n >> 48) & 255,
+            (n >> 40) & 255,
+            (n >> 32) & 255,
+            (n >> 24) & 255,
+            (n >> 16) & 255,
+            (n >> 8) & 255,
+            n & 255
+        ]
+    )
 }
 
 /// Creates an incremental decoder for a raw DEFLATE stream (RFC 1951, no wrapper). Feed it with
-/// `stream_push`; each call returns the bytes produced by the blocks completed so far. The LZ77
-/// window (32 KiB) survives across calls, so a protocol that keeps one stream open for a whole
-/// session (RFB ZRLE/Zlib/Tight, WebSocket permessage-deflate) decodes message by message.
+/// `stream_push`; each call returns the bytes decoded so far. The LZ77 window (32 KiB) survives
+/// across calls, so a protocol that keeps one stream open for a whole session (RFB ZRLE/Zlib/Tight,
+/// WebSocket permessage-deflate) decodes message by message. The decoder state is released when the
+/// stream ends or fails; a session stream abandoned midway should be `stream_close`d.
 pub fn inflate_stream() -> InflateStream {
+    let fast = __deflate_op("stream_new", b"", 0);
+    let handle = if (fast.len() == 1) { be64(fast[0]) } else { 0 };
     InflateStream {
         window: [],
         pending: b"",
@@ -799,8 +834,21 @@ pub fn inflate_stream() -> InflateStream {
         header: false,
         finished: false,
         failed: Option.None,
-        limit: default_limit()
+        limit: default_limit(),
+        handle: handle
     }
+}
+
+/// Releases the decoder state of a stream that will not be fed any more (a session that ended
+/// before its final block). Further `stream_push` calls return empty output. A stream that reached
+/// its final block or failed has already been released; closing it again is harmless.
+pub fn stream_close(z: InflateStream) {
+    if (z.handle > 0) {
+        let _ = __deflate_op("stream_close", b"", z.handle);
+        z.handle = 0;
+    }
+    z.finished = true;
+    z.window = [];
 }
 
 /// Like `inflate_stream`, for a zlib stream (RFC 1950): the 2-byte header is consumed first (FDICT
@@ -827,10 +875,10 @@ fn is_truncation(msg: string) -> bool {
     msg.contains("truncated")
 }
 
-/// Feeds `chunk` to the incremental decoder and returns the bytes produced by every block that
-/// completed with the input available so far (possibly empty: the block needs more input). Input
-/// may be split at any byte boundary, even inside a block. A corrupt stream returns `Err` and the
-/// stream stays failed; after the final block, further input is ignored.
+/// Feeds `chunk` to the incremental decoder and returns the bytes decoded with the input available
+/// so far (possibly empty: more input is needed). Input may be split at any byte boundary, even
+/// inside a block. A corrupt stream returns `Err` and the stream stays failed; after the final
+/// block, further input is ignored.
 pub fn stream_push(z: InflateStream, chunk: bytes) -> Result<bytes, string> {
     match (z.failed) {
         Option.Some(e) => {
@@ -857,6 +905,9 @@ pub fn stream_push(z: InflateStream, chunk: bytes) -> Result<bytes, string> {
         }
         z.pending = z.pending.sub_bytes(2, z.pending.len());
         z.header = false;
+    }
+    if (z.handle > 0) {
+        return stream_push_fast(z);
     }
     // La ventana entra como salida ya emitida (las referencias hacia atrás la alcanzan); lo nuevo
     // se acumula detrás. El tope de salida es por `push`, sin contar la ventana.
@@ -925,6 +976,43 @@ pub fn stream_push(z: InflateStream, chunk: bytes) -> Result<bytes, string> {
         z.bitpos = 0;
     }
     Result.Ok(bytes_of(produced))
+}
+
+// M415: el push sobre el stream del runtime. `data` = tope de este push (8 BE) + toda la entrada
+// pendiente; la respuesta trae el estado, cuánto consumió y lo producido. El runtime libera el
+// handle al terminar o fallar; aquí se refleja (`handle` = 0) para que `stream_close` no lo repita.
+fn stream_push_fast(z: InflateStream) -> Result<bytes, string> {
+    let limit = if (z.limit < 0) { 0 } else { z.limit };
+    let input = z.pending;
+    z.pending = b"";
+    let fast = __deflate_op("stream_push", be64_bytes(limit) + input, z.handle);
+    if (fast.len() != 1) {
+        // El handle ya no existe (no debería pasar): el stream queda inutilizable, no corrupto.
+        z.handle = 0;
+        z.finished = true;
+        return Result.Ok(b"");
+    }
+    let r = fast[0];
+    let status = r[0];
+    let used = be64(r.sub_bytes(1, 9));
+    let produced = r.sub_bytes(9, r.len());
+    if (status == 0) {
+        return Result.Ok(produced);
+    }
+    z.handle = 0;
+    if (status == 1) {
+        z.finished = true;
+        // rayzip #191: lo que seguía al bloque final (`stream_remaining`).
+        z.pending = input.sub_bytes(used, input.len());
+        return Result.Ok(produced);
+    }
+    let msg = if (status == 3) {
+        "decompressed output exceeds the limit (possible decompression bomb)"
+    } else {
+        "corrupt DEFLATE stream"
+    };
+    z.failed = Option.Some(msg);
+    Result.Err(msg)
 }
 
 /// After the final block (`stream_finished(z)`), the input bytes that followed it in the chunks

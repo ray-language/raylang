@@ -30,8 +30,9 @@ zip.close(a);
 
 - **Opciones** (`zip.create_with(path, zip.Options { level, deflate_limit, clock })`;
   `zip.options()` da los defaults): nivel 1–9 (0 = todo stored), tamaño a partir del cual
-  `add_file` almacena por trozos (512 MiB), y el reloj de las fechas DOS — `dostime.local()` (la
-  hora local del sistema, como `zip` y el Explorador) o `dostime.utc()` (archivos reproducibles).
+  `add_file` almacena por trozos (512 MiB), y el reloj de las fechas DOS — `zip.dostime_local()`
+  (la hora local del sistema, como `zip` y el Explorador) o `zip.dostime_utc()` (archivos
+  reproducibles, los mismos octetos en cualquier máquina).
 - **Entradas** (`zip.Entry`, de `zip/format`): `name`, `size`, `compressed`, `method` (0 stored, 8
   deflate), `crc`, `offset`, `mode`, `is_dir`; `format.is_symlink(e)`, `format.permissions(e)`;
   `zip.mtime_ms(e)` (el campo extendido UT en UTC si lo hay; si no, la fecha DOS en hora local).

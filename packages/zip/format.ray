@@ -98,7 +98,7 @@ pub fn u64_at(b: bytes, i: int) -> int {
 
 /// One entry as the central directory describes it. `name` uses `/` separators (a directory
 /// ends in `/`); `size` is uncompressed, `compressed` what the archive holds; `offset` is the
-/// local header's position; `dos_time`/`dos_date` the MS-DOS timestamp (local time, 2-second
+/// local header's position; `msdos_time`/`msdos_date` the MS-DOS timestamp (local time, 2-second
 /// resolution) and `unix_time` the extended-timestamp field (UTC seconds) when the archive has it;
 /// `mode` the Unix st_mode (0 when the creator was not Unix).
 pub struct Entry {
@@ -109,8 +109,8 @@ pub struct Entry {
     compressed: int,
     size: int,
     offset: int,
-    dos_time: int,
-    dos_date: int,
+    msdos_time: int,
+    msdos_date: int,
     unix_time: Option<int>,
     mode: int,
     is_dir: bool,
@@ -176,8 +176,8 @@ pub fn local_header(e: Entry) -> bytes {
     put_u16(b, version_needed(e));
     put_u16(b, e.flags);
     put_u16(b, e.method);
-    put_u16(b, e.dos_time);
-    put_u16(b, e.dos_date);
+    put_u16(b, e.msdos_time);
+    put_u16(b, e.msdos_date);
     put_u32(b, e.crc);
     put_u32(b, if (z64) { MAX32 } else { e.compressed });
     put_u32(b, if (z64) { MAX32 } else { e.size });
@@ -217,8 +217,8 @@ pub fn central_header(e: Entry) -> bytes {
     put_u16(b, version_needed(e));
     put_u16(b, e.flags);
     put_u16(b, e.method);
-    put_u16(b, e.dos_time);
-    put_u16(b, e.dos_date);
+    put_u16(b, e.msdos_time);
+    put_u16(b, e.msdos_date);
     put_u32(b, e.crc);
     put_u32(b, clamp32(e.compressed));
     put_u32(b, clamp32(e.size));
@@ -375,8 +375,8 @@ pub fn central_entries(cd: bytes, count: int) -> Result<[Entry], string> {
             compressed: u32_at(cd, p + 20),
             size: u32_at(cd, p + 24),
             offset: u32_at(cd, p + 42),
-            dos_time: u16_at(cd, p + 12),
-            dos_date: u16_at(cd, p + 14),
+            msdos_time: u16_at(cd, p + 12),
+            msdos_date: u16_at(cd, p + 14),
             unix_time: Option.None,
             mode: mode,
             is_dir: name.ends_with("/") || name.ends_with("\\") || (external & 0x10) == 0x10

@@ -4269,7 +4269,7 @@ paquetes:
    liberarlo (`stream_close`) — los streams de un servidor WebSocket viven una sesión entera, y sin
    destructores un handle olvidado es memoria perdida. Diseño: handle explícito + liberación al
    terminar el stream + el respaldo raylang actual para `--without deflate`.
-3. **`std/zip` completo** (rayzip #193): lector sobre un handle de archivo (directorio central desde
+3. ✅ EJECUTADA como M419 (DESIGN §391, 1.27.72; paquete `zip` 0.1.0). **`std/zip` completo** (rayzip #193): lector sobre un handle de archivo (directorio central desde
    la cola, entradas por streaming, ZIP64) y escritor. rayzip ya tiene ~940 líneas que lo hacen;
    lo natural es un paquete `zip` a partir de ellas más que crecer la stdlib.
 4. ✅ EJECUTADA como M416 (DESIGN §388, 1.27.71; `tz`/`cron` 0.2.0). **Hora local** (rayzip #200, raycron #202): `time.local_offset_ms(instant_ms)` (localtime_r /

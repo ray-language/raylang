@@ -55,7 +55,7 @@ pub fn close(a: Archive) {
 }
 
 fn close_handle(h: int) {
-    close(h);
+    builtin.close(h);
 }
 
 /// The entries, in central-directory order.
@@ -83,7 +83,7 @@ pub fn find(a: Archive, name: string) -> Option<Entry> {
 pub fn mtime_ms(e: Entry) -> int {
     match (e.unix_time) {
         Option.Some(secs) => secs * 1000,
-        Option.None => dostime.decode(dostime.local(), e.dos_time, e.dos_date),
+        Option.None => dostime.decode(dostime.local(), e.msdos_time, e.msdos_date),
     }
 }
 
@@ -240,6 +240,16 @@ pub struct Options {
     clock: dostime.Clock,
 }
 
+/// The clock of `options()`: DOS timestamps in the system's local time (what `zip` does).
+pub fn dostime_local() -> dostime.Clock {
+    dostime.local()
+}
+
+/// A UTC clock for `Options.clock`: reproducible archives, the same bytes on every machine.
+pub fn dostime_utc() -> dostime.Clock {
+    dostime.utc()
+}
+
 /// The defaults: level 6, files over 512 MiB stored, timestamps in the system's local time.
 pub fn options() -> Options {
     Options { level: 6, deflate_limit: 512 * 1024 * 1024, clock: dostime.local() }
@@ -328,8 +338,8 @@ fn entry_for(w: Writer, name: string, size: int, mtime_ms: int, mode: int, is_di
         compressed: 0,
         size: size,
         offset: w.offset,
-        dos_time: t,
-        dos_date: d,
+        msdos_time: t,
+        msdos_date: d,
         unix_time: Option.Some(mtime_ms / 1000),
         mode: if (is_dir) { format.dir_mode(mode & 0o777) } else { format.file_mode(mode & 0o777) },
         is_dir: is_dir

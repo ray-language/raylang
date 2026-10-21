@@ -35,21 +35,21 @@ pub fn encode(c: Clock, ms: int) -> (int, int) {
     if (t.year > 2107) {
         return ((23 << 11) | (59 << 5) | 29, (127 << 9) | (12 << 5) | 31);
     }
-    let dos_time = (t.hour << 11) | (t.minute << 5) | (t.second / 2);
-    let dos_date = ((t.year - 1980) << 9) | (t.month << 5) | t.day;
-    (dos_time, dos_date)
+    let msdos_time = (t.hour << 11) | (t.minute << 5) | (t.second / 2);
+    let msdos_date = ((t.year - 1980) << 9) | (t.month << 5) | t.day;
+    (msdos_time, msdos_date)
 }
 
 /// The instant (epoch-ms) of a DOS (time, date) pair read in the clock's zone. A civil time that
 /// falls in a daylight-saving gap or overlap is read with the offset in force a day earlier.
-pub fn decode(c: Clock, dos_time: int, dos_date: int) -> int {
+pub fn decode(c: Clock, msdos_time: int, msdos_date: int) -> int {
     let civil = time.DateTime {
-        year: 1980 + (dos_date >> 9),
-        month: max_int((dos_date >> 5) & 15, 1),
-        day: max_int(dos_date & 31, 1),
-        hour: dos_time >> 11,
-        minute: (dos_time >> 5) & 63,
-        second: (dos_time & 31) * 2,
+        year: 1980 + (msdos_date >> 9),
+        month: max_int((msdos_date >> 5) & 15, 1),
+        day: max_int(msdos_date & 31, 1),
+        hour: msdos_time >> 11,
+        minute: (msdos_time >> 5) & 63,
+        second: (msdos_time & 31) * 2,
         weekday: 0
     };
     let naive = time.to_epoch_millis(civil);

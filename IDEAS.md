@@ -4258,7 +4258,7 @@ querrá las dos cosas; son independientes.
 M411 (DESIGN §383) arregló lo que era del lenguaje. Esto pide diseño, un paquete o una release de
 paquetes:
 
-1. ✅ EJECUTADA como M418 (DESIGN §390, 1.27.73; decisión del usuario, 21 oct 2026). **`==` despacha a `impl Eq`** (raydata #206). Hoy `==` es estructural por SPEC §7 y un `impl Eq`
+1. ✅ EJECUTADA como M418 (DESIGN §392, 1.27.73; decisión del usuario, 21 oct 2026). **`==` despacha a `impl Eq`** (raydata #206). Hoy `==` es estructural por SPEC §7 y un `impl Eq`
    a mano solo vale con `.eq()`. Rust, Swift y Kotlin hacen que `==` sea el `Eq` del tipo, y lo
    que espera quien escribe `impl Eq` es eso. Coste: cambio de semántica (un programa que hoy
    compara estructuralmente un tipo con `impl Eq` distinto cambiaría), bajada `a == b` →

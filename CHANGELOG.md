@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.73 — 2026-10-21
+
+- **`==`/`!=` despachan al `impl Eq` escrito a mano** (M418, raydata #206; cambio de semántica,
+  SPEC §7): sobre un struct o enum cuyo `impl Eq` escribió el programa, `a == b` es `a.eq(b)` y
+  `a != b` es `!a.eq(b)`; sobre un `T: Eq`, `a == b` compila y usa el bound. Un `@derive(Eq)`,
+  `Option`/`Result`, tuplas, arreglos y `contains` siguen siendo estructurales. Un programa con un
+  `impl Eq` a mano distinto de la igualdad estructural que comparara con `==` cambia de resultado
+  (es lo que la REFERENCE prometía hasta 1.27.66). La pista del `T` sin bound dice ahora «a type
+  parameter compares with == only under an Eq bound (fn f<T: Eq>)».
+- **Paquete `zip` 0.1.0** (M419, rayzip #193), publicado en el índice: lectura y escritura de ZIP
+  sobre un handle de archivo (ZIP64, entradas por trozos, hora local del sistema, modo Unix,
+  UTF-8/CP437), nacido del código de rayzip; `std/zip` sigue siendo el lector en memoria.
+
 ## 1.27.72 — 2026-10-21
 
 La FFI por plataforma (M417, rayffi #215).

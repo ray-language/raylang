@@ -18549,7 +18549,7 @@ con el paquete y con `std/zip` como lector independiente, `unzip -t` del sistema
 70 000 entradas (los registros ZIP64; `std/zip` los rechaza, el paquete los lee). El espejo del
 paquete (`ray registry mirror`) se publica como `zip` 0.1.0.
 
-## 390. M418 — `==` despacha al `impl Eq` escrito a mano (raydata #206, oct 2026)
+## 392. M418 — `==` despacha al `impl Eq` escrito a mano (raydata #206, oct 2026)
 
 raydata escribió un `impl Eq` (una igualdad por clave, no por todos los campos) y descubrió que
 `==` no lo miraba: SPEC §7 decía estructural y punto, y la REFERENCE prometía lo contrario. M411

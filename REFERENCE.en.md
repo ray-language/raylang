@@ -743,4 +743,4 @@ threads, one per core by default; `1` = deterministic. A network server with few
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:f516ac651e7e -->
+<!-- sync: sha256:e37e54b9a023 -->

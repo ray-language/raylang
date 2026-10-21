@@ -83,7 +83,7 @@ Reservadas (no pueden usarse como identificadores):
 | `+` | suma (int/float/u\*); **concatena** strings, bytes y arreglos; sobrecargable (trait `Add`) |
 | `-` | resta; negación unaria; sobrecargable (`Sub`/`Neg`) |
 | `*` `/` `%` | producto, cociente, resto (división/módulo por cero = error de ejecución); `Mul`/`Div` |
-| `==` `!=` | igualdad estructural (primitivos, strings, bytes; tipos de usuario vía `Eq`) · `f() == Option.None` / `r != Result.Err("x")` toman `T` del otro operando |
+| `==` `!=` | igualdad estructural (primitivos, strings, bytes, tuplas, arreglos, derives, `Option`/`Result`); sobre un struct/enum con `impl Eq` **a mano** y sobre un `T: Eq`, el `eq` de ese impl/bound (1.27.73) · `f() == Option.None` / `r != Result.Err("x")` toman `T` del otro operando |
 | `<` `<=` `>` `>=` | comparación: números, strings (lexicográfica), chars (code point) |
 | `&&` `\|\|` `!` | lógicos (cortocircuito en `&&`/`\|\|`) |
 | `&` `\|` `^` `~` `<<` `>>` | bit a bit sobre `int`/`u8`/`u32`/`u64` (semántica *wrapping*; el shift enmascara el ancho) |
@@ -345,7 +345,7 @@ definiendo el mismo nombre).
 
 | Trait | Método(s) | Notas |
 |---|---|---|
-| `Eq` | `eq(self, other: Self) -> bool` | la igualdad de los *bounds* (`T: Eq`), de las claves de `dict`/`set`, de `assert_eq` y de `.eq()`. **`==`/`!=` no lo usan**: son siempre estructurales (SPEC §7) — un `impl Eq` a mano que compare de otra forma solo vale con `.eq()`, y sobre un `T: Eq` se escribe `a.eq(b)` (el checker lo sugiere); `Option<T>`/`Result<T, E>` lo implementan si sus parámetros lo hacen (`assert_eq(o, Option.Some(1))`), igual que `Show` (`Option.Some(1)`); derivable. Los primitivos lo traen, también `u8`/`u32`/`u64` (con `Show`, `Ord` y `Hash`) |
+| `Eq` | `eq(self, other: Self) -> bool` | la igualdad de los *bounds* (`T: Eq`), de las claves de `dict`/`set`, de `assert_eq`, de `.eq()` y, desde 1.27.73, de **`==`/`!=`** sobre un struct/enum cuyo `impl Eq` escribió el programa (y sobre un `T: Eq`: `a == b` vale dentro de `fn f<T: Eq>`); un `@derive(Eq)` y `Option`/`Result` siguen comparándose estructuralmente con el operador, igual que los arreglos y tuplas que contengan el tipo (y `contains`); `Option<T>`/`Result<T, E>` lo implementan si sus parámetros lo hacen (`assert_eq(o, Option.Some(1))`), igual que `Show` (`Option.Some(1)`); derivable. Los primitivos lo traen, también `u8`/`u32`/`u64` (con `Show`, `Ord` y `Hash`) |
 | `Show` | `show(self) -> string` | habilita `print`/`to_string`; derivable |
 | `Ord` | `less(self, other: Self) -> bool` | habilita `sort`/`min`/`max`; impls para int/float/string/char |
 | `Hash` | `hash(self) -> int` | claves de `Set`; derivable |

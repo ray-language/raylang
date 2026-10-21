@@ -471,6 +471,10 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     let prelude_impls: Vec<crate::ast::ImplBlock> = crate::prelude::impls()
         .into_iter()
         .filter(|i| !impls_existentes.contains(&(i.trait_name.clone(), type_key_of(&i.target))))
+        .map(|mut i| {
+            i.synthetic = true; // M418: `==` sobre Option/Result/primitivos sigue siendo estructural
+            i
+        })
         .collect();
     // D3: el `unwrap_or` de Option es del prelude si el usuario NI redefinió el trait `OptionOps`
     // NI aporta un impl propio `(OptionOps, Option)` (que desplazaría al del prelude).
@@ -713,9 +717,13 @@ struct Checker {
     /// M40.2: `for x in it` sobre un iterador → posición del `for` (línea, col) → nombre manglado de
     /// su método `next`. Un pase lo baja reescribiendo `ForIter::In` a `ForIter::Iter`.
     for_iter_sites: HashMap<(usize, usize), String>,
-    /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → función manglada
-    /// del método del operador (`Vec2#add`). El lowering reescribe el `Binary`/`Unary` a una llamada.
-    op_sites: HashMap<(usize, usize, String), String>,
+    /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → el callee al
+    /// que baja (`Vec2#add` como identificador). El lowering reescribe el `Binary`/`Unary` a una llamada.
+    /// M418: también `"Eq"` para `==`/`!=` sobre un tipo con `impl Eq` a mano o un `T: Eq` — el callee
+    /// es el diccionario (`Tipo#eq`, el parámetro `T#Eq#eq`, o un closure si el impl es genérico acotado).
+    op_sites: HashMap<(usize, usize, String), Expr>,
+    /// M418: los `(tipo, trait)` cuyo impl es SINTÉTICO (derive o prelude): `==` no despacha a ellos.
+    synthetic_impls: HashSet<(String, String)>,
     /// V2 (bench políglota): posiciones de los `Add` **de strings** (`string + string`). La pasada
     /// `lower_concat` (la ÚLTIMA, para no interferir con las tablas por posición de las demás) aplana
     /// cada cadena en una llamada al primitivo `__concat(a, b, …)` → opcode `ConcatN` en la VM (un

@@ -45,6 +45,7 @@ impl Checker {
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
             impl_traits: HashSet::new(),
+            synthetic_impls: HashSet::new(),
             generic_impls: HashMap::new(),
             current_self: None,
             current_fn_bounds: Vec::new(),
@@ -629,6 +630,9 @@ impl Checker {
                 }
             }
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
+            if imp.synthetic {
+                self.synthetic_impls.insert((key.clone(), imp.trait_name.clone()));
+            }
             self.impl_traits.insert((key, imp.trait_name.clone()));
         }
         self.type_params.clear();
@@ -2480,7 +2484,7 @@ impl Checker {
                     // `-x` baja a `x.neg()`.
                     UnaryOp::Neg => match type_key_of(&t) {
                         Some(key) if self.impl_traits.contains(&(key.clone(), "Neg".to_string())) => {
-                            self.op_sites.insert((expr.line, expr.col, "Neg".to_string()), mangle(&key, "neg"));
+                            self.op_sites.insert((expr.line, expr.col, "Neg".to_string()), ident_expr(&mangle(&key, "neg"), expr.line, expr.col));
                             Ok(t)
                         }
                         _ => Err(self.err(expr.line, expr.col, format!("cannot negate (-) a {}", t))),
@@ -2820,19 +2824,25 @@ impl Checker {
                     bin_op_str(op), lt, rt
                 ))),
             },
-            // Igualdad: mismo tipo y comparable → bool.
+            // Igualdad: mismo tipo y comparable → bool. M418 (raydata #206): sobre un tipo con `impl Eq`
+            // a mano, o un `T: Eq`, `==`/`!=` despachan a ese `eq` (sitio registrado; `lower_operators`
+            // lo reescribe, `!=` con la negación). Lo demás sigue siendo la igualdad estructural.
             Eq | Ne => {
-                if lt == rt && is_comparable(&lt) {
-                    Ok(Type::Bool)
-                } else {
-                    // raydata #206: `==` es estructural y no despacha a `Eq`; sobre un parámetro de tipo
-                    // la igualdad es la del bound.
-                    let hint = if lt == rt && matches!(lt, Type::Var(_)) { "; compare a type parameter with its Eq bound: a.eq(b)" } else { "" };
-                    Err(self.err(line, col, format!(
-                        "the operator '{}' requires both operands of the same comparable type, not {} and {}{}",
-                        bin_op_str(op), lt, rt, hint
-                    )))
+                if lt == rt {
+                    if let Some(callee) = self.eq_dispatch(&lt, line, col)? {
+                        self.op_sites.insert((line, col, "Eq".to_string()), callee);
+                        return Ok(Type::Bool);
+                    }
+                    if is_comparable(&lt) {
+                        return Ok(Type::Bool);
+                    }
                 }
+                // Un parámetro de tipo sin bound `Eq` es opaco: no hay igualdad que aplicar.
+                let hint = if lt == rt && matches!(lt, Type::Var(_)) { "; a type parameter compares with == only under an Eq bound (fn f<T: Eq>)" } else { "" };
+                Err(self.err(line, col, format!(
+                    "the operator '{}' requires both operands of the same comparable type, not {} and {}{}",
+                    bin_op_str(op), lt, rt, hint
+                )))
             }
             // Lógicos: ambos bool → bool.
             And | Or => {
@@ -2902,8 +2912,33 @@ impl Checker {
         }
         // El método está garantizado por la validación del impl; registra el sitio y el retorno = Self.
         let mangled = mangle(&key, method);
-        self.op_sites.insert((line, col, trait_name.to_string()), mangled);
+        self.op_sites.insert((line, col, trait_name.to_string()), ident_expr(&mangled, line, col));
         Some(Ok(lt.clone()))
+    }
+
+    /// M418 (raydata #206): el callee al que bajan `a == b`/`a != b` cuando la igualdad NO es la
+    /// estructural: sobre un `T: Eq` el diccionario del bound (`T#Eq#eq`), y sobre un struct/enum
+    /// con un `impl Eq` **escrito a mano** (no `@derive(Eq)`, no del prelude) su método — como
+    /// `dict_for`, así un impl genérico acotado da el closure que rellena sus diccionarios. `None`
+    /// cuando `==` sigue siendo estructural (primitivos, tuplas, arreglos, derives, Option/Result…).
+    pub(super) fn eq_dispatch(&self, t: &Type, line: usize, col: usize) -> Result<Option<Expr>, TypeError> {
+        match t {
+            Type::Var(u) => {
+                if self.current_fn_bounds.iter().any(|(bp, tr)| bp == u && tr == "Eq") {
+                    return Ok(Some(ident_expr(&dict_param_name(u, "Eq", "eq"), line, col)));
+                }
+                Ok(None)
+            }
+            Type::Struct(_, _) | Type::Enum(_, _) => {
+                let Some(key) = type_key_of(t) else { return Ok(None) };
+                let pair = (key, "Eq".to_string());
+                if self.impl_traits.contains(&pair) && !self.synthetic_impls.contains(&pair) {
+                    return self.dict_for(t, "Eq", "eq", line, col).map(Some);
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
     }
 
     /// M28.3b: si `expr` es un literal entero que cabe en `u{w}`, lo registra para coercionarlo a

@@ -82,7 +82,7 @@ Reserved (cannot be used as identifiers):
 | `+` | addition (int/float/u\*); **concatenates** strings, bytes and arrays; overloadable (trait `Add`) |
 | `-` | subtraction; unary negation; overloadable (`Sub`/`Neg`) |
 | `*` `/` `%` | product, quotient, remainder (division/modulo by zero = runtime error); `Mul`/`Div` |
-| `==` `!=` | structural equality (primitives, strings, bytes; user types via `Eq`) · `f() == Option.None` / `r != Result.Err("x")` take `T` from the other operand |
+| `==` `!=` | structural equality (primitives, strings, bytes, tuples, arrays, derives, `Option`/`Result`); on a struct/enum with a **hand-written** `impl Eq` and on a `T: Eq`, that impl's/bound's `eq` (1.27.73) · `f() == Option.None` / `r != Result.Err("x")` take `T` from the other operand |
 | `<` `<=` `>` `>=` | comparison: numbers, strings (lexicographic), chars (code point) |
 | `&&` `\|\|` `!` | logical (short-circuit in `&&`/`\|\|`) |
 | `&` `\|` `^` `~` `<<` `>>` | bitwise on `int`/`u8`/`u32`/`u64` (*wrapping* semantics; the shift masks the width) |
@@ -344,7 +344,7 @@ defining the same name).
 
 | Trait | Method(s) | Notes |
 |---|---|---|
-| `Eq` | `eq(self, other: Self) -> bool` | the equality of bounds (`T: Eq`), of `dict`/`set` keys, of `assert_eq` and of `.eq()`. **`==`/`!=` do not use it**: they are always structural (SPEC §7) — a hand-written `impl Eq` that compares differently only applies through `.eq()`, and on a `T: Eq` you write `a.eq(b)` (the checker suggests it); `Option<T>`/`Result<T, E>` implement it when their parameters do (`assert_eq(o, Option.Some(1))`), as does `Show` (`Option.Some(1)`); derivable |
+| `Eq` | `eq(self, other: Self) -> bool` | the equality of bounds (`T: Eq`), of `dict`/`set` keys, of `assert_eq`, of `.eq()` and, since 1.27.73, of **`==`/`!=`** on a struct/enum whose `impl Eq` the program wrote (and on a `T: Eq`: `a == b` works inside `fn f<T: Eq>`); a `@derive(Eq)` and `Option`/`Result` still compare structurally under the operator, as do arrays and tuples containing the type (and `contains`); `Option<T>`/`Result<T, E>` implement it when their parameters do (`assert_eq(o, Option.Some(1))`), as does `Show` (`Option.Some(1)`); derivable |
 | `Show` | `show(self) -> string` | enables `print`/`to_string`; derivable |
 | `Ord` | `less(self, other: Self) -> bool` | enables `sort`/`min`/`max`; impls for int/float/string/char |
 | `Hash` | `hash(self) -> int` | keys of `Set`; derivable |

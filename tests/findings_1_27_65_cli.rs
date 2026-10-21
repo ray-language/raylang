@@ -141,7 +141,8 @@ fn derive_tojson_without_the_import_points_at_the_annotation() {
     assert!(err.contains("at 3:1: trait 'ToJson' not declared: it lives in std/json, import it with `from std/json import ToJson;`"), "{err}");
 }
 
-/// raydata #206: `==` es estructural; `.eq()` y `assert_eq` usan el `impl Eq` en los tres motores.
+/// raydata #206: `.eq()` y `assert_eq` usan el `impl Eq` en los tres motores — y desde M418 también
+/// `==` (antes era estructural: `false true`).
 #[test]
 fn assert_eq_uses_the_user_impl_eq_on_all_engines() {
     let d = tmp("impl_eq");
@@ -165,17 +166,21 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    three_engines(&d, "false true\nok\n");
+    three_engines(&d, "true true\nok\n");
 }
 
-/// raydata #206: `==` sobre un `T: Eq` sugiere `.eq()`.
+/// raydata #206: `==` sobre un `T: Eq` despacha al bound (M418); sin el bound, el error lo dice.
 #[test]
-fn eq_operator_on_a_type_parameter_suggests_the_bound() {
+fn eq_operator_on_a_type_parameter_uses_the_bound_or_asks_for_it() {
     let d = tmp("eq_tparam");
-    std::fs::write(d.join("prog.ray"), "fn same<T: Eq>(a: T, b: T) -> bool { a == b }\nfn main() { print(same(1, 1)); }\n").unwrap();
+    std::fs::write(d.join("prog.ray"), "fn same<T: Eq>(a: T, b: T) -> bool { a == b }\nfn main() { print(same(1, 1)); print(same(\"a\", \"b\")); }\n").unwrap();
+    let (out, err, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "true\nfalse\n");
+    std::fs::write(d.join("prog.ray"), "fn same<T>(a: T, b: T) -> bool { a == b }\nfn main() { print(same(1, 1)); }\n").unwrap();
     let (_out, err, code) = ray(&d, &["run", "prog.ray"]);
     assert_eq!(code, 65);
-    assert!(err.contains("compare a type parameter with its Eq bound: a.eq(b)"), "{err}");
+    assert!(err.contains("a type parameter compares with == only under an Eq bound (fn f<T: Eq>)"), "{err}");
 }
 
 /// rayffi #212: dos módulos declaran la misma función C (una `blocking`); se llaman calificadas.

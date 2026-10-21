@@ -20,7 +20,7 @@ use super::*;
 // receptor pasa a ser el primer argumento y el callee se vuelve un `Ident`. Tras esto,
 // el intérprete y la VM solo ven llamadas ordinarias.
 
-type SiteMap = HashMap<(usize, usize, String), String>;
+type SiteMap = HashMap<(usize, usize, String), Expr>;
 /// M267: los sitios UFCS llevan además la profundidad en la cadena (ver `ufcs_chain_depth`).
 type UfcsSiteMap = HashMap<(usize, usize, String, usize), String>;
 
@@ -467,15 +467,18 @@ pub(super) fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
     // operador porque un mismo `(línea, col)` puede corresponder a operadores encadenados
     // (`a + b + c`); un mismo operador en la misma posición baja al mismo método. Reescribir
     // ANTES de recorrer los hijos, para que la recursión baje también los operandos.
-    let target = match &expr.kind {
-        ExprKind::Binary { op, .. } => op_trait_method(*op)
-            .and_then(|(tr, _)| sites.get(&(expr.line, expr.col, tr.to_string())).cloned()),
-        ExprKind::Unary { op: UnaryOp::Neg, .. } => {
-            sites.get(&(expr.line, expr.col, "Neg".to_string())).cloned()
-        }
-        _ => None,
+    // M418: `==`/`!=` registrados bajo "Eq" bajan a `eq(a, b)`; `!=` además se niega.
+    let (target, negate) = match &expr.kind {
+        ExprKind::Binary { op: BinaryOp::Eq, .. } => (sites.get(&(expr.line, expr.col, "Eq".to_string())).cloned(), false),
+        ExprKind::Binary { op: BinaryOp::Ne, .. } => (sites.get(&(expr.line, expr.col, "Eq".to_string())).cloned(), true),
+        ExprKind::Binary { op, .. } => (
+            op_trait_method(*op).and_then(|(tr, _)| sites.get(&(expr.line, expr.col, tr.to_string())).cloned()),
+            false,
+        ),
+        ExprKind::Unary { op: UnaryOp::Neg, .. } => (sites.get(&(expr.line, expr.col, "Neg".to_string())).cloned(), false),
+        _ => (None, false),
     };
-    if let Some(target) = target {
+    if let Some(callee) = target {
         let (l, c) = (expr.line, expr.col);
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let args = match taken {
@@ -483,9 +486,11 @@ pub(super) fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
             ExprKind::Unary { expr: inner, .. } => vec![*inner],
             _ => crate::ice!("the site guard guarantees Binary or Unary Neg"),
         };
-        expr.kind = ExprKind::Call {
-            callee: Box::new(Expr { kind: ExprKind::Ident(target), line: l, col: c }),
-            args,
+        let call = ExprKind::Call { callee: Box::new(callee), args };
+        expr.kind = if negate {
+            ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(Expr { kind: call, line: l, col: c }) }
+        } else {
+            call
         };
     }
 

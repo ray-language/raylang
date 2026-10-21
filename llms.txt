@@ -150,9 +150,10 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
   Option.None }` infers `Option<int>`.
 - A `while (true)` with no `break` of its own DIVERGES: a `fn f() -> Result<T, E>` may end in
   it (exit with `return`) — no dead `Result.Err("unreachable")` after the loop.
-- `==`/`!=` are STRUCTURAL, always: a hand-written `impl Eq` (case-insensitive, numeric 2 == 2.0…)
-  is used by `.eq()`, `assert_eq`, `dict`/`set` keys and `T: Eq` bounds, but NOT by `==` or
-  `[x].contains(y)`. Inside `fn f<T: Eq>(a: T, b: T)` write `a.eq(b)` (`a == b` does not compile).
+- `==`/`!=` are STRUCTURAL (primitives, tuples, arrays, `@derive(Eq)`, `Option`/`Result`), EXCEPT on a
+  struct/enum with a hand-written `impl Eq` (case-insensitive, numeric 2 == 2.0…): there `a == b` IS
+  `a.eq(b)` (1.27.73), like `.eq()`, `assert_eq`, `dict`/`set` keys and `T: Eq` bounds. Containers and
+  `[x].contains(y)` stay structural. Inside `fn f<T: Eq>(a: T, b: T)`, `a == b` compiles and uses the bound.
 - Tuples support `==` and satisfy `Eq`/`Show` bounds element-wise: `assert_eq(f(), ("h", 81))`
   works (there is no `print(tuple)` / `to_string(tuple)`: show is only via those bounds).
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an

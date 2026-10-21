@@ -18549,3 +18549,44 @@ con el paquete y con `std/zip` como lector independiente, `unzip -t` del sistema
 70 000 entradas (los registros ZIP64; `std/zip` los rechaza, el paquete los lee). El espejo del
 paquete (`ray registry mirror`) se publica como `zip` 0.1.0.
 
+## 390. M418 — `==` despacha al `impl Eq` escrito a mano (raydata #206, oct 2026)
+
+raydata escribió un `impl Eq` (una igualdad por clave, no por todos los campos) y descubrió que
+`==` no lo miraba: SPEC §7 decía estructural y punto, y la REFERENCE prometía lo contrario. M411
+corrigió la doc y dejó la decisión en IDEAS §113 #1, porque es un cambio de semántica de un
+operador. El usuario la tomó el 21 de octubre: `==` es el `Eq` del tipo, como en Rust, Swift y
+Kotlin, que es lo que espera quien se molesta en escribir un `impl Eq`.
+
+**La regla.** `a == b` sobre un struct o enum cuyo `impl Eq` escribió el programa baja a
+`Tipo#eq(a, b)`, y `a != b` a `!Tipo#eq(a, b)`; sobre un parámetro de tipo con bound `Eq`, al
+diccionario del bound (`T#Eq#eq`). Todo lo demás sigue siendo la igualdad estructural de siempre,
+y a propósito: un `@derive(Eq)` ES la igualdad estructural (bajar a su `eq` solo añadiría una
+llamada); los impls del prelude —`Option`, `Result`, los primitivos— también (y `x != Option.None`
+en un bucle caliente no debe pagar un closure); los contenedores (`[Tag] == [Tag]`, tuplas,
+`contains`, `index_of`) comparan estructuralmente sus elementos, como documenta la SPEC — hacer
+que un arreglo despache elemento a elemento al `Eq` del usuario pediría igualdad polimórfica en
+los motores, y nadie lo ha pedido. `ImplBlock` gana `synthetic` (lo ponen `parse_derived_impl` y
+la inyección del prelude) y el checker guarda `synthetic_impls` junto a `impl_traits`.
+
+**La implementación cabe en la sobrecarga de operadores (M28.1).** `op_sites` ya bajaba `a + b`
+sobre un tipo con `impl Add` a `Vec2#add(a, b)` por posición; el valor pasa de un nombre manglado a
+una `Expr` (el callee), porque el `Eq` de un impl genérico acotado no es un nombre sino el closure
+que rellena sus diccionarios — exactamente lo que `dict_for` ya sintetiza para `assert_eq` (M9.2b,
+M302). `check_binary` registra el sitio bajo `"Eq"` para `==` y `!=` y `lower_operators` lo
+reescribe, con la negación para `!=`. Como las demás bajadas, es un cambio de AST antes de los
+motores: la VM, el intérprete y el transpilador no saben nada. El espejo selfhost acepta `==`
+sobre un `T: Eq` (no baja nada: solo tipa) y comparte la pista nueva del `T` sin bound («a type
+parameter compares with == only under an Eq bound (fn f<T: Eq>)»); la antigua («compare … with
+a.eq(b)») desaparece de los dos lados.
+
+**Lo que cambia para un programa existente.** Solo uno que tuviera un `impl Eq` a mano con una
+igualdad DISTINTA de la estructural y comparara ese tipo con `==` esperando la estructural: ahora
+obtiene la suya. Es la lectura que todo el mundo daba por hecha (y la que la REFERENCE prometía
+hasta M411), así que se asume sin período de transición; el CHANGELOG lo señala. El test de
+M411 que fijaba `false true` (`==` estructural, `.eq()` del impl) pasa a `true true`.
+
+Tests: `findings_1_27_73_cli` (struct y enum con `impl Eq` a mano, `!=`, dentro de `fn same<T:
+Eq>`, el derive y `Option` estructurales, `contains` sin cambio, tuplas) en los tres motores; el
+test del hint en `findings_1_27_65_cli` pasa a comprobar que `a == b` compila bajo `T: Eq` y que
+sin bound el error lo dice; suites selfhost en verde.
+

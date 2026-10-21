@@ -18290,3 +18290,36 @@ importar aunque el paquete no reexporte.
 Versiones: `llm`, `mcp` y `agent` 0.2.1, publicadas con el espejo nuevo (así `agent` pide
 `llm = "^0.2.1"` y `mcp = "^0.2.1"`, y estos `net = "^0.10.1"`).
 
+## 385. M413 — Windows: el `accept` bloqueaba el worker en nativo y la tubería del hijo no despertaba en la VM (raystat #222, oct 2026)
+
+raystat vio en el CI de Windows x86_64 que, con un servidor HTTP escuchando, un worker entero dejaba
+de correr (censo de 16 fibras: 13 responden; el worker del `accept` ya no corre nada), y raymcp, en
+la VM de Windows, que `mcp.connect` no recibía la respuesta del hijo mientras hubiera un
+`webserver` esperando. No hay runner x86_64 a mano: se reprodujo en la VM Windows 11 arm64 del
+usuario, cross-compilando el censo a `x86_64-pc-windows-msvc` y ejecutándolo emulado (13/16, 3 de
+3), y con el repro de raymcp sobre la VM arm64 (15 s de plazo agotado).
+
+**Nativo.** `__ray_tcp_accept` re-resuelve el handle en cada vuelta y hace `accept` sobre un
+`try_clone()` del listener, aparcando la fibra sobre el fd del registro. En unix el clon comparte
+la *open file description* y con ella `O_NONBLOCK`; en Windows el duplicado (`WSADuplicateSocket`)
+sale **bloqueante**, así que el `accept` del clon se quedaba con el hilo del worker: no era que la
+fibra no despertara, era que nadie más corría en ese hilo. Un programa Rust de ocho líneas en la
+VM lo demostró (el `accept` del clon no vuelve). La VM lo sabía desde M170b («Windows no lo
+hereda») y reponía el modo en cada clon; el emisor nativo no. Arreglo: `set_nonblocking(true)` en
+el clon del listener y en `__ray_udp_clone` (que funcionaba de casualidad: un `recv_from` bloqueante
+sobre un clon vuelve en cuanto llega el datagrama, y los tests aislados siempre tenían uno).
+Verificado emulado: 16/16 tres veces.
+
+**VM.** Los pipes de un proceso hijo no entran en `WSAPoll`: una fibra que lee uno aparca sin fd
+(`fd = -1`, `handle >= 0`). Sin ningún socket aparcado, `io_wait` entra en el respaldo
+cooperativo (1 ms y reintento) y la fibra vuelve a mirar su pipe. Con un socket aparcado a la vez
+—el `accept` del webserver—, `io_wait` acota el plazo del poller a 10 ms (M183) y, al vencer, solo
+re-despierta las esperas sin fd que conoce: la cola de eventos de UI y un watch sin fd. La del
+pipe no estaba en la lista, así que la fibra lectora no volvía nunca y el `initialize` moría a los
+15 s. `wake_ready_without_fd` consulta ahora también la tubería (`pipe_has_pending`: `PeekNamedPipe`
+con datos o el otro extremo cerrado). Repro de raymcp en la VM: de 15 274 ms a 271 ms.
+
+**Tests.** `a_fiber_parked_in_accept_does_not_hold_its_worker` en `native_fibers_cli` (el censo;
+corre en el job de Windows x86_64 del CI, donde antes habría dado 13/16) y el caso de la tubería
+en `process_windows_cli`.
+

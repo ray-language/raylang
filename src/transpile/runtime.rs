@@ -1235,11 +1235,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // el fd del REGISTRO (estable hasta el close), no el del clon (muere con el drop).
                 // M306 (#14): `set_read_timeout(listener, ms)` acota también el accept (el plazo
                 // vive en el park, como en las lecturas) → "read timeout".
+                // raystat #222: en Windows el clon (`WSADuplicateSocket`) NO hereda el modo no
+                // bloqueante (la VM ya lo sabía, M170b): sin reponerlo, el `accept` del clon
+                // bloqueaba el hilo del worker y todas sus fibras. Lo mismo en `__ray_udp_clone`.
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
                 "    let to = __ray_rd_to(h);\n",
                 "    let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "    loop {\n",
-                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
+                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map(|c| { let _ = c.set_nonblocking(true); c }).map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
                 "        match l.accept() {\n",
                 "            Ok((s, _)) => { let _ = s.set_nonblocking(true); let _ = s.set_nodelay(true); return Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); }\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); let ms = match dl { None => 0, Some(d) => { let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 { return Err(Rc::<str>::from(\"read timeout\")); } rem } }; if ray_runtime::fibers::wait_readable_timeout(fd, ms) { return Err(Rc::<str>::from(\"read timeout\")); } }\n",
@@ -1466,7 +1469,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
                 "        Ok(s) => { let _ = s.set_nonblocking(true); let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
                 "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
-                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
+                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok().map(|c| { let _ = c.set_nonblocking(true); c }), _ => None } }\n",
                 "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
                 "    let r = match __ray_udp_clone(h) { Some(s) => { let fd = __ray_fd(&s); loop {\n",
                 "        match s.send_to(data, (host, port as u16)) {\n",
@@ -1505,7 +1508,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
                 "        Ok(s) => { let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
                 "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
-                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
+                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok().map(|c| { let _ = c.set_nonblocking(true); c }), _ => None } }\n",
                 "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
                 "    let r = match __ray_udp_clone(h) { Some(s) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()), None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
                 "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",

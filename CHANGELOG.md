@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.68 — 2026-10-21
+
+- **Windows: una fibra en `net.tcp_accept` paraba su worker entero en el binario nativo x86_64
+  (M413, raystat #222)**: `accept` corre sobre un `try_clone()` del listener y en Windows el
+  duplicado no hereda el modo no bloqueante, así que bloqueaba el hilo y todas las fibras fijadas a
+  él (cualquier servidor HTTP perdía un worker; censo 13/16). El clon repone `set_nonblocking`
+  (también el de UDP). Medido en una VM emulando x86_64: 16/16.
+- **Windows, VM: con un socket aparcado no se atendía la tubería de un proceso hijo** (raymcp, el
+  mismo hallazgo): `mcp.connect` con un `webserver` esperando en otra fibra agotaba los 15 s del
+  `initialize`. El poller de Windows esperaba a cuantos de 10 ms pero solo re-despertaba las
+  esperas sin fd de UI y watch, nunca las de un pipe. Ahora mira la tubería (`PeekNamedPipe`):
+  conecta en ~270 ms.
+
 ## 1.27.67 — 2026-10-21
 
 Los paquetes de agentes (raymcp #219–#221, M412). `llm`, `mcp` y `agent` **0.2.1** publicados.

@@ -61,7 +61,10 @@ fn main() -> int {
 }
 "#;
 
-const WANT: &str = "true\ntrue\ntrue\nreserved DEFLATE block type (3)\nsticky\n";
+// M415: el stream incremental lo decodifica el runtime (miniz) cuando está; un stream corrupto se
+// reporta como `corrupt DEFLATE stream` (el decodificador raylang de respaldo da el detalle,
+// `reserved DEFLATE block type (3)`, en los builds sin `deflate`).
+const WANT: &str = "true\ntrue\ntrue\ncorrupt DEFLATE stream\nsticky\n";
 
 const ORACLE: &str = r#"
 import zlib, sys

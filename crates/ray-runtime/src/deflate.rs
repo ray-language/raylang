@@ -11,6 +11,16 @@
 //! un flush de sincronización, sin BFINAL: los trozos se concatenan en un solo stream),
 //! `"inflate_consumed"` (los octetos de entrada usados, 8 octetos BE, delante de la salida) y
 //! `"crc32_update"` (n = la CRC acumulada; sigue sumando `data`).
+//!
+//! M415 (rayzip #189): el INFLATE INCREMENTAL también vive aquí. `std/inflate` lo hacía en raylang
+//! puro (15× más lento que `inflate_raw` en nativo, 1350× en la VM). Como un stream a medias es
+//! estado (las tablas Huffman del bloque en curso, la ventana), hay un `InflateState` de miniz por
+//! HANDLE en una tabla del proceso: `"stream_new"` (→ handle, 8 octetos BE), `"stream_push"` (n =
+//! handle; `data` = tope de salida de este push en 8 octetos BE + el trozo; → 1 octeto de estado +
+//! 8 BE de entrada consumida + lo producido; estado 0 = sigue, 1 = bloque final visto, 2 = stream
+//! corrupto, 3 = tope rebasado) y `"stream_close"` (n = handle; libera). El runtime libera el handle
+//! solo al terminar o fallar (ya no puede producir nada); un stream de sesión que se abandona a
+//! medias sin `stream_close` es memoria perdida — por eso la API raylang expone el cierre explícito.
 
 #[cfg(feature = "deflate")]
 pub fn op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
@@ -36,6 +46,12 @@ pub fn op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
             Some(r)
         }
         "crc32_update" => Some(crc32_with((n & 0xFFFF_FFFF) as u32, data).to_be_bytes().to_vec()),
+        "stream_new" => Some(stream_new().to_be_bytes().to_vec()),
+        "stream_push" => stream_push(n as u64, data),
+        "stream_close" => {
+            stream_close(n as u64);
+            Some(Vec::new())
+        }
         "crc32" => Some(crc32(data).to_be_bytes().to_vec()),
         "adler32" => Some(adler32(data).to_be_bytes().to_vec()),
         _ => None,
@@ -96,6 +112,77 @@ fn inflate_consumed(mut input: &[u8], limit: usize) -> Option<(Vec<u8>, usize)> 
     }
 }
 
+/// M415: los streams incrementales abiertos, por handle. Un `Mutex` del proceso: cada `push`
+/// toma el candado lo que dura la llamada (un stream no se usa desde dos fibras a la vez; el
+/// candado solo protege la tabla).
+#[cfg(feature = "deflate")]
+type Streams = std::sync::Mutex<std::collections::HashMap<u64, Box<miniz_oxide::inflate::stream::InflateState>>>;
+#[cfg(feature = "deflate")]
+fn streams() -> &'static Streams {
+    static STREAMS: std::sync::OnceLock<Streams> = std::sync::OnceLock::new();
+    STREAMS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// M415: abre un stream DEFLATE crudo (la cabecera zlib la consume `std/inflate`, como hasta ahora)
+/// y devuelve su handle (desde 1; 0 significa «sin runtime» en raylang).
+#[cfg(feature = "deflate")]
+fn stream_new() -> u64 {
+    use miniz_oxide::inflate::stream::InflateState;
+    use miniz_oxide::DataFormat;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    streams().lock().unwrap_or_else(|e| e.into_inner()).insert(id, InflateState::new_boxed(DataFormat::Raw));
+    id
+}
+
+/// M415: libera el stream `id` (no-op si no existe o ya se liberó).
+#[cfg(feature = "deflate")]
+fn stream_close(id: u64) {
+    streams().lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+}
+
+/// M415: alimenta el stream `id` con `data` = tope (8 BE) + trozo. Devuelve `[estado][consumidos
+/// 8 BE][producido…]`; `None` si el handle no existe (raylang cae a su decodificador). Con miniz el
+/// bloque a medias NO se descarta: lo decodificado sale en este push y el resto en el siguiente. Al
+/// ver el bloque final (estado 1) o un error (2, 3) el stream se libera aquí mismo.
+#[cfg(feature = "deflate")]
+fn stream_push(id: u64, data: &[u8]) -> Option<Vec<u8>> {
+    use miniz_oxide::inflate::stream::inflate;
+    use miniz_oxide::{MZError, MZFlush, MZStatus};
+    if data.len() < 8 {
+        return None;
+    }
+    let limit = u64::from_be_bytes(data[..8].try_into().ok()?) as usize;
+    let input = &data[8..];
+    let mut table = streams().lock().unwrap_or_else(|e| e.into_inner());
+    let state = table.get_mut(&id)?;
+    let mut out = vec![0u8; 9];
+    let mut used = 0usize;
+    let mut buf = [0u8; 32 * 1024];
+    let status: u8 = loop {
+        let r = inflate(state, &input[used..], &mut buf, MZFlush::None);
+        used += r.bytes_consumed;
+        out.extend_from_slice(&buf[..r.bytes_written]);
+        if out.len() - 9 > limit {
+            break 3;
+        }
+        match r.status {
+            Ok(MZStatus::StreamEnd) => break 1,
+            Ok(_) if r.bytes_written == buf.len() => continue,
+            Ok(_) => break 0,
+            // Sin progreso posible con lo que hay: hace falta más entrada.
+            Err(MZError::Buf) => break 0,
+            Err(_) => break 2,
+        }
+    };
+    if status != 0 {
+        table.remove(&id);
+    }
+    out[0] = status;
+    out[1..9].copy_from_slice(&(used as u64).to_be_bytes());
+    Some(out)
+}
+
 /// CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320), un octeto por paso sobre una tabla de 256.
 #[cfg(feature = "deflate")]
 fn crc32(data: &[u8]) -> u32 {
@@ -140,6 +227,60 @@ fn adler32(data: &[u8]) -> u32 {
 #[cfg(all(test, feature = "deflate"))]
 mod tests {
     use super::*;
+
+    /// M415: el stream incremental produce lo mismo que `inflate` aunque la entrada llegue partida
+    /// en cualquier octeto, señala el bloque final con lo que sobraba detrás y respeta el tope.
+    #[test]
+    fn an_incremental_stream_decodes_in_arbitrary_pieces_and_reports_the_end() {
+        let handle = || u64::from_be_bytes(op("stream_new", &[], 0).unwrap().try_into().unwrap());
+        let plain: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+        let z = op("deflate", &plain, 6).expect("deflate");
+        let mut data = z.clone();
+        data.extend_from_slice(b"TRAILER");
+        let h = handle();
+        let mut out = Vec::new();
+        let (mut pos, mut finished, mut remaining) = (0usize, false, Vec::new());
+        for n in [1usize, 7, 100, 3, 5000, 33, 2, 9999, 1, 1].iter().cycle() {
+            if pos >= data.len() || finished {
+                break;
+            }
+            let end = (pos + n).min(data.len());
+            let mut req = (1u64 << 30).to_be_bytes().to_vec();
+            req.extend_from_slice(&data[pos..end]);
+            let r = op("stream_push", &req, h as i64).expect("push");
+            let used = u64::from_be_bytes(r[1..9].try_into().unwrap()) as usize;
+            out.extend_from_slice(&r[9..]);
+            match r[0] {
+                0 => assert_eq!(used, end - pos),
+                1 => {
+                    finished = true;
+                    remaining = data[pos + used..].to_vec();
+                }
+                s => panic!("estado {s}"),
+            }
+            pos = end;
+        }
+        assert!(finished);
+        assert_eq!(out, plain);
+        assert_eq!(remaining, b"TRAILER");
+        // Liberado al terminar: otro push no encuentra el handle.
+        assert!(op("stream_push", &[0u8; 9], h as i64).is_none());
+        // Tope por push: rebasarlo es estado 3 y libera.
+        let h2 = handle();
+        let mut req = 100u64.to_be_bytes().to_vec();
+        req.extend_from_slice(&z);
+        assert_eq!(op("stream_push", &req, h2 as i64).unwrap()[0], 3);
+        assert!(op("stream_push", &[0u8; 9], h2 as i64).is_none());
+        // Corrupto: tipo de bloque reservado → 2.
+        let h3 = handle();
+        let mut req = (1u64 << 20).to_be_bytes().to_vec();
+        req.extend_from_slice(&[0x07, 0x00]);
+        assert_eq!(op("stream_push", &req, h3 as i64).unwrap()[0], 2);
+        // `stream_close` sobre uno vivo lo quita.
+        let h4 = handle();
+        op("stream_close", &[], h4 as i64);
+        assert!(op("stream_push", &[0u8; 9], h4 as i64).is_none());
+    }
 
     #[test]
     fn checksums_match_the_reference_vectors() {

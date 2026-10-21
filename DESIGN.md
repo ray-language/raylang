@@ -18363,3 +18363,44 @@ pares de Map y campos. La llamada deja de ser repartible y el literal se pega a 
 primera pasada, que es la forma que ya se consideraba canónica (es la que producía la segunda).
 `fmt_policy` (todo `.ray` del repo converge) sigue en verde.
 
+## 387. M415 — el inflate incremental en el runtime: un decodificador por handle (rayzip #189, oct 2026)
+
+`std/inflate` tenía dos velocidades: `inflate_raw` pasaba por miniz (M253) y el modo incremental
+(`inflate_stream`/`stream_push`, M193) era raylang puro — el port de `puff.c` con la ventana y el
+cursor de bits guardados entre llamadas. rayzip lo midió: 15× más lento que `inflate_raw` en nativo
+y 1350× en la VM. Para un servidor WebSocket con `permessage-deflate` o un cliente RFB, que viven
+en ese modo, era la diferencia entre un decodificador y un cuello de botella.
+
+**Por qué no era un `op` sin estado más.** Las primitivas de M253 son funciones puras sobre `bytes`
+(`op(nombre, data, n)`), determinista por construcción y por eso oráculo VM↔nativo. Un stream a
+medias no cabe ahí: miniz, como zlib, guarda el bloque en curso (las tablas Huffman, el código a
+medio leer, la ventana) dentro de su `InflateState`, y no hay forma de reconstruirlo desde «la
+ventana más los octetos pendientes» al estilo del decodificador raylang (que descartaba el bloque
+incompleto y lo re-decodificaba al llegar más entrada, cosa que miniz no sabe hacer desde mitad
+de octeto). Lo que hace falta es ESTADO con identidad: un handle.
+
+**El diseño.** Una tabla del proceso (`Mutex<HashMap<u64, Box<InflateState>>>`, en
+`crates/ray-runtime/src/deflate.rs`) y tres ops nuevas sobre la misma primitiva: `"stream_new"`
+devuelve el handle (8 octetos BE); `"stream_push"` (n = handle; `data` = tope de salida de ESTE push
+en 8 BE + el trozo) devuelve `[estado][consumidos 8 BE][producido…]` con estado 0 = sigue, 1 =
+bloque final visto, 2 = corrupto, 3 = tope rebasado; `"stream_close"` libera. El runtime libera el
+handle él mismo al terminar o fallar (nada más puede salir de ahí); solo un stream de sesión
+abandonado a medias necesita `stream_close`, que es la función nueva de la superficie. Sin
+destructores en el lenguaje, ese es el precio honesto: la API lo dice y `stream_close` tras el
+final es inocuo. En raylang, `InflateStream` lleva `handle` (0 = decodificador propio: builds sin
+`deflate`, wasm) y `stream_push` bifurca tras consumir la cabecera zlib, que sigue haciéndose en
+raylang para que el stream del runtime sea siempre crudo. `stream_remaining` (#191) se conserva:
+con estado 1 el runtime dice cuánto consumió y lo que seguía queda en `pending`.
+
+**Lo que cambia de cara al usuario.** `stream_push` devuelve ahora lo decodificado hasta el
+momento, no «lo que produjeron los bloques completos»: miniz emite la salida de un bloque a medias.
+Para los protocolos que lo usan (un `Z_SYNC_FLUSH` por mensaje) es lo mismo — cada push sigue
+dando su mensaje entero —; para un corte dentro de un bloque, parte sale antes. Y un stream
+corrupto se reporta como `corrupt DEFLATE stream` (miniz no distingue causas); el decodificador
+raylang conserva sus mensajes detallados como respaldo. El test `inflate_stream_cli` cambia esa
+línea; `findings_1_27_70_cli` cubre cortes arbitrarios, tope por push, `stream_close` a medias y
+`stream_remaining` en los tres motores, y el runtime tiene su test unitario de los tres ops.
+
+**Medido** (un stream zlib de 2000 mensajes con `Z_SYNC_FLUSH`, 387 KB → 2,8 MB, pushes de 4 KiB):
+VM 2140 ms → 16 ms; nativo 169 ms → 23 ms. PERFORMANCE §22.
+

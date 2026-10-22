@@ -325,7 +325,8 @@ fn the_docs_say_what_spawn_fs_and_net_do() {
     assert!(doc("spawn").contains("is never joined ends silently"));
     assert!(doc("fs.is_file").contains("Follows symlinks"));
     assert!(doc("fs.is_dir").contains("Follows symlinks"));
-    assert!(doc("net.socket_write_bytes").contains("There is no write timeout"));
+    assert!(doc("net.socket_write_bytes").contains("`set_write_timeout` deadline passes"));
+    assert!(doc("net.set_write_timeout").contains("fails with the stable error \"write timeout\""));
     assert!(doc("net.set_read_timeout").contains("Reads only"));
     assert!(doc("math.checked_mul").contains("or `None` if it overflows"));
 }

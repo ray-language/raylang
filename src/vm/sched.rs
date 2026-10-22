@@ -133,6 +133,9 @@ pub(super) struct IoParked {
 pub(super) struct PendingWrite {
     pub(super) handle: i64,
     pub(super) remaining: Vec<u8>,
+    /// raysec #234: el plazo de la escritura ENTERA (`net.set_write_timeout`), fijado al aparcar por
+    /// primera vez y conservado en cada re-aparcado parcial (gotear octetos no lo renueva).
+    pub(super) deadline: Option<std::time::Instant>,
 }
 
 /// M98.1: un slot del almacén de tareas. `task: None` = libre (en `free_tasks`); `gen` se incrementa
@@ -449,7 +452,8 @@ impl<'a> Vm<'a> {
         {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             let fiber = Self::take_current_fiber(&mut self.cur);
-            sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }), handle, deadline: None });
+            let deadline = crate::builtins::write_deadline(handle);
+            sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining, deadline }), handle, deadline });
             sh.running -= 1; // esta fibra se aparcó → este worker queda ocioso
         }
         if !self.poll_next(line, col)? { self.stop = true; }
@@ -465,7 +469,8 @@ impl<'a> Vm<'a> {
             Ok(n) => {
                 pw.remaining.drain(..n); // descarta lo ya enviado y re-aparca el resto
                 let handle = pw.handle;
-                shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw), handle, deadline: None });
+                let deadline = pw.deadline;
+                shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw), handle, deadline });
                 return;
             }
             Err(e) => Err(e),
@@ -624,6 +629,20 @@ impl<'a> Vm<'a> {
         while i < shared.io_parked.len() {
             if shared.io_parked[i].deadline.is_some_and(|d| d <= now) {
                 let p = shared.io_parked.remove(i);
+                if p.pending_write.is_some() {
+                    // raysec #234: una ESCRITURA vencida no se re-ejecuta (su `ip` ya avanzó): se le
+                    // empuja el resultado de error, como hace `finish_parked_write` al terminar.
+                    let mut fiber = p.fiber;
+                    let elems = vec![
+                        HeapValue::Str("err".to_string().into()),
+                        HeapValue::Str(crate::builtins::WRITE_TIMEOUT_MSG.to_string().into()),
+                    ];
+                    let h = fiber.heap.allocate(Obj::Array(elems));
+                    fiber.stack.push(HeapValue::Obj(h));
+                    shared.ready.push_back(fiber);
+                    woke = true;
+                    continue;
+                }
                 if p.handle >= 0 {
                     crate::builtins::mark_read_timeout(p.handle);
                 }

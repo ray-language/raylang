@@ -87,13 +87,16 @@ pub fn trace_of(req: Request) -> trace.Trace {
 // `serve_raw` usan `default_limits()`; las variantes `*_limits` los configuran.
 /// Safety limits for the server: maximum header bytes, maximum body bytes (as declared by
 /// `Content-Length`), maximum simultaneous connections (`max_conns <= 0` = unbounded), and the
-/// total time budget in ms for reading one request (`read_timeout_millis <= 0` = no timeout).
+/// total time budget in ms for reading one request (`read_timeout_millis <= 0` = no timeout), and
+/// the write timeout per response write (`write_timeout_millis`, raysec #234: a client that stops
+/// reading its response no longer holds the connection's fiber forever; `<= 0` = no timeout).
 /// `serve`/`serve_raw` use `default_limits()`; pass your own via `serve_limits`/`serve_raw_limits`.
 pub struct Limits {
     max_header_bytes: int,
     max_body_bytes: int,
     max_conns: int,
     read_timeout_millis: int,
+    write_timeout_millis: int,
     // M297: si no está vacío, toda petición debe traerlo (cabecera `X-Ray-Token`, cookie
     // `ray_local` o `?ray_token=`; ver `local_limits`). Es la defensa contra OTROS PROCESOS de la
     // misma máquina (o apps del mismo móvil) que conecten al puerto de una app de escritorio.
@@ -101,13 +104,14 @@ pub struct Limits {
 }
 
 /// The default safety limits: 64 KiB of headers, 10 MiB of body, 1024 simultaneous connections,
-/// 10 s to read a request.
+/// 10 s to read a request, 30 s for each write of a response to make progress.
 pub fn default_limits() -> Limits {
     Limits {
         max_header_bytes: 65536,
         max_body_bytes: 10485760,
         max_conns: 1024,
         read_timeout_millis: 10000,
+        write_timeout_millis: 30000,
         local_token: ""
     }
 }
@@ -2117,6 +2121,11 @@ fn rejection(e: string) -> Response {
 
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     var follow: bool = true;
+    // raysec #234: una escritura de la respuesta que no avanza en `write_timeout_millis` (el
+    // cliente dejó de leer) falla con "write timeout" y la conexión se cierra, en vez de retener
+    // la fibra y el cuerpo en memoria para siempre. El plazo es del handle: vale para todas las
+    // escrituras de esta conexión (también las de un cuerpo en streaming, trozo a trozo).
+    net.set_write_timeout(conn, limits.write_timeout_millis);
     // M316 (findings #81): los octetos sobrantes de la petición anterior (pipelining HTTP/1.1).
     var carry: bytes = b"";
     // M361: lo que se calcula una vez por conexión (dirección remota, `Date`, live-reload).

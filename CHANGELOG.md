@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.78 — 2026-10-22
+
+- **`net.set_write_timeout(h, ms)`** (M424, raysec #234): una escritura (`socket_write`,
+  `socket_write_bytes`; TCP y TLS) que no logra entregar todos sus octetos en `ms` falla con el
+  error estable `"write timeout"`, en los tres motores. El plazo es de la escritura entera: un
+  peer que acepta un octeto cada tanto no lo renueva. Sin él, como hasta ahora, una escritura a un
+  peer que dejó de leer espera sin plazo (la fibra aparca).
+- **`net` 0.11.1**: el webserver pone `Limits.write_timeout_millis` (30 s por defecto) en cada
+  conexión: un cliente que deja de leer su respuesta ya no retiene la fibra ni el cuerpo en
+  memoria para siempre.
+
 ## 1.27.77 — 2026-10-22
 
 Ronda de raysec, una revisión de seguridad de las apps (M423, #229–#237).

@@ -2881,6 +2881,14 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees int, int"),
             },
+            // raysec #234: timeout de escritura (total; aquí aplica el SO_SNDTIMEO real).
+            "__socket_set_write_timeout" => match (&values[0], &values[1]) {
+                (Value::Int(h), Value::Int(ms)) => {
+                    crate::builtins::socket_set_write_timeout(*h, *ms);
+                    Value::Unit
+                }
+                _ => unreachable!("the checker guarantees int, int"),
+            },
             // M203: TCP_NODELAY del socket (total).
             "__socket_set_nodelay" => match (&values[0], &values[1]) {
                 (Value::Int(h), Value::Bool(on)) => {

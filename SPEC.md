@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.77** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.78** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -552,7 +552,8 @@ en los puntos de cesión), nunca preemptiva.
 
 **Plazos y fibras ocupadas.** No hay preempción: una fibra que computa sin ceder ocupa su worker
 hasta que cede (E/S, canal, `sleep`, `yield`). Los **plazos** de las demás fibras (`time.sleep`,
-`select_timeout`, `io.read_timeout`, `net.set_read_timeout`, `ui.next_event_timeout`) y sus
+`select_timeout`, `io.read_timeout`, `net.set_read_timeout`, `net.set_write_timeout`,
+`ui.next_event_timeout`) y sus
 despertares por E/S **no dependen** de que esa fibra ceda mientras haya **otro worker** que pueda
 reanudarlas: en la VM, cualquier worker ocioso atiende los plazos vencidos y la E/S lista (con
 precisión de ~1 ms); en el binario nativo, cada worker atiende con su propio poller los plazos y la

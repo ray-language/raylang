@@ -22,9 +22,10 @@ pub fn socket_read_bytes(h: int) -> Result<bytes, string> {
     }
 }
 
-/// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`. There is no write timeout:
-/// if the peer stops reading and its window fills, the write waits (the fiber parks) until the
-/// peer reads or the connection closes. `set_read_timeout` does not cover writes.
+/// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`. If the peer stops reading
+/// and its window fills, the write waits (the fiber parks) until the peer reads, the connection
+/// closes, or the `set_write_timeout` deadline passes ("write timeout"); `set_read_timeout` does
+/// not cover writes.
 pub fn socket_write_bytes(h: int, data: bytes) -> Result<int, string> {
     let r = __socket_write_bytes(h, data);
     if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
@@ -210,8 +211,8 @@ pub fn socket_read(h: int) -> Result<string, string> {
 }
 
 // Escribe en el socket; Ok(nº de bytes) u Err(mensaje).
-/// Writes the string to the socket; `Ok(byte count)` or `Err(message)`. No write timeout (see
-/// `socket_write_bytes`).
+/// Writes the string to the socket; `Ok(byte count)` or `Err(message)`. Bounded only by
+/// `set_write_timeout` (see `socket_write_bytes`).
 pub fn socket_write(h: int, s: string) -> Result<int, string> {
     let r = __socket_write(h, s);
     if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
@@ -265,6 +266,18 @@ pub fn local_port(h: int) -> int {
 /// Total: non-socket handles are ignored.
 pub fn set_read_timeout(h: int, ms: int) {
     __socket_set_read_timeout(h, ms);
+}
+
+// raysec #234: el gemelo de escritura. En la VM el plazo vive en el aparcado por escritura (una
+// escritura parcial que gotea no lo renueva: es el plazo de la escritura ENTERA); en el intérprete,
+// el SO_SNDTIMEO real; en nativo, la tabla por handle del runtime emitido.
+/// Sets (ms > 0) or clears (ms <= 0) the write timeout of socket `h`: a `socket_write` or
+/// `socket_write_bytes` that cannot hand all its bytes to the peer within `ms` (the peer stopped
+/// reading and its window is full) fails with the stable error "write timeout". The deadline
+/// covers the whole write, not each partial progress. TCP and TLS; total: other handles are
+/// ignored. Without it a write to a peer that never reads waits forever.
+pub fn set_write_timeout(h: int, ms: int) {
+    __socket_set_write_timeout(h, ms);
 }
 
 // M203 (feedback 23 de ray-remote): sin Nagle, cada escritura pequeña sale ya (eventos de ratón,

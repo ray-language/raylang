@@ -4578,6 +4578,16 @@ impl<'a> Vm<'a> {
                     crate::builtins::socket_set_read_timeout(handle, ms);
                     self.push(HeapValue::Unit);
                 }
+                // raysec #234: timeout de escritura (total).
+                OpCode::SocketSetWriteTimeout => {
+                    let ms = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Int(ms)) = (handle, ms) else {
+                        unreachable!("the checker guarantees int, int");
+                    };
+                    crate::builtins::socket_set_write_timeout(handle, ms);
+                    self.push(HeapValue::Unit);
+                }
                 // M203: TCP_NODELAY del socket (total).
                 OpCode::SocketSetNodelay => {
                     let on = self.pop();

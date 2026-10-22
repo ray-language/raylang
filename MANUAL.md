@@ -2104,6 +2104,10 @@ primer día):
   El cliente `net/http` ya acota sus diales (el plazo de la petición, o 10 s; `http.connect_timeout`).
 - `net.set_read_timeout(h, ms)` — la lectura que espere más falla con `"read timeout"`. Aplica a
   TCP, TLS **y UDP** (`udp.recv_from`: un datagrama perdido ya no cuelga la fibra).
+- `net.set_write_timeout(h, ms)` — la escritura que no logre entregar todos sus octetos en `ms`
+  (el peer dejó de leer y su ventana está llena) falla con `"write timeout"`. El plazo es de la
+  escritura entera: un peer que acepta un octeto cada tanto no lo renueva. El webserver lo pone
+  por conexión (`Limits.write_timeout_millis`, 30 s).
 - `net.peer_addr(h)` — `"ip:puerto"` del otro extremo (TCP o TLS): logs con origen, rate-limit
   por IP. El webserver la expone directa en `Request.remote` (+ `webserver.remote_ip(req)`).
 - `net.tls_peer_cert(h) -> Result<PeerCert, _>` — el certificado del peer: **"expira en N días"**

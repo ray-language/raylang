@@ -669,7 +669,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M401 (raygate #175): poke DIRIGIDO al fd que se cierra — solo despierta a los reactores
             // con fibras aparcadas en él (ninguno, en el caso normal). Un archivo no se arma en el
             // poller: sin poke. Otro handle con fd (proceso, watch): poke global, como antes.
-            "{ __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); }; match &__e { Some(__RayHandle::Tcp(s)) => ray_runtime::fibers::poke_fd(__ray_fd(&**s)), Some(__RayHandle::Listener(l)) => ray_runtime::fibers::poke_fd(__ray_fd(l)), Some(__RayHandle::Udp(u)) => ray_runtime::fibers::poke_fd(__ray_fd(u)), Some(__RayHandle::Reader(_)) | Some(__RayHandle::Writer(_)) | None => {}, _ => ray_runtime::fibers::poke() } "
+            "{ __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); __ray_wr_to_clear(h); }; match &__e { Some(__RayHandle::Tcp(s)) => ray_runtime::fibers::poke_fd(__ray_fd(&**s)), Some(__RayHandle::Listener(l)) => ray_runtime::fibers::poke_fd(__ray_fd(l)), Some(__RayHandle::Udp(u)) => ray_runtime::fibers::poke_fd(__ray_fd(u)), Some(__RayHandle::Reader(_)) | Some(__RayHandle::Writer(_)) | None => {}, _ => ray_runtime::fibers::poke() } "
         } else if t.needs_net {
             "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {
@@ -1311,12 +1311,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // vencido → "read timeout", byte-idéntico a la VM.
             (
                 "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
-                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all_wait(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_wr_to(h); let mut __g = __t.lock().unwrap(); return match __g.write_all_wait_timeout(bytes, to) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else if t.needs_rt_tls {
             (
                 "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return __RAY_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); match __g.read(&mut buf[..]) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) } }); } ",
-                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else {
             ("", "")
@@ -1366,7 +1366,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             };
             write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    {tls_rds}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())")).unwrap();
             write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{\n    {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<[u8]>::from(&buf[..n])")).unwrap();
-            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = __ray_fd(&*s); let mut off = 0;\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
+            // raysec #234: el plazo de ESCRITURA del handle (__ray_wr_to) acota la escritura entera;
+            // vencido → "write timeout", byte-idéntico a la VM (WRITE_TIMEOUT_MSG).
+            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = __ray_fd(&*s); let mut off = 0;\n    let to = __ray_wr_to(h);\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {{ let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"write timeout\")); }} rem }} }}; if ray_runtime::fibers::wait_writable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"write timeout\")); }} }}\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
         } else {
             // §64 (también en hilo-por-tarea): en EOF se re-verifica el registro — un close desde
             // otra tarea hizo shutdown del fd (el read bloqueado despierta con Ok(0)) y debe
@@ -1375,7 +1377,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // TimedOut (Windows, WSAETIMEDOUT 10060): ambos son el "read timeout" estable de la VM.
             write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ {tls_rds}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
             write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
-            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+            // raysec #234: SO_SNDTIMEO (set_write_timeout, sockets bloqueantes) vence como WouldBlock
+            // (unix) o TimedOut (Windows): el "write timeout" estable de la VM.
+            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => return Err(Rc::<str>::from(\"write timeout\")), Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         }
         out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",
@@ -1432,6 +1436,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_rd_to(h: i64) -> i64 { if __RAY_RD_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return 0; } __ray_rd_to_map().read().unwrap().get(&h).copied().unwrap_or(0) }\n",
                 "fn __ray_rd_to_clear(h: i64) { if __RAY_RD_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return; } let mut m = __ray_rd_to_map().write().unwrap(); if m.remove(&h).is_some() { __RAY_RD_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } }\n",
                 "fn __ray_set_read_timeout(h: i64, ms: i64) { let mut m = __ray_rd_to_map().write().unwrap(); if ms <= 0 { if m.remove(&h).is_some() { __RAY_RD_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } } else if m.insert(h, ms).is_none() { __RAY_RD_TO_N.fetch_add(1, std::sync::atomic::Ordering::AcqRel); } }\n",
+                // raysec #234: la misma tabla para el plazo de ESCRITURA (lo aplica el park de
+                // __ray_socket_write / write_all_wait_timeout). Sin plazos puestos, no toca el lock.
+                "static __RAY_WR_TO_N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+                "fn __ray_wr_to_map() -> &'static std::sync::RwLock<std::collections::HashMap<i64, i64>> { static M: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<i64, i64>>> = std::sync::OnceLock::new(); M.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new())) }\n",
+                "fn __ray_wr_to(h: i64) -> i64 { if __RAY_WR_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return 0; } __ray_wr_to_map().read().unwrap().get(&h).copied().unwrap_or(0) }\n",
+                "fn __ray_wr_to_clear(h: i64) { if __RAY_WR_TO_N.load(std::sync::atomic::Ordering::Acquire) == 0 { return; } let mut m = __ray_wr_to_map().write().unwrap(); if m.remove(&h).is_some() { __RAY_WR_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } }\n",
+                "fn __ray_set_write_timeout(h: i64, ms: i64) { let mut m = __ray_wr_to_map().write().unwrap(); if ms <= 0 { if m.remove(&h).is_some() { __RAY_WR_TO_N.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); } } else if m.insert(h, ms).is_none() { __RAY_WR_TO_N.fetch_add(1, std::sync::atomic::Ordering::AcqRel); } }\n",
             ));
         } else {
             out.push_str(concat!(
@@ -1453,6 +1464,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        _ => {}\n",
             "    } }\n",
             "thread_local! { static __RAY_LST_TO: std::cell::RefCell<std::collections::HashMap<i64, i64>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
+            // raysec #234: el plazo de escritura, SO_SNDTIMEO real (sockets bloqueantes).
+            "fn __ray_set_write_timeout(h: i64, ms: i64) {\n",
+            "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
+            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { let _ = s.set_write_timeout(d); return; }\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) {\n",
+            "        Some(__RayHandle::Tcp(s)) => { let _ = s.set_write_timeout(d); }\n",
+            "        _ => {}\n",
+            "    } }\n",
             ));
         }
         out.push_str(concat!(
@@ -1610,7 +1630,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         ));
         // La higiene de la caché de sockets según el modelo: ctx de fibra (--fibers) o thread-local.
         if t.fibers {
-            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); { __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); };\n");
+            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); { __ray_ctx(|c| { c.socks.remove(&h); }); __ray_rd_to_clear(h); __ray_wr_to_clear(h); };\n");
         } else {
             out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n");
         }

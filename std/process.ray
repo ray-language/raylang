@@ -112,7 +112,9 @@ pub fn listen_signal(sig: int) -> bool {
 
 /// Runs `program` with `args` (no shell — a pipeline is written `run("sh", ["-c", …])`,
 /// visibly). `Ok(Output)` even when the child failed or died by signal; `Err(message)` only
-/// when it could not launch.
+/// when it could not launch. Waiting for the child parks only the calling fiber: in a native
+/// binary the wait runs on the blocking pool (since 1.27.66), so the other fibers of its worker
+/// keep running, as in the VM.
 pub fn run(program: string, args: [string]) -> Result<Output, string> {
     cmd(program, args).run()
 }

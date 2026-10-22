@@ -18590,3 +18590,42 @@ Eq>`, el derive y `Option` estructurales, `contains` sin cambio, tuplas) en los 
 test del hint en `findings_1_27_65_cli` pasa a comprobar que `a == b` compila bajo `T: Eq` y que
 sin bound el error lo dice; suites selfhost en verde.
 
+## 393. M420 — la ronda 1.27.73: el `stream_push` que perdía datos y la política de otoño de `cron/local` (rayzip #223, raycron #226; oct 2026)
+
+Las apps re-midieron con 1.27.73 y encontraron dos bugs de lo entregado esa misma tarde.
+
+**#223, regresión de M415.** El `stream_push` del runtime sacaba la salida en un búfer de 32 KiB y
+paraba en cuanto una llamada a `inflate` de miniz escribía menos que el búfer, leyéndolo como «no
+queda entrada». Pero `inflate` (`miniz_oxide::inflate::stream`) tiene un camino temprano: si su
+diccionario guarda salida pendiente, la vuelca y VUELVE sin tocar la entrada. Con un stream muy
+comprimible (MB de salida por KB de entrada) eso pasa en cada trozo: el bucle paraba con entrada
+sin consumir, y el lado raylang (`stream_push_fast`) tiraba `pending` sin mirar cuánto se había
+usado. Resultado: salida truncada, a veces con el bloque final ya visto (`finished = true` sin
+error) y a veces un `corrupt DEFLATE stream` al seguir decodificando a mitad de un bloque. El
+test unitario de M415 no lo vio porque su stream (20 000 octetos de `i % 251`) nunca acumulaba
+salida en el diccionario más allá del búfer. Arreglo: el bucle sigue mientras haya progreso
+(entrada consumida o salida escrita) y para solo en una vuelta sin progreso, el bloque final o
+`Err(Buf)`; y raylang devuelve a `pending` lo no consumido. El test nuevo del runtime trocea un
+stream de 3,2 MB (3 MB de `a` + 200 KB pseudoaleatorios) en 1, 7, 100, 2000 y 64 KiB octetos y
+exige la salida entera y toda la entrada consumida; con el bucle viejo falla en el trozo de 100.
+El de integración repite la tabla del hallazgo en los tres motores. Con el paquete `zip`, la
+entrada de 100 MB del zip de 75 MB del hallazgo se lee por trozos en ~480 ms (VM y nativo).
+
+**#226, la política de otoño.** M416 añadió la segunda pasada para schedules horarios con una
+segunda búsqueda desde el cursor civil retrasado — y era frágil: solo encontraba el primer minuto
+de la hora repetida (`*/15` daba 02:00 CET y saltaba a 03:00), una hora fijada encadenada desde
+un instante dentro del solape volvía a disparar, y `*/7` en Santiago agotaba la guarda y daba
+`Err` (con lo que `run_in` dejaba de funcionar esa noche). `next_after_in` se rehace con una
+sola regla: los minutos civiles que casan se recorren desde `ms + off_min` (el menor offset en un
+día a cada lado), cada uno da sus disparos (`Single` → uno; `Gap` → el final del hueco;
+`Ambiguous(a, b)` → `a`, y también `b` si el campo hora es `*`) y gana el menor posterior a `ms`;
+se para en cuanto un candidato civil, menos `off_max`, ya no puede mejorar al mejor. Sin estado
+ni segunda búsqueda: el orden civil y el real pueden diferir en la hora repetida y no importa. Los
+tests fijan las cinco filas del hallazgo (Madrid con el fixture; Santiago con el zoneinfo del
+sistema cuando existe). `cron` pasa a 0.2.1.
+
+**Doc** (#224/#225/#227 y los restos de #199/#201): un ejemplo con `3_600_000` (raylang no admite
+`_` en literales; queda en IDEAS §114), `read_link`/`symlink` en Windows, `ray doc Eq` y la tabla
+de errores de `llms.txt` tras M418 (la fila del `T: Eq` describía un error que ya no existe; la
+sustituye la del `T` sin bound), `Stat.mode` en Windows y `process.run` en fibras.
+

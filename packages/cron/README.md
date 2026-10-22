@@ -23,7 +23,7 @@ spawn(fn() { cron.run(s, fn() { print("tick"); }); });   // runner cooperativo
   la hora CIVIL de la zona. Política DST: una hora del **hueco** de primavera dispara al
   acabar el hueco; una del **solape** de otoño dispara solo la PRIMERA vez si el schedule fija la
   hora (`30 2 * * *`), y en las DOS pasadas si corre cada hora (`0 * * * *`, `*/15 * * * *`), para
-  que el espaciado real se mantenga (0.2.0, raycron #202). Con `tz.system()` corre en la hora
+  que el espaciado real se mantenga (0.2.0, raycron #202; 0.2.1 la cumple en todos los casos, #226). Con `tz.system()` corre en la hora
   local del sistema, también en Windows. Módulo aparte para que el cron UTC no arrastre la
   dependencia tz.
 

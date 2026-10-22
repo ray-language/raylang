@@ -4,7 +4,7 @@
 // tz. El consumidor que quiera hora local declara AMBOS paquetes (cron y tz, hermanos
 // de path o del índice) e importa `cron/local`.
 //
-// Política DST (IDEAS §42; M416 afina el solape con la de raycron #202):
+// Política DST (IDEAS §42; M416 afina el solape con la de raycron #202; raycron #226 la arregla):
 // - una hora civil que cae en el HUECO de primavera (no existe) dispara al TERMINAR el
 //   hueco — la primera hora local válida;
 // - una hora civil del SOLAPE de otoño (ocurre dos veces) dispara solo la PRIMERA vez si
@@ -17,102 +17,105 @@ import std/time;
 
 // El siguiente disparo del schedule en la hora CIVIL de la zona, como instante UTC
 // (epoch-ms), estrictamente posterior a `ms`.
-/// The next fire time of the schedule evaluated in the zone's CIVIL local time, as a
-/// UTC instant (epoch-ms) strictly after `ms`. DST policy: a civil time falling in the
-/// spring-forward gap fires when the gap ends; one in the fall-back overlap fires only on
-/// its first occurrence when the schedule pins the hour, and on both occurrences when it
-/// runs every hour (`0 * * * *`), so the real-time spacing is kept.
+/// The next fire time of the schedule evaluated in the zone's CIVIL local time, as a UTC instant
+/// (epoch-ms) strictly after `ms`. DST policy, one rule for every schedule:
+/// - a civil time in the spring-forward GAP (it never happens) fires once, when the gap ends;
+/// - a civil time in the fall-back OVERLAP (it happens twice) fires on its first occurrence and,
+///   only when the schedule runs every hour (hour field `*`: `0 * * * *`, `*/15 * * * *`), also on
+///   the second, so the real-time spacing is kept; a schedule that pins the hour (`30 2 * * *`)
+///   fires once.
 pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, string> {
-    // La búsqueda normal: el cursor civil arranca en la hora local de `ms` y el solape de
-    // otoño cuenta solo su primera ocurrencia.
-    let main = civil_search(s, z, ms, ms + tz.offset_at(z, ms))?;
-    if (!every_hour(s)) {
-        return Result.Ok(main);
-    }
-    // M416 (raycron #202): schedule horario. Si estamos en las horas previas a un retraso del
-    // reloj (otoño), la SEGUNDA pasada de la hora repetida también dispara: se busca con el
-    // cursor civil retrasado al offset de después del cambio, aceptando solo segundas
-    // ocurrencias (`Ambiguous(_, b)` con `b > ms`), y gana la más temprana.
-    let later = tz.offset_at(z, ms + 3 * 3600000);
-    let current = tz.offset_at(z, ms);
-    if (later >= current) {
-        return Result.Ok(main);
-    }
-    var naive = ms + later;
-    let limit = ms + current;
+    let hourly = every_hour(s);
+    // raycron #226: los offsets de la ventana (un día a cada lado cubre cualquier cambio cercano).
+    // Un disparo `t > ms` viene de un minuto civil `c` con `c - off = t`, así que basta mirar los
+    // `c` desde `ms + off_min`; y como cada disparo es `>= c - off_max`, en cuanto `c - off_max`
+    // supera al mejor encontrado no hay uno más temprano.
+    let o1 = tz.offset_at(z, ms - 86400000);
+    let o2 = tz.offset_at(z, ms);
+    let o3 = tz.offset_at(z, ms + 86400000);
+    let off_min = min3(o1, o2, o3);
+    let off_max = max3(o1, o2, o3);
+    var civil = ms + off_min - 60000;
+    var best = -1;
     var guard = 0;
-    while (guard < 240) {
-        let cand = cron.next_after(s, naive)?;
-        if (cand > limit) {
-            return Result.Ok(main);
+    while (guard < 5000) {
+        let cand = cron.next_after(s, civil)?;
+        if (best >= 0 && cand - off_max > best) {
+            return Result.Ok(best);
         }
-        match (tz.to_utc(z, time.from_epoch_millis(cand))) {
-            tz.LocalResult.Ambiguous(a, b) => {
-                if (b > ms && b < main) {
-                    return Result.Ok(b);
-                }
-            },
-            tz.LocalResult.Single(t) => { },
-            tz.LocalResult.Gap => { },
-        }
-        naive = cand;
+        best = earliest_after(fires_of(z, cand, hourly), ms, best);
+        civil = cand;
         guard = guard + 1;
     }
-    Result.Ok(main)
-}
-
-// La búsqueda civil desde el cursor `naive` (hora local ingenua): el matcher puro avanza en
-// tiempo civil y cada candidato se resuelve a UTC con la política del hueco y del solape
-// (primera ocurrencia).
-fn civil_search(s: cron.Schedule, z: tz.Zone, ms: int, start: int) -> Result<int, string> {
-    var naive = start;
-    var guard = 0;
-    while (guard < 8) {
-        let cand = cron.next_after(s, naive)?;  // el matcher puro, sobre el civil local
-        let civil = time.from_epoch_millis(cand);
-        match (tz.to_utc(z, civil)) {
-            tz.LocalResult.Single(t) => {
-                if (t > ms) {
-                    return Result.Ok(t);
-                }
-            },
-            tz.LocalResult.Ambiguous(a, b) => {
-                // Solo la PRIMERA ocurrencia; si ya pasó, este disparo civil ya corrió
-                // (la segunda, para los horarios, la aporta `next_after_in`).
-                if (a > ms) {
-                    return Result.Ok(a);
-                }
-            },
-            tz.LocalResult.Gap => {
-                // La hora civil no existe: dispara al acabar el hueco (el primer minuto
-                // civil válido después; un hueco real dura minutos u horas, acotamos).
-                var c2 = cand + 60000;
-                var step = 0;
-                while (step < 240) {
-                    match (tz.to_utc(z, time.from_epoch_millis(c2))) {
-                        tz.LocalResult.Single(t2) => {
-                            if (t2 > ms) {
-                                return Result.Ok(t2);
-                            }
-                            step = 240;  // válido pero pasado: fuera del hueco, aborta el escaneo
-                        },
-                        tz.LocalResult.Ambiguous(a2, b2) => {
-                            if (a2 > ms) {
-                                return Result.Ok(a2);
-                            }
-                            step = 240;
-                        },
-                        tz.LocalResult.Gap => { },
-                    }
-                    c2 = c2 + 60000;
-                    step = step + 1;
-                }
-            },
-        }
-        naive = cand;
-        guard = guard + 1;
+    if (best >= 0) {
+        return Result.Ok(best);
     }
     Result.Err("cron: no trigger found in local time (impossible expression?)")
+}
+
+// Los instantes UTC en que dispara el minuto civil `cand` según la política de la zona.
+fn fires_of(z: tz.Zone, cand: int, hourly: bool) -> [int] {
+    match (tz.to_utc(z, time.from_epoch_millis(cand))) {
+        tz.LocalResult.Single(t) => [t],
+        tz.LocalResult.Ambiguous(a, b) => if (hourly) {
+            [a, b]
+        } else {
+            [a]
+        },
+        tz.LocalResult.Gap => {
+            // No existe: dispara al acabar el hueco, el primer minuto civil válido después (un hueco
+            // real dura minutos u horas; se acota a un día).
+            var c2 = cand + 60000;
+            var step = 0;
+            while (step < 1440) {
+                match (tz.to_utc(z, time.from_epoch_millis(c2))) {
+                    tz.LocalResult.Single(t2) => {
+                        return [t2];
+                    },
+                    tz.LocalResult.Ambiguous(a2, b2) => {
+                        return [a2];
+                    },
+                    tz.LocalResult.Gap => { },
+                }
+                c2 = c2 + 60000;
+                step = step + 1;
+            }
+            []
+        },
+    }
+}
+
+// El menor de `fires` estrictamente posterior a `ms`, comparado con `best` (-1 = ninguno aún).
+fn earliest_after(fires: [int], ms: int, best: int) -> int {
+    var b = best;
+    for t in fires {
+        if (t > ms && (b < 0 || t < b)) {
+            b = t;
+        }
+    }
+    b
+}
+
+fn min3(a: int, b: int, c: int) -> int {
+    var m = a;
+    if (b < m) {
+        m = b;
+    }
+    if (c < m) {
+        m = c;
+    }
+    m
+}
+
+fn max3(a: int, b: int, c: int) -> int {
+    var m = a;
+    if (b > m) {
+        m = b;
+    }
+    if (c > m) {
+        m = c;
+    }
+    m
 }
 
 // ¿Corre el schedule a cada hora (campo hora = `*`)? Entonces el solape de otoño dispara dos veces.

@@ -4295,3 +4295,12 @@ paquetes:
    deja el literal con la envoltura larga, la segunda vuelve a pegar el literal a la llamada. La
    guarda `fmt_policy` lo detecta como «el formateador no converge». Bug de `src/fmt.rs`, chico.
 
+## 114. Separadores `_` en literales numéricos (rayzip #224, oct 2026)
+
+rayzip copió `3_600_000` de una doc de la stdlib y no compiló: raylang no acepta `_` en los
+literales (`1_000_000` es un error de sintaxis). La doc se corrigió (M420); queda la pregunta de
+si el lenguaje debería aceptarlos, como Rust, Python, Java, Swift, Go y JS. Coste: lexer (y su
+espejo selfhost), formateador (preservar la forma del usuario, como hace con `0xFF`), gramáticas de
+editores (tree-sitter, Sublime, VS Code) y SPEC §1. Impacto: **bajo**, puramente aditivo (un
+programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
+

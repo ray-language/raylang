@@ -508,6 +508,7 @@ optional one first with `ffi.library_available("z") -> bool`. Full rules: §13 o
 
 | You write | You get | Fix |
 |---|---|---|
+| `a == b` with `a, b: T` and no bound on `T` | `type error at L:C: the operator '==' requires both operands of the same comparable type, not T and T; a type parameter compares with == only under an Eq bound (fn f<T: Eq>)` | `fn f<T: Eq>(a: T, b: T)` |
 | `match x { ... }` | `syntax error at L:C: expected '(' after 'match'` | `match (x) { ... }` |
 | `let mut x = 1;` | `syntax error at L:C: expected '=' in the declaration` | `var x = 1;` |
 | a `"…"` literal across lines | `lex error at L:C: newline inside an unterminated string` | use a backtick string (multi-line) |
@@ -521,7 +522,6 @@ optional one first with `ffi.library_available("z") -> bool`. Full rules: §13 o
 | `f(1)` on `fn f(a: int, b: int)` | `type error at L:C: 'f' expects 2 argument(s), received 1` | fix arity |
 | `f("x")` on `fn f(a: int)` | `type error at L:C: argument 1 of 'f': expected int, got string` | fix the type |
 | `@derive(ToJson)` without importing it | `type error at L:C: trait 'ToJson' not declared: it lives in std/json, import it with ...` | `from std/json import ToJson;` |
-| `a == b` with `a, b: T` and `T: Eq` | `type error at L:C: the operator '==' requires both operands of the same comparable type, not T and T; compare a type parameter with its Eq bound: a.eq(b)` | `a.eq(b)` |
 | `Result.Ok(())` | `syntax error at L:C: expected an expression, found RParen` | `Result.Ok({ })` — the empty block `{ }` IS the unit value; `()` is not an expression |
 
 Error headers (stable): `lex error at L:C:` · `syntax error at L:C:` ·

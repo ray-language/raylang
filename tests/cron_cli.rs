@@ -183,6 +183,10 @@ fn main() -> int {{
     secuencia(mad, "0 * * * *", 1792884600000, 4);
     // …pero una hora fijada sigue disparando solo la primera vez.
     secuencia(mad, "0 2 * * *", 1792884600000, 2);
+    // raycron #226: `*/15` dispara en los cuatro cuartos de la segunda pasada (02:00–02:45 CET =
+    // 01:00–01:45Z) y `30 2` encadenado desde su propio disparo NO repite a las 02:30 CET.
+    secuencia(mad, "*/15 * * * *", 1792887300000, 6);
+    secuencia(mad, "30 2 * * *", 1792888200000, 1);
     0
 }}
 "#,
@@ -194,7 +198,9 @@ fn main() -> int {{
 30 2 * * * → 2026-03-29T01:00:00Z(CEST) 2026-03-30T00:30:00Z(CEST)\n\
 30 2 * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-26T01:30:00Z(CET)\n\
 0 * * * * → 2026-10-25T00:00:00Z(CEST) 2026-10-25T01:00:00Z(CET) 2026-10-25T02:00:00Z(CET) 2026-10-25T03:00:00Z(CET)\n\
-0 2 * * * → 2026-10-25T00:00:00Z(CEST) 2026-10-26T01:00:00Z(CET)\n";
+0 2 * * * → 2026-10-25T00:00:00Z(CEST) 2026-10-26T01:00:00Z(CET)\n\
+*/15 * * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-25T00:45:00Z(CEST) 2026-10-25T01:00:00Z(CET) 2026-10-25T01:15:00Z(CET) 2026-10-25T01:30:00Z(CET) 2026-10-25T01:45:00Z(CET)\n\
+30 2 * * * → 2026-10-26T01:30:00Z(CET)\n";
 
     let (o_in, c_in) = run(&app, &[]);
     let (o_vm, c_vm) = run(&app, &["--vm"]);

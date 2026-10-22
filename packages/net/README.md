@@ -162,7 +162,9 @@ fn main() -> int {
   `path` convertiría un `%0d%0a` en un salto de línea). **Encuadre estricto** (0.11.0): un tamaño
   de chunk de más de 15 dígitos hex, dos `Content-Length` distintos, un `Content-Length` que no es
   solo dígitos, o `Transfer-Encoding` junto con `Content-Length` son un 400 y se cierra la
-  conexión (las ambigüedades que permiten *request smuggling*). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
+  conexión (las ambigüedades que permiten *request smuggling*). 0.11.2: también un nombre de
+  cabecera con espacios, una línea plegada (obs-fold), una línea de tamaño de chunk de más de
+  4 KiB y un `Host` malformado (`webserver.valid_host`). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra). Un handler que panica responde
   500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;

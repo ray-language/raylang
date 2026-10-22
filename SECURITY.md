@@ -173,7 +173,8 @@ Revisión de los bordes donde el código «funciona» y ningún test funcional v
 - **Encuadre HTTP sin ambigüedades** (raysec, oct 2026). El webserver de `net` responde 400 y
   cierra ante las formas que permiten *request smuggling*: dos `Content-Length` distintos, un
   `Content-Length` que no es solo dígitos, `Transfer-Encoding` junto a `Content-Length` y un
-  tamaño de chunk que desbordaría el `int`. El cliente `net/http` no manda una URL, un método o una
+  tamaño de chunk que desbordaría el `int`; también un nombre de cabecera con espacios, una línea
+  plegada, una línea de chunk de más de 4 KiB y un `Host` malformado. El cliente `net/http` no manda una URL, un método o una
   cabecera con CR/LF ni otros caracteres de control, y `Request.raw_path` da a un proxy la ruta
   original para reenviarla (nunca `path`, que va descodificado). El servidor HTTP de `mcp` sin
   token solo contesta a un `Host` de loopback o declarado en `hosts` (DNS rebinding), y el de `rpc`

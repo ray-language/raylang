@@ -4,6 +4,23 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.79 — 2026-10-23
+
+Segunda ronda de raysec (M425, #238–#241).
+
+- **`net` 0.11.2 — más encuadre estricto en el webserver**: un nombre de cabecera con espacios
+  (`Content-Length : 5`, Go CVE-2019-16276) o una línea plegada que empieza por espacio (obs-fold)
+  son un 400 (#238); la línea del tamaño de un chunk tiene un tope de 4 KiB, antes una extensión
+  enorme se acumulaba en memoria hasta el plazo de lectura (#239, Puma CVE-2024-21647); un `Host`
+  malformado (`localhost:1@evil.example:80`) es un 400 para todas las apps (#240), y
+  `webserver.valid_host(h)` queda pública.
+- **`mcp` 0.3.1**: el servidor HTTP valida el `Host` antes de compararlo y toma el puerto del
+  último `:` (#240).
+- **Intérprete: `set_write_timeout` vencía al doble del plazo** (#241): `SO_SNDTIMEO` es por
+  llamada y la primera escritura parcial lo consumía entero. Ahora el plazo es de la escritura
+  entera en los tres motores (antes de cada avance se fija a lo que resta). La escritura TLS del
+  intérprete también vence con "write timeout".
+
 ## 1.27.78 — 2026-10-22
 
 - **`net.set_write_timeout(h, ms)`** (M424, raysec #234): una escritura (`socket_write`,

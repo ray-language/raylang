@@ -423,6 +423,10 @@ fn leer_cuerpo_chunked(
     var seguir: bool = true;
     while (seguir) {
         let nl: int = buscar_crlf(acc, 0);
+        // raysec #239: la línea del tamaño tiene tope.
+        if ((nl < 0 && acc.len() > 4096) || nl > 4096) {
+            return Result.Err("línea de tamaño de chunk demasiado larga");
+        }
         if (nl < 0) {
             match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(t) => {
@@ -584,9 +588,17 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
             while (i < lineas.len()) {
+                // raysec #238: ni plegado obsoleto ni espacios en el nombre.
+                if (lineas[i].starts_with(" ") || lineas[i].starts_with("\t")) {
+                    return Result.Err("plegado de cabecera obsoleto");
+                }
                 match (index_of(lineas[i], ":")) {
                     Option.Some(c) => {
-                        let nombre: string = lineas[i].substring(0, c).trim().to_lower();
+                        let crudo: string = lineas[i].substring(0, c);
+                        if (crudo.len() == 0 || crudo != crudo.trim() || crudo.contains(" ")) {
+                            return Result.Err("nombre de cabecera inválido: " + crudo);
+                        }
+                        let nombre: string = crudo.to_lower();
                         let valor: string = lineas[i].substring(c + 1, lineas[i].len()).trim();
                         headers.insert(nombre, valor);
                     },

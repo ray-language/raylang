@@ -2801,19 +2801,36 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     // raysec #234: con SO_SNDTIMEO puesto (set_write_timeout) el socket BLOQUEANTE del intérprete
     // vence como WouldBlock/TimedOut; en un socket no bloqueante (la VM no pasa por aquí) WouldBlock
     // es «buffer lleno» y se gira. Se distinguen por el modo del handle.
-    let timed = write_timeouts().lock().unwrap().contains_key(&h) && !is_nonblocking(h);
-    while off < bytes.len() {
+    // raysec #241: SO_SNDTIMEO es POR LLAMADA, y la primera escritura parcial lo consumía entero
+    // (la siguiente volvía a esperar el plazo completo: vencía al doble). El plazo es de la escritura
+    // ENTERA, como en la VM: antes de cada `write` se fija a lo que RESTA, y al final se repone.
+    let timeout_ms = write_timeouts().lock().unwrap().get(&h).copied().filter(|_| !is_nonblocking(h));
+    let deadline = timeout_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+    let result = loop {
+        if let Some(d) = deadline {
+            let remaining = d.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break Err(WRITE_TIMEOUT_MSG.to_string());
+            }
+            let _ = stream.set_write_timeout(Some(remaining));
+        }
+        if off >= bytes.len() {
+            break Ok(bytes.len());
+        }
         match stream.write(&bytes[off..]) {
-            Ok(0) => return Err("the connection closed during the write".to_string()),
+            Ok(0) => break Err("the connection closed during the write".to_string()),
             Ok(n) => off += n,
-            Err(e) if timed && (e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut) => {
-                return Err(WRITE_TIMEOUT_MSG.to_string());
+            Err(e) if deadline.is_some() && (e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut) => {
+                break Err(WRITE_TIMEOUT_MSG.to_string());
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => break Err(e.to_string()),
         }
+    };
+    if let Some(ms) = timeout_ms {
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(ms)));
     }
-    Ok(bytes.len())
+    result
 }
 
 /// Escritura **parcial no bloqueante** (VM): escribe lo que quepa en el buffer de envío del socket y
@@ -3174,9 +3191,20 @@ pub fn tls_set_nonblocking(_h: i64) -> Result<(), String> { Err(NET_TLS_UNAVAILA
 /// M44a: solo no-wasm (toma `&mut TlsConn`, que no existe en wasm).
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 fn tls_flush_writes(tc: &mut TlsConn) -> Result<(), String> {
+    tls_flush_writes_timed(tc, false)
+}
+
+/// Como `tls_flush_writes`; con `blocking_timed` (socket BLOQUEANTE con SO_SNDTIMEO: el intérprete
+/// tras `set_write_timeout`, raysec #234) el vencimiento —WouldBlock o TimedOut según el SO— es
+/// "write timeout". En la VM el socket es no bloqueante y WouldBlock significa «lleno»: se cede.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+fn tls_flush_writes_timed(tc: &mut TlsConn, blocking_timed: bool) -> Result<(), String> {
     while tc.conn.wants_write() {
         match tc.conn.write_tls(&mut tc.sock) {
             Ok(_) => {}
+            Err(e) if blocking_timed && (e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut) => {
+                return Err(WRITE_TIMEOUT_MSG.to_string());
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
             Err(e) => return Err(e.to_string()),
         }
@@ -3247,10 +3275,11 @@ pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     // raysec #234: el giro de abajo respeta el plazo de escritura del handle (en el intérprete el
     // socket es bloqueante y manda su SO_SNDTIMEO; en la VM, este deadline).
     let deadline = write_deadline(h);
+    let blocking_timed = deadline.is_some() && !is_nonblocking(h);
     while off < bytes.len() {
         let n = tc.conn.writer().write(&bytes[off..]).map_err(|e| e.to_string())?;
         off += n;
-        tls_flush_writes(tc)?;
+        tls_flush_writes_timed(tc, blocking_timed)?;
         if n == 0 && off < bytes.len() {
             if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
                 return Err(WRITE_TIMEOUT_MSG.to_string());

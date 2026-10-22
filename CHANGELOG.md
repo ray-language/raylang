@@ -15,6 +15,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   fs.Stat` lista cada campo con su `///` (así se ve que `mode` vale 0 en Windows), igual que el
   `ray_doc` del MCP y el Markdown de `ray doc` sobre un archivo. Las docs de `fs.stat` y `fs.Stat`
   lo dicen también en su resumen.
+- **El LSP muestra la doc de los campos**: el hover sobre `st.mode` o `p.x` trae el `///` del
+  campo (también de un módulo de la std), ir-a-definición salta a su declaración y el completado
+  de `p.` la muestra para los structs del mismo archivo. Rename y references siguen sin tocar los
+  campos.
+- Un tipo desconocido en un campo de un struct de **otro módulo** se reportaba en el módulo de
+  entrada y sin la línea de código; ahora sale en el suyo, con el fragmento.
 
 ## 1.27.75 — 2026-10-21
 

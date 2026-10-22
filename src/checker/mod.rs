@@ -622,6 +622,10 @@ pub struct SemanticIndex {
     /// Ir-a-definición (M10.2b-2): por cada uso, el rango del uso y la posición de su
     /// declaración.
     pub defs: Vec<DefEntry>,
+    /// Los usos de un CAMPO (`p.x`) con la posición de su declaración en el struct (rayzip #199):
+    /// para el hover (su `///`) e ir-a-definición. Aparte de `defs` a propósito: references/rename
+    /// no ven los campos (un rename dejaría sin tocar los literales `P { x: … }`).
+    pub field_defs: Vec<DefEntry>,
 }
 
 /// Una entrada de hover: el identificador en `(line, col)` (1-basado) de largo `len` muestra
@@ -660,6 +664,9 @@ struct Checker {
     /// Dan la aridad (para validar `Caja<int>`) y los nombres (para sustituir).
     enum_tparams: HashMap<String, Vec<String>>,
     struct_tparams: HashMap<String, Vec<String>>,
+    /// Posición (línea, columna) del nombre de cada campo de cada struct, en orden de declaración
+    /// (rayzip #199): la declaración del campo para el índice semántico. Vacío si sintético.
+    struct_field_pos: HashMap<String, Vec<(usize, usize)>>,
     /// M311: alias de tipo → (parámetros, tipo destino CRUDO). `resolve_type` los expande.
     aliases: HashMap<String, (Vec<String>, Type)>,
     /// Bounds de los parámetros de tipo de cada struct/enum (M9.4): nombre → `[(T, Trait), ...]`.

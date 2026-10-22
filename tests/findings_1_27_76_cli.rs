@@ -64,3 +64,17 @@ fn ray_doc_of_a_struct_lists_its_field_docs() {
     let (out, _, _) = ray(&d, &["doc", "fs.stat"]);
     assert!(out.contains("On Windows `mode` is always 0"), "{out}");
 }
+
+/// De paso (M422): las posiciones de los campos de un struct de OTRO módulo no se desplazaban a su
+/// banda, así que el «unknown type» de un campo (M396) culpaba al módulo de entrada, sin fragmento.
+#[test]
+fn an_unknown_field_type_in_an_imported_module_points_at_that_module() {
+    let d = tmp("field_band");
+    std::fs::write(d.join("main.ray"), "import geo;\nfn main() -> int {\n    0\n}\n").unwrap();
+    std::fs::write(d.join("geo.ray"), "// geo\n\npub struct S {\n    a: int,\n    b: Nope,\n}\n").unwrap();
+    let (out, err, code) = ray(&d, &["check", "main.ray"]);
+    let all = format!("{out}{err}");
+    assert_ne!(code, 0, "{all}");
+    assert!(all.contains("[geo] type error at 5:8: unknown type: 'Nope' not declared"), "{all}");
+    assert!(all.contains("b: Nope,"), "con el fragmento de geo.ray: {all}");
+}

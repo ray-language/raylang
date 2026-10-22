@@ -415,6 +415,30 @@ fn hover_of_fields_and_methods() {
     assert!(t.starts_with("map: fn("), "{t}");
 }
 
+/// rayzip #199: el hover de un campo trae su `///` (del archivo y de un módulo de la std) e
+/// ir-a-definición salta a él; references/rename siguen sin ver los campos (dejarían los literales).
+#[test]
+fn hover_and_definition_of_a_documented_field() {
+    let dir = std::env::temp_dir().join(format!("ray_lsp_field_doc_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.ray");
+    let src = "import std/fs;\nstruct P {\n    /// Horizontal.\n    x: int,\n}\nfn main() -> int {\n    let st = fs.stat(\".\").unwrap();\n    let p = P { x: 1 };\n    st.mode + p.x\n}\n";
+    std::fs::write(&path, src).unwrap();
+    let uri = file_uri(&path);
+    let mut docs = HashMap::new();
+    docs.insert(uri.clone(), src.to_string());
+    let line = src.lines().nth(8).unwrap();
+    let (cx, cm) = (line.find("p.x").unwrap() + 2, line.find("st.mode").unwrap() + 3);
+    assert_eq!(doc_of_symbol(&uri, src, 8, cx, &docs).as_deref(), Some("Horizontal."));
+    let d = doc_of_symbol(&uri, src, 8, cm, &docs).expect("doc de Stat.mode");
+    assert!(d.contains("Always 0 on\nWindows"), "{d}");
+    let (target, l0, c0, _) = definition_at(&uri, src, 8, cx).expect("def del campo");
+    assert_eq!((target.as_str(), l0, c0), (uri.as_str(), 3, 4));
+    assert!(symbol_occurrences(Some(&uri), src, 8, cx).is_none(), "sin rename/references de campos");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn hover_inside_interpolation() {
     // Las expresiones de `${…}` se re-lexan con posiciones reales → hover funciona dentro.

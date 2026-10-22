@@ -368,7 +368,8 @@ pub(super) fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) ->
     {
         let mut program = loaded.program;
         let idx = checker::semantic_index(&mut program);
-        let d = idx.defs.iter()
+        // rayzip #199: también los campos (`field_defs`), que references/rename no ven.
+        let d = idx.defs.iter().chain(idx.field_defs.iter())
             .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
             .min_by_key(|d| d.len)?;
         // ¿En qué módulo (banda) cae la declaración? El de mayor `start_line` que no la supere.
@@ -382,7 +383,7 @@ pub(super) fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) ->
     }
     // Fallback un solo archivo (buffer sin guardar): la declaración vive en el propio documento.
     let idx = index_for(Some(uri), src)?;
-    let d = idx.defs.iter()
+    let d = idx.defs.iter().chain(idx.field_defs.iter())
         .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
         .min_by_key(|d| d.len)?;
     let (dl0, dc0) = (d.def_line - 1, d.def_col - 1);

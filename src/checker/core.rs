@@ -18,6 +18,7 @@ impl Checker {
             enum_names: HashSet::new(),
             enum_tparams: HashMap::new(),
             struct_tparams: HashMap::new(),
+            struct_field_pos: HashMap::new(),
             aliases: HashMap::new(),
             struct_bounds: HashMap::new(),
             enum_bounds: HashMap::new(),
@@ -177,6 +178,7 @@ impl Checker {
         for s in &program.structs {
             self.check_unique_tparams(&s.type_params, &s.name, s.line, s.col)?;
             self.struct_tparams.insert(s.name.clone(), s.type_params.clone());
+            self.struct_field_pos.insert(s.name.clone(), s.field_lines.iter().copied().zip(s.field_cols.iter().copied()).collect());
             self.struct_bounds.insert(s.name.clone(), s.bounds.clone());
         }
 
@@ -2125,8 +2127,8 @@ impl Checker {
         match ot {
             Type::Struct(sname, targs) => {
                 let fields = self.structs.get(&sname).unwrap_or_else(|| crate::ice!("the struct '{}' is not in the checker table", sname));
-                let fty = match fields.iter().find(|(fname, _)| fname == name) {
-                    Some((_, fty)) => fty.clone(),
+                let (fi, fty) = match fields.iter().enumerate().find(|(_, (fname, _))| fname == name) {
+                    Some((i, (_, fty))) => (i, fty.clone()),
                     None => return Err(self.err(object.line, object.col, format!("the struct '{}' has no field '{}'", sname, name))),
                 };
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
@@ -2135,6 +2137,8 @@ impl Checker {
                 // M10.2g: hover del **campo** en su posición (nombre tras el `.`); un campo de datos
                 // no tiene declaración de función → sin `def`.
                 self.record_field_hover(object.line, object.col, name, &result, None);
+                let def = self.struct_field_pos.get(&sname).and_then(|v| v.get(fi)).copied();
+                self.record_field_def(object.line, object.col, name, def);
                 Ok(result)
             }
             other => Err(self.err(object.line, object.col, format!("cannot access '.{}' on a {} (not a struct)", name, other))),
@@ -3180,9 +3184,12 @@ impl Checker {
                 if let Some(fields) = self.structs.get(sname) {
                     let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
                     let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
-                    for (fname, fty) in fields {
+                    let pos = self.struct_field_pos.get(sname);
+                    for (i, (fname, fty)) in fields.iter().enumerate() {
                         let ty = subst(fty, &sigma);
-                        add(&mut out, &mut seen, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+                        // rayzip #199: la declaración del campo, para que la completion traiga su `///`.
+                        let def = pos.and_then(|v| v.get(i)).copied();
+                        add(&mut out, &mut seen, fname.clone(), 5, Some(format!("{}", ty)), false, def);
                     }
                 }
             }
@@ -4091,6 +4098,21 @@ impl Checker {
                 if let Some((def_line, def_col)) = def {
                     self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
                 }
+            }
+        }
+    }
+
+    /// Registra la declaración del campo `name` en cada posición de `recv.name` (rayzip #199), en
+    /// `field_defs`: hover con su `///` e ir-a-definición, sin entrar en references/rename.
+    pub(super) fn record_field_def(&mut self, recv_line: usize, recv_col: usize, name: &str, def: Option<(usize, usize)>) {
+        let Some((def_line, def_col)) = def else { return };
+        if !self.gather {
+            return;
+        }
+        if let Some(positions) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())).cloned() {
+            let len = name.chars().count();
+            for (line, col) in positions {
+                self.index.field_defs.push(DefEntry { line, col, len, def_line, def_col });
             }
         }
     }

@@ -18682,3 +18682,16 @@ el mismo `doc_lines_above` del hover. `ray doc fs.Stat` (y el `ray_doc` del MCP)
 `  campo: tipo — doc` bajo el resumen, y el Markdown de raydoc una viñeta por campo cuando alguno
 tiene doc. Además, el resumen de `stat` y de `Stat` repite lo de Windows, que es lo que se lee
 primero.
+
+El LSP tenía el mismo hueco: el hover de `st.mode` daba solo `mode: int`. El hover busca la doc
+por ir-a-definición, y los campos no tenían definición en el índice semántico. Meterlos en `defs`
+habría enchufado también references y rename, y un rename de campo cambiaría la declaración y los
+`p.x` pero no los literales `P { x: … }` ni los patrones: código roto. Así que van en una lista
+aparte, `SemanticIndex.field_defs`, que solo consultan `definition_at` (y con él el hover). El
+parser guarda ahora también la columna del nombre de cada campo (`field_cols`), y el completado de
+`p.` pasa esa posición para traer la doc cuando el struct es del mismo archivo.
+
+De paso apareció un bug latente: `shift_program` desplazaba `s.line` de cada struct a la banda de
+su módulo, pero no `field_lines` ni `field_type_pos`. El «unknown type» de un campo (M396) de un
+módulo importado caía así en la banda del módulo de entrada: `[main] type error at 5:8`, sin
+fragmento. Ahora se desplazan con el struct.

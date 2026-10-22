@@ -347,7 +347,8 @@ pub fn unlock(h: int) -> Result<int, string> {
 pub struct Stat {
     /// "file", "dir", "symlink" or "other" (socket, FIFO, device…).
     kind: string,
-    /// Permission bits (the low 12 bits), as an int: 0o600 is 384, 0o755 is 493.
+    /// Permission bits (the low 12 bits), as an int: 0o600 is 384, 0o755 is 493. Always 0 on
+    /// Windows, which has no Unix permission bits (and `chmod` is an `Err` there).
     mode: int,
     /// Size in bytes (for a symlink: the length of the link itself).
     size: int,
@@ -378,7 +379,9 @@ pub fn real_path(path: string) -> Result<string, string> {
 
 /// Creates a symbolic link at `link` pointing to `target` (`ln -s target link`); `Ok(0)` or
 /// `Err(message)`. `target` may be relative (resolved from the link's directory, as the OS does)
-/// and need not exist. `stat(link).kind` is `"symlink"`; `real_path(link)` follows it.
+/// and need not exist. `stat(link).kind` is `"symlink"`; `real_path(link)` follows it. On
+/// Windows the target is stored with `\` separators (a `/` would make a link Windows cannot follow),
+/// so `read_link` gives it back with `\`.
 pub fn symlink(target: string, link: string) -> Result<int, string> {
     let r = __symlink(target, link);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
@@ -386,7 +389,8 @@ pub fn symlink(target: string, link: string) -> Result<int, string> {
 
 /// The text a symbolic link points to (readlink), as it was written — NOT resolved: a relative
 /// link gives the relative target (`real_path` gives the absolute, fully resolved one). `Err` if
-/// `path` is not a symlink or does not exist.
+/// `path` is not a symlink or does not exist. On Windows the separators come back as `\`
+/// (`symlink` stores them that way): normalize with `.replace("\\", "/")` to compare portably.
 pub fn read_link(path: string) -> Result<string, string> {
     let r = __read_link(path);
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }

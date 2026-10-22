@@ -997,6 +997,10 @@ fn stream_push_fast(z: InflateStream) -> Result<bytes, string> {
     let used = be64(r.sub_bytes(1, 9));
     let produced = r.sub_bytes(9, r.len());
     if (status == 0) {
+        // rayzip #223: lo que el runtime no consumió vuelve a `pending` (nunca se tira entrada).
+        if (used < input.len()) {
+            z.pending = input.sub_bytes(used, input.len());
+        }
         return Result.Ok(produced);
     }
     z.handle = 0;

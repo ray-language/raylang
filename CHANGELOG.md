@@ -4,6 +4,23 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.74 — 2026-10-21
+
+Lo que encontró la re-medición de las apps con 1.27.73 (M420). `cron` **0.2.1** publicado.
+
+- **Regresión de 1.27.70: `inflate.stream_push` perdía datos** con el stream en más de un trozo
+  (rayzip #223): a veces `corrupt DEFLATE stream`, a veces salida truncada con `finished = true`.
+  `inflate` de miniz vuelve en cuanto vacía la salida pendiente de su diccionario y el runtime lo
+  tomaba por «falta entrada»; además la entrada sin consumir se descartaba. Arreglado en los dos
+  sitios, con un test que trocea un stream muy comprimible en 1, 7, 100, 2000 y 64 KiB octetos. El
+  paquete `zip` lee ahora una entrada de 100 MB (75 MB comprimidos) por trozos en ~480 ms.
+- **`cron/local` cumple su política en el cambio de otoño** (raycron #226): una hora fijada dispara
+  una vez, un schedule horario (`*/15`, `*/7`, `0 *`) recorre la hora repetida entera, y `*/7` en
+  Santiago ya no da `Err`. Una sola regla, escrita igual en la doc y en el README.
+- Doc: `time.local_offset_ms` sin literales con `_` (#224), `fs.read_link`/`symlink` dicen que en
+  Windows el destino va con `\` (#225), `ray doc Eq` y `llms.txt` al día con `==` → `impl Eq`
+  (#227), `Stat.mode` vale 0 en Windows (#199) y `process.run` no retiene el worker (#201).
+
 ## 1.27.73 — 2026-10-21
 
 - **`==`/`!=` despachan al `impl Eq` escrito a mano** (M418, raydata #206; cambio de semántica,

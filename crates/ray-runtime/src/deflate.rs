@@ -166,10 +166,14 @@ fn stream_push(id: u64, data: &[u8]) -> Option<Vec<u8>> {
         if out.len() - 9 > limit {
             break 3;
         }
+        // rayzip #223: `inflate` de miniz VUELVE en cuanto vacía la salida pendiente de su
+        // diccionario (32 KiB), sin tocar la entrada: un `bytes_written` menor que el búfer NO
+        // significa «pide más entrada». Se sigue mientras haya progreso; la entrada agotada sin
+        // salida pendiente da `Err(Buf)` (la vuelta siguiente) o una vuelta sin progreso.
         match r.status {
             Ok(MZStatus::StreamEnd) => break 1,
-            Ok(_) if r.bytes_written == buf.len() => continue,
-            Ok(_) => break 0,
+            Ok(_) if r.bytes_consumed == 0 && r.bytes_written == 0 => break 0,
+            Ok(_) => continue,
             // Sin progreso posible con lo que hay: hace falta más entrada.
             Err(MZError::Buf) => break 0,
             Err(_) => break 2,
@@ -227,6 +231,37 @@ fn adler32(data: &[u8]) -> u32 {
 #[cfg(all(test, feature = "deflate"))]
 mod tests {
     use super::*;
+
+    /// rayzip #223: un stream MUY comprimible (MB de salida por KB de entrada) troceado en 1, 7,
+    /// 100, 2000 y 64 KiB octetos da lo mismo que `inflate` de una vez y consume toda la entrada.
+    #[test]
+    fn a_highly_compressible_stream_survives_any_chunking() {
+        let handle = || u64::from_be_bytes(op("stream_new", &[], 0).unwrap().try_into().unwrap());
+        let mut plain = vec![b'a'; 3_000_000];
+        plain.extend((0..200_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8));
+        let z = op("deflate", &plain, 6).expect("deflate");
+        for size in [1usize, 7, 100, 2000, 65536] {
+            let h = handle();
+            let (mut out, mut pos, mut finished) = (Vec::new(), 0usize, false);
+            while pos < z.len() {
+                let end = (pos + size).min(z.len());
+                let mut req = (1u64 << 40).to_be_bytes().to_vec();
+                req.extend_from_slice(&z[pos..end]);
+                let r = op("stream_push", &req, h as i64).expect("push");
+                let used = u64::from_be_bytes(r[1..9].try_into().unwrap()) as usize;
+                out.extend_from_slice(&r[9..]);
+                match r[0] {
+                    0 => assert_eq!(used, end - pos, "trozo {size}: entrada sin consumir"),
+                    1 => finished = true,
+                    s => panic!("trozo {size}: estado {s}"),
+                }
+                pos = end;
+            }
+            assert!(finished, "trozo {size}: sin bloque final");
+            assert_eq!(out.len(), plain.len(), "trozo {size}");
+            assert!(out == plain, "trozo {size}: contenido distinto");
+        }
+    }
 
     /// M415: el stream incremental produce lo mismo que `inflate` aunque la entrada llegue partida
     /// en cualquier octeto, señala el bloque final con lo que sobraba detrás y respeta el tope.

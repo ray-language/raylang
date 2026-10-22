@@ -43,7 +43,7 @@ pub fn sleep(ms: int) { __sleep(ms) }
 // y en unix lo que diga `localtime_r` (honra `TZ`). Para zonas por nombre y la ambigüedad del DST
 // como valor, el paquete `tz` (cuyo `system()` cae a esto cuando no hay TZif).
 /// The system's local time zone offset from UTC at `instant_ms` (epoch-ms), in milliseconds,
-/// daylight saving included — e.g. 3_600_000 for Madrid in winter, -10_800_000 for Santiago in
+/// daylight saving included — e.g. 3600000 for Madrid in winter, -10800000 for Santiago in
 /// October. Comes from the OS (`localtime_r`; the active Windows time zone), so it works without a
 /// zoneinfo database. 0 when the OS cannot tell.
 pub fn local_offset_ms(instant_ms: int) -> int { __local_offset(instant_ms) }

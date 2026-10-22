@@ -26,10 +26,13 @@ enum Received<T> {
 // Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
 // Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
 // (object safety): se compara entre valores concretos, `a.eq(b)`.
-/// Structural equality between two values of the same concrete type.
-/// Derivable with `@derive(Eq)`; not object-safe (uses `Self` as an argument).
+/// Equality between two values of the same concrete type. `@derive(Eq)` gives the structural one
+/// (field by field, variant and payload). A hand-written `impl Eq` defines the type's own
+/// equality, and `==`/`!=` use it on that type (since 1.27.73); containers (`[T]`, tuples) and
+/// `contains`/`index_of` keep comparing structurally. Inside `fn f<T: Eq>`, `a == b` uses the
+/// bound. Not object-safe (uses `Self` as an argument).
 trait Eq {
-    /// Returns true when `self` and `otro` are structurally equal.
+    /// Returns true when `self` and `other` are equal under this type's equality.
     fn eq(self, other: Self) -> bool;
 }
 

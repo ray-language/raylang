@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.75 — 2026-10-21
+
+- **Separadores `_` en los literales numéricos** (M421, rayzip #224): `1_000_000`, `0xFFFF_FFFF`,
+  `0b1010_0101`, `2_000u32`, `1_000.5`. Un `_` va siempre entre dos dígitos de la base (`1_`,
+  `1__0`, `0x_FF` y `1_.5` son error léxico con un mensaje que lo dice). `ray fmt` conserva el
+  agrupado de los enteros (reagrupa desde la derecha con el tamaño del último grupo) y normaliza
+  los flotantes, como ya hacía. Puramente aditivo: ningún programa válido cambia. Gramáticas de
+  Sublime y VS Code al día; el lexer selfhost también.
+
 ## 1.27.74 — 2026-10-21
 
 Lo que encontró la re-medición de las apps con 1.27.73 (M420). `cron` **0.2.1** publicado.

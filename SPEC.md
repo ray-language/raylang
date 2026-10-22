@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.74** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.75** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -47,7 +47,9 @@ longitud en caracteres. **Ningún token cruza líneas.**
 - **Literales**:
   - *Entero*: dígitos decimales (`42`) o con **prefijo de base** (M118): `0x`/`0X` hexadecimal
     (`0x1F`), `0o`/`0O` octal (`0o755`), `0b`/`0B` binario (`0b1010`). Al menos un dígito tras el
-    prefijo (`0x` solo es error léxico). **Sufijo** opcional `u8`/`u32`/`u64` pegado a los
+    prefijo (`0x` solo es error léxico). **Separadores** `_` (1.27.75) entre dos dígitos de la base,
+    en enteros y flotantes (también en la fracción y el exponente): `1_000_000`, `0xFFFF_FFFF`,
+    `0b1010_0101`, `1_000.5`; no cambian el valor. `1_`, `1__0`, `0x_FF` y `1_.5` son error léxico. **Sufijo** opcional `u8`/`u32`/`u64` pegado a los
     dígitos (`255u8`, `0xFFu32`): el literal es de ese tipo sin contexto, y debe caber en él
     (si no, error léxico). Sin sufijo, un literal que cabe en `int` (i64) es `int` (y se coerciona
     al `u*` del contexto, §5); uno que **no cabe en `int` pero sí en `u64`** (`0xFFFFFFFFFFFFFFFF`)

@@ -179,6 +179,12 @@ fn basic_cases() {
 }
 
 #[test]
+fn digit_separators() {
+    // M421: separadores `_` entre dígitos, en enteros y flotantes (incluido el exponente).
+    compare("let a = 1_000_000; let b = 3_600_000 + 1; let c = 1_000.250_5; let d = 1e1_0;", "sh_sep.ray");
+}
+
+#[test]
 fn flotantes_con_exponente() {
     // M80: exponente con y sin punto/signo, y las degradaciones de la guarda
     // conservadora (`1eabc` = Int + Ident; `1e+` = Int + Ident + Plus).

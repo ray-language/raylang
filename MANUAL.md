@@ -115,7 +115,7 @@ hola/
 
 | Tipo | Ejemplo | Notas |
 |------|---------|-------|
-| `int` | `42`, `-7`, `0xFF`, `0o755`, `0b1010` | entero de 64 bits con signo; decimal o prefijo `0x`/`0o`/`0b` (hex/octal/binario); el desbordamiento es **error de ejecución** (no envuelve en silencio) |
+| `int` | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `1_000_000` | entero de 64 bits con signo; decimal o prefijo `0x`/`0o`/`0b` (hex/octal/binario); `_` entre dígitos para agrupar (para tiempos y tamaños, mejor `1.hours()`/`64.kb()`); el desbordamiento es **error de ejecución** (no envuelve en silencio) |
 | `u8`, `u32`, `u64` | `let x: u8 = 255;` | sin signo; la aritmética **envuelve** por diseño (para hashes, protocolos, bits) |
 | `float` | `3.14`, `2.0` | coma flotante de 64 bits |
 | `bool` | `true`, `false` | |

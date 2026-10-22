@@ -4295,7 +4295,7 @@ paquetes:
    deja el literal con la envoltura larga, la segunda vuelve a pegar el literal a la llamada. La
    guarda `fmt_policy` lo detecta como «el formateador no converge». Bug de `src/fmt.rs`, chico.
 
-## 114. Separadores `_` en literales numéricos (rayzip #224, oct 2026)
+## 114. Separadores `_` en literales numéricos (rayzip #224, oct 2026) — ✅ EJECUTADA como M421 (DESIGN §394, 1.27.75; decisión del usuario, 21 oct 2026)
 
 rayzip copió `3_600_000` de una doc de la stdlib y no compiló: raylang no acepta `_` en los
 literales (`1_000_000` es un error de sintaxis). La doc se corrigió (M420); queda la pregunta de

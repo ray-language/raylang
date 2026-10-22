@@ -18629,3 +18629,33 @@ sistema cuando existe). `cron` pasa a 0.2.1.
 de errores de `llms.txt` tras M418 (la fila del `T: Eq` describía un error que ya no existe; la
 sustituye la del `T` sin bound), `Stat.mode` en Windows y `process.run` en fibras.
 
+## 394. M421 — separadores `_` en los literales numéricos (rayzip #224, oct 2026)
+
+La REFERENCE llevaba desde M118/M192 una nota escueta: «Sin `_` (diferido)». Nunca hubo una
+decisión razonada en contra; se aplazó porque no hacía falta para los literales hex. En el arco de
+las unidades (IDEAS §55) sí se razonó algo cercano: se rechazaron los SUFIJOS de unidad (`64kb`,
+`30s`) para reservar el espacio de sufijos a tipos numéricos futuros (`64i32`), y las duraciones y
+tamaños quedaron como funciones (`30.seconds()`, `64.kb()`). El separador `_` no compite con eso:
+no es un sufijo ni lleva unidad, y cubre lo que las unidades no cubren — cantidades sin unidad
+(`1_000_000` iteraciones, el tope de una llamada a C) y máscaras (`0xFFFF_FFFF`).
+
+rayzip #224 lo trajo de vuelta: copió `3_600_000` de una doc de la stdlib que escribí yo mismo, y
+no compiló. Es la expectativa de cualquiera que venga de Rust, Python, Java, Swift, Go o JS, y la
+de un modelo que escribe raylang. El usuario decidió aceptarlo (21 oct 2026).
+
+**La regla.** Un `_` vale solo ENTRE dos dígitos de la base del literal: en la parte entera, en la
+fracción y en el exponente de un flotante, y tras un prefijo `0x`/`0o`/`0b`. `1_`, `1__0`, `0x_FF`
+y `1_.5` son error léxico (`a '_' in a number literal goes between two digits (1_000_000)`). `1e_5`
+no lo es: como `1eabc`, la guarda del exponente (M80) no lo toma por exponente y queda `1` seguido
+del identificador `e_5`. Puramente aditivo: hoy `1_000` era `1` seguido del identificador `_000`,
+un error de sintaxis, así que ningún programa válido cambia de significado.
+
+**Implementación.** `digit_run_from` en el lexer recoge los dígitos sin separadores y el tamaño del
+ÚLTIMO grupo; `Radix` gana `group` (solo presentación, fuera de la igualdad, como `digits` de
+M273). `ray fmt` reagrupa los enteros desde la derecha con ese tamaño: `1_000_000` y `0xFFFF_FFFF`
+salen tal cual, y un agrupado irregular (`1_00_000`) se normaliza a `100_000`. Los flotantes se
+normalizan como siempre (el token `Float` solo lleva el `f64`; `ray fmt` ya convertía `1e10` en
+`10000000000.0`). El lexer selfhost acepta lo mismo en decimal con el mismo mensaje (sigue sin
+bases, como desde M118), y `selfhost_lexer` lo compara con el de Rust. Gramáticas de Sublime y
+VS Code al día; la del repo aparte `raylang-grammar` (linguist) y la de Zed quedan por actualizar.
+

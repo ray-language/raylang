@@ -242,26 +242,22 @@ impl Lexer {
                 _ => None,
             }) {
                 let prefix = self.advance(); // consume x/o/b
-                let dstart = self.pos;
-                while matches!(self.peek(), Some(c) if c.is_digit(radix)) {
-                    self.advance();
-                }
-                if self.pos == dstart {
+                let (digits, group) = self.digit_run(radix)?;
+                if digits.is_empty() {
                     return Err(self.error(format!("expected at least one digit after '0{}'", prefix)));
                 }
-                let digits: String = self.chars[dstart..self.pos].iter().collect();
                 // M192: se lee como u64 — un literal que no cabe en `int` es AMPLIO (solo `u64`).
                 let v = u64::from_str_radix(&digits, radix).map_err(|_| {
                     let text: String = self.chars[start..self.pos].iter().collect();
                     self.error(format!("integer out of range '{}'", text))
                 })?;
                 // M273: el nº de dígitos escritos viaja con el token (solo para `ray fmt`).
-                return self.int_with_suffix(v, base.with_digits(digits.len()), start);
+                return self.int_with_suffix(v, base.with_digits(digits.len()).with_group(group), start);
             }
         }
-        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            self.advance();
-        }
+        // M421: la parte entera sigue con `digit_run`, sembrada con el primer dígito ya consumido.
+        let (int_digits, group) = self.digit_run_from(10, Some(self.chars[start]))?;
+        let mut text = int_digits;
 
         // Es flotante solo si hay '.' Y un dígito tras el punto. Así "1." o
         // "1.metodo()" (futuro UFCS) no se confunden con un flotante.
@@ -269,9 +265,8 @@ impl Lexer {
             self.peek() == Some('.') && matches!(self.peek_next(), Some(c) if c.is_ascii_digit());
         if has_dot {
             self.advance(); // consume el '.'
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.advance();
-            }
+            text.push('.');
+            text.push_str(&self.digit_run(10)?.0);
         }
 
         // M80: exponente opcional `e|E [+|-] dígitos` (`1e21`, `1.5e-3`, `2E+10`); hace el
@@ -287,28 +282,60 @@ impl Lexer {
                 _ => false,
             };
         if has_exp {
-            self.advance(); // el e/E
+            text.push(self.advance()); // el e/E
             if matches!(self.peek(), Some('+') | Some('-')) {
-                self.advance();
+                text.push(self.advance());
             }
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.advance();
-            }
+            text.push_str(&self.digit_run(10)?.0);
         }
         let is_float = has_dot || has_exp;
 
-        let text: String = self.chars[start..self.pos].iter().collect();
         if is_float {
             let v = text
                 .parse::<f64>()
                 .map_err(|_| self.error(format!("invalid float '{}'", text)))?;
             Ok(TokenKind::Float(v))
         } else {
-            let v = text
-                .parse::<u64>()
-                .map_err(|_| self.error(format!("integer out of range '{}'", text)))?;
-            self.int_with_suffix(v, Radix::DEC, start)
+            let v = text.parse::<u64>().map_err(|_| {
+                let written: String = self.chars[start..self.pos].iter().collect();
+                self.error(format!("integer out of range '{}'", written))
+            })?;
+            self.int_with_suffix(v, Radix::DEC.with_group(group), start)
         }
+    }
+
+    /// M421 (rayzip #224): una tira de dígitos de la base `radix` con separadores `_` opcionales
+    /// (`1_000_000`, `0xFFFF_FFFF`). Un `_` solo vale ENTRE dos dígitos: `1_`, `1__0`, `0x_FF` y
+    /// `1_.5` son error. Devuelve los dígitos sin separadores y el tamaño del último grupo (0 si no
+    /// hubo `_`), que `ray fmt` usa para reagrupar.
+    fn digit_run(&mut self, radix: u32) -> Result<(String, usize), LexError> {
+        self.digit_run_from(radix, None)
+    }
+
+    /// `digit_run` con un primer dígito ya consumido (`first`).
+    fn digit_run_from(&mut self, radix: u32, first: Option<char>) -> Result<(String, usize), LexError> {
+        let mut digits: String = first.into_iter().collect();
+        let mut group = digits.len();
+        let mut grouped = false;
+        loop {
+            match self.peek() {
+                Some(c) if c.is_digit(radix) => {
+                    digits.push(self.advance());
+                    group += 1;
+                }
+                Some('_') => {
+                    let next_is_digit = self.peek_next().is_some_and(|c| c.is_digit(radix));
+                    if digits.is_empty() || !next_is_digit {
+                        return Err(self.error("a '_' in a number literal goes between two digits (1_000_000)".to_string()));
+                    }
+                    self.advance();
+                    grouped = true;
+                    group = 0;
+                }
+                _ => break,
+            }
+        }
+        Ok((digits, if grouped { group } else { 0 }))
     }
 
     /// M192: cierra un literal entero ya leído como `u64`: consume un sufijo `u8`/`u32`/`u64` si lo
@@ -841,6 +868,17 @@ mod tests {
     fn base_prefixed_integer_literals() {
         // M118: prefijos 0x/0o/0b (mayúsculas también) para hex, octal y binario.
         assert_eq!(kinds("0xFF"), vec![TokenKind::Int(255, Radix::HEX), TokenKind::Eof]);
+        // M421: separadores `_` entre dígitos (el tamaño del último grupo viaja para `ray fmt`).
+        assert_eq!(kinds("1_000_000"), vec![TokenKind::Int(1_000_000, Radix::DEC), TokenKind::Eof]);
+        assert_eq!(kinds("0xFFFF_FFFF"), vec![TokenKind::Int(0xFFFF_FFFF, Radix::HEX), TokenKind::Eof]);
+        assert_eq!(kinds("0b1010_0101"), vec![TokenKind::Int(0b1010_0101, Radix::BIN), TokenKind::Eof]);
+        assert_eq!(kinds("2_000u32"), vec![TokenKind::Int(2000, Radix::DEC.with_suffix(Some(32))), TokenKind::Eof]);
+        assert_eq!(kinds("1_000.5"), vec![TokenKind::Float(1000.5), TokenKind::Eof]);
+        assert_eq!(kinds("1e1_0"), vec![TokenKind::Float(1e10), TokenKind::Eof]);
+        for bad in ["1_", "1__0", "0x_FF", "1_.5"] {
+            let err = crate::lexer::lex(bad).expect_err(bad);
+            assert!(err.msg.contains("a '_' in a number literal goes between two digits"), "{bad}: {}", err.msg);
+        }
         assert_eq!(kinds("0x1F300"), vec![TokenKind::Int(127744, Radix::HEX), TokenKind::Eof]);
         assert_eq!(kinds("0o755"), vec![TokenKind::Int(493, Radix::OCT), TokenKind::Eof]);
         assert_eq!(kinds("0o600"), vec![TokenKind::Int(384, Radix::OCT), TokenKind::Eof]);

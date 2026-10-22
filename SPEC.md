@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.75** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.76** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -298,8 +298,8 @@ iterable  = expresion [ '..' expresion ] ;
   el inicializador determina el tipo; `[]`, `None`, `Map.new()`, `Channel.new()` y `Caja.Vacia` son
   **indeterminados** y exigen anotación o contexto (§7).
 - La **mutación interior no exige `var`**: `obj.campo = v` y `arr[i] = v` mutan el objeto
-  referenciado (§8); `var` gobierna la *ligadura*, no el objeto. `s[i] = c` sobre string es
-  error (inmutable).
+  referenciado (§8); `var` gobierna la *ligadura*, no el objeto. `s[i] = c` sobre string y
+  `b[i] = v` sobre `bytes` son error (valores inmutables; 1.27.76 para `bytes`).
 - **`for`** itera: arreglo (elemento), rango `a..b` (enteros, `a` inclusivo, `b` exclusivo; el
   rango solo existe en la cabecera del `for`), string (`char`), `bytes` (cada octeto como `int`,
   igual que `b[i]`; M356), `Map` (tupla `(clave, valor)`

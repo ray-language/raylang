@@ -1097,9 +1097,16 @@ impl Checker {
             // inmutabilidad de `let` ata la variable, no congela el objeto.
             ExprKind::Index { array, index } => {
                 // M11.4c-2: los strings son inmutables; `s[i] = c` no se permite (sí se lee `s[i]`).
-                if self.check_expr(array)? == Type::String {
+                let at = self.check_expr(array)?;
+                if at == Type::String {
                     return Err(self.err(target.line, target.col,
                         "cannot assign to a character of a string (strings are immutable)".into()));
+                }
+                // rayffi #228: `bytes` también es un valor inmutable (SPEC §3); sin esto pasaba el
+                // checker y la VM caía en un ICE y el nativo no compilaba (`Rc<[u8]>`).
+                if at == Type::Bytes {
+                    return Err(self.err(target.line, target.col,
+                        "cannot assign to an octet of bytes (bytes are immutable; build them with bytes_of([…]) or a bytesbuilder)".into()));
                 }
                 let elem = self.check_index(array, index)?;
                 let vt = self.check_expr_expected(value, &elem)?;

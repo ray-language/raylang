@@ -277,7 +277,7 @@ also exist as free calls (`method(recv, args)`).
 | Method | Result | Description |
 |---|---|---|
 | `b.len()` | `int` | octets |
-| `b[i]` | `int` | octet (0–255), in O(1) (unlike `s[i]`) |
+| `b[i]` | `int` | octet (0–255), in O(1) (unlike `s[i]`); read-only: `b[i] = v` is a type error (build it with `bytes_of([…])` or a `bytesbuilder`) |
 | `b.sub_bytes(i, j)` | `bytes` | slice `[i, j)`, *clamped* |
 | `b.index_of(needle)` | `Option<int>` | OCTET index of the first occurrence of the subsequence (`Some(0)` for an empty needle); allocation-free (finding a header's `\r\n\r\n` is one call) |
 | `b.index_of_from(needle, start)` | `Option<int>` | like `index_of` from octet `start` (no copy: an incremental parser's `find(buf, from)`) |
@@ -743,4 +743,4 @@ threads, one per core by default; `1` = deterministic. A network server with few
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:4c7473db3eeb -->
+<!-- sync: sha256:59f8c25c280d -->

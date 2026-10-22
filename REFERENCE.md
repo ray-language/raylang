@@ -278,7 +278,7 @@ que también existen como llamada libre (`metodo(recv, args)`).
 | Método | Resultado | Descripción |
 |---|---|---|
 | `b.len()` | `int` | octetos |
-| `b[i]` | `int` | octeto (0–255), en O(1) (a diferencia de `s[i]`) |
+| `b[i]` | `int` | octeto (0–255), en O(1) (a diferencia de `s[i]`); solo lectura: `b[i] = v` es error de tipos (se construye con `bytes_of([…])` o un `bytesbuilder`) |
 | `b.sub_bytes(i, j)` | `bytes` | rebanada `[i, j)` con *clamp* |
 | `b.index_of(needle)` | `Option<int>` | índice de OCTETO de la primera ocurrencia de la subsecuencia (`Some(0)` con aguja vacía); sin asignar (el `\r\n\r\n` de una cabecera es una llamada) |
 | `b.index_of_from(needle, start)` | `Option<int>` | como `index_of` desde el octeto `start` (sin copiar: el `find(buf, from)` de un parser incremental) |

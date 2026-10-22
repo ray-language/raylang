@@ -4,6 +4,24 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.76 — 2026-10-22
+
+- **`b[i] = v` sobre un `bytes` es un error de tipos** (M422, rayffi #228): `bytes` es inmutable
+  como `string` (SPEC §3), pero el checker lo aceptaba y luego la VM caía en un error interno y el
+  nativo no compilaba. Ahora `ray check` lo rechaza en su línea: «cannot assign to an octet of
+  bytes (bytes are immutable; build them with bytes_of([…]) or a bytesbuilder)». Ningún programa
+  que funcionara cambia: ese código nunca llegó a ejecutarse.
+- **`ray doc` y raydoc muestran la doc de los campos de un struct** (M422, rayzip #199): `ray doc
+  fs.Stat` lista cada campo con su `///` (así se ve que `mode` vale 0 en Windows), igual que el
+  `ray_doc` del MCP y el Markdown de `ray doc` sobre un archivo. Las docs de `fs.stat` y `fs.Stat`
+  lo dicen también en su resumen.
+- **El LSP muestra la doc de los campos**: el hover sobre `st.mode` o `p.x` trae el `///` del
+  campo (también de un módulo de la std), ir-a-definición salta a su declaración y el completado
+  de `p.` la muestra para los structs del mismo archivo. Rename y references siguen sin tocar los
+  campos.
+- Un tipo desconocido en un campo de un struct de **otro módulo** se reportaba en el módulo de
+  entrada y sin la línea de código; ahora sale en el suyo, con el fragmento.
+
 ## 1.27.75 — 2026-10-21
 
 - **Separadores `_` en los literales numéricos** (M421, rayzip #224): `1_000_000`, `0xFFFF_FFFF`,

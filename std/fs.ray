@@ -343,7 +343,7 @@ pub fn unlock(h: int) -> Result<int, string> {
 // (kind "symlink") en vez de seguirse a ciegas — lo que un sync/backup fiel necesita. Los
 // helpers totales (is_dir/is_file/mtime/file_size) siguen resolviendo symlinks, como siempre. ---
 /// File metadata, WITHOUT following symlinks (lstat semantics): a symlink reports its own
-/// kind/size instead of its target's. See `stat`.
+/// kind/size instead of its target's. See `stat`. On Windows `mode` is always 0.
 pub struct Stat {
     /// "file", "dir", "symlink" or "other" (socket, FIFO, device…).
     kind: string,
@@ -357,7 +357,8 @@ pub struct Stat {
 }
 
 /// Metadata of the path WITHOUT following symlinks; `Ok(Stat)` or `Err(message)` if the path
-/// does not exist. A symlink reports kind "symlink" — the way to even detect one.
+/// does not exist. A symlink reports kind "symlink" — the way to even detect one. On Windows
+/// `mode` is always 0 (no Unix permission bits).
 pub fn stat(path: string) -> Result<Stat, string> {
     let r = __stat(path);
     if (r[0] == "ok") {

@@ -18659,3 +18659,39 @@ normalizan como siempre (el token `Float` solo lleva el `f64`; `ray fmt` ya conv
 bases, como desde M118), y `selfhost_lexer` lo compara con el de Rust. Gramáticas de Sublime y
 VS Code al día; la del repo aparte `raylang-grammar` (linguist) y la de Zed quedan por actualizar.
 
+## 395. M422 — `b[i] = v` sobre `bytes` y la doc de los campos (rayffi #228, rayzip #199; oct 2026)
+
+**#228.** `bytes` es un valor inmutable desde M16.1 (SPEC §3: «secuencia inmutable de octetos»), y
+el nativo lo representa como `Rc<[u8]>`. El checker rechazaba `s[i] = c` sobre `string` desde
+M11.4c-2, pero no la misma escritura sobre `bytes`: `check_index` daba `int` y la asignación
+pasaba. Luego la VM, en `SetIndex`, solo sabe escribir en arreglos (el `unreachable!` de «the
+checker guarantees an object») y el transpilador emitía un `borrow_mut` que no existe. Rayffi lo
+encontró al construir a mano la celda `uLongf` de zlib sobre un `ffi.buffer(8)`.
+
+Había dos salidas: rechazarlo o permitirlo. Permitirlo convertiría `bytes` en un valor mutable
+compartido (un `let a = b` pasaría a ver las escrituras de `b`, cosa que hoy solo pasa cuando C
+escribe en un búfer de FFI, y que la doc de `ffi.buffer` ya presenta como excepción), y obligaría
+a cambiar la representación en los tres motores. Para construir octetos ya están `bytes_of([…])` y
+`bytesbuilder`. Así que el checker lo rechaza, como con los strings, con un mensaje que dice cómo
+construirlo. El selfhost no tiene tipo `bytes`, así que no hay espejo que tocar.
+
+**#199.** La doc de `Stat.mode` ya decía «Always 0 on Windows», pero en el campo, y ni `ray doc` ni
+raydoc mostraban la doc de los campos: solo la del struct. El parser ya guarda la línea de cada
+campo (`field_lines`, del formateador), así que `raydoc::field_docs` lee el `///` de cada uno con
+el mismo `doc_lines_above` del hover. `ray doc fs.Stat` (y el `ray_doc` del MCP) lista
+`  campo: tipo — doc` bajo el resumen, y el Markdown de raydoc una viñeta por campo cuando alguno
+tiene doc. Además, el resumen de `stat` y de `Stat` repite lo de Windows, que es lo que se lee
+primero.
+
+El LSP tenía el mismo hueco: el hover de `st.mode` daba solo `mode: int`. El hover busca la doc
+por ir-a-definición, y los campos no tenían definición en el índice semántico. Meterlos en `defs`
+habría enchufado también references y rename, y un rename de campo cambiaría la declaración y los
+`p.x` pero no los literales `P { x: … }` ni los patrones: código roto. Así que van en una lista
+aparte, `SemanticIndex.field_defs`, que solo consultan `definition_at` (y con él el hover). El
+parser guarda ahora también la columna del nombre de cada campo (`field_cols`), y el completado de
+`p.` pasa esa posición para traer la doc cuando el struct es del mismo archivo.
+
+De paso apareció un bug latente: `shift_program` desplazaba `s.line` de cada struct a la banda de
+su módulo, pero no `field_lines` ni `field_type_pos`. El «unknown type» de un campo (M396) de un
+módulo importado caía así en la banda del módulo de entrada: `[main] type error at 5:8`, sin
+fragmento. Ahora se desplazan con el struct.

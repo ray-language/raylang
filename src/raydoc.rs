@@ -70,6 +70,16 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
         for s in structs {
             out.push_str(&format!("### `{}`\n\n", sig_struct(s)));
             emit_doc(&mut out, &lines, s.line);
+            let fields = field_docs(s, &lines);
+            if fields.iter().any(|(_, _, d)| d.is_some()) {
+                for (name, ty, doc) in fields {
+                    match doc {
+                        Some(d) => out.push_str(&format!("- `{name}: {ty}` — {d}\n")),
+                        None => out.push_str(&format!("- `{name}: {ty}`\n")),
+                    }
+                }
+                out.push('\n');
+            }
         }
     }
 
@@ -165,6 +175,20 @@ pub fn doc_lines_above(lines: &[&str], line: usize) -> Option<Vec<String>> {
     }
     docs.reverse();
     Some(docs)
+}
+
+/// Cada campo de un struct con su `///` (rayzip #199: la doc de `Stat.mode` decía que vale 0 en
+/// Windows, pero ni `ray doc` ni raydoc mostraban la doc de los campos). `None` si el campo no
+/// tiene; sin `field_lines` (struct sintético) ninguno la tiene. Compartido con el MCP.
+pub fn field_docs(s: &StructDef, lines: &[&str]) -> Vec<(String, String, Option<String>)> {
+    s.fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, ty))| {
+            let doc = s.field_lines.get(i).and_then(|&l| doc_above(lines, l));
+            (name.clone(), ty.to_string(), doc)
+        })
+        .collect()
 }
 
 /// El doc-comment de `linea` como una sola línea (para el resumen de raydoc).
@@ -288,6 +312,16 @@ fn privada() -> int { 0 }
         assert!(!md3.contains("HIDDEN"), "{md3}");
         let pos_c = md3.find("## Constantes").unwrap();
         assert!(pos_c < md3.find("## Funciones").unwrap(), "las constantes van antes que las funciones");
+    }
+
+    #[test]
+    fn a_struct_lists_the_doc_of_its_fields() {
+        let src = "/// A point.\npub struct P {\n    /// Horizontal.\n    x: int,\n    y: int,\n}\npub fn f() -> int { 0 }\n";
+        let md = generate(src, "p.ray").unwrap();
+        assert!(md.contains("- `x: int` — Horizontal.\n"), "{md}");
+        assert!(md.contains("- `y: int`\n"), "{md}");
+        let bare = generate("pub struct Q { x: int }\npub fn f() -> int { 0 }\n", "q.ray").unwrap();
+        assert!(!bare.contains("- `x: int`"), "sin doc de campos no se listan:\n{bare}");
     }
 
     #[test]

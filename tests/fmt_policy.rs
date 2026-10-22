@@ -64,9 +64,10 @@ fn regex_lite(s: &str) -> String {
             while i < b.len() && b[i].is_ascii_digit() { i += 1; }
             continue;
         }
-        if rest.starts_with("field_lines: [") {
-            out.push_str("field_lines: []");
-            i += "field_lines: [".len();
+        // `field_cols` (rayzip #199: la columna del nombre de cada campo) va con `field_lines`.
+        if let Some(key) = ["field_lines: [", "field_cols: ["].into_iter().find(|k| rest.starts_with(k)) {
+            out.push_str(&key.replace('[', "[]"));
+            i += key.len();
             while i < b.len() && b[i] != b']' { i += 1; }
             i += 1;
             continue;

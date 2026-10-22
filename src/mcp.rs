@@ -518,7 +518,16 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             }
         }
         let head = format!("{mod_name}: {sig}");
-        Some(if doc_lines.is_empty() { head } else { format!("{head}\n{}", doc_lines.join(" ")) })
+        let mut text = if doc_lines.is_empty() { head } else { format!("{head}\n{}", doc_lines.join(" ")) };
+        // rayzip #199: un struct lista también la doc de sus campos (`Stat.mode` vale 0 en Windows).
+        if let Some(s) = prog.structs.iter().find(|s| s.is_pub && s.name == func) {
+            for (name, ty, doc) in crate::raydoc::field_docs(s, &lines) {
+                if let Some(d) = doc {
+                    text.push_str(&format!("\n  {name}: {ty} — {d}"));
+                }
+            }
+        }
+        Some(text)
     }
 }
 

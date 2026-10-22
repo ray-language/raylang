@@ -785,6 +785,7 @@ pub(super) fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch
             bounds: Vec::new(),
             fields,
             field_lines: Vec::new(),
+            field_cols: Vec::new(),
             field_type_pos: Vec::new(),
             line: 0,
             col: 0,

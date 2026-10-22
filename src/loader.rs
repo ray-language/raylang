@@ -509,6 +509,14 @@ pub fn shift_program(program: &mut Program, delta: usize) {
     }
     for s in &mut program.structs {
         s.line += delta;
+        // rayzip #199: las posiciones de los campos también, o el hover/def de un campo de otro
+        // módulo (y el «unknown type» de M396) caerían en la banda equivocada.
+        for l in &mut s.field_lines {
+            *l += delta;
+        }
+        for p in &mut s.field_type_pos {
+            p.0 += delta;
+        }
         for a in &mut s.annotations {
             a.line += delta;
         }

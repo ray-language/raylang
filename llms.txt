@@ -286,7 +286,8 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    `m.get_or(k, default) -> V` · bytes `b[i] -> int` (octet 0–255, O(1) — THE primitive of every
    binary parser; never `from_utf8(b.sub_bytes(i, i+1))`), `b.len() b.sub_bytes(i, j) -> bytes
    b.index_of(needle) -> Option<int> b.starts_with(prefix) -> bool` (octet index, no allocation);
-   `for b in bs { … }` iterates the octets as `int`.
+   `for b in bs { … }` iterates the octets as `int`. `bytes` is immutable like `string`:
+   `b[i] = v` is a type error — build it with `bytes_of([…])` or a `bytesbuilder`.
    (`sort(xs)` is free, so `xs.sort()` also works.)
    Return types that surprise: `s.index_of(x) -> Option<int>`, `xs.position(v) -> Option<int>`,
    `xs.pop() -> Option<T>`, `parse_int(s) -> Option<int>`, `parse_float(s) -> Option<float>`,

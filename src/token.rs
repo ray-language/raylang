@@ -35,6 +35,10 @@ pub struct Radix {
     /// izquierda (un octeto es `0x0D`, una tabla alineada se lee de un vistazo). No participa en la
     /// igualdad: dos literales con el mismo valor y base son el mismo token.
     pub digits: u8,
+    /// M421 (rayzip #224): el tamaño del ÚLTIMO grupo si el literal se escribió con separadores
+    /// `_` (`1_000_000` = 3, `0xFFFF_FFFF` = 4; 0 = sin separadores). Solo PRESENTACIÓN: `ray fmt`
+    /// reagrupa desde la derecha con ese tamaño. No participa en la igualdad.
+    pub group: u8,
 }
 
 impl PartialEq for Radix {
@@ -45,10 +49,10 @@ impl PartialEq for Radix {
 impl Eq for Radix {}
 
 impl Radix {
-    pub const DEC: Radix = Radix { base: Base::Dec, suffix: None, wide: false, digits: 0 };
-    pub const HEX: Radix = Radix { base: Base::Hex, suffix: None, wide: false, digits: 0 };
-    pub const OCT: Radix = Radix { base: Base::Oct, suffix: None, wide: false, digits: 0 };
-    pub const BIN: Radix = Radix { base: Base::Bin, suffix: None, wide: false, digits: 0 };
+    pub const DEC: Radix = Radix { base: Base::Dec, suffix: None, wide: false, digits: 0, group: 0 };
+    pub const HEX: Radix = Radix { base: Base::Hex, suffix: None, wide: false, digits: 0, group: 0 };
+    pub const OCT: Radix = Radix { base: Base::Oct, suffix: None, wide: false, digits: 0, group: 0 };
+    pub const BIN: Radix = Radix { base: Base::Bin, suffix: None, wide: false, digits: 0, group: 0 };
     pub fn with_suffix(self, suffix: Option<u8>) -> Radix {
         Radix { suffix, ..self }
     }
@@ -58,6 +62,10 @@ impl Radix {
     /// M273: registra los dígitos escritos (ver `digits`).
     pub fn with_digits(self, digits: usize) -> Radix {
         Radix { digits: digits.min(255) as u8, ..self }
+    }
+    /// M421: registra el tamaño del último grupo de separadores (ver `group`).
+    pub fn with_group(self, group: usize) -> Radix {
+        Radix { group: group.min(255) as u8, ..self }
     }
     /// El ancho FIJO del literal, si lo tiene: el sufijo escrito, o 64 si es amplio.
     pub fn fixed_width(&self) -> Option<u8> {

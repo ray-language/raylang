@@ -2128,10 +2128,31 @@ fn fmt_int(n: i64, radix: crate::token::Radix) -> String {
         Base::Oct => format!("0o{:0w$o}", n as u64, w = radix.digits as usize),
         Base::Bin => format!("0b{:0w$b}", n as u64, w = radix.digits as usize),
     };
+    // M421: los separadores `_` escritos se reemiten reagrupando desde la derecha con el tamaño del
+    // último grupo (`1_000_000`, `0xFFFF_FFFF`); un agrupado irregular (`1_00_000`) se normaliza.
+    let body = if radix.group > 0 { group_digits(&body, radix.group as usize) } else { body };
     match radix.suffix {
         Some(w) => format!("{}u{}", body, w),
         None => body,
     }
+}
+
+/// Inserta `_` cada `size` dígitos desde la derecha, respetando el prefijo de base (`0x`…).
+fn group_digits(body: &str, size: usize) -> String {
+    let (prefix, digits) = if body.len() > 2 && body.starts_with('0') && matches!(&body[1..2], "x" | "o" | "b") {
+        body.split_at(2)
+    } else {
+        ("", body)
+    };
+    let chars: Vec<char> = digits.chars().collect();
+    let mut out = String::from(prefix);
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i) % size == 0 {
+            out.push('_');
+        }
+        out.push(*c);
+    }
+    out
 }
 
 fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
@@ -2331,6 +2352,14 @@ mod tests {
         assert!(out.contains("${a}\\u{1B}[0m"), "{out}");
         assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "sin bytes de control crudos:\n{out:?}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn digit_separators_are_preserved_and_regrouped() {
+        // M421: el agrupado escrito se conserva (reagrupando desde la derecha con el último grupo).
+        let src = "fn main() -> int {\n    let a = 1_000_000;\n    let b = 0xFFFF_FFFF;\n    let c = 0b1010_0101;\n    let d = 2_000u32;\n    a\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt("fn main() -> int {\n    1_00_000\n}\n"), "fn main() -> int {\n    100_000\n}\n");
     }
 
     #[test]

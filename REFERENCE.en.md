@@ -108,8 +108,8 @@ Reserved (cannot be used as identifiers):
 
 | Literal | Form | Notes |
 |---|---|---|
-| Integer | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `255u8`, `0xFFu32` | decimal or with a `0x`/`0o`/`0b` prefix (hex/octal/binary, uppercase too). Optional suffix `u8`/`u32`/`u64` = that type without context. Without a suffix: fits in `int` → `int` (coerces to the `u*` of the context); does not fit in `int` but fits in `u64` (`0xFFFFFFFFFFFFFFFF`) → **wide**, `u64`. No `_` (deferred) |
-| Float | `3.14` | `digits . digits` (the `.` requires a fraction: `2.0`, not `2.`); always decimal |
+| Integer | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `255u8`, `0xFFu32` | decimal or with a `0x`/`0o`/`0b` prefix (hex/octal/binary, uppercase too). Optional suffix `u8`/`u32`/`u64` = that type without context. Without a suffix: fits in `int` → `int` (coerces to the `u*` of the context); does not fit in `int` but fits in `u64` (`0xFFFFFFFFFFFFFFFF`) → **wide**, `u64`. `_` separators between digits (`1_000_000`, `0xFFFF_FFFF`, since 1.27.75); `ray fmt` keeps the grouping. For durations and sizes prefer the units: `1.hours()` (`std/time`), `64.kb()` (`std/units`) |
+| Float | `3.14` | `digits . digits` (the `.` requires a fraction: `2.0`, not `2.`); always decimal; accepts `_` between digits (`1_000.5`), which `ray fmt` normalizes |
 | Boolean | `true` / `false` | |
 | String | `"hello"` | escapes `\n \t \r \\ \" \$ \0`, `\xNN` (hex octet, U+0000..U+00FF) and `\u{H…H}` (1–6 hex digits, Unicode code point); no literal line breaks |
 | Interpolated string | `"x = ${expr}"` | `${expr}` = **one** expression; desugars to `+ to_string(expr)`. `\${` = literal. `"$5"` and `"{n}"` are literals (the `$` is only special before `{`) |
@@ -743,4 +743,4 @@ threads, one per core by default; `1` = deterministic. A network server with few
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:8d9b06ac932e -->
+<!-- sync: sha256:4c7473db3eeb -->

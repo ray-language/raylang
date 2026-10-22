@@ -177,19 +177,20 @@ contexts:
   literals:
     - match: '\b(true|false)\b'
       scope: constant.language.boolean.raylang
-    # Con prefijo de base (M118): 0xFF, 0o17, 0b1010; sufijo u8/u32/u64 opcional (M192).
-    - match: '\b0[xX][0-9A-Fa-f]+{{int_suffix}}\b'
+    # Con prefijo de base (M118): 0xFF, 0o17, 0b1010; sufijo u8/u32/u64 opcional (M192); separadores
+    # `_` entre dígitos (M421): 1_000_000, 0xFFFF_FFFF.
+    - match: '\b0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*{{int_suffix}}\b'
       scope: constant.numeric.integer.raylang
-    - match: '\b0[oO][0-7]+{{int_suffix}}\b'
+    - match: '\b0[oO][0-7](?:_?[0-7])*{{int_suffix}}\b'
       scope: constant.numeric.integer.raylang
-    - match: '\b0[bB][01]+{{int_suffix}}\b'
+    - match: '\b0[bB][01](?:_?[01])*{{int_suffix}}\b'
       scope: constant.numeric.integer.raylang
     # Flotante: con punto y/o exponente (`1.5`, `1e3`, `1.5e-3`, `2E+10`).
-    - match: '\b[0-9]+(\.[0-9]+)?[eE][+-]?[0-9]+\b'
+    - match: '\b[0-9](?:_?[0-9])*(\.[0-9](?:_?[0-9])*)?[eE][+-]?[0-9](?:_?[0-9])*\b'
       scope: constant.numeric.float.raylang
-    - match: '\b[0-9]+\.[0-9]+\b'
+    - match: '\b[0-9](?:_?[0-9])*\.[0-9](?:_?[0-9])*\b'
       scope: constant.numeric.float.raylang
-    - match: '\b[0-9]+{{int_suffix}}\b'
+    - match: '\b[0-9](?:_?[0-9])*{{int_suffix}}\b'
       scope: constant.numeric.integer.raylang
 
   calls:

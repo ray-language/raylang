@@ -61,7 +61,9 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   check the value (15/2), not stop on "any signal" (`webserver.shutdown_signals()` is that filter).
 - `ray version` prints `X.Y.Z+dev.<sha>` for a toolchain built from the repo HEAD: it accepts
   code a release may not. `[package] raylang = "X.Y.Z"` in ray.toml pins the minimum release.
-- Integer literals: decimal or `0xFF` / `0o755` / `0b1010`. String/char escapes include
+- Integer literals: decimal or `0xFF` / `0o755` / `0b1010`, with optional `_` between digits
+  (`1_000_000`, `0xFFFF_FFFF`; since 1.27.75 — `1_`, `1__0`, `0x_FF` are errors). For durations
+  and sizes prefer the units: `1.hours()`, `30.seconds()` (`std/time`, ms), `64.kb()` (`std/units`). String/char escapes include
   `\0`, `\xNN` and `\u{1F600}`.
 
 ## Canonical forms (from the LSP snippet catalog)

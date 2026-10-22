@@ -188,18 +188,14 @@ fn substr(lx: Lexer, start: int, end: int) -> string {
 // '.' seguido de dígito.
 fn number(lx: Lexer) -> Result<TokKind, LexError> {
     let start = lx.pos - 1;
-    while (!at_end(lx) && is_digit(cur(lx))) {
-        advance(lx);
-    }
+    digit_run(lx, true)?;
     let has_dot = !at_end(lx)
         && cur(lx) == '.'
         && lx.pos + 1 < lx.chars.len()
         && is_digit(lx.chars[lx.pos + 1]);
     if (has_dot) {
         advance(lx);  // el '.'
-        while (!at_end(lx) && is_digit(cur(lx))) {
-            advance(lx);
-        }
+        digit_run(lx, false)?;
     }
     // M80: exponente opcional `e|E [+|-] dígitos`, espejo del lexer de Rust. Guarda
     // conservadora: el e/E solo se consume si le sigue un dígito, o un signo Y un dígito.
@@ -209,12 +205,11 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
         if (!at_end(lx) && (cur(lx) == '+' || cur(lx) == '-')) {
             advance(lx);
         }
-        while (!at_end(lx) && is_digit(cur(lx))) {
-            advance(lx);
-        }
+        digit_run(lx, false)?;
     }
     let is_float = has_dot || has_exp;
-    let text = substr(lx, start, lx.pos);
+    // M421: los separadores `_` no forman parte del valor.
+    let text = substr(lx, start, lx.pos).replace("_", "");
     if (is_float) {
         match (parse_float(text)) {
             Option.Some(f) => Result.Ok(TokKind.Float(f)),
@@ -226,6 +221,32 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
             Option.None => Result.Err(lex_error(lx, "integer out of range '" + text + "'")),
         }
     }
+}
+
+// M421 (rayzip #224): consume una tira de dígitos decimales con separadores `_` opcionales; un `_`
+// solo vale ENTRE dos dígitos (espejo de `digit_run` del lexer de Rust, mismo mensaje).
+// `seeded`: ya se consumió un dígito antes (el primero del número).
+fn digit_run(lx: Lexer, seeded: bool) -> Result<int, LexError> {
+    var any = seeded;
+    var go = true;
+    while (go && !at_end(lx)) {
+        let c = cur(lx);
+        if (is_digit(c)) {
+            advance(lx);
+            any = true;
+        } else if (c == '_') {
+            let next_is_digit = lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
+            if (!any || !next_is_digit) {
+                return Result.Err(
+                    lex_error(lx, "a '_' in a number literal goes between two digits (1_000_000)")
+                );
+            }
+            advance(lx);
+        } else {
+            go = false;
+        }
+    }
+    Result.Ok(0)
 }
 
 // M80: ¿lo que sigue al e/E (que está bajo el cursor) es un exponente válido?

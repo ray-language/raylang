@@ -109,8 +109,8 @@ Reservadas (no pueden usarse como identificadores):
 
 | Literal | Forma | Notas |
 |---|---|---|
-| Entero | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `255u8`, `0xFFu32` | decimal o con prefijo `0x`/`0o`/`0b` (hex/octal/binario, mayúsculas también). Sufijo opcional `u8`/`u32`/`u64` = ese tipo sin contexto. Sin sufijo: cabe en `int` → `int` (coerciona al `u*` del contexto); no cabe en `int` pero sí en `u64` (`0xFFFFFFFFFFFFFFFF`) → **amplio**, `u64`. Sin `_` (diferido) |
-| Flotante | `3.14` | `dígitos . dígitos` (el `.` exige decimal: `2.0`, no `2.`); siempre decimal |
+| Entero | `42`, `-7`, `0xFF`, `0o755`, `0b1010`, `255u8`, `0xFFu32` | decimal o con prefijo `0x`/`0o`/`0b` (hex/octal/binario, mayúsculas también). Sufijo opcional `u8`/`u32`/`u64` = ese tipo sin contexto. Sin sufijo: cabe en `int` → `int` (coerciona al `u*` del contexto); no cabe en `int` pero sí en `u64` (`0xFFFFFFFFFFFFFFFF`) → **amplio**, `u64`. Separadores `_` entre dígitos (`1_000_000`, `0xFFFF_FFFF`, desde 1.27.75); `ray fmt` conserva el agrupado. Para duraciones y tamaños, mejor las unidades: `1.hours()` (`std/time`), `64.kb()` (`std/units`) |
+| Flotante | `3.14` | `dígitos . dígitos` (el `.` exige decimal: `2.0`, no `2.`); siempre decimal; admite `_` entre dígitos (`1_000.5`), que `ray fmt` normaliza |
 | Booleano | `true` / `false` | |
 | String | `"hola"` | escapes `\n \t \r \\ \" \$ \0`, `\xNN` (octeto hex, U+0000..U+00FF) y `\u{H…H}` (1–6 hex, code point Unicode); sin saltos de línea literales |
 | String interpolada | `"x = ${expr}"` | `${expr}` = **una** expresión; desazucara a `+ to_string(expr)`. `\${` = literal. `"$5"` y `"{n}"` son literales (el `$` solo es especial ante `{`) |

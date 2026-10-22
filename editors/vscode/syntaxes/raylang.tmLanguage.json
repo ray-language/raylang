@@ -189,12 +189,12 @@
     },
     "numbers": {
       "patterns": [
-        { "name": "constant.numeric.integer.raylang", "match": "\\b0[xX][0-9A-Fa-f]+(?:u8|u32|u64)?\\b" },
-        { "name": "constant.numeric.integer.raylang", "match": "\\b0[oO][0-7]+(?:u8|u32|u64)?\\b" },
-        { "name": "constant.numeric.integer.raylang", "match": "\\b0[bB][01]+(?:u8|u32|u64)?\\b" },
-        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9]+(\\.[0-9]+)?[eE][+-]?[0-9]+\\b" },
-        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9]+\\.[0-9]+\\b" },
-        { "name": "constant.numeric.integer.raylang", "match": "\\b[0-9]+(?:u8|u32|u64)?\\b" }
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[oO][0-7](?:_?[0-7])*(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b0[bB][01](?:_?[01])*(?:u8|u32|u64)?\\b" },
+        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9](?:_?[0-9])*(\\.[0-9](?:_?[0-9])*)?[eE][+-]?[0-9](?:_?[0-9])*\\b" },
+        { "name": "constant.numeric.float.raylang", "match": "\\b[0-9](?:_?[0-9])*\\.[0-9](?:_?[0-9])*\\b" },
+        { "name": "constant.numeric.integer.raylang", "match": "\\b[0-9](?:_?[0-9])*(?:u8|u32|u64)?\\b" }
       ]
     },
     "function-call": {

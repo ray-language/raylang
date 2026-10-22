@@ -11,7 +11,7 @@ añade desde el índice de paquetes con `ray add rpc`, que lo declara en tu `ray
 
 ```toml
 [dependencies]
-rpc = "^0.1.3"
+rpc = "^0.2.0"
 ```
 
 Dentro del monorepo de raylang se puede usar la ruta (`rpc = "path:../raylang/packages/rpc"`).
@@ -56,8 +56,12 @@ fn main() -> int {
   que nunca llega. M306: `serve_on[_shutdown[_limits]](listener, …)` sirven sobre un listener ya
   abierto (`net.tcp_listen(host, 0)` + `net.local_port` = puerto efímero sin carrera: tests y apps
   de escritorio).
-- Límites: `Limits { max_frame_bytes }` (default 10 MiB) — un peer hostil no puede hacer
-  reservar memoria sin tope.
+- Límites: `Limits { max_frame_bytes, frame_timeout_ms, idle_timeout_ms }` (defaults 10 MiB, 30 s,
+  0): un peer hostil no puede hacer reservar memoria sin tope, ni dejar un frame a medias
+  ocupando su conexión (0.2.0: el frame empezado tiene `frame_timeout_ms` para completarse, y un
+  peer que gotea octetos no renueva el plazo). `idle_timeout_ms > 0` cierra en silencio la
+  conexión que pasa ese tiempo sin empezar un frame; por defecto no (un pool de clientes mantiene
+  sus conexiones abiertas). `serve_shutdown_limits`/`serve_on_shutdown_limits` los reciben.
 
 ## Cliente
 

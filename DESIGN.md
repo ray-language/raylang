@@ -18695,3 +18695,68 @@ De paso apareció un bug latente: `shift_program` desplazaba `s.line` de cada st
 su módulo, pero no `field_lines` ni `field_type_pos`. El «unknown type» de un campo (M396) de un
 módulo importado caía así en la banda del módulo de entrada: `[main] type error at 5:8`, sin
 fragmento. Ahora se desplazan con el struct.
+
+## 396. M423 — la ronda de raysec: encuadre HTTP, Host, plazos de rpc y aritmética sin desbordar (#229–#237, oct 2026)
+
+raysec es la primera app de ray-apps dedicada a atacar a las demás: arranca cada una en un puerto
+alto y le manda lo que un peer hostil mandaría. Encontró nueve cosas; cinco eran de paquetes.
+
+**El encuadre de `net/webserver` (#229, #230).** `tam_chunk` acumulaba dígitos hex sin tope: con
+17, `n * 16 + d` desbordaba el `int`, la fibra de la conexión moría con un error en tiempo de
+ejecución (la que nadie espera, #232) y la conexión quedaba abierta sin respuesta; 1100 así
+agotaban los huecos de `max_conns`. Ahora más de 15 dígitos (2^60, muy por encima de cualquier
+`max_body_bytes`) es «chunk size not hex or too large» → 400 y cierre. Dos `Content-Length`
+distintos se quedaban con el último (el `Map` pisaba): ahora es 400, como pide RFC 9112 §6.3. Al
+mirar esto salieron dos huecos del mismo tipo que raysec no había probado: un `Content-Length`
+que no es solo dígitos (`abc`, `-5`) daba `parse_int` None y el servidor lo trataba como «sin
+cuerpo», así que el cuerpo se leía como la SIGUIENTE petición; y `Transfer-Encoding: chunked` con
+`Content-Length` se resolvía a favor del chunked. Las cuatro son las ambigüedades clásicas de
+*request smuggling*: un proxy delante que lea el otro valor parte el flujo de otra manera. Las
+cuatro son 400.
+
+**`raw_path` y el cliente (#237).** raylb y raygate reenviaban `req.path`, que llega descodificado:
+un `%0d%0a` pasaba a ser un salto de línea en la petición al upstream. `Request` gana `raw_path`
+(la ruta tal cual, con `..` sin resolver). Romper los literales `Request { … }` escritos a mano
+(dos apps, en tests y un banco) es el precio, y por eso net sube a 0.11.0. Del otro lado, el
+cliente `net/http` copiaba la ruta, el método y las cabeceras extra a la petición sin mirar: ahora
+`check_request_head` rechaza CR, LF, espacio y demás caracteres de control (en valores de cabecera
+se admite el espacio y el tab) antes de escribir nada, y `parse_url` lo hace antes incluso de
+conectar. `build_request_conn` pasa a devolver `Result`; `net/websocket_client` hace lo mismo con
+el host y la ruta del upgrade.
+
+**El `Host` de `mcp/serve` (#231).** La defensa contra DNS rebinding comparaba el host del
+`Origin` con el `Host`. Pero una página de `evil.example` que resuelve a 127.0.0.1 manda
+`Origin: http://evil.example:8765` y `Host: evil.example:8765`: iguales. Lo que delata el rebinding
+es el `Host`. Sin `token`, ahora solo se contesta a un `Host` de loopback (`localhost`,
+`127.0.0.1`, `[::1]`, cualquier puerto) o de `Provider.hosts` (`nombre` o `nombre:puerto`). Con
+`token` se acepta cualquiera: la página no lo conoce, y así un despliegue remoto con token no se
+rompe. El `cross_site_blocked` de `webserver.local_limits` tiene la misma forma, pero ahí el
+token local es obligatorio y ya para el rebinding (la cookie de 127.0.0.1 no viaja a
+`evil.example`). Exigir allí un `Host` de loopback rompería el emulador de Android, que llega al
+host por loopback con `Host: 10.0.2.2:…`. Se deja como está.
+
+**Los plazos de `rpc` (#235).** El bucle de accept vive en el paquete y `read_exact` esperaba sin
+plazo: un frame a medias ocupaba su conexión para siempre. `Limits` gana `frame_timeout_ms` (30 s
+por defecto: el frame empezado debe completarse en ese plazo, fijado como en el webserver a lo que
+RESTA en cada lectura, así que gotear octetos no lo renueva) e `idle_timeout_ms` (0 por defecto:
+un pool de clientes mantiene conexiones abiertas entre llamadas, y cortarlas por defecto lo
+rompería). El cliente sigue usando `read_frame` sin plazos propios: los pone él alrededor de la
+llamada.
+
+**La aritmética (#233).** El desbordamiento de `int` es un error en tiempo de ejecución desde el
+principio (SPEC §8, REFERENCE), pero `llms.txt` no lo decía, y es lo que lee un modelo. Ahora sí,
+con la consecuencia práctica (acotar lo que controla un peer antes de operar), y `std/math` gana
+`checked_add/sub/mul -> Option<int>`, `saturating_add/sub/mul` y `MAX_INT`/`MIN_INT`, en raylang
+puro con las comprobaciones de CERT INT32-C (ninguna operación intermedia desborda). Al probarlas
+en nativo salieron como «not supported»: el transpilador interceptaba TODO `std::math::*`, así que
+las funciones puras que ya había (`gcd`, `lcm`, `clamp`, `iabs`, `sign`, `ipow`, `factorial`,
+`is_prime`) nunca habían compilado en nativo. `names::math_intercepted` lista solo las que envuelven
+un primitivo (y las ad-hoc `abs`/`min`/`max`); el resto se emite como cualquier función de módulo,
+igual que ya se hacía con `std/time`. Las constantes de `std/math` se emiten salvo `PI`/`E`.
+
+**Lo que queda (IDEAS §115).** Dos decisiones que no son de doc. Una tarea que falla y nadie
+espera muere en silencio (#232): documentado, pero imprimir el fallo en stderr (como un hilo de
+Rust que entra en pánico) es un cambio de comportamiento en los tres motores. Y no hay timeout de
+escritura (#234): `socket_write_bytes` aparca la fibra sin plazo cuando el peer no lee, y la de TLS
+gira; documentado, y `set_write_timeout` es el arco siguiente.
+

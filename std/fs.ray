@@ -116,12 +116,15 @@ pub fn make_temp_dir(prefix: string) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
-/// Whether the path exists and is a directory (total; never fails).
+/// Whether the path exists and is a directory (total; never fails). Follows symlinks: a symlink to
+/// a directory is a directory; `stat(path).kind` sees the link itself ("symlink").
 pub fn is_dir(path: string) -> bool {
     __is_dir(path)
 }
 
-/// Whether the path exists and is a regular file (total; never fails).
+/// Whether the path exists and is a regular file (total; never fails). Follows symlinks: a symlink
+/// to a file is a file, even one outside the directory you walk; `stat(path).kind` sees the link
+/// itself ("symlink").
 pub fn is_file(path: string) -> bool {
     __is_file(path)
 }

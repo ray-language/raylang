@@ -22,7 +22,9 @@ pub fn socket_read_bytes(h: int) -> Result<bytes, string> {
     }
 }
 
-/// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`.
+/// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`. There is no write timeout:
+/// if the peer stops reading and its window fills, the write waits (the fiber parks) until the
+/// peer reads or the connection closes. `set_read_timeout` does not cover writes.
 pub fn socket_write_bytes(h: int, data: bytes) -> Result<int, string> {
     let r = __socket_write_bytes(h, data);
     if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
@@ -208,7 +210,8 @@ pub fn socket_read(h: int) -> Result<string, string> {
 }
 
 // Escribe en el socket; Ok(nº de bytes) u Err(mensaje).
-/// Writes the string to the socket; `Ok(byte count)` or `Err(message)`.
+/// Writes the string to the socket; `Ok(byte count)` or `Err(message)`. No write timeout (see
+/// `socket_write_bytes`).
 pub fn socket_write(h: int, s: string) -> Result<int, string> {
     let r = __socket_write(h, s);
     if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
@@ -258,7 +261,8 @@ pub fn local_port(h: int) -> int {
 /// fails with the stable error "read timeout". Applies to any blocking wait on the handle —
 /// TCP/TLS reads, UDP receives (M121) and, on a LISTENER, `tcp_accept` (M306: an accept that
 /// waits longer than `ms` fails with "read timeout" — the way to poll a listener with a
-/// deadline instead of closing it from another fiber). Total: non-socket handles are ignored.
+/// deadline instead of closing it from another fiber). Reads only: a write is not bounded by it.
+/// Total: non-socket handles are ignored.
 pub fn set_read_timeout(h: int, ms: int) {
     __socket_set_read_timeout(h, ms);
 }

@@ -52,11 +52,23 @@ pub struct Provider {
     resources: [ResourceDef],
     /// HTTP only: when not empty, every request must carry `Authorization: Bearer <token>`.
     token: string,
+    /// HTTP only: the `Host` names the server answers to besides loopback (`localhost`,
+    /// `127.0.0.1`, `[::1]`), as `name` (any port) or `name:port`. With no `token`, any other
+    /// `Host` is refused (DNS rebinding); with a `token`, every `Host` is accepted.
+    hosts: [string],
 }
 
 /// An empty provider that introduces itself as `name` `version`.
 pub fn provider(name: string, version: string) -> Provider {
-    Provider { name: name, version: version, instructions: "", tools: [], resources: [], token: "" }
+    Provider {
+        name: name,
+        version: version,
+        instructions: "",
+        tools: [],
+        resources: [],
+        token: "",
+        hosts: []
+    }
 }
 
 // Un nombre repetido o un esquema que no es JSON son errores del programa, no situaciones de
@@ -370,6 +382,40 @@ fn origin_host(origin: string) -> string {
     }
 }
 
+// El nombre de una cabecera Host sin el puerto: "a.example:8443" → "a.example", "[::1]:80" → "[::1]".
+fn host_name(host: string) -> string {
+    if (host.starts_with("[")) {
+        return match (host.index_of("]")) {
+            Option.Some(i) => host.substring(0, i + 1),
+            Option.None => host,
+        };
+    }
+    match (host.index_of(":")) {
+        Option.Some(i) => host.substring(0, i),
+        Option.None => host,
+    }
+}
+
+// raysec #231: ¿responde el servidor a este Host? Comparar Origin con Host no basta: una página de
+// `evil.example` que resuelve a 127.0.0.1 manda los dos iguales. Sin token, solo loopback y `hosts`.
+fn host_allowed(p: Provider, host: string) -> bool {
+    if (p.token != "") {
+        return true;
+    }
+    let h = host.to_lower();
+    let name = host_name(h);
+    if (name == "localhost" || name == "127.0.0.1" || name == "[::1]") {
+        return true;
+    }
+    for allowed in p.hosts {
+        let a = allowed.to_lower();
+        if (a == h || a == name) {
+            return true;
+        }
+    }
+    false
+}
+
 // Igualdad en tiempo que depende solo de las longitudes: comparar el token octeto a octeto y
 // parar en la primera diferencia dejaría adivinarlo midiendo las respuestas.
 fn same(a: string, b: string) -> bool {
@@ -403,9 +449,13 @@ pub fn answer(p: Provider, req: Request) -> Response {
         return r;
     }
     // Una página web de otro origen no debe poder hablar con un servidor local (DNS rebinding):
-    // el navegador siempre dice de dónde viene.
+    // el navegador siempre dice de dónde viene, y el Host tiene que ser uno de los nuestros.
+    let host = req.headers.get("host").unwrap_or("");
+    if (!host_allowed(p, host)) {
+        return webserver.text(403, "unexpected Host header (add it to the provider's hosts)");
+    }
     let origin = req.headers.get("origin").unwrap_or("");
-    if (origin != "" && origin_host(origin) != req.headers.get("host").unwrap_or("").to_lower()) {
+    if (origin != "" && origin_host(origin) != host.to_lower()) {
         return webserver.text(403, "cross-origin request refused");
     }
     if (p.token != ""
@@ -438,7 +488,8 @@ pub fn http_on(build: fn() -> Provider, listener: int) -> Result<int, string> {
 }
 
 /// `http_on` after binding `host:port`. Use `127.0.0.1` unless the server must be reachable
-/// from other machines, and set `token` on the provider when it is.
+/// from other machines, and set `token` on the provider when it is. Without a `token` only a
+/// loopback `Host` (or one listed in `hosts`) is answered.
 pub fn http(build: fn() -> Provider, host: string, port: int) -> Result<int, string> {
     let listener = net.tcp_listen(host, port)?;
     http_on(build, listener)

@@ -4,6 +4,35 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.77 — 2026-10-22
+
+Ronda de raysec, una revisión de seguridad de las apps (M423, #229–#237).
+
+- **`net` 0.11.0 — el webserver rechaza el encuadre ambiguo** (#229, #230): un tamaño de chunk de
+  más de 15 dígitos hex (antes desbordaba el `int`: la conexión se quedaba sin respuesta ni cierre
+  y, con 1100 así, el servidor dejaba de contestar), dos `Content-Length` distintos, un
+  `Content-Length` que no es solo dígitos (antes `abc` o `-5` daban «sin cuerpo» y lo que venía
+  detrás se leía como otra petición) y `Transfer-Encoding` junto a `Content-Length` son un 400 y
+  se cierra la conexión.
+- **`net` 0.11.0 — `Request.raw_path`** (#237): la ruta tal como la mandó el cliente, sin
+  descodificar, para que un proxy la reenvíe (reenviar `path` convertía `%0d%0a` en un salto de
+  línea). ⚠️ Quien construya `webserver.Request { … }` a mano (tests) añade el campo. Y el cliente
+  `net/http` (y `net/websocket_client`) devuelve `Err` ante una URL, un método o una cabecera con
+  CR, LF, espacio u otro carácter de control, en vez de mandarlos.
+- **`mcp` 0.3.0 — el servidor HTTP comprueba el `Host`** (#231): sin `token`, solo contesta a un
+  `Host` de loopback o de la lista nueva `Provider.hosts`; la defensa anterior comparaba `Origin`
+  con `Host`, que una página atacante manda iguales (DNS rebinding). Con `token`, cualquier `Host`.
+- **`rpc` 0.2.0 — plazos en el servidor** (#235): `Limits.frame_timeout_ms` (30 s por defecto)
+  corta un frame que se queda a medias, e `idle_timeout_ms` (0 = sin límite) la conexión ociosa.
+- **`std/math`: `checked_add/sub/mul` (→ `Option<int>`), `saturating_add/sub/mul`, `MAX_INT` y
+  `MIN_INT`** (#233), para cuando desbordar es una entrada esperada (el desbordamiento de `int`
+  sigue siendo un error en tiempo de ejecución, ahora dicho también en `llms.txt`). De paso, las
+  funciones puras de `std/math` (`gcd`, `lcm`, `clamp`, `iabs`, `sign`, `ipow`, `factorial`,
+  `is_prime`) compilan en nativo: antes eran «not supported».
+- **Doc** (#232, #234, #236): `spawn` dice que una tarea que falla y nadie espera termina en
+  silencio; `socket_write_bytes`/`set_read_timeout`, que las escrituras no tienen plazo;
+  `fs.is_file`/`fs.is_dir`, que siguen los symlinks (al contrario que `fs.stat`).
+
 ## 1.27.76 — 2026-10-22
 
 - **`b[i] = v` sobre un `bytes` es un error de tipos** (M422, rayffi #228): `bytes` es inmutable

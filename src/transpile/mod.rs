@@ -510,7 +510,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // Constantes de nivel superior → funciones `fn NAME() -> T { <literal> }`.
     for c in &prog.consts {
         // `std::math::PI`/`E` se emiten como constantes de `std::f64::consts` en el sitio de uso.
-        if c.name.starts_with("std::math::") {
+        if c.name == "std::math::PI" || c.name == "std::math::E" {
             continue;
         }
         // La DEFINICIÓN debe usar el mismo `mangle` que el uso (línea ~1605): una constante namespacada

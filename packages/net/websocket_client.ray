@@ -31,6 +31,20 @@ fn make_key() -> string {
     base64(crypto.random_bytes(16))
 }
 
+// raysec #237: un CR/LF, espacio u otro carácter de control en el host o la ruta metería líneas
+// en la petición de upgrade; se rechaza antes de conectar.
+fn check_target(host: string, path: string) -> Result<int, string> {
+    for c in host + path {
+        let n = char_code(c);
+        if (n <= 32 || n == 127) {
+            return Result.Err(
+                "invalid WebSocket host or path (control character or space; percent-encode it)"
+            );
+        }
+    }
+    Result.Ok(0)
+}
+
 // La petición de upgrade del cliente.
 fn upgrade_request(host: string, path: string, key: string) -> string {
     "GET "
@@ -158,6 +172,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<WsConn,
 /// RFC 6455 client handshake on `path`. Blocking network I/O.
 /// Returns `Ok(WsConn)` on success; `Err(reason)` if the TCP connect or handshake fails.
 pub fn connect(host: string, port: int, path: string) -> Result<WsConn, string> {
+    let _ = check_target(host, path)?;
     match (net.tcp_connect(host, port)) {
         Result.Err(e) => Result.Err("connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
@@ -170,6 +185,7 @@ pub fn connect(host: string, port: int, path: string) -> Result<WsConn, string> 
 /// handshake on `path`; all I/O goes through the encrypted session.
 /// Returns `Ok(WsConn)` on success; `Err(reason)` if the TLS connect or handshake fails.
 pub fn connect_tls(host: string, port: int, path: string) -> Result<WsConn, string> {
+    let _ = check_target(host, path)?;
     match (net.tls_connect(host, port)) {
         Result.Err(e) => Result.Err("tls connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),

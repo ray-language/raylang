@@ -4304,3 +4304,20 @@ espejo selfhost), formateador (preservar la forma del usuario, como hace con `0x
 editores (tree-sitter, Sublime, VS Code) y SPEC §1. Impacto: **bajo**, puramente aditivo (un
 programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
 
+## 115. Lo que dejó abierto raysec (#232, #234; oct 2026)
+
+- **#232 — una tarea que falla y nadie espera muere en silencio.** Hoy: documentado en `spawn`,
+  REFERENCE y `llms.txt`. Propuesta: escribir el fallo en stderr en el momento en que la tarea
+  muere (`task <id> failed: <mensaje>`), como hace Rust con un hilo que entra en pánico, aunque
+  después alguien la espere con `join`/`try_join`. Coste: los tres motores (VM, intérprete sin
+  fibras no aplica, nativo), y una forma de silenciarlo para quien ya gestiona el error (el rpc y
+  el webserver hacen `try_join` y registran por su cuenta: saldría dos veces). Impacto: **medio**,
+  cambia lo que ve stderr en programas que hoy funcionan. Pendiente de decisión del usuario.
+- **#234 — no hay timeout de escritura.** Hoy: documentado (`socket_write_bytes`,
+  `set_read_timeout`). Propuesta: `net.set_write_timeout(h, ms)`: la escritura que espera más falla
+  con "write timeout". Coste: la VM (`park_write` con plazo, como `park_read`), el nativo con
+  fibras (`wait_writable` con plazo) y sin ellas (`SO_SNDTIMEO`), el intérprete (bloqueante,
+  `SO_SNDTIMEO`) y la escritura TLS, que hoy gira en el raro bloqueo. Luego el webserver puede
+  acotar la escritura de una respuesta a un cliente que no lee (hoy retiene la fibra y su memoria).
+  Impacto: **bajo** (aditivo). Es el arco siguiente.
+

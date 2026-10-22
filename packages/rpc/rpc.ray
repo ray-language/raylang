@@ -24,15 +24,22 @@ import std/time;
 from std/json import parse, stringify, Json;
 
 // --- Límites de seguridad ---
-/// Safety limits: the maximum frame size in bytes (a hostile or buggy peer cannot make the
-/// server allocate unbounded memory). `serve`/`connect` use `default_limits()`.
+/// Safety limits for the server (a hostile or buggy peer cannot make it allocate unbounded
+/// memory or hold a connection forever). `serve`/`connect` use `default_limits()`.
 pub struct Limits {
+    /// The maximum frame size in bytes.
     max_frame_bytes: int,
+    /// Once a frame's first byte arrives, the whole frame must arrive within this many ms or the
+    /// connection is closed (`<= 0` = no limit).
+    frame_timeout_ms: int,
+    /// How long a connection may sit idle between frames before the server closes it quietly
+    /// (`<= 0` = forever, what a client pool keeping connections open expects).
+    idle_timeout_ms: int,
 }
 
-/// The default limits: 10 MiB per frame.
+/// The default limits: 10 MiB per frame, 30 s to complete a frame, idle connections kept.
 pub fn default_limits() -> Limits {
-    Limits { max_frame_bytes: 10485760 }
+    Limits { max_frame_bytes: 10485760, frame_timeout_ms: 30000, idle_timeout_ms: 0 }
 }
 
 // --- El framing: prefijo de longitud de 4 octetos big-endian ---
@@ -42,10 +49,27 @@ struct Rd {
     buf: bytes,
 }
 
-// Exactamente `n` octetos del socket (acumula lecturas crudas en el buffer).
-fn read_exact(r: Rd, n: int) -> Result<bytes, string> {
+// Exactamente `n` octetos del socket (acumula lecturas crudas en el buffer). Con `deadline` (reloj
+// monotónico; 0 = sin plazo) cada lectura espera solo lo que RESTA: un peer que gotea octetos no
+// renueva el plazo (raysec #235).
+fn read_exact(r: Rd, n: int, deadline: int) -> Result<bytes, string> {
     while (r.buf.len() < n) {
-        let chunk = net.socket_read_bytes(r.conn)?;
+        if (deadline > 0) {
+            let remaining = deadline - time.monotonic();
+            if (remaining <= 0) {
+                return Result.Err("frame timeout (the peer stopped mid-frame)");
+            }
+            net.set_read_timeout(r.conn, remaining);
+        }
+        let chunk = match (net.socket_read_bytes(r.conn)) {
+            Result.Ok(c) => c,
+            Result.Err(e) => {
+                if (deadline > 0 && time.monotonic() >= deadline) {
+                    return Result.Err("frame timeout (the peer stopped mid-frame)");
+                }
+                return Result.Err(e);
+            },
+        };
         if (chunk.len() == 0) {
             return Result.Err("connection closed mid-frame");
         }
@@ -64,21 +88,40 @@ fn frame(payload: bytes) -> bytes {
 
 // Lee un frame completo. `Ok(None)` = EOF LIMPIO (el peer cerró entre frames — fin normal de
 // una conexión); un EOF a mitad de frame o un frame sobre el límite son errores.
+// El cliente: sin plazos propios (los pone él con `set_read_timeout` alrededor de la llamada).
 fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
+    read_frame_timed(r, max, 0, 0)
+}
+
+// El servidor (raysec #235): `idle_ms` acota la espera ENTRE frames (vencida sin nada a medias =
+// cierre silencioso, `Ok(None)`) y `frame_ms` el frame ya empezado. 0 = sin límite en cada caso.
+fn read_frame_timed(r: Rd, max: int, idle_ms: int, frame_ms: int) -> Result<Option<bytes>, string> {
     // ¿Fin limpio? Solo si no hay nada a medias en el buffer y la primera lectura da EOF.
     if (r.buf.len() == 0) {
-        let chunk = net.socket_read_bytes(r.conn)?;
+        if (idle_ms > 0 || frame_ms > 0) {
+            net.set_read_timeout(r.conn, if (idle_ms > 0) { idle_ms } else { 0 });
+        }
+        let chunk = match (net.socket_read_bytes(r.conn)) {
+            Result.Ok(c) => c,
+            Result.Err(e) => {
+                if (idle_ms > 0) {
+                    return Result.Ok(Option.None);
+                }
+                return Result.Err(e);
+            },
+        };
         if (chunk.len() == 0) {
             return Result.Ok(Option.None);
         }
         r.buf = chunk;
     }
-    let h = read_exact(r, 4)?;
+    let deadline = if (frame_ms > 0) { time.monotonic() + frame_ms } else { 0 };
+    let h = read_exact(r, 4, deadline)?;
     let n = h[0] << 24 | h[1] << 16 | h[2] << 8 | h[3];
     if (n > max) {
         return Result.Err("frame too large (" + to_string(n) + " > " + to_string(max) + " bytes)");
     }
-    let body = read_exact(r, n)?;
+    let body = read_exact(r, n, deadline)?;
     Result.Ok(Option.Some(body))
 }
 
@@ -213,7 +256,12 @@ fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limit
     let r = Rd { conn: conn, buf: b"" };
     var follow = true;
     while (follow) {
-        match (read_frame(r, limits.max_frame_bytes)) {
+        match (read_frame_timed(
+            r,
+            limits.max_frame_bytes,
+            limits.idle_timeout_ms,
+            limits.frame_timeout_ms
+        )) {
             Result.Ok(of) => {
                 match (of) {
                     Option.Some(fr) => {

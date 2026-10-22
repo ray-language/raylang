@@ -1225,7 +1225,9 @@ impl Transpiler {
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
         // `std::math::*` (módulo std/math) → los métodos de `f64` de Rust (misma impl que la VM → mismo
         // resultado). abs/min/max son ad-hoc int|float (ambos tienen esos métodos en Rust).
-        if let Some(mfn) = name.strip_prefix("std::math::") {
+        if let Some(mfn) = name.strip_prefix("std::math::")
+            && super::names::math_intercepted(mfn)
+        {
             return self.emit_math(out, mfn, &eff);
         }
         // std/ffi (revisión FFI jul 2026): `errno()` → helper emitido que lee el errno del hilo.
@@ -3354,7 +3356,9 @@ impl Transpiler {
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto
                 // (sqrt/pow/sin/…) → float. Antes de la ruta genérica (su FnSig lleva params-diccionario
                 // que no sabríamos tipar: el arg es `int#less`, un impl del prelude que no emitimos).
-                if let Some(mfn) = n.strip_prefix("std::math::") {
+                if let Some(mfn) = n.strip_prefix("std::math::")
+                    && super::names::math_intercepted(mfn)
+                {
                     return Ok(match mfn {
                         "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
                         "float_bits" => Type::Int, // la reinterpretación bit a bit devuelve el patrón como int

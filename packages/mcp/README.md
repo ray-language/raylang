@@ -13,7 +13,7 @@ Paquete adicional, como `net` o `db`. Se añade desde el índice con `ray add mc
 
 ```toml
 [dependencies]
-mcp = "^0.1.0"
+mcp = "^0.3.0"
 ```
 
 Dentro del monorepo de raylang se puede usar la ruta (`mcp = "path:../raylang/packages/mcp"`).
@@ -175,7 +175,7 @@ Por HTTP, el mismo `build` se sirve con `serve.http(build, "127.0.0.1", 8765)`.
 
 | Función | Qué hace |
 |---|---|
-| `provider(name, version) -> Provider` | un proveedor vacío; `instructions` y `token` son campos |
+| `provider(name, version) -> Provider` | un proveedor vacío; `instructions`, `token` y `hosts` son campos |
 | `tool(p, name, description, schema, run)` | añade una herramienta; `schema` es el JSON Schema de sus argumentos como texto, `""` si no tiene |
 | `read_only_tool(…)` | lo mismo, declarada como de solo lectura (`readOnlyHint`) |
 | `write_tool(…)` | lo mismo, declarada como un cambio que se puede deshacer (`destructiveHint: false`): el paquete `agent` la trata como `WRITE` y en `EDITS` no pregunta |
@@ -201,9 +201,13 @@ el texto que lee el modelo, y el `Err` le llega como llamada fallida, con su men
 - **Por HTTP no hay sesiones:** cada POST lleva un mensaje y recibe su respuesta. Cada conexión
   corre en su fibra y construye su copia del proveedor, así que el estado compartido entre
   peticiones vive en una base de datos o tras un canal, nunca en una variable capturada.
-- **Por HTTP se rechaza una petición de otro origen** (cabecera `Origin` distinta del `Host`),
-  para que una página web no pueda hablar con un servidor local. Con `token` puesto, cada
-  petición debe llevar `Authorization: Bearer <token>`, comparado en tiempo constante.
+- **Por HTTP, sin `token`, solo se contesta a un `Host` de loopback** (`localhost`, `127.0.0.1`,
+  `[::1]`, con cualquier puerto) o a uno de `hosts` (`"mcp.lan"` o `"mcp.lan:8765"`); cualquier
+  otro es un 403. Es la defensa contra el *DNS rebinding*: una página de `evil.example` que
+  resuelve a `127.0.0.1` manda `Host: evil.example`. Además se rechaza una petición de otro
+  origen (cabecera `Origin` distinta del `Host`). Con `token` puesto se acepta cualquier `Host`
+  (la página no conoce el token) y cada petición debe llevar `Authorization: Bearer <token>`,
+  comparado en tiempo constante.
 - **No anuncia lo que no tiene:** sin recursos registrados, no declara la capacidad `resources`.
 
 No implementa *prompts*, notificaciones del servidor al cliente (progreso, cambios en la lista de

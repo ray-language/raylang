@@ -33,6 +33,11 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   int or both float"), and there is no `n.to_float()`/`float(n)`. Convert with `as`: `n as float`,
   `x as int` (truncates toward zero, saturating), `c as int` (code point), `n as char`, `n as u8`.
   `std/math` (`floor`/`round`/`trunc`) returns `float` — `math.round(x) as int` for an integer.
+- `int` is 64-bit signed and OVERFLOW IS A RUNTIME ERROR (`+ - *`, `abs`, `/` of `MIN` by -1; exit
+  70), never a silent wrap — so bound what a peer controls (a size, a count) before doing
+  arithmetic on it. `math.checked_add/checked_sub/checked_mul(a, b) -> Option<int>` (None on
+  overflow) and `math.saturating_add/saturating_sub/saturating_mul` (clamp to `math.MAX_INT` /
+  `math.MIN_INT`) when overflow is an expected input. `--fast` builds wrap instead.
 - `main` returns `int` (the process exit code) or unit. `exit(code)` terminates the process
   immediately from any fiber (diverges like `panic`; stdout/stderr flushed).
 - Patterns (since 1.27.13): nested variants `Result.Ok(Option.Some(v))`, tuples
@@ -216,6 +221,9 @@ above the file; a stray file compiled from inside another project gets that proj
 ```raylang
 let ch: Channel<int> = Channel.new();            // annotate; Channel.bounded(n) = bounded
 spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
+// A task that FAILS (runtime error, panic) and is never joined ends SILENTLY: no message, main
+//   goes on. `join(t)` re-raises the failure, `try_join(t) -> Result<T, string>` returns it: join
+//   (or try_join and log) every task whose failure matters, or wrap its body and eprint the error.
 // spawn_isolated(f): same, but in a fresh handle domain (cannot use other tasks' files/sockets)
 // Native scheduler model: a fiber is pinned to its worker for life (no migration); each worker
 //   polls its own kqueue/epoll (RAYLANG_REACTOR=local, the unix default; `shared` = one reactor
@@ -309,7 +317,7 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    x25519_shared_secret` (raw DH → always `crypto.hkdf_sha256` before AEAD) ·
    passwords: `crypto.password_hash(p)` to store, `crypto.password_verify(p, stored)` to check
    (PBKDF2-HMAC-SHA256, never `sha256(password)`) ·
-   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.is_dir(p) fs.list_dir(p) fs.mkdir(p) (creates missing parents, like mkdir -p; existing dir is not an error)
+   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.is_dir(p) (is_dir/is_file FOLLOW symlinks; fs.stat(p).kind == "symlink" sees one) fs.list_dir(p) fs.mkdir(p) (creates missing parents, like mkdir -p; existing dir is not an error)
    fs.copy_file(a, b) fs.copy_all(src, dst) fs.remove_all(p) fs.make_temp_dir(prefix)` ·
    `time.now() time.sleep(ms)` · `random.below(n)`. There is NO `os` module: the operating
    system is the free builtin `platform()` → `"macos"` | `"linux"` | `"windows"`.

@@ -116,6 +116,56 @@ pub fn clamp<T: Ord>(x: T, lo: T, hi: T) -> T {
     }
 }
 
+// raysec #233: el desbordamiento de `int` es un error en tiempo de ejecución; estas dan la vía
+// para cuando desbordar es una entrada esperada (un tamaño de un peer). Las comprobaciones son las
+// de CERT INT32-C: ninguna operación intermedia desborda.
+/// The largest `int`, 2^63 - 1. Use qualified: `math.MAX_INT`.
+pub const MAX_INT: int = 9223372036854775807;
+
+/// The smallest `int`, -2^63. Use qualified: `math.MIN_INT`.
+pub const MIN_INT: int = -9223372036854775807 - 1;
+
+/// `a + b`, or `None` if it overflows `int` (plain `+` is a runtime error then).
+pub fn checked_add(a: int, b: int) -> Option<int> {
+    if ((b > 0 && a > MAX_INT - b) || (b < 0 && a < MIN_INT - b)) {
+        return Option.None;
+    }
+    Option.Some(a + b)
+}
+
+/// `a - b`, or `None` if it overflows `int` (plain `-` is a runtime error then).
+pub fn checked_sub(a: int, b: int) -> Option<int> {
+    if ((b < 0 && a > MAX_INT + b) || (b > 0 && a < MIN_INT + b)) {
+        return Option.None;
+    }
+    Option.Some(a - b)
+}
+
+/// `a * b`, or `None` if it overflows `int` (plain `*` is a runtime error then).
+pub fn checked_mul(a: int, b: int) -> Option<int> {
+    let overflows = if (a > 0) {
+        if (b > 0) { a > MAX_INT / b } else { b < MIN_INT / a }
+    } else {
+        if (b > 0) { a < MIN_INT / b } else { a != 0 && b < MAX_INT / a }
+    };
+    if (overflows) { Option.None } else { Option.Some(a * b) }
+}
+
+/// `a + b`, clamped to `MIN_INT`/`MAX_INT` instead of overflowing.
+pub fn saturating_add(a: int, b: int) -> int {
+    checked_add(a, b).unwrap_or(if (b > 0) { MAX_INT } else { MIN_INT })
+}
+
+/// `a - b`, clamped to `MIN_INT`/`MAX_INT` instead of overflowing.
+pub fn saturating_sub(a: int, b: int) -> int {
+    checked_sub(a, b).unwrap_or(if (b < 0) { MAX_INT } else { MIN_INT })
+}
+
+/// `a * b`, clamped to `MIN_INT`/`MAX_INT` instead of overflowing.
+pub fn saturating_mul(a: int, b: int) -> int {
+    checked_mul(a, b).unwrap_or(if ((a > 0) == (b > 0)) { MAX_INT } else { MIN_INT })
+}
+
 /// Greatest common divisor of `a` and `b` (Euclid's algorithm). Always non-negative;
 /// `gcd(0, 0) == 0`.
 pub fn gcd(a: int, b: int) -> int {

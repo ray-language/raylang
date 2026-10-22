@@ -125,6 +125,18 @@ pub(super) fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), Str
 /// ¿Es una función del PRELUDE o un builtin que el transpilador maneja directamente? Sus definiciones
 /// inyectadas por el checker se SALTAN (el transpilador las mapea a Rust nativo, o no las soporta y su
 /// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
+/// Las funciones de `std/math` que el nativo INTERCEPTA (envuelven un primitivo `__x`, o son las
+/// ad-hoc int|float `abs`/`min`/`max`). El resto (gcd, clamp, checked_add… raylang puro) se emite
+/// como cualquier función de módulo — antes todo `std::math::*` se interceptaba y esas eran
+/// «not supported» en nativo (raysec #233 lo destapó con `checked_add`).
+pub(super) fn math_intercepted(f: &str) -> bool {
+    matches!(
+        f,
+        "sqrt" | "pow" | "sin" | "cos" | "tan" | "ln" | "log10" | "log2" | "exp" | "floor" | "ceil" | "round"
+            | "trunc" | "asin" | "acos" | "atan" | "atan2" | "abs" | "min" | "max" | "float_bits" | "float_from_bits"
+    )
+}
+
 pub(super) fn is_handled_builtin(name: &str) -> bool {
     // M270 (raystream [1]): `x#prelude` es la función del prelude `x` inyectada bajo alias porque la
     // raíz redefinió `x`; se trata exactamente como `x` (interceptada, no emitida).
@@ -136,7 +148,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     // `__stat`/`__chmod`, como en std/process).
     // M115.4: watch/next_event/next_event_timeout — como stat/chmod, sus wrappers se EMITEN (el
     // struct WatchEvent vive en raylang) y el intercept es a nivel de primitivo __watch/__watch_next.
-    if name.starts_with("std::math::")
+    if name.strip_prefix("std::math::").is_some_and(math_intercepted)
         || name.strip_prefix("std::fs::").is_some_and(|f| !fs_wrapper_emitted(f))
     {
         return true;

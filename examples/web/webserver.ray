@@ -398,7 +398,8 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
             i = fin;
         } else {
             let d: int = hex_digito(b[i]);
-            if (d < 0) {
+            // raysec #229: más de 15 dígitos desbordaría el int (la fibra moría sin responder).
+            if (d < 0 || n >= (1 << 56)) {
                 return 0 - 1;
             }
             n = n * 16 + d;
@@ -618,6 +619,11 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (!chunked) {
                 match (get(headers, "content-length")) {
                     Option.Some(cl) => {
+                        // raysec #230: un Content-Length no numérico o negativo no es «sin cuerpo».
+                        if (cl.len() == 0
+                            || cl.chars().any(fn(c: char) -> bool { c < '0' || c > '9' })) {
+                            return Result.Err("Content-Length inválido: " + cl);
+                        }
                         match (parse_int(cl)) {
                             Option.Some(n) => {
                                 if (n > limits.max_body_bytes) {

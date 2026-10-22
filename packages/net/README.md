@@ -23,7 +23,7 @@ lo escribe por ti; con el índice oficial por defecto no hay nada que configurar
 
 ```toml
 [dependencies]
-net = "^0.3"
+net = "^0.11"
 ```
 
 Si desarrollas en el monorepo, por ruta (`net = "path:../ruta/a/packages/net"`); la dependencia
@@ -89,7 +89,9 @@ fn main() -> int {
   `Ok(None)` = fin limpio, truncado = `Err`). Para respuestas que se generan en vivo (tokens de un
   LLM, logs) pintando cada trozo al llegar. M347: `Response.raw_headers` guarda TODAS las líneas de
   cabecera en orden (también las repetidas, que el `Map` `headers` no puede) — `header_all(r, name)`
-  y `set_cookies(r)` las leen.
+  y `set_cookies(r)` las leen. 0.11.0: una URL, un método o una cabecera con CR, LF, espacio u otro
+  carácter de control es un `Err` antes de escribir nada (no se inyectan líneas en la petición;
+  codifica la ruta con `%XX`); lo mismo para el host y la ruta de `net/websocket_client`.
 - **`net/sse`** — cliente **Server-Sent Events** (`text/event-stream`) sobre `net/http.stream`:
   `open(url, headers)` suscribe (sin plazo de ocio: un stream sano puede callar minutos) y
   `next(es)` entrega cada `Event { data, event, id }` (data multilínea unida con `\n`; los
@@ -153,7 +155,12 @@ fn main() -> int {
   simultáneas, 10 s para leer una petición — anti-slowloris; configurables con
   `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
   El `path` de la petición llega percent-decodificado y sin query string (M56.2); la query va aparte
-  (`req.query` cruda, `query_params(req)` parseada). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
+  (`req.query` cruda, `query_params(req)` parseada). **`req.raw_path`** (0.11.0) es la ruta tal
+  como la mandó el cliente, sin descodificar ni resolver `..`: la que reenvía un proxy (reenviar
+  `path` convertiría un `%0d%0a` en un salto de línea). **Encuadre estricto** (0.11.0): un tamaño
+  de chunk de más de 15 dígitos hex, dos `Content-Length` distintos, un `Content-Length` que no es
+  solo dígitos, o `Transfer-Encoding` junto con `Content-Length` son un 400 y se cierra la
+  conexión (las ambigüedades que permiten *request smuggling*). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra). Un handler que panica responde
   500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;

@@ -31,7 +31,11 @@ import std/hex;
 /// case-insensitive lookup), and the raw body as bytes (use `request_text` to decode it as UTF-8).
 pub struct Request {
     method: string,
+    /// The path, percent-decoded (`/a%20b` → `/a b`); use it for routing and files.
     path: string,
+    /// The path exactly as the client sent it, still percent-encoded and with `..` unresolved: what
+    /// a proxy forwards upstream (forwarding `path` would turn `%0d%0a` into a line break).
+    raw_path: string,
     query: string,
     version: string,
     headers: Map<string, string>,
@@ -1205,12 +1209,28 @@ fn hex_digit(b: int) -> int {
     0 - 1
 }
 
+// Un valor no vacío de solo dígitos ASCII (un Content-Length válido).
+fn all_digits(s: string) -> bool {
+    if (s.len() == 0) {
+        return false;
+    }
+    for c in s {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    true
+}
+
 // El tamaño de un chunk: hex desde el inicio de la línea hasta `;` (extensiones, se ignoran) o el
-// fin de línea. -1 si no hay ni un dígito válido.
+// fin de línea. -1 si no hay ni un dígito válido, o si tiene más de 15 dígitos (raysec #229: con 16
+// o más el int desbordaba, error en tiempo de ejecución que mataba la fibra de la conexión sin
+// respuesta ni cierre; 15 dígitos hex son 2^60, muy por encima de cualquier `max_body_bytes`).
 fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
     var n: int = 0;
     var i: int = ini;
     var any_found: bool = false;
+    var digits: int = 0;
     while (i < fin) {
         if (b[i] == 59) {
             // ';' → extensión de chunk: ignorar el resto
@@ -1218,6 +1238,10 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
         } else {
             let d: int = hex_digit(b[i]);
             if (d < 0) {
+                return 0 - 1;
+            }
+            digits = digits + 1;
+            if (digits > 15) {
                 return 0 - 1;
             }
             n = n * 16 + d;
@@ -1253,7 +1277,7 @@ fn read_body_chunked(conn: int, initial: bytes, deadline: int, max: int) -> Resu
         } else {
             let n: int = tam_chunk(acc, 0, nl);
             if (n < 0) {
-                return Result.Err("malformed chunked body (non-hex size)");
+                return Result.Err("malformed chunked body (chunk size not hex or too large)");
             }
             if (n == 0) {
                 follow = false;
@@ -1433,7 +1457,7 @@ fn read_request_from(
                     path = p;
                 },
                 Result.Err(e) => {
-                    return Result.Err("path malformada (" + e + "): " + path_raw);
+                    return Result.Err("malformed path (" + e + "): " + path_raw);
                 },
             }
 
@@ -1445,6 +1469,18 @@ fn read_request_from(
                     Option.Some(c) => {
                         let name: string = lines[i].substring(0, c).trim().to_lower();
                         let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
+                        // raysec #230: dos Content-Length distintos son un 400 (RFC 9112 §6.3): cada
+                        // salto del camino podría quedarse con uno y partir el flujo de otra manera.
+                        if (name == "content-length") {
+                            match (get(headers, name)) {
+                                Option.Some(prev) => {
+                                    if (prev != value) {
+                                        return Result.Err("conflicting Content-Length headers");
+                                    }
+                                },
+                                Option.None => { },
+                            }
+                        }
                         headers.insert(name, value);
                     },
                     Option.None => { },
@@ -1463,6 +1499,11 @@ fn read_request_from(
                 },
                 Option.None => { },
             }
+            // Transfer-Encoding Y Content-Length a la vez es la forma clásica de request smuggling
+            // (RFC 9112 §6.1): un proxy delante puede quedarse con el otro. Se rechaza.
+            if (chunked && headers.contains_key("content-length")) {
+                return Result.Err("both Transfer-Encoding and Content-Length");
+            }
             if (chunked) {
                 match (read_body_chunked(conn, body, deadline, limits.max_body_bytes)) {
                     Result.Ok(b2) => {
@@ -1480,6 +1521,11 @@ fn read_request_from(
             if (!chunked) {
                 match (get(headers, "content-length")) {
                     Option.Some(cl) => {
+                        // Solo dígitos (RFC 9112 §8.6): antes `abc` o `-5` no daban cuerpo y lo que
+                        // venía detrás se leía como la SIGUIENTE petición.
+                        if (!all_digits(cl)) {
+                            return Result.Err("invalid Content-Length: " + cl);
+                        }
                         match (parse_int(cl)) {
                             Option.Some(n) => {
                                 if (n > limits.max_body_bytes) {
@@ -1498,7 +1544,7 @@ fn read_request_from(
                                                 return Result.Err(
                                                     "incomplete body: the connection closed with "
                                                         + to_string(body.len())
-                                                        + " de "
+                                                        + " of "
                                                         + to_string(n)
                                                         + " bytes"
                                                 );
@@ -1515,7 +1561,10 @@ fn read_request_from(
                                     body = body.sub_bytes(0, n);
                                 }
                             },
-                            Option.None => { },
+                            Option.None => {
+                                // Dígitos que no caben en un int.
+                                return Result.Err("invalid Content-Length: " + cl);
+                            },
                         }
                     },
                     Option.None => {
@@ -1535,6 +1584,7 @@ fn read_request_from(
             let req: Request = Request {
                 method: method,
                 path: path,
+                raw_path: path_raw,
                 query: query,
                 version: version,
                 headers: headers,

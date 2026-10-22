@@ -2352,6 +2352,7 @@ pub fn close_handle(h: i64) {
     // M56.4: limpia el estado de timeout del socket (los ids no se reusan; es solo higiene).
     read_timeouts().lock().unwrap().remove(&h);
     read_expired().lock().unwrap().remove(&h);
+    write_timeouts().lock().unwrap().remove(&h);
 }
 
 /// M129: cierra TODOS los handles vivos del registro — sockets, LISTENERS, TLS, pipes, watches y
@@ -2797,10 +2798,17 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     }
     let mut stream = socket_clone(h)?;
     let mut off = 0;
+    // raysec #234: con SO_SNDTIMEO puesto (set_write_timeout) el socket BLOQUEANTE del intérprete
+    // vence como WouldBlock/TimedOut; en un socket no bloqueante (la VM no pasa por aquí) WouldBlock
+    // es «buffer lleno» y se gira. Se distinguen por el modo del handle.
+    let timed = write_timeouts().lock().unwrap().contains_key(&h) && !is_nonblocking(h);
     while off < bytes.len() {
         match stream.write(&bytes[off..]) {
             Ok(0) => return Err("the connection closed during the write".to_string()),
             Ok(n) => off += n,
+            Err(e) if timed && (e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut) => {
+                return Err(WRITE_TIMEOUT_MSG.to_string());
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
             Err(e) => return Err(e.to_string()),
         }
@@ -3236,11 +3244,17 @@ pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     // 100 KB, p. ej.). Se cifra por trozos: lo que el búfer acepte, se drena al socket, y se sigue.
     // El nativo (StreamOwned) y el intérprete (rustls::Stream) ya lo hacían así.
     let mut off = 0;
+    // raysec #234: el giro de abajo respeta el plazo de escritura del handle (en el intérprete el
+    // socket es bloqueante y manda su SO_SNDTIMEO; en la VM, este deadline).
+    let deadline = write_deadline(h);
     while off < bytes.len() {
         let n = tc.conn.writer().write(&bytes[off..]).map_err(|e| e.to_string())?;
         off += n;
         tls_flush_writes(tc)?;
         if n == 0 && off < bytes.len() {
+            if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Err(WRITE_TIMEOUT_MSG.to_string());
+            }
             // El búfer está lleno y no hay nada que escribir: el protocolo espera al peer (el
             // handshake sigue en curso — tras `tls_connect` solo se ha enviado el ClientHello, y el
             // texto plano se cifra cuando llega el ServerHello…). Hay que LEER para avanzarlo. Una
@@ -3393,6 +3407,50 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
 
 /// El mensaje del timeout de lectura (idéntico en ambos motores).
 pub const READ_TIMEOUT_MSG: &str = "read timeout";
+
+/// El mensaje del timeout de escritura (raysec #234; idéntico en los tres motores).
+pub const WRITE_TIMEOUT_MSG: &str = "write timeout";
+
+/// handle → timeout de ESCRITURA en ms (raysec #234). Mismo modelo que `read_timeouts`: en la VM
+/// lo aplica el scheduler al aparcar la fibra por escritura (`park_write` con `write_deadline`); en
+/// el intérprete, el SO_SNDTIMEO real; el nativo lleva su propia tabla emitida (`__ray_wr_to`).
+fn write_timeouts() -> &'static std::sync::Mutex<std::collections::HashMap<i64, u64>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, u64>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Fija (ms > 0) o quita (ms <= 0) el timeout de escritura del socket `h`. Total. Builtin
+/// `__socket_set_write_timeout`.
+pub fn socket_set_write_timeout(h: i64, ms: i64) {
+    if ms > 0 {
+        write_timeouts().lock().unwrap().insert(h, ms as u64);
+    } else {
+        write_timeouts().lock().unwrap().remove(&h);
+    }
+    // El SO_SNDTIMEO real, para los sockets BLOQUEANTES del intérprete (inofensivo en la VM).
+    let dur = if ms > 0 { Some(std::time::Duration::from_millis(ms as u64)) } else { None };
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => {
+            let _ = s.set_write_timeout(dur);
+        }
+        #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+        Some(OpenHandle::Tls(tc)) => {
+            let _ = tc.sock.set_write_timeout(dur);
+        }
+        _ => {}
+    }
+}
+
+/// El deadline absoluto de la escritura en curso del handle, si tiene timeout (lo consulta la VM al
+/// aparcar una fibra por escritura).
+pub fn write_deadline(h: i64) -> Option<std::time::Instant> {
+    write_timeouts()
+        .lock()
+        .unwrap()
+        .get(&h)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(*ms))
+}
 
 /// handle → timeout de lectura en ms (los sockets sin entrada no tienen timeout).
 fn read_timeouts() -> &'static std::sync::Mutex<std::collections::HashMap<i64, u64>> {
@@ -5798,6 +5856,14 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__socket_set_read_timeout", " (handle, ms)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_read_timeout expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_read_timeout expects an int (ms), not {}", a[1]))); }
+        Ok(Type::Unit)
+    } },
+    // __socket_set_write_timeout(h, ms) -> unit (raysec #234): fija (ms > 0) o quita (ms <= 0) el
+    // timeout de escritura del socket. Total. Envoltorio net.set_write_timeout.
+    Builtin { name: "__socket_set_write_timeout", opcode: OpCode::SocketSetWriteTimeout, check: |a| {
+        arity(a, 2, "__socket_set_write_timeout", " (handle, ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_write_timeout expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_write_timeout expects an int (ms), not {}", a[1]))); }
         Ok(Type::Unit)
     } },
     // __socket_set_nodelay(h, on) -> unit (M203): TCP_NODELAY del socket. Total. Envoltorio net.set_nodelay.

@@ -18760,3 +18760,32 @@ Rust que entra en pánico) es un cambio de comportamiento en los tres motores. Y
 escritura (#234): `socket_write_bytes` aparca la fibra sin plazo cuando el peer no lee, y la de TLS
 gira; documentado, y `set_write_timeout` es el arco siguiente.
 
+## 397. M424 — `net.set_write_timeout` (raysec #234, oct 2026)
+
+Lo que quedaba abierto de la ronda de raysec. `set_read_timeout` existía desde M56.4 y acotaba
+lecturas, UDP y `tcp_accept`; una escritura a un peer que dejaba de leer esperaba sin plazo en los
+tres motores: en la VM `park_write` aparcaba la fibra sin `deadline`, en el nativo
+`wait_writable(fd)` no tenía variante con plazo, y la escritura TLS giraba (`yield_now`) en el raro
+bloqueo. Un servidor con muchas respuestas a clientes que no leen retenía una fibra y un cuerpo
+por cada uno.
+
+**El mismo molde que la lectura.** `write_timeouts()` en `builtins` (handle → ms), el builtin
+`__socket_set_write_timeout` con su opcode, y el envoltorio `net.set_write_timeout`. En la VM el
+plazo entra en `park_write` como `deadline` del `IoParked` y viaja en `PendingWrite` por los
+re-aparcados parciales: es el plazo de la escritura ENTERA, no de cada avance, para que un peer que
+acepta un octeto cada 100 ms no lo renueve. Al vencer, `expire_deadlines` no puede re-ejecutar el
+opcode (a diferencia de la lectura, el `ip` ya avanzó: el resultado lo empuja `finish_parked_write`),
+así que empuja él mismo `["err", "write timeout"]` en la pila de la fibra. En el intérprete y en el
+nativo hilo-por-tarea es el `SO_SNDTIMEO` real, con WouldBlock/TimedOut mapeados al mismo mensaje
+(en el intérprete solo si el handle es bloqueante: en un socket no bloqueante WouldBlock sigue
+siendo «búfer lleno»). En el nativo con fibras, `fibers::wait_writable_timeout` (el gemelo de
+`wait_readable_timeout`, `Park::Write` con deadline, que el reactor ya sabía expirar) y una tabla
+emitida `__ray_wr_to` idéntica a la de lectura; la escritura TLS gana `write_all_wait_timeout`, y
+`wait_ready` aplica el plazo en la dirección que toque (antes la de escritura esperaba sin
+límite aunque la lectura lo tuviera).
+
+**El webserver lo usa.** `Limits.write_timeout_millis` (30 s) se fija en cada conexión al entrar
+en `handle_http`; cubre también los trozos de un cuerpo en streaming. Treinta segundos sin que una
+escritura avance es un cliente muerto, no uno lento. net sube a 0.11.1: `Limits` gana un campo
+(quien lo construya a mano lo añade; `default_limits()` y `local_limits()` lo traen).
+

@@ -157,6 +157,14 @@ mod imp {
             }
         }
 
+        /// El SO_SNDTIMEO del socket (raysec #234; el camino hilo-por-tarea, sockets bloqueantes).
+        pub fn set_write_timeout(&self, d: Option<std::time::Duration>) -> std::io::Result<()> {
+            match self {
+                TlsStream::Client(s) => s.sock.set_write_timeout(d),
+                TlsStream::Server(s) => s.sock.set_write_timeout(d),
+            }
+        }
+
         /// Como [`TlsStream::read`], esperando readiness en WouldBlock. `timeout_ms > 0` acota la
         /// operación completa (el read-timeout M56.4); vencido → `ErrorKind::TimedOut` (el
         /// llamador lo normaliza a "read timeout", byte-idéntico a la VM).
@@ -180,9 +188,20 @@ mod imp {
             }
         }
 
-        /// Como [`TlsStream::write_all`], esperando readiness en WouldBlock (sin plazo: el modelo
-        /// de escritura no tiene timeout, como en TCP plano).
+        /// Como [`TlsStream::write_all`], esperando readiness en WouldBlock, sin plazo.
         pub fn write_all_wait(&mut self, data: &[u8]) -> std::io::Result<()> {
+            self.write_all_wait_timeout(data, 0)
+        }
+
+        /// Como [`write_all_wait`](Self::write_all_wait) con plazo (raysec #234, el write-timeout
+        /// del handle): `timeout_ms > 0` acota la escritura ENTERA (cifrado + vaciado al socket);
+        /// vencido → `ErrorKind::TimedOut` (el llamador lo normaliza a "write timeout").
+        pub fn write_all_wait_timeout(&mut self, data: &[u8], timeout_ms: i64) -> std::io::Result<()> {
+            let deadline = if timeout_ms > 0 {
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64))
+            } else {
+                None
+            };
             // M351: `write` (cifra al búfer de rustls) y `flush` (vacía al socket) se tratan POR
             // SEPARADO. Antes iban encadenados y un `flush` con WouldBlock descartaba el `n` que
             // `write` ya había aceptado: el reintento volvía a cifrar los mismos bytes y el peer
@@ -205,7 +224,7 @@ mod imp {
                         if e.kind() == std::io::ErrorKind::WouldBlock
                             || e.kind() == std::io::ErrorKind::Interrupted =>
                     {
-                        self.wait_ready(None)?;
+                        self.wait_ready(deadline)?;
                     }
                     Err(e) => return Err(e),
                 }
@@ -227,7 +246,7 @@ mod imp {
                         if e.kind() == std::io::ErrorKind::WouldBlock
                             || e.kind() == std::io::ErrorKind::Interrupted =>
                     {
-                        self.wait_ready(None)?;
+                        self.wait_ready(deadline)?;
                     }
                     Err(e) => return Err(e),
                 }
@@ -238,21 +257,21 @@ mod imp {
         /// de vaciar; lectura si espera del peer). Vencido el plazo → `TimedOut`.
         fn wait_ready(&self, deadline: Option<std::time::Instant>) -> std::io::Result<()> {
             let fd = self.raw_fd();
-            let timed_out = if self.wants_write() {
-                // La escritura no lleva plazo (como TCP plano): espera sin límite.
-                crate::fibers::wait_writable(fd);
-                false
-            } else {
-                let ms = match deadline {
-                    None => 0,
-                    Some(d) => {
-                        let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64;
-                        if rem <= 0 {
-                            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
-                        }
-                        rem
+            // El plazo (si lo hay) acota la operación entera, en la dirección que toque: la de una
+            // lectura (`read_wait`) o la de una escritura (`write_all_wait_timeout`, raysec #234).
+            let ms = match deadline {
+                None => 0,
+                Some(d) => {
+                    let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64;
+                    if rem <= 0 {
+                        return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
                     }
-                };
+                    rem
+                }
+            };
+            let timed_out = if self.wants_write() {
+                crate::fibers::wait_writable_timeout(fd, ms)
+            } else {
                 crate::fibers::wait_readable_timeout(fd, ms)
             };
             if timed_out {

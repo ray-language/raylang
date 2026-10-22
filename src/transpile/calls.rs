@@ -1017,6 +1017,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // set_write_timeout(h, ms) -> unit (raysec #234): el timeout de escritura del socket.
+            "set_write_timeout" => {
+                out.push_str("__ray_set_write_timeout(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // set_keepalive(h, on) -> unit (M207): SO_KEEPALIVE del socket.
             "set_keepalive" => {
                 out.push_str("__ray_set_keepalive(");
@@ -1330,7 +1338,7 @@ impl Transpiler {
             if matches!(
                 nfn,
                 "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "peer_addr" | "shutdown_write" | "socket_read" | "socket_read_bytes"
-                    | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout" | "set_nodelay" | "set_keepalive"
+                    | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout" | "set_write_timeout" | "set_nodelay" | "set_keepalive"
             ) {
                 return self.emit_net(out, nfn, &eff);
             }
@@ -3402,7 +3410,7 @@ impl Transpiler {
                     "std::ffi::library_available" => return Ok(Type::Bool),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
-                    "std::net::set_read_timeout" | "std::net::set_nodelay" | "std::net::set_keepalive" => return Ok(Type::Unit),
+                    "std::net::set_read_timeout" | "std::net::set_write_timeout" | "std::net::set_nodelay" | "std::net::set_keepalive" => return Ok(Type::Unit),
                     "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept"
                     | "std::net::socket_write" | "std::net::socket_write_bytes" | "std::net::shutdown_write" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))

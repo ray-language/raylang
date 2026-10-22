@@ -573,7 +573,7 @@ over h2c with a `Router`, `net/grpc_conn` persistent client h2c/TLS, `net/grpc_s
 messages are protobuf bytes from `std/protobuf` — codecs are hand-written, no `.proto`
 generator yet; infra: `net/udp` — UDP datagrams, `bind(host, port)`, `send_to(h, host, port,
 data)`, `recv_from(h) -> Result<Packet{host, port, data}, string>`, yields the fiber and honors
-`net.set_read_timeout` — plus `net/dns`, `net/redis`, `net/postgres`; `std/net` itself is TCP
+`net.set_read_timeout`; `net.set_write_timeout(h, ms)` bounds a write to a peer that stops reading ("write timeout", since 1.27.78) — plus `net/dns`, `net/redis`, `net/postgres`; `std/net` itself is TCP
 only, so UDP needs `ray add net`), `web` (an Express-style app framework
 over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
 the recommended base for servers and for desktop/mobile app backends with `std/ui`),

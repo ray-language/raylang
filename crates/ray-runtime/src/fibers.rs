@@ -655,6 +655,21 @@ pub fn wait_readable_timeout(fd: i32, timeout_ms: i64) -> bool {
     }
 }
 
+/// Como [`wait_readable_timeout`], para **escritura** (raysec #234, `net.set_write_timeout`):
+/// `true` si venció sin que el fd fuera escribible.
+pub fn wait_writable_timeout(fd: i32, timeout_ms: i64) -> bool {
+    if timeout_ms <= 0 {
+        wait_writable(fd);
+        return false;
+    }
+    if in_fiber() {
+        suspend(Park::Write(fd, Some(Instant::now() + Duration::from_millis(timeout_ms as u64))))
+    } else {
+        let clamped = timeout_ms.min(i32::MAX as i64) as i32;
+        sys_common::poll_block(fd, true, clamped)
+    }
+}
+
 /// Despierta el reactor para que RE-REGISTRE sus intereses. Lo llama el `close` del runtime
 /// emitido: el fd cerrado se re-registra en el siguiente ciclo y kqueue/epoll lo devuelven como
 /// error/listo → la fibra aparcada en él despierta y su syscall reporta el error real (el mismo

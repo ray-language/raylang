@@ -4313,11 +4313,9 @@ programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
   fibras no aplica, nativo), y una forma de silenciarlo para quien ya gestiona el error (el rpc y
   el webserver hacen `try_join` y registran por su cuenta: saldría dos veces). Impacto: **medio**,
   cambia lo que ve stderr en programas que hoy funcionan. Pendiente de decisión del usuario.
-- **#234 — no hay timeout de escritura.** Hoy: documentado (`socket_write_bytes`,
-  `set_read_timeout`). Propuesta: `net.set_write_timeout(h, ms)`: la escritura que espera más falla
-  con "write timeout". Coste: la VM (`park_write` con plazo, como `park_read`), el nativo con
-  fibras (`wait_writable` con plazo) y sin ellas (`SO_SNDTIMEO`), el intérprete (bloqueante,
-  `SO_SNDTIMEO`) y la escritura TLS, que hoy gira en el raro bloqueo. Luego el webserver puede
-  acotar la escritura de una respuesta a un cliente que no lee (hoy retiene la fibra y su memoria).
-  Impacto: **bajo** (aditivo). Es el arco siguiente.
+- **#234 — no hay timeout de escritura.** ✅ EJECUTADA (1.27.78, DESIGN §397): `net.set_write_timeout(h, ms)`
+  en los tres motores (VM: `park_write` con plazo; nativo con fibras: `wait_writable_timeout` y
+  `write_all_wait_timeout` en TLS; hilo-por-tarea e intérprete: `SO_SNDTIMEO`), error estable
+  `"write timeout"`; el webserver de `net` 0.11.1 lo pone por conexión (`Limits.write_timeout_millis`,
+  30 s).
 

@@ -152,7 +152,9 @@ fn main() -> int {
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Sobre `std/url`.
   Con límites de seguridad por defecto (M56.1/M56.4: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones
-  simultáneas, 10 s para leer una petición — anti-slowloris; configurables con
+  simultáneas, 10 s para leer una petición — anti-slowloris — y, desde 0.11.1, 30 s para que cada
+  escritura de la respuesta avance: `Limits.write_timeout_millis`, un cliente que deja de leer ya
+  no retiene la fibra ni el cuerpo; configurables con
   `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
   El `path` de la petición llega percent-decodificado y sin query string (M56.2); la query va aparte
   (`req.query` cruda, `query_params(req)` parseada). **`req.raw_path`** (0.11.0) es la ruta tal

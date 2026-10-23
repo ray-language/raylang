@@ -1213,6 +1213,96 @@ fn hex_digit(b: int) -> int {
     0 - 1
 }
 
+// raysec #238: un nombre de cabecera es un token (RFC 9110 §5.6.2): sin espacios, tabuladores,
+// controles ni separadores. Basta con rechazar lo que un proxy podría leer distinto.
+fn valid_header_name(name: string) -> bool {
+    for c in name {
+        let n = char_code(c);
+        if (n <= 32
+            || n >= 127
+            || c == ':'
+            || c == '"'
+            || c == '('
+            || c == ')'
+            || c == ','
+            || c == '/'
+            || c == ';'
+            || c == '<'
+            || c == '='
+            || c == '>'
+            || c == '?'
+            || c == '@'
+            || c == '['
+            || c == ']'
+            || c == '\\'
+            || c == '{'
+            || c == '}') {
+            return false;
+        }
+    }
+    true
+}
+
+// raysec #240: `Host` válido = `nombre[:puerto]` (nombre de letras, dígitos, `.`, `-`, `_`) o
+// `[dirección v6][:puerto]`, con el puerto solo de dígitos. Vacío vale (HTTP/1.0 no lo manda).
+/// Whether `host` is a well-formed `Host` header value: `name[:port]` (letters, digits, `.`, `-`,
+/// `_`) or `[ipv6][:port]`, the port digits only. The webserver answers 400 to any other.
+pub fn valid_host(host: string) -> bool {
+    if (host.len() == 0) {
+        return true;
+    }
+    var rest: string = host;
+    if (host.starts_with("[")) {
+        let close_at: int = match (host.index_of("]")) {
+            Option.Some(i) => i,
+            Option.None => {
+                return false;
+            },
+        };
+        for c in host.substring(1, close_at) {
+            if (!((c >= '0' && c <= '9')
+                || (c >= 'a' && c <= 'f')
+                || (c >= 'A' && c <= 'F')
+                || c == ':'
+                || c == '.')) {
+                return false;
+            }
+        }
+        rest = host.substring(close_at + 1, host.len());
+        if (rest.len() == 0) {
+            return true;
+        }
+        if (!rest.starts_with(":")) {
+            return false;
+        }
+        return all_digits(rest.substring(1, rest.len()));
+    }
+    var name: string = host;
+    match (host.index_of(":")) {
+        Option.Some(i) => {
+            name = host.substring(0, i);
+            if (!all_digits(host.substring(i + 1, host.len()))) {
+                return false;
+            }
+        },
+        Option.None => { },
+    }
+    if (name.len() == 0) {
+        return false;
+    }
+    for c in name {
+        if (!((c >= '0' && c <= '9')
+            || (c >= 'a' && c <= 'z')
+            || (c >= 'A' && c <= 'Z')
+            || c == '.'
+            || c == '-'
+            || c == '_')) {
+            return false;
+        }
+    }
+    true
+}
+
 // Un valor no vacío de solo dígitos ASCII (un Content-Length válido).
 fn all_digits(s: string) -> bool {
     if (s.len() == 0) {
@@ -1256,6 +1346,9 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
     if (any_found) { n } else { 0 - 1 }
 }
 
+// raysec #239: tope de la línea `tamaño-hex[;extensiones]` de un chunk.
+const MAX_CHUNK_LINE: int = 4096;
+
 // Decodifica un cuerpo `Transfer-Encoding: chunked`: líneas `tamaño-hex\r\n` + datos + `\r\n`,
 // terminado por el chunk 0 (los trailers, raros, no se soportan: tras el 0 se exige `\r\n`).
 // `initial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
@@ -1266,6 +1359,11 @@ fn read_body_chunked(conn: int, initial: bytes, deadline: int, max: int) -> Resu
     var follow: bool = true;
     while (follow) {
         let nl: int = find_crlf(acc, 0);
+        // raysec #239: la línea del tamaño (con sus extensiones `;k=v`) tiene tope: sin él, una
+        // extensión enorme se acumulaba en memoria hasta el plazo de lectura (Puma CVE-2024-21647).
+        if ((nl < 0 && acc.len() > MAX_CHUNK_LINE) || nl > MAX_CHUNK_LINE) {
+            return Result.Err("chunk size line too long");
+        }
         if (nl < 0) {
             match (read_with_deadline(conn, deadline)) {
                 Result.Ok(t) => {
@@ -1469,10 +1567,25 @@ fn read_request_from(
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
             while (i < lines.len()) {
+                // raysec #238 (RFC 9112 §5.1/§5.2): una línea que empieza por espacio o tabulador es
+                // un plegado obsoleto (obs-fold), y un nombre con espacios (`Content-Length : 5`)
+                // es inválido. Un proxy que los lea al revés dejaría colar una cabecera: 400.
+                if (lines[i].starts_with(" ") || lines[i].starts_with("\t")) {
+                    return Result.Err("obsolete header line folding");
+                }
                 match (index_of(lines[i], ":")) {
                     Option.Some(c) => {
-                        let name: string = lines[i].substring(0, c).trim().to_lower();
+                        let raw_name: string = lines[i].substring(0, c);
+                        if (raw_name.len() == 0 || !valid_header_name(raw_name)) {
+                            return Result.Err("invalid header name: " + raw_name);
+                        }
+                        let name: string = raw_name.to_lower();
                         let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
+                        // raysec #240 (RFC 9112 §3.2): un `Host` que no es `nombre[:puerto]` o
+                        // `[v6][:puerto]` (`localhost:1@evil.example`) es un 400, para todas las apps.
+                        if (name == "host" && !valid_host(value)) {
+                            return Result.Err("invalid Host header: " + value);
+                        }
                         // raysec #230: dos Content-Length distintos son un 400 (RFC 9112 §6.3): cada
                         // salto del camino podría quedarse con uno y partir el flujo de otra manera.
                         if (name == "content-length") {

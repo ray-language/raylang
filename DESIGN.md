@@ -18789,3 +18789,36 @@ en `handle_http`; cubre también los trozos de un cuerpo en streaming. Treinta s
 escritura avance es un cliente muerto, no uno lento. net sube a 0.11.1: `Limits` gana un campo
 (quien lo construya a mano lo añade; `default_limits()` y `local_limits()` lo traen).
 
+## 398. M425 — la segunda ronda de raysec: obs-fold, línea de chunk, `Host` con `@` y el doble plazo del intérprete (#238–#241, oct 2026)
+
+raysec volvió con 1.27.77 y 1.27.78 llevando CVEs conocidos de otros servidores al webserver.
+
+**#238.** `read_request_from` recortaba el nombre de cada cabecera con `trim()`: `Content-Length
+: 5` contaba como `Content-Length` (Go CVE-2019-16276) y una línea plegada ` X-Extra: 1` se tomaba
+por una cabecera nueva. Solo (y siempre) un proxy que las lea de otra manera convierte eso en una
+cabecera colada. Ahora un nombre es un token (RFC 9110 §5.6.2: sin espacios, controles ni
+separadores) y una línea que empieza por espacio o tabulador es un 400; no se despliega el obs-fold
+porque la RFC 9112 §5.2 permite rechazarlo y ningún cliente moderno lo manda.
+
+**#239.** La línea del tamaño de un chunk se leía hasta el CRLF sin tope, y `tam_chunk` ignoraba
+todo lo que iba tras `;`: una extensión de 200 KB se aceptaba (Puma CVE-2024-21647) y solo el plazo
+de lectura la acotaba. `MAX_CHUNK_LINE` = 4 KiB: la línea entera, con extensiones, o 400.
+
+**#240.** `host_name` del servidor MCP cortaba en el primer `:`, así que `localhost:1@evil.example:80`
+era «localhost». Un navegador no puede mandar ese `Host`, pero es inválido (RFC 9112 §3.2 → 400).
+La validación va en el webserver de `net` (`valid_host`, pública): `nombre[:puerto]` o
+`[v6][:puerto]`, puerto solo de dígitos. Así vale para todas las apps; `mcp.answer` la repite
+porque puede montarse en una ruta de otro servidor con un `Request` construido aparte, y
+`host_name` corta en el último `:` por defensa en profundidad.
+
+**#241.** Mío de ayer (M424). En el intérprete el plazo de escritura era el `SO_SNDTIMEO` del
+socket bloqueante, que es POR LLAMADA: con un búfer lleno, el primer `write` esperaba el plazo
+entero y devolvía los octetos que llegó a colocar (un éxito parcial, no un error), el bucle
+llamaba otra vez y el segundo `write` esperaba el plazo entero de nuevo. Vencía exactamente al
+doble. El arreglo es el mismo principio que en la VM y que `read_with_deadline` del webserver: un
+deadline para la escritura entera, y antes de cada `write` se fija el `SO_SNDTIMEO` a lo que RESTA
+(al acabar se repone el configurado). El mismo defecto estaba en el camino TLS del intérprete, que
+además no mapeaba el vencimiento a "write timeout": `tls_flush_writes_timed` lo hace cuando el
+socket es bloqueante y tiene plazo. El nativo hilo-por-tarea (`--without fibers`) tiene el mismo
+patrón por llamada; queda documentado aquí y se arregla si alguien lo usa con plazo.
+

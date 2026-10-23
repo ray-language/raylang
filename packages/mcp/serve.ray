@@ -390,7 +390,9 @@ fn host_name(host: string) -> string {
             Option.None => host,
         };
     }
-    match (host.index_of(":")) {
+    // raysec #240: cortar en el PRIMER `:` tomaba `localhost:1@evil.example:80` por `localhost`.
+    // El puerto es lo que sigue al ÚLTIMO `:`; la forma completa la valida `webserver.valid_host`.
+    match (host.last_index_of(":")) {
         Option.Some(i) => host.substring(0, i),
         Option.None => host,
     }
@@ -451,6 +453,11 @@ pub fn answer(p: Provider, req: Request) -> Response {
     // Una página web de otro origen no debe poder hablar con un servidor local (DNS rebinding):
     // el navegador siempre dice de dónde viene, y el Host tiene que ser uno de los nuestros.
     let host = req.headers.get("host").unwrap_or("");
+    // raysec #240: un `Host` malformado (`localhost:1@evil.example:80`) es un 400 antes de mirar
+    // si es local; el webserver de `net` ya lo rechaza al leer, esto cubre `answer` montado aparte.
+    if (!webserver.valid_host(host)) {
+        return webserver.text(400, "invalid Host header");
+    }
     if (!host_allowed(p, host)) {
         return webserver.text(403, "unexpected Host header (add it to the provider's hosts)");
     }

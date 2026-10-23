@@ -100,6 +100,17 @@ fn main() -> int {
     print("cl-alpha " + raw(port, h + "Content-Length: abc\r\n\r\n"));
     print("cl-negative " + raw(port, h + "Content-Length: -5\r\n\r\n"));
     print("te-and-cl " + raw(port, h + "Transfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n2\r\nab\r\n0\r\n\r\n"));
+    // #238: espacio antes de los dos puntos y plegado obsoleto → 400; #239: línea de chunk sin tope.
+    print("name-space " + raw(port, h + "Content-Length : 2\r\n\r\nab"));
+    print("obs-fold " + raw(port, h + "X-A: 1\r\n X-Extra: 1\r\nContent-Length: 2\r\n\r\nab"));
+    var ext = "";
+    var k = 0;
+    while (k < 600) { ext = ext + "abcdefghij"; k = k + 1; }
+    print("chunk-ext " + raw(port, h + "Transfer-Encoding: chunked\r\n\r\n2;x=" + ext + "\r\nab\r\n0\r\n\r\n"));
+    print("chunk-ext-ok " + raw(port, h + "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n2;x=y\r\nab\r\n0\r\n\r\n"));
+    // #240: un Host malformado es un 400 en el webserver, para todas las apps.
+    print("bad-host " + raw(port, "GET /h HTTP/1.1\r\nHost: localhost:1@evil.example:80\r\nConnection: close\r\n\r\n"));
+    print("v6-host " + raw(port, "GET /h HTTP/1.1\r\nHost: [::1]:8080\r\nConnection: close\r\n\r\n"));
     // #237: la ruta original llega aparte de la descodificada (`path` lleva el CR/LF de verdad; el
     // `lines()` del test se come el CR).
     print("raw " + raw(port, "GET /a%20b/..%2fc%0d%0a?q=1 HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n"));
@@ -133,6 +144,12 @@ cl-same HTTP/1.1 200 OK /x|/x|ab\n\
 cl-alpha HTTP/1.1 400 Bad Request\n\
 cl-negative HTTP/1.1 400 Bad Request\n\
 te-and-cl HTTP/1.1 400 Bad Request\n\
+name-space HTTP/1.1 400 Bad Request\n\
+obs-fold HTTP/1.1 400 Bad Request\n\
+chunk-ext HTTP/1.1 400 Bad Request\n\
+chunk-ext-ok HTTP/1.1 200 OK /x|/x|ab\n\
+bad-host HTTP/1.1 400 Bad Request\n\
+v6-host HTTP/1.1 200 OK /h|/h|\n\
 raw HTTP/1.1 200 OK /a b/../c\n|/a%20b/..%2fc%0d%0a|\n\
 url: invalid URL (control character or space; percent-encode it): http://127.0.0.1:PORT/a\\r\\nX-Evil: 1\n\
 header: invalid value for header X-Trace (CR, LF or another control character)\n\
@@ -179,6 +196,7 @@ fn main() -> int {
     let p = serve.provider("t", "1");
     // #231: una página de evil.example que resuelve a 127.0.0.1 manda Origin y Host iguales.
     print("rebinding ${status(p, "evil.example:8765", "http://evil.example:8765")}");
+    print("at-host ${status(p, "localhost:1@evil.example:8765", "http://localhost:1@evil.example:8765")}");
     print("no-origin ${status(p, "evil.example:8765", "")}");
     print("localhost ${status(p, "localhost:8765", "http://localhost:8765")}");
     print("v4 ${status(p, "127.0.0.1:8765", "")} v6 ${status(p, "[::1]:8765", "")}");
@@ -197,7 +215,7 @@ fn the_mcp_http_server_answers_only_loopback_or_listed_hosts_without_a_token() {
     let out = run(&project("mcp", MCP_HOSTS));
     assert_eq!(
         out,
-        "rebinding 403\nno-origin 403\nlocalhost 200\nv4 200 v6 200\ncross 403\nlisted 200 port 200 other-port 403\ntoken-any-host 401\n"
+        "rebinding 403\nat-host 400\nno-origin 403\nlocalhost 200\nv4 200 v6 200\ncross 403\nlisted 200 port 200 other-port 403\ntoken-any-host 401\n"
     );
 }
 

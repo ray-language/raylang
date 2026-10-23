@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`net` 0.11.3 — `jwt_verify_claims` falla en cerrado** (raysec #242): un `exp` o `nbf` presente
+  pero no numérico (`"exp":"1700000000"`, `null`, una lista) invalida el token con
+  `'exp' is not a NumericDate`. Antes se trataba como ausente y el token no caducaba nunca
+  (RFC 7519 §2). Solo cambia el paquete; la toolchain no.
+
 ## 1.27.79 — 2026-10-23
 
 Segunda ronda de raysec (M425, #238–#241).

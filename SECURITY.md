@@ -174,9 +174,14 @@ Revisión de los bordes donde el código «funciona» y ningún test funcional v
   cierra ante las formas que permiten *request smuggling*: dos `Content-Length` distintos, un
   `Content-Length` que no es solo dígitos, `Transfer-Encoding` junto a `Content-Length` y un
   tamaño de chunk que desbordaría el `int`; también un nombre de cabecera con espacios, una línea
-  plegada, una línea de chunk de más de 4 KiB y un `Host` malformado. El cliente `net/http` no manda una URL, un método o una
+  plegada, una línea de chunk de más de 4 KiB y un `Host` malformado; y nunca escribe una cabecera
+  de respuesta con CR/LF u otro control (500 y cierre: un proxy que copia cabeceras del upstream
+  no puede inyectar otras al cliente). El cliente `net/http` no manda una URL, un método o una
   cabecera con CR/LF ni otros caracteres de control, y `Request.raw_path` da a un proxy la ruta
-  original para reenviarla (nunca `path`, que va descodificado). El servidor HTTP de `mcp` sin
+  original para reenviarla (nunca `path`, que va descodificado); en la respuesta rechaza las líneas
+  plegadas, los nombres con espacio y los valores con controles, trata `Content-Length` junto a
+  `Transfer-Encoding` como error, y descarta una conexión keep-alive a la que le sobran octetos
+  tras una respuesta (una respuesta no pedida nunca se entrega a la petición siguiente). El servidor HTTP de `mcp` sin
   token solo contesta a un `Host` de loopback o declarado en `hosts` (DNS rebinding), y el de `rpc`
   corta un frame que se queda a medias (`Limits.frame_timeout_ms`).
 

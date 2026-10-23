@@ -1213,6 +1213,67 @@ fn hex_digit(b: int) -> int {
     0 - 1
 }
 
+// raysec #243: un valor de cabecera no puede llevar CR, LF, NUL ni otro control (RFC 9110 §5.5;
+// el tabulador vale). Un valor copiado de fuera (la cabecera de un upstream en un proxy) con un
+// CR o LF suelto partiría la respuesta en dos cabeceras para el cliente.
+fn valid_header_value(value: string) -> bool {
+    for c in value {
+        let n = char_code(c);
+        if ((n < 32 && n != 9) || n == 127) {
+            return false;
+        }
+    }
+    true
+}
+
+// Serializa las cabeceras del usuario y las Set-Cookie de una respuesta, validando nombre y valor
+// (raysec #243). `Err` = una cabecera inválida; el que llama responde 500 y cierra, nunca la
+// escribe tal cual.
+fn user_headers(r: Response) -> Result<string, string> {
+    var head: string = "";
+    let ks: [string] = r.headers.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        if (!valid_header_name(ks[i])) {
+            return Result.Err("invalid response header name: " + ks[i]);
+        }
+        match (get(r.headers, ks[i])) {
+            Option.Some(v) => {
+                if (!valid_header_value(v)) {
+                    return Result.Err(
+                        "invalid value for response header "
+                            + ks[i]
+                            + " (CR, LF or another control character)"
+                    );
+                }
+                head = head + ks[i] + ": " + v + "\r\n";
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    // M56.7: una línea Set-Cookie por cookie, en orden de inserción (la única cabecera repetible).
+    var c: int = 0;
+    while (c < r.set_cookie.len()) {
+        if (!valid_header_value(r.set_cookie[c])) {
+            return Result.Err("invalid Set-Cookie value (CR, LF or another control character)");
+        }
+        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
+        c = c + 1;
+    }
+    Result.Ok(head)
+}
+
+// Una respuesta con una cabecera inválida no sale a la red: el cliente recibe un 500 con
+// `Connection: close` y el bucle de servicio cierra la conexión (el error vuelve a stderr).
+fn bad_response_head(conn: int, e: string) -> Result<int, string> {
+    let _ = net.socket_write_bytes(
+        conn,
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error".to_bytes()
+    );
+    Result.Err(e)
+}
+
 // raysec #238: un nombre de cabecera es un token (RFC 9110 §5.6.2): sin espacios, tabuladores,
 // controles ni separadores. Basta con rechazar lo que un proxy podría leer distinto.
 fn valid_header_name(name: string) -> bool {
@@ -1887,23 +1948,15 @@ fn send_response_keep(
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
     head = head + "Date: " + http_date(cx) + "\r\n";
-    // Cabeceras del usuario (keys() está ordenada → salida determinista).
-    let ks: [string] = r.headers.keys();
-    var i: int = 0;
-    while (i < ks.len()) {
-        match (get(r.headers, ks[i])) {
-            Option.Some(v) => {
-                head = head + ks[i] + ": " + v + "\r\n";
-            },
-            Option.None => { },
-        }
-        i = i + 1;
-    }
-    // M56.7: una línea Set-Cookie por cookie, en orden de inserción (la única cabecera repetible).
-    var c: int = 0;
-    while (c < r.set_cookie.len()) {
-        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
-        c = c + 1;
+    // Cabeceras del usuario (keys() está ordenada → salida determinista) y Set-Cookie, validadas
+    // (raysec #243).
+    match (user_headers(r)) {
+        Result.Ok(extra) => {
+            head = head + extra;
+        },
+        Result.Err(e) => {
+            return bad_response_head(conn, e);
+        },
     }
     head = head + "\r\n";
     if (omit_body) {
@@ -1933,21 +1986,13 @@ fn send_file_response(
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     head = head + "Date: " + http_date(cx) + "\r\n";
-    let ks: [string] = r.headers.keys();
-    var i: int = 0;
-    while (i < ks.len()) {
-        match (get(r.headers, ks[i])) {
-            Option.Some(v) => {
-                head = head + ks[i] + ": " + v + "\r\n";
-            },
-            Option.None => { },
-        }
-        i = i + 1;
-    }
-    var c: int = 0;
-    while (c < r.set_cookie.len()) {
-        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
-        c = c + 1;
+    match (user_headers(r)) {
+        Result.Ok(extra) => {
+            head = head + extra;
+        },
+        Result.Err(e) => {
+            return bad_response_head(conn, e);
+        },
     }
     head = head + "\r\n";
     if (omit_body) {
@@ -2038,21 +2083,14 @@ fn send_stream_response(
         head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     }
     head = head + "Date: " + http_date(cx) + "\r\n";
-    let ks: [string] = r.headers.keys();
-    var i: int = 0;
-    while (i < ks.len()) {
-        match (get(r.headers, ks[i])) {
-            Option.Some(v) => {
-                head = head + ks[i] + ": " + v + "\r\n";
-            },
-            Option.None => { },
-        }
-        i = i + 1;
-    }
-    var c: int = 0;
-    while (c < r.set_cookie.len()) {
-        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
-        c = c + 1;
+    match (user_headers(r)) {
+        Result.Ok(extra) => {
+            head = head + extra;
+        },
+        Result.Err(e) => {
+            drain_stream(ch);
+            return bad_response_head(conn, e);
+        },
     }
     head = head + "\r\n";
     match (net.socket_write_bytes(conn, head.to_bytes())) {

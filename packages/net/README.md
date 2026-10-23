@@ -166,7 +166,13 @@ fn main() -> int {
   solo dígitos, o `Transfer-Encoding` junto con `Content-Length` son un 400 y se cierra la
   conexión (las ambigüedades que permiten *request smuggling*). 0.11.2: también un nombre de
   cabecera con espacios, una línea plegada (obs-fold), una línea de tamaño de chunk de más de
-  4 KiB y un `Host` malformado (`webserver.valid_host`). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
+  4 KiB y un `Host` malformado (`webserver.valid_host`). 0.11.4: una cabecera de RESPUESTA cuyo
+  nombre no es un token o cuyo valor lleva CR, LF u otro control (un valor copiado de un upstream)
+  no se escribe nunca: el cliente recibe un 500 con `Connection: close` y el error va a stderr.
+  El cliente `net/http` (0.11.4) rechaza en la respuesta las líneas plegadas, los nombres con
+  espacio y los valores con controles, trata `Content-Length` + `Transfer-Encoding` como encuadre
+  ambiguo (error), y una conexión keep-alive (`Conn`, `Pool`) a la que le sobran octetos tras una
+  respuesta se descarta en vez de entregarlos como la respuesta siguiente. HTTPS con `serve_tls`/`serve_raw_tls[_limits]
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra). Un handler que panica responde
   500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;

@@ -394,14 +394,36 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>, [(string, string
             var i: int = 1;
             while (i < lines.len()) {
                 let line: string = lines[i];
+                // raysec #243 (RFC 9112 §5.2): una línea plegada (empieza por espacio o
+                // tabulador) o un nombre con espacios/controles la leería otro cliente como una
+                // cabecera distinta; un CR o LF suelto dentro del valor, igual. Se rechazan, no se
+                // normalizan: lo que llegue aquí se reenvía tal cual en un proxy.
+                if (line.starts_with(" ") || line.starts_with("\t")) {
+                    return Result.Err("malformed response header (obsolete line folding)");
+                }
                 match (index_of(line, ":")) {
                     Option.Some(c) => {
-                        let name: string = line.substring(0, c).trim().to_lower();
+                        let name_raw: string = line.substring(0, c);
+                        if (name_raw.len() == 0 || unsafe_char(name_raw, false)) {
+                            return Result.Err(
+                                "malformed response header name: " + show_escaped(name_raw)
+                            );
+                        }
                         let value: string = line.substring(c + 1, line.len()).trim();
+                        if (unsafe_char(value, true)) {
+                            return Result.Err(
+                                "malformed response header value for "
+                                    + name_raw
+                                    + " (CR, LF or another control character)"
+                            );
+                        }
+                        let name: string = name_raw.to_lower();
                         headers.insert(name, value);
                         raw.push((name, value));  // M347 (rayauth R14): también las repetidas
                     },
-                    Option.None => { },
+                    Option.None => {
+                        return Result.Err("malformed response header line: " + show_escaped(line));
+                    },
                 }
                 i = i + 1;
             }
@@ -423,6 +445,15 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             let status: int = head.0;
             let headers: Map<string, string> = head.1;
             let raw_headers: [(string, string)] = head.2;
+            // raysec #244 (RFC 9112 §6.3): Content-Length y Transfer-Encoding a la vez es un
+            // encuadre ambiguo (lo que un proxy intermedio toma por una respuesta y lo que
+            // nosotros tomamos pueden diferir) → error, nunca elegir uno.
+            if (headers.contains_key("transfer-encoding")
+                && headers.contains_key("content-length")) {
+                return Result.Err(
+                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
+                );
+            }
             // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
             // algunos servidores siempre chunked aunque pidamos Connection: close).
             var body_final: bytes = body;
@@ -878,6 +909,11 @@ fn conn_attempt(
     headers: Map<string, string>,
     timeout_millis: int
 ) -> Result<Response, string> {
+    // raysec #244: sin pipelining, unos octetos recibidos ANTES de mandar la petición no pueden
+    // ser su respuesta (eran el sobrante de la anterior). La conexión se descarta y se reabre.
+    if (c.open && c.buf.len() > 0) {
+        conn_close(c);
+    }
     if (!c.open) {
         let _ = conn_reopen(c)?;
     }
@@ -895,7 +931,11 @@ fn conn_attempt(
                 Result.Err(e) => Result.Err(e),
                 Result.Ok(raw) => {
                     match (parse_response(raw)) {
-                        Result.Err(e) => Result.Err(e),
+                        Result.Err(e) => {
+                            // Una respuesta que no se entiende deja la conexión sin encuadre fiable.
+                            conn_close(c);
+                            Result.Err(e)
+                        },
                         Result.Ok(r) => {
                             // El servidor puede pedir cerrar tras esta respuesta.
                             var close: bool = false;
@@ -953,11 +993,16 @@ fn conn_ensure(c: Conn, n: int, deadline: int) -> Result<int, string> {
     Result.Ok(0)
 }
 
-// Saca los primeros `n` octetos de `c.buf` (la respuesta completa) dejando el resto en el
-// buffer (pertenecen a la SIGUIENTE respuesta).
+// Saca los primeros `n` octetos de `c.buf` (la respuesta completa). raysec #244: si sobra algo,
+// el servidor mandó más de una respuesta por nuestra única petición (sin pipelining no hay a
+// quién pertenezca): la conexión se cierra y no vuelve al pool, en vez de guardar el sobrante
+// como la «respuesta» de la siguiente petición — que en un proxy puede ser de otro cliente.
 fn take(c: Conn, n: int) -> bytes {
     let r: bytes = c.buf.sub_bytes(0, n);
     c.buf = c.buf.sub_bytes(n, c.buf.len());
+    if (c.buf.len() > 0) {
+        conn_close(c);
+    }
     r
 }
 
@@ -1029,6 +1074,12 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
                 || status == 304
                 || status >= 100 && status < 200) {
                 return Result.Ok(take(c, fin_cab));
+            }
+            if (chunked && content_len >= 0) {
+                conn_close(c);
+                return Result.Err(
+                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
+                );
             }
             if (chunked) {
                 return conn_read_chunked(c, fin_cab, deadline);
@@ -1237,6 +1288,13 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
                 stream_close(s);
                 s.mode = "done";
                 return Result.Ok(s);
+            }
+            if (s.headers.contains_key("transfer-encoding")
+                && s.headers.contains_key("content-length")) {
+                stream_close(s);
+                return Result.Err(
+                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
+                );
             }
             var chunked: bool = false;
             match (get(s.headers, "transfer-encoding")) {

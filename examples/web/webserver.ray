@@ -700,6 +700,26 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
     send_response_keep(conn, r, false, false)
 }
 
+// raysec #243: ¿lleva CR, LF u otro carácter de control (salvo el tabulador)?
+fn has_ctl(s: string) -> bool {
+    for ch in s {
+        let n = char_code(ch);
+        if ((n < 32 && n != 9) || n == 127) {
+            return true;
+        }
+    }
+    false
+}
+
+// Una respuesta con una cabecera inválida no sale a la red: 500 con `Connection: close`.
+fn bad_response_head(conn: int, e: string) -> Result<int, string> {
+    let _ = net.socket_write_bytes(
+        conn,
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error".to_bytes()
+    );
+    Result.Err(e)
+}
+
 // M56.6: la escritura real, con `Connection` según si la conexión sigue viva (keep-alive de
 // `serve`) o se cierra. M56.8: `omit_body` = respuesta a un HEAD (cabeceras sin cuerpo).
 fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Result<int, string> {
@@ -710,12 +730,16 @@ fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Re
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
     head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
-    // Cabeceras del usuario (keys() está ordenada → salida determinista).
+    // Cabeceras del usuario (keys() está ordenada → salida determinista). raysec #243: un valor
+    // con CR o LF partiría la respuesta en dos cabeceras → 500 y cierre, nunca se escribe tal cual.
     let ks: [string] = r.headers.keys();
     var i: int = 0;
     while (i < ks.len()) {
         match (get(r.headers, ks[i])) {
             Option.Some(v) => {
+                if (has_ctl(ks[i]) || has_ctl(v)) {
+                    return bad_response_head(conn, "invalid response header " + ks[i]);
+                }
                 head = head + ks[i] + ": " + v + "\r\n";
             },
             Option.None => { },
@@ -725,6 +749,9 @@ fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Re
     // M56.7: una línea Set-Cookie por cookie, en orden de inserción (la única cabecera repetible).
     var c: int = 0;
     while (c < r.set_cookie.len()) {
+        if (has_ctl(r.set_cookie[c])) {
+            return bad_response_head(conn, "invalid Set-Cookie value");
+        }
         head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
         c = c + 1;
     }

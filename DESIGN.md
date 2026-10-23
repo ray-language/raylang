@@ -18835,3 +18835,38 @@ fallar en cerrado. `claim_seconds` devuelve ahora `Result<Option<int>, string>`:
 `jwt_verify_claims` propaga con `?`. Solo cambia `net` (0.11.3); `jwt_check_claims` ya distinguía
 «`iss` ausente» de «`iss` no es string».
 
+## 400. raysec #243 y #244 — *response splitting* y la respuesta encolada del keep-alive (oct 2026)
+
+Las dos rondas anteriores endurecieron la PETICIÓN (lo que el servidor lee y lo que el cliente
+manda). raysec miró ahora la RESPUESTA en un proxy (raylb, raygate): lo que el cliente `net/http`
+lee del upstream y lo que el webserver escribe al cliente final.
+
+**#243.** El webserver armaba `nombre + ": " + valor + CRLF` con lo que hubiera en
+`Response.headers`, y el cliente aceptaba en `parse_head` cualquier línea con `:` (con `trim()` del
+nombre, el mismo fallo que #238 en el servidor). Un upstream con `X-A: a\rX-Injected: 1` o con una
+línea plegada llegaba al cliente final como dos cabeceras. Dos arreglos, uno por lado: (1) una
+función única `user_headers` serializa y valida las cabeceras del usuario y las `Set-Cookie` en los
+tres caminos de escritura (cuerpo en memoria, fichero, stream); si algo no vale, `bad_response_head`
+manda un 500 con `Connection: close` y devuelve `Err`, que el bucle de servicio ya trataba como «avisar
+por stderr y cerrar». Se eligió el 500 y no descartar la cabecera en silencio porque el handler ha
+producido algo que no se puede representar y el desarrollador tiene que verlo; y no se eligió
+«escribir lo demás y omitir esa» porque una cabecera que falta cambia el significado de la
+respuesta (un `Set-Cookie`, un `Location`). (2) `parse_head` del cliente rechaza una línea que
+empieza por espacio o tabulador, un nombre vacío o con espacio/control, un valor con CR/LF/control
+y una línea sin `:`; no normaliza nada porque lo que acepte se reenvía tal cual en un proxy.
+
+**#244.** `Conn` guardaba los octetos sobrantes tras una respuesta como el principio de la
+siguiente (el patrón `Rd` del RPC, donde SÍ hay un encuadre propio). En HTTP/1.1 sin pipelining,
+nada que llegue antes de mandar la petición puede ser su respuesta: un upstream que responde
+`Content-Length: 2` + `Transfer-Encoding: chunked` y encola otra respuesta tras el chunk final
+conseguía que la petición siguiente —de otro cliente, en un proxy— recibiera esa respuesta. Tres
+cambios: `take` cierra la conexión si sobra algo (la respuesta ya delimitada se entrega igual, la
+conexión no vuelve al pool y la siguiente petición reabre); `conn_attempt` descarta por defensa
+una conexión que tenga octetos en el buffer antes de escribir la petición; y `Content-Length`
+junto a `Transfer-Encoding` es un error en `parse_response`, en `conn_read_response` y en
+`stream_head` (RFC 9112 §6.3: elegir uno es exactamente la desincronización que explota el
+*smuggling*). También `conn_attempt` cierra la conexión cuando `parse_response` falla: una
+respuesta que no se entiende deja el encuadre sin garantías.
+
+Solo cambia `net` (0.11.4). El `examples/web/webserver.ray` lleva la misma guarda de valores.
+

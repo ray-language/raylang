@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net` 0.11.4 — ni *response splitting* ni respuestas encoladas** (raysec #243, #244). El
+  webserver no escribe una cabecera de respuesta cuyo nombre no sea un token o cuyo valor lleve
+  CR, LF u otro control (el caso de un proxy que copia las cabeceras del upstream): el cliente
+  recibe un 500 con `Connection: close` y el error va a stderr. El cliente `net/http` rechaza en
+  la respuesta las líneas plegadas (obs-fold), los nombres con espacio y los valores con
+  controles; `Content-Length` junto a `Transfer-Encoding` es un error (encuadre ambiguo, también en
+  `stream`); y una conexión keep-alive (`Conn`/`Pool`) a la que le sobran octetos tras una
+  respuesta se cierra y se reabre en la siguiente petición, en vez de entregar esos octetos como
+  su respuesta (en un proxy, la de otro cliente). Solo cambia el paquete.
 - **`net` 0.11.3 — `jwt_verify_claims` falla en cerrado** (raysec #242): un `exp` o `nbf` presente
   pero no numérico (`"exp":"1700000000"`, `null`, una lista) invalida el token con
   `'exp' is not a NumericDate`. Antes se trataba como ausente y el token no caducaba nunca

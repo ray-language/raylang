@@ -18822,3 +18822,16 @@ además no mapeaba el vencimiento a "write timeout": `tls_flush_writes_timed` lo
 socket es bloqueante y tiene plazo. El nativo hilo-por-tarea (`--without fibers`) tiene el mismo
 patrón por llamada; queda documentado aquí y se arregla si alguien lo usa con plazo.
 
+## 399. raysec #242 — `exp`/`nbf` no numéricos en `jwt_verify_claims` (oct 2026)
+
+`claim_seconds` devolvía `None` tanto para «la claim no está» como para «está pero no es un
+número», y `jwt_verify_claims` solo sabía hacer una cosa con `None`: saltarse la comprobación. Un
+emisor que codificara `exp` como string (o que mandara `null`, o una lista) producía tokens que
+nunca caducaban, con firma válida. Hace falta el secreto para firmarlos, así que no es una vía de
+falsificación, pero sí una forma silenciosa de perder la caducidad. La RFC 7519 §2 define
+`NumericDate` como número JSON; cualquier otro tipo es un token inválido, y el verificador debe
+fallar en cerrado. `claim_seconds` devuelve ahora `Result<Option<int>, string>`: ausente → `Ok(None)`
+(opcional, como antes), número → `Ok(Some)`, otro tipo → `Err("'exp' is not a NumericDate")`, que
+`jwt_verify_claims` propaga con `?`. Solo cambia `net` (0.11.3); `jwt_check_claims` ya distinguía
+«`iss` ausente» de «`iss` no es string».
+

@@ -3413,6 +3413,15 @@ fn package_net_jwt_via_path_dep() {
          \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t2, 998000000)) {\n\
          \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(e); },\n\
          \x20 }\n\
+         \x20 // raysec #242: un exp/nbf presente pero no numérico invalida el token (fail closed).\n\
+         \x20 let t3 = jwt.jwt_sign(\"secreto\".to_bytes(), \"{\\\"exp\\\":\\\"1700000000\\\"}\");\n\
+         \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t3, 1800000000000)) {\n\
+         \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(\"string: \" + e); },\n\
+         \x20 }\n\
+         \x20 let t4 = jwt.jwt_sign(\"secreto\".to_bytes(), \"{\\\"nbf\\\":null}\");\n\
+         \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t4, 1800000000000)) {\n\
+         \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(\"null: \" + e); },\n\
+         \x20 }\n\
          \x20 0\n\
          }\n",
     )
@@ -3424,6 +3433,9 @@ fn package_net_jwt_via_path_dep() {
     assert!(out.contains("claims ok"), "verify_claims dentro de la ventana → Ok\n{out}");
     assert!(out.contains("token expired"), "now >= exp → expirado\n{out}");
     assert!(out.contains("token not yet valid"), "now < nbf → aún no válido\n{out}");
+    assert!(out.contains("string: 'exp' is not a NumericDate"), "exp en string → inválido (#242)\n{out}");
+    assert!(out.contains("null: 'nbf' is not a NumericDate"), "nbf null → inválido (#242)\n{out}");
+    assert!(!out.contains("¿?"), "ningún caso inválido debe pasar\n{out}");
 }
 
 #[test]

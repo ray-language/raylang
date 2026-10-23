@@ -193,15 +193,17 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     }
 }
 
-// Lee una claim numérica del payload (segundos UNIX, como manda la RFC). `None` si no está
-// o no es número.
-fn claim_seconds(m: Map<string, Json>, name: string) -> Option<int> {
+// Lee una claim temporal del payload (segundos UNIX, NumericDate de la RFC 7519 §2). Distingue
+// tres casos: ausente (`Ok(None)`, la claim es opcional), número (`Ok(Some(s))`) y presente con
+// otro tipo (`Err`): un `exp` en string, null o array NO es «sin exp», es un token inválido
+// (raysec #242 — antes se trataba como ausente y el token no caducaba nunca).
+fn claim_seconds(m: Map<string, Json>, name: string) -> Result<Option<int>, string> {
     match (m.get(name)) {
         Option.Some(v) => match (v) {
-            Json.JNum(f) => Option.Some(f as int),
-            _ => Option.None,
+            Json.JNum(f) => Result.Ok(Option.Some(f as int)),
+            _ => Result.Err("'" + name + "' is not a NumericDate"),
         },
-        Option.None => Option.None,
+        Option.None => Result.Ok(Option.None),
     }
 }
 
@@ -210,14 +212,16 @@ fn claim_seconds(m: Map<string, Json>, name: string) -> Option<int> {
 /// Verifies the JWT's signature (like `jwt_verify`) AND its time claims: rejects an expired
 /// token (`now >= exp`) and one not yet valid (`now < nbf`). `now_ms` is the current UNIX
 /// time in milliseconds (`time.now()`); `exp`/`nbf` are in seconds per RFC 7519 and are
-/// optional (a token without them passes). Returns the payload JSON on success.
+/// optional (a token without them passes), but when present they must be numbers: an `exp`
+/// or `nbf` given as a string, `null`, array or object invalidates the token (RFC 7519 §2
+/// NumericDate; fail closed). Returns the payload JSON on success.
 pub fn jwt_verify_claims(secret: bytes, token: string, now_ms: int) -> Result<string, string> {
     let payload_json = jwt_verify(secret, token)?;
     let j = parse(payload_json)?;
     match (j) {
         Json.JObject(m) => {
             let now_s = now_ms / 1000;
-            match (claim_seconds(m, "exp")) {
+            match (claim_seconds(m, "exp")?) {
                 Option.Some(exp) => {
                     if (now_s >= exp) {
                         return Result.Err("token expired");
@@ -225,7 +229,7 @@ pub fn jwt_verify_claims(secret: bytes, token: string, now_ms: int) -> Result<st
                 },
                 Option.None => { },
             }
-            match (claim_seconds(m, "nbf")) {
+            match (claim_seconds(m, "nbf")?) {
                 Option.Some(nbf) => {
                     if (now_s < nbf) {
                         return Result.Err("token not yet valid");

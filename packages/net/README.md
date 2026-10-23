@@ -54,7 +54,9 @@ fn main() -> int {
   payload)` pone el `kid` en la cabecera (rotación de claves vía JWKS), `jwt_header(token)` /
   `jwt_kid(token)` la leen SIN verificar (para elegir la clave) y `jwt_check_claims(payload, iss,
   aud)` comprueba emisor y audiencia (string o lista) del payload ya verificado — sirve también para
-  EdDSA. Sobre `net/crypto` + `std/base64`.
+  EdDSA. `jwt_verify_claims(secret, token, now_ms)` = firma + `exp`/`nbf`; 0.11.3: un `exp` o `nbf`
+  presente pero no numérico (string, null, lista) invalida el token (RFC 7519 NumericDate; antes se
+  trataba como ausente y el token no caducaba). Sobre `net/crypto` + `std/base64`.
 - **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA); `jwt_eddsa_sign_kid` para el `kid`. Sobre
   `net/crypto` + `std/base64`.
 - **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.

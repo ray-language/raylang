@@ -1,0 +1,11 @@
+# Manifiesto del paquete-librería `yaml` (rayreq #260, IDEAS §116): lector de YAML 1.2 sobre el
+# `json.Doc` ordenado de la stdlib. Nace del lector de rayreq (ray-apps), contrastado con libyaml
+# sobre las descripciones OpenAPI de GitHub y Stripe.
+[package]
+name = "yaml"
+version = "0.1.0"
+license = "Apache-2.0"
+entry = "yaml.ray"
+description = "YAML 1.2 for raylang: read a document into std/json's ordered Doc (block and flow collections, every scalar style, anchors, aliases and merge keys) and write a Doc back as YAML"
+keywords = ["yaml", "openapi", "config", "parser", "kubernetes", "ci"]
+raylang = "1.27.81"

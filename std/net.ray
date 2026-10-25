@@ -203,6 +203,23 @@ pub fn tls_upgrade(handle: int, host: string) -> Result<int, string> {
     }
 }
 
+/// Like `tls_upgrade` but WITHOUT verifying the server certificate (rayreq #250): a self-signed,
+/// expired or wrong-name certificate is accepted (the handshake signatures are still checked, so
+/// the link is encrypted — you just do not know who is at the other end). For development
+/// against a local server only. To trust your own CA instead, point `SSL_CERT_FILE` at its PEM:
+/// that keeps the verification on.
+pub fn tls_upgrade_insecure(handle: int, host: string) -> Result<int, string> {
+    let r = __tls_upgrade_insecure(handle, host);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
 /// Performs one read from the socket; `Ok(data)` (empty string = EOF) or `Err(message)`.
 pub fn socket_read(h: int) -> Result<string, string> {

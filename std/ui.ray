@@ -123,7 +123,15 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// a dragging host stays clickable, and the nearest marked element wins. `always_on_top` (M260) keeps the
 /// window above every other window. `parent` (M260) is the handle of the OWNING window (0 =
 /// none): the new one stays above it and follows it — the closest thing to a sheet on every OS.
-/// Build it with `ui.options(width, height)` and tweak the fields you need.
+/// `place` (#245) says where it opens: `""` (the default: `center` decides), `"at"` (the top-left
+/// corner of the window frame at `x`, `y`, screen coordinates with the origin at the top left,
+/// like `set_position` — applied before it shows, so it does not jump; set it with
+/// `place_at(o, x, y)`) or `"cascade"` (22 px down and right of the last window the program
+/// opened, like a document app's new window; centered when there is none). It wins over
+/// `center` and `autosave`. `titlebar` (#270, macOS, with `kind: "full_content"`) makes the title
+/// bar taller so the traffic lights center on a taller header: `""` (the standard one, ≈ 32 pt on macOS 26),
+/// `"compact"` (≈ 40 pt) or `"tall"` (≈ 52 pt) — `window.ray.titlebar_height` gives the real
+/// height; Linux/Windows ignore it. Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,
@@ -138,6 +146,10 @@ pub struct WindowOptions {
     kind: string,
     always_on_top: bool,
     parent: int,
+    place: string,
+    x: int,
+    y: int,
+    titlebar: string,
 }
 
 /// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
@@ -156,8 +168,35 @@ pub fn options(width: int, height: int) -> WindowOptions {
         minimizable: true,
         kind: "document",
         always_on_top: false,
-        parent: 0
+        parent: 0,
+        place: "",
+        x: 0,
+        y: 0,
+        titlebar: ""
     }
+}
+
+/// `o` opening with the top-left corner of its frame at (`x`, `y`) — screen coordinates with the
+/// origin at the top left, as `set_position` and `frame` use (#245).
+pub fn place_at(o: WindowOptions, x: int, y: int) -> WindowOptions {
+    var p = o;
+    p.place = "at";
+    p.x = x;
+    p.y = y;
+    p
+}
+
+/// `o` opening 22 px down and right of the last window the program opened (#245).
+pub fn cascade(o: WindowOptions) -> WindowOptions {
+    var p = o;
+    p.place = "cascade";
+    p
+}
+
+// Las opciones nuevas viajan al runtime como un solo texto `clave=valor;…` (#245, #270): una
+// opción más no cambia la aridad del primitivo en los tres motores.
+fn extra_text(o: WindowOptions) -> string {
+    "place=" + o.place + ";x=" + to_string(o.x) + ";y=" + to_string(o.y) + ";titlebar=" + o.titlebar
 }
 
 /// Like `open`, with `WindowOptions`: `ui.open_with("App", url, ui.options(1024, 720))` after
@@ -180,7 +219,8 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.kind,
         o.always_on_top,
         o.parent,
-        o.background
+        o.background,
+        extra_text(o)
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -358,6 +398,15 @@ pub fn menu_at(position: int, title: string, items: [MenuItem]) -> Result<int, s
 /// opened afterwards. `Err` if no menu has that title (`menu`/`menu_at` create one).
 pub fn replace_menu(title: string, items: [MenuItem]) -> Result<int, string> {
     let r = __ui_replace_menu(title, encode_items(items));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Changes the TITLE of a top-level menu (`old` → `new`), keeping its items and its place in the
+/// bar (rayreq #252): what an app that switches language at run time needs ("File" →
+/// "Archivo"). Err if there is no menu `old`, there is already one `new`, or `new` is empty.
+/// After it, `replace_menu` finds the menu by its new title.
+pub fn rename_menu(old: string, new: string) -> Result<int, string> {
+    let r = __ui_window(0, "rename_menu", old + "\n" + new);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
@@ -803,6 +852,29 @@ pub fn set_position(h: int, x: int, y: int) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Where an OPEN window is (#245): `(x, y, width, height)` — the top-left corner of its frame in
+/// screen coordinates with the origin at the top left (what `set_position` takes) and the size
+/// of its content area (what `set_size` and the options take). Err for a closed window, or in
+/// the mobile shells.
+pub fn frame(h: int) -> Result<(int, int, int, int), string> {
+    let r = __ui_window(h, "frame", "");
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    let parts = r[1].split(",");
+    if (parts.len() != 4) {
+        return Result.Err("ui: unexpected frame: " + r[1]);
+    }
+    Result.Ok(
+        (
+            parse_int(parts[0]).unwrap_or(0),
+            parse_int(parts[1]).unwrap_or(0),
+            parse_int(parts[2]).unwrap_or(0),
+            parse_int(parts[3]).unwrap_or(0)
+        )
+    )
+}
+
 /// Centers an OPEN window on its screen (M260).
 pub fn center(h: int) -> Result<int, string> {
     let r = __ui_window(h, "center", "");
@@ -857,7 +929,9 @@ pub fn open_path(path: string) -> Result<int, string> {
 /// an app does to start an OAuth sign-in (RFC 8252) or show a help page. Only `http`, `https`
 /// and `mailto` URLs; no shell is involved (`open` on macOS, `url.dll` on Windows, `xdg-open`
 /// on freedesktop). Err for another scheme, a space or a control character, or when the
-/// launcher cannot start; not yet available in the mobile shells (Err). `open_path` is for
+/// launcher cannot start. On iOS it goes through `UIApplication`; on Android through an
+/// `ACTION_VIEW` intent, which needs a shell generated by raylang 1.27.81+ (an older one gives
+/// `Err` with the fix). `open_path` is for
 /// files and directories that exist.
 pub fn open_url(url: string) -> Result<int, string> {
     let r = __ui_desktop("open_url", url);

@@ -38,8 +38,16 @@ mod imp {
     /// un PRAGMA se descartan) y suma las filas afectadas; con parámetros exige UNA sentencia y
     /// lo comprueba ANTES de ejecutar nada (a qué sentencia irían `?1`… sería ambiguo).
     pub fn exec_conn(conn: &rusqlite::Connection, sql: &str, params: &[String]) -> Result<i64, String> {
+        let opt: Vec<Option<String>> = params.iter().cloned().map(Some).collect();
+        exec_conn_opt(conn, sql, &opt)
+    }
+
+    /// rayreq #248: como [`exec_conn`] con parámetros que pueden ser `NULL` (`None`).
+    pub fn exec_conn_opt(conn: &rusqlite::Connection, sql: &str, params: &[Option<String>]) -> Result<i64, String> {
         let mut batch = rusqlite::Batch::new(conn, sql);
-        let mut total: i64 = 0;
+        // Se cuenta por el delta de `total_changes`: `changes()` solo lo actualizan
+        // INSERT/UPDATE/DELETE y tras un DDL conserva el valor anterior (se sumaría dos veces).
+        let before = conn.total_changes() as i64;
         if !params.is_empty() {
             let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? else {
                 return Ok(0);
@@ -51,31 +59,28 @@ mod imp {
                             run the others in their own exec (without parameters they all run)"
                     .to_string());
             }
-            let readonly = stmt.readonly();
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| e.to_string())?;
             while rows.next().map_err(|e| e.to_string())?.is_some() {}
             drop(rows);
-            if !readonly {
-                total = conn.changes() as i64;
-            }
-            return Ok(total);
+            return Ok(conn.total_changes() as i64 - before);
         }
         while let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? {
-            let readonly = stmt.readonly();
             let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
             while rows.next().map_err(|e| e.to_string())?.is_some() {}
             drop(rows);
-            if !readonly {
-                total += conn.changes() as i64;
-            }
         }
-        Ok(total)
+        Ok(conn.total_changes() as i64 - before)
     }
 
     impl Conn {
         /// Ejecuta SQL sin devolver filas; ver [`exec_conn`].
         pub fn exec(&self, sql: &str, params: &[String]) -> Result<i64, String> {
             exec_conn(&self.inner, sql, params)
+        }
+
+        /// rayreq #248: `exec` con parámetros `NULL` (`None`).
+        pub fn exec_opt(&self, sql: &str, params: &[Option<String>]) -> Result<i64, String> {
+            exec_conn_opt(&self.inner, sql, params)
         }
 
         /// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
@@ -118,7 +123,7 @@ mod imp {
 }
 
 #[cfg(feature = "sqlite")]
-pub use imp::{exec_conn, open, Conn};
+pub use imp::{exec_conn, exec_conn_opt, open, Conn};
 
 // --- Stubs sin la feature `sqlite` (el binario compila sin rusqlite; el consumidor no los alcanza) ---
 #[cfg(not(feature = "sqlite"))]
@@ -126,6 +131,9 @@ mod stub {
     pub struct Conn(std::convert::Infallible);
     impl Conn {
         pub fn exec(&self, _sql: &str, _params: &[String]) -> Result<i64, String> {
+            match self.0 {}
+        }
+        pub fn exec_opt(&self, _sql: &str, _params: &[Option<String>]) -> Result<i64, String> {
             match self.0 {}
         }
         pub fn query(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> {

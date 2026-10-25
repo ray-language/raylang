@@ -719,9 +719,71 @@ fn url_spawn(url: &str) -> Result<(), String> {
     spawn_detached("rundll32.exe", &[std::ffi::OsString::from("url.dll,FileProtocolHandler"), std::ffi::OsString::from(url)])
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
-fn url_spawn(_url: &str) -> Result<(), String> {
-    Err("ui: open_url is not available in the mobile shells yet".to_string())
+#[cfg(target_os = "android")]
+fn url_spawn(url: &str) -> Result<(), String> {
+    if android::open_url(url) {
+        Ok(())
+    } else {
+        Err("ui: this Android shell predates open_url; regenerate it with `ray bundle --android`".to_string())
+    }
+}
+
+#[cfg(target_os = "ios")]
+fn url_spawn(url: &str) -> Result<(), String> {
+    ios_url::open(url);
+    Ok(())
+}
+
+/// rayreq #263: `openURL:options:completionHandler:` de UIApplication, en la cola principal (UIKit
+/// lo exige). El runtime vive dentro de la app, así que no hace falta pasar por el shell.
+#[cfg(target_os = "ios")]
+mod ios_url {
+    use std::ffi::c_void;
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+    #[repr(C)]
+    struct DispatchQueue {
+        _opaque: [u8; 0],
+    }
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const u8) -> Id;
+        fn sel_registerName(name: *const u8) -> Sel;
+        fn objc_msgSend();
+        static _dispatch_main_q: DispatchQueue;
+        fn dispatch_async_f(queue: *const DispatchQueue, ctx: *mut c_void, work: extern "C" fn(*mut c_void));
+    }
+
+    extern "C" fn work(ctx: *mut c_void) {
+        // SAFETY: `ctx` es el Box<String> de `open`; mensajes estándar de Foundation/UIKit en el
+        // hilo principal.
+        unsafe {
+            let url: Box<String> = Box::from_raw(ctx as *mut String);
+            let Ok(text) = std::ffi::CString::new(url.as_str()) else { return };
+            let send = objc_msgSend as *const ();
+            let msg: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(send);
+            let msg_str: unsafe extern "C" fn(Id, Sel, *const std::ffi::c_char) -> Id = std::mem::transmute(send);
+            let msg_id: unsafe extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(send);
+            let open: unsafe extern "C" fn(Id, Sel, Id, Id, Id) = std::mem::transmute(send);
+            let ns = msg_str(objc_getClass(b"NSString\0".as_ptr()), sel_registerName(b"stringWithUTF8String:\0".as_ptr()), text.as_ptr());
+            let nsurl = msg_id(objc_getClass(b"NSURL\0".as_ptr()), sel_registerName(b"URLWithString:\0".as_ptr()), ns);
+            if nsurl.is_null() {
+                return;
+            }
+            let app = msg(objc_getClass(b"UIApplication\0".as_ptr()), sel_registerName(b"sharedApplication\0".as_ptr()));
+            let options = msg(objc_getClass(b"NSDictionary\0".as_ptr()), sel_registerName(b"dictionary\0".as_ptr()));
+            if app.is_null() {
+                return;
+            }
+            open(app, sel_registerName(b"openURL:options:completionHandler:\0".as_ptr()), nsurl, options, std::ptr::null_mut());
+        }
+    }
+
+    pub(super) fn open(url: &str) {
+        let boxed = Box::new(url.to_string());
+        // SAFETY: la cola principal es un static exportado de libdispatch; `work` libera el Box.
+        unsafe { dispatch_async_f(&_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, work) };
+    }
 }
 
 #[cfg(not(any(target_os = "macos", windows, target_os = "ios", target_os = "android")))]
@@ -1055,6 +1117,19 @@ pub struct WindowOptions {
     /// (macOS `addChildWindow:`, Windows owner, GTK `transient_for`) — es lo que da un "sheet"
     /// degradado o un panel pegado a su documento.
     pub parent: i64,
+    /// rayreq/ray-sublime #245: dónde se abre. `""` = lo de siempre (`center` decide); `"at"` =
+    /// con la esquina superior izquierda del MARCO en (`x`, `y`), coordenadas de pantalla con
+    /// origen arriba-izquierda como `set_position`, aplicadas ANTES de mostrarla (sin salto);
+    /// `"cascade"` = escalonada 22 px abajo-derecha de la última ventana abierta del proceso
+    /// (centrada si no hay otra). Gana a `center` y a `autosave`.
+    pub place: String,
+    pub x: i64,
+    pub y: i64,
+    /// rayreq #270: la altura de la barra de título con `kind: "full_content"` (macOS): `""` = la
+    /// estándar (≈ 32 pt en macOS 26), `"compact"` ≈ 40 pt y `"tall"` ≈ 52 pt — una `NSToolbar` vacía con estilo
+    /// unified compacto o normal, como Finder/Safari: los semáforos se centran en esa altura y
+    /// `window.ray.titlebar_height` la refleja. Linux/Windows lo ignoran (no hay `full_content`).
+    pub titlebar: String,
 }
 
 impl WindowOptions {
@@ -1074,6 +1149,81 @@ impl WindowOptions {
             kind: "document".to_string(),
             always_on_top: false,
             parent: 0,
+            place: String::new(),
+            x: 0,
+            y: 0,
+            titlebar: String::new(),
+        }
+    }
+}
+
+/// #245/#270: las opciones de ventana que viajan desde `std/ui` como un solo texto
+/// `clave=valor;…` (`place`, `x`, `y`, `titlebar`) — así una opción nueva no cambia la aridad de
+/// `__ui_open_with` en los tres motores. Una sola tabla para la VM, el intérprete y el nativo.
+pub fn apply_extra(opts: &mut WindowOptions, text: &str) -> Result<(), String> {
+    for pair in text.split(';').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').ok_or_else(|| format!("ui: malformed window option '{pair}'"))?;
+        let int = || v.trim().parse::<i64>().map_err(|_| format!("ui: window option '{k}' expects an integer, not '{v}'"));
+        match k {
+            "place" => opts.place = v.to_string(),
+            "x" => opts.x = int()?,
+            "y" => opts.y = int()?,
+            "titlebar" => opts.titlebar = v.to_string(),
+            _ => return Err(format!("ui: unknown window option '{k}'")),
+        }
+    }
+    if !matches!(opts.titlebar.as_str(), "" | "compact" | "tall") {
+        return Err(format!("ui: unsupported titlebar '{}' (\"\", compact, tall)", opts.titlebar));
+    }
+    Ok(())
+}
+
+/// #245: el paso de `place: "cascade"` respecto a la ventana anterior.
+const CASCADE_STEP: i64 = 22;
+
+/// #245: la última ventana abierta (para `cascade`); 0 = ninguna.
+static LAST_OPENED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// #245: el marco de cada ventana HEADLESS (`x`, `y`, ancho, alto del contenido): lo que abrir,
+/// `set_position` y `set_size` dejarían, para que `frame` responda en pruebas sin backend.
+fn headless_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
+    static FRAMES: OnceLock<Mutex<HashMap<i64, (i64, i64, i64, i64)>>> = OnceLock::new();
+    FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// #245: el marco de una ventana ABIERTA — `(x, y, ancho, alto)`: la esquina superior izquierda
+/// del marco en coordenadas de pantalla con origen arriba-izquierda (las de `set_position`) y el
+/// tamaño del ÁREA DE CONTENIDO (el de `set_size` y de las opciones). `Err` con una ventana
+/// cerrada o desconocida, o en los shells móviles (una sola vista a pantalla completa).
+pub fn window_frame(id: i64) -> Result<(i64, i64, i64, i64), String> {
+    let map = windows().lock().unwrap();
+    let Some(state) = map.get(&id).filter(|w| !w.closed) else {
+        return Err("ui: not an open window".to_string());
+    };
+    match &state.win {
+        Win::Headless => {
+            drop(map);
+            Ok(headless_frames().lock().unwrap().get(&id).copied().unwrap_or((0, 0, 0, 0)))
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Win::Shell => Err("ui: frame is not available in the mobile shells".to_string()),
+        #[cfg(target_os = "macos")]
+        Win::Mac { window, .. } => {
+            let w = *window;
+            drop(map);
+            mac::window_frame(w)
+        }
+        #[cfg(target_os = "linux")]
+        Win::Gtk { window, alive, .. } => {
+            let (w, alive) = (*window, alive.clone());
+            drop(map);
+            gtk::window_frame(w, alive)
+        }
+        #[cfg(windows)]
+        Win::Windows { hwnd, alive } => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::window_frame(h, alive)
         }
     }
 }
@@ -1677,6 +1827,33 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     if opts.parent != 0 && !matches!(windows().lock().unwrap().get(&opts.parent), Some(WinState { closed: false, .. })) {
         return Err("ui: the parent is not an open window".to_string());
     }
+    if !matches!(opts.place.as_str(), "" | "at" | "cascade") {
+        return Err(format!("ui: unsupported window placement '{}' (\"\", at, cascade)", opts.place));
+    }
+    // #245: `cascade` es `at` con la posición de la ventana anterior más un paso; sin ventana
+    // anterior (o si no responde), la de siempre.
+    let mut placed = opts.clone();
+    if placed.place == "cascade" {
+        let last = LAST_OPENED.load(std::sync::atomic::Ordering::SeqCst);
+        match if last != 0 { window_frame(last).ok() } else { None } {
+            Some((px, py, _, _)) => {
+                placed.place = "at".to_string();
+                placed.x = px + CASCADE_STEP;
+                placed.y = py + CASCADE_STEP;
+            }
+            None => placed.place = String::new(),
+        }
+    }
+    let opts = &placed;
+    let r = open_placed(id, title, url, opts);
+    if r.is_ok() {
+        LAST_OPENED.store(id, std::sync::atomic::Ordering::SeqCst);
+    }
+    r
+}
+
+fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<(), String> {
+    let (width, height) = (opts.width, opts.height);
     notify_dev_windowed();
     if headless() {
         start_headless_exit_watchdog();
@@ -1690,6 +1867,11 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
             }
         }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false, intercept_close: false });
+        let (fx, fy) = if opts.place == "at" { (opts.x, opts.y) } else { (0, 0) };
+        headless_frames().lock().unwrap().insert(id, (fx, fy, width, height));
+        if ui_trace() && opts.place == "at" {
+            eprintln!("[ui] window {id} at {fx},{fy}");
+        }
         // M252 (ray-sublime #76): la ventana recién abierta pasa a ser la clave headless, pero
         // NO emite `focused`: abrir no produce eventos en headless (las pruebas del aparcado
         // cuentan con una cola en silencio tras `open`); `focus(h)` sí lo emite.
@@ -2211,6 +2393,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     if matches!(op, "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls") {
         return app_op(op, arg);
     }
+    if op == "rename_menu" {
+        let (old, new) = arg.split_once('\n').ok_or_else(|| "ui: rename_menu expects 'old\\nnew'".to_string())?;
+        return rename_menu(old, new);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {
@@ -2259,6 +2445,21 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     }
     match &state.win {
         Win::Headless => {
+            match cmd {
+                Some(WindowCmd::Position(x, y)) => {
+                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
+                        f.0 = x;
+                        f.1 = y;
+                    }
+                }
+                Some(WindowCmd::Size(w, h)) => {
+                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
+                        f.2 = w;
+                        f.3 = h;
+                    }
+                }
+                _ => {}
+            }
             if ui_trace() {
                 match cmd {
                     Some(c) => eprintln!("[ui] window {id} {c:?}"),
@@ -2830,6 +3031,53 @@ fn headless_menu_tags() -> &'static Mutex<std::collections::HashSet<String>> {
 fn headless_menu_titles() -> &'static Mutex<std::collections::HashSet<String>> {
     static TITLES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     TITLES.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// rayreq #252: cambia el TÍTULO de un menú de nivel superior (`old` → `new`) sin tocar sus
+/// ítems ni su posición — lo que necesita una app que cambia de idioma en caliente («File» →
+/// «Archivo»). `Err` si no hay un menú `old`, si ya hay uno `new` o si `new` está vacío.
+pub fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+    if new.is_empty() {
+        return Err("ui: a menu title cannot be empty".to_string());
+    }
+    if old == new {
+        return Ok(());
+    }
+    if headless() {
+        let mut titles = headless_menu_titles().lock().unwrap();
+        if !titles.contains(old) {
+            return Err(format!("ui: no menu titled '{old}'"));
+        }
+        if titles.contains(new) {
+            return Err(format!("ui: there is already a menu titled '{new}'"));
+        }
+        titles.remove(old);
+        titles.insert(new.to_string());
+        if ui_trace() {
+            eprintln!("[ui] rename menu {old} -> {new}");
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::rename_menu(old, new)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::rename_menu(old, new)
+    }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::rename_menu(old, new)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (old, new);
+        Err("ui: menus are not available on this platform".to_string())
+    }
 }
 
 /// M250 (ray-sublime): reemplaza el CONTENIDO del menú de nivel superior titulado `title` por
@@ -4438,6 +4686,38 @@ mod mac {
     /// principal: vacía el NSMenu (`removeAllItems`), purga del registro por tag los items que
     /// contenía y añade los nuevos con `make_item` (que los registra). El NSMenu y el item de la
     /// barra son los mismos objetos: la posición en la barra no cambia.
+    /// #252: el título del ítem de la barra y el de su submenú (el que muestra macOS).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let (old, new) = (old.to_string(), new.to_string());
+        on_main_sync(move || {
+            let main_menu = MAIN_MENU.load(std::sync::atomic::Ordering::SeqCst);
+            if main_menu == 0 {
+                return Err("ui: the menu bar is not ready".to_string());
+            }
+            // SAFETY: mensajes estándar de NSMenu/NSMenuItem en el hilo principal.
+            unsafe {
+                let index_of: MsgI64Id = std::mem::transmute(msg_send());
+                let item_at: MsgIdI64 = std::mem::transmute(msg_send());
+                let submenu_of: MsgId = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                if index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&new)) >= 0 {
+                    return Err(format!("ui: there is already a menu titled '{new}'"));
+                }
+                let idx = index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&old));
+                if idx < 0 {
+                    return Err(format!("ui: no menu titled '{old}'"));
+                }
+                let bar_item = item_at(main_menu as Id, sel(b"itemAtIndex:\0"), idx);
+                set_id(bar_item, sel(b"setTitle:\0"), nsstring(&new));
+                let menu = submenu_of(bar_item, sel(b"submenu\0"));
+                if !menu.is_null() {
+                    set_id(menu, sel(b"setTitle:\0"), nsstring(&new));
+                }
+            }
+            Ok(())
+        })
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let title = title.to_string();
         let items = items.to_vec();
@@ -4851,6 +5131,22 @@ mod mac {
                 // el margen (`window.ray.titlebar_height`).
                 let mut titlebar_height = 0.0;
                 if is_full_content {
+                    // #270: una barra más alta = una NSToolbar vacía con estilo unified (11+):
+                    // compacta ≈ 40 pt, normal ≈ 52 pt; AppKit centra los semáforos en ella.
+                    if !opts.titlebar.is_empty() {
+                        let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                        if responds(window, sel(b"respondsToSelector:\0"), sel(b"setToolbarStyle:\0")) != 0 {
+                            let init_id: MsgIdId = std::mem::transmute(msg_send());
+                            let toolbar = init_id(alloc(cls(b"NSToolbar\0"), sel(b"alloc\0")), sel(b"initWithIdentifier:\0"), nsstring("ray.titlebar"));
+                            let set_tb: MsgVoidId = std::mem::transmute(msg_send());
+                            set_bool(toolbar, sel(b"setShowsBaselineSeparator:\0"), 0);
+                            set_tb(window, sel(b"setToolbar:\0"), toolbar);
+                            plain(toolbar, sel(b"release\0"));
+                            let set_style: MsgVoidI64 = std::mem::transmute(msg_send());
+                            // NSWindowToolbarStyleUnified = 3, UnifiedCompact = 4.
+                            set_style(window, sel(b"setToolbarStyle:\0"), if opts.titlebar == "compact" { 4 } else { 3 });
+                        }
+                    }
                     let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
                     set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
                     set_i64(window, sel(b"setTitleVisibility:\0"), 1); // NSWindowTitleHidden
@@ -4858,6 +5154,9 @@ mod mac {
                     let frame = rect_of(window, sel(b"frame\0"));
                     let content = rect_of(window, sel(b"contentLayoutRect\0"));
                     titlebar_height = (frame.h - content.h).max(0.0);
+                    if super::ui_trace() {
+                        eprintln!("[ui] titlebar height {}", titlebar_height.round() as i64);
+                    }
                 }
                 // M224: la barra de título del color del tema (como Sublime): la barra se vuelve
                 // transparente y deja ver el fondo de la ventana, que se pinta del color pedido;
@@ -4994,6 +5293,13 @@ mod mac {
                 if !opts.autosave.is_empty() {
                     let set_name: MsgBoolId = std::mem::transmute(msg_send());
                     set_name(window, sel(b"setFrameAutosaveName:\0"), nsstring(&opts.autosave));
+                }
+                // #245: una posición explícita gana al centrado y al frame recordado; antes de
+                // mostrar la ventana, así no salta.
+                if opts.place == "at" {
+                    let screen = CGDisplayBounds(CGMainDisplayID());
+                    let set_point: MsgVoidPoint = std::mem::transmute(msg_send());
+                    set_point(window, sel(b"setFrameTopLeftPoint:\0"), CGPoint { x: opts.x as f64, y: screen.h - opts.y as f64 });
                 }
                 // M327: el fondo bajo la página ANTES de mostrar la ventana — el primer fotograma
                 // ya sale del color del tema. El fondo de la ventana solo si la barra no lo puso.
@@ -5240,6 +5546,25 @@ mod mac {
                 }
             }
         });
+    }
+
+    /// #245: el marco de la ventana en el hilo principal — esquina superior izquierda del marco
+    /// en coordenadas arriba-izquierda (las de `set_position`) y tamaño del área de contenido.
+    pub(super) fn window_frame(window: usize) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            // SAFETY: mensajes estándar de NSWindow/NSView en el hilo principal.
+            unsafe {
+                let w = window as Id;
+                let rect_of: MsgRect = std::mem::transmute(msg_send());
+                let get_id: MsgId = std::mem::transmute(msg_send());
+                let frame = rect_of(w, sel(b"frame\0"));
+                let content = get_id(w, sel(b"contentView\0"));
+                let size = if content.is_null() { frame } else { rect_of(content, sel(b"frame\0")) };
+                let screen = CGDisplayBounds(CGMainDisplayID());
+                let top = screen.h - (frame.y + frame.h);
+                Ok((frame.x.round() as i64, top.round() as i64, size.w.round() as i64, size.h.round() as i64))
+            }
+        })
     }
 
     /// M257: `setTitle:` en el hilo principal.
@@ -6022,6 +6347,22 @@ mod gtk {
     /// cada ventana viva en el hilo del loop: se destruye la barra vieja (y se purgan del
     /// registro por tag los widgets de esa ventana), se construye una nueva de los specs y se
     /// empaqueta arriba del todo.
+    /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let items = {
+            let mut specs = menu_specs().lock().unwrap();
+            if specs.iter().any(|(t, _)| t == new) {
+                return Err(format!("ui: there is already a menu titled '{new}'"));
+            }
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == old) else {
+                return Err(format!("ui: no menu titled '{old}'"));
+            };
+            entry.0 = new.to_string();
+            entry.1.clone()
+        };
+        replace_menu(new, &items)
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         {
             let mut specs = menu_specs().lock().unwrap();
@@ -6665,8 +7006,13 @@ mod gtk {
                 if (opts.min_width > 0 || opts.min_height > 0) && let Some(f) = api.set_size_request {
                     f(window, opts.min_width as i32, opts.min_height as i32);
                 }
-                if opts.center && let Some(f) = api.set_position {
+                if opts.center && opts.place != "at" && let Some(f) = api.set_position {
                     f(window, 1); // GTK_WIN_POS_CENTER
+                }
+                // #245: posición explícita antes de mostrar (gtk_window_move sobre una ventana
+                // aún no mapeada fija dónde aparece).
+                if opts.place == "at" && let Some(f) = window_api().move_to {
+                    f(window, opts.x as i32, opts.y as i32);
                 }
                 // M260: tipo de ventana, siempre encima, ventana dueña.
                 let wa = window_api();
@@ -6847,6 +7193,7 @@ mod gtk {
         resize: Option<unsafe extern "C" fn(Widget, i32, i32)>,
         move_to: Option<unsafe extern "C" fn(Widget, i32, i32)>,
         get_size: Option<unsafe extern "C" fn(Widget, *mut i32, *mut i32)>,
+        get_position: Option<unsafe extern "C" fn(Widget, *mut i32, *mut i32)>,
         iconify: Option<FnWidgetOp>,
         maximize: Option<FnWidgetOp>,
         screen_default: Option<unsafe extern "C" fn() -> *mut c_void>,
@@ -6881,6 +7228,7 @@ mod gtk {
                     resize: opt(gtk, c"gtk_window_resize").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
                     move_to: opt(gtk, c"gtk_window_move").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
                     get_size: opt(gtk, c"gtk_window_get_size").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut i32, *mut i32)>(p)),
+                    get_position: opt(gtk, c"gtk_window_get_position").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut i32, *mut i32)>(p)),
                     iconify: opt(gtk, c"gtk_window_iconify").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
                     maximize: opt(gtk, c"gtk_window_maximize").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
                     screen_default: opt(gdk, c"gdk_screen_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
@@ -6953,6 +7301,27 @@ mod gtk {
             }
         });
         Ok(())
+    }
+
+    /// #245: el marco en el hilo gtk (`gtk_window_get_position` = esquina del marco según el gestor
+    /// de ventanas; `gtk_window_get_size` = el área de la ventana sin decoraciones).
+    pub(super) fn window_frame(window: usize, alive: Arc<AtomicBool>) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            let wa = window_api();
+            let (Some(get_pos), Some(get_size)) = (wa.get_position, wa.get_size) else {
+                return Err("ui: frame needs gtk_window_get_position/get_size".to_string());
+            };
+            let (mut x, mut y, mut w, mut h) = (0i32, 0i32, 0i32, 0i32);
+            // SAFETY: ventana viva en el hilo del loop; firmas C de GTK 3.
+            unsafe {
+                get_pos(window as Widget, &mut x, &mut y);
+                get_size(window as Widget, &mut w, &mut h);
+            }
+            Ok((x as i64, y as i64, w as i64, h as i64))
+        })
     }
 
     /// M260: operaciones de geometría/estado en el hilo gtk. `Center` sobre una ventana ya
@@ -7547,6 +7916,7 @@ mod android {
     static MID_EVAL: AtomicUsize = AtomicUsize::new(0);
     static MID_PICK: AtomicUsize = AtomicUsize::new(0); // M382: 0 = shell anterior, sin selector
     static MID_MEDIA: AtomicUsize = AtomicUsize::new(0); // M404: 0 = shell anterior, sin std/media
+    static MID_OPEN_URL: AtomicUsize = AtomicUsize::new(0); // #263: 0 = shell anterior, sin open_url
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -7592,6 +7962,13 @@ mod android {
                 clear(env);
             } else {
                 MID_MEDIA.store(media as usize, Ordering::SeqCst);
+            }
+            // rayreq #263: `onOpenUrl` existe desde 1.27.81; misma limpieza.
+            let open_url = get_static(env, bridge, c"onOpenUrl".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_OPEN_URL.store(open_url as usize, Ordering::SeqCst);
             }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
@@ -7682,6 +8059,17 @@ mod android {
     extern "C" fn pick_handler(id: i64, kind: *const c_char, title: *const c_char, multiple: i32, exts: *const c_char) {
         let spec = format!("{id}\n{}\n{}\n{multiple}\n{}", cstr_owned(kind), cstr_owned(title), cstr_owned(exts));
         call_bridge(MID_PICK.load(Ordering::SeqCst), &[&spec]);
+    }
+
+    /// rayreq #263: `ui.open_url` → `RayBridge.onOpenUrl(url)` (Intent ACTION_VIEW). `false` si el
+    /// shell es anterior a 1.27.81 (sin `onOpenUrl`).
+    pub(super) fn open_url(url: &str) -> bool {
+        let mid = MID_OPEN_URL.load(Ordering::SeqCst);
+        if mid == 0 {
+            return false;
+        }
+        call_bridge(mid, &[url]);
+        true
     }
 
     /// M404: `std/media` → `RayBridge.onMedia(op, arg)` (MediaSession + notificación MediaStyle en
@@ -8451,6 +8839,22 @@ mod win {
     /// M250: reemplaza el spec del menú `title` (ventanas futuras) y reconstruye la barra de
     /// cada ventana viva en el hilo 1: barra y tabla de aceleradores nuevas, `WinCtx` al día
     /// (tags y atajos) y la barra vieja destruida.
+    /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let items = {
+            let mut specs = menu_specs().lock().unwrap();
+            if specs.iter().any(|(t, _)| t == new) {
+                return Err(format!("ui: there is already a menu titled '{new}'"));
+            }
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == old) else {
+                return Err(format!("ui: no menu titled '{old}'"));
+            };
+            entry.0 = new.to_string();
+            entry.1.clone()
+        };
+        replace_menu(new, &items)
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         {
             let mut specs = menu_specs().lock().unwrap();
@@ -8998,7 +9402,9 @@ mod win {
                     (0, 0)
                 };
                 // M210: centrada en la pantalla principal si se pide; Windows no recuerda el frame solo.
-                let (x, y) = if opts.center {
+                let (x, y) = if opts.place == "at" {
+                    (opts.x as i32, opts.y as i32) // #245: posición explícita, sin salto
+                } else if opts.center {
                     let sw = GetSystemMetrics(SM_CXSCREEN);
                     let sh = GetSystemMetrics(SM_CYSCREEN);
                     (((sw - win_w) / 2).max(0), ((sh - win_h) / 2).max(0))
@@ -9105,6 +9511,23 @@ mod win {
     /// (WS_POPUP) y cubre el monitor de la ventana, guardando estilo y rectángulo en el ctx;
     /// `Fullscreen(false)` los restaura. `Size` es del ÁREA CLIENTE (marco añadido con
     /// AdjustWindowRectEx, como al abrir).
+    /// #245: el marco (`GetWindowRect` para la esquina, `GetClientRect` para el contenido).
+    pub(super) fn window_frame(hwnd: usize, alive: Arc<AtomicBool>) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            // SAFETY: hilo 1, ventana viva (alive).
+            unsafe {
+                let hwnd = HWND(hwnd as *mut _);
+                let (mut outer, mut client) = (RECT::default(), RECT::default());
+                let _ = GetWindowRect(hwnd, &mut outer);
+                let _ = GetClientRect(hwnd, &mut client);
+                Ok((outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64))
+            }
+        })
+    }
+
     pub(super) fn window_command(hwnd: usize, alive: Arc<AtomicBool>, cmd: super::WindowCmd) {
         use super::WindowCmd as C;
         use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};

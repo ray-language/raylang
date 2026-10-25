@@ -4319,9 +4319,11 @@ programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
   `"write timeout"`; el webserver de `net` 0.11.1 lo pone por conexión (`Limits.write_timeout_millis`,
   30 s).
 
-## 116. Lo que dejó abierto rayreq (#245–#270; oct 2026)
+## 116. Lo que dejó abierto rayreq (#245–#270; oct 2026) — ✅ EJECUTADA como M427 (DESIGN §402, 1.27.81; recomendaciones aprobadas por el usuario, 25 oct 2026)
 
 Lo de rayreq que afecta a la toolchain y no entró en M426 (DESIGN §401), con su clasificación.
+Todas se hicieron según la recomendación de cada entrada; queda abierta solo la de `as` entre
+literales en constantes (impacto bajo, sin petición).
 
 - **#259 — objetos JSON con orden de inserción.** `JObject` es un `Map` ordenado por clave. Opciones:
   (a) que `Map` conserve el orden de inserción (como los dict de Python): cambia el orden de
@@ -4358,3 +4360,21 @@ Lo de rayreq que afecta a la toolchain y no entró en M426 (DESIGN §401), con s
   distingue `NULL` al leer. Para escribirlo hace falta un primitivo con máscara (como
   `__sqlite_query_nulls`) y una forma `exec_opt(c, sql, [Option<string>])`. Aditivo.
 
+
+## 117. Segunda mirada a 1.27.80/1.27.81 (revisión de código, 25 oct 2026) — pendientes menores
+
+Desde 1.27.81 toda release pasa una revisión de código independiente antes del tag. La primera cazó
+una divergencia VM/nativo (guardas de `match` no visitadas en `transpile/analysis.rs`, corregida en
+la misma PR) y dejó estos pendientes, ninguno bloqueante:
+
+- **TLS: `UnexpectedEof → Ok(0)` también en el servidor y durante el handshake**
+  (`crates/ray-runtime/src/tls.rs`, y la VM hace lo mismo en `builtins::tls_read`). Correcto para el
+  cliente tras el handshake (#250); un cliente que muere a medio handshake se ve como «petición
+  vacía». Acotarlo al cliente post-handshake en AMBOS motores a la vez. Impacto bajo.
+- **`headless_frames` no se vacía al cerrar** (`ui.rs`): guardar el marco en `WinState` y borrar
+  la tabla paralela. Solo headless.
+- **`ray fmt` y los escapes en patrones** (`fmt_literal_pattern` pasa un `keep` vacío): `match (s)
+  { "\u{a0}" => …` vuelve a perder el escape; y `source_escapes` indexa por carácter, así que
+  `"A\u{41}"` sale `"\u{41}\u{41}"`. Indexar por posición dentro del literal.
+- **Una `String` por carácter** en `url.find_any` y en `yaml` (`",[]{}".contains(ch.to_string())`):
+  comparar `char` directamente. Rendimiento, no corrección.

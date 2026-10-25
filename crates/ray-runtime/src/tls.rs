@@ -92,9 +92,16 @@ mod imp {
         /// Lee hasta `buf.len()` octetos de texto plano (descifra; conduce el handshake si hace falta).
         /// `Ok(0)` = fin de la conexión.
         pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            match self {
+            let r = match self {
                 TlsStream::Client(s) => s.read(buf),
                 TlsStream::Server(s) => s.read(buf),
+            };
+            // Un peer que cierra el TCP sin `close_notify` es un EOF, no un error — como en la VM
+            // (`builtins::tls_read`): muchos servidores HTTP con `Connection: close` lo hacen, y el
+            // cuerpo ya delimitado por el cierre llegó entero. (Lo destapó la prueba de #250.)
+            match r {
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(0),
+                other => other,
             }
         }
         /// Escribe TODO `data` (cifra) y lo vacía al socket.
@@ -356,6 +363,70 @@ mod imp {
         Ok(TlsStream::Client(rustls::StreamOwned::new(conn, sock)))
     }
 
+    /// rayreq #250: un verificador que ACEPTA cualquier certificado del servidor (autofirmado,
+    /// caducado, de otro nombre) pero sigue comprobando las firmas del handshake con el proveedor
+    /// `ring` — la conexión va cifrada, solo que sin saber con quién. Para clientes de desarrollo
+    /// contra un servidor local; nunca por defecto.
+    #[derive(Debug)]
+    struct NoVerify(Arc<rustls::crypto::CryptoProvider>);
+
+    impl rustls::client::danger::ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        }
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.0.signature_verification_algorithms.supported_schemes()
+        }
+    }
+
+    /// rayreq #250: la config de cliente SIN verificar el certificado (ver [`NoVerify`]). La comparten
+    /// la VM (`builtins::tls_upgrade_insecure`) y el nativo ([`upgrade_insecure`]).
+    pub fn insecure_client_config() -> Arc<rustls::ClientConfig> {
+        static C: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+        C.get_or_init(|| {
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
+                .with_safe_default_protocol_versions()
+                .expect("the ring provider supports the default protocol versions")
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerify(provider)))
+                .with_no_client_auth();
+            Arc::new(cfg)
+        })
+        .clone()
+    }
+
+    /// rayreq #250: como [`upgrade`], sin verificar el certificado del servidor.
+    pub fn upgrade_insecure(sock: TcpStream, host: &str) -> Result<TlsStream, String> {
+        let sn = rustls::pki_types::ServerName::try_from(host.to_string())
+            .map_err(|_| format!("invalid server name for TLS: {host}"))?;
+        let conn = rustls::ClientConnection::new(insecure_client_config(), sn).map_err(|e| e.to_string())?;
+        Ok(TlsStream::Client(rustls::StreamOwned::new(conn, sock)))
+    }
+
     /// Envuelve un `TcpStream` YA conectado en una sesión TLS de cliente (STARTTLS), verificando el cert
     /// contra `host`. El simétrico de [`accept`].
     pub fn upgrade(sock: TcpStream, host: &str) -> Result<TlsStream, String> {
@@ -374,7 +445,7 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub use imp::{accept, connect, connect_h2, upgrade, TlsStream};
+pub use imp::{accept, connect, connect_h2, insecure_client_config, upgrade, upgrade_insecure, TlsStream};
 
 // --- Stubs sin la feature `tls` (el binario compila sin rustls; el consumidor no los alcanza) ---
 #[cfg(not(feature = "tls"))]
@@ -404,10 +475,11 @@ mod stub {
     pub fn connect(_host: &str, _port: i64) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn connect_h2(_host: &str, _port: i64) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn upgrade(_sock: TcpStream, _host: &str) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
+    pub fn upgrade_insecure(_sock: TcpStream, _host: &str) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn accept(_sock: TcpStream, _cert_pem: &str, _key_pem: &str) -> Result<TlsStream, String> {
         Err(UNAVAIL.to_string())
     }
 }
 
 #[cfg(not(feature = "tls"))]
-pub use stub::{accept, connect, connect_h2, upgrade, TlsStream};
+pub use stub::{accept, connect, connect_h2, upgrade, upgrade_insecure, TlsStream};

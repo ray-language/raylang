@@ -167,7 +167,9 @@ fn main() -> int {
   `query`/`exec` con `params: [string]` (marcadores **`?1`, `?2`, …** enlazados aparte del SQL →
   anti-inyección), `disconnect`. Transacciones = SQL corriente (`BEGIN`/`COMMIT`/`ROLLBACK`).
 - **Celdas como texto** (misma convención): INTEGER/REAL → repr decimal, `NULL` → `""`, BLOB → hex.
-  Para distinguir un `NULL` de la cadena vacía, `query_opt` devuelve `[[Option<string>]]`.
+  Para distinguir un `NULL` de la cadena vacía, `query_opt` devuelve `[[Option<string>]]`; para
+  ESCRIBIR un `NULL`, `exec_opt(c, sql, [Option<string>])` (0.6.0, raylang 1.27.81) enlaza
+  `Option.None` como `NULL`.
 - **`exec` con varias sentencias** (0.5.2, raylang 1.27.80): sin parámetros corre TODAS en orden,
   como un script de migración, y descarta las filas de un `PRAGMA` o `SELECT`; con parámetros
   exige una sola y lo comprueba antes de ejecutar nada. Antes corría solo la primera y devolvía

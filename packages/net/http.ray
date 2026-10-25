@@ -602,6 +602,41 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: int = 10000;
 // M355 (raylb L5): con plazo de CONEXIÓN — `ms > 0` acota el dial (`tcp_connect_timeout`, que aparca
 // la fibra; para https, el TLS se sube después sobre ese socket); `ms <= 0` = el plazo del SO.
 fn dial(u: Url, ms: int) -> Result<int, string> {
+    dial_with(u, ms, false)
+}
+
+// rayreq #250: `insecure` sube a TLS sin verificar el certificado (`Options.insecure_skip_verify`).
+// Un error de certificado en el camino normal sugiere primero confiar en la CA.
+fn dial_with(u: Url, ms: int, insecure: bool) -> Result<int, string> {
+    if (u.tls && insecure) {
+        let h = if (ms > 0) {
+            net.tcp_connect_timeout(u.host, u.port, ms)?
+        } else {
+            net.tcp_connect(u.host, u.port)?
+        };
+        return match (net.tls_upgrade_insecure(h, u.host)) {
+            Result.Ok(t) => Result.Ok(t),
+            Result.Err(e) => {
+                close(h);
+                Result.Err(e)
+            },
+        };
+    }
+    dial_plain(u, ms)
+}
+
+// Si el error es de certificado, cómo arreglarlo bien antes que desactivar la verificación (el
+// handshake ocurre en la primera escritura o lectura: se aplica al error de la petición entera).
+fn cert_hint(e: string) -> string {
+    if (e.to_lower().contains("certificate") && !e.contains("SSL_CERT_FILE")) {
+        e
+            + " (trust the server's CA with SSL_CERT_FILE=ca.pem; insecure_skip_verify in http.Options is for development only)"
+    } else {
+        e
+    }
+}
+
+fn dial_plain(u: Url, ms: int) -> Result<int, string> {
     if (ms <= 0) {
         return if (u.tls) {
             net.tls_connect(u.host, u.port)
@@ -703,6 +738,35 @@ pub fn request_bytes(
     request_pairs(method, url, body, pairs_of(headers), timeout_millis)
 }
 
+/// Options of `request_opts` (start from `options()`): `timeout_millis` is the total read timeout
+/// (also bounding the connect; `<= 0` = none) and `insecure_skip_verify` accepts ANY server
+/// certificate (self-signed, expired, another name) — for development against a local server;
+/// trusting your CA with `SSL_CERT_FILE=ca.pem` keeps the verification on and is the right fix.
+pub struct Options {
+    timeout_millis: int,
+    insecure_skip_verify: bool,
+}
+
+/// The defaults of `request_opts`: 30 s, certificates verified.
+pub fn options() -> Options {
+    Options { timeout_millis: 30000, insecure_skip_verify: false }
+}
+
+/// The most explicit request form (rayreq #250): raw `bytes` body, headers as ordered pairs (with
+/// repeats) and `Options`. `request_pairs`/`request_bytes`/`request` are this with `options()`.
+pub fn request_opts(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: [(string, string)],
+    o: Options
+) -> Result<Response, string> {
+    match (send_pairs(method, url, body, headers, o.timeout_millis, o.insecure_skip_verify)) {
+        Result.Ok(r) => Result.Ok(r),
+        Result.Err(e) => Result.Err(if (o.insecure_skip_verify) { e } else { cert_hint(e) }),
+    }
+}
+
 /// Like `request_bytes`, with the extra headers as `(name, value)` pairs sent IN ORDER and with
 /// repeats — two `("X-A", …)` pairs are two `X-A` lines, which a `Map` cannot express.
 pub fn request_pairs(
@@ -712,10 +776,24 @@ pub fn request_pairs(
     headers: [(string, string)],
     timeout_millis: int
 ) -> Result<Response, string> {
+    match (send_pairs(method, url, body, headers, timeout_millis, false)) {
+        Result.Ok(r) => Result.Ok(r),
+        Result.Err(e) => Result.Err(cert_hint(e)),
+    }
+}
+
+fn send_pairs(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: [(string, string)],
+    timeout_millis: int,
+    insecure: bool
+) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u, connect_ms(timeout_millis))) {
+            match (dial_with(u, connect_ms(timeout_millis), insecure)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     let deadline: int = if (timeout_millis > 0) {

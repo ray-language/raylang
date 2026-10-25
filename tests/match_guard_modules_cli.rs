@@ -24,3 +24,34 @@ fn a_match_guard_sees_imported_modules() {
         assert_eq!(stdout, "big\nabs\n", "{flags:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// Revisión de 1.27.80: los recorredores del backend nativo (`transpile/analysis.rs`) saltaban la
+/// guarda, así que una variable capturada SOLO desde ella no entraba en `cell_vars` y el binario
+/// veía el valor viejo (VM `false`, nativo `true`). Se compara la salida de los tres motores.
+#[test]
+fn a_variable_captured_only_from_a_guard_is_a_cell_in_the_native_backend() {
+    let dir = std::env::temp_dir().join(format!("ray_guard_cell_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("prog.ray"),
+        "fn main() {\n    var limit = 10;\n    let f = fn(x: Option<int>) -> bool {\n        match (x) {\n            Option.Some(n) if n > limit => true,\n            _ => false,\n        }\n    };\n    limit = 20;\n    print(f(Option.Some(15)));\n    limit = 12;\n    print(f(Option.Some(15)));\n}\n",
+    )
+    .unwrap();
+    const WANT: &str = "false\ntrue\n";
+    for flags in [&[][..], &["--interp"][..]] {
+        let out = Command::new(BIN).arg("run").args(flags).arg("prog.ray").current_dir(&dir).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{flags:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(BIN)
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo ≡ VM");
+    }
+}

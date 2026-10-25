@@ -1585,7 +1585,7 @@ pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i6
 /// Los motores los pasan tal cual; el handle de la dueña se traduce aquí al id del runtime.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str, minimizable: bool, kind: &str, always_on_top: bool, parent: i64, background: &str) -> Result<i64, String> {
+pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min_h: i64, resizable: bool, center: bool, autosave: &str, titlebar_color: &str, minimizable: bool, kind: &str, always_on_top: bool, parent: i64, background: &str, extra: &str) -> Result<i64, String> {
     let parent = if parent == 0 {
         0
     } else {
@@ -1594,11 +1594,13 @@ pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min
             _ => return Err("ui: the parent is not an open window".to_string()),
         }
     };
-    ui_open_with(title, url, ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), background: background.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent })
+    let mut opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), background: background.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent, place: String::new(), x: 0, y: 0, titlebar: String::new() };
+    ray_runtime::ui::apply_extra(&mut opts, extra)?; // #245/#270
+    ui_open_with(title, url, opts)
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
-pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str, _minimizable: bool, _kind: &str, _always_on_top: bool, _parent: i64, _background: &str) -> Result<i64, String> {
+pub fn ui_open_with_args(_title: &str, _url: &str, _w: i64, _h: i64, _min_w: i64, _min_h: i64, _resizable: bool, _center: bool, _autosave: &str, _titlebar_color: &str, _minimizable: bool, _kind: &str, _always_on_top: bool, _parent: i64, _background: &str, _extra: &str) -> Result<i64, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -1740,7 +1742,26 @@ pub fn ui_set_titlebar(_h: i64, _color: &str) -> Result<(), String> {
 /// (`set_title`, `set_edited`, `intercept_close`) y la app (`intercept_quit`, `h` ignorado).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
-    if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls") {
+    ui_window_value(h, op, arg).map(|_| ())
+}
+
+/// `__ui_window` con su valor: `frame` (#245) devuelve `"x,y,ancho,alto"`; las demás, `""`.
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
+    if op == "frame" {
+        let win = match registry().lock().unwrap().open.get(&h) {
+            Some(OpenHandle::Window(w)) => w.0,
+            _ => return Err("ui: not an open window".to_string()),
+        };
+        let (x, y, w, hh) = ray_runtime::ui::window_frame(win)?;
+        return Ok(format!("{x},{y},{w},{hh}"));
+    }
+    ui_window_op(h, op, arg).map(|_| String::new())
+}
+
+#[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
+fn ui_window_op(h: i64, op: &str, arg: &str) -> Result<(), String> {
+    if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls" | "rename_menu") {
         return ray_runtime::ui::window_op(0, op, arg);
     }
     let win = match registry().lock().unwrap().open.get(&h) {
@@ -1751,6 +1772,10 @@ pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_window(_h: i64, _op: &str, _arg: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+#[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
+pub fn ui_window_value(_h: i64, _op: &str, _arg: &str) -> Result<String, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -2468,6 +2493,26 @@ pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> 
     // que el binario nativo).
     ray_runtime::sqlite::exec_conn(conn, sql, params)
 }
+
+/// rayreq #248: `sqlite_exec` con parámetros `NULL`: `nulls` lleva una `n` (NULL) o una `v`
+/// (valor) por parámetro, como la máscara de `sqlite_query_nulls`.
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
+pub fn sqlite_exec_opt(h: i64, sql: &str, params: &[String], nulls: &str) -> Result<i64, String> {
+    let opt = sqlite_opt_params(params, nulls)?;
+    let mut reg = registry().lock().unwrap();
+    let conn = sqlite_conn(&mut reg, h)?;
+    ray_runtime::sqlite::exec_conn_opt(conn, sql, &opt)
+}
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_exec_opt(_h: i64, _sql: &str, _params: &[String], _nulls: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
+
+/// Los parámetros con su máscara `n`/`v` → `Option` (la comparten la VM y el nativo).
+pub fn sqlite_opt_params(params: &[String], nulls: &str) -> Result<Vec<Option<String>>, String> {
+    if nulls.len() != params.len() {
+        return Err("sqlite: the NULL mask does not match the parameters".to_string());
+    }
+    Ok(params.iter().zip(nulls.bytes()).map(|(p, m)| if m == b'n' { None } else { Some(p.clone()) }).collect())
+}
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
@@ -3170,6 +3215,27 @@ pub fn tls_upgrade(h: i64, host: &str) -> Result<i64, String> {
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_upgrade(_h: i64, _host: &str) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+
+/// rayreq #250: `tls_upgrade` SIN verificar el certificado del servidor (autofirmado, caducado, de
+/// otro nombre); las firmas del handshake sí se comprueban. Solo para desarrollo: `std/net` lo
+/// expone con un nombre que lo dice y `net/http` solo tras `insecure_skip_verify`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_upgrade_insecure(h: i64, host: &str) -> Result<i64, String> {
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("invalid server name for TLS: {host}"))?;
+    let client = rustls::ClientConnection::new(ray_runtime::tls::insecure_client_config(), server_name)
+        .map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let sock = match reg.open.remove(&h) {
+        Some(OpenHandle::Tcp(s)) => s,
+        Some(other) => { reg.open.insert(h, other); return Err(format!("handle {h} is not a plain TCP socket")); }
+        None => return Err(format!("invalid handle: {h}")),
+    };
+    reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
+    Ok(h)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_upgrade_insecure(_h: i64, _host: &str) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
 /// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS.
 /// M44a: en wasm nunca hay handles TLS (no se pueden crear) → siempre `false`, y los caminos TLS de
@@ -4553,6 +4619,16 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_exec expects a [string] (the parameters), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // rayreq #248: __sqlite_exec_opt(h, sql, params, nulls) -> [string]: como __sqlite_exec, con una
+    // máscara 'n'/'v' por parámetro (n = NULL). db/sqlite → exec_opt.
+    Builtin { name: "__sqlite_exec_opt", opcode: OpCode::SqliteExecOpt, check: |a| {
+        arity(a, 4, "__sqlite_exec_opt", " (handle, sql, params, nulls)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_exec_opt expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_exec_opt expects a string (the SQL), not {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_exec_opt expects a [string] (the parameters), not {}", a[2]))); }
+        if a[3] != Type::String { return Err((Some(3), format!("__sqlite_exec_opt expects a string (the NULL mask), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __sqlite_query(h, sql, params) -> [string]: ["ok", ncols, celdas…] o ["err", msg].
     Builtin { name: "__sqlite_query", opcode: OpCode::SqliteQuery, check: |a| {
         arity(a, 3, "__sqlite_query", " (handle, sql, params)")?;
@@ -5551,8 +5627,8 @@ static BUILTINS: &[Builtin] = &[
     // __ui_open_with(title, url, w, h, min_w, min_h, resizable, center, autosave, titlebar_color,
     // minimizable) -> [string] (M210, M224, M230): la ventana con opciones; misma respuesta que __ui_open.
     Builtin { name: "__ui_open_with", opcode: OpCode::UiOpenWith, check: |a| {
-        arity(a, 15, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color, minimizable, kind, always_on_top, parent, background)")?;
-        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String, Type::Bool, Type::String, Type::Bool, Type::Int, Type::String];
+        arity(a, 16, "__ui_open_with", " (title, url, width, height, min_width, min_height, resizable, center, autosave, titlebar_color, minimizable, kind, always_on_top, parent, background, extra)")?;
+        let want = [Type::String, Type::String, Type::Int, Type::Int, Type::Int, Type::Int, Type::Bool, Type::Bool, Type::String, Type::String, Type::Bool, Type::String, Type::Bool, Type::Int, Type::String, Type::String];
         for (i, t) in want.iter().enumerate() {
             if a[i] != *t { return Err((Some(i), format!("__ui_open_with expects {} as argument {}, not {}", t, i + 1, a[i]))); }
         }
@@ -5855,6 +5931,14 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__tls_accept expects a string (the PEM certificate), not {}", a[1]))); }
         if a[2] != Type::String { return Err((Some(2), format!("__tls_accept expects a string (the PEM key), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // rayreq #250: __tls_upgrade_insecure(h, host) -> [string]: como __tls_upgrade sin verificar el
+    // certificado del servidor. std/net → tls_upgrade_insecure.
+    Builtin { name: "__tls_upgrade_insecure", opcode: OpCode::TlsUpgradeInsecure, check: |a| {
+        arity(a, 2, "__tls_upgrade_insecure", " (handle, host)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_upgrade_insecure expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_upgrade_insecure expects a string (the host), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_upgrade(h, host) -> [string] (diferido TLS): STARTTLS de cliente sobre un TCP plano;

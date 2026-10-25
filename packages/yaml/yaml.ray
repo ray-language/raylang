@@ -1,0 +1,1139 @@
+//! YAML 1.2 read into `std/json`'s ordered `Doc` (members in order, numbers as their text),
+//! and a `Doc` written back as YAML. Read: block mappings and sequences (also a sequence at its
+//! key's indentation), flow `[…]`/`{…}`, plain, quoted and multi-line scalars, `|`/`>` block
+//! scalars with their indicators, comments, anchors, aliases and the `<<` merge key; only the
+//! first document of a stream. Not supported: complex `?` keys, and tags beyond being skipped
+//! (`!!str` keeps a scalar as text). Plain scalars follow the YAML 1.2 core schema:
+//! `null`/`~`/empty, `true`/`false`, integers and floats; everything else is a string. Born as
+//! rayreq's reader, checked against libyaml on the OpenAPI descriptions of GitHub and Stripe.
+
+import std/json;
+from std/json import Doc, Member;
+
+struct Y {
+    lines: [[char]],
+    li: int,
+    col: int,
+    anchors: Map<string, Doc>,
+}
+
+const MAX_DEPTH: int = 128;
+
+/// Reads the first document of `text` into a `Doc`. Err with the line on malformed YAML or an
+/// unsupported construct.
+pub fn parse(text: string) -> Result<Doc, string> {
+    var lines: [[char]] = [];
+    for raw in text.split("\n") {
+        var cs = raw.chars();
+        if (cs.len() > 0 && cs[cs.len() - 1] == '\r') {
+            cs = cs.slice(0, cs.len() - 1);
+        }
+        lines.push(cs);
+    }
+    if (lines.len() > 0 && lines[0].len() > 0 && char_code(lines[0][0]) == 0xFEFF) {
+        lines[0] = lines[0].slice(1, lines[0].len());
+    }
+    let anchors: Map<string, Doc> = Map.new();
+    var y = Y { lines: lines, li: 0, col: 0, anchors: anchors };
+    skip_directives(y);
+    next_content(y);
+    if (marker(y, "---")) {
+        y.col = 3;
+        skip_spaces(y);
+    }
+    let n = if (rest_blank(y)) { block(y, -1, 0)? } else { node_at(y, -1, y.col, 0)? };
+    next_content(y);
+    if (!eof(y) && !marker(y, "---") && !marker(y, "...")) {
+        return fail(y, "unexpected content (is the indentation right?)");
+    }
+    Result.Ok(n)
+}
+
+fn fail<T>(y: Y, what: string) -> Result<T, string> {
+    Result.Err("YAML, line ${y.li + 1}: ${what}")
+}
+
+// ---- position ------------------------------------------------------------------------------
+
+fn eof(y: Y) -> bool {
+    y.li >= y.lines.len()
+}
+
+fn eol(y: Y) -> bool {
+    y.li >= y.lines.len() || y.col >= y.lines[y.li].len()
+}
+
+/// The character here; '\n' at the end of a line (these three run millions of times on a big
+/// spec: they read the line directly).
+fn ch(y: Y) -> char {
+    if (y.li < y.lines.len()) {
+        let line = y.lines[y.li];
+        if (y.col < line.len()) {
+            return line[y.col];
+        }
+    }
+    '\n'
+}
+
+fn ch_at(y: Y, offset: int) -> char {
+    let i = y.col + offset;
+    if (eof(y) || i >= y.lines[y.li].len()) { '\n' } else { y.lines[y.li][i] }
+}
+
+fn blank(c: char) -> bool {
+    c == ' ' || c == '\t' || c == '\n'
+}
+
+fn skip_spaces(y: Y) {
+    if (y.li >= y.lines.len()) {
+        return;
+    }
+    let line = y.lines[y.li];
+    var c = y.col;
+    while (c < line.len() && (line[c] == ' ' || line[c] == '\t')) {
+        c = c + 1;
+    }
+    y.col = c;
+}
+
+/// Nothing but spaces and maybe a comment until the end of the line.
+fn rest_blank(y: Y) -> bool {
+    skip_spaces(y);
+    eol(y) || ch(y) == '#'
+}
+
+/// `---` or `...` at the start of the line, alone or followed by a space.
+fn marker(y: Y, m: string) -> bool {
+    if (eof(y) || y.col != 0) {
+        return false;
+    }
+    let line = y.lines[y.li];
+    let ms = m.chars();
+    if (line.len() < 3 || line[0] != ms[0] || line[1] != ms[1] || line[2] != ms[2]) {
+        return false;
+    }
+    line.len() == 3 || line[3] == ' ' || line[3] == '\t'
+}
+
+fn skip_directives(y: Y) {
+    while (!eof(y) && y.lines[y.li].len() > 0 && y.lines[y.li][0] == '%') {
+        y.li = y.li + 1;
+    }
+}
+
+/// To the first character of the next line with content (comments and blank lines skipped);
+/// stays put when the rest of the current line has content.
+fn next_content(y: Y) {
+    while (!eof(y)) {
+        if (!rest_blank(y)) {
+            return;
+        }
+        y.li = y.li + 1;
+        y.col = 0;
+        if (!eof(y)) {
+            if (marker(y, "---") || marker(y, "...")) {
+                return;
+            }
+            skip_spaces(y);
+            if (!eol(y) && ch(y) != '#') {
+                return;
+            }
+        }
+    }
+}
+
+fn indent_has_tab(y: Y) -> bool {
+    !eof(y) && y.lines[y.li].slice(0, y.col).contains('\t')
+}
+
+/// The leading spaces of line `li` (-1 for a blank or comment line).
+fn indent_of(y: Y, li: int) -> int {
+    let line = y.lines[li];
+    var i = 0;
+    while (i < line.len() && line[i] == ' ') {
+        i = i + 1;
+    }
+    if (i >= line.len() || line[i] == '#') { -1 } else { i }
+}
+
+fn is_dash(y: Y) -> bool {
+    ch(y) == '-' && blank(ch_at(y, 1))
+}
+
+// ---- block structure -----------------------------------------------------------------------
+
+/// The node on the following lines, indented deeper than `parent`; null when there is none.
+fn block(y: Y, parent: int, depth: int) -> Result<Doc, string> {
+    next_content(y);
+    if (eof(y) || marker(y, "---") || marker(y, "...") || y.col <= parent) {
+        return Result.Ok(Doc.Null);
+    }
+    if (indent_has_tab(y)) {
+        return fail(y, "a tab in the indentation");
+    }
+    node_at(y, parent, y.col, depth)
+}
+
+/// The node that starts here, at column `c`, inside a parent indented at `parent`.
+fn node_at(y: Y, parent: int, c: int, depth: int) -> Result<Doc, string> {
+    if (depth > MAX_DEPTH) {
+        return fail(y, "nested too deep");
+    }
+    let props = properties(y)?;
+    if (props.0 != "" || props.1 != "") {
+        if (rest_blank(y)) {
+            let n = block(y, parent, depth + 1)?;
+            return Result.Ok(anchored(y, props.0, tagged(props.1, n)));
+        }
+        // La propiedad no mueve la columna del nodo: `&k first: 1` sigue siendo un mapping en
+        // `c`, y `second: 2` en la línea siguiente es su hermana, no el fin del mapping.
+        let n = node_at(y, parent, c, depth + 1)?;
+        return Result.Ok(anchored(y, props.0, tagged(props.1, n)));
+    }
+    if (is_dash(y)) {
+        return sequence(y, c, depth);
+    }
+    if (ch(y) == '[' || ch(y) == '{') {
+        let n = flow(y, depth)?;
+        if (!rest_blank(y)) {
+            return fail(y, "a flow collection as a key is not supported");
+        }
+        return Result.Ok(n);
+    }
+    if (ch(y) == '?' && blank(ch_at(y, 1))) {
+        return fail(y, "complex keys ('? ') are not supported");
+    }
+    if (is_key(y)) {
+        return mapping(y, c, depth);
+    }
+    scalar_value(y, parent, depth)
+}
+
+/// The value after `key:` or `- ` on the same line: a scalar, a flow collection, an alias or
+/// a block scalar.
+fn scalar_value(y: Y, parent: int, depth: int) -> Result<Doc, string> {
+    let c = ch(y);
+    if (c == '*') {
+        return alias(y);
+    }
+    if (c == '|' || c == '>') {
+        return block_scalar(y, parent);
+    }
+    if (c == '[' || c == '{') {
+        return flow(y, depth);
+    }
+    if (c == '"') {
+        let s = double_quoted(y)?;
+        return after_scalar(y, Doc.Str(s));
+    }
+    if (c == '\'') {
+        let s = single_quoted(y)?;
+        return after_scalar(y, Doc.Str(s));
+    }
+    Result.Ok(plain_scalar(plain_block(y, parent)?))
+}
+
+fn after_scalar(y: Y, n: Doc) -> Result<Doc, string> {
+    if (!rest_blank(y)) {
+        return fail(y, "unexpected text after a quoted scalar");
+    }
+    Result.Ok(n)
+}
+
+/// `&anchor` and `!tag`, in either order, before a node.
+fn properties(y: Y) -> Result<(string, string), string> {
+    var anchor = "";
+    var tag = "";
+    while (true) {
+        let c = ch(y);
+        if (c == '&' && anchor == "") {
+            y.col = y.col + 1;
+            anchor = name(y);
+            if (anchor == "") {
+                return fail(y, "an anchor without a name");
+            }
+        } else if (c == '!' && tag == "") {
+            let start = y.col;
+            while (!eol(y) && !blank(ch(y))) {
+                y.col = y.col + 1;
+            }
+            tag = chars_to_string(y.lines[y.li], start, y.col);
+        } else {
+            return Result.Ok((anchor, tag));
+        }
+        skip_spaces(y);
+    }
+}
+
+fn name(y: Y) -> string {
+    let start = y.col;
+    while (!eol(y) && !blank(ch(y)) && !",[]{}".contains(ch(y).to_string())) {
+        y.col = y.col + 1;
+    }
+    chars_to_string(y.lines[y.li], start, y.col)
+}
+
+fn anchored(y: Y, anchor: string, n: Doc) -> Doc {
+    if (anchor != "") {
+        y.anchors.insert(anchor, n);
+    }
+    n
+}
+
+/// `!!str 12` stays the text "12"; other tags change nothing.
+fn tagged(tag: string, n: Doc) -> Doc {
+    if (tag == "!!str") {
+        match (n) {
+            Doc.Num(s) => return Doc.Str(s),
+            Doc.Bool(b) => return Doc.Str(if (b) { "true" } else { "false" }),
+            Doc.Null => return Doc.Str(""),
+            _ => { },
+        }
+    }
+    n
+}
+
+fn alias(y: Y) -> Result<Doc, string> {
+    y.col = y.col + 1;
+    let a = name(y);
+    match (y.anchors.get(a)) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => fail(y, "unknown alias '*${a}'"),
+    }
+}
+
+/// A block sequence whose dashes are at column `c` (the current position is the first dash).
+fn sequence(y: Y, c: int, depth: int) -> Result<Doc, string> {
+    var xs: [Doc] = [];
+    while (true) {
+        y.col = y.col + 1;
+        let item = if (rest_blank(y)) {
+            block(y, c, depth + 1)?
+        } else {
+            node_at(y, c, y.col, depth + 1)?
+        };
+        xs.push(item);
+        next_content(y);
+        if (eof(y) || marker(y, "---") || marker(y, "...") || y.col < c) {
+            break;
+        }
+        if (y.col > c) {
+            return fail(y, "bad indentation in a list");
+        }
+        if (!is_dash(y)) {
+            break;
+        }
+    }
+    Result.Ok(Doc.List(xs))
+}
+
+/// Whether a `key:` starts here.
+fn is_key(y: Y) -> bool {
+    let line = y.lines[y.li];
+    var i = y.col;
+    if (i < line.len() && (line[i] == '"' || line[i] == '\'')) {
+        let q = line[i];
+        i = i + 1;
+        while (i < line.len()) {
+            if (q == '"' && line[i] == '\\') {
+                i = i + 2;
+                continue;
+            }
+            if (line[i] == q) {
+                if (q == '\'' && i + 1 < line.len() && line[i + 1] == '\'') {
+                    i = i + 2;
+                    continue;
+                }
+                break;
+            }
+            i = i + 1;
+        }
+        i = i + 1;
+        while (i < line.len() && line[i] == ' ') {
+            i = i + 1;
+        }
+        return i < line.len() && line[i] == ':' && (i + 1 >= line.len() || blank(line[i + 1]));
+    }
+    while (i < line.len()) {
+        if (line[i] == ':' && (i + 1 >= line.len() || blank(line[i + 1]))) {
+            return true;
+        }
+        if (line[i] == '#' && i > 0 && blank(line[i - 1])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn key(y: Y) -> Result<string, string> {
+    let c = ch(y);
+    let k = if (c == '"') {
+        double_quoted(y)?
+    } else if (c == '\'') {
+        single_quoted(y)?
+    } else {
+        let line = y.lines[y.li];
+        let start = y.col;
+        while (!(line[y.col] == ':' && (y.col + 1 >= line.len() || blank(line[y.col + 1])))) {
+            y.col = y.col + 1;
+        }
+        chars_to_string(line, start, y.col).trim()
+    };
+    skip_spaces(y);
+    if (ch(y) != ':') {
+        return fail(y, "expected ':' after the key");
+    }
+    y.col = y.col + 1;
+    Result.Ok(k)
+}
+
+/// A block mapping whose keys are at column `c` (the current position is the first key).
+fn mapping(y: Y, c: int, depth: int) -> Result<Doc, string> {
+    var fields: [Member] = [];
+    while (true) {
+        let k = key(y)?;
+        var v = Doc.Null;
+        skip_spaces(y);
+        let props = properties(y)?;
+        if (rest_blank(y)) {
+            next_content(y);
+            if (!eof(y) && !marker(y, "---") && !marker(y, "...")) {
+                if (indent_has_tab(y)) {
+                    return fail(y, "a tab in the indentation");
+                }
+                if (y.col > c) {
+                    v = node_at(y, c, y.col, depth + 1)?;
+                } else if (y.col == c && is_dash(y)) {
+                    v = sequence(y, c, depth + 1)?;
+                }
+            }
+        } else {
+            v = scalar_value(y, c, depth + 1)?;
+        }
+        v = anchored(y, props.0, tagged(props.1, v));
+        if (k == "<<") {
+            merge(fields, v);
+        } else {
+            put(fields, k, v);
+        }
+        next_content(y);
+        if (eof(y) || marker(y, "---") || marker(y, "...") || y.col < c) {
+            break;
+        }
+        if (y.col > c) {
+            return fail(y, "bad indentation in a mapping");
+        }
+        if (is_dash(y)) {
+            return fail(y, "a list item where a key was expected");
+        }
+        if (!is_key(y)) {
+            return fail(y, "expected 'key: value'");
+        }
+    }
+    Result.Ok(Doc.Obj(fields))
+}
+
+/// `<<: *base` (or a list of them): the members not set already.
+fn merge(fields: [Member], v: Doc) {
+    let sources = match (v) {
+        Doc.List(xs) => xs,
+        _ => [v],
+    };
+    for s in sources {
+        for m in json.doc_members(s) {
+            if (json.doc_get(Doc.Obj(fields), m.key).is_none()) {
+                fields.push(m);
+            }
+        }
+    }
+}
+
+// ---- scalars -------------------------------------------------------------------------------
+
+/// The text of a plain scalar from here to the end of the line (a ` #` comment cut off),
+/// continued by the following lines indented deeper than `parent`.
+fn plain_block(y: Y, parent: int) -> Result<string, string> {
+    var text = plain_line(y);
+    while (true) {
+        // The next line with content, counting the blank lines in between.
+        var li = y.li + 1;
+        var blanks = 0;
+        while (li < y.lines.len() && indent_of(y, li) < 0 && !has_comment_only(y, li)) {
+            blanks = blanks + 1;
+            li = li + 1;
+        }
+        if (li >= y.lines.len()) {
+            break;
+        }
+        let ind = indent_of(y, li);
+        if (ind <= parent) {
+            break;
+        }
+        y.li = li;
+        y.col = ind;
+        if (marker(y, "---") || marker(y, "...")) {
+            break;
+        }
+        if (is_key(y)) {
+            // `a: 1` over `  b: 2`: a key cannot continue a scalar.
+            return fail(y, "bad indentation: a key inside a scalar");
+        }
+        let more = plain_line(y);
+        text = text + if (blanks > 0) { "\n".repeat(blanks) } else { " " } + more;
+    }
+    Result.Ok(text)
+}
+
+fn has_comment_only(y: Y, li: int) -> bool {
+    let line = y.lines[li];
+    var i = 0;
+    while (i < line.len() && (line[i] == ' ' || line[i] == '\t')) {
+        i = i + 1;
+    }
+    i < line.len() && line[i] == '#'
+}
+
+fn plain_line(y: Y) -> string {
+    let line = y.lines[y.li];
+    let start = y.col;
+    var end = start;
+    while (y.col < line.len()) {
+        if (line[y.col] == '#' && y.col > 0 && blank(line[y.col - 1])) {
+            break;
+        }
+        y.col = y.col + 1;
+        if (!blank(line[y.col - 1])) {
+            end = y.col;
+        }
+    }
+    y.col = line.len();
+    chars_to_string(line, start, end)
+}
+
+/// A plain scalar's value under the core schema.
+/// What a plain (unquoted) scalar means under the YAML 1.2 core schema: `Null` for
+/// `null`/`~`/empty, `Bool` for `true`/`false`, `Num` for an integer or float (its text,
+/// normalized to JSON: `0x1F` → `31`, `.inf` stays a string), `Str` otherwise.
+pub fn plain_scalar(s: string) -> Doc {
+    if (s == "" || s == "~" || s == "null" || s == "Null" || s == "NULL") {
+        return Doc.Null;
+    }
+    if (s == "true" || s == "True" || s == "TRUE") {
+        return Doc.Bool(true);
+    }
+    if (s == "false" || s == "False" || s == "FALSE") {
+        return Doc.Bool(false);
+    }
+    match (number_text(s)) {
+        Option.Some(n) => Doc.Num(n),
+        Option.None => Doc.Str(s),
+    }
+}
+
+/// The JSON text of a YAML number (`+1` → `1`, `0x1F` → `31`, `.5` → `0.5`); None when `s`
+/// is not one.
+fn number_text(s: string) -> Option<string> {
+    let cs = s.chars();
+    var i = 0;
+    var sign = "";
+    if (cs[0] == '-' || cs[0] == '+') {
+        if (cs[0] == '-') {
+            sign = "-";
+        }
+        i = 1;
+    }
+    let body = chars_to_string(cs, i, cs.len());
+    if (sign == "" && (body.starts_with("0x") || body.starts_with("0o")) && cs[0] != '+') {
+        let base = if (body.starts_with("0x")) { 16 } else { 8 };
+        var v = 0;
+        let ds = body.chars();
+        if (ds.len() < 3 || ds.len() > 17) {
+            return Option.None;
+        }
+        for d in ds.slice(2, ds.len()) {
+            let h = hex_digit(d);
+            if (h < 0 || h >= base) {
+                return Option.None;
+            }
+            v = v * base + h;
+        }
+        return Option.Some(to_string(v));
+    }
+    // [0-9]* ( . [0-9]* )? ( [eE] [-+]? [0-9]+ )?, with a digit somewhere before the exponent.
+    let bs = body.chars();
+    var j = 0;
+    var int_digits = 0;
+    while (j < bs.len() && bs[j] >= '0' && bs[j] <= '9') {
+        j = j + 1;
+        int_digits = int_digits + 1;
+    }
+    var frac_digits = -1;
+    if (j < bs.len() && bs[j] == '.') {
+        j = j + 1;
+        frac_digits = 0;
+        while (j < bs.len() && bs[j] >= '0' && bs[j] <= '9') {
+            j = j + 1;
+            frac_digits = frac_digits + 1;
+        }
+    }
+    if (int_digits == 0 && frac_digits <= 0) {
+        return Option.None;
+    }
+    var exp = "";
+    if (j < bs.len() && (bs[j] == 'e' || bs[j] == 'E')) {
+        let e_start = j;
+        j = j + 1;
+        if (j < bs.len() && (bs[j] == '+' || bs[j] == '-')) {
+            j = j + 1;
+        }
+        let d0 = j;
+        while (j < bs.len() && bs[j] >= '0' && bs[j] <= '9') {
+            j = j + 1;
+        }
+        if (j == d0) {
+            return Option.None;
+        }
+        exp = chars_to_string(bs, e_start, j);
+    }
+    if (j != bs.len()) {
+        return Option.None;
+    }
+    // JSON wants no leading zeros, a digit on both sides of the point.
+    var whole = chars_to_string(bs, 0, int_digits);
+    while (whole.len() > 1 && whole.starts_with("0")) {
+        whole = whole.substring(1, whole.len());
+    }
+    if (whole == "") {
+        whole = "0";
+    }
+    let frac = if (frac_digits > 0) {
+        "." + chars_to_string(bs, int_digits + 1, int_digits + 1 + frac_digits)
+    } else if (frac_digits == 0) {
+        ".0"
+    } else {
+        ""
+    };
+    Option.Some(sign + whole + frac + exp)
+}
+
+fn hex_digit(c: char) -> int {
+    let n = char_code(c);
+    if (n >= 48 && n <= 57) {
+        n - 48
+    } else if (n >= 97 && n <= 102) {
+        n - 87
+    } else if (n >= 65 && n <= 70) {
+        n - 55
+    } else {
+        -1
+    }
+}
+
+/// The text of a quoted scalar that runs onto the next lines: a line break is a space, a blank
+/// line a newline, and the spaces around the break go.
+fn fold_break(y: Y, parts: [string]) -> Result<int, string> {
+    // Trailing spaces before the break go.
+    while (parts.len() > 0 && (parts[parts.len() - 1] == " " || parts[parts.len() - 1] == "\t")) {
+        parts.pop();
+    }
+    y.li = y.li + 1;
+    y.col = 0;
+    var blanks = 0;
+    while (!eof(y)) {
+        skip_spaces(y);
+        if (!eol(y)) {
+            break;
+        }
+        blanks = blanks + 1;
+        y.li = y.li + 1;
+        y.col = 0;
+    }
+    if (eof(y)) {
+        return fail(y, "unterminated quoted scalar");
+    }
+    parts.push(if (blanks > 0) { "\n".repeat(blanks) } else { " " });
+    Result.Ok(blanks)
+}
+
+fn single_quoted(y: Y) -> Result<string, string> {
+    y.col = y.col + 1;
+    var parts: [string] = [];
+    while (true) {
+        if (eol(y)) {
+            fold_break(y, parts)?;
+            continue;
+        }
+        let c = ch(y);
+        y.col = y.col + 1;
+        if (c == '\'') {
+            if (ch(y) == '\'') {
+                parts.push("'");
+                y.col = y.col + 1;
+                continue;
+            }
+            return Result.Ok(parts.join(""));
+        }
+        parts.push(c.to_string());
+    }
+}
+
+fn hex_escape(y: Y, n: int) -> Result<string, string> {
+    var v = 0;
+    for _ in 0..n {
+        let h = hex_digit(ch(y));
+        if (h < 0) {
+            return fail(y, "expected ${n} hex digits in an escape");
+        }
+        v = v * 16 + h;
+        y.col = y.col + 1;
+    }
+    Result.Ok(char_from_code(v).map(to_string).unwrap_or(code_point(0xFFFD)))
+}
+
+fn code_point(n: int) -> string {
+    char_from_code(n).unwrap().to_string()
+}
+
+fn double_quoted(y: Y) -> Result<string, string> {
+    y.col = y.col + 1;
+    var parts: [string] = [];
+    while (true) {
+        if (eol(y)) {
+            fold_break(y, parts)?;
+            continue;
+        }
+        let c = ch(y);
+        y.col = y.col + 1;
+        if (c == '"') {
+            return Result.Ok(parts.join(""));
+        }
+        if (c != '\\') {
+            parts.push(c.to_string());
+            continue;
+        }
+        if (eol(y)) {
+            // An escaped line break joins the lines with nothing in between.
+            y.li = y.li + 1;
+            y.col = 0;
+            skip_spaces(y);
+            if (eof(y)) {
+                return fail(y, "unterminated quoted scalar");
+            }
+            continue;
+        }
+        let e = ch(y);
+        y.col = y.col + 1;
+        match (e) {
+            '0' => parts.push("\0"),
+            'a' => parts.push("\u{7}"),
+            'b' => parts.push("\u{8}"),
+            // An escaped space or tab stays at the end of a line: the empty part after it
+            // stops fold_break from trimming it.
+            't' => {
+                parts.push("\t");
+                parts.push("");
+            },
+            '\t' => {
+                parts.push("\t");
+                parts.push("");
+            },
+            'n' => parts.push("\n"),
+            'v' => parts.push("\u{B}"),
+            'f' => parts.push("\u{C}"),
+            'r' => parts.push("\r"),
+            'e' => parts.push("\u{1B}"),
+            ' ' => {
+                parts.push(" ");
+                parts.push("");
+            },
+            '"' => parts.push("\""),
+            '/' => parts.push("/"),
+            '\\' => parts.push("\\"),
+            'N' => parts.push("\u{85}"),
+            // By code: `ray fmt` turns these escapes into the (invisible) characters themselves.
+            '_' => parts.push(code_point(0xA0)),
+            'L' => parts.push(code_point(0x2028)),
+            'P' => parts.push(code_point(0x2029)),
+            'x' => parts.push(hex_escape(y, 2)?),
+            'u' => parts.push(hex_escape(y, 4)?),
+            'U' => parts.push(hex_escape(y, 8)?),
+            _ => return fail(y, "invalid escape '\\${e}'"),
+        }
+    }
+}
+
+/// `|` or `>` with its chomping (`-`, `+`) and indentation indicators; the content is on the
+/// following lines, indented deeper than `parent`.
+fn block_scalar(y: Y, parent: int) -> Result<Doc, string> {
+    let folded = ch(y) == '>';
+    y.col = y.col + 1;
+    var chomp = ' ';
+    var explicit = 0;
+    while (!eol(y) && !blank(ch(y))) {
+        let c = ch(y);
+        if (c == '-' || c == '+') {
+            chomp = c;
+        } else if (c >= '1' && c <= '9') {
+            explicit = char_code(c) - 48;
+        } else {
+            return fail(y, "invalid block scalar indicator '${c}'");
+        }
+        y.col = y.col + 1;
+    }
+    if (!rest_blank(y)) {
+        return fail(y, "text after a block scalar indicator");
+    }
+    let base = if (parent < 0) { 0 } else { parent };
+    var content = if (explicit > 0) { base + explicit } else { -1 };
+    var lines: [string] = [];
+    var li = y.li + 1;
+    var last = y.li;
+    while (li < y.lines.len()) {
+        let line = y.lines[li];
+        var spaces = 0;
+        while (spaces < line.len() && line[spaces] == ' ') {
+            spaces = spaces + 1;
+        }
+        let empty = spaces == line.len();
+        if (!empty) {
+            if (content < 0) {
+                if (spaces <= parent) {
+                    break;
+                }
+                content = spaces;
+            }
+            if (spaces < content) {
+                break;
+            }
+        }
+        if (empty && content >= 0 && spaces > content) {
+            lines.push(chars_to_string(line, content, line.len()));
+        } else if (empty) {
+            lines.push("");
+        } else {
+            lines.push(chars_to_string(line, content, line.len()));
+            last = li;
+        }
+        li = li + 1;
+    }
+    // The blank lines after the last line of text belong to the chomping, not the content.
+    var trailing = 0;
+    while (lines.len() > 0 && lines[lines.len() - 1] == "") {
+        lines.pop();
+        trailing = trailing + 1;
+    }
+    y.li = last;
+    y.col = y.lines[last].len();
+    var body = if (folded) { fold_lines(lines) } else { lines.join("\n") };
+    if (lines.len() == 0) {
+        body = "";
+    }
+    let text = if (chomp == '-') {
+        body
+    } else if (chomp == '+') {
+        body + if (lines.len() > 0) { "\n" } else { "" } + "\n".repeat(trailing)
+    } else if (lines.len() > 0) {
+        body + "\n"
+    } else {
+        ""
+    };
+    Result.Ok(Doc.Str(text))
+}
+
+/// `>` folding: lines of text join with a space, a blank line is a newline, and the lines that
+/// are indented more keep their breaks.
+fn fold_lines(lines: [string]) -> string {
+    var parts: [string] = [];
+    var i = 0;
+    while (i < lines.len()) {
+        let line = lines[i];
+        if (i == 0) {
+            parts.push(if (line == "") { "\n" } else { line });
+        } else {
+            let prev = lines[i - 1];
+            if (line == "") {
+                parts.push("\n");
+            } else if (prev == "") {
+                parts.push(line);
+            } else if (more_indented(line) || more_indented(prev)) {
+                parts.push("\n" + line);
+            } else {
+                parts.push(" " + line);
+            }
+        }
+        i = i + 1;
+    }
+    parts.join("")
+}
+
+fn more_indented(line: string) -> bool {
+    line.starts_with(" ") || line.starts_with("\t")
+}
+
+// ---- flow ----------------------------------------------------------------------------------
+
+/// Spaces, line breaks and comments inside a flow collection.
+fn skip_flow_space(y: Y) {
+    while (!eof(y)) {
+        if (eol(y) || ch(y) == '#') {
+            y.li = y.li + 1;
+            y.col = 0;
+        } else if (ch(y) == ' ' || ch(y) == '\t') {
+            y.col = y.col + 1;
+        } else {
+            return;
+        }
+    }
+}
+
+fn flow(y: Y, depth: int) -> Result<Doc, string> {
+    if (depth > MAX_DEPTH) {
+        return fail(y, "nested too deep");
+    }
+    let open = ch(y);
+    y.col = y.col + 1;
+    if (open == '[') {
+        var xs: [Doc] = [];
+        while (true) {
+            skip_flow_space(y);
+            if (eof(y)) {
+                return fail(y, "unterminated '['");
+            }
+            if (ch(y) == ']') {
+                y.col = y.col + 1;
+                return Result.Ok(Doc.List(xs));
+            }
+            let item = flow_node(y, depth + 1)?;
+            skip_flow_space(y);
+            if (ch(y) == ':') {
+                // [a: 1] is a list holding the one-pair mapping {a: 1}.
+                y.col = y.col + 1;
+                skip_flow_space(y);
+                let v = flow_value(y, depth + 1)?;
+                xs.push(Doc.Obj([Member { key: flow_key(y, item)?, value: v }]));
+                skip_flow_space(y);
+            } else {
+                xs.push(item);
+            }
+            if (eof(y)) {
+                return fail(y, "unterminated '['");
+            }
+            if (ch(y) == ',') {
+                y.col = y.col + 1;
+            } else if (ch(y) != ']') {
+                return fail(y, "expected ',' or ']'");
+            }
+        }
+    }
+    var fields: [Member] = [];
+    while (true) {
+        skip_flow_space(y);
+        if (eof(y)) {
+            return fail(y, "unterminated '{'");
+        }
+        if (ch(y) == '}') {
+            y.col = y.col + 1;
+            return Result.Ok(Doc.Obj(fields));
+        }
+        let k = flow_node(y, depth + 1)?;
+        skip_flow_space(y);
+        var v = Doc.Null;
+        if (ch(y) == ':') {
+            y.col = y.col + 1;
+            skip_flow_space(y);
+            v = flow_value(y, depth + 1)?;
+            skip_flow_space(y);
+        }
+        put(fields, flow_key(y, k)?, v);
+        if (eof(y)) {
+            return fail(y, "unterminated '{'");
+        }
+        if (ch(y) == ',') {
+            y.col = y.col + 1;
+        } else if (ch(y) != '}') {
+            return fail(y, "expected ',' or '}'");
+        }
+    }
+}
+
+/// The key of a flow pair: a scalar. A collection or `null` as a key is rejected like `? ` in
+/// block mode, instead of silently becoming the member "".
+fn flow_key(y: Y, k: Doc) -> Result<string, string> {
+    match (k) {
+        Doc.Str(s) => Result.Ok(s),
+        Doc.Num(s) => Result.Ok(s),
+        Doc.Bool(b) => Result.Ok(if (b) { "true" } else { "false" }),
+        Doc.Null => fail(y, "a null key is not supported"),
+        _ => fail(y, "complex keys (a collection as a key) are not supported"),
+    }
+}
+
+/// A value after `:` in a flow mapping; empty before `,` or a closing bracket.
+fn flow_value(y: Y, depth: int) -> Result<Doc, string> {
+    let c = ch(y);
+    if (c == ',' || c == '}' || c == ']') {
+        return Result.Ok(Doc.Null);
+    }
+    flow_node(y, depth)
+}
+
+fn flow_node(y: Y, depth: int) -> Result<Doc, string> {
+    let props = properties(y)?;
+    let c = ch(y);
+    let n = if (c == '[' || c == '{') {
+        flow(y, depth)?
+    } else if (c == '"') {
+        Doc.Str(double_quoted(y)?)
+    } else if (c == '\'') {
+        Doc.Str(single_quoted(y)?)
+    } else if (c == '*') {
+        alias(y)?
+    } else {
+        // Plain, up to a flow indicator, `: `, ` #` or the end of the line.
+        let line = y.lines[y.li];
+        let start = y.col;
+        var end = start;
+        while (y.col < line.len()) {
+            let d = line[y.col];
+            if (",[]{}".contains(d.to_string())) {
+                break;
+            }
+            if (d == ':'
+                && (y.col + 1 >= line.len()
+                    || blank(line[y.col + 1])
+                    || ",[]{}".contains(line[y.col + 1].to_string()))) {
+                break;
+            }
+            if (d == '#' && y.col > start && blank(line[y.col - 1])) {
+                break;
+            }
+            y.col = y.col + 1;
+            if (!blank(d)) {
+                end = y.col;
+            }
+        }
+        plain_scalar(chars_to_string(line, start, end))
+    };
+    Result.Ok(anchored(y, props.0, tagged(props.1, n)))
+}
+
+// Fija `k` en los miembros: una clave repetida reemplaza al valor anterior EN SU SITIO (YAML no
+// admite claves repetidas; así lo deja el último, como libyaml).
+fn put(fields: [Member], k: string, v: Doc) {
+    var i = 0;
+    while (i < fields.len()) {
+        if (fields[i].key == k) {
+            fields[i] = Member { key: k, value: v };
+            return;
+        }
+        i = i + 1;
+    }
+    fields.push(Member { key: k, value: v });
+}
+
+// ---- writing -------------------------------------------------------------------------------
+
+// ¿Puede `s` ir como escalar plano sin cambiar de significado? Conservador: ASCII seguro, sin
+// indicadores ni `:`/`#`, sin espacios en los extremos, y que el esquema core lo lea como texto.
+fn plain_ok(s: string) -> bool {
+    if (s == "" || s.starts_with(" ") || s.ends_with(" ")) {
+        return false;
+    }
+    let first = s.chars()[0];
+    if (!(alnum(first) || first == '_' || first == '/' || first == '.')) {
+        return false;
+    }
+    for c in s {
+        let ok = alnum(c)
+            || c == ' '
+            || c == '_'
+            || c == '-'
+            || c == '.'
+            || c == '/'
+            || c == '('
+            || c == ')';
+        if (!ok) {
+            return false;
+        }
+    }
+    match (plain_scalar(s)) {
+        Doc.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn alnum(c: char) -> bool {
+    let n = char_code(c);
+    n >= 48 && n <= 57 || n >= 65 && n <= 90 || n >= 97 && n <= 122
+}
+
+fn scalar_text(d: Doc) -> string {
+    match (d) {
+        Doc.Null => "null",
+        Doc.Bool(b) => if (b) { "true" } else { "false" },
+        Doc.Num(t) => t,
+        // Un string que no puede ir plano va entre comillas dobles con los escapes de JSON, que
+        // son un subconjunto válido de los de YAML.
+        Doc.Str(t) => if (plain_ok(t)) { t } else { json.render_doc(d) },
+        Doc.List(_) => "[]",
+        Doc.Obj(_) => "{}",
+    }
+}
+
+fn is_block(d: Doc) -> bool {
+    match (d) {
+        Doc.List(xs) => xs.len() > 0,
+        Doc.Obj(ms) => ms.len() > 0,
+        _ => false,
+    }
+}
+
+// Las líneas de un bloque (mapa o lista no vacíos) con sangría `ind`.
+fn block_lines(d: Doc, out: [string], ind: string) {
+    match (d) {
+        Doc.Obj(members) => {
+            for m in members {
+                let k = scalar_text(Doc.Str(m.key));
+                if (is_block(m.value)) {
+                    out.push(ind + k + ":");
+                    block_lines(m.value, out, ind + "  ");
+                } else {
+                    out.push(ind + k + ": " + scalar_text(m.value));
+                }
+            }
+        },
+        Doc.List(items) => {
+            for item in items {
+                if (is_block(item)) {
+                    // El elemento se escribe a dos espacios más y su primera línea toma el guion.
+                    var sub: [string] = [];
+                    block_lines(item, sub, ind + "  ");
+                    out.push(ind + "- " + sub[0].substring(ind.len() + 2, sub[0].len()));
+                    var i = 1;
+                    while (i < sub.len()) {
+                        out.push(sub[i]);
+                        i = i + 1;
+                    }
+                } else {
+                    out.push(ind + "- " + scalar_text(item));
+                }
+            }
+        },
+        _ => {
+            out.push(ind + scalar_text(d));
+        },
+    }
+}
+
+/// `d` as a YAML document in block style: mappings as `key: value` in member order, lists as
+/// `- item`, two spaces per level; strings stay plain when that cannot change their meaning and
+/// go double-quoted otherwise; numbers keep their text. `parse(render(d))` gives `d` back.
+pub fn render(d: Doc) -> string {
+    if (!is_block(d)) {
+        return scalar_text(d) + "\n";
+    }
+    var out: [string] = [];
+    block_lines(d, out, "");
+    out.join("\n") + "\n"
+}

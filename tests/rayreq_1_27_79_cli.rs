@@ -107,6 +107,7 @@ fn main() {
     print("pragma " + show(sqlite.exec(c, "PRAGMA busy_timeout = 5000", [])));
     print("insert " + show(sqlite.exec(c, "INSERT INTO a VALUES (?1)", ["7"])));
     print("batch " + show(sqlite.exec(c, "INSERT INTO a VALUES (1); INSERT INTO a VALUES (2); UPDATE a SET x = x + 1", [])));
+    print("ddl-after-dml " + show(sqlite.exec(c, "INSERT INTO a VALUES (9); CREATE INDEX i ON a (x); CREATE TABLE d (w)", [])));
     print("params-multi " + show(sqlite.exec(c, "INSERT INTO b VALUES (?1); INSERT INTO b VALUES (?1)", ["5"])));
     print("b rows " + rows(sqlite.query(c, "SELECT count(*) FROM b", []).unwrap()));
     print("syntax " + show(sqlite.exec(c, "CREATE TABLE c (z); NOT SQL", [])));
@@ -123,10 +124,37 @@ a;b
 pragma ok 0
 insert ok 1
 batch ok 5
+ddl-after-dml ok 1
 params-multi err sqlite: exec with parameters runs one statement, and the SQL has more; run the others in their own exec (without parameters they all run)
 b rows 0
 syntax err near "NOT": syntax error in  NOT SQL at offset 1
 c exists 1
 empty ok 0
+"##);
+}
+
+const SQL_NULLS: &str = r##"import db/sqlite;
+fn cell(o: Option<string>) -> string { match (o) { Option.Some(v) => "'" + v + "'", Option.None => "NULL" } }
+fn main() {
+    let c = sqlite.connect(":memory:").unwrap();
+    let _ = sqlite.exec(c, "CREATE TABLE t (id INTEGER, folder INTEGER, name TEXT)", []);
+    print(to_string(sqlite.exec_opt(c, "INSERT INTO t VALUES (?1, ?2, ?3)", [Option.Some("1"), Option.None, Option.Some("")]).unwrap()));
+    print(to_string(sqlite.exec_opt(c, "INSERT INTO t VALUES (?1, ?2, ?3)", [Option.Some("2"), Option.Some("7"), Option.None]).unwrap()));
+    for row in sqlite.query_opt(c, "SELECT id, folder, name FROM t ORDER BY id", []).unwrap() {
+        print(cell(row[0]) + " " + cell(row[1]) + " " + cell(row[2]));
+    }
+    print(match (sqlite.exec_opt(c, "INSERT INTO t (id) VALUES (?1); INSERT INTO t (id) VALUES (?1)", [Option.None])) { Result.Ok(_) => "ok", Result.Err(e) => "err " + e });
+}
+"##;
+
+/// rayreq #248: `sqlite.exec_opt` enlaza `Option.None` como SQL `NULL`.
+#[test]
+fn sqlite_exec_opt_binds_null_parameters() {
+    let out = run(&project("sqlnull", "db", SQL_NULLS));
+    assert_eq!(out, r##"1
+1
+'1' NULL ''
+'2' '7' NULL
+err sqlite: exec with parameters runs one statement, and the SQL has more; run the others in their own exec (without parameters they all run)
 "##);
 }

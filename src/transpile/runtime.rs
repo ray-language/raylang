@@ -996,10 +996,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
             // M210: la ventana con opciones.
-            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str, mi: bool, kind: &str, top: bool, parent: i64, bg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "#[allow(clippy::too_many_arguments)] fn __ray_ui_open_with(title: &str, url: &str, w: i64, h: i64, mw: i64, mh: i64, r: bool, c: bool, a: &str, tc: &str, mi: bool, kind: &str, top: bool, parent: i64, bg: &str, extra: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    if parent != 0 && !matches!(__ray_reg().lock().unwrap().open.get(&parent), Some(__RayHandle::Window(_))) { return Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(\"ui: the parent is not an open window\")])); }\n",
             "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
-            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string(), background: bg.to_string(), minimizable: mi, kind: kind.to_string(), always_on_top: top, parent };\n",
+            "    let opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: mw, min_height: mh, resizable: r, center: c, autosave: a.to_string(), titlebar_color: tc.to_string(), background: bg.to_string(), minimizable: mi, kind: kind.to_string(), always_on_top: top, parent, place: String::new(), x: 0, y: 0, titlebar: String::new() };\n",
+            "    let mut opts = opts; if let Err(e) = ray_runtime::ui::apply_extra(&mut opts, extra) { return Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())])); }\n",
             "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window_with(id, title, url, &opts) {\n",
             "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
@@ -1035,9 +1036,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M257: operaciones de ventana por nombre (título, punto de modificado, interceptar
             // cierre/salida); `intercept_quit` no exige ventana.
             "fn __ray_ui_window(h: i64, op: &str, arg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let known = matches!(op, \"intercept_quit\" | \"single_instance\" | \"notify\" | \"badge\" | \"request_attention\" | \"media_now_playing\" | \"media_clear\" | \"media_controls\") || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
-            "    let r = if known { ray_runtime::ui::window_op(h, op, arg) } else { Err(\"ui: not an open window\".to_string()) };\n",
-            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "    let known = matches!(op, \"intercept_quit\" | \"single_instance\" | \"notify\" | \"badge\" | \"request_attention\" | \"media_now_playing\" | \"media_clear\" | \"media_controls\" | \"rename_menu\") || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if !known { Err(\"ui: not an open window\".to_string()) } else if op == \"frame\" { ray_runtime::ui::window_frame(h).map(|(x, y, w, hh)| format!(\"{x},{y},{w},{hh}\")) } else { ray_runtime::ui::window_op(h, op, arg).map(|_| String::new()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(v) if v.is_empty() => vec![Rc::<str>::from(\"ok\")], Ok(v) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(v.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M229: foco a una ventana abierta.
             "fn __ray_ui_focus(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
@@ -1661,9 +1662,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         out.push_str(concat!(
             "            __ray_tls_tag_ok(h) }\n",
             "        Err(e) => __ray_tls_tag_err(e) } }\n",
-            "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { __ray_tls_upgrade_with(h, host, false) }\n",
+            // rayreq #250: `insecure` = sin verificar el certificado (`tls_upgrade_insecure`).
+            "#[allow(dead_code)] fn __ray_tls_upgrade_with(h: i64, host: &str, insecure: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let sock = match __ray_tls_take_tcp(h, \"is not a plain TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::upgrade(sock, host) {\n",
+            "    match if insecure { ray_runtime::tls::upgrade_insecure(sock, host) } else { ray_runtime::tls::upgrade(sock, host) } {\n",
             "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
             "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
         ));
@@ -1706,6 +1709,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_sqlite_exec(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
             "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
+            "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
+            // rayreq #248: exec con parámetros NULL (máscara 'n'/'v' por parámetro).
+            "fn __ray_sqlite_exec_opt(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, nulls: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let p = __ray_sqlite_params(params); if nulls.len() != p.len() { return __ray_sqlite_err(\"sqlite: the NULL mask does not match the parameters\".to_string()); }\n",
+            "    let opt: Vec<Option<String>> = p.into_iter().zip(nulls.bytes()).map(|(v, m)| if m == b'n' { None } else { Some(v) }).collect();\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec_opt(sql, &opt), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
             "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
             // M347 (rayauth R6): la variante con máscara de NULL ('n'/'v' por celda), misma etiqueta que la VM.
             "fn __ray_sqlite_query_nulls(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

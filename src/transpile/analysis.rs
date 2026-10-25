@@ -220,7 +220,13 @@ pub(super) fn visit_exprs_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         ExprKind::Func(fx) => visit_exprs_block(&fx.body, f),
         ExprKind::Match { scrutinee, arms } => {
             visit_exprs_expr(scrutinee, f);
-            arms.iter().for_each(|a| visit_exprs_expr(&a.body, f));
+            // #262: la guarda también es código del brazo (captura/celdas como el cuerpo).
+            arms.iter().for_each(|a| {
+                if let Some(g) = &a.guard {
+                    visit_exprs_expr(g, f);
+                }
+                visit_exprs_expr(&a.body, f);
+            });
         }
         ExprKind::If { cond, then_branch, else_branch } => {
             visit_exprs_expr(cond, f);
@@ -256,7 +262,12 @@ pub(super) fn idents_of_expr(e: &Expr, out: &mut std::collections::HashSet<Strin
         ExprKind::Func(f) => idents_of_block(&f.body, out),
         ExprKind::Match { scrutinee, arms } => {
             idents_of_expr(scrutinee, out);
-            arms.iter().for_each(|a| idents_of_expr(&a.body, out));
+            arms.iter().for_each(|a| {
+                if let Some(g) = &a.guard {
+                    idents_of_expr(g, out);
+                }
+                idents_of_expr(&a.body, out);
+            });
         }
         ExprKind::Try(inner) => idents_of_expr(inner, out),
         ExprKind::If { cond, then_branch, else_branch } => {
@@ -308,7 +319,12 @@ pub(super) fn captured_idents_expr(e: &Expr, out: &mut std::collections::HashSet
         ExprKind::EnumLit { args, .. } => args.iter().for_each(|a| captured_idents_expr(a, out)),
         ExprKind::Match { scrutinee, arms } => {
             captured_idents_expr(scrutinee, out);
-            arms.iter().for_each(|a| captured_idents_expr(&a.body, out));
+            arms.iter().for_each(|a| {
+                if let Some(g) = &a.guard {
+                    captured_idents_expr(g, out);
+                }
+                captured_idents_expr(&a.body, out);
+            });
         }
         ExprKind::Try(inner) => captured_idents_expr(inner, out),
         ExprKind::If { cond, then_branch, else_branch } => {
@@ -372,7 +388,12 @@ pub(super) fn mut_var_decls_expr(e: &Expr, out: &mut std::collections::HashSet<S
         }
         ExprKind::While { body, .. } => mut_var_decls_block(body, out),
         ExprKind::Block(b) => mut_var_decls_block(b, out),
-        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| mut_var_decls_expr(&a.body, out)),
+        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| {
+            if let Some(g) = &a.guard {
+                mut_var_decls_expr(g, out);
+            }
+            mut_var_decls_expr(&a.body, out);
+        }),
         _ => {}
     }
 }
@@ -576,7 +597,12 @@ pub(super) fn tail_call_sites(body: &Block) -> std::collections::HashSet<(usize,
                     expr(eb, out);
                 }
             }
-            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| expr(&a.body, out)),
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| {
+                if let Some(g) = &a.guard {
+                    expr(g, out);
+                }
+                expr(&a.body, out);
+            }),
             ExprKind::Block(b) => block(b, out),
             _ => {}
         }

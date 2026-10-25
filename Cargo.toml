@@ -6,7 +6,7 @@ members = ["crates/ray-runtime"]
 
 [package]
 name = "raylang"
-version = "1.27.80"
+version = "1.27.81"
 edition = "2024"
 description = "raylang — un lenguaje de programación estáticamente tipado, orientado a expresiones, con genéricos, traits, concurrencia por actores y compilador auto-alojado. Escrito en Rust (VM + GC + binario nativo), con una superficie de dependencias mínima y deliberada."
 authors = ["Roberto Ayala <dev@rayala.org>"]
@@ -54,7 +54,7 @@ ui = ["ray-runtime/ui"]
 # rustls). El *stub* de slim/wasm sigue en `builtins.rs` (rama `not(net-tls)`).
 # (M100: `ray-runtime` dejó de ser opcional — el primitivo de procesos vive ahí y es del núcleo;
 # sin features extra el crate no arrastra ninguna dependencia → el build slim queda igual.)
-net-tls = ["ray-runtime/crypto", "ray-runtime/x509", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+net-tls = ["ray-runtime/crypto", "ray-runtime/x509", "ray-runtime/tls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # M89.3: la carga de librerías nativas (extern/FFI, libloading) tras una feature (activa por
 # defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
 # endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.

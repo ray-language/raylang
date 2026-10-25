@@ -746,6 +746,26 @@ public final class RayBridge {
         });
     }
 
+    // rayreq #263: `ui.open_url` — la URL en el navegador del sistema (Intent ACTION_VIEW), en el
+    // main thread. Sin una app que la abra, se anota en logcat (el programa ya recibió Ok).
+    public static void onOpenUrl(String url) {
+        MAIN.post(() -> {
+            android.content.Context c = webView != null ? webView.getContext() : MainActivity.rayCurrent;
+            if (c == null) {
+                return;
+            }
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url));
+            if (!(c instanceof android.app.Activity)) {
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            }
+            try {
+                c.startActivity(i);
+            } catch (android.content.ActivityNotFoundException e) {
+                android.util.Log.w("ray", "open_url: no app opens " + url);
+            }
+        });
+    }
+
     // M404: `std/media` — Now Playing y controles del sistema (MediaSession), en el main thread.
     public static void onMedia(String op, String arg) {
         MAIN.post(() -> RayMedia.apply(op, arg));
@@ -1201,6 +1221,8 @@ mod tests {
     #[test]
     fn the_shell_ships_the_media_session_bridge() {
         assert!(RAY_BRIDGE_JAVA.contains("public static void onMedia(String op, String arg)"));
+        // rayreq #263: `ui.open_url` entra al shell por `onOpenUrl` (Intent ACTION_VIEW).
+        assert!(RAY_BRIDGE_JAVA.contains("public static void onOpenUrl(String url)"));
         assert!(RAY_BRIDGE_JAVA.contains("RayMedia.apply(op, arg)"));
         assert!(RAY_MEDIA_JAVA.contains("new MediaSession(c, \"ray\")"));
         assert!(RAY_MEDIA_JAVA.contains("Notification.MediaStyle().setMediaSession"));

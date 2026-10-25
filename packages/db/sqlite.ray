@@ -66,6 +66,34 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
     };
 }
 
+/// Like `exec`, with parameters that may be SQL `NULL`: `Option.None` binds `NULL`,
+/// `Option.Some(text)` binds the text (rayreq #248) — an optional foreign key without writing
+/// `NULL` into the SQL. Same one-statement rule as `exec` with parameters. Needs raylang 1.27.81 (db 0.6).
+pub fn exec_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, string> {
+    var values: [string] = [];
+    var mask = "";
+    for p in params {
+        match (p) {
+            Option.Some(v) => {
+                values.push(v);
+                mask = mask + "v";
+            },
+            Option.None => {
+                values.push("");
+                mask = mask + "n";
+            },
+        }
+    }
+    let r = __sqlite_exec_opt(c.handle, sql, values, mask);
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    return match (parse_int(r[1])) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => Result.Err("corrupt SQLite response: " + r[1]),
+    };
+}
+
 /// Runs a query with positional parameters and returns all rows as text cells
 /// (NULL becomes `""`, BLOB becomes hex). A `NULL` is therefore indistinguishable from an empty
 /// string here: use `query_opt` when the difference matters.

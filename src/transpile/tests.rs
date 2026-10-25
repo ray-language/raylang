@@ -48,8 +48,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
     "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",
     "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hasher_clone", "__hasher_final", "__hasher_new", "__hasher_update", "__hmac_sha256", "__hmac", "__pk_op", "__qr_matrix", "__sha1",
-    "__sha256", "__sha512", "__sqlite_exec", "__sqlite_open", "__sqlite_query", "__sqlite_query_nulls", "__tls_accept",
-    "__tls_connect", "__tls_connect_h2", "__tls_peer_cert", "__tls_upgrade",
+    "__sha256", "__sha512", "__sqlite_exec", "__sqlite_exec_opt", "__sqlite_open", "__sqlite_query", "__sqlite_query_nulls", "__tls_accept",
+    "__tls_connect", "__tls_connect_h2", "__tls_peer_cert", "__tls_upgrade", "__tls_upgrade_insecure",
     // M114: acuerdo de claves X25519 + HKDF + comparación en tiempo constante.
     "__constant_time_eq", "__hkdf_sha256", "__x25519_public_key", "__x25519_shared_secret",
     "__pbkdf2_hmac_sha256", // M290

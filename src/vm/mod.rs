@@ -3029,6 +3029,26 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // rayreq #248: exec con parámetros NULL (máscara n/v).
+                OpCode::SqliteExecOpt => {
+                    let nulls = self.pop();
+                    let ps = self.pop();
+                    let sql = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(sql), HeapValue::Obj(ph), HeapValue::Str(nulls)) = (handle, sql, ps, nulls) else {
+                        unreachable!("the checker guarantees int, string, [string], string");
+                    };
+                    let params: Vec<String> = self.as_array(ph).iter().map(|v| match v {
+                        HeapValue::Str(s) => s.to_string(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }).collect();
+                    let elems = match crate::builtins::sqlite_exec_opt(handle, &sql, &params, &nulls) {
+                        Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::SqliteExec | OpCode::SqliteQuery | OpCode::SqliteQueryNulls => {
                     // Orden en la pila: handle, sql, params → se saca params primero.
                     let ps = self.pop();
@@ -3665,6 +3685,10 @@ impl<'a> Vm<'a> {
                 }
                 // M210/M224/M230: la ventana con opciones (11 argumentos; se sacan en orden inverso).
                 OpCode::UiOpenWith => {
+                    let placement = self.pop(); // #245
+                    let HeapValue::Str(placement) = placement else {
+                        unreachable!("the checker guarantees a string");
+                    };
                     let background = self.pop(); // M327
                     let parent = self.pop();
                     let always_on_top = self.pop();
@@ -3693,7 +3717,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(kind), HeapValue::Bool(always_on_top), HeapValue::Int(parent), HeapValue::Str(background)) = (kind, always_on_top, parent, background) else {
                         unreachable!("the checker guarantees (string, bool, int, string)");
                     };
-                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent, &background) {
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent, &background, &placement) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3822,8 +3846,9 @@ impl<'a> Vm<'a> {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");
                     };
-                    let elems = match crate::builtins::ui_window(handle, &op, &arg) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                    let elems = match crate::builtins::ui_window_value(handle, &op, &arg) {
+                        Ok(v) if v.is_empty() => vec![HeapValue::Str("ok".to_string().into())],
+                        Ok(v) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(v.into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -4454,6 +4479,20 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees int, string");
                     };
                     let elems = match crate::builtins::tls_upgrade(handle, &host) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // rayreq #250: STARTTLS de cliente sin verificar el certificado.
+                OpCode::TlsUpgradeInsecure => {
+                    let host = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(host)) = (handle, host) else {
+                        unreachable!("the checker guarantees int, string");
+                    };
+                    let elems = match crate::builtins::tls_upgrade_insecure(handle, &host) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };

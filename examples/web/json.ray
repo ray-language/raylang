@@ -149,6 +149,18 @@ fn is_num_char(c: int) -> bool {
 }
 
 fn parse_number(p: P) -> Result<Json, string> {
+    match (scan_number(p)) {
+        Result.Ok(text) => match (parse_float(text)) {
+            Option.Some(f) => Result.Ok(Json.JNum(f)),
+            Option.None => Result.Err("invalid number: " + text),
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// El TEXTO de un número en el cursor (lo avanza). `parse_number` lo convierte a float; `Doc` lo
+// guarda tal cual (rayreq #257).
+fn scan_number(p: P) -> Result<string, string> {
     let start: int = p.i;
     var keep_going: bool = true;
     while (keep_going) {
@@ -165,10 +177,56 @@ fn parse_number(p: P) -> Result<Json, string> {
     }
     // La racha es ASCII (solo caracteres numéricos): `from_utf8` no puede fallar.
     let text = from_utf8(p.b.sub_bytes(start, p.i)).unwrap_or("");
-    match (parse_float(text)) {
-        Option.Some(f) => Result.Ok(Json.JNum(f)),
-        Option.None => Result.Err("invalid number: " + text),
+    if (!valid_number(text)) {
+        return Result.Err("invalid number: " + text);
     }
+    Result.Ok(text)
+}
+
+// ¿`t` es un número JSON (RFC 8259 §6)? `-`? (`0` | [1-9][0-9]*) (`.` [0-9]+)? ([eE] [+-]? [0-9]+)?
+fn valid_number(t: string) -> bool {
+    let b = t.to_bytes();
+    let n = b.len();
+    var i = 0;
+    if (i < n && b[i] == 45) {
+        i = i + 1;
+    }
+    if (i >= n) {
+        return false;
+    }
+    if (b[i] == 48) {
+        i = i + 1;
+    } else if (b[i] >= 49 && b[i] <= 57) {
+        while (i < n && b[i] >= 48 && b[i] <= 57) {
+            i = i + 1;
+        }
+    } else {
+        return false;
+    }
+    if (i < n && b[i] == 46) {
+        i = i + 1;
+        let f0 = i;
+        while (i < n && b[i] >= 48 && b[i] <= 57) {
+            i = i + 1;
+        }
+        if (i == f0) {
+            return false;
+        }
+    }
+    if (i < n && (b[i] == 101 || b[i] == 69)) {
+        i = i + 1;
+        if (i < n && (b[i] == 43 || b[i] == 45)) {
+            i = i + 1;
+        }
+        let e0 = i;
+        while (i < n && b[i] >= 48 && b[i] <= 57) {
+            i = i + 1;
+        }
+        if (i == e0) {
+            return false;
+        }
+    }
+    i == n
 }
 
 fn ctrl(n: int) -> string {
@@ -1196,6 +1254,434 @@ pub fn raw_at(json: string, pointer: string) -> Option<string> {
         return Option.None;
     }
     Option.Some(chars_to_string(cs, i, e))
+}
+
+// =====================================================================
+// rayreq #259 + #257 — `Doc`: un documento JSON con los objetos EN ORDEN y el TEXTO de cada
+// número. `Json` guarda los objetos en un `Map` (claves ordenadas) y los números como float; para
+// importar un documento escrito por personas (OpenAPI) ni lo uno ni lo otro sirve. Es ADITIVO: no
+// toca `Json`, cuyos `match` de usuario se romperían. El paquete `yaml` produce este mismo tipo.
+// (Sin tuplas ni `for`: este archivo lo lee también el parser auto-alojado.)
+// =====================================================================
+
+/// A JSON document that keeps what `Json` normalizes away: object members IN ORDER (repeated
+/// keys included) and every number AS WRITTEN (`Num("9007199254740993")`, `Num("1.50")`), so a
+/// round trip through `parse_doc` and `render_doc` gives the same document back. The `yaml`
+/// package reads into this same type.
+pub enum Doc {
+    Null,
+    Bool(bool),
+    Num(string),
+    Str(string),
+    List([Doc]),
+    Obj([Member]),
+}
+
+/// One member of a `Doc.Obj`: its key and its value.
+pub struct Member {
+    key: string,
+    value: Doc,
+}
+
+fn doc_value(p: P) -> Result<Doc, string> {
+    skip_ws(p);
+    if (at_end(p)) {
+        return Result.Err("unexpected end of input");
+    }
+    let c = cur(p);
+    if (c == 123 || c == 91) {
+        p.depth = p.depth + 1;
+        if (p.depth > max_depth()) {
+            return Result.Err(
+                "nesting too deep (possible DoS): more than " + to_string(max_depth()) + " levels"
+            );
+        }
+        let r = if (c == 123) { doc_object(p) } else { doc_array(p) };
+        p.depth = p.depth - 1;
+        r
+    } else if (c == 34) {
+        match (parse_str_raw(p)) {
+            Result.Ok(s) => Result.Ok(Doc.Str(s)),
+            Result.Err(e) => Result.Err(e),
+        }
+    } else if (lit(p, "true")) {
+        Result.Ok(Doc.Bool(true))
+    } else if (lit(p, "false")) {
+        Result.Ok(Doc.Bool(false))
+    } else if (lit(p, "null")) {
+        Result.Ok(Doc.Null)
+    } else {
+        match (scan_number(p)) {
+            Result.Ok(t) => Result.Ok(Doc.Num(t)),
+            Result.Err(e) => Result.Err(e),
+        }
+    }
+}
+
+fn doc_array(p: P) -> Result<Doc, string> {
+    p.i = p.i + 1;  // saltar '['
+    var items: [Doc] = [];
+    skip_ws(p);
+    if (!at_end(p) && cur(p) == 93) {
+        p.i = p.i + 1;
+        return Result.Ok(Doc.List(items));
+    }
+    while (true) {
+        items.push(doc_value(p)?);
+        skip_ws(p);
+        if (at_end(p)) {
+            return Result.Err("unterminated array");
+        }
+        let c = cur(p);
+        if (c == 44) {
+            p.i = p.i + 1;
+            if (p.relaxed) {
+                skip_ws(p);
+                if (!at_end(p) && cur(p) == 93) {
+                    p.i = p.i + 1;
+                    return Result.Ok(Doc.List(items));
+                }
+            }
+        } else if (c == 93) {
+            p.i = p.i + 1;
+            return Result.Ok(Doc.List(items));
+        } else {
+            return Result.Err("expected ',' or ']'");
+        }
+    }
+    Result.Err("unreachable")
+}
+
+fn doc_object(p: P) -> Result<Doc, string> {
+    p.i = p.i + 1;  // saltar '{'
+    var members: [Member] = [];
+    skip_ws(p);
+    if (!at_end(p) && cur(p) == 125) {
+        p.i = p.i + 1;
+        return Result.Ok(Doc.Obj(members));
+    }
+    while (true) {
+        skip_ws(p);
+        if (at_end(p) || cur(p) != 34) {
+            return Result.Err("expected a string key");
+        }
+        let k = parse_str_raw(p)?;
+        skip_ws(p);
+        if (at_end(p) || cur(p) != 58) {
+            return Result.Err("expected ':'");
+        }
+        p.i = p.i + 1;  // saltar ':'
+        let v = doc_value(p)?;
+        members.push(Member { key: k, value: v });
+        skip_ws(p);
+        if (at_end(p)) {
+            return Result.Err("unterminated object");
+        }
+        let c = cur(p);
+        if (c == 44) {
+            p.i = p.i + 1;
+            if (p.relaxed) {
+                skip_ws(p);
+                if (!at_end(p) && cur(p) == 125) {
+                    p.i = p.i + 1;
+                    return Result.Ok(Doc.Obj(members));
+                }
+            }
+        } else if (c == 125) {
+            p.i = p.i + 1;
+            return Result.Ok(Doc.Obj(members));
+        } else {
+            return Result.Err("expected ',' or '}'");
+        }
+    }
+    Result.Err("unreachable")
+}
+
+fn doc_with(s: string, relaxed: bool) -> Result<Doc, string> {
+    let b = s.to_bytes();
+    var p: P = P { b: b, i: 0, n: b.len(), relaxed: relaxed, depth: 0 };
+    let d = doc_value(p)?;
+    skip_ws(p);
+    if (at_end(p)) { Result.Ok(d) } else { Result.Err("trailing text after the JSON") }
+}
+
+/// Parses JSON into a `Doc`: members in the order written (repeated keys kept), numbers as
+/// their text (checked against the JSON grammar). Same errors and nesting limit as `parse`.
+pub fn parse_doc(s: string) -> Result<Doc, string> {
+    doc_with(s, false)
+}
+
+/// `parse_doc` with the relaxed dialect of `parse_relaxed` (comments, trailing commas).
+pub fn parse_doc_relaxed(s: string) -> Result<Doc, string> {
+    doc_with(s, true)
+}
+
+fn render_doc_into(b: sb.StringBuilder, d: Doc, indent: int, depth: int) {
+    match (d) {
+        Doc.Null => sb.push(b, "null"),
+        Doc.Bool(v) => sb.push(b, if (v) { "true" } else { "false" }),
+        Doc.Num(t) => sb.push(b, t),
+        Doc.Str(t) => sb.push(b, quote(t)),
+        Doc.List(items) => {
+            if (items.len() == 0) {
+                sb.push(b, "[]");
+            } else {
+                sb.push(b, "[");
+                var i = 0;
+                while (i < items.len()) {
+                    if (i > 0) {
+                        sb.push(b, ",");
+                    }
+                    if (indent > 0) {
+                        sb.push(b, "\n");
+                        sb.push(b, " ".repeat(indent * (depth + 1)));
+                    }
+                    render_doc_into(b, items[i], indent, depth + 1);
+                    i = i + 1;
+                }
+                if (indent > 0) {
+                    sb.push(b, "\n");
+                    sb.push(b, " ".repeat(indent * depth));
+                }
+                sb.push(b, "]");
+            }
+        },
+        Doc.Obj(members) => {
+            if (members.len() == 0) {
+                sb.push(b, "{}");
+            } else {
+                sb.push(b, "{");
+                var i = 0;
+                while (i < members.len()) {
+                    if (i > 0) {
+                        sb.push(b, ",");
+                    }
+                    if (indent > 0) {
+                        sb.push(b, "\n");
+                        sb.push(b, " ".repeat(indent * (depth + 1)));
+                    }
+                    sb.push(b, quote(members[i].key));
+                    sb.push(b, if (indent > 0) { ": " } else { ":" });
+                    render_doc_into(b, members[i].value, indent, depth + 1);
+                    i = i + 1;
+                }
+                if (indent > 0) {
+                    sb.push(b, "\n");
+                    sb.push(b, " ".repeat(indent * depth));
+                }
+                sb.push(b, "}");
+            }
+        },
+    }
+}
+
+/// Compact JSON text of a `Doc`, members in their order and numbers as written.
+pub fn render_doc(d: Doc) -> string {
+    let b = sb.new();
+    render_doc_into(b, d, 0, 0);
+    sb.build(b)
+}
+
+/// `render_doc` indented with `indent` spaces per level (`indent <= 0` = compact).
+pub fn render_doc_pretty(d: Doc, indent: int) -> string {
+    let b = sb.new();
+    render_doc_into(b, d, indent, 0);
+    sb.build(b)
+}
+
+/// The value of the member `key` of an object (the LAST one if the key is repeated, as a
+/// `Map` would keep); None for a missing key or a value that is not an object.
+pub fn doc_get(d: Doc, key: string) -> Option<Doc> {
+    match (d) {
+        Doc.Obj(members) => {
+            var i = members.len() - 1;
+            while (i >= 0) {
+                if (members[i].key == key) {
+                    return Option.Some(members[i].value);
+                }
+                i = i - 1;
+            }
+            Option.None
+        },
+        _ => Option.None,
+    }
+}
+
+/// The element `i` of a list, or None.
+pub fn doc_at(d: Doc, i: int) -> Option<Doc> {
+    match (d) {
+        Doc.List(items) => if (i >= 0 && i < items.len()) {
+            Option.Some(items[i])
+        } else {
+            Option.None
+        },
+        _ => Option.None,
+    }
+}
+
+/// The members of an object in order; `[]` for anything else.
+pub fn doc_members(d: Doc) -> [Member] {
+    match (d) {
+        Doc.Obj(members) => members,
+        _ => [],
+    }
+}
+
+/// The elements of a list; `[]` for anything else.
+pub fn doc_items(d: Doc) -> [Doc] {
+    match (d) {
+        Doc.List(items) => items,
+        _ => [],
+    }
+}
+
+/// A scalar as text (`"abc"` → `abc`, a number as written, `true`/`false`); None for null,
+/// lists and objects.
+pub fn doc_text(d: Doc) -> Option<string> {
+    match (d) {
+        Doc.Str(t) => Option.Some(t),
+        Doc.Num(t) => Option.Some(t),
+        Doc.Bool(v) => Option.Some(if (v) { "true" } else { "false" }),
+        _ => Option.None,
+    }
+}
+
+/// A number written as an integer that fits in an `int` — EXACT, with all 64 bits (unlike
+/// `as_int` over a float); None for `1.5`, `1e3`, an out-of-range integer or a non-number.
+pub fn doc_int(d: Doc) -> Option<int> {
+    match (d) {
+        Doc.Num(t) => {
+            if (t.contains(".") || t.contains("e") || t.contains("E")) {
+                return Option.None;
+            }
+            parse_int(t)
+        },
+        _ => Option.None,
+    }
+}
+
+/// A number as a float (precision as `parse`); None for a non-number.
+pub fn doc_float(d: Doc) -> Option<float> {
+    match (d) {
+        Doc.Num(t) => parse_float(t),
+        _ => Option.None,
+    }
+}
+
+/// The bool, or None.
+pub fn doc_bool(d: Doc) -> Option<bool> {
+    match (d) {
+        Doc.Bool(v) => Option.Some(v),
+        _ => Option.None,
+    }
+}
+
+/// The value at a JSON Pointer (RFC 6901: `""` is the document, `"/paths/~1users/get"` the
+/// member `get` of the member `/users` of `paths`); None if the path does not exist.
+pub fn doc_pointer(d: Doc, pointer: string) -> Option<Doc> {
+    if (pointer == "") {
+        return Option.Some(d);
+    }
+    if (!pointer.starts_with("/")) {
+        return Option.None;
+    }
+    let tokens = pointer.substring(1, pointer.len()).split("/");
+    var node = d;
+    var t = 0;
+    while (t < tokens.len()) {
+        let token = pointer_token(tokens[t]);
+        t = t + 1;
+        let next = match (node) {
+            Doc.Obj(_) => doc_get(node, token),
+            Doc.List(_) => {
+                if (token.len() > 1 && token.starts_with("0")) {
+                    Option.None
+                } else {
+                    match (parse_int(token)) {
+                        Option.Some(i) => doc_at(node, i),
+                        Option.None => Option.None,
+                    }
+                }
+            },
+            _ => Option.None,
+        };
+        match (next) {
+            Option.Some(n) => {
+                node = n;
+            },
+            Option.None => {
+                return Option.None;
+            },
+        }
+    }
+    Option.Some(node)
+}
+
+/// The `Doc` of a `Json` (members in key order, numbers as `to_string` writes them).
+pub fn doc_of(j: Json) -> Doc {
+    match (j) {
+        Json.JNull => Doc.Null,
+        Json.JBool(v) => Doc.Bool(v),
+        Json.JNum(f) => Doc.Num(stringify(Json.JNum(f))),
+        Json.JStr(t) => Doc.Str(t),
+        Json.JArray(items) => {
+            var out: [Doc] = [];
+            var i = 0;
+            while (i < items.len()) {
+                out.push(doc_of(items[i]));
+                i = i + 1;
+            }
+            Doc.List(out)
+        },
+        Json.JObject(m) => {
+            var out: [Member] = [];
+            let ks = m.keys();
+            var i = 0;
+            while (i < ks.len()) {
+                match (get(m, ks[i])) {
+                    Option.Some(v) => {
+                        out.push(Member { key: ks[i], value: doc_of(v) });
+                    },
+                    Option.None => { },
+                }
+                i = i + 1;
+            }
+            Doc.Obj(out)
+        },
+    }
+}
+
+/// The `Json` of a `Doc` — what `parse` would give for its text: keys sorted (a repeated key
+/// keeps the last value) and numbers as floats.
+pub fn json_of(d: Doc) -> Json {
+    match (d) {
+        Doc.Null => Json.JNull,
+        Doc.Bool(v) => Json.JBool(v),
+        Doc.Num(t) => Json.JNum(parse_float(t).unwrap_or(0.0)),
+        Doc.Str(t) => Json.JStr(t),
+        Doc.List(items) => {
+            var out: [Json] = [];
+            var i = 0;
+            while (i < items.len()) {
+                out.push(json_of(items[i]));
+                i = i + 1;
+            }
+            Json.JArray(out)
+        },
+        Doc.Obj(members) => {
+            var m: Map<string, Json> = Map.new();
+            var i = 0;
+            while (i < members.len()) {
+                m.insert(members[i].key, json_of(members[i].value));
+                i = i + 1;
+            }
+            Json.JObject(m)
+        },
+    }
+}
+
+impl ToJson for Doc {
+    fn to_json(self) -> string { render_doc(self) }
 }
 
 impl ToJson for Obj {

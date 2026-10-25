@@ -35,6 +35,14 @@ Hallazgos de rayreq con 1.27.79 (M426, #245–#270, lo que afecta a la toolchain
 - **Documentación** (#253, #268, #270, #245): la gramática de los atajos de menú; que sin
   devtools el webview sigue mostrando su propio menú contextual y cómo quitarlo; que los semáforos
   de `full_content` no se mueven con una cabecera más alta; y dónde coloca `center` una ventana.
+- **`net` 0.11.5 y `db` 0.5.2** (rayreq #246, #247, #249, #250, #255): `http.request_bytes("HEAD",
+  …)` devolvía `truncated response` porque esperaba el cuerpo que anuncia `Content-Length`;
+  `http.request_pairs` manda cabeceras repetidas en orden y `Stream.raw_headers` conserva los
+  `Set-Cookie` repetidos; la doc de `request_bytes` dice lo que añade el cliente y que una
+  respuesta gzip llega descomprimida. `sqlite.exec` corre todas las sentencias de un script sin
+  parámetros (antes solo la primera, devolviendo `Ok`) y rechaza varias con parámetros antes de
+  ejecutar nada; el arreglo está en el runtime de la toolchain. `db` 0.5.2 se publica con `net`
+  como rango del índice, sin el aviso de `net` fijado a 0.9.0.
 - **`net` 0.11.4 — ni *response splitting* ni respuestas encoladas** (raysec #243, #244). El
   webserver no escribe una cabecera de respuesta cuyo nombre no sea un token o cuyo valor lleve
   CR, LF u otro control (el caso de un proxy que copia las cabeceras del upstream): el cliente

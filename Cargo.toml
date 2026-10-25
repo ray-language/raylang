@@ -34,7 +34,7 @@ interp = []
 # --features interp): sin el C de SQLite dentro, menos peso y menos superficie de ataque. Un
 # programa que use db/sqlite contra un binario slim recibe un Err claro en connect (errores como
 # valores; el checker acepta el programa — la tabla BUILTINS se registra siempre).
-sqlite = ["dep:rusqlite"]
+sqlite = ["dep:rusqlite", "ray-runtime/sqlite"]
 # M115.4: watch de filesystem por eventos de kernel (crate `notify` vía ray-runtime — FSEvents en
 # macOS, inotify en Linux). Activa por defecto; el build slim la excluye y `fs.watch` devuelve un
 # Err claro (errores como valores, como sqlite).

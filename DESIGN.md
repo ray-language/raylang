@@ -18939,3 +18939,16 @@ menú contextual propio de WebKit sale igual, y eso es lo que rayreq veía (#268
 `full_content` (#270) y la posición de `center` (#245) quedan documentados; moverlos o abrir en
 `x`/`y` es trabajo de los tres backends y está en IDEAS §116.
 
+**Los paquetes (#246, #247, #249, #250, #255).** `parse_response` no sabía el método, así que una
+respuesta a HEAD con `Content-Length` se leía como truncada; ahora lo recibe y no espera cuerpo en
+HEAD, 1xx, 204 ni 304 (RFC 9112 §6.3), como ya hacían `conn_read_response` y `stream_head`. La
+petición se construye internamente con PARES de cabeceras, de modo que `request_pairs` manda
+repeticiones en orden; las formas con `Map` convierten en orden de clave, como siempre. `sqlite.exec`
+usaba `Connection::execute`, que compila la primera sentencia y descarta el resto en silencio. Ahora
+recorre las sentencias con `rusqlite::Batch`: sin parámetros las ejecuta todas (drenando las filas,
+como `sqlite3_exec`), y con parámetros prepara la segunda antes de ejecutar la primera para negarse
+sin efectos (si preparar la segunda falla porque depende de la primera, también hay más de una).
+La función es una sola en el runtime y la VM la llama (la feature `sqlite` del binario activa ahora
+la de `ray-runtime`). Desactivar la verificación TLS por petición (#250) queda en IDEAS §116: es
+una decisión de política de seguridad, no un hueco.
+

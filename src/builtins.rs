@@ -2464,9 +2464,9 @@ fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connecti
 pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
-    conn.execute(sql, rusqlite::params_from_iter(params.iter()))
-        .map(|n| n as i64)
-        .map_err(|e| e.to_string())
+    // rayreq #247: todas las sentencias sin parámetros, una sola con ellos (la misma función
+    // que el binario nativo).
+    ray_runtime::sqlite::exec_conn(conn, sql, params)
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }

@@ -4349,4 +4349,12 @@ Lo de rayreq que afecta a la toolchain y no entró en M426 (DESIGN §401), con s
   ACTION_VIEW` en Android, `openURL:` en iOS); exige regenerar el shell.
 - **#258 (resto) — `as` entre literales en expresiones constantes** (`const R: char = 0xFFFD as char`).
   Con fmt conservando los escapes, `const R: char = '\u{FFFD}'` ya sirve. Impacto bajo.
+- **#250 (resto) — desactivar la verificación TLS por petición.** Un cliente REST de desarrollo la
+  necesita para certificados autofirmados. Toca el runtime TLS (rustls con un verificador que acepta
+  todo) en los tres motores y es fácil de usar mal: si se hace, que el nombre lo diga
+  (`insecure_skip_verify`), que no exista en `request`/`fetch` sino en una forma explícita, y que el
+  error del certificado sugiera primero añadir la CA (`tls_trust_ca`). Decisión del usuario.
+- **#248 (resto) — `NULL` como parámetro de SQLite.** Los parámetros son `[string]`; `query_opt` ya
+  distingue `NULL` al leer. Para escribirlo hace falta un primitivo con máscara (como
+  `__sqlite_query_nulls`) y una forma `exec_opt(c, sql, [Option<string>])`. Aditivo.
 

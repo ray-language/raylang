@@ -48,8 +48,13 @@ pub fn connect(path: string) -> Result<Conn, string> {
     Result.Ok(Conn { handle: parse_handle(r[1]) })
 }
 
-/// Runs a statement that returns no rows (INSERT/UPDATE/DELETE/DDL/BEGIN/…) with positional
-/// parameters (`?1`, `?2`, … bound as text). Returns the number of affected rows.
+/// Runs SQL that returns no rows (INSERT/UPDATE/DELETE/DDL/BEGIN/PRAGMA/…) and returns the
+/// number of affected rows. With parameters (`?1`, `?2`, … bound as text) the SQL must be ONE
+/// statement — more is an `Err` before anything runs. Without parameters every statement runs in
+/// order, like a migration script (`"CREATE TABLE a (…); CREATE TABLE b (…);"`); rows a statement
+/// returns (a `PRAGMA`, a `SELECT`) are discarded, and the count is the sum. If one fails, the
+/// ones before it stay applied: wrap a script in `BEGIN; …; COMMIT;` to make it all-or-nothing.
+/// Needs raylang 1.27.80 (before, only the first statement ran and the call returned `Ok`).
 pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
     let r = __sqlite_exec(c.handle, sql, params);
     if (r[0] != "ok") {

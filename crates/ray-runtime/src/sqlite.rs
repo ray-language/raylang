@@ -29,14 +29,53 @@ mod imp {
         }
     }
 
+    /// Ejecuta SQL sin devolver filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales
+    /// (`?1`…) enlazados como texto; devuelve el número de filas afectadas.
+    ///
+    /// rayreq #247: antes `execute` corría SOLO la primera sentencia y devolvía `Ok` (una
+    /// migración `CREATE TABLE a …; CREATE TABLE b …;` dejaba el esquema a medias sin error).
+    /// Ahora: sin parámetros corre TODAS en orden (como `sqlite3_exec`; las filas de un SELECT o
+    /// un PRAGMA se descartan) y suma las filas afectadas; con parámetros exige UNA sentencia y
+    /// lo comprueba ANTES de ejecutar nada (a qué sentencia irían `?1`… sería ambiguo).
+    pub fn exec_conn(conn: &rusqlite::Connection, sql: &str, params: &[String]) -> Result<i64, String> {
+        let mut batch = rusqlite::Batch::new(conn, sql);
+        let mut total: i64 = 0;
+        if !params.is_empty() {
+            let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? else {
+                return Ok(0);
+            };
+            // Preparar la siguiente puede fallar (`no such table` de una tabla que crearía la
+            // primera): también eso es «hay más de una».
+            if !matches!(batch.next(), Ok(None)) {
+                return Err("sqlite: exec with parameters runs one statement, and the SQL has more; \
+                            run the others in their own exec (without parameters they all run)"
+                    .to_string());
+            }
+            let readonly = stmt.readonly();
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| e.to_string())?;
+            while rows.next().map_err(|e| e.to_string())?.is_some() {}
+            drop(rows);
+            if !readonly {
+                total = conn.changes() as i64;
+            }
+            return Ok(total);
+        }
+        while let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? {
+            let readonly = stmt.readonly();
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            while rows.next().map_err(|e| e.to_string())?.is_some() {}
+            drop(rows);
+            if !readonly {
+                total += conn.changes() as i64;
+            }
+        }
+        Ok(total)
+    }
+
     impl Conn {
-        /// Ejecuta una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales (`?1`…)
-        /// enlazados como texto; devuelve el número de filas afectadas.
+        /// Ejecuta SQL sin devolver filas; ver [`exec_conn`].
         pub fn exec(&self, sql: &str, params: &[String]) -> Result<i64, String> {
-            self.inner
-                .execute(sql, rusqlite::params_from_iter(params.iter()))
-                .map(|n| n as i64)
-                .map_err(|e| e.to_string())
+            exec_conn(&self.inner, sql, params)
         }
 
         /// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
@@ -79,7 +118,7 @@ mod imp {
 }
 
 #[cfg(feature = "sqlite")]
-pub use imp::{open, Conn};
+pub use imp::{exec_conn, open, Conn};
 
 // --- Stubs sin la feature `sqlite` (el binario compila sin rusqlite; el consumidor no los alcanza) ---
 #[cfg(not(feature = "sqlite"))]

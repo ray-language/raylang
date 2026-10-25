@@ -18,7 +18,7 @@ Los pendientes menores de la segunda mirada a 1.27.80/1.27.81 (M428, IDEAS §117
   que empieza por `${…}` también.
 - `std/ui`: el marco de las ventanas headless vive en el estado de la ventana y se libera con ella
   (antes una tabla aparte crecía durante toda la vida del proceso).
-- `std/url` y `yaml` comparan caracteres sin crear una cadena por carácter en sus bucles de
+- `std/url` y `yaml` 0.1.1 comparan caracteres sin crear una cadena por carácter en sus bucles de
   escaneo.
 
 ## 1.27.81 — 2026-10-25

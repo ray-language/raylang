@@ -20,12 +20,23 @@ mod imp {
     /// Una conexión TLS bloqueante: sesión rustls + socket, vía `StreamOwned`. Es un enum cliente/servidor
     /// porque `StreamOwned` exige el tipo de sesión CONCRETO (el enum unificado `rustls::Connection` no
     /// cumple los bounds de `Deref`); cada variante concreta sí.
-    /// El peer cerró el TCP antes de terminar el handshake (mismo texto en la VM).
-    pub const TLS_HANDSHAKE_EOF: &str = "tls: the peer closed the connection during the handshake";
-
     pub enum TlsStream {
         Client(rustls::StreamOwned<rustls::ClientConnection, TcpStream>),
         Server(rustls::StreamOwned<rustls::ServerConnection, TcpStream>),
+    }
+
+    /// El peer cerró el TCP antes de terminar el handshake (mismo texto en la VM).
+    pub const TLS_HANDSHAKE_EOF: &str = "tls: the peer closed the connection during the handshake";
+
+    /// IDEAS §117: un `UnexpectedEof` MIENTRAS el handshake sigue en curso es «el peer cerró a
+    /// medio saludo», con nombre; cualquier otro error pasa tal cual. Se aplica en TODA llamada
+    /// que conduce el handshake (read, write, complete_io), no solo en la lectura.
+    fn handshake_eof(e: std::io::Error, handshaking: bool) -> std::io::Error {
+        if handshaking && e.kind() == std::io::ErrorKind::UnexpectedEof {
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, TLS_HANDSHAKE_EOF)
+        } else {
+            e
+        }
     }
 
     impl TlsStream {
@@ -57,8 +68,8 @@ mod imp {
         /// Una vuelta de `complete_io` (conduce el handshake sobre el socket subyacente).
         fn complete_io_once(&mut self) -> std::io::Result<()> {
             match self {
-                TlsStream::Client(s) => s.conn.complete_io(&mut s.sock).map(|_| ()),
-                TlsStream::Server(s) => s.conn.complete_io(&mut s.sock).map(|_| ()),
+                TlsStream::Client(s) => s.conn.complete_io(&mut s.sock).map(|_| ()).map_err(|e| handshake_eof(e, true)),
+                TlsStream::Server(s) => s.conn.complete_io(&mut s.sock).map(|_| ()).map_err(|e| handshake_eof(e, true)),
             }
         }
 
@@ -105,26 +116,22 @@ mod imp {
             // DURANTE el handshake es un error (IDEAS §117): no hubo conexión, y un «EOF limpio»
             // haría pasar un peer que murió a medio saludo por una petición vacía.
             match r {
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    if self.is_handshaking() {
-                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, TLS_HANDSHAKE_EOF))
-                    } else {
-                        Ok(0)
-                    }
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !self.is_handshaking() => Ok(0),
+                Err(e) => Err(handshake_eof(e, self.is_handshaking())),
                 other => other,
             }
         }
         /// Escribe TODO `data` (cifra) y lo vacía al socket.
         pub fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
+            // La escritura también conduce el handshake (`tls_connect` lo deja para la primera I/O).
             match self {
                 TlsStream::Client(s) => {
-                    s.write_all(data)?;
-                    s.flush()
+                    let hs = s.conn.is_handshaking();
+                    s.write_all(data).and_then(|_| s.flush()).map_err(|e| handshake_eof(e, hs))
                 }
                 TlsStream::Server(s) => {
-                    s.write_all(data)?;
-                    s.flush()
+                    let hs = s.conn.is_handshaking();
+                    s.write_all(data).and_then(|_| s.flush()).map_err(|e| handshake_eof(e, hs))
                 }
             }
         }
@@ -365,7 +372,7 @@ mod imp {
         let mut conn = rustls::ClientConnection::new(Arc::new(cfg), sn).map_err(|e| e.to_string())?;
         let mut sock = TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
         while conn.is_handshaking() {
-            conn.complete_io(&mut sock).map_err(|e| e.to_string())?;
+            conn.complete_io(&mut sock).map_err(|e| handshake_eof(e, true).to_string())?;
         }
         match conn.alpn_protocol() {
             Some(p) if p == b"h2" => {}

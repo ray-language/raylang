@@ -19054,3 +19054,13 @@ tablas con la misma clave.
 
 **Asignaciones.** `url.find_any` y los tres `",[]{}".contains(c.to_string())` de `yaml` creaban una
 `String` por carácter escaneado; comparan `char` (`[char].contains` y `flow_indicator`).
+
+**La revisión de esta PR** (misma regla) afinó tres cosas antes del tag: el mapeo del EOF del
+handshake vive en UN helper (`handshake_eof` nativo, `tls_io_err` en la VM) aplicado a toda llamada
+que conduce el handshake — escritura, `complete_io`, `tls_peer_cert`, `connect_h2` — y no solo a la
+lectura (el flujo HTTP normal escribe primero); `is_template` y `source_escapes` resuelven el
+delimitador con el mismo `literal_delim` (un template que empieza por `${…}` con saltos de línea
+se habría colapsado a `"…\n…"`), y `source_escapes` pre-escanea el literal (`has_hex_escape`) antes
+de reservar nada; el marco headless va DENTRO de la variante (`Win::Headless { frame }`), no como
+campo de `WinState` que los backends reales rellenarían con ceros. El test del handshake drena el
+ClientHello antes de cerrar: en Linux, cerrar con datos sin leer manda RST, no FIN.

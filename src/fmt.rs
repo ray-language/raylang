@@ -313,7 +313,53 @@ impl Cur {
 
     /// ¿Era un BACKTICK el literal que empieza en `(line, col)`? (M95: se mira el fuente.)
     fn is_template(&self, line: usize, col: usize) -> bool {
-        self.srclines.get(line.wrapping_sub(1)).and_then(|l| l.get(col.wrapping_sub(1))) == Some(&'`')
+        matches!(self.literal_delim(line, col), Some(('`', _)))
+    }
+
+    /// El delimitador del literal cuya hoja izquierda está en `(line, col)` y el índice (en la
+    /// línea) desde el que recorrer su cuerpo. Normalmente la comilla está en `col - 1`; una
+    /// interpolación que EMPIEZA por `${…}` tiene como hoja izquierda la expresión de dentro, así
+    /// que se retrocede sobre `"${` (con espacios opcionales) y se arranca en el `$`. Lo comparten
+    /// `is_template` y `source_escapes` para que nunca discrepen (IDEAS §117).
+    fn literal_delim(&self, line: usize, col: usize) -> Option<(char, usize)> {
+        let is_delim = |d: char| d == '"' || d == '`' || d == '\'';
+        let l = self.srclines.get(line.wrapping_sub(1))?;
+        if let Some(&d) = l.get(col.wrapping_sub(1)).filter(|d| is_delim(**d)) {
+            return Some((d, col));
+        }
+        let mut k = col.wrapping_sub(2);
+        while k < l.len() && l[k].is_whitespace() {
+            k = k.wrapping_sub(1);
+        }
+        if k < l.len() && k >= 2 && l[k] == '{' && l[k - 1] == '$' && is_delim(l[k - 2]) && l[k - 2] != '\'' {
+            Some((l[k - 2], k - 1))
+        } else {
+            None
+        }
+    }
+
+    /// ¿Hay algún `\u{…}`/`\xNN` en el literal que arranca en `(li, ci)`? Pre-escaneo barato (sin
+    /// reservar nada) para que `source_escapes` solo construya la tabla cuando hace falta. Se mira
+    /// la línea entera (y, en un template, las siguientes hasta la primera con un backtick):
+    /// pasarse de largo solo cuesta construir una tabla que no se usará.
+    fn has_hex_escape(&self, li: usize, ci: usize, template: bool) -> bool {
+        let mut li = li;
+        let mut from = ci;
+        while let Some(l) = self.srclines.get(li) {
+            let mut k = from;
+            while k + 1 < l.len() {
+                if l[k] == '\\' && (l[k + 1] == 'x' || (l[k + 1] == 'u' && l.get(k + 2) == Some(&'{'))) {
+                    return true;
+                }
+                k += 1;
+            }
+            if !template || l[from..].contains(&'`') {
+                return false;
+            }
+            li += 1;
+            from = 0;
+        }
+        false
     }
 
     /// rayreq #258: los escapes `\u{…}`/`\xNN` tal como se escribieron en el literal que abre en
@@ -325,29 +371,12 @@ impl Cur {
     /// salta. Recorre hasta el delimitador de cierre (varias líneas en un template).
     fn source_escapes(&self, line: usize, col: usize) -> Spellings {
         let mut out = Spellings::default();
-        let (mut li, mut ci) = (line.wrapping_sub(1), col);
-        let is_delim = |d: char| d == '"' || d == '`' || d == '\'';
-        let delim = match self.srclines.get(li).and_then(|l| l.get(col.wrapping_sub(1))) {
-            Some(&d) if is_delim(d) => d,
-            _ => {
-                // Una interpolación que EMPIEZA por `${…}` tiene como hoja izquierda la expresión
-                // de dentro: `(line, col)` apunta a ella, no a la comilla. Se retrocede sobre
-                // `"${` (con espacios opcionales) y se arranca en el `$`, que el bucle salta.
-                let Some(l) = self.srclines.get(li) else { return out };
-                let mut k = col.wrapping_sub(2);
-                while k < l.len() && l[k].is_whitespace() {
-                    k = k.wrapping_sub(1);
-                }
-                if k < l.len() && k >= 2 && l[k] == '{' && l[k - 1] == '$' && is_delim(l[k - 2]) && l[k - 2] != '\'' {
-                    ci = k - 1;
-                    l[k - 2]
-                } else {
-                    return out;
-                }
-            }
-        };
+        let Some((delim, start)) = self.literal_delim(line, col) else { return out };
+        let (mut li, mut ci) = (line.wrapping_sub(1), start);
+        if !self.has_hex_escape(li, ci, delim == '`') {
+            return out; // camino rápido: nada que conservar
+        }
         let mut depth = 0usize; // `${` abiertos
-        let mut any_escape = false;
         while let Some(l) = self.srclines.get(li) {
             if ci >= l.len() {
                 if delim != '`' && depth == 0 {
@@ -368,7 +397,6 @@ impl Cur {
                         if let Some(ch) = u32::from_str_radix(&hex.replace('_', ""), 16).ok().and_then(char::from_u32) {
                             if depth == 0 {
                                 out.push(ch, Some(l[ci..ci + 4 + end].iter().collect()));
-                                any_escape = true;
                             }
                         }
                         ci += 4 + end;
@@ -380,7 +408,6 @@ impl Cur {
                     if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                         if depth == 0 {
                             out.push(ch, Some(l[ci..ci + 4].iter().collect()));
-                            any_escape = true;
                         }
                         ci += 4;
                         continue;
@@ -418,10 +445,6 @@ impl Cur {
                 out.push(c, None);
             }
             ci += 1;
-        }
-        // Sin ningún `\u{…}`/`\xNN` no hay nada que conservar: la tabla vacía es el camino rápido.
-        if !any_escape {
-            return Spellings::default();
         }
         out
     }
@@ -3417,7 +3440,7 @@ mod tests {
         // IDEAS §117: la tabla va por POSICIÓN — `"A\u{41}"` conserva la `A` literal y el escape
         // (por carácter salía `"\u{41}\u{41}"`); y en un literal en posición de patrón el escape
         // también sobrevive (antes `match (s) { "\u{a0}" => …` perdía el escape).
-        let src = "fn main() {\n    let a = \"A\\u{41}A\";\n    let n = match (a) {\n        \"\\u{a0}\" => 1,\n        \"x\\xA0\" => 2,\n        _ => 0,\n    };\n    let c = match ('\\u{FFFD}') {\n        '\\u{FFFD}' => n,\n        _ => 0,\n    };\n    print(\"${a}\\u{a0}${c} \\u{a0}\");\n}\n";
+        let src = "fn main() {\n    let a = \"A\\u{41}A\";\n    let n = match (a) {\n        \"\\u{a0}\" => 1,\n        \"x\\xA0\" => 2,\n        _ => 0,\n    };\n    let c = match ('\\u{FFFD}') {\n        '\\u{FFFD}' => n,\n        _ => 0,\n    };\n    print(\"${a}\\u{a0}${c} \\u{a0}\");\n    print(`${a}\nsecond \\u{2028}`);\n}\n";
         let out = fmt(src);
         assert_eq!(out, src, "fmt conserva cada ortografía en su sitio");
     }

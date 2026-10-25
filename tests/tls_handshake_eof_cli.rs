@@ -8,11 +8,13 @@ use std::process::Command;
 const PROG: &str = r##"import std/net;
 
 fn main() {
-    // Un «servidor» que acepta y cierra sin hablar TLS.
+    // Un «servidor» que acepta, lee el ClientHello y cierra sin hablar TLS. Se LEE antes de
+    // cerrar: en Linux, cerrar con datos sin leer manda RST (ECONNRESET) en vez de FIN.
     let l = net.tcp_listen("127.0.0.1", 0).unwrap();
     let port = net.local_port(l);
     let _ = spawn(fn() -> int {
         let c = net.tcp_accept(l).unwrap();
+        let _ = net.socket_read_bytes(c);
         close(c);
         0
     });
@@ -53,4 +55,5 @@ fn a_peer_that_closes_during_the_handshake_is_an_error_not_a_clean_eof() {
         let out = Command::new(&bin).output().unwrap();
         check(&String::from_utf8_lossy(&out.stdout), "nativo");
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }

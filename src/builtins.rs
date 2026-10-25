@@ -3076,7 +3076,7 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
                         #[cfg(not(any(unix, windows)))]
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
-                    Err(e) => return Err(e.to_string()),
+                    Err(e) => return Err(tls_io_err(&e, true)),
                 }
             }
             let der = tc
@@ -3137,7 +3137,7 @@ pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
     let mut sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
     // Handshake bloqueante hasta terminar (para poder consultar el ALPN negociado).
     while client.is_handshaking() {
-        client.complete_io(&mut sock).map_err(|e| e.to_string())?;
+        client.complete_io(&mut sock).map_err(|e| tls_io_err(&e, true))?;
     }
     match client.alpn_protocol() {
         Some(p) if p == b"h2" => {}
@@ -3280,7 +3280,7 @@ fn tls_flush_writes_timed(tc: &mut TlsConn, blocking_timed: bool) -> Result<(), 
                 return Err(WRITE_TIMEOUT_MSG.to_string());
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(tls_io_err(&e, tc.conn.is_handshaking())),
         }
     }
     Ok(())
@@ -3322,7 +3322,7 @@ pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
                 // tras procesar puede haber nuevas escrituras (handshake) o texto plano → reitera.
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(None), // aparcar en el fd
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(tls_io_err(&e, tc.conn.is_handshaking())),
         }
     }
 }
@@ -3520,6 +3520,14 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
 pub const READ_TIMEOUT_MSG: &str = "read timeout";
 /// IDEAS §117: el peer cerró el TCP durante el handshake TLS (mismo texto que `ray_runtime::tls`).
 pub const TLS_HANDSHAKE_EOF: &str = "tls: the peer closed the connection during the handshake";
+
+/// El texto de un error de I/O TLS: un `UnexpectedEof` MIENTRAS el handshake sigue en curso es
+/// [`TLS_HANDSHAKE_EOF`]; lo demás, el mensaje del SO/rustls. Para toda llamada que conduce el
+/// handshake (lectura, escritura, `complete_io`), igual que el nativo.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+fn tls_io_err(e: &std::io::Error, handshaking: bool) -> String {
+    if handshaking && e.kind() == std::io::ErrorKind::UnexpectedEof { TLS_HANDSHAKE_EOF.to_string() } else { e.to_string() }
+}
 
 /// El mensaje del timeout de escritura (raysec #234; idéntico en los tres motores).
 pub const WRITE_TIMEOUT_MSG: &str = "write timeout";

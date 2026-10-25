@@ -54,4 +54,5 @@ fn a_variable_captured_only_from_a_guard_is_a_cell_in_the_native_backend() {
         let out = Command::new(&bin).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo ≡ VM");
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }

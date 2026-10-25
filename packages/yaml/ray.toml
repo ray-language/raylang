@@ -3,7 +3,7 @@
 # sobre las descripciones OpenAPI de GitHub y Stripe.
 [package]
 name = "yaml"
-version = "0.1.0"
+version = "0.1.1"
 license = "Apache-2.0"
 entry = "yaml.ray"
 description = "YAML 1.2 for raylang: read a document into std/json's ordered Doc (block and flow collections, every scalar style, anchors, aliases and merge keys) and write a Doc back as YAML"

@@ -130,3 +130,29 @@ c exists 1
 empty ok 0
 "##);
 }
+
+const SQL_NULLS: &str = r##"import db/sqlite;
+fn cell(o: Option<string>) -> string { match (o) { Option.Some(v) => "'" + v + "'", Option.None => "NULL" } }
+fn main() {
+    let c = sqlite.connect(":memory:").unwrap();
+    let _ = sqlite.exec(c, "CREATE TABLE t (id INTEGER, folder INTEGER, name TEXT)", []);
+    print(to_string(sqlite.exec_opt(c, "INSERT INTO t VALUES (?1, ?2, ?3)", [Option.Some("1"), Option.None, Option.Some("")]).unwrap()));
+    print(to_string(sqlite.exec_opt(c, "INSERT INTO t VALUES (?1, ?2, ?3)", [Option.Some("2"), Option.Some("7"), Option.None]).unwrap()));
+    for row in sqlite.query_opt(c, "SELECT id, folder, name FROM t ORDER BY id", []).unwrap() {
+        print(cell(row[0]) + " " + cell(row[1]) + " " + cell(row[2]));
+    }
+    print(match (sqlite.exec_opt(c, "INSERT INTO t (id) VALUES (?1); INSERT INTO t (id) VALUES (?1)", [Option.None])) { Result.Ok(_) => "ok", Result.Err(e) => "err " + e });
+}
+"##;
+
+/// rayreq #248: `sqlite.exec_opt` enlaza `Option.None` como SQL `NULL`.
+#[test]
+fn sqlite_exec_opt_binds_null_parameters() {
+    let out = run(&project("sqlnull", "db", SQL_NULLS));
+    assert_eq!(out, r##"1
+1
+'1' NULL ''
+'2' '7' NULL
+err sqlite: exec with parameters runs one statement, and the SQL has more; run the others in their own exec (without parameters they all run)
+"##);
+}

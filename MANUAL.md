@@ -1147,7 +1147,11 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    archivo con su aplicación, `ui.open_url(u)` abre una web `http(s)` o un `mailto:` en el
    navegador del sistema (el inicio de sesión OAuth de una app), `ui.reveal(p)` lo muestra en el gestor de archivos y
    `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
-   app de terminal en macOS y Windows). Nada de eso pasa por una shell.
+   app de terminal en macOS y Windows). Nada de eso pasa por una shell. Una ventana se abre
+   donde se le pida, sin saltar después: `ui.place_at(ui.options(800, 600), x, y)` o
+   `ui.cascade(o)`, escalonada respecto a la anterior como hace una app de documentos; y
+   `ui.frame(h)` dice dónde está. `ui.rename_menu("File", "Archivo")` traduce la barra de menús
+   sin reiniciar.
 
    `std/url` trocea y resuelve URLs según la RFC 3986: `url.parse(s)` da esquema, host, puerto,
    ruta, query y fragmento tal como se escribieron, y `url.resolve("https://api.x/v1/users",
@@ -1155,6 +1159,10 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    strings con claves repetidas, `url.parse_query_pairs` conserva el orden. En `std/json` un número
    es un `float`: un id de 64 bits no cabe exacto, así que `json.get_int` da `None` por encima de
    2^53 − 1 y `json.raw_at(text, "/data/0/id")` lee el TEXTO del valor con todos sus dígitos.
+   Cuando el orden de las claves o los números exactos importan (un documento que escribe una
+   persona, como un OpenAPI), `json.parse_doc` devuelve un `json.Doc`: los miembros en orden, cada
+   número con su texto, y `render_doc` lo devuelve tal cual. El paquete `yaml` lee YAML a ese mismo
+   tipo, así que el mismo código sirve para las dos formas.
 
    `std/regex` trae **dos dialectos**: el propio (`compile`/`search`/…, motor lineal escrito en
    raylang, sin look-around) y el **Oniguruma** de `regex.onig` — el que usan los

@@ -18952,3 +18952,69 @@ La función es una sola en el runtime y la VM la llama (la feature `sqlite` del 
 la de `ray-runtime`). Desactivar la verificación TLS por petición (#250) queda en IDEAS §116: es
 una decisión de política de seguridad, no un hueco.
 
+## 402. M427 — lo que dejó abierto rayreq: `json.Doc`, `yaml`, colocación de ventanas, TLS explícito (IDEAS §116, oct 2026)
+
+El usuario aprobó las recomendaciones de IDEAS §116 tal como estaban. Este arco las ejecuta.
+
+**`json.Doc` (#259, #257).** Cambiar `Json` rompía cualquier `match` de usuario sobre él, y hacer
+que `Map` conserve el orden de inserción cambiaba el orden de todo `Map` del lenguaje. La salida
+aditiva es un segundo tipo: `Doc`, con los objetos como lista de `Member { key, value }` y los
+números como `Num(string)`. Un struct y no tuplas porque `json.ray` lo lee también el parser
+auto-alojado, que no tiene tuplas ni `for`. El parser de `Doc` reutiliza el lector de strings y el
+de números del de `Json`, y deja el de `Json` intacto (su rendimiento está medido, M379). Al
+separar el lector de números apareció que `parse` aceptaba lo que `parse_float` acepta (`+1`,
+`.5`, `01`): ahora ambos validan la gramática de la RFC 8259, y es un cambio de comportamiento a
+favor de la norma. `doc_int` lee 64 bits exactos desde el texto; `as_int` sobre `Json` sigue
+dando `None` fuera de ±(2^53 − 1).
+
+**`yaml` (#260).** Paquete y no stdlib: una API de YAML fijada como estable antes de usarla de
+verdad sería difícil de corregir. El lector es el de rayreq (el usuario es dueño de los dos
+repos), adaptado de su árbol propio a `json.Doc`: así una app que importa OpenAPI trata igual el
+JSON (`parse_doc`) que el YAML (`yaml.parse`). Se le añadió `render`, conservador al decidir si
+un string va sin comillas, con ida y vuelta probada.
+
+**Colocación de ventanas (#245).** Abrir centrada y mover después produce un salto visible. La
+posición tiene que llegar al backend ANTES de mostrar la ventana: `setFrameTopLeftPoint:` antes
+de `makeKeyAndOrderFront`, `gtk_window_move` antes de mapear y las coordenadas de
+`CreateWindowExW`. `cascade` se resuelve en el runtime, común a los tres backends: el marco de la
+última ventana más 22 px, y se trata como `at`. `ui.frame` devuelve la esquina del MARCO (las
+coordenadas de `set_position`) y el tamaño del CONTENIDO (el de `set_size`), las dos magnitudes
+que el programa ya maneja. Para no ensanchar `__ui_open_with` en los tres motores con cada
+opción nueva, las de este arco viajan como un único texto `clave=valor;…` que el runtime
+interpreta en un solo sitio. macOS se verificó con ventanas reales. Linux y Windows se compilan
+para su target y pasan las pruebas headless; la VM de Linux estaba apagada.
+
+**`rename_menu` (#252).** En macOS se cambia el título del ítem de la barra y el de su submenú. En
+GTK y Windows los menús se reconstruyen desde una tabla de especificaciones: se renombra la
+entrada y se reutiliza la reconstrucción de `replace_menu`. Va por el canal de operaciones de
+aplicación de `__ui_window`, sin primitivo nuevo.
+
+**Barra alta (#270).** Lo que hacen Finder y Safari: una `NSToolbar` vacía con estilo unified.
+Medido en macOS 26: la barra estándar con `full_content` mide 32 pt, la compacta 40 y la normal
+52, y AppKit centra los semáforos en ella; `window.ray.titlebar_height` lo refleja porque se mide
+después de poner la barra de herramientas.
+
+**`open_url` en móvil (#263).** En iOS el runtime vive dentro de la app y puede llamar a
+`UIApplication openURL:` en la cola principal sin pasar por el shell. En Android hace falta un
+método nuevo en el puente Java (`RayBridge.onOpenUrl`, un intent `ACTION_VIEW`), buscado por JNI
+con la misma limpieza de excepción que `onMedia` para que un shell antiguo dé un `Err` con el
+remedio. Verificado: en el emulador de Android arranca Chrome con la URL, en el simulador de iOS
+arranca Safari.
+
+**TLS sin verificar (#250).** Con las tres condiciones de §116. Un verificador de rustls que
+acepta cualquier certificado pero sigue comprobando las firmas del handshake, escrito una vez en
+`ray-runtime` y usado por la VM y el nativo (la feature `net-tls` activa ahora `ray-runtime/tls`).
+En `std/net` es `tls_upgrade_insecure`; en `net/http` solo `request_opts` con
+`Options.insecure_skip_verify`, nunca `request` ni `fetch`. El error de certificado de una
+petición normal añade la sugerencia de `SSL_CERT_FILE`, la vía correcta, que ya existía. La
+prueba destapó una divergencia previa: la VM trata un peer TLS que cierra sin `close_notify`
+como fin de flujo y el nativo como error. Muchos servidores HTTP con `Connection: close` hacen
+eso, así que el nativo pasa a hacer lo mismo que la VM.
+
+**NULL como parámetro (#248).** `__sqlite_exec_opt` con una máscara `n`/`v` por parámetro, la
+forma que ya usaba `__sqlite_query_nulls` para leer. La función del runtime es una sola
+(`exec_conn_opt`) y `exec_conn` la llama con todo `Some`.
+
+`net` pasa a 0.12.0 y `db` a 0.6.0 (piden 1.27.81 por sus primitivos nuevos): una app con
+`^0.11`/`^0.5` y un raylang anterior no los recibe.
+

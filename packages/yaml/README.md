@@ -57,4 +57,4 @@ Read the result with `std/json`'s `Doc` helpers: `doc_get`, `doc_at`, `doc_membe
 - A repeated key keeps the last value, in the place of the first.
 
 The reader comes from rayreq (ray-apps), where it was checked against libyaml on the OpenAPI
-descriptions of GitHub (10 MB) and Stripe (6.6 MB). Requires raylang 1.27.80 or later.
+descriptions of GitHub (10 MB) and Stripe (6.6 MB). Requires raylang 1.27.81 or later.

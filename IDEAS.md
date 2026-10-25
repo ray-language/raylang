@@ -4319,9 +4319,11 @@ programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
   `"write timeout"`; el webserver de `net` 0.11.1 lo pone por conexión (`Limits.write_timeout_millis`,
   30 s).
 
-## 116. Lo que dejó abierto rayreq (#245–#270; oct 2026)
+## 116. Lo que dejó abierto rayreq (#245–#270; oct 2026) — ✅ EJECUTADA como M427 (DESIGN §402, 1.27.81; recomendaciones aprobadas por el usuario, 25 oct 2026)
 
 Lo de rayreq que afecta a la toolchain y no entró en M426 (DESIGN §401), con su clasificación.
+Todas se hicieron según la recomendación de cada entrada; queda abierta solo la de `as` entre
+literales en constantes (impacto bajo, sin petición).
 
 - **#259 — objetos JSON con orden de inserción.** `JObject` es un `Map` ordenado por clave. Opciones:
   (a) que `Map` conserve el orden de inserción (como los dict de Python): cambia el orden de

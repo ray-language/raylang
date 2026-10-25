@@ -337,7 +337,10 @@ std/random std/time std/units std/crypto std/text std/sort std/kv std/json (numb
 `json.get_int`/`as_int` give `None` beyond ±(2^53 − 1) rather than another integer — read a 64-bit id
 with `json.raw_at(text, "/data/0/id")`, the value's TEXT by JSON Pointer; `json.compact(text)` and
 `json.reindent(text, n)` work on the text, keeping key order and number digits; a parsed object is
-a `Map`, so `stringify` sorts keys) std/hex
+a `Map`, so `stringify` sorts keys — when order or exact numbers matter, `json.parse_doc(text) ->
+Result<json.Doc, _>`: `Doc.Obj([Member { key, value }])` in order, `Doc.Num(text)` as written,
+`render_doc`/`render_doc_pretty` give it back exactly, `doc_get doc_at doc_members doc_items doc_text
+doc_int` (exact 64-bit) `doc_float doc_bool doc_pointer(d, "/a/0/b")`, `doc_of`/`json_of` convert) std/hex
 std/base64 std/url (also `url.parse(s) -> Result<url.Url,_>` with `scheme userinfo host port path
 query fragment` as written, `url.render(u)`, `url.resolve(base, ref)` — RFC 3986 §5.2, what a
 browser does with a relative link or `Location` —, `url.remove_dot_segments(p)`,
@@ -355,7 +358,12 @@ then `login.begin(p, client)` gives a `Pending` (code + PKCE + nonce; redirect t
 and `login.finish(p, client, pending, query_map)` returns the `Tokens` with the verified ID token in
 `t.claims`; also `login.refresh`, `login.userinfo`, `login.logout_url`; resource servers:
 `import oidc/tokens;` then `tokens.verify_access_token(p, bearer, scopes, now_ms)` — RFC 9068),
-`tz`, `cron`, `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
+`tz`, `cron`, `yaml` (`import yaml/yaml;` → `yaml.parse(text)` returns `Result<json.Doc, string>`,
+`yaml.render(doc)`; YAML 1.2 into the same ordered `json.Doc` as `json.parse_doc`, so OpenAPI in JSON
+or YAML reads alike; net 0.12/db 0.6 also need 1.27.81: `http.request_opts(method, url, body,
+[(name, value)], o)` with `var o = http.options(); o.insecure_skip_verify = true;` accepts any
+certificate — development only, trust a CA with `SSL_CERT_FILE=ca.pem` instead —, and
+`sqlite.exec_opt(c, sql, [Option<string>])` binds `None` as SQL NULL), `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
 `mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`; server side: `import mcp/serve;` →
 `serve.provider(name, version)`, `serve.tool(p, name, description, schema_json_text, run)` where `run` takes the
 arguments as `Json` and returns `Result<string, string>`, then `serve.stdio(p)`), `llm` (language models: `import llm/llm;` →
@@ -468,7 +476,8 @@ Linux/Windows; aliases `command super meta primary`), `ctrl`/`control`, `alt`/`o
 `shift`, and key a character, `f1`–`f12`, `enter`/`return`, `escape`/`esc`, `tab`, `space`,
 `backspace`, `delete`/`del`, `up down left right home end pageup pagedown`, case-insensitive;
 anything else makes `ui.menu`/`replace_menu` return `Err`), `ui.menu_at(pos,
-…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
+…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.rename_menu(old, new)` (1.27.81: a menu's title,
+for switching language at run time), `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
 standard edit roles: items tagged `role:undo|redo|cut|copy|paste|select_all|close` act natively
 (no event; empty title/shortcut = the standard one) and `ui.edit_menu(items)` rebuilds the Edit
@@ -501,23 +510,24 @@ wire it from the page's `contextmenu` via `window.ray.send`); window kinds: `o.k
 (floating utility palette) | `"borderless"` | `"full_content"` (1.27.23: the page runs under the
 title bar — macOS: transparent bar, hidden title, traffic lights over the page; reserve
 `window.ray.titlebar_height` px and mark the drag handle with `data-ray-drag`; the traffic lights
-stay where macOS puts them for a standard 28 pt bar — a taller header cannot move them yet, so
-center your header's controls on that line; Linux/Windows = document for now), `o.always_on_top`, `o.parent = h` (owned window);
+center on the bar: standard ≈ 32 pt on macOS 26, or `o.titlebar = "compact"` (≈ 40 pt) /
+`"tall"` (≈ 52 pt) for a taller header (1.27.81); Linux/Windows = document for now), `o.always_on_top`, `o.parent = h` (owned window);
 live geometry: `ui.set_fullscreen(h, bool)`, `ui.set_always_on_top`, `ui.set_size(h, w, hh)`,
 `ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)` (`center` —
 the option or the call — is the system's own: on macOS horizontally centered and a little above
-the middle, about ¼ of the free height above the window; a window opens where `center` puts it
-and `set_position` moves it afterwards — there is no `x`/`y` option nor a way to read a
-window's position yet, and in the page `window.screenX/screenY/outerWidth/outerHeight` are not
-meaningful, `screen.avail*` is);
+the middle, about ¼ of the free height above the window); open it where you want it, without a
+jump (1.27.81): `ui.open_with(t, url, ui.place_at(ui.options(w, h), x, y))` or `ui.cascade(o)`
+(22 px down-right of the last window); `ui.frame(h) -> Result<(x, y, w, h), _>` says where a window
+is (frame corner in `set_position` coordinates, content size); in the page
+`window.screenX/screenY/outerWidth/outerHeight` are not meaningful, `screen.avail*` is;
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch —
 NOT when the process runs outside the graphical session: from ssh/CI/an agent shell the window
 stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate with `eval_js` +
 `MessageChannel`, or launch from the session); desktop:
 `ui.open_path(p)` (a file or directory that exists), `ui.open_url(url)` (an `http`/`https`/
-`mailto` URL in the system browser or mail client — the OAuth sign-in of a native app; Err in
-the mobile shells for now), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
+`mailto` URL in the system browser or mail client — the OAuth sign-in of a native app; also in
+the mobile shells: iOS `UIApplication`, Android an `ACTION_VIEW` intent from a shell ≥ 1.27.81), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
 `ray dev` the window live-reloads on asset changes and the webview devtools are on; otherwise they
 are off (`ray run --devtools`, or a native/bundled build with `--devtools`, turns them on): no
 "Inspect Element". The webview's own context menu (Look Up, Translate, Services…) still appears on

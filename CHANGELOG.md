@@ -4,6 +4,36 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.81 — 2026-10-25
+
+Lo que dejó abierto rayreq, con las recomendaciones de IDEAS §116 aprobadas (M427).
+
+- **`json.Doc`: JSON con orden y números exactos** (#259, #257). `json.parse_doc` conserva el
+  orden de los miembros (y las claves repetidas) y el texto de cada número, así que
+  `render_doc(parse_doc(s))` devuelve el documento tal cual y `doc_int` lee 64 bits exactos.
+  Accesores `doc_get`, `doc_at`, `doc_members`, `doc_items`, `doc_text`, `doc_int`, `doc_float`,
+  `doc_bool`, `doc_pointer` (JSON Pointer), y conversión `doc_of`/`json_of`. Es aditivo: `Json`
+  no cambia. `parse` y `parse_doc` validan ahora la gramática de los números (RFC 8259): `+1`,
+  `01`, `1.` o `.5` son un error.
+- **Paquete `yaml` 0.1.0** (#260): lee YAML 1.2 al `json.Doc` ordenado y lo escribe de vuelta.
+  Nace del lector de rayreq, contrastado con libyaml sobre los OpenAPI de GitHub y Stripe.
+- **Ventanas donde se piden** (#245): `WindowOptions.place` abre en `x`/`y` (`ui.place_at`) o
+  escalonada respecto a la anterior (`ui.cascade`) sin el salto de moverla después, y
+  `ui.frame(h)` dice dónde está una ventana.
+- **`ui.rename_menu(old, new)`** (#252): cambia el título de un menú de la barra, para una app
+  que cambia de idioma en caliente.
+- **Barra de título más alta con `full_content`** (#270): `WindowOptions.titlebar` `"compact"`
+  (≈ 40 pt) o `"tall"` (≈ 52 pt) en macOS centra los semáforos en una cabecera más alta.
+- **`ui.open_url` en iOS y Android** (#263): `UIApplication` en iOS y un intent `ACTION_VIEW` en
+  Android (regenera el shell con `ray bundle --android`).
+- **TLS sin verificar, de forma explícita** (#250): `net.tls_upgrade_insecure` y, en `net`
+  0.12.0, `http.request_opts` con `Options.insecure_skip_verify`. La petición normal sigue
+  verificando y su error de certificado sugiere primero confiar en la CA con `SSL_CERT_FILE`.
+- **`sqlite.exec_opt`** (#248, `db` 0.6.0): parámetros `Option<string>`, `None` = SQL `NULL`.
+- **Nativo**: un peer TLS que cierra sin `close_notify` es un fin de flujo, como en la VM; antes
+  el cliente nativo lo daba como error al leer la respuesta.
+- `net` 0.12.0, `db` 0.6.0 y `yaml` 0.1.0 piden raylang 1.27.81.
+
 ## 1.27.80 — 2026-10-25
 
 Hallazgos de rayreq con 1.27.79 (M426, #245–#270, lo que afecta a la toolchain).

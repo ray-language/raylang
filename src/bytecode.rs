@@ -355,6 +355,8 @@ pub enum OpCode {
     /// TLS. Primitivo `__tls_upgrade`; `std/net` → `tls_upgrade`. Habilita STARTTLS (Postgres
     /// sslRequest, MySQL caching_sha2 full-path, SMTP…).
     TlsUpgrade,
+    /// rayreq #250: como `TlsUpgrade` sin verificar el certificado. Primitivo `__tls_upgrade_insecure`.
+    TlsUpgradeInsecure,
     /// Diferido JSON-1: el inverso de `char_code`. Saca un `int`; empuja `[char]` de 0/1 elementos
     /// (vacío si no es un code point válido: surrogates D800–DFFF o fuera de rango). Primitivo
     /// `__char_from_code`; el prelude → `char_from_code -> Option<char>`. Habilita los escapes
@@ -381,6 +383,8 @@ pub enum OpCode {
     SqliteQuery,
     /// M347 (rayauth R6): `__sqlite_query_nulls` — como SqliteQuery con máscara de NULL.
     SqliteQueryNulls,
+    /// rayreq #248: como `SqliteExec` con una máscara `n`/`v` de parámetros NULL (4 operandos).
+    SqliteExecOpt,
 
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).

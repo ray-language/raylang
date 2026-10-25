@@ -2701,6 +2701,15 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            // rayreq #250: sin verificar el certificado (mismo helper, otra config).
+            "tls_upgrade_insecure" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_upgrade_with(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", true)");
+            }
             "tls_upgrade" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_upgrade(");
@@ -2717,6 +2726,19 @@ impl Transpiler {
                 self.needs_rt_sqlite = true;
                 out.push_str("__ray_sqlite_open(&");
                 self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            // rayreq #248: exec con máscara de NULL.
+            "sqlite_exec_opt" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
+                self.needs_rt_sqlite = true;
+                out.push_str("__ray_sqlite_exec_opt(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[3])?;
                 out.push(')');
             }
             "sqlite_exec" | "sqlite_query" | "sqlite_query_nulls" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
@@ -2872,7 +2894,7 @@ impl Transpiler {
                 out.push_str(", &*");
                 self.emit_expr(out, eff[14])?; // M327: background
                 out.push_str(", &*");
-                self.emit_expr(out, eff[15])?; // #245: placement
+                self.emit_expr(out, eff[15])?; // #245/#270: extra (clave=valor)
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {

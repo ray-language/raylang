@@ -2701,6 +2701,20 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__sqlite_exec_opt" => {
+                let (Value::Int(h), Value::Str(sql), Value::Array(ps), Value::Str(nulls)) = (&values[0], &values[1], &values[2], &values[3]) else {
+                    unreachable!("the checker guarantees int, string, [string], string");
+                };
+                let params: Vec<String> = ps.borrow().iter().map(|v| match v {
+                    Value::Str(s) => s.clone(),
+                    _ => unreachable!("the checker guarantees [string]"),
+                }).collect();
+                let arr = match crate::builtins::sqlite_exec_opt(*h, sql, &params, nulls) {
+                    Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
+                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__sqlite_exec" | "__sqlite_query" | "__sqlite_query_nulls" => {
                 let (Value::Int(h), Value::Str(sql), Value::Array(ps)) = (&values[0], &values[1], &values[2]) else {
                     unreachable!("the checker guarantees int, string, [string]");
@@ -2828,6 +2842,16 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // Diferido TLS: STARTTLS de cliente sobre un TCP plano → ["ok", handle] o ["err", msg].
+            "__tls_upgrade_insecure" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(host)) => match crate::builtins::tls_upgrade_insecure(*h, host) {
+                        Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees int, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__tls_upgrade" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Int(h), Value::Str(host)) => match crate::builtins::tls_upgrade(*h, host) {

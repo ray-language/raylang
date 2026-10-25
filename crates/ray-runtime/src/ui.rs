@@ -719,9 +719,71 @@ fn url_spawn(url: &str) -> Result<(), String> {
     spawn_detached("rundll32.exe", &[std::ffi::OsString::from("url.dll,FileProtocolHandler"), std::ffi::OsString::from(url)])
 }
 
-#[cfg(any(target_os = "ios", target_os = "android"))]
-fn url_spawn(_url: &str) -> Result<(), String> {
-    Err("ui: open_url is not available in the mobile shells yet".to_string())
+#[cfg(target_os = "android")]
+fn url_spawn(url: &str) -> Result<(), String> {
+    if android::open_url(url) {
+        Ok(())
+    } else {
+        Err("ui: this Android shell predates open_url; regenerate it with `ray bundle --android`".to_string())
+    }
+}
+
+#[cfg(target_os = "ios")]
+fn url_spawn(url: &str) -> Result<(), String> {
+    ios_url::open(url);
+    Ok(())
+}
+
+/// rayreq #263: `openURL:options:completionHandler:` de UIApplication, en la cola principal (UIKit
+/// lo exige). El runtime vive dentro de la app, así que no hace falta pasar por el shell.
+#[cfg(target_os = "ios")]
+mod ios_url {
+    use std::ffi::c_void;
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+    #[repr(C)]
+    struct DispatchQueue {
+        _opaque: [u8; 0],
+    }
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const u8) -> Id;
+        fn sel_registerName(name: *const u8) -> Sel;
+        fn objc_msgSend();
+        static _dispatch_main_q: DispatchQueue;
+        fn dispatch_async_f(queue: *const DispatchQueue, ctx: *mut c_void, work: extern "C" fn(*mut c_void));
+    }
+
+    extern "C" fn work(ctx: *mut c_void) {
+        // SAFETY: `ctx` es el Box<String> de `open`; mensajes estándar de Foundation/UIKit en el
+        // hilo principal.
+        unsafe {
+            let url: Box<String> = Box::from_raw(ctx as *mut String);
+            let Ok(text) = std::ffi::CString::new(url.as_str()) else { return };
+            let send = objc_msgSend as *const ();
+            let msg: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(send);
+            let msg_str: unsafe extern "C" fn(Id, Sel, *const std::ffi::c_char) -> Id = std::mem::transmute(send);
+            let msg_id: unsafe extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(send);
+            let open: unsafe extern "C" fn(Id, Sel, Id, Id, Id) = std::mem::transmute(send);
+            let ns = msg_str(objc_getClass(b"NSString\0".as_ptr()), sel_registerName(b"stringWithUTF8String:\0".as_ptr()), text.as_ptr());
+            let nsurl = msg_id(objc_getClass(b"NSURL\0".as_ptr()), sel_registerName(b"URLWithString:\0".as_ptr()), ns);
+            if nsurl.is_null() {
+                return;
+            }
+            let app = msg(objc_getClass(b"UIApplication\0".as_ptr()), sel_registerName(b"sharedApplication\0".as_ptr()));
+            let options = msg(objc_getClass(b"NSDictionary\0".as_ptr()), sel_registerName(b"dictionary\0".as_ptr()));
+            if app.is_null() {
+                return;
+            }
+            open(app, sel_registerName(b"openURL:options:completionHandler:\0".as_ptr()), nsurl, options, std::ptr::null_mut());
+        }
+    }
+
+    pub(super) fn open(url: &str) {
+        let boxed = Box::new(url.to_string());
+        // SAFETY: la cola principal es un static exportado de libdispatch; `work` libera el Box.
+        unsafe { dispatch_async_f(&_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, work) };
+    }
 }
 
 #[cfg(not(any(target_os = "macos", windows, target_os = "ios", target_os = "android")))]
@@ -1063,6 +1125,11 @@ pub struct WindowOptions {
     pub place: String,
     pub x: i64,
     pub y: i64,
+    /// rayreq #270: la altura de la barra de título con `kind: "full_content"` (macOS): `""` = la
+    /// estándar (≈ 32 pt en macOS 26), `"compact"` ≈ 40 pt y `"tall"` ≈ 52 pt — una `NSToolbar` vacía con estilo
+    /// unified compacto o normal, como Finder/Safari: los semáforos se centran en esa altura y
+    /// `window.ray.titlebar_height` la refleja. Linux/Windows lo ignoran (no hay `full_content`).
+    pub titlebar: String,
 }
 
 impl WindowOptions {
@@ -1085,23 +1152,30 @@ impl WindowOptions {
             place: String::new(),
             x: 0,
             y: 0,
+            titlebar: String::new(),
         }
     }
 }
 
-/// #245: la colocación tal como viaja desde `std/ui` (`""`, `"at:x,y"`, `"cascade"`) →
-/// (`place`, `x`, `y`) de [`WindowOptions`]. Una sola tabla para la VM, el intérprete y el nativo.
-pub fn parse_placement(text: &str) -> Result<(String, i64, i64), String> {
-    if text.is_empty() || text == "cascade" {
-        return Ok((text.to_string(), 0, 0));
+/// #245/#270: las opciones de ventana que viajan desde `std/ui` como un solo texto
+/// `clave=valor;…` (`place`, `x`, `y`, `titlebar`) — así una opción nueva no cambia la aridad de
+/// `__ui_open_with` en los tres motores. Una sola tabla para la VM, el intérprete y el nativo.
+pub fn apply_extra(opts: &mut WindowOptions, text: &str) -> Result<(), String> {
+    for pair in text.split(';').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').ok_or_else(|| format!("ui: malformed window option '{pair}'"))?;
+        let int = || v.trim().parse::<i64>().map_err(|_| format!("ui: window option '{k}' expects an integer, not '{v}'"));
+        match k {
+            "place" => opts.place = v.to_string(),
+            "x" => opts.x = int()?,
+            "y" => opts.y = int()?,
+            "titlebar" => opts.titlebar = v.to_string(),
+            _ => return Err(format!("ui: unknown window option '{k}'")),
+        }
     }
-    if let Some(rest) = text.strip_prefix("at:")
-        && let Some((a, b)) = rest.split_once(',')
-        && let (Ok(x), Ok(y)) = (a.trim().parse::<i64>(), b.trim().parse::<i64>())
-    {
-        return Ok(("at".to_string(), x, y));
+    if !matches!(opts.titlebar.as_str(), "" | "compact" | "tall") {
+        return Err(format!("ui: unsupported titlebar '{}' (\"\", compact, tall)", opts.titlebar));
     }
-    Err(format!("ui: unsupported window placement '{text}'"))
+    Ok(())
 }
 
 /// #245: el paso de `place: "cascade"` respecto a la ventana anterior.
@@ -2319,6 +2393,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     if matches!(op, "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls") {
         return app_op(op, arg);
     }
+    if op == "rename_menu" {
+        let (old, new) = arg.split_once('\n').ok_or_else(|| "ui: rename_menu expects 'old\\nnew'".to_string())?;
+        return rename_menu(old, new);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {
@@ -2953,6 +3031,53 @@ fn headless_menu_tags() -> &'static Mutex<std::collections::HashSet<String>> {
 fn headless_menu_titles() -> &'static Mutex<std::collections::HashSet<String>> {
     static TITLES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     TITLES.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// rayreq #252: cambia el TÍTULO de un menú de nivel superior (`old` → `new`) sin tocar sus
+/// ítems ni su posición — lo que necesita una app que cambia de idioma en caliente («File» →
+/// «Archivo»). `Err` si no hay un menú `old`, si ya hay uno `new` o si `new` está vacío.
+pub fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+    if new.is_empty() {
+        return Err("ui: a menu title cannot be empty".to_string());
+    }
+    if old == new {
+        return Ok(());
+    }
+    if headless() {
+        let mut titles = headless_menu_titles().lock().unwrap();
+        if !titles.contains(old) {
+            return Err(format!("ui: no menu titled '{old}'"));
+        }
+        if titles.contains(new) {
+            return Err(format!("ui: there is already a menu titled '{new}'"));
+        }
+        titles.remove(old);
+        titles.insert(new.to_string());
+        if ui_trace() {
+            eprintln!("[ui] rename menu {old} -> {new}");
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::rename_menu(old, new)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::rename_menu(old, new)
+    }
+    #[cfg(windows)]
+    {
+        ensure_app()?;
+        win::rename_menu(old, new)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (old, new);
+        Err("ui: menus are not available on this platform".to_string())
+    }
 }
 
 /// M250 (ray-sublime): reemplaza el CONTENIDO del menú de nivel superior titulado `title` por
@@ -4561,6 +4686,38 @@ mod mac {
     /// principal: vacía el NSMenu (`removeAllItems`), purga del registro por tag los items que
     /// contenía y añade los nuevos con `make_item` (que los registra). El NSMenu y el item de la
     /// barra son los mismos objetos: la posición en la barra no cambia.
+    /// #252: el título del ítem de la barra y el de su submenú (el que muestra macOS).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let (old, new) = (old.to_string(), new.to_string());
+        on_main_sync(move || {
+            let main_menu = MAIN_MENU.load(std::sync::atomic::Ordering::SeqCst);
+            if main_menu == 0 {
+                return Err("ui: the menu bar is not ready".to_string());
+            }
+            // SAFETY: mensajes estándar de NSMenu/NSMenuItem en el hilo principal.
+            unsafe {
+                let index_of: MsgI64Id = std::mem::transmute(msg_send());
+                let item_at: MsgIdI64 = std::mem::transmute(msg_send());
+                let submenu_of: MsgId = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                if index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&new)) >= 0 {
+                    return Err(format!("ui: there is already a menu titled '{new}'"));
+                }
+                let idx = index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&old));
+                if idx < 0 {
+                    return Err(format!("ui: no menu titled '{old}'"));
+                }
+                let bar_item = item_at(main_menu as Id, sel(b"itemAtIndex:\0"), idx);
+                set_id(bar_item, sel(b"setTitle:\0"), nsstring(&new));
+                let menu = submenu_of(bar_item, sel(b"submenu\0"));
+                if !menu.is_null() {
+                    set_id(menu, sel(b"setTitle:\0"), nsstring(&new));
+                }
+            }
+            Ok(())
+        })
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let title = title.to_string();
         let items = items.to_vec();
@@ -4974,6 +5131,22 @@ mod mac {
                 // el margen (`window.ray.titlebar_height`).
                 let mut titlebar_height = 0.0;
                 if is_full_content {
+                    // #270: una barra más alta = una NSToolbar vacía con estilo unified (11+):
+                    // compacta ≈ 40 pt, normal ≈ 52 pt; AppKit centra los semáforos en ella.
+                    if !opts.titlebar.is_empty() {
+                        let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                        if responds(window, sel(b"respondsToSelector:\0"), sel(b"setToolbarStyle:\0")) != 0 {
+                            let init_id: MsgIdId = std::mem::transmute(msg_send());
+                            let toolbar = init_id(alloc(cls(b"NSToolbar\0"), sel(b"alloc\0")), sel(b"initWithIdentifier:\0"), nsstring("ray.titlebar"));
+                            let set_tb: MsgVoidId = std::mem::transmute(msg_send());
+                            set_bool(toolbar, sel(b"setShowsBaselineSeparator:\0"), 0);
+                            set_tb(window, sel(b"setToolbar:\0"), toolbar);
+                            plain(toolbar, sel(b"release\0"));
+                            let set_style: MsgVoidI64 = std::mem::transmute(msg_send());
+                            // NSWindowToolbarStyleUnified = 3, UnifiedCompact = 4.
+                            set_style(window, sel(b"setToolbarStyle:\0"), if opts.titlebar == "compact" { 4 } else { 3 });
+                        }
+                    }
                     let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
                     set_bool(window, sel(b"setTitlebarAppearsTransparent:\0"), 1);
                     set_i64(window, sel(b"setTitleVisibility:\0"), 1); // NSWindowTitleHidden
@@ -4981,6 +5154,9 @@ mod mac {
                     let frame = rect_of(window, sel(b"frame\0"));
                     let content = rect_of(window, sel(b"contentLayoutRect\0"));
                     titlebar_height = (frame.h - content.h).max(0.0);
+                    if super::ui_trace() {
+                        eprintln!("[ui] titlebar height {}", titlebar_height.round() as i64);
+                    }
                 }
                 // M224: la barra de título del color del tema (como Sublime): la barra se vuelve
                 // transparente y deja ver el fondo de la ventana, que se pinta del color pedido;
@@ -6171,6 +6347,22 @@ mod gtk {
     /// cada ventana viva en el hilo del loop: se destruye la barra vieja (y se purgan del
     /// registro por tag los widgets de esa ventana), se construye una nueva de los specs y se
     /// empaqueta arriba del todo.
+    /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let items = {
+            let mut specs = menu_specs().lock().unwrap();
+            if specs.iter().any(|(t, _)| t == new) {
+                return Err(format!("ui: there is already a menu titled '{new}'"));
+            }
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == old) else {
+                return Err(format!("ui: no menu titled '{old}'"));
+            };
+            entry.0 = new.to_string();
+            entry.1.clone()
+        };
+        replace_menu(new, &items)
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         {
             let mut specs = menu_specs().lock().unwrap();
@@ -7724,6 +7916,7 @@ mod android {
     static MID_EVAL: AtomicUsize = AtomicUsize::new(0);
     static MID_PICK: AtomicUsize = AtomicUsize::new(0); // M382: 0 = shell anterior, sin selector
     static MID_MEDIA: AtomicUsize = AtomicUsize::new(0); // M404: 0 = shell anterior, sin std/media
+    static MID_OPEN_URL: AtomicUsize = AtomicUsize::new(0); // #263: 0 = shell anterior, sin open_url
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -7769,6 +7962,13 @@ mod android {
                 clear(env);
             } else {
                 MID_MEDIA.store(media as usize, Ordering::SeqCst);
+            }
+            // rayreq #263: `onOpenUrl` existe desde 1.27.81; misma limpieza.
+            let open_url = get_static(env, bridge, c"onOpenUrl".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_OPEN_URL.store(open_url as usize, Ordering::SeqCst);
             }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
@@ -7859,6 +8059,17 @@ mod android {
     extern "C" fn pick_handler(id: i64, kind: *const c_char, title: *const c_char, multiple: i32, exts: *const c_char) {
         let spec = format!("{id}\n{}\n{}\n{multiple}\n{}", cstr_owned(kind), cstr_owned(title), cstr_owned(exts));
         call_bridge(MID_PICK.load(Ordering::SeqCst), &[&spec]);
+    }
+
+    /// rayreq #263: `ui.open_url` → `RayBridge.onOpenUrl(url)` (Intent ACTION_VIEW). `false` si el
+    /// shell es anterior a 1.27.81 (sin `onOpenUrl`).
+    pub(super) fn open_url(url: &str) -> bool {
+        let mid = MID_OPEN_URL.load(Ordering::SeqCst);
+        if mid == 0 {
+            return false;
+        }
+        call_bridge(mid, &[url]);
+        true
     }
 
     /// M404: `std/media` → `RayBridge.onMedia(op, arg)` (MediaSession + notificación MediaStyle en
@@ -8628,6 +8839,22 @@ mod win {
     /// M250: reemplaza el spec del menú `title` (ventanas futuras) y reconstruye la barra de
     /// cada ventana viva en el hilo 1: barra y tabla de aceleradores nuevas, `WinCtx` al día
     /// (tags y atajos) y la barra vieja destruida.
+    /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
+    pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
+        let items = {
+            let mut specs = menu_specs().lock().unwrap();
+            if specs.iter().any(|(t, _)| t == new) {
+                return Err(format!("ui: there is already a menu titled '{new}'"));
+            }
+            let Some(entry) = specs.iter_mut().find(|(t, _)| t == old) else {
+                return Err(format!("ui: no menu titled '{old}'"));
+            };
+            entry.0 = new.to_string();
+            entry.1.clone()
+        };
+        replace_menu(new, &items)
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         {
             let mut specs = menu_specs().lock().unwrap();

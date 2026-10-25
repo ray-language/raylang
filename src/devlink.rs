@@ -1118,6 +1118,7 @@ pub fn pair(prefill: Option<&str>, name: &str) -> String {
             place: String::new(),
             x: 0,
             y: 0,
+            titlebar: String::new(),
         };
         if let Err(e) = ui::open_window_with(1, "raylang dev", "ray://app/__raydev/pair.html", &opts) {
             eprintln!("[dev-client] cannot show the pairing page: {e}");

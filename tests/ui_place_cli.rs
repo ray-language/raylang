@@ -30,7 +30,7 @@ fn main() {
 const WANT: &str = r##"a 100,200,600,400
 b 122,222,500,300
 b moved 10,20,640,480
-bad ui: unsupported window placement 'nowhere'
+bad ui: unsupported window placement 'nowhere' ("", at, cascade)
 closed err ui: not an open window
 "##;
 

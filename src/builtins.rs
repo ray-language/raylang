@@ -3310,12 +3310,13 @@ pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
             Ok(0) => return Ok(Some(Vec::new())),            // close_notify → EOF limpio
             Ok(n) => return Ok(Some(buf[..n].to_vec())),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {} // no hay texto plano todavía
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(Some(Vec::new())),
+            // Sin `close_notify`: EOF tras el handshake; error durante él (IDEAS §117).
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return tls_eof(tc),
             Err(e) => return Err(e.to_string()),
         }
         // 3) Necesitamos más registros del peer: leer del socket (no bloqueante).
         match tc.conn.read_tls(&mut tc.sock) {
-            Ok(0) => return Ok(Some(Vec::new())),            // el peer cerró el TCP
+            Ok(0) => return tls_eof(tc),                      // el peer cerró el TCP
             Ok(_) => {
                 tc.conn.process_new_packets().map_err(|e| e.to_string())?;
                 // tras procesar puede haber nuevas escrituras (handshake) o texto plano → reitera.
@@ -3327,6 +3328,13 @@ pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_read_nb(_h: i64) -> Result<Option<Vec<u8>>, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+
+/// El peer cerró el TCP sin `close_notify`: EOF limpio si el handshake ya terminó (servidores
+/// HTTP con `Connection: close` lo hacen a menudo), error si seguía en curso.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+fn tls_eof(tc: &TlsConn) -> Result<Option<Vec<u8>>, String> {
+    if tc.conn.is_handshaking() { Err(TLS_HANDSHAKE_EOF.to_string()) } else { Ok(Some(Vec::new())) }
+}
 
 /// Escritura TLS **no bloqueante** (VM, M19.4b): cifra `bytes` y los drena al socket. Las escrituras
 /// rara vez bloquean (tramas pequeñas); se completan en el sitio (girando en el raro `WouldBlock`).
@@ -3510,6 +3518,8 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
 
 /// El mensaje del timeout de lectura (idéntico en ambos motores).
 pub const READ_TIMEOUT_MSG: &str = "read timeout";
+/// IDEAS §117: el peer cerró el TCP durante el handshake TLS (mismo texto que `ray_runtime::tls`).
+pub const TLS_HANDSHAKE_EOF: &str = "tls: the peer closed the connection during the handshake";
 
 /// El mensaje del timeout de escritura (raysec #234; idéntico en los tres motores).
 pub const WRITE_TIMEOUT_MSG: &str = "write timeout";

@@ -20,6 +20,9 @@ mod imp {
     /// Una conexión TLS bloqueante: sesión rustls + socket, vía `StreamOwned`. Es un enum cliente/servidor
     /// porque `StreamOwned` exige el tipo de sesión CONCRETO (el enum unificado `rustls::Connection` no
     /// cumple los bounds de `Deref`); cada variante concreta sí.
+    /// El peer cerró el TCP antes de terminar el handshake (mismo texto en la VM).
+    pub const TLS_HANDSHAKE_EOF: &str = "tls: the peer closed the connection during the handshake";
+
     pub enum TlsStream {
         Client(rustls::StreamOwned<rustls::ClientConnection, TcpStream>),
         Server(rustls::StreamOwned<rustls::ServerConnection, TcpStream>),
@@ -96,11 +99,19 @@ mod imp {
                 TlsStream::Client(s) => s.read(buf),
                 TlsStream::Server(s) => s.read(buf),
             };
-            // Un peer que cierra el TCP sin `close_notify` es un EOF, no un error — como en la VM
-            // (`builtins::tls_read`): muchos servidores HTTP con `Connection: close` lo hacen, y el
-            // cuerpo ya delimitado por el cierre llegó entero. (Lo destapó la prueba de #250.)
+            // Un peer que cierra el TCP sin `close_notify` TRAS el handshake es un EOF, no un error
+            // — como en la VM (`builtins::tls_read`): muchos servidores HTTP con `Connection: close`
+            // lo hacen, y el cuerpo ya delimitado por el cierre llegó entero (lo destapó #250).
+            // DURANTE el handshake es un error (IDEAS §117): no hubo conexión, y un «EOF limpio»
+            // haría pasar un peer que murió a medio saludo por una petición vacía.
             match r {
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(0),
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    if self.is_handshaking() {
+                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, TLS_HANDSHAKE_EOF))
+                    } else {
+                        Ok(0)
+                    }
+                }
                 other => other,
             }
         }

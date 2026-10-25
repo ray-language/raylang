@@ -457,6 +457,9 @@ struct WinState {
     /// M257: si el cierre del USUARIO (botón, ⌘W/Alt+F4, WM del sistema) debe convertirse en el
     /// evento `close_requested` en vez de cerrar. `close(h)` siempre cierra (es el programa).
     intercept_close: bool,
+    /// #245: el marco `(x, y, ancho, alto)` que `frame` devuelve en HEADLESS (lo que abrir,
+    /// `set_position` y `set_size` dejarían); los backends reales lo preguntan a la ventana.
+    frame: (i64, i64, i64, i64),
 }
 
 /// Clave del mapa: el ID DEL LLAMADOR (el handle del registro del host) — así los eventos
@@ -1184,13 +1187,6 @@ const CASCADE_STEP: i64 = 22;
 /// #245: la última ventana abierta (para `cascade`); 0 = ninguna.
 static LAST_OPENED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-/// #245: el marco de cada ventana HEADLESS (`x`, `y`, ancho, alto del contenido): lo que abrir,
-/// `set_position` y `set_size` dejarían, para que `frame` responda en pruebas sin backend.
-fn headless_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
-    static FRAMES: OnceLock<Mutex<HashMap<i64, (i64, i64, i64, i64)>>> = OnceLock::new();
-    FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// #245: el marco de una ventana ABIERTA — `(x, y, ancho, alto)`: la esquina superior izquierda
 /// del marco en coordenadas de pantalla con origen arriba-izquierda (las de `set_position`) y el
 /// tamaño del ÁREA DE CONTENIDO (el de `set_size` y de las opciones). `Err` con una ventana
@@ -1201,10 +1197,7 @@ pub fn window_frame(id: i64) -> Result<(i64, i64, i64, i64), String> {
         return Err("ui: not an open window".to_string());
     };
     match &state.win {
-        Win::Headless => {
-            drop(map);
-            Ok(headless_frames().lock().unwrap().get(&id).copied().unwrap_or((0, 0, 0, 0)))
-        }
+        Win::Headless => Ok(state.frame),
         #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
         Win::Shell => Err("ui: frame is not available in the mobile shells".to_string()),
         #[cfg(target_os = "macos")]
@@ -1866,9 +1859,11 @@ fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<
                 eprintln!("[ui] devtools {id} on");
             }
         }
-        windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false, intercept_close: false });
         let (fx, fy) = if opts.place == "at" { (opts.x, opts.y) } else { (0, 0) };
-        headless_frames().lock().unwrap().insert(id, (fx, fy, width, height));
+        windows().lock().unwrap().insert(
+            id,
+            WinState { win: Win::Headless, closed: false, intercept_close: false, frame: (fx, fy, width, height) },
+        );
         if ui_trace() && opts.place == "at" {
             eprintln!("[ui] window {id} at {fx},{fy}");
         }
@@ -1898,7 +1893,7 @@ fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<
             return Err("ui: this app shell was generated with raylang < 1.27.17 and does not serve ray://app: regenerate it with `ray bundle --ios` / `--android`".to_string());
         }
         shell::open(title, url);
-        windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false, intercept_close: false });
+        windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false, intercept_close: false, frame: (0, 0, 0, 0) });
         return Ok(());
     }
     #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -1909,21 +1904,21 @@ fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<
     {
         ensure_app()?;
         let mw = mac::open_window(title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: mw, closed: false, intercept_close: false });
+        windows().lock().unwrap().insert(id, WinState { win: mw, closed: false, intercept_close: false, frame: (0, 0, 0, 0) });
         Ok(())
     }
     #[cfg(target_os = "linux")]
     {
         ensure_app()?;
         let gw = gtk::open_window(id, title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: gw, closed: false, intercept_close: false });
+        windows().lock().unwrap().insert(id, WinState { win: gw, closed: false, intercept_close: false, frame: (0, 0, 0, 0) });
         Ok(())
     }
     #[cfg(windows)]
     {
         ensure_app()?;
         let ww = win::open_window(id, title, url, opts.clone())?;
-        windows().lock().unwrap().insert(id, WinState { win: ww, closed: false, intercept_close: false });
+        windows().lock().unwrap().insert(id, WinState { win: ww, closed: false, intercept_close: false, frame: (0, 0, 0, 0) });
         Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android", windows)))]
@@ -2447,16 +2442,12 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         Win::Headless => {
             match cmd {
                 Some(WindowCmd::Position(x, y)) => {
-                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
-                        f.0 = x;
-                        f.1 = y;
-                    }
+                    state.frame.0 = x;
+                    state.frame.1 = y;
                 }
                 Some(WindowCmd::Size(w, h)) => {
-                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
-                        f.2 = w;
-                        f.3 = h;
-                    }
+                    state.frame.2 = w;
+                    state.frame.3 = h;
                 }
                 _ => {}
             }

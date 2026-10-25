@@ -4361,7 +4361,7 @@ literales en constantes (impacto bajo, sin petición).
   `__sqlite_query_nulls`) y una forma `exec_opt(c, sql, [Option<string>])`. Aditivo.
 
 
-## 117. Segunda mirada a 1.27.80/1.27.81 (revisión de código, 25 oct 2026) — pendientes menores
+## 117. Segunda mirada a 1.27.80/1.27.81 (revisión de código, 25 oct 2026) — ✅ EJECUTADA como M428 (DESIGN §403, 1.27.82)
 
 Desde 1.27.81 toda release pasa una revisión de código independiente antes del tag. La primera cazó
 una divergencia VM/nativo (guardas de `match` no visitadas en `transpile/analysis.rs`, corregida en

@@ -366,6 +366,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "starts_with" | "ends_with" => (vec!["s: string", "affix: string"], "bool"),
         "to_upper" | "to_lower" => (vec!["s: string"], "string"),
         "substring" => (vec!["s: string", "i: int", "j: int"], "string"),
+        "chars_to_string" => (vec!["cs: [char]", "i: int", "j: int"], "string"),
         "repeat" => (vec!["s: string", "n: int"], "string"),
         "join" => (vec!["a: [string]", "sep: string"], "string"),
         "to_bytes" => (vec!["s: string"], "bytes"),
@@ -412,7 +413,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "ends_with" => "Whether the string ends with the given suffix.",
         "to_upper" => "Returns the string converted to uppercase.",
         "to_lower" => "Returns the string converted to lowercase.",
-        "substring" => "Returns the substring `[i, j)` by character index. Out-of-range indices are clamped, so it never fails at runtime.",
+        "substring" => "Returns the substring `[i, j)` by character index. Out-of-range indices are clamped, so it never fails at runtime. Costs like `s[i]`: O(1) on ASCII text, amortized O(1) walking non-ASCII text in order.",
         "repeat" => "Returns the string repeated `n` times (`n <= 0` gives the empty string).",
         "join" => "With `(array, sep)`: joins a `[string]` into one string using the separator. With `(task)`: blocks until the task finishes and returns its value (re-raises if it failed).",
         "reverse" => "Returns a new array with the elements in reverse order.",
@@ -420,6 +421,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "to_bytes" => "Encodes a string as UTF-8 and returns it as `bytes`.",
         "bytes_of" => "Builds a `bytes` value from an `[int]` of octets (each 0–255).",
         "bytes_concat" => "Concatenates a `[bytes]` into one `bytes` value in a single allocation (linear in the total). Use it instead of `+` in a loop, which copies everything accumulated on every call.",
+        "chars_to_string" => "Returns the characters `[i, j)` of a `[char]` as a string (out-of-range indices are clamped, like `substring`), in O(j - i): the way back from `chars()`.",
         "sub_bytes" => "Returns the byte slice `[i, j)` by octet index. Out-of-range indices are clamped, so it never fails at runtime.",
         // --- Crypto (via ring) ---
         "sha256" => "Computes the SHA-256 digest of a bytes value; returns 32 bytes.",
@@ -728,13 +730,23 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
 /// M233: el tramo `[i, j)` por CARÁCTER como préstamo cuando el string es ASCII (byte = carácter);
 /// `None` si no es ASCII (el llamador cae a `substring_chars`). Mismo clamp que aquella.
 pub fn substring_ascii(s: &str, i: i64, j: i64) -> Option<&str> {
-    if !s.is_ascii() {
-        return None;
-    }
+    // rayreq #261: basta con que el PREFIJO hasta `j` sea ASCII (ahí carácter = octeto); antes se
+    // comprobaba el string entero en cada llamada, O(n) aunque el tramo estuviera al principio.
     let n = s.len() as i64;
     let lo = i.clamp(0, n);
     let hi = j.clamp(lo, n);
+    if !s.as_bytes()[..hi as usize].is_ascii() {
+        return None;
+    }
     Some(&s[lo as usize..hi as usize])
+}
+
+/// rayreq #261: el tramo `[i, j)` (con clamp, como `substring`) de una secuencia de `n` caracteres.
+pub fn clamp_char_range(n: usize, i: i64, j: i64) -> (usize, usize) {
+    let n = n as i64;
+    let lo = i.clamp(0, n);
+    let hi = j.clamp(lo, n);
+    (lo as usize, hi as usize)
 }
 
 /// M394 (rayplay #160): el tramo `[i, j)` por CARÁCTER como PRÉSTAMO sea o no ASCII. Antes el camino
@@ -1648,11 +1660,7 @@ pub fn platform_name() -> &'static str {
 /// M235: `ui.open_path`/`ui.reveal` — el escritorio abre o revela una ruta (sin shell).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_desktop(kind: &str, path: &str) -> Result<(), String> {
-    match kind {
-        "open_path" => ray_runtime::ui::open_path(path),
-        "reveal" => ray_runtime::ui::reveal_path(path),
-        other => Err(format!("ui: unknown desktop action '{other}'")),
-    }
+    ray_runtime::ui::desktop(kind, path)
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
 pub fn ui_desktop(_kind: &str, _path: &str) -> Result<(), String> {
@@ -4724,6 +4732,18 @@ static BUILTINS: &[Builtin] = &[
             Type::Array(el) if **el == Type::Bytes => Ok(Type::Bytes),
             _ => Err((Some(0), format!("bytes_concat expects a [bytes], not {}", a[0]))),
         }
+    } },
+    // rayreq #261: chars_to_string(cs, i, j) -> string — el tramo `[i, j)` de un [char] como string,
+    // en O(j − i) (con clamp, como substring). La vuelta de `chars()` sin recorrer el texto entero.
+    Builtin { name: "chars_to_string", opcode: OpCode::CharsToString, check: |a| {
+        arity(a, 3, "chars_to_string", " (array of chars, start, end)")?;
+        match &a[0] {
+            Type::Array(el) if **el == Type::Char => {}
+            _ => return Err((Some(0), format!("chars_to_string expects a [char], not {}", a[0]))),
+        }
+        if a[1] != Type::Int { return Err((Some(1), format!("chars_to_string expects an int start, not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("chars_to_string expects an int end, not {}", a[2]))); }
+        Ok(Type::String)
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {

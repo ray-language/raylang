@@ -338,7 +338,11 @@ fn send_once(c: Config, tools: [Tool], history: [Message]) -> Result<Reply, Fail
 /// A failure worth retrying (no connection, a 429, a 5xx) is retried up to `max_attempts`
 /// times, waiting what the provider asks. `Err` carries the status and the provider's message.
 pub fn send(c: Config, tools: [Tool], history: [Message]) -> Result<Reply, string> {
-    with_retries(c, fn() -> Result<Reply, Failure> { send_once(c, tools, history) }, fn() -> bool { false })
+    with_retries(
+        c,
+        fn() -> Result<Reply, Failure> { send_once(c, tools, history) },
+        fn() -> bool { false }
+    )
 }
 
 // ---------------------------------------------------------------- por partes

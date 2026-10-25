@@ -18870,3 +18870,72 @@ respuesta que no se entiende deja el encuadre sin garantías.
 
 Solo cambia `net` (0.11.4). El `examples/web/webserver.ray` lleva la misma guarda de valores.
 
+## 401. M426 — los hallazgos de rayreq: guardas, escapes en fmt, `substring` amortizado, `std/url` y enteros de JSON (#245–#270, oct 2026)
+
+rayreq, un cliente REST de escritorio, dejó veinte entradas que tocan raylang, `net` y `db`. Este
+arco cubre las de la toolchain; los paquetes van aparte, y lo que pide una decisión de diseño queda
+en IDEAS §116.
+
+**#262, la guarda que no veía los módulos.** El loader resuelve los nombres calificados
+(`math.abs` → el símbolo del módulo) recorriendo el AST antes del checker, y en un `match`
+recorría el patrón y el cuerpo de cada brazo pero no la guarda. Bastaba con añadirla dentro del
+ámbito del brazo (la guarda ve los enlaces del patrón). El recolector de funciones anónimas de
+`ast.rs` tenía el mismo hueco. El selfhost no admite guardas, así que no hay espejo.
+
+**#258, los escapes que fmt reescribía.** fmt emite los literales desde su VALOR ya descodificado;
+por eso `"\u{a0}"` salía como un espacio duro literal. Rehacer los literales desde el fuente
+entero sería otra arquitectura; lo mínimo correcto es que fmt mire el literal original (ya tenía
+las líneas del fuente para saber si un string era un template) y recuerde qué caracteres se
+escribieron como `\u{…}` o `\xNN`, con su ortografía exacta. Al reemitir, un carácter de ese
+conjunto sale como se escribió. Si el mismo carácter aparece en un literal escrito de dos formas,
+sale con la primera: no cambia el programa y el caso no compensa una tabla por posición.
+
+**#256, la cadena partida dentro de un argumento.** El reparto forzado de una sentencia larga cae
+en el primer hijo repartible. Una llamada con una closure entre sus argumentos no se consideraba
+repartible por argumentos (M106 dejó fuera las formas con bloque, para no desplazar
+`spawn(fn() { … })`), así que el reparto lo recibía una cadena de métodos interior. Una closure de
+UNA expresión se escribe en una línea y no tiene ese problema: deja de impedir el reparto por
+argumentos, salvo si es el único argumento (`map(fn(x) { … })` en un pipeline sigue compacto). El
+cambio reformateó siete archivos del repo, todos líneas de más de 100 columnas que ya debían
+partirse.
+
+**#261, `substring` cuadrático.** M213 había hecho `s[i]` amortizado con una caché por cadena
+(ASCII, longitud en caracteres, último cursor), pero `substring` no la usaba: comprobaba en cada
+llamada si el string ENTERO era ASCII y, si no, recorría `char_indices` desde el principio.
+Ahora convierte `[i, j)` a offsets de byte con el mismo cursor, en la VM y en el runtime del
+nativo. Medido sobre 1,3 M caracteres: los cortes ASCII pasan de 17 ms a menos de 1, y un lector
+que corta tokens de un texto no-ASCII y mira su primer carácter pasa de 9 s a 4 ms. Ese segundo
+caso destapó un límite de la caché de UNA entrada: el token recién cortado expulsaba al texto, y el
+siguiente corte reconstruía la entrada recorriendo todo. Con dos entradas (el texto y el token) el
+patrón de un lexer acierta siempre. `chars_to_string(cs, i, j)` cubre el otro lado: quien ya
+trabaja sobre `chars()` vuelve a `string` sin pasar carácter a carácter por `to_string` y `join`.
+El intérprete, que es el oráculo, solo gana la comprobación ASCII del prefijo.
+
+**#251, `std/url`.** Cada cliente HTTP escribía su troceador. El de `net/http` es interno y solo
+sabe de `http(s)`. `url.parse` sigue la gramática de la RFC 3986 y guarda los componentes tal como
+se escribieron (sin normalizar), de modo que `render` devuelve el texto; `resolve` es el algoritmo
+de §5.2 con `remove_dot_segments`, probado con los 42 ejemplos normales y anómalos de §5.4 en los
+tres motores. `parse_query_pairs` conserva orden y repeticiones, lo que el `Map` de `parse_query`
+no puede.
+
+**#257, enteros de JSON.** `Json.JNum` es un float y cambiarlo (un `JInt`, o el texto del literal)
+rompería todo `match` exhaustivo de usuario sobre `Json`: eso queda en IDEAS §116. Lo que sí se
+puede arreglar sin romper nada es no devolver un número equivocado: `as_int`/`get_int` dan `None`
+fuera de ±(2^53 − 1), el mismo límite que `Number.isSafeInteger` de JavaScript, porque por encima
+dos enteros distintos pueden ser el mismo float. Y `raw_at(text, pointer)` lee el texto del valor
+por JSON Pointer sin pasar por float. `reindent(text, 0)` compactaba mal (un elemento por línea sin
+sangría): ahora compacta, igual que `compact`.
+
+**#263, `ui.open_url`.** `open_path` exige que la ruta exista. La URL va al mismo lanzador sin
+shell de cada plataforma; solo se aceptan `http`, `https` y `mailto`, porque abrir un `file:` o un
+esquema de app no es «abrir una web» y una URL que viene de fuera no debe poder lanzar otra cosa.
+El despacho de las acciones de escritorio pasa a una sola tabla en el runtime, que comparten la VM,
+el intérprete y el nativo. En los shells móviles hace falta un puente nuevo en Java y Objective-C:
+devuelve `Err` explícito hasta entonces.
+
+**Documentación.** La gramática de los atajos ya existía (M236) y rechazaba una tecla desconocida;
+solo faltaba decirla (#253). Los devtools están apagados fuera de `ray dev`/`--devtools`, pero el
+menú contextual propio de WebKit sale igual, y eso es lo que rayreq veía (#268). Los semáforos de
+`full_content` (#270) y la posición de `center` (#245) quedan documentados; moverlos o abrir en
+`x`/`y` es trabajo de los tres backends y está en IDEAS §116.
+

@@ -162,3 +162,366 @@ pub fn build_query(m: Map<string, string>) -> string {
     }
     out
 }
+
+// ---------------------------------------------------------------------------------------------
+// rayreq #251: trocear, recomponer y resolver una URL (RFC 3986 §3, §5.2, §5.3). Los componentes
+// se guardan TAL COMO SE ESCRIBIERON (sin normalizar mayúsculas ni percent-encoding): `render`
+// de un `parse` devuelve el mismo texto. Cada app escribía su propio troceador.
+// ---------------------------------------------------------------------------------------------
+
+/// A URI reference split into its components (RFC 3986 §3), as written — nothing is
+/// normalized, so `render(parse(s)?)` gives `s` back (save an empty port, `h:/` → `h/`). `scheme` is `""` in a relative
+/// reference. `host` is `None` when there is no authority (`mailto:x`, `/a/b`) and `Some("")`
+/// for an empty one (`file:///etc`); an IPv6 host is kept without its brackets. `port` is
+/// `None` when absent or empty. `query`/`fragment` are `None` when there is no `?`/`#`, and
+/// `Some("")` for a bare one.
+pub struct Url {
+    scheme: string,
+    userinfo: Option<string>,
+    host: Option<string>,
+    port: Option<int>,
+    path: string,
+    query: Option<string>,
+    fragment: Option<string>,
+}
+
+// ¿Puede `c` ir en un esquema tras la primera letra? (ALPHA / DIGIT / "+" / "-" / ".")
+fn scheme_char(c: char, first: bool) -> bool {
+    let n = char_code(c);
+    let alpha = n >= 65 && n <= 90 || n >= 97 && n <= 122;
+    if (first) {
+        return alpha;
+    }
+    alpha || n >= 48 && n <= 57 || c == '+' || c == '-' || c == '.'
+}
+
+// El índice del primer carácter de `stops` en `cs` desde `from`, o `cs.len()`.
+fn find_any(cs: [char], from: int, stops: string) -> int {
+    var i = from;
+    while (i < cs.len()) {
+        if (stops.contains(cs[i].to_string())) {
+            return i;
+        }
+        i = i + 1;
+    }
+    cs.len()
+}
+
+// La autoridad `[userinfo@]host[:port]` (sin el `//`).
+fn parse_authority(a: string) -> Result<(Option<string>, string, Option<int>), string> {
+    var userinfo: Option<string> = Option.None;
+    var hostport = a;
+    match (last_index_of(a, "@")) {
+        Option.Some(at) => {
+            userinfo = Option.Some(a.substring(0, at));
+            hostport = a.substring(at + 1, a.len());
+        },
+        Option.None => { },
+    }
+    var host = hostport;
+    var port_text: Option<string> = Option.None;
+    if (hostport.starts_with("[")) {
+        match (index_of(hostport, "]")) {
+            Option.Some(close) => {
+                host = hostport.substring(1, close);
+                let rest = hostport.substring(close + 1, hostport.len());
+                if (rest.len() > 0) {
+                    if (!rest.starts_with(":")) {
+                        return Result.Err(
+                            "invalid URL: unexpected text after the IPv6 host: " + rest
+                        );
+                    }
+                    port_text = Option.Some(rest.substring(1, rest.len()));
+                }
+            },
+            Option.None => {
+                return Result.Err("invalid URL: unclosed '[' in the host");
+            },
+        }
+    } else {
+        match (index_of(hostport, ":")) {
+            Option.Some(c) => {
+                host = hostport.substring(0, c);
+                port_text = Option.Some(hostport.substring(c + 1, hostport.len()));
+            },
+            Option.None => { },
+        }
+        if (host.contains("[") || host.contains("]")) {
+            return Result.Err("invalid URL: '[' or ']' outside an IPv6 host");
+        }
+    }
+    var port: Option<int> = Option.None;
+    match (port_text) {
+        Option.Some(p) => {
+            if (p.len() > 0) {
+                for c in p {
+                    let n = char_code(c);
+                    if (n < 48 || n > 57) {
+                        return Result.Err("invalid URL: the port is not a number: " + p);
+                    }
+                }
+                if (p.len() > 5) {
+                    return Result.Err("invalid URL: port out of range: " + p);
+                }
+                let v = parse_int(p).unwrap_or(0 - 1);
+                if (v < 0 || v > 65535) {
+                    return Result.Err("invalid URL: port out of range: " + p);
+                }
+                port = Option.Some(v);
+            }
+        },
+        Option.None => { },
+    }
+    Result.Ok((userinfo, host, port))
+}
+
+/// Splits a URI reference into its components (RFC 3986 §3; relative references too). Err on a
+/// control character or a space (percent-encode them), an invalid scheme, an unclosed IPv6
+/// bracket or a port that is not a number in 0..65535. Nothing is decoded or normalized.
+pub fn parse(s: string) -> Result<Url, string> {
+    for c in s {
+        let n = char_code(c);
+        if (n <= 32 || n == 127) {
+            return Result.Err("invalid URL (control character or space; percent-encode it)");
+        }
+    }
+    let cs = s.chars();
+    var i = 0;
+    var scheme = "";
+    // El esquema es lo que va antes del primer ':' si no hay antes un '/', '?' o '#'.
+    let colon = find_any(cs, 0, ":/?#");
+    if (colon < cs.len() && cs[colon] == ':') {
+        if (colon == 0) {
+            return Result.Err("invalid URL: empty scheme");
+        }
+        var k = 0;
+        while (k < colon) {
+            if (!scheme_char(cs[k], k == 0)) {
+                return Result.Err("invalid URL: invalid scheme: " + chars_to_string(cs, 0, colon));
+            }
+            k = k + 1;
+        }
+        scheme = chars_to_string(cs, 0, colon);
+        i = colon + 1;
+    }
+    var userinfo: Option<string> = Option.None;
+    var host: Option<string> = Option.None;
+    var port: Option<int> = Option.None;
+    if (i + 1 < cs.len() && cs[i] == '/' && cs[i + 1] == '/') {
+        let end = find_any(cs, i + 2, "/?#");
+        let auth = parse_authority(chars_to_string(cs, i + 2, end))?;
+        userinfo = auth.0;
+        host = Option.Some(auth.1);
+        port = auth.2;
+        i = end;
+    }
+    let path_end = find_any(cs, i, "?#");
+    let path = chars_to_string(cs, i, path_end);
+    i = path_end;
+    var query: Option<string> = Option.None;
+    if (i < cs.len() && cs[i] == '?') {
+        let q_end = find_any(cs, i + 1, "#");
+        query = Option.Some(chars_to_string(cs, i + 1, q_end));
+        i = q_end;
+    }
+    var fragment: Option<string> = Option.None;
+    if (i < cs.len() && cs[i] == '#') {
+        fragment = Option.Some(chars_to_string(cs, i + 1, cs.len()));
+    }
+    Result.Ok(
+        Url {
+            scheme: scheme,
+            userinfo: userinfo,
+            host: host,
+            port: port,
+            path: path,
+            query: query,
+            fragment: fragment
+        }
+    )
+}
+
+/// Recomposes a `Url` into text (RFC 3986 §5.3); an IPv6 host gets its brackets back.
+pub fn render(u: Url) -> string {
+    var out = "";
+    if (u.scheme != "") {
+        out = out + u.scheme + ":";
+    }
+    match (u.host) {
+        Option.Some(h) => {
+            out = out + "//";
+            match (u.userinfo) {
+                Option.Some(ui) => {
+                    out = out + ui + "@";
+                },
+                Option.None => { },
+            }
+            out = out + if (h.contains(":")) { "[" + h + "]" } else { h };
+            match (u.port) {
+                Option.Some(p) => {
+                    out = out + ":" + to_string(p);
+                },
+                Option.None => { },
+            }
+        },
+        Option.None => { },
+    }
+    out = out + u.path;
+    match (u.query) {
+        Option.Some(q) => {
+            out = out + "?" + q;
+        },
+        Option.None => { },
+    }
+    match (u.fragment) {
+        Option.Some(f) => {
+            out = out + "#" + f;
+        },
+        Option.None => { },
+    }
+    out
+}
+
+/// Removes the `.` and `..` segments of a path (RFC 3986 §5.2.4): `/a/b/../c/./d` → `/a/c/d`.
+/// A `..` above the root is dropped (`/../a` → `/a`).
+pub fn remove_dot_segments(path: string) -> string {
+    var input = path;
+    var out: [string] = [];
+    while (input.len() > 0) {
+        if (input.starts_with("../")) {
+            input = input.substring(3, input.len());
+        } else if (input.starts_with("./")) {
+            input = input.substring(2, input.len());
+        } else if (input.starts_with("/./")) {
+            input = input.substring(2, input.len());
+        } else if (input == "/.") {
+            input = "/";
+        } else if (input.starts_with("/../")) {
+            input = input.substring(3, input.len());
+            let _ = out.pop();
+        } else if (input == "/..") {
+            input = "/";
+            let _ = out.pop();
+        } else if (input == "." || input == "..") {
+            input = "";
+        } else {
+            // El primer segmento (con su '/' inicial, si lo tiene) hasta el siguiente '/'.
+            let from = if (input.starts_with("/")) { 1 } else { 0 };
+            let rest = input.substring(from, input.len());
+            let cut = match (index_of(rest, "/")) {
+                Option.Some(k) => k + from,
+                Option.None => input.len(),
+            };
+            out.push(input.substring(0, cut));
+            input = input.substring(cut, input.len());
+        }
+    }
+    out.join("")
+}
+
+// La ruta de la base con la referencia relativa encima (RFC 3986 §5.2.3).
+fn merge_paths(base: Url, ref_path: string) -> string {
+    match (base.host) {
+        Option.Some(_) => {
+            if (base.path == "") {
+                return "/" + ref_path;
+            }
+        },
+        Option.None => { },
+    }
+    match (last_index_of(base.path, "/")) {
+        Option.Some(k) => base.path.substring(0, k + 1) + ref_path,
+        Option.None => ref_path,
+    }
+}
+
+/// Resolves `reference` (absolute or relative: `../x`, `/y`, `?q`, `#f`, `//host/p`) against
+/// the absolute URL `base` (RFC 3986 §5.2): what a browser does with a link or a `Location`
+/// header. Err if either fails to parse or `base` has no scheme.
+pub fn resolve(base: string, reference: string) -> Result<string, string> {
+    let b = parse(base)?;
+    if (b.scheme == "") {
+        return Result.Err("resolve: the base URL has no scheme: " + base);
+    }
+    let r = parse(reference)?;
+    var t = Url {
+        scheme: b.scheme,
+        userinfo: b.userinfo,
+        host: b.host,
+        port: b.port,
+        path: b.path,
+        query: b.query,
+        fragment: r.fragment
+    };
+    if (r.scheme != "") {
+        t.scheme = r.scheme;
+        t.userinfo = r.userinfo;
+        t.host = r.host;
+        t.port = r.port;
+        t.path = remove_dot_segments(r.path);
+        t.query = r.query;
+    } else {
+        match (r.host) {
+            Option.Some(_) => {
+                t.userinfo = r.userinfo;
+                t.host = r.host;
+                t.port = r.port;
+                t.path = remove_dot_segments(r.path);
+                t.query = r.query;
+            },
+            Option.None => {
+                if (r.path == "") {
+                    match (r.query) {
+                        Option.Some(_) => {
+                            t.query = r.query;
+                        },
+                        Option.None => { },
+                    }
+                } else {
+                    t.path = if (r.path.starts_with("/")) {
+                        remove_dot_segments(r.path)
+                    } else {
+                        remove_dot_segments(merge_paths(b, r.path))
+                    };
+                    t.query = r.query;
+                }
+            },
+        }
+    }
+    Result.Ok(render(t))
+}
+
+/// Parses a query string into its `(key, value)` pairs IN ORDER, repeated keys included
+/// (`a=1&a=2` → `[("a", "1"), ("a", "2")]`), unlike `parse_query`, whose `Map` keeps the last.
+/// Keys and values are URL-decoded (`+` is a space; a malformed escape stays as written).
+pub fn parse_query_pairs(qs: string) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    for p in qs.split("&") {
+        if (p.len() > 0) {
+            match (index_of(p, "=")) {
+                Option.Some(eq) => {
+                    out.push(
+                        (
+                            url_decode_or(p.substring(0, eq)),
+                            url_decode_or(p.substring(eq + 1, p.len()))
+                        )
+                    );
+                },
+                Option.None => {
+                    out.push((url_decode_or(p), ""));
+                },
+            }
+        }
+    }
+    out
+}
+
+/// Builds a query string from `(key, value)` pairs in the given order (repeats allowed); keys
+/// and values are percent-encoded.
+pub fn build_query_pairs(pairs: [(string, string)]) -> string {
+    var parts: [string] = [];
+    for kv in pairs {
+        parts.push(url_encode(kv.0) + "=" + url_encode(kv.1));
+    }
+    parts.join("&")
+}

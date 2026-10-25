@@ -1817,6 +1817,19 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an array"),
             },
+            // rayreq #261: el tramo [i, j) de un [char] como string, en O(j − i).
+            "chars_to_string" => match (&values[0], &values[1], &values[2]) {
+                (Value::Array(xs), Value::Int(i), Value::Int(j)) => {
+                    let xs = xs.borrow();
+                    let (lo, hi) = crate::builtins::clamp_char_range(xs.len(), *i, *j);
+                    let out: String = xs[lo..hi].iter().map(|v| match v {
+                        Value::Char(c) => *c,
+                        _ => unreachable!("the checker guarantees [char]"),
+                    }).collect();
+                    Value::Str(out.into())
+                }
+                _ => unreachable!("the checker guarantees [char], int, int"),
+            },
             "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("the checker guarantees string, int"),

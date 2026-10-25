@@ -587,6 +587,11 @@ print("uno dos".chars().len());          // 7
 
 Un string **no se muta** (`s[i] = c` es error): construye uno nuevo, o usa `StringBuilder` para acumular.
 
+Indexar y cortar van por **carácter**, y recorrer un texto en orden es barato: `s[i]` y
+`s.substring(i, j)` cuestan O(1) en ASCII y O(1) amortizado avanzando por un texto no-ASCII, así
+que un lector que corta tokens de un documento grande no se vuelve cuadrático. Si ya trabajas con
+`let cs = s.chars();`, `cs.chars_to_string(i, j)` devuelve el tramo como string.
+
 #### Cadenas plantilla: multilínea y comillas sin escapar
 
 Un literal `"…"` **no puede cruzar líneas** (`lex error: newline inside an unterminated string`).
@@ -1139,9 +1144,17 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
 
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
    prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
-   archivo con su aplicación, `ui.reveal(p)` lo muestra en el gestor de archivos y
+   archivo con su aplicación, `ui.open_url(u)` abre una web `http(s)` o un `mailto:` en el
+   navegador del sistema (el inicio de sesión OAuth de una app), `ui.reveal(p)` lo muestra en el gestor de archivos y
    `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
    app de terminal en macOS y Windows). Nada de eso pasa por una shell.
+
+   `std/url` trocea y resuelve URLs según la RFC 3986: `url.parse(s)` da esquema, host, puerto,
+   ruta, query y fragmento tal como se escribieron, y `url.resolve("https://api.x/v1/users",
+   "../health")` hace lo que un navegador con un enlace relativo o un `Location`. Para las query
+   strings con claves repetidas, `url.parse_query_pairs` conserva el orden. En `std/json` un número
+   es un `float`: un id de 64 bits no cabe exacto, así que `json.get_int` da `None` por encima de
+   2^53 − 1 y `json.raw_at(text, "/data/0/id")` lee el TEXTO del valor con todos sus dígitos.
 
    `std/regex` trae **dos dialectos**: el propio (`compile`/`search`/…, motor lineal escrito en
    raylang, sin look-around) y el **Oniguruma** de `regex.onig` — el que usan los

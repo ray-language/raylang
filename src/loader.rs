@@ -1414,6 +1414,12 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(scrutinee, src, module)?;
                 for arm in arms {
                     self.scopes.push(arm_bindings(arm));
+                    // rayreq #262: la guarda ve el mismo ámbito que el cuerpo (los enlaces del
+                    // patrón y los módulos importados); antes no se resolvía y `math.abs(n)` en
+                    // una guarda daba «name 'math' not declared».
+                    if let Some(g) = &mut arm.guard {
+                        self.resolve_expr(g, src, module)?;
+                    }
                     self.resolve_expr(&mut arm.body, src, module)?;
                     self.scopes.pop();
                 }

@@ -852,6 +852,9 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
         ExprKind::Match { scrutinee, arms } => {
             walk_expr(scrutinee, acc);
             for arm in arms {
+                if let Some(g) = &arm.guard {
+                    walk_expr(g, acc); // una fn-expr dentro de una guarda también cuenta
+                }
                 walk_expr(&arm.body, acc);
             }
         }

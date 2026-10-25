@@ -298,6 +298,70 @@ impl Cur {
         self.srclines.get(line.wrapping_sub(1)).and_then(|l| l.get(col.wrapping_sub(1))) == Some(&'`')
     }
 
+    /// rayreq #258: los escapes `\u{…}` tal como se escribieron en el literal que abre en
+    /// `(line, col)`, por el carácter que producen. El literal se reemite desde su VALOR, así que
+    /// sin esto `"\u{a0}"` salía como un espacio duro literal, indistinguible de un espacio (y
+    /// `\u{FEFF}`, `\u{2028}`, `'\u{FFFD}'`, igual): el escape era la documentación de qué
+    /// carácter hay ahí. Recorre hasta el delimitador de cierre (varias líneas en un template);
+    /// lo que haya dentro de un `${…}` también se recoge, y como solo decide la ORTOGRAFÍA de un
+    /// carácter (no su valor), recoger de más no cambia el programa.
+    fn source_escapes(&self, line: usize, col: usize) -> std::collections::HashMap<char, String> {
+        let mut out = std::collections::HashMap::new();
+        let (mut li, mut ci) = (line.wrapping_sub(1), col);
+        let delim = match self.srclines.get(li).and_then(|l| l.get(col.wrapping_sub(1))) {
+            Some(&d) if d == '"' || d == '`' || d == '\'' => d,
+            _ => return out,
+        };
+        let mut depth = 0usize; // `${` abiertos
+        while let Some(l) = self.srclines.get(li) {
+            if ci >= l.len() {
+                if delim != '`' && depth == 0 {
+                    break; // un "…" o '…' no cruza líneas
+                }
+                li += 1;
+                ci = 0;
+                continue;
+            }
+            let c = l[ci];
+            if c == '\\' {
+                if l.get(ci + 1) == Some(&'u') && l.get(ci + 2) == Some(&'{') {
+                    if let Some(end) = l[ci + 3..].iter().position(|&x| x == '}') {
+                        let hex: String = l[ci + 3..ci + 3 + end].iter().collect();
+                        if let Some(ch) = u32::from_str_radix(&hex.replace('_', ""), 16).ok().and_then(char::from_u32) {
+                            out.entry(ch).or_insert_with(|| l[ci..ci + 4 + end].iter().collect());
+                        }
+                        ci += 4 + end;
+                        continue;
+                    }
+                }
+                if l.get(ci + 1) == Some(&'x') && ci + 3 < l.len() {
+                    let hex: String = l[ci + 2..ci + 4].iter().collect();
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        out.entry(ch).or_insert_with(|| l[ci..ci + 4].iter().collect());
+                        ci += 4;
+                        continue;
+                    }
+                }
+                ci += 2;
+                continue;
+            }
+            if delim != '\'' && c == '$' && l.get(ci + 1) == Some(&'{') {
+                depth += 1;
+                ci += 2;
+                continue;
+            }
+            if depth > 0 && c == '{' {
+                depth += 1;
+            } else if depth > 0 && c == '}' {
+                depth -= 1;
+            } else if depth == 0 && c == delim {
+                break;
+            }
+            ci += 1;
+        }
+        out
+    }
+
     /// ¿Emitir una línea en blanco antes del constructo que empieza en `line` (con sus comentarios
     /// previos)? Sí si la línea de fuente **justo encima** del grupo (los comentarios sueltos que van a
     /// volcarse + la propia línea) está en blanco. Colapsa 2+ blancos a uno (se emite a lo sumo uno).
@@ -1286,7 +1350,8 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     if let Some(segs) = cur.interp.remove(&leaf) {
         if interp_spine_pieces(e) == segs.len() {
             let template = cur.is_template(leaf.0, leaf.1);
-            let s = fmt_interp(cur, &segs, template); // una cadena interpolada es primaria → sin paréntesis
+            let keep = cur.source_escapes(leaf.0, leaf.1);
+            let s = fmt_interp(cur, &segs, template, &keep); // una cadena interpolada es primaria → sin paréntesis
             cur.interp.insert(leaf, segs);
             return s;
         }
@@ -1510,7 +1575,7 @@ fn interp_spine_pieces(e: &Expr) -> usize {
 /// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
 /// literales se re-escapan como un string; cada `${e}` formatea su expresión (recursivo → interpolación
 /// anidada funciona). Un `${` literal en el texto se re-escapa como `\${`.
-fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
+fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool, keep: &std::collections::HashMap<char, String>) -> String {
     let delim = if template { '`' } else { '"' };
     let mut out = String::from(delim);
     for seg in segs {
@@ -1523,6 +1588,10 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
                 // se reemiten LITERALES (multilínea).
                 let chars: Vec<char> = s.chars().collect();
                 for (i, &c) in chars.iter().enumerate() {
+                    if let Some(esc) = keep.get(&c) {
+                        out.push_str(esc); // rayreq #258: el escape tal como se escribió
+                        continue;
+                    }
                     match c {
                         '\\' => out.push_str("\\\\"),
                         '\n' if template => out.push('\n'),
@@ -1625,6 +1694,14 @@ fn fmt_chain_wrapped(cur: &mut Cur, recv: &Expr, links: &[(&str, &[Expr])]) -> S
 /// Una lista con un elemento así NO se reparte: su forma multilínea ya la dan `fmt_expr_indented`/
 /// `fmt_block` relativas a `cur.base`, y repartir la lista además desplazaría `spawn(fn() { … })`
 /// a una forma que nadie escribe.
+/// rayreq #256: una closure cuyo cuerpo es una sola expresión sin bloque (anidada o no):
+/// `fn(x: int) -> int { x }`, `fn() -> fn(R) -> S { handle }`.
+fn is_compact_fn(e: &Expr) -> bool {
+    let ExprKind::Func(fe) = &e.kind else { return false };
+    fe.body.statements.is_empty()
+        && fe.body.tail.as_ref().is_some_and(|t| is_compact_fn(t) || !is_multiline_form(t))
+}
+
 fn is_multiline_form(e: &Expr) -> bool {
     !is_compact_if(e) && (is_block_form(e) || matches!(e.kind, ExprKind::Func(_)))
 }
@@ -1779,7 +1856,17 @@ fn could_wrap_list(e: &Expr) -> bool {
         }
         _ => return false,
     };
-    if elems.is_empty() || elems.iter().any(forces_multiline) {
+    // rayreq #256: una closure de UNA expresión (`fn() -> T { echo }`), que se escribe en una sola
+    // línea, no impide repartir los argumentos. Antes sí lo impedía, y el reparto forzado de la
+    // sentencia caía en el primer hijo repartible: una cadena `a.b().c()` partida en mitad de un
+    // argumento, con `.c()` a la izquierda de su receptor. Las closures con sentencias siguen
+    // fuera (`spawn(fn() { … })` conserva su forma).
+    if elems.is_empty() || elems.iter().any(|x| forces_multiline(x) && !is_compact_fn(x)) {
+        return false;
+    }
+    // …pero una closure como ÚNICO elemento (`map(fn(x: int) -> int { x * x })`, la etapa de un
+    // pipeline) no se reparte sola en su línea: se queda compacta, como `spawn(fn() { … })`.
+    if elems.len() == 1 && is_compact_fn(&elems[0]) {
         return false;
     }
     // La excepción de M105: un único argumento que es cadena mantiene la forma compacta.
@@ -1820,9 +1907,10 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         ExprKind::Float(f) => fmt_float(*f),
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Str(s) => {
-            if cur.is_template(e.line, e.col) { fmt_template_lit(s) } else { fmt_string_lit(s) }
+            let keep = cur.source_escapes(e.line, e.col);
+            if cur.is_template(e.line, e.col) { fmt_template_lit(s, &keep) } else { fmt_string_lit(s, &keep) }
         }
-        ExprKind::Char(c) => fmt_char_lit(*c),
+        ExprKind::Char(c) => fmt_char_lit(*c, &cur.source_escapes(e.line, e.col)),
         ExprKind::Bytes(b) => fmt_bytes_lit(b),
         ExprKind::Ident(n) => n.clone(),
         ExprKind::Unary { op, expr } => {
@@ -2094,8 +2182,8 @@ fn fmt_literal_pattern(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Int(v, r) => fmt_int(*v, *r),
         ExprKind::Float(f) => fmt_float(*f),
-        ExprKind::Str(t) => fmt_string_lit(t),
-        ExprKind::Char(c) => fmt_char_lit(*c),
+        ExprKind::Str(t) => fmt_string_lit(t, &Default::default()),
+        ExprKind::Char(c) => fmt_char_lit(*c, &Default::default()),
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Unary { op: UnaryOp::Neg, expr } => format!("-{}", fmt_literal_pattern(expr)),
         _ => "_".to_string(),
@@ -2155,7 +2243,11 @@ fn group_digits(body: &str, size: usize) -> String {
     out
 }
 
-fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
+fn escape_char(c: char, out: &mut String, in_double_quotes: bool, keep: &std::collections::HashMap<char, String>) {
+    if let Some(esc) = keep.get(&c) {
+        out.push_str(esc); // rayreq #258: el escape `\u{…}` tal como se escribió
+        return;
+    }
     match c {
         '\\' => out.push_str("\\\\"),
         '\n' => out.push_str("\\n"),
@@ -2171,7 +2263,7 @@ fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
     }
 }
 
-fn fmt_string_lit(s: &str) -> String {
+fn fmt_string_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> String {
     let mut out = String::from("\"");
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
@@ -2180,7 +2272,7 @@ fn fmt_string_lit(s: &str) -> String {
         if c == '$' && chars.get(i + 1) == Some(&'{') {
             out.push_str("\\$");
         } else {
-            escape_char(c, &mut out, true);
+            escape_char(c, &mut out, true, keep);
         }
     }
     out.push('"');
@@ -2189,10 +2281,14 @@ fn fmt_string_lit(s: &str) -> String {
 
 /// Reemite un string cuyo literal original era un BACKTICK (M95): la `"` es literal, el
 /// `` ` `` se escapa y los saltos de línea se conservan literales (multilínea).
-fn fmt_template_lit(s: &str) -> String {
+fn fmt_template_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> String {
     let mut out = String::from("`");
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
+        if let Some(esc) = keep.get(&c) {
+            out.push_str(esc); // rayreq #258
+            continue;
+        }
         match c {
             '\\' => out.push_str("\\\\"),
             '`' => out.push_str("\\`"),
@@ -2207,9 +2303,9 @@ fn fmt_template_lit(s: &str) -> String {
     out
 }
 
-fn fmt_char_lit(c: char) -> String {
+fn fmt_char_lit(c: char, keep: &std::collections::HashMap<char, String>) -> String {
     let mut out = String::from("'");
-    escape_char(c, &mut out, false);
+    escape_char(c, &mut out, false, keep);
     out.push('\'');
     out
 }
@@ -3237,6 +3333,32 @@ mod tests {
         let out = fmt(src);
         assert!(out.contains("    let s = \"uno\"\n        + \"dos\"\n"), "{out}");
         assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn unicode_escapes_are_kept_as_written() {
+        // rayreq #258: el literal se reemite desde su valor; un escape `\u{…}` / `\xNN` del fuente
+        // se conserva (un espacio duro, la BOM o U+2028 no se distinguirían del carácter literal).
+        // (Un mismo carácter escrito de dos formas en UN literal sale con la primera.)
+        let src = "fn main() {\n    let a = \"x\\u{a0}y \u{e9}\";\n    let h = \"\\xA0\";\n    let b = '\\u{FFFD}';\n    let c = \"\\u{FEFF}%YAML ${a} \\u{2028}\";\n    let d = `l\\u{2029}\nn ${b}`;\n    print(a + h + b.to_string() + c + d);\n}\n";
+        let out = fmt(src);
+        assert_eq!(out, src, "fmt no toca los escapes");
+        // Un carácter escrito tal cual se queda tal cual.
+        assert!(out.contains("y \u{e9}\""), "{out}");
+    }
+
+    #[test]
+    fn a_chain_inside_arguments_is_not_split_when_a_compact_closure_is_there() {
+        // rayreq #256: con una closure de una expresión entre los argumentos, se reparte por
+        // argumentos; antes se partía la cadena `options().quiet()` en mitad del argumento.
+        let src = "fn main() {\n    let _ = webserver.serve_options_on(listener, webserver.options().quiet(), fn() -> fn(webserver.Request) -> webserver.Response { echo });\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    let _ = webserver.serve_options_on(\n        listener,\n        webserver.options().quiet(),\n"), "{out}");
+        assert!(!out.contains("\n        .quiet()"), "{out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // Una closure como único argumento sigue compacta (la etapa de un pipeline).
+        let one = "fn main() -> int {\n    let c: int = xs |> map(fn(x: int) -> int { x * x }) |> filter(fn(x: int) -> bool { x > 10 }) |> fold(0, suma);\n    c\n}\n";
+        assert!(!fmt(one).contains("map(\n"), "{}", fmt(one));
     }
 
     #[test]

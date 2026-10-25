@@ -68,6 +68,12 @@ fn scalars_follow_the_core_schema() {
         `[null,null,true,false,12,-3,4,31,15,1.5,0.5,2.0,1e3,7,"3.0.1","12","yes",".inf"]`
     );
     assert_eq(as_json("a: !!str 12\nb: !custom x"), `{"a":"12","b":"x"}`);
+    // A property on the first key does not shift the mapping's column; a tag before a block
+    // value still applies; a collection or null as a flow key is an error, not the member "".
+    assert_eq(as_json("&k first: 1\nsecond: 2"), `{"first":1,"second":2}`);
+    assert_eq(as_json("key: !!str\n  123"), `{"key":"123"}`);
+    assert_eq(error_of("{[a, b]: 1}"), "YAML, line 1: complex keys (a collection as a key) are not supported");
+    assert_eq(error_of("{~: 1}"), "YAML, line 1: a null key is not supported");
     assert_eq(
         as_json("k: a # comment\nu: http://x/#frag\nh: a#b"),
         `{"k":"a","u":"http://x/#frag","h":"a#b"}`

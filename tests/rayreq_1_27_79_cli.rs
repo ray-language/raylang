@@ -107,6 +107,7 @@ fn main() {
     print("pragma " + show(sqlite.exec(c, "PRAGMA busy_timeout = 5000", [])));
     print("insert " + show(sqlite.exec(c, "INSERT INTO a VALUES (?1)", ["7"])));
     print("batch " + show(sqlite.exec(c, "INSERT INTO a VALUES (1); INSERT INTO a VALUES (2); UPDATE a SET x = x + 1", [])));
+    print("ddl-after-dml " + show(sqlite.exec(c, "INSERT INTO a VALUES (9); CREATE INDEX i ON a (x); CREATE TABLE d (w)", [])));
     print("params-multi " + show(sqlite.exec(c, "INSERT INTO b VALUES (?1); INSERT INTO b VALUES (?1)", ["5"])));
     print("b rows " + rows(sqlite.query(c, "SELECT count(*) FROM b", []).unwrap()));
     print("syntax " + show(sqlite.exec(c, "CREATE TABLE c (z); NOT SQL", [])));
@@ -123,6 +124,7 @@ a;b
 pragma ok 0
 insert ok 1
 batch ok 5
+ddl-after-dml ok 1
 params-multi err sqlite: exec with parameters runs one statement, and the SQL has more; run the others in their own exec (without parameters they all run)
 b rows 0
 syntax err near "NOT": syntax error in  NOT SQL at offset 1

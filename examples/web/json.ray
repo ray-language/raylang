@@ -1182,8 +1182,9 @@ pub fn raw_at(json: string, pointer: string) -> Option<string> {
         }
         if (cs[i] == '{') {
             i = raw_skip_ws(cs, i + 1);
-            var found = false;
-            while (!found) {
+            // Clave repetida: gana la ÚLTIMA, igual que `parse`, `doc_get` y `doc_pointer`.
+            var hit = 0 - 1;
+            while (true) {
                 if (i >= cs.len() || cs[i] != '"') {
                     return Option.None;
                 }
@@ -1203,20 +1204,25 @@ pub fn raw_at(json: string, pointer: string) -> Option<string> {
                 }
                 i = raw_skip_ws(cs, i + 1);
                 if (key == token) {
-                    found = true;
+                    hit = i;
+                }
+                let e = raw_value_end(cs, i);
+                if (e < 0) {
+                    return Option.None;
+                }
+                i = raw_skip_ws(cs, e);
+                if (i < cs.len() && cs[i] == ',') {
+                    i = raw_skip_ws(cs, i + 1);
+                } else if (i < cs.len() && cs[i] == '}') {
+                    break;
                 } else {
-                    let e = raw_value_end(cs, i);
-                    if (e < 0) {
-                        return Option.None;
-                    }
-                    i = raw_skip_ws(cs, e);
-                    if (i < cs.len() && cs[i] == ',') {
-                        i = raw_skip_ws(cs, i + 1);
-                    } else {
-                        return Option.None;
-                    }
+                    return Option.None;
                 }
             }
+            if (hit < 0) {
+                return Option.None;
+            }
+            i = hit;
         } else if (cs[i] == '[') {
             let want = match (parse_int(token)) {
                 Option.Some(n) => n,

@@ -45,7 +45,9 @@ mod imp {
     /// rayreq #248: como [`exec_conn`] con parámetros que pueden ser `NULL` (`None`).
     pub fn exec_conn_opt(conn: &rusqlite::Connection, sql: &str, params: &[Option<String>]) -> Result<i64, String> {
         let mut batch = rusqlite::Batch::new(conn, sql);
-        let mut total: i64 = 0;
+        // Se cuenta por el delta de `total_changes`: `changes()` solo lo actualizan
+        // INSERT/UPDATE/DELETE y tras un DDL conserva el valor anterior (se sumaría dos veces).
+        let before = conn.total_changes() as i64;
         if !params.is_empty() {
             let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? else {
                 return Ok(0);
@@ -57,25 +59,17 @@ mod imp {
                             run the others in their own exec (without parameters they all run)"
                     .to_string());
             }
-            let readonly = stmt.readonly();
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| e.to_string())?;
             while rows.next().map_err(|e| e.to_string())?.is_some() {}
             drop(rows);
-            if !readonly {
-                total = conn.changes() as i64;
-            }
-            return Ok(total);
+            return Ok(conn.total_changes() as i64 - before);
         }
         while let Some(mut stmt) = batch.next().map_err(|e| e.to_string())? {
-            let readonly = stmt.readonly();
             let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
             while rows.next().map_err(|e| e.to_string())?.is_some() {}
             drop(rows);
-            if !readonly {
-                total += conn.changes() as i64;
-            }
         }
-        Ok(total)
+        Ok(conn.total_changes() as i64 - before)
     }
 
     impl Conn {

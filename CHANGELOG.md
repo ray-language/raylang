@@ -32,6 +32,16 @@ Lo que dejó abierto rayreq, con las recomendaciones de IDEAS §116 aprobadas (M
 - **`sqlite.exec_opt`** (#248, `db` 0.6.0): parámetros `Option<string>`, `None` = SQL `NULL`.
 - **Nativo**: un peer TLS que cierra sin `close_notify` es un fin de flujo, como en la VM; antes
   el cliente nativo lo daba como error al leer la respuesta.
+- **Nativo: una variable usada solo en la guarda de un `match`** ya es una celda compartida con
+  la closure que la captura: el binario veía el valor viejo (VM `false`, nativo `true`). Lo
+  arrastraba 1.27.80 (#262 arregló el loader, no los recorredores del transpilador); el LSP
+  tampoco miraba dentro de la guarda al completar.
+- `json.raw_at` devuelve la **última** clave repetida, como `parse`, `doc_get` y `doc_pointer`.
+- `sqlite.exec` cuenta las filas por el delta de `total_changes`: un `CREATE INDEX` tras un
+  `INSERT` en el mismo lote ya no suma otra vez las filas del `INSERT`.
+- `yaml`: un ancla o tag sobre la primera clave (`&k first: 1`) no corta el mapping; un tag ante
+  un valor en bloque (`key: !!str\n  123`) se aplica; una colección o `null` como clave de flow
+  es un error, no el miembro `""`.
 - `net` 0.12.0, `db` 0.6.0 y `yaml` 0.1.0 piden raylang 1.27.81.
 
 ## 1.27.80 — 2026-10-25

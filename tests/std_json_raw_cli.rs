@@ -27,6 +27,7 @@ fn main() {
     print("raw esc: " + show(json.raw_at(text, "/a~1b")) + " " + show(json.raw_at(text, "/t~0")));
     print("raw missing: " + show(json.raw_at(text, "/data/5")) + " " + show(json.raw_at(text, "/nope")) + " " + show(json.raw_at(text, "/data/01")) + " " + show(json.raw_at(text, "bad")));
     print("raw whole: " + show(json.raw_at("  [1, 2] ", "")));
+    print("raw dup: " + show(json.raw_at("{\"k\": 1, \"k\": 2}", "/k")) + " " + show(json.raw_at("{\"k\": 1}", "/z")) + " " + show(json.raw_at("{}", "/k")));
     print("compact: " + json.compact("{ \"a\" : [ 1 , 2 ],\n  \"b\": \"x y\" }"));
     print("reindent0: " + json.reindent("{\"a\": [1, 2]}", 0));
     print("reindent2: " + json.reindent("{\"a\": [1, 2]}", 2).replace("\n", "|"));
@@ -46,6 +47,7 @@ raw arr: [true, null]
 raw esc: 7 8
 raw missing: None None None None
 raw whole: [1, 2]
+raw dup: 2 None None
 compact: {"a":[1,2],"b":"x y"}
 reindent0: {"a":[1,2]}
 reindent2: {|  "a": [|    1,|    2|  ]|}

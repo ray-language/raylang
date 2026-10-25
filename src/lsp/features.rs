@@ -2274,7 +2274,10 @@ pub(super) fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &
             ExprKind::While { body, .. } => collect_lets(body, cursor_line, out),
             ExprKind::Block(b) => collect_lets(b, cursor_line, out),
             ExprKind::Match { arms, .. } => {
-                for arm in arms { visit_expr(&arm.body, cursor_line, out); }
+                for arm in arms {
+                    if let Some(g) = &arm.guard { visit_expr(g, cursor_line, out); }
+                    visit_expr(&arm.body, cursor_line, out);
+                }
             }
             _ => {}
         }

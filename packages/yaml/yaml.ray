@@ -183,9 +183,11 @@ fn node_at(y: Y, parent: int, c: int, depth: int) -> Result<Doc, string> {
     if (props.0 != "" || props.1 != "") {
         if (rest_blank(y)) {
             let n = block(y, parent, depth + 1)?;
-            return Result.Ok(anchored(y, props.0, n));
+            return Result.Ok(anchored(y, props.0, tagged(props.1, n)));
         }
-        let n = node_at(y, parent, y.col, depth + 1)?;
+        // La propiedad no mueve la columna del nodo: `&k first: 1` sigue siendo un mapping en
+        // `c`, y `second: 2` en la línea siguiente es su hermana, no el fin del mapping.
+        let n = node_at(y, parent, c, depth + 1)?;
         return Result.Ok(anchored(y, props.0, tagged(props.1, n)));
     }
     if (is_dash(y)) {
@@ -909,7 +911,7 @@ fn flow(y: Y, depth: int) -> Result<Doc, string> {
                 y.col = y.col + 1;
                 skip_flow_space(y);
                 let v = flow_value(y, depth + 1)?;
-                xs.push(Doc.Obj([Member { key: json.doc_text(item).unwrap_or(""), value: v }]));
+                xs.push(Doc.Obj([Member { key: flow_key(y, item)?, value: v }]));
                 skip_flow_space(y);
             } else {
                 xs.push(item);
@@ -943,7 +945,7 @@ fn flow(y: Y, depth: int) -> Result<Doc, string> {
             v = flow_value(y, depth + 1)?;
             skip_flow_space(y);
         }
-        put(fields, json.doc_text(k).unwrap_or(""), v);
+        put(fields, flow_key(y, k)?, v);
         if (eof(y)) {
             return fail(y, "unterminated '{'");
         }
@@ -952,6 +954,18 @@ fn flow(y: Y, depth: int) -> Result<Doc, string> {
         } else if (ch(y) != '}') {
             return fail(y, "expected ',' or '}'");
         }
+    }
+}
+
+/// The key of a flow pair: a scalar. A collection or `null` as a key is rejected like `? ` in
+/// block mode, instead of silently becoming the member "".
+fn flow_key(y: Y, k: Doc) -> Result<string, string> {
+    match (k) {
+        Doc.Str(s) => Result.Ok(s),
+        Doc.Num(s) => Result.Ok(s),
+        Doc.Bool(b) => Result.Ok(if (b) { "true" } else { "false" }),
+        Doc.Null => fail(y, "a null key is not supported"),
+        _ => fail(y, "complex keys (a collection as a key) are not supported"),
     }
 }
 

@@ -593,30 +593,60 @@ fn client_nonce() -> string {
 
 /// `find` through the pool (retries once on a fresh connection when a reused one fails on the wire).
 pub fn pool_find(p: Pool, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[[bson.Field]], string> { find(c, coll, filter) }, true)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<[[bson.Field]], string> { find(c, coll, filter) },
+        true
+    )
 }
 
 /// `insert` through the pool. Never retries (the write may have happened before the break).
 pub fn pool_insert(p: Pool, coll: string, docs: [[bson.Field]]) -> Result<int, string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<int, string> { insert(c, coll, docs) }, false)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<int, string> { insert(c, coll, docs) },
+        false
+    )
 }
 
 /// `run_command` through the pool. Never retries.
 pub fn pool_run_command(p: Pool, doc: [bson.Field]) -> Result<[bson.Field], string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, fn(c: Conn) -> Result<[bson.Field], string> { run_command(c, doc) }, false)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<[bson.Field], string> { run_command(c, doc) },
+        false
+    )
 }
 
 /// Like `pool_with`, but if `f` fails on the wire on a REUSED connection (the server closed it
 /// while idle) it runs once more on a fresh one: for blocks that are safe to repeat.
 pub fn pool_with_retry<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, f, true)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        f,
+        true
+    )
 }
 
 /// Runs `f` with ONE pooled connection for its whole duration (e.g. `update`/`delete`, or
 /// several operations on one session), then returns it. No retry: a wire failure inside `f`
 /// discards the connection, any other error returns it to the pool.
 pub fn pool_with<R>(p: Pool, f: fn(Conn) -> Result<R, string>) -> Result<R, string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { pool_dial(p) }, fn(c: Conn) { disconnect(c) }, f, false)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        f,
+        false
+    )
 }
 
 /// Closes the pool's idle connections and the pool itself.

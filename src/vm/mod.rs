@@ -2622,7 +2622,10 @@ impl<'a> Vm<'a> {
                     };
                     // M233: ASCII → tramo prestado, un solo Arc; M394 (rayplay #160): también el no-ASCII
                     // (antes materializaba el string entero por caracteres).
-                    let out: Arc<str> = crate::builtins::substring_slice(&s, i, j).into();
+                    // rayreq #261: el tramo por la caché de la cadena (ASCII O(1), no-ASCII
+                    // amortizado), como `s[i]`.
+                    let (lo, hi) = str_cache::byte_range(&s, i, j);
+                    let out: Arc<str> = s[lo..hi].into();
                     self.push(HeapValue::Str(out));
                 }
                 // M19.2: sub-secuencia de bytes por octeto (con clamp). Orden en la pila: b, i, j.
@@ -2678,6 +2681,22 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees [bytes]"),
                     }));
                     self.push(HeapValue::bytes(out));
+                }
+                // rayreq #261: el tramo [i, j) de un [char] como string, en O(j − i).
+                OpCode::CharsToString => {
+                    let j = self.pop();
+                    let i = self.pop();
+                    let a = self.pop();
+                    let (HeapValue::Obj(h), HeapValue::Int(i), HeapValue::Int(j)) = (a, i, j) else {
+                        unreachable!("the checker guarantees [char], int, int");
+                    };
+                    let cs = self.as_array(h);
+                    let (lo, hi) = crate::builtins::clamp_char_range(cs.len(), i, j);
+                    let out: String = cs[lo..hi].iter().map(|v| match v {
+                        HeapValue::Char(c) => *c,
+                        _ => unreachable!("the checker guarantees [char]"),
+                    }).collect();
+                    self.push(HeapValue::Str(out.into()));
                 }
                 OpCode::Repeat => {
                     let n = self.pop();
@@ -5731,26 +5750,62 @@ mod str_cache {
         last_byte: usize,
     }
 
+    // rayreq #261: DOS entradas (la más reciente primero). Un lexer alterna el texto con el token
+    // que acaba de cortar (`let t = text.substring(a, b); t[0]`): con una sola, cada token
+    // expulsaba al texto y el siguiente `substring` volvía a recorrerlo entero.
     thread_local! {
-        static LAST: RefCell<Option<Entry>> = const { RefCell::new(None) };
+        static LAST: RefCell<[Option<Entry>; 2]> = const { RefCell::new([None, None]) };
     }
 
     fn with_entry<R>(s: &Arc<str>, f: impl FnOnce(&mut Entry) -> R) -> R {
         LAST.with(|cell| {
-            let mut slot = cell.borrow_mut();
-            let hit = matches!(&*slot, Some(e) if Arc::ptr_eq(&e.s, s));
-            if !hit {
+            let mut slots = cell.borrow_mut();
+            let hit = |e: &Option<Entry>| matches!(e, Some(e) if Arc::ptr_eq(&e.s, s));
+            if hit(&slots[1]) {
+                slots.swap(0, 1);
+            } else if !hit(&slots[0]) {
                 let ascii = s.is_ascii();
                 let chars = if ascii { s.len() } else { s.chars().count() };
-                *slot = Some(Entry { s: Arc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });
+                slots[1] = slots[0].take();
+                slots[0] = Some(Entry { s: Arc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });
             }
-            f(slot.as_mut().expect("entry just set"))
+            f(slots[0].as_mut().expect("entry just set"))
         })
     }
 
     /// Longitud en caracteres (O(1) tras la primera vez para cada cadena).
     pub(super) fn char_len(s: &Arc<str>) -> usize {
         with_entry(s, |e| e.chars)
+    }
+
+    /// rayreq #261: mueve el cursor de la entrada al carácter `i` (`i <= chars`) y devuelve su
+    /// offset de byte — hacia delante o hacia atrás desde la última posición, o desde el
+    /// principio si queda más cerca. En ASCII, el propio `i`.
+    fn seek(e: &mut Entry, i: usize) -> usize {
+        if e.ascii {
+            return i;
+        }
+        let bytes = e.s.as_bytes();
+        let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i {
+            (e.last_char, e.last_byte)
+        } else {
+            (0, 0)
+        };
+        while ci < i {
+            let b = bytes[bi];
+            bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 };
+            ci += 1;
+        }
+        while ci > i {
+            bi -= 1;
+            while bi > 0 && (bytes[bi] & 0xC0) == 0x80 {
+                bi -= 1;
+            }
+            ci -= 1;
+        }
+        e.last_char = ci;
+        e.last_byte = bi;
+        bi
     }
 
     /// El carácter en la posición `i` (por carácter), o `None` fuera de rango.
@@ -5763,29 +5818,22 @@ mod str_cache {
             if e.ascii {
                 return Some(e.s.as_bytes()[i] as char);
             }
-            // No-ASCII: hacia delante desde la última posición, hacia atrás desde ella si queda
-            // más cerca que el principio (un bucle descendente), y si no desde el principio.
-            let bytes = e.s.as_bytes();
-            let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i {
-                (e.last_char, e.last_byte)
-            } else {
-                (0, 0)
-            };
-            while ci < i {
-                let b = bytes[bi];
-                bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 };
-                ci += 1;
-            }
-            while ci > i {
-                bi -= 1;
-                while bi > 0 && (bytes[bi] & 0xC0) == 0x80 {
-                    bi -= 1;
-                }
-                ci -= 1;
-            }
-            e.last_char = ci;
-            e.last_byte = bi;
+            let bi = seek(e, i);
             e.s[bi..].chars().next()
+        })
+    }
+
+    /// rayreq #261: los offsets de byte del tramo `[i, j)` por carácter, con el clamp de
+    /// `substring`: O(1) en ASCII tras la primera vez, amortizado en un recorrido secuencial.
+    /// Antes `substring` comprobaba en cada llamada si el string ENTERO era ASCII.
+    pub(super) fn byte_range(s: &Arc<str>, i: i64, j: i64) -> (usize, usize) {
+        with_entry(s, |e| {
+            let n = e.chars as i64;
+            let lo = i.clamp(0, n) as usize;
+            let hi = j.clamp(lo as i64, n) as usize;
+            let blo = seek(e, lo);
+            let bhi = seek(e, hi);
+            (blo, bhi)
         })
     }
 }

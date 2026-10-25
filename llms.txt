@@ -286,7 +286,10 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    declared`): strings `s.len() s.trim() s.split(",") s.chars() s.contains(x)
    s.replace(a, b) s.starts_with(p) s.ends_with(p) s.to_upper() s.to_lower()
    s.strip_prefix(p) s.strip_suffix(p) (-> Option<string>; `.unwrap_or(s)` to drop it if present)
-   s.substring(i, j) s.repeat(n) s.index_of(x) s.to_bytes()` · arrays `xs.len()
+   s.substring(i, j) s.repeat(n) s.index_of(x) s.to_bytes()` (character indices; `s[i]` and
+   `s.substring(i, j)` are O(1) on ASCII text and amortized O(1) when walking non-ASCII text in
+   order, O(distance) on random jumps — VM and native; `cs.chars_to_string(i, j)` cuts a
+   `[char]` from `s.chars()` in O(j − i)) · arrays `xs.len()
    xs.push(v) xs.pop() xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
    `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
@@ -330,8 +333,15 @@ parameter is that type), so builders chain with just `import std/json;`:
 (`Option`/`Result`/`Map`) have no module: for those, UFCS needs the unqualified import.
 
 Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
-std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
-std/base64 std/url std/regex std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates — a file `site/page.ray.html` is an importable module with
+std/random std/time std/units std/crypto std/text std/sort std/kv std/json (numbers are floats:
+`json.get_int`/`as_int` give `None` beyond ±(2^53 − 1) rather than another integer — read a 64-bit id
+with `json.raw_at(text, "/data/0/id")`, the value's TEXT by JSON Pointer; `json.compact(text)` and
+`json.reindent(text, n)` work on the text, keeping key order and number digits; a parsed object is
+a `Map`, so `stringify` sorts keys) std/hex
+std/base64 std/url (also `url.parse(s) -> Result<url.Url,_>` with `scheme userinfo host port path
+query fragment` as written, `url.render(u)`, `url.resolve(base, ref)` — RFC 3986 §5.2, what a
+browser does with a relative link or `Location` —, `url.remove_dot_segments(p)`,
+`url.parse_query_pairs(qs) -> [(string, string)]` in order with repeats, `url.build_query_pairs`) std/regex std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates — a file `site/page.ray.html` is an importable module with
 `pub fn render(<params>) -> string`: FIRST directive `{% params title: string, items: [model.Item] %}`,
 then `{% import site/model %}` for types of other modules (not `from … import`), then
 `{% if flag %}`/`{% for x in items %}`/`{{ x.name }}`/`{{& raw }}`; conditions must be `bool`
@@ -452,7 +462,12 @@ of `ui.next_event()` (`tag` "play"/"pause"/"toggle"/"next"/"previous"/"stop"/"se
 macOS, iOS (needs `[ios] background_audio = true`), Android (MediaSession, regenerate the shell with
 `ray bundle --android`), Linux (MPRIS over D-Bus, needs GLib) and Windows (System Media Transport Controls);
 `[app.plist]` values may be strings, booleans or string arrays; menus:
-`ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])`, `ui.menu_at(pos,
+`ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])` (shortcut = one character
+— `"s"` cmd+S, `"S"` cmd+shift+S — or `mod+…+key` with modifiers `cmd` (Command on macOS, Ctrl on
+Linux/Windows; aliases `command super meta primary`), `ctrl`/`control`, `alt`/`option`/`opt`,
+`shift`, and key a character, `f1`–`f12`, `enter`/`return`, `escape`/`esc`, `tab`, `space`,
+`backspace`, `delete`/`del`, `up down left right home end pageup pagedown`, case-insensitive;
+anything else makes `ui.menu`/`replace_menu` return `Err`), `ui.menu_at(pos,
 …)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
 standard edit roles: items tagged `role:undo|redo|cut|copy|paste|select_all|close` act natively
@@ -485,17 +500,31 @@ context menu: `ui.popup_menu(h, items)` at the mouse position (choice arrives as
 wire it from the page's `contextmenu` via `window.ray.send`); window kinds: `o.kind = "panel"`
 (floating utility palette) | `"borderless"` | `"full_content"` (1.27.23: the page runs under the
 title bar — macOS: transparent bar, hidden title, traffic lights over the page; reserve
-`window.ray.titlebar_height` px and mark the drag handle with `data-ray-drag`; Linux/Windows
-= document for now), `o.always_on_top`, `o.parent = h` (owned window);
+`window.ray.titlebar_height` px and mark the drag handle with `data-ray-drag`; the traffic lights
+stay where macOS puts them for a standard 28 pt bar — a taller header cannot move them yet, so
+center your header's controls on that line; Linux/Windows = document for now), `o.always_on_top`, `o.parent = h` (owned window);
 live geometry: `ui.set_fullscreen(h, bool)`, `ui.set_always_on_top`, `ui.set_size(h, w, hh)`,
-`ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)`;
+`ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)` (`center` —
+the option or the call — is the system's own: on macOS horizontally centered and a little above
+the middle, about ¼ of the free height above the window; a window opens where `center` puts it
+and `set_position` moves it afterwards — there is no `x`/`y` option nor a way to read a
+window's position yet, and in the page `window.screenX/screenY/outerWidth/outerHeight` are not
+meaningful, `screen.avail*` is);
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
 (page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch —
 NOT when the process runs outside the graphical session: from ssh/CI/an agent shell the window
 stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate with `eval_js` +
 `MessageChannel`, or launch from the session); desktop:
-`ui.open_path(p)`, `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under `ray
-dev` the window live-reloads on asset changes and the webview devtools are on.
+`ui.open_path(p)` (a file or directory that exists), `ui.open_url(url)` (an `http`/`https`/
+`mailto` URL in the system browser or mail client — the OAuth sign-in of a native app; Err in
+the mobile shells for now), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
+`ray dev` the window live-reloads on asset changes and the webview devtools are on; otherwise they
+are off (`ray run --devtools`, or a native/bundled build with `--devtools`, turns them on): no
+"Inspect Element". The webview's own context menu (Look Up, Translate, Services…) still appears on
+a right click, and WebKit selects the word under the pointer; for a desktop feel, call
+`preventDefault()` in a `contextmenu` listener on `document` except on editable fields (or open
+your own with `ui.popup_menu`), and use `-webkit-user-select: none` (WebKit ignores the unprefixed
+`user-select`) on chrome that is not content.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map — note `fetch` lives in the Tier-2 package `net`,

@@ -103,6 +103,30 @@ fn host_header(u: Url) -> string {
     if (u.port == default) { u.host } else { u.host + ":" + to_string(u.port) }
 }
 
+// rayreq #250: las cabeceras de un `Map` como pares, en orden de clave (el orden de siempre).
+fn pairs_of(m: Map<string, string>) -> [(string, string)] {
+    var out: [(string, string)] = [];
+    for k in m.keys() {
+        match (get(m, k)) {
+            Option.Some(v) => {
+                out.push((k, v));
+            },
+            Option.None => { },
+        }
+    }
+    out
+}
+
+// ¿Los pares ya traen `nombre` (case-insensitive)?
+fn has_header_pair(extra: [(string, string)], name: string) -> bool {
+    for kv in extra {
+        if (kv.0.to_lower() == name) {
+            return true;
+        }
+    }
+    false
+}
+
 // ¿Las cabeceras extra ya traen `nombre` (case-insensitive)? Para no pisar las del llamador.
 fn has_header(extra: Map<string, string>, name: string) -> bool {
     let ks: [string] = extra.keys();
@@ -114,18 +138,6 @@ fn has_header(extra: Map<string, string>, name: string) -> bool {
         i = i + 1;
     }
     false
-}
-
-// Cabeceras extra (nombre→valor). Las del cliente (Host/Connection/Content-Length/Accept-Encoding)
-// van primero; las extra se añaden tal cual (en orden de clave, determinista). El cuerpo va en
-// BYTES → el Content-Length cuenta OCTETOS (con string contaba caracteres: mal con no-ASCII).
-fn build_request_h(
-    method: string,
-    u: Url,
-    body: bytes,
-    extra: Map<string, string>
-) -> Result<bytes, string> {
-    build_request_conn(method, u, body, extra, "close")
 }
 
 // raysec #237: un CR, LF, espacio u otro carácter de control en la línea de petición o en una
@@ -149,7 +161,7 @@ fn unsafe_char(s: string, allow_space: bool) -> bool {
 fn check_request_head(
     method: string,
     path: string,
-    extra: Map<string, string>
+    extra: [(string, string)]
 ) -> Result<int, string> {
     if (method.len() == 0 || unsafe_char(method, false)) {
         return Result.Err("invalid HTTP method: " + show_escaped(method));
@@ -160,21 +172,15 @@ fn check_request_head(
                 + show_escaped(path)
         );
     }
-    for name in extra.keys() {
+    for kv in extra {
+        let name = kv.0;
         if (name.len() == 0 || unsafe_char(name, false) || name.contains(":")) {
             return Result.Err("invalid header name: " + show_escaped(name));
         }
-        match (get(extra, name)) {
-            Option.Some(value) => {
-                if (unsafe_char(value, true)) {
-                    return Result.Err(
-                        "invalid value for header "
-                            + name
-                            + " (CR, LF or another control character)"
-                    );
-                }
-            },
-            Option.None => { },
+        if (unsafe_char(kv.1, true)) {
+            return Result.Err(
+                "invalid value for header " + name + " (CR, LF or another control character)"
+            );
         }
     }
     Result.Ok(0)
@@ -212,28 +218,32 @@ fn build_request_conn(
     extra: Map<string, string>,
     conn_val: string
 ) -> Result<bytes, string> {
+    build_request_pairs(method, u, body, pairs_of(extra), conn_val)
+}
+
+// rayreq #250: la petición con las cabeceras extra como PARES, en su orden y con repeticiones (dos
+// `X-A` salen como dos líneas). Las del cliente (Host/Connection/Accept-Encoding/Content-Length)
+// van primero.
+fn build_request_pairs(
+    method: string,
+    u: Url,
+    body: bytes,
+    extra: [(string, string)],
+    conn_val: string
+) -> Result<bytes, string> {
     let _ = check_request_head(method, u.path, extra)?;
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
     req = req + "Host: " + host_header(u) + "\r\n";
     req = req + "Connection: " + conn_val + "\r\n";
     // M58.2: anuncia gzip (el gunzip transparente existía desde M20.10b pero nunca se pedía).
-    if (!has_header(extra, "accept-encoding")) {
+    if (!has_header_pair(extra, "accept-encoding")) {
         req = req + "Accept-Encoding: gzip\r\n";
     }
     if (body.len() > 0) {
         req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
-    let names: [string] = extra.keys();
-    var i: int = 0;
-    while (i < names.len()) {
-        let name: string = names[i];
-        match (get(extra, name)) {
-            Option.Some(value) => {
-                req = req + name + ": " + value + "\r\n";
-            },
-            Option.None => { },
-        }
-        i = i + 1;
+    for kv in extra {
+        req = req + kv.0 + ": " + kv.1 + "\r\n";
     }
     req = req + "\r\n";
     Result.Ok(req.to_bytes() + body)
@@ -432,7 +442,9 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>, [(string, string
     }
 }
 
-fn parse_response(raw: bytes) -> Result<Response, string> {
+// rayreq #246: `method` decide si la respuesta PUEDE traer cuerpo (RFC 9112 §6.3): HEAD, 1xx,
+// 204 y 304 no lo traen aunque anuncien `Content-Length` (el de HEAD es el que tendría el GET).
+fn parse_response(raw: bytes, method: string) -> Result<Response, string> {
     let sep: int = find_fin_headers(raw);
     if (sep < 0) {
         return Result.Err("malformed HTTP response (no header separator)");
@@ -445,6 +457,19 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             let status: int = head.0;
             let headers: Map<string, string> = head.1;
             let raw_headers: [(string, string)] = head.2;
+            if (method == "HEAD"
+                || status == 204
+                || status == 304
+                || status >= 100 && status < 200) {
+                return Result.Ok(
+                    Response {
+                        status: status,
+                        headers: headers,
+                        body: b"",
+                        raw_headers: raw_headers
+                    }
+                );
+            }
             // raysec #244 (RFC 9112 §6.3): Content-Length y Transfer-Encoding a la vez es un
             // encuadre ambiguo (lo que un proxy intermedio toma por una respuesta y lo que
             // nosotros tomamos pueden diferir) → error, nunca elegir uno.
@@ -491,7 +516,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                                     return Result.Err(
                                         "truncated response: got "
                                             + to_string(body_final.len())
-                                            + " de "
+                                            + " of "
                                             + to_string(n)
                                             + " bytes"
                                     );
@@ -662,12 +687,29 @@ pub fn fetch_traced(url: string, t: trace.Trace) -> Result<Response, string> {
 /// an explicit total read-timeout in ms (`<= 0` = no timeout) that also bounds the CONNECT (with
 /// `<= 0`, the connect still gets `DEFAULT_CONNECT_TIMEOUT_MS`). `request`/`request_with` delegate
 /// here with a UTF-8 body and 30 s. Err on invalid URL, connect failure, I/O error/timeout, or a
-/// malformed/truncated response.
+/// malformed/truncated response. What the client adds (rayreq #249): `Host`, `Connection: close`,
+/// `Accept-Encoding: gzip` (unless you send your own `Accept-Encoding`) and `Content-Length` when
+/// there is a body. A `Content-Encoding: gzip` response arrives DECODED in `body`, while
+/// `headers`/`raw_headers` keep what came on the wire (`content-encoding: gzip` and the compressed
+/// `content-length`): check `content-encoding` to know it was decoded, and send
+/// `Accept-Encoding: identity` to get the bytes as sent. HEAD, 1xx, 204 and 304 have no body.
 pub fn request_bytes(
     method: string,
     url: string,
     body: bytes,
     headers: Map<string, string>,
+    timeout_millis: int
+) -> Result<Response, string> {
+    request_pairs(method, url, body, pairs_of(headers), timeout_millis)
+}
+
+/// Like `request_bytes`, with the extra headers as `(name, value)` pairs sent IN ORDER and with
+/// repeats — two `("X-A", …)` pairs are two `X-A` lines, which a `Map` cannot express.
+pub fn request_pairs(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: [(string, string)],
     timeout_millis: int
 ) -> Result<Response, string> {
     match (parse_url(url)) {
@@ -681,7 +723,7 @@ pub fn request_bytes(
                     } else {
                         0
                     };
-                    let wire = match (build_request_h(method, u, body, headers)) {
+                    let wire = match (build_request_pairs(method, u, body, headers, "close")) {
                         Result.Ok(w) => w,
                         Result.Err(e) => {
                             close(h);
@@ -698,7 +740,7 @@ pub fn request_bytes(
                             close(h);
                             match (r) {
                                 Result.Err(e) => Result.Err("error reading: " + e),
-                                Result.Ok(raw) => parse_response(raw),
+                                Result.Ok(raw) => parse_response(raw, method),
                             }
                         },
                     }
@@ -930,7 +972,7 @@ fn conn_attempt(
             match (conn_read_response(c, method, deadline)) {
                 Result.Err(e) => Result.Err(e),
                 Result.Ok(raw) => {
-                    match (parse_response(raw)) {
+                    match (parse_response(raw, method)) {
                         Result.Err(e) => {
                             // Una respuesta que no se entiende deja la conexión sin encuadre fiable.
                             conn_close(c);
@@ -1155,13 +1197,16 @@ fn conn_read_chunked(c: Conn, start: int, deadline: int) -> Result<bytes, string
 // El plazo es de OCIO por lectura (un stream legítimo puede durar minutos; lo que delata el
 // problema es el silencio), no total.
 
-/// A streaming HTTP response: `status`/`headers` are available immediately; the body is pulled
-/// piece by piece with `stream_read`. Fields `mode`/`remaining`/`buf` are internal state.
+/// A streaming HTTP response: `status`/`headers` are available immediately (and `raw_headers`,
+/// every header in order with repeats, like `Response`); the body is pulled piece by piece with
+/// `stream_read`. Fields `mode`/`remaining`/`buf` are internal state.
 pub struct Stream {
     h: int,
     buf: bytes,
     status: int,
     headers: Map<string, string>,
+    // rayreq #250: todas las cabeceras en orden, repetidas incluidas (`Set-Cookie`), como `Response`.
+    raw_headers: [(string, string)],
     // "size" | "data" | "crlf" | "trailer" (chunked) · "length" · "eof" · "done"
     mode: string,
     // en "data": octetos que quedan del chunk; en "length": octetos que quedan del cuerpo
@@ -1220,6 +1265,7 @@ pub fn stream_with(
                         buf: b"",
                         status: 0,
                         headers: Map.new(),
+                        raw_headers: [],
                         mode: "eof",
                         remaining: 0,
                         idle_ms: idle_timeout_ms,
@@ -1270,6 +1316,7 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
         Result.Ok(head) => {
             s.status = head.0;
             s.headers = head.1;
+            s.raw_headers = head.2;
             s.buf = s.buf.sub_bytes(sep + 4, s.buf.len());
             // Un cuerpo comprimido no se puede entregar a trozos (no hay gunzip incremental):
             // solo puede pasar si el servidor ignora nuestro Accept-Encoding: identity.

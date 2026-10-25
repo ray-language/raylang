@@ -649,11 +649,21 @@ pub fn as_float(j: Json) -> Option<float> {
     }
 }
 
-/// The number as an int, or None if the value is not a number or not integral (3.5 → None).
+/// The number as an int, or None if the value is not a number, not integral (3.5 → None) or
+/// beyond ±(2^53 − 1): a JSON number is a float, so a bigger integer (a 64-bit id) may already
+/// be a different one after `parse` — read those with `raw_at`, which keeps the text.
 pub fn as_int(j: Json) -> Option<int> {
     match (j) {
-        // Un float integral se muestra sin decimales ("3") → parse_int lo acepta; "3.5" no.
-        Json.JNum(f) => parse_int(to_string(f)),
+        // rayreq #257: por encima de 2^53 − 1 el float ya no distingue enteros consecutivos
+        // (9007199254740993 se lee 9007199254740992): None antes que otro número.
+        Json.JNum(f) => {
+            if (f > 9007199254740991.0 || f < 0.0 - 9007199254740991.0) {
+                Option.None
+            } else {
+                // Un float integral se muestra sin decimales ("3") → parse_int lo acepta; "3.5" no.
+                parse_int(to_string(f))
+            }
+        },
         _ => Option.None,
     }
 }
@@ -914,9 +924,13 @@ pub fn render_arr_pretty(a: Arr, indent: int) -> string {
 }
 
 /// Re-indents compact JSON text (`render`, `stringify`, a file) with `indent` spaces per level
-/// WITHOUT parsing it into a `Json`: objects keep the order of their keys. Empty `{}`/`[]` stay on
-/// one line. The text must be valid JSON; strings are copied verbatim (escapes included).
+/// WITHOUT parsing it into a `Json`: objects keep the order of their keys and numbers keep their
+/// text. Empty `{}`/`[]` stay on one line. `indent <= 0` compacts it instead (no whitespace at
+/// all, like `compact`). The text must be valid JSON; strings are copied verbatim.
 pub fn reindent(json: string, indent: int) -> string {
+    if (indent <= 0) {
+        return compact(json);
+    }
     let b = sb.new();
     let cs = json.chars();
     var depth = 0;
@@ -973,6 +987,215 @@ pub fn reindent(json: string, indent: int) -> string {
         i = i + 1;
     }
     sb.build(b)
+}
+
+/// Compact JSON text: the same document without any whitespace outside strings, WITHOUT
+/// parsing it (key order and the text of each number are kept). The text must be valid JSON.
+pub fn compact(json: string) -> string {
+    let b = sb.new();
+    let cs = json.chars();
+    var start = 0;
+    var i = 0;
+    var in_str = false;
+    var esc = false;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+        } else if (c == '"') {
+            in_str = true;
+        } else if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+            // rayreq #257: los tramos sin blanco se copian enteros (no carácter a carácter).
+            sb.push(b, chars_to_string(cs, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    sb.push(b, chars_to_string(cs, start, cs.len()));
+    sb.build(b)
+}
+
+// rayreq #257 — el TEXTO de un subvalor. Saltar blancos desde `i`.
+fn raw_skip_ws(cs: [char], i: int) -> int {
+    var k = i;
+    while (k < cs.len() && (cs[k] == ' ' || cs[k] == '\n' || cs[k] == '\t' || cs[k] == '\r')) {
+        k = k + 1;
+    }
+    k
+}
+
+// El fin (exclusivo) del string que abre en `i` (`cs[i] == '"'`), o -1 si no cierra.
+fn raw_string_end(cs: [char], i: int) -> int {
+    var k = i + 1;
+    while (k < cs.len()) {
+        if (cs[k] == '\\') {
+            k = k + 2;
+        } else if (cs[k] == '"') {
+            return k + 1;
+        } else {
+            k = k + 1;
+        }
+    }
+    0 - 1
+}
+
+// El fin (exclusivo) del valor que empieza en `i` (ya sin blancos delante), o -1 si no cierra.
+fn raw_value_end(cs: [char], i: int) -> int {
+    if (i >= cs.len()) {
+        return 0 - 1;
+    }
+    let c = cs[i];
+    if (c == '"') {
+        return raw_string_end(cs, i);
+    }
+    if (c == '{' || c == '[') {
+        var depth = 0;
+        var k = i;
+        while (k < cs.len()) {
+            let d = cs[k];
+            if (d == '"') {
+                let e = raw_string_end(cs, k);
+                if (e < 0) {
+                    return 0 - 1;
+                }
+                k = e;
+            } else {
+                if (d == '{' || d == '[') {
+                    depth = depth + 1;
+                } else if (d == '}' || d == ']') {
+                    depth = depth - 1;
+                    if (depth == 0) {
+                        return k + 1;
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        return 0 - 1;
+    }
+    // número, true, false, null: hasta el siguiente separador.
+    var k = i;
+    while (k < cs.len()
+        && cs[k] != ','
+        && cs[k] != '}'
+        && cs[k] != ']'
+        && cs[k] != ' '
+        && cs[k] != '\n'
+        && cs[k] != '\t'
+        && cs[k] != '\r') {
+        k = k + 1;
+    }
+    if (k == i) { 0 - 1 } else { k }
+}
+
+// Un token de JSON Pointer: `~1` → `/`, `~0` → `~` (RFC 6901 §4).
+fn pointer_token(t: string) -> string {
+    t.replace("~1", "/").replace("~0", "~")
+}
+
+/// The TEXT of the value at the JSON Pointer `pointer` (RFC 6901: `""` is the whole document,
+/// `"/data/0/id"` the member `id` of the first element of `data`), exactly as written in `json`
+/// — a 64-bit id or a long decimal keeps every digit, which `parse` (numbers are floats) cannot
+/// promise. None if the path does not exist or the text is not valid there. Strings come back
+/// with their quotes; `parse` the result to read it as a `Json`.
+pub fn raw_at(json: string, pointer: string) -> Option<string> {
+    if (pointer != "" && !pointer.starts_with("/")) {
+        return Option.None;
+    }
+    let cs = json.chars();
+    var i = raw_skip_ws(cs, 0);
+    let tokens: [string] = if (pointer == "") {
+        []
+    } else {
+        pointer.substring(1, pointer.len()).split("/")
+    };
+    var t = 0;
+    while (t < tokens.len()) {
+        let token = pointer_token(tokens[t]);
+        t = t + 1;
+        if (i >= cs.len()) {
+            return Option.None;
+        }
+        if (cs[i] == '{') {
+            i = raw_skip_ws(cs, i + 1);
+            var found = false;
+            while (!found) {
+                if (i >= cs.len() || cs[i] != '"') {
+                    return Option.None;
+                }
+                let key_end = raw_string_end(cs, i);
+                if (key_end < 0) {
+                    return Option.None;
+                }
+                let key = match (parse(chars_to_string(cs, i, key_end))) {
+                    Result.Ok(k) => as_string(k).unwrap_or(""),
+                    Result.Err(_) => {
+                        return Option.None;
+                    },
+                };
+                i = raw_skip_ws(cs, key_end);
+                if (i >= cs.len() || cs[i] != ':') {
+                    return Option.None;
+                }
+                i = raw_skip_ws(cs, i + 1);
+                if (key == token) {
+                    found = true;
+                } else {
+                    let e = raw_value_end(cs, i);
+                    if (e < 0) {
+                        return Option.None;
+                    }
+                    i = raw_skip_ws(cs, e);
+                    if (i < cs.len() && cs[i] == ',') {
+                        i = raw_skip_ws(cs, i + 1);
+                    } else {
+                        return Option.None;
+                    }
+                }
+            }
+        } else if (cs[i] == '[') {
+            let want = match (parse_int(token)) {
+                Option.Some(n) => n,
+                Option.None => {
+                    return Option.None;
+                },
+            };
+            if (want < 0 || token.starts_with("+") || token.len() > 1 && token.starts_with("0")) {
+                return Option.None;
+            }
+            i = raw_skip_ws(cs, i + 1);
+            var k = 0;
+            while (k < want) {
+                let e = raw_value_end(cs, i);
+                if (e < 0) {
+                    return Option.None;
+                }
+                i = raw_skip_ws(cs, e);
+                if (i < cs.len() && cs[i] == ',') {
+                    i = raw_skip_ws(cs, i + 1);
+                } else {
+                    return Option.None;
+                }
+                k = k + 1;
+            }
+            if (i < cs.len() && cs[i] == ']') {
+                return Option.None;
+            }
+        } else {
+            return Option.None;
+        }
+    }
+    let e = raw_value_end(cs, i);
+    if (e < 0) {
+        return Option.None;
+    }
+    Option.Some(chars_to_string(cs, i, e))
 }
 
 impl ToJson for Obj {

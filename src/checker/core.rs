@@ -4157,6 +4157,7 @@ fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
     match (name, i) {
         ("bytes_of", 0) => Some(Type::Array(Box::new(Type::Int))),
         ("bytes_concat", 0) => Some(Type::Array(Box::new(Type::Bytes))), // M395
+        ("chars_to_string", 0) => Some(Type::Array(Box::new(Type::Char))), // rayreq #261
         ("join", 0) => Some(Type::Array(Box::new(Type::String))),
         _ => None,
     }

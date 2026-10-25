@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.79** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.80** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -649,7 +649,8 @@ sobre el que se escriben las capas 1 y 2.
   (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
   replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes
   parse_int parse_float` · **Arreglos**: `push pop reverse contains position sort map filter fold
-  any all iter` (+ `a + b` concatena) · **Bytes**: `bytes_of bytes_concat sub_bytes index_of starts_with from_utf8` (+ `b1 + b2`,
+  any all iter` (+ `a + b` concatena) · `chars_to_string(cs: [char], i, j) -> string` (el tramo
+  `[i, j)` de un `[char]`, con clamp; la vuelta de `chars`) · **Bytes**: `bytes_of bytes_concat sub_bytes index_of starts_with from_utf8` (+ `b1 + b2`,
   `to_string` → hex).
 - **Entrada/entorno**: `args() -> [string]` (argumentos del programa), `env(name) ->
   Option<string>`, `input() -> Option<string>` (una línea de stdin), `read_int() ->

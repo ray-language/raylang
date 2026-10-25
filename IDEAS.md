@@ -4319,3 +4319,42 @@ programa válido hoy sigue siéndolo). Pendiente de decisión del usuario.
   `"write timeout"`; el webserver de `net` 0.11.1 lo pone por conexión (`Limits.write_timeout_millis`,
   30 s).
 
+## 116. Lo que dejó abierto rayreq (#245–#270; oct 2026)
+
+Lo de rayreq que afecta a la toolchain y no entró en M426 (DESIGN §401), con su clasificación.
+
+- **#259 — objetos JSON con orden de inserción.** `JObject` es un `Map` ordenado por clave. Opciones:
+  (a) que `Map` conserve el orden de inserción (como los dict de Python): cambia el orden de
+  iteración de TODO `Map` del lenguaje, y hay código y tests que dependen del orden por clave;
+  (b) `json.parse_ordered -> JsonOrdered` con objetos como `[(string, JsonOrdered)]`: aditivo, pero
+  duplica la API de acceso; (c) un `JObject` con un mapa ordenado propio: rompe los `match` sobre
+  `Json`. **Impacto alto** (superficie estable). Recomendación: (b), junto con #257.
+- **#257 (resto) — el número JSON como texto.** Un `JInt(int)` o un `JNum` que guarde el literal
+  rompe los `match` exhaustivos de usuario sobre `Json`. Va con la decisión de #259: un `Json` v2
+  aditivo (`parse_ordered`/`parse_exact`) que conserve orden y texto de números, sin tocar el
+  actual. Mientras, `raw_at`/`compact` (1.27.80) cubren leer un id de 64 bits.
+- **#260 — YAML.** rayreq ofrece su lector (800 líneas, contrastado con libyaml sobre las
+  descripciones OpenAPI de GitHub y Stripe). Decidir: `std/yaml` en la stdlib (como `std/toml`) o
+  un paquete `yaml` en el índice. Recomendación: paquete primero (no fija una API estable antes de
+  usarla), tomando el código de rayreq con su permiso y su licencia.
+- **#245 — posición de ventanas.** `x`/`y` en `WindowOptions`, `ui.frame(h) -> (x, y, w, h)` y
+  quizá `cascade: bool` (AppKit `cascadeTopLeftFromPoint:`). Trabajo en los tres backends; Windows
+  y Linux se prueban en las VMs. Impacto bajo (aditivo).
+- **#252 — renombrar un menú.** `ui.rename_menu(old, new)` o un id estable por menú. Aditivo, tres
+  backends.
+- **#270 — barra de título más alta con `full_content`.** Una opción (`titlebar_height`) que centre
+  los semáforos: en macOS, una `NSToolbar` vacía con estilo `unified` o mover los botones a mano;
+  actualizar `window.ray.titlebar_height`. Aditivo.
+- **#263 (resto) — `open_url` en móvil.** Un método nuevo en el puente de los shells (`Intent
+  ACTION_VIEW` en Android, `openURL:` en iOS); exige regenerar el shell.
+- **#258 (resto) — `as` entre literales en expresiones constantes** (`const R: char = 0xFFFD as char`).
+  Con fmt conservando los escapes, `const R: char = '\u{FFFD}'` ya sirve. Impacto bajo.
+- **#250 (resto) — desactivar la verificación TLS por petición.** Un cliente REST de desarrollo la
+  necesita para certificados autofirmados. Toca el runtime TLS (rustls con un verificador que acepta
+  todo) en los tres motores y es fácil de usar mal: si se hace, que el nombre lo diga
+  (`insecure_skip_verify`), que no exista en `request`/`fetch` sino en una forma explícita, y que el
+  error del certificado sugiera primero añadir la CA (`tls_trust_ca`). Decisión del usuario.
+- **#248 (resto) — `NULL` como parámetro de SQLite.** Los parámetros son `[string]`; `query_opt` ya
+  distingue `NULL` al leer. Para escribirlo hace falta un primitivo con máscara (como
+  `__sqlite_query_nulls`) y una forma `exec_opt(c, sql, [Option<string>])`. Aditivo.
+

@@ -4,8 +4,45 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.80 — 2026-10-25
 
+Hallazgos de rayreq con 1.27.79 (M426, #245–#270, lo que afecta a la toolchain).
+
+- **Una guarda de `match` ve los módulos importados** (#262): `Option.Some(n) if math.abs(n) > 1`
+  daba «name 'math' not declared»; ahora la guarda resuelve nombres como el cuerpo del brazo, en
+  los tres motores.
+- **`ray fmt` conserva los escapes `\u{…}` y `\xNN`** (#258): un `"\u{a0}"`, `\u{FEFF}`,
+  `\u{2028}` o `'\u{FFFD}'` salía como el carácter literal, indistinguible de un espacio o
+  invisible. El programa era el mismo; el fuente ya no lo dejaba ver.
+- **`ray fmt` reparte por argumentos una llamada con una closure de una expresión** (#256): antes
+  partía una cadena `options().quiet()` en mitad de un argumento. Una closure como único argumento
+  sigue compacta.
+- **`substring` cuesta lo que `s[i]`** (#261): O(1) en ASCII y O(1) amortizado al recorrer un
+  texto no-ASCII en orden, en la VM y en nativo. Antes cada llamada recorría el texto desde el
+  principio: un lector que cortaba tokens de un documento de 1,3 M caracteres no-ASCII tardaba 9 s,
+  ahora 4 ms. La caché de cadenas guarda dos entradas (el texto y el token recién cortado).
+  Nuevo **`chars_to_string(cs, i, j)`**: el tramo de un `[char]` como string, la vuelta de `chars()`.
+- **`std/url` trocea, recompone y resuelve URLs** (#251, RFC 3986): `url.parse`, `url.render`,
+  `url.resolve(base, ref)` (lo que hace un navegador con un enlace relativo o un `Location`),
+  `url.remove_dot_segments` y `url.parse_query_pairs`/`build_query_pairs`, que conservan orden y
+  claves repetidas.
+- **`std/json` no devuelve otro entero** (#257): `as_int`/`get_int` dan `None` por encima de
+  2^53 − 1, donde un float ya no distingue enteros consecutivos. `json.raw_at(text, "/data/0/id")`
+  da el texto de un valor por JSON Pointer, con todos sus dígitos; `json.compact(text)` y
+  `reindent(text, 0)` compactan sin reordenar.
+- **`ui.open_url(url)`** (#263): abre una URL `http`/`https`/`mailto` en el navegador del sistema,
+  sin shell (el OAuth de una app nativa). En los shells móviles aún devuelve `Err`.
+- **Documentación** (#253, #268, #270, #245): la gramática de los atajos de menú; que sin
+  devtools el webview sigue mostrando su propio menú contextual y cómo quitarlo; que los semáforos
+  de `full_content` no se mueven con una cabecera más alta; y dónde coloca `center` una ventana.
+- **`net` 0.11.5 y `db` 0.5.2** (rayreq #246, #247, #249, #250, #255): `http.request_bytes("HEAD",
+  …)` devolvía `truncated response` porque esperaba el cuerpo que anuncia `Content-Length`;
+  `http.request_pairs` manda cabeceras repetidas en orden y `Stream.raw_headers` conserva los
+  `Set-Cookie` repetidos; la doc de `request_bytes` dice lo que añade el cliente y que una
+  respuesta gzip llega descomprimida. `sqlite.exec` corre todas las sentencias de un script sin
+  parámetros (antes solo la primera, devolviendo `Ok`) y rechaza varias con parámetros antes de
+  ejecutar nada; el arreglo está en el runtime de la toolchain. `db` 0.5.2 se publica con `net`
+  como rango del índice, sin el aviso de `net` fijado a 0.9.0.
 - **`net` 0.11.4 — ni *response splitting* ni respuestas encoladas** (raysec #243, #244). El
   webserver no escribe una cabecera de respuesta cuyo nombre no sea un token o cuyo valor lleve
   CR, LF u otro control (el caso de un proxy que copia las cabeceras del upstream): el cliente

@@ -429,6 +429,10 @@ pub enum OpCode {
     /// M395 (raykv #162): saca un `[bytes]` (objeto del heap); empuja la concatenación de todos sus
     /// trozos en UNA reserva (lineal en el total). Builtin `bytes_concat`; `+` copia el acumulado por llamada.
     BytesConcat,
+    /// rayreq #261: saca `j`, `i` y un `[char]`; empuja el string de los caracteres `[i, j)` (con
+    /// clamp, como `substring`). Builtin `chars_to_string`: cortar en O(j − i) sobre un texto ya
+    /// partido con `chars()`, en vez de `substring`, que recorre el texto desde el principio.
+    CharsToString,
     /// Saca `n` y el string; empuja el string repetido `n` veces (`n<=0` → `""`). Builtin `repeat`.
     Repeat,
     /// Saca la subcadena y el string; empuja un `[int]` con **0 o 1** elementos: el índice de

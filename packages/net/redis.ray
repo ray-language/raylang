@@ -295,7 +295,13 @@ pub fn pool_command(p: Pool, args: [string]) -> Result<Reply, string> {
 
 /// `pool_command` with an explicit retry policy.
 pub fn pool_command_with(p: Pool, args: [string], retry: bool) -> Result<Reply, string> {
-    pool.run(p.slots, fn() -> Result<Conn, string> { connect(p.host, p.port) }, fn(c: Conn) { close_conn(c) }, fn(c: Conn) -> Result<Reply, string> { command(c, args) }, retry)
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { connect(p.host, p.port) },
+        fn(c: Conn) { close_conn(c) },
+        fn(c: Conn) -> Result<Reply, string> { command(c, args) },
+        retry
+    )
 }
 
 /// Closes the pool's idle connections and the pool itself.

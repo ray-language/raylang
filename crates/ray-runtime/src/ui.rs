@@ -677,6 +677,58 @@ pub fn reveal_path(path: &str) -> Result<(), String> {
     desktop_launch("reveal", path)
 }
 
+/// Las acciones de escritorio de `std/ui` por nombre (`__ui_desktop` en los tres motores): una
+/// sola tabla, para que el nativo y la VM no tengan cada uno la suya.
+pub fn desktop(kind: &str, arg: &str) -> Result<(), String> {
+    match kind {
+        "open_path" => open_path(arg),
+        "reveal" => reveal_path(arg),
+        "open_url" => open_url(arg),
+        other => Err(format!("ui: unknown desktop action '{other}'")),
+    }
+}
+
+/// rayreq #263: abrir una URL `http`/`https`/`mailto` en el navegador (o el cliente de correo)
+/// del sistema — lo que pide el flujo OAuth de una app nativa (RFC 8252). Sin shell, como
+/// `open_path`: la URL es un argumento del lanzador. Se rechaza otro esquema (un `file:` o un
+/// esquema de app no es «abrir una web») y un carácter de control o un espacio.
+pub fn open_url(url: &str) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")) {
+        return Err(format!("ui: open_url takes an http, https or mailto URL, not '{url}'"));
+    }
+    if url.chars().any(|c| c.is_control() || c == ' ') {
+        return Err("ui: open_url: the URL has a space or a control character (percent-encode it)".to_string());
+    }
+    if headless() {
+        if ui_trace() {
+            eprintln!("[ui] open_url {url}");
+        }
+        return Ok(());
+    }
+    url_spawn(url)
+}
+
+#[cfg(target_os = "macos")]
+fn url_spawn(url: &str) -> Result<(), String> {
+    spawn_detached("open", &[std::ffi::OsString::from(url)])
+}
+
+#[cfg(windows)]
+fn url_spawn(url: &str) -> Result<(), String> {
+    spawn_detached("rundll32.exe", &[std::ffi::OsString::from("url.dll,FileProtocolHandler"), std::ffi::OsString::from(url)])
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+fn url_spawn(_url: &str) -> Result<(), String> {
+    Err("ui: open_url is not available in the mobile shells yet".to_string())
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "ios", target_os = "android")))]
+fn url_spawn(url: &str) -> Result<(), String> {
+    spawn_detached("xdg-open", &[std::ffi::OsString::from(url)])
+}
+
 fn desktop_launch(kind: &str, path: &str) -> Result<(), String> {
     let p = std::path::Path::new(path);
     if path.is_empty() || !p.exists() {

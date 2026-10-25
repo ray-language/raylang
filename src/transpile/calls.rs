@@ -1153,11 +1153,10 @@ impl Transpiler {
         self.emit_expr(out, sub[1])?;
         out.push_str("; let __rt_fb: i64 = ");
         self.emit_expr(out, sub[2])?;
-        out.push_str("; if __rt_fs.is_ascii() { let __rt_fl = __rt_fs.len() as i64; let __rt_lo = __rt_fa.clamp(0, __rt_fl) as usize; let __rt_hi = __rt_fb.clamp(__rt_lo as i64, __rt_fl) as usize; ");
+        // rayreq #261: el tramo por la caché de la cadena (sin escanear el string entero).
+        out.push_str("; let (__rt_lo, __rt_hi) = __ray_char_range(&__rt_fs, __rt_fa, __rt_fb); ");
         use_(self, out, "&__rt_fs[__rt_lo..__rt_hi]")?;
-        out.push_str(" } else { ");
-        use_(self, out, "&*__ray_substring(&__rt_fs, __rt_fa, __rt_fb)")?;
-        out.push_str(" } }");
+        out.push_str(" }");
         Ok(())
     }
 
@@ -1520,6 +1519,16 @@ impl Transpiler {
                     self.emit_expr(out, eff[0])?;
                     out.push_str("; let __rt_p = __rt_p.borrow(); let mut __rt_v: Vec<u8> = Vec::with_capacity(__rt_p.iter().map(|__rt_x| __rt_x.len()).sum()); for __rt_x in __rt_p.iter() { __rt_v.extend_from_slice(__rt_x); } Rc::<[u8]>::from(__rt_v) }");
                 }
+            }
+            // rayreq #261: chars_to_string([char], i, j) -> string — el tramo [i, j) con clamp, O(j − i).
+            "chars_to_string" => {
+                out.push_str("{ let __rt_c = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_c: std::cell::Ref<Vec<char>> = __rt_c.borrow(); let __rt_n = __rt_c.len() as i64; let __rt_lo = (");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<str>::from(__rt_c[__rt_lo as usize..__rt_hi as usize].iter().collect::<String>()) }");
             }
             // Más builtins de string (→ métodos de `str`/`String` de Rust, misma semántica que la VM).
             "trim" => {
@@ -3476,6 +3485,7 @@ impl Transpiler {
                     "parse_int" => opt_of(Type::Int),
                     "parse_float" => opt_of(Type::Float),
                     // Bytes: to_bytes → bytes; sub_bytes → bytes; from_utf8 → Result<string,string>.
+                    "chars_to_string" => Type::String, // rayreq #261
                     "to_bytes" | "sub_bytes" | "bytes_of" | "bytes_concat" => Type::Bytes, // M345: `bytes_of` como valor de `let`
                     "from_utf8" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                     // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>;
@@ -3804,6 +3814,7 @@ fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
     match (name, i) {
         ("bytes_of", 0) => Some(Type::Array(Box::new(Type::Int))),
         ("bytes_concat", 0) => Some(Type::Array(Box::new(Type::Bytes))), // M395
+        ("chars_to_string", 0) => Some(Type::Array(Box::new(Type::Char))), // rayreq #261
         ("join", 0) => Some(Type::Array(Box::new(Type::String))),
         _ => None,
     }

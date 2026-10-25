@@ -380,30 +380,42 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // y la última pareja (carácter, byte): ASCII indexa el byte; no-ASCII avanza o retrocede desde la
     // última posición. Sin `yield` dentro: el `RefCell` nunca queda prestado a través de una fibra.
     out.push_str("struct __RayStrEntry { s: Rc<str>, ascii: bool, chars: usize, last_char: usize, last_byte: usize }\n");
-    out.push_str("thread_local! { static __RAY_STR_LAST: std::cell::RefCell<Option<__RayStrEntry>> = const { std::cell::RefCell::new(None) }; }\n");
+    // rayreq #261: DOS entradas, como la VM (el texto y el token que se acaba de cortar).
+    out.push_str("thread_local! { static __RAY_STR_LAST: std::cell::RefCell<[Option<__RayStrEntry>; 2]> = const { std::cell::RefCell::new([None, None]) }; }\n");
     out.push_str("fn __ray_str_entry<R>(s: &Rc<str>, f: impl FnOnce(&mut __RayStrEntry) -> R) -> R {\n");
     out.push_str("    __RAY_STR_LAST.with(|cell| {\n");
-    out.push_str("        let mut slot = cell.borrow_mut();\n");
-    out.push_str("        if !matches!(&*slot, Some(e) if Rc::ptr_eq(&e.s, s)) {\n");
+    out.push_str("        let mut slots = cell.borrow_mut();\n");
+    out.push_str("        let hit = |e: &Option<__RayStrEntry>| matches!(e, Some(e) if Rc::ptr_eq(&e.s, s));\n");
+    out.push_str("        if hit(&slots[1]) { slots.swap(0, 1); } else if !hit(&slots[0]) {\n");
     out.push_str("            let ascii = s.is_ascii();\n");
     out.push_str("            let chars = if ascii { s.len() } else { s.chars().count() };\n");
-    out.push_str("            *slot = Some(__RayStrEntry { s: Rc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });\n");
+    out.push_str("            slots[1] = slots[0].take();\n");
+    out.push_str("            slots[0] = Some(__RayStrEntry { s: Rc::clone(s), ascii, chars, last_char: 0, last_byte: 0 });\n");
     out.push_str("        }\n");
-    out.push_str("        f(slot.as_mut().unwrap())\n");
+    out.push_str("        f(slots[0].as_mut().unwrap())\n");
     out.push_str("    })\n}\n");
     out.push_str("#[inline] fn __ray_char_len(s: &Rc<str>) -> i64 { __ray_str_entry(s, |e| e.chars as i64) }\n");
+    // rayreq #261: el cursor de la entrada al carácter `i` (`i <= chars`) → su offset de byte.
+    out.push_str("fn __ray_str_seek(e: &mut __RayStrEntry, i: usize) -> usize {\n");
+    out.push_str("    if e.ascii { return i; }\n");
+    out.push_str("    let bytes = e.s.as_bytes();\n");
+    out.push_str("    let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i { (e.last_char, e.last_byte) } else { (0, 0) };\n");
+    out.push_str("    while ci < i { let b = bytes[bi]; bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 }; ci += 1; }\n");
+    out.push_str("    while ci > i { bi -= 1; while bi > 0 && (bytes[bi] & 0xC0) == 0x80 { bi -= 1; } ci -= 1; }\n");
+    out.push_str("    e.last_char = ci; e.last_byte = bi;\n");
+    out.push_str("    bi\n}\n");
     out.push_str("fn __ray_char_at(s: &Rc<str>, i: i64) -> Option<char> {\n");
     out.push_str("    let Ok(i) = usize::try_from(i) else { return None };\n");
     out.push_str("    __ray_str_entry(s, |e| {\n");
     out.push_str("        if i >= e.chars { return None; }\n");
     out.push_str("        if e.ascii { return Some(e.s.as_bytes()[i] as char); }\n");
-    out.push_str("        let bytes = e.s.as_bytes();\n");
-    out.push_str("        let (mut ci, mut bi) = if i >= e.last_char || e.last_char - i < i { (e.last_char, e.last_byte) } else { (0, 0) };\n");
-    out.push_str("        while ci < i { let b = bytes[bi]; bi += if b < 0x80 { 1 } else if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 }; ci += 1; }\n");
-    out.push_str("        while ci > i { bi -= 1; while bi > 0 && (bytes[bi] & 0xC0) == 0x80 { bi -= 1; } ci -= 1; }\n");
-    out.push_str("        e.last_char = ci; e.last_byte = bi;\n");
+    out.push_str("        let bi = __ray_str_seek(e, i);\n");
     out.push_str("        e.s[bi..].chars().next()\n");
     out.push_str("    })\n}\n");
+    // rayreq #261: los offsets de byte del tramo `[i, j)` por carácter (clamp de `substring`), por
+    // la misma caché: ASCII O(1) tras la primera vez, no-ASCII amortizado en un recorrido.
+    out.push_str("fn __ray_char_range(s: &Rc<str>, i: i64, j: i64) -> (usize, usize) {\n");
+    out.push_str("    __ray_str_entry(s, |e| { let n = e.chars as i64; let lo = i.clamp(0, n) as usize; let hi = j.clamp(lo as i64, n) as usize; let blo = __ray_str_seek(e, lo); let bhi = __ray_str_seek(e, hi); (blo, bhi) })\n}\n");
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
     out.push_str("    if s.is_ascii() { return s.find(sub).map(|i| i as i64); }\n");
     out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");
@@ -416,12 +428,9 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // para ambos hashers); los registros internos (sockets/TLS, clave i64) siguen en HashMap std.
     // M394 (rayplay #160): el tramo no-ASCII se corta recorriendo `char_indices` hasta `j`, sin
     // materializar el string por caracteres (espejo de `builtins::substring_slice`).
-    out.push_str("fn __ray_substring(s: &str, i: i64, j: i64) -> Rc<str> {\n");
-    out.push_str("    if s.is_ascii() { let n = s.len() as i64; let lo = i.clamp(0, n); let hi = j.clamp(lo, n); return Rc::from(&s[lo as usize..hi as usize]); }\n");
-    out.push_str("    let lo = i.max(0) as usize; let hi = j.max(0).max(lo as i64) as usize;\n");
-    out.push_str("    let (mut start, mut end) = (s.len(), s.len());\n");
-    out.push_str("    for (k, (at, _)) in s.char_indices().enumerate() { if k == lo { start = at; } if k == hi { end = at; break; } }\n");
-    out.push_str("    Rc::from(&s[start..end])\n}\n");
+    out.push_str("fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
+    out.push_str("    let (lo, hi) = __ray_char_range(s, i, j);\n");
+    out.push_str("    Rc::from(&s[lo..hi])\n}\n");
     if ahash {
         out.push_str("type __RayMap<K, V> = std::collections::HashMap<K, V, ray_runtime::RandomState>;\n");
     } else {
@@ -1008,7 +1017,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M235: escritorio (abrir/revelar) y portapapeles.
             "fn __ray_ui_desktop(kind: &str, path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let r = match kind { \"open_path\" => ray_runtime::ui::open_path(path), \"reveal\" => ray_runtime::ui::reveal_path(path), other => Err(format!(\"ui: unknown desktop action '{other}'\")) };\n",
+            "    let r = ray_runtime::ui::desktop(kind, path);\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_clipboard(op: &str, text: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = match op { \"write\" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()), \"read\" => ray_runtime::ui::clipboard_read(), other => Err(format!(\"ui: unknown clipboard op '{other}'\")) };\n",

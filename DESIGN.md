@@ -19018,3 +19018,49 @@ forma que ya usaba `__sqlite_query_nulls` para leer. La función del runtime es 
 `net` pasa a 0.12.0 y `db` a 0.6.0 (piden 1.27.81 por sus primitivos nuevos): una app con
 `^0.11`/`^0.5` y un raylang anterior no los recibe.
 
+
+## 403. M428 — los pendientes de la segunda mirada: EOF del handshake TLS, escapes por posición, marco headless (IDEAS §117, oct 2026)
+
+**Contexto.** Desde 1.27.81 toda release pasa una revisión de código independiente antes del tag
+(regla del usuario, 25 oct 2026). La primera cazó la divergencia VM/nativo de las guardas de
+`match` (corregida en la misma PR, §402) y dejó cuatro pendientes menores (IDEAS §117). Este arco
+los cierra.
+
+**TLS.** `TlsStream::read` (nativo) y `tls_read_nb` (VM) convertían TODO `UnexpectedEof` en «EOF
+limpio». Era lo correcto para el cliente tras el handshake (#250: servidores con
+`Connection: close` cierran sin `close_notify`), pero también tapaba un peer que muere a medio
+saludo: el servidor lo veía como petición vacía y el cliente como respuesta vacía. La regla queda
+acotada por el ESTADO, no por el lado: `is_handshaking()` → error con nombre
+(`tls: the peer closed the connection during the handshake`, misma cadena en ambos motores);
+después, EOF. No se acota al cliente porque en el servidor el cierre sin `close_notify` tras el
+handshake es lo normal (los navegadores lo hacen) y convertirlo en error llenaría los logs de
+cada webserver. Test `tls_handshake_eof_cli` en VM y nativo con un «servidor» que acepta y cierra.
+
+**`ray fmt`.** La tabla de escapes de #258 iba por CARÁCTER (`HashMap<char, String>`): un mismo
+carácter escrito de dos formas en un literal salía con la primera (`"A\u{41}"` → `"\u{41}\u{41}"`,
+alterando el texto del usuario), y los literales en posición de patrón pasaban una tabla vacía.
+Ahora `Spellings` guarda la ortografía de CADA carácter del valor en orden (`Some(esc)` o `None`)
+y los emisores la consumen por posición (`take`): la n-ésima aparición de un carácter en el valor
+es su n-ésima aparición en el fuente. Lo que hay dentro de un `${…}` no forma parte del valor y se
+salta (antes se recogía «de más» porque solo decidía ortografía; por posición desincronizaría).
+Camino rápido: sin ningún `\u{…}`/`\xNN` la tabla queda vacía. `fmt_pattern` recibe el `Cur` para
+que los literales de patrón conserven sus escapes. De paso, una interpolación que EMPIEZA por
+`${…}` tiene como hoja izquierda la expresión de dentro, no la comilla: `source_escapes` retrocede
+sobre `"${` para encontrar el delimitador (antes perdía los escapes de esas cadenas).
+
+**Headless.** El marco de #245 vivía en `headless_frames`, una tabla paralela a `windows()` que
+nunca se vaciaba. Pasa a ser un campo `frame` de `WinState`: muere con la ventana y no hay dos
+tablas con la misma clave.
+
+**Asignaciones.** `url.find_any` y los tres `",[]{}".contains(c.to_string())` de `yaml` creaban una
+`String` por carácter escaneado; comparan `char` (`[char].contains` y `flow_indicator`).
+
+**La revisión de esta PR** (misma regla) afinó tres cosas antes del tag: el mapeo del EOF del
+handshake vive en UN helper (`handshake_eof` nativo, `tls_io_err` en la VM) aplicado a toda llamada
+que conduce el handshake — escritura, `complete_io`, `tls_peer_cert`, `connect_h2` — y no solo a la
+lectura (el flujo HTTP normal escribe primero); `is_template` y `source_escapes` resuelven el
+delimitador con el mismo `literal_delim` (un template que empieza por `${…}` con saltos de línea
+se habría colapsado a `"…\n…"`), y `source_escapes` pre-escanea el literal (`has_hex_escape`) antes
+de reservar nada; el marco headless va DENTRO de la variante (`Win::Headless { frame }`), no como
+campo de `WinState` que los backends reales rellenarían con ceros. El test del handshake drena el
+ClientHello antes de cerrar: en Linux, cerrar con datos sin leer manda RST, no FIN.

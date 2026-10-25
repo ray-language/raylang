@@ -196,6 +196,24 @@ fn collect_comments(src: &str) -> Vec<Comment> {
 /// Cursor sobre los comentarios recolectados, consumidos **en orden de fuente** conforme el formateador
 /// emite los constructos (que se recorren en ese mismo orden). Ver el `//!` del módulo. También conoce
 /// las **líneas en blanco** de la fuente, para preservar la separación visual entre sentencias.
+/// rayreq #258 / IDEAS §117: la ortografía de cada carácter de un literal, en el orden del valor.
+/// `Some(esc)` = se escribió `\u{…}`/`\xNN`; `None` = la del lexer. Se consume por posición
+/// (`take`): la n-ésima aparición de un carácter en el valor es su n-ésima aparición en el fuente.
+#[derive(Default)]
+struct Spellings(std::collections::HashMap<char, std::collections::VecDeque<Option<String>>>);
+
+impl Spellings {
+    fn push(&mut self, c: char, spelling: Option<String>) {
+        self.0.entry(c).or_default().push_back(spelling);
+    }
+
+    /// La ortografía de la SIGUIENTE aparición de `c` (None = por defecto, también si la tabla
+    /// está vacía o se desincronizó).
+    fn take(&mut self, c: char) -> Option<String> {
+        self.0.get_mut(&c).and_then(|q| q.pop_front()).flatten()
+    }
+}
+
 struct Cur {
     items: Vec<Comment>,
     /// Las líneas del fuente como chars (M95): para saber si un literal de string era un
@@ -295,28 +313,77 @@ impl Cur {
 
     /// ¿Era un BACKTICK el literal que empieza en `(line, col)`? (M95: se mira el fuente.)
     fn is_template(&self, line: usize, col: usize) -> bool {
-        self.srclines.get(line.wrapping_sub(1)).and_then(|l| l.get(col.wrapping_sub(1))) == Some(&'`')
+        matches!(self.literal_delim(line, col), Some(('`', _)))
     }
 
-    /// rayreq #258: los escapes `\u{…}` tal como se escribieron en el literal que abre en
-    /// `(line, col)`, por el carácter que producen. El literal se reemite desde su VALOR, así que
-    /// sin esto `"\u{a0}"` salía como un espacio duro literal, indistinguible de un espacio (y
-    /// `\u{FEFF}`, `\u{2028}`, `'\u{FFFD}'`, igual): el escape era la documentación de qué
-    /// carácter hay ahí. Recorre hasta el delimitador de cierre (varias líneas en un template);
-    /// lo que haya dentro de un `${…}` también se recoge, y como solo decide la ORTOGRAFÍA de un
-    /// carácter (no su valor), recoger de más no cambia el programa.
-    fn source_escapes(&self, line: usize, col: usize) -> std::collections::HashMap<char, String> {
-        let mut out = std::collections::HashMap::new();
-        let (mut li, mut ci) = (line.wrapping_sub(1), col);
-        let delim = match self.srclines.get(li).and_then(|l| l.get(col.wrapping_sub(1))) {
-            Some(&d) if d == '"' || d == '`' || d == '\'' => d,
-            _ => return out,
-        };
+    /// El delimitador del literal cuya hoja izquierda está en `(line, col)` y el índice (en la
+    /// línea) desde el que recorrer su cuerpo. Normalmente la comilla está en `col - 1`; una
+    /// interpolación que EMPIEZA por `${…}` tiene como hoja izquierda la expresión de dentro, así
+    /// que se retrocede sobre `"${` (con espacios opcionales) y se arranca en el `$`. Lo comparten
+    /// `is_template` y `source_escapes` para que nunca discrepen (IDEAS §117).
+    fn literal_delim(&self, line: usize, col: usize) -> Option<(char, usize)> {
+        let is_delim = |d: char| d == '"' || d == '`' || d == '\'';
+        let l = self.srclines.get(line.wrapping_sub(1))?;
+        if let Some(&d) = l.get(col.wrapping_sub(1)).filter(|d| is_delim(**d)) {
+            return Some((d, col));
+        }
+        let mut k = col.wrapping_sub(2);
+        while k < l.len() && l[k].is_whitespace() {
+            k = k.wrapping_sub(1);
+        }
+        if k < l.len() && k >= 2 && l[k] == '{' && l[k - 1] == '$' && is_delim(l[k - 2]) && l[k - 2] != '\'' {
+            Some((l[k - 2], k - 1))
+        } else {
+            None
+        }
+    }
+
+    /// ¿Hay algún `\u{…}`/`\xNN` en el literal que arranca en `(li, ci)`? Pre-escaneo barato (sin
+    /// reservar nada) para que `source_escapes` solo construya la tabla cuando hace falta. Se mira
+    /// la línea entera (y, en un template, las siguientes hasta la primera con un backtick):
+    /// pasarse de largo solo cuesta construir una tabla que no se usará.
+    fn has_hex_escape(&self, li: usize, ci: usize, template: bool) -> bool {
+        let mut li = li;
+        let mut from = ci;
+        while let Some(l) = self.srclines.get(li) {
+            let mut k = from;
+            while k + 1 < l.len() {
+                if l[k] == '\\' && (l[k + 1] == 'x' || (l[k + 1] == 'u' && l.get(k + 2) == Some(&'{'))) {
+                    return true;
+                }
+                k += 1;
+            }
+            if !template || l[from..].contains(&'`') {
+                return false;
+            }
+            li += 1;
+            from = 0;
+        }
+        false
+    }
+
+    /// rayreq #258: los escapes `\u{…}`/`\xNN` tal como se escribieron en el literal que abre en
+    /// `(line, col)`. El literal se reemite desde su VALOR, así que sin esto `"\u{a0}"` salía como
+    /// un espacio duro literal, indistinguible de un espacio (y `\u{FEFF}`, `\u{2028}`,
+    /// `'\u{FFFD}'`, igual): el escape era la documentación de qué carácter hay ahí. Se recoge la
+    /// ortografía de CADA carácter del valor, en orden (IDEAS §117: por carácter, `"A\u{41}"`
+    /// salía `"\u{41}\u{41}"`); lo que hay dentro de un `${…}` no forma parte del valor y se
+    /// salta. Recorre hasta el delimitador de cierre (varias líneas en un template).
+    fn source_escapes(&self, line: usize, col: usize) -> Spellings {
+        let mut out = Spellings::default();
+        let Some((delim, start)) = self.literal_delim(line, col) else { return out };
+        let (mut li, mut ci) = (line.wrapping_sub(1), start);
+        if !self.has_hex_escape(li, ci, delim == '`') {
+            return out; // camino rápido: nada que conservar
+        }
         let mut depth = 0usize; // `${` abiertos
         while let Some(l) = self.srclines.get(li) {
             if ci >= l.len() {
                 if delim != '`' && depth == 0 {
                     break; // un "…" o '…' no cruza líneas
+                }
+                if depth == 0 {
+                    out.push('\n', None); // el salto de línea literal de un template
                 }
                 li += 1;
                 ci = 0;
@@ -328,7 +395,9 @@ impl Cur {
                     if let Some(end) = l[ci + 3..].iter().position(|&x| x == '}') {
                         let hex: String = l[ci + 3..ci + 3 + end].iter().collect();
                         if let Some(ch) = u32::from_str_radix(&hex.replace('_', ""), 16).ok().and_then(char::from_u32) {
-                            out.entry(ch).or_insert_with(|| l[ci..ci + 4 + end].iter().collect());
+                            if depth == 0 {
+                                out.push(ch, Some(l[ci..ci + 4 + end].iter().collect()));
+                            }
                         }
                         ci += 4 + end;
                         continue;
@@ -337,9 +406,25 @@ impl Cur {
                 if l.get(ci + 1) == Some(&'x') && ci + 3 < l.len() {
                     let hex: String = l[ci + 2..ci + 4].iter().collect();
                     if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                        out.entry(ch).or_insert_with(|| l[ci..ci + 4].iter().collect());
+                        if depth == 0 {
+                            out.push(ch, Some(l[ci..ci + 4].iter().collect()));
+                        }
                         ci += 4;
                         continue;
+                    }
+                }
+                // Un escape simple produce un carácter con su ortografía por defecto (la del lexer).
+                if depth == 0 {
+                    let produced = match l.get(ci + 1) {
+                        Some('n') => Some('\n'),
+                        Some('t') => Some('\t'),
+                        Some('r') => Some('\r'),
+                        Some('0') => Some('\0'),
+                        Some(&other) => Some(other), // `\\`, `\"`, `\``, `\$`, `\'`
+                        None => None,
+                    };
+                    if let Some(p) = produced {
+                        out.push(p, None);
                     }
                 }
                 ci += 2;
@@ -356,6 +441,8 @@ impl Cur {
                 depth -= 1;
             } else if depth == 0 && c == delim {
                 break;
+            } else if depth == 0 {
+                out.push(c, None);
             }
             ci += 1;
         }
@@ -1350,8 +1437,8 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     if let Some(segs) = cur.interp.remove(&leaf) {
         if interp_spine_pieces(e) == segs.len() {
             let template = cur.is_template(leaf.0, leaf.1);
-            let keep = cur.source_escapes(leaf.0, leaf.1);
-            let s = fmt_interp(cur, &segs, template, &keep); // una cadena interpolada es primaria → sin paréntesis
+            let mut keep = cur.source_escapes(leaf.0, leaf.1);
+            let s = fmt_interp(cur, &segs, template, &mut keep); // una cadena interpolada es primaria → sin paréntesis
             cur.interp.insert(leaf, segs);
             return s;
         }
@@ -1575,7 +1662,7 @@ fn interp_spine_pieces(e: &Expr) -> usize {
 /// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
 /// literales se re-escapan como un string; cada `${e}` formatea su expresión (recursivo → interpolación
 /// anidada funciona). Un `${` literal en el texto se re-escapa como `\${`.
-fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool, keep: &std::collections::HashMap<char, String>) -> String {
+fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool, keep: &mut Spellings) -> String {
     let delim = if template { '`' } else { '"' };
     let mut out = String::from(delim);
     for seg in segs {
@@ -1588,8 +1675,8 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool, keep: &std::col
                 // se reemiten LITERALES (multilínea).
                 let chars: Vec<char> = s.chars().collect();
                 for (i, &c) in chars.iter().enumerate() {
-                    if let Some(esc) = keep.get(&c) {
-                        out.push_str(esc); // rayreq #258: el escape tal como se escribió
+                    if let Some(esc) = keep.take(c) {
+                        out.push_str(&esc); // rayreq #258: el escape tal como se escribió
                         continue;
                     }
                     match c {
@@ -1907,10 +1994,10 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         ExprKind::Float(f) => fmt_float(*f),
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Str(s) => {
-            let keep = cur.source_escapes(e.line, e.col);
-            if cur.is_template(e.line, e.col) { fmt_template_lit(s, &keep) } else { fmt_string_lit(s, &keep) }
+            let mut keep = cur.source_escapes(e.line, e.col);
+            if cur.is_template(e.line, e.col) { fmt_template_lit(s, &mut keep) } else { fmt_string_lit(s, &mut keep) }
         }
-        ExprKind::Char(c) => fmt_char_lit(*c, &cur.source_escapes(e.line, e.col)),
+        ExprKind::Char(c) => fmt_char_lit(*c, &mut cur.source_escapes(e.line, e.col)),
         ExprKind::Bytes(b) => fmt_bytes_lit(b),
         ExprKind::Ident(n) => n.clone(),
         ExprKind::Unary { op, expr } => {
@@ -2075,7 +2162,7 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
             // M201: un `if let` del usuario (desazucarado por el parser a `match` de dos brazos) se
             // reemite como `if let`: `if let <patrón> = <expr> { … } [else { … } | else if …]`.
             let scrut = fmt_cond(cur, scrutinee, "if let  = ", cur.wrap);
-            let mut s = format!("if let {} = {} ", fmt_pattern(&arms[0].pattern), scrut);
+            let mut s = format!("if let {} = {} ", fmt_pattern(cur, &arms[0].pattern), scrut);
             match &arms[0].body.kind {
                 ExprKind::Block(b) => s.push_str(&fmt_block(cur, b, base)),
                 _ => s.push_str(&fmt_expr(cur, &arms[0].body, 0)),
@@ -2119,7 +2206,7 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
                     Some(g) => format!(" if {}", fmt_expr(cur, g, 0)),
                     None => String::new(),
                 };
-                let line = format!("{}{}{} => {},", inner, fmt_pattern(&arm.pattern), guard, body);
+                let line = format!("{}{}{} => {},", inner, fmt_pattern(cur, &arm.pattern), guard, body);
                 s.push_str(&line);
                 if !body.contains('\n') {
                     s.push_str(&cur.trailing_on(arm.body.line));
@@ -2148,7 +2235,7 @@ fn assign_arm_sugar(body: &Expr) -> Option<(&Expr, &Expr)> {
         .then_some((target, value))
 }
 
-fn fmt_pattern(p: &Pattern) -> String {
+fn fmt_pattern(cur: &Cur, p: &Pattern) -> String {
     match &p.kind {
         PatternKind::Wildcard => "_".to_string(),
         PatternKind::Binding(n) => n.clone(),
@@ -2156,7 +2243,7 @@ fn fmt_pattern(p: &Pattern) -> String {
             if subpatterns.is_empty() {
                 format!("{}.{}", enum_name, variant)
             } else {
-                let bs: Vec<String> = subpatterns.iter().map(fmt_pattern).collect(); // recursivo (M40.1c)
+                let bs: Vec<String> = subpatterns.iter().map(|q| fmt_pattern(cur, q)).collect(); // recursivo (M40.1c)
                 format!("{}.{}({})", enum_name, variant, bs.join(", "))
             }
         }
@@ -2164,28 +2251,29 @@ fn fmt_pattern(p: &Pattern) -> String {
             // M40.1d: `Nombre { campo: sub, … }` (la forma corta `campo` = `campo: campo` se reimprime
             // larga, sin ambigüedad).
             let fs: Vec<String> = fields.iter()
-                .map(|(f, p)| format!("{}: {}", f, fmt_pattern(p)))
+                .map(|(f, p)| format!("{}: {}", f, fmt_pattern(cur, p)))
                 .collect();
             format!("{} {{ {} }}", name, fs.join(", "))
         }
         // M310: tupla y literal.
         PatternKind::Tuple(subs) => {
-            let ps: Vec<String> = subs.iter().map(fmt_pattern).collect();
+            let ps: Vec<String> = subs.iter().map(|q| fmt_pattern(cur, q)).collect();
             format!("({})", ps.join(", "))
         }
-        PatternKind::Literal(e) => fmt_literal_pattern(e),
+        PatternKind::Literal(e) => fmt_literal_pattern(cur, e),
     }
 }
 
-/// M310: el texto de un literal en posición de patrón (sin `Cur`: un literal no lleva comentarios).
-fn fmt_literal_pattern(e: &Expr) -> String {
+/// M310: el texto de un literal en posición de patrón (sin comentarios; el `Cur` solo aporta el
+/// fuente para conservar los escapes `\u{…}` también aquí, IDEAS §117).
+fn fmt_literal_pattern(cur: &Cur, e: &Expr) -> String {
     match &e.kind {
         ExprKind::Int(v, r) => fmt_int(*v, *r),
         ExprKind::Float(f) => fmt_float(*f),
-        ExprKind::Str(t) => fmt_string_lit(t, &Default::default()),
-        ExprKind::Char(c) => fmt_char_lit(*c, &Default::default()),
+        ExprKind::Str(t) => fmt_string_lit(t, &mut cur.source_escapes(e.line, e.col)),
+        ExprKind::Char(c) => fmt_char_lit(*c, &mut cur.source_escapes(e.line, e.col)),
         ExprKind::Bool(b) => b.to_string(),
-        ExprKind::Unary { op: UnaryOp::Neg, expr } => format!("-{}", fmt_literal_pattern(expr)),
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => format!("-{}", fmt_literal_pattern(cur, expr)),
         _ => "_".to_string(),
     }
 }
@@ -2243,9 +2331,9 @@ fn group_digits(body: &str, size: usize) -> String {
     out
 }
 
-fn escape_char(c: char, out: &mut String, in_double_quotes: bool, keep: &std::collections::HashMap<char, String>) {
-    if let Some(esc) = keep.get(&c) {
-        out.push_str(esc); // rayreq #258: el escape `\u{…}` tal como se escribió
+fn escape_char(c: char, out: &mut String, in_double_quotes: bool, keep: &mut Spellings) {
+    if let Some(esc) = keep.take(c) {
+        out.push_str(&esc); // rayreq #258: el escape `\u{…}` tal como se escribió
         return;
     }
     match c {
@@ -2263,13 +2351,14 @@ fn escape_char(c: char, out: &mut String, in_double_quotes: bool, keep: &std::co
     }
 }
 
-fn fmt_string_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> String {
+fn fmt_string_lit(s: &str, keep: &mut Spellings) -> String {
     let mut out = String::from("\"");
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
         // Un `$` seguido de `{` en el VALOR debe re-escaparse `\$` — si no, el roundtrip del
         // formateador convertiría un `\${x}` literal en una interpolación real (fix M95).
         if c == '$' && chars.get(i + 1) == Some(&'{') {
+            let _ = keep.take(c); // consume su turno: la tabla va por posición
             out.push_str("\\$");
         } else {
             escape_char(c, &mut out, true, keep);
@@ -2281,12 +2370,12 @@ fn fmt_string_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> St
 
 /// Reemite un string cuyo literal original era un BACKTICK (M95): la `"` es literal, el
 /// `` ` `` se escapa y los saltos de línea se conservan literales (multilínea).
-fn fmt_template_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> String {
+fn fmt_template_lit(s: &str, keep: &mut Spellings) -> String {
     let mut out = String::from("`");
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
-        if let Some(esc) = keep.get(&c) {
-            out.push_str(esc); // rayreq #258
+        if let Some(esc) = keep.take(c) {
+            out.push_str(&esc); // rayreq #258
             continue;
         }
         match c {
@@ -2303,7 +2392,7 @@ fn fmt_template_lit(s: &str, keep: &std::collections::HashMap<char, String>) -> 
     out
 }
 
-fn fmt_char_lit(c: char, keep: &std::collections::HashMap<char, String>) -> String {
+fn fmt_char_lit(c: char, keep: &mut Spellings) -> String {
     let mut out = String::from("'");
     escape_char(c, &mut out, false, keep);
     out.push('\'');
@@ -3339,12 +3428,21 @@ mod tests {
     fn unicode_escapes_are_kept_as_written() {
         // rayreq #258: el literal se reemite desde su valor; un escape `\u{…}` / `\xNN` del fuente
         // se conserva (un espacio duro, la BOM o U+2028 no se distinguirían del carácter literal).
-        // (Un mismo carácter escrito de dos formas en UN literal sale con la primera.)
         let src = "fn main() {\n    let a = \"x\\u{a0}y \u{e9}\";\n    let h = \"\\xA0\";\n    let b = '\\u{FFFD}';\n    let c = \"\\u{FEFF}%YAML ${a} \\u{2028}\";\n    let d = `l\\u{2029}\nn ${b}`;\n    print(a + h + b.to_string() + c + d);\n}\n";
         let out = fmt(src);
         assert_eq!(out, src, "fmt no toca los escapes");
         // Un carácter escrito tal cual se queda tal cual.
         assert!(out.contains("y \u{e9}\""), "{out}");
+    }
+
+    #[test]
+    fn escapes_are_kept_by_position_and_inside_patterns() {
+        // IDEAS §117: la tabla va por POSICIÓN — `"A\u{41}"` conserva la `A` literal y el escape
+        // (por carácter salía `"\u{41}\u{41}"`); y en un literal en posición de patrón el escape
+        // también sobrevive (antes `match (s) { "\u{a0}" => …` perdía el escape).
+        let src = "fn main() {\n    let a = \"A\\u{41}A\";\n    let n = match (a) {\n        \"\\u{a0}\" => 1,\n        \"x\\xA0\" => 2,\n        _ => 0,\n    };\n    let c = match ('\\u{FFFD}') {\n        '\\u{FFFD}' => n,\n        _ => 0,\n    };\n    print(\"${a}\\u{a0}${c} \\u{a0}\");\n    print(`${a}\nsecond \\u{2028}`);\n}\n";
+        let out = fmt(src);
+        assert_eq!(out, src, "fmt conserva cada ortografía en su sitio");
     }
 
     #[test]

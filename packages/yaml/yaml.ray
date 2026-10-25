@@ -267,7 +267,7 @@ fn properties(y: Y) -> Result<(string, string), string> {
 
 fn name(y: Y) -> string {
     let start = y.col;
-    while (!eol(y) && !blank(ch(y)) && !",[]{}".contains(ch(y).to_string())) {
+    while (!eol(y) && !blank(ch(y)) && !flow_indicator(ch(y))) {
         y.col = y.col + 1;
     }
     chars_to_string(y.lines[y.li], start, y.col)
@@ -957,6 +957,12 @@ fn flow(y: Y, depth: int) -> Result<Doc, string> {
     }
 }
 
+/// One of `,[]{}`, the characters that end a plain scalar inside a flow collection. Compared
+/// as chars: this runs once per character of a big document, and `string.contains` would allocate.
+fn flow_indicator(c: char) -> bool {
+    c == ',' || c == '[' || c == ']' || c == '{' || c == '}'
+}
+
 /// The key of a flow pair: a scalar. A collection or `null` as a key is rejected like `? ` in
 /// block mode, instead of silently becoming the member "".
 fn flow_key(y: Y, k: Doc) -> Result<string, string> {
@@ -996,13 +1002,11 @@ fn flow_node(y: Y, depth: int) -> Result<Doc, string> {
         var end = start;
         while (y.col < line.len()) {
             let d = line[y.col];
-            if (",[]{}".contains(d.to_string())) {
+            if (flow_indicator(d)) {
                 break;
             }
             if (d == ':'
-                && (y.col + 1 >= line.len()
-                    || blank(line[y.col + 1])
-                    || ",[]{}".contains(line[y.col + 1].to_string()))) {
+                && (y.col + 1 >= line.len() || blank(line[y.col + 1]) || flow_indicator(line[y.col + 1]))) {
                 break;
             }
             if (d == '#' && y.col > start && blank(line[y.col - 1])) {

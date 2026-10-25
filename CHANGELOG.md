@@ -4,6 +4,23 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.82 — 2026-10-25
+
+Los pendientes menores de la segunda mirada a 1.27.80/1.27.81 (M428, IDEAS §117).
+
+- **TLS: cerrar durante el handshake es un error, no un fin de flujo.** Un peer que corta el TCP
+  sin `close_notify` sigue siendo EOF limpio tras el handshake (servidores HTTP con
+  `Connection: close`), pero si lo hace a medio saludo la lectura falla con
+  `tls: the peer closed the connection during the handshake`, en la VM y en el nativo; antes
+  ambos lo daban como respuesta vacía.
+- **`ray fmt` conserva los escapes por posición y también en los patrones**: `"A\u{41}"` ya no
+  sale `"\u{41}\u{41}"`, `match (s) { "\u{a0}" => … }` conserva el escape, y una interpolación
+  que empieza por `${…}` también.
+- `std/ui`: el marco de las ventanas headless vive en el estado de la ventana y se libera con ella
+  (antes una tabla aparte crecía durante toda la vida del proceso).
+- `std/url` y `yaml` 0.1.1 comparan caracteres sin crear una cadena por carácter en sus bucles de
+  escaneo.
+
 ## 1.27.81 — 2026-10-25
 
 Lo que dejó abierto rayreq, con las recomendaciones de IDEAS §116 aprobadas (M427).

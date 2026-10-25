@@ -420,8 +420,10 @@ fn drain_pipe(fd: i32, max: usize) {
 /// Una ventana viva. Los punteros objc se guardan como `usize` y SOLO se dereferencian en el
 /// hilo principal (toda operación se despacha ahí) — el mapa en sí es datos ordinarios.
 enum Win {
-    /// Backend de mesa: la ventana solo existe como fila (tests/CI).
-    Headless,
+    /// Backend de mesa: la ventana solo existe como fila (tests/CI). `frame` es el marco
+    /// `(x, y, ancho, alto)` que `frame` devuelve (#245): lo que abrir, `set_position` y
+    /// `set_size` dejarían. Los backends reales se lo preguntan a la ventana.
+    Headless { frame: (i64, i64, i64, i64) },
     #[cfg(target_os = "macos")]
     Mac {
         window: usize,
@@ -931,7 +933,7 @@ pub fn set_titlebar_color(id: i64, color: &str) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
-        Some(WinState { win: Win::Headless, .. }) => {
+        Some(WinState { win: Win::Headless { .. }, .. }) => {
             if ui_trace() {
                 eprintln!("[ui] titlebar {id} {}", if color.is_empty() { "system" } else { color });
             }
@@ -981,7 +983,7 @@ pub fn set_background(id: i64, color: &str) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
-        Some(WinState { win: Win::Headless, .. }) => {
+        Some(WinState { win: Win::Headless { .. }, .. }) => {
             if ui_trace() {
                 eprintln!("[ui] background {id} {}", if color.is_empty() { "system" } else { color });
             }
@@ -1184,13 +1186,6 @@ const CASCADE_STEP: i64 = 22;
 /// #245: la última ventana abierta (para `cascade`); 0 = ninguna.
 static LAST_OPENED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-/// #245: el marco de cada ventana HEADLESS (`x`, `y`, ancho, alto del contenido): lo que abrir,
-/// `set_position` y `set_size` dejarían, para que `frame` responda en pruebas sin backend.
-fn headless_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
-    static FRAMES: OnceLock<Mutex<HashMap<i64, (i64, i64, i64, i64)>>> = OnceLock::new();
-    FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// #245: el marco de una ventana ABIERTA — `(x, y, ancho, alto)`: la esquina superior izquierda
 /// del marco en coordenadas de pantalla con origen arriba-izquierda (las de `set_position`) y el
 /// tamaño del ÁREA DE CONTENIDO (el de `set_size` y de las opciones). `Err` con una ventana
@@ -1201,10 +1196,7 @@ pub fn window_frame(id: i64) -> Result<(i64, i64, i64, i64), String> {
         return Err("ui: not an open window".to_string());
     };
     match &state.win {
-        Win::Headless => {
-            drop(map);
-            Ok(headless_frames().lock().unwrap().get(&id).copied().unwrap_or((0, 0, 0, 0)))
-        }
+        Win::Headless { frame } => Ok(*frame),
         #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
         Win::Shell => Err("ui: frame is not available in the mobile shells".to_string()),
         #[cfg(target_os = "macos")]
@@ -1866,9 +1858,11 @@ fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<
                 eprintln!("[ui] devtools {id} on");
             }
         }
-        windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false, intercept_close: false });
         let (fx, fy) = if opts.place == "at" { (opts.x, opts.y) } else { (0, 0) };
-        headless_frames().lock().unwrap().insert(id, (fx, fy, width, height));
+        windows().lock().unwrap().insert(
+            id,
+            WinState { win: Win::Headless { frame: (fx, fy, width, height) }, closed: false, intercept_close: false },
+        );
         if ui_trace() && opts.place == "at" {
             eprintln!("[ui] window {id} at {fx},{fy}");
         }
@@ -1963,7 +1957,7 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(w) => match &w.win {
-            Win::Headless => {
+            Win::Headless { .. } => {
                 // M217 (ray-sublime #8): con RAY_UI_TRACE=1, cada eval_js (y por tanto cada
                 // `ui.reply`) queda en stderr — un test de CI puede afirmar QUÉ contestó la app.
                 if ui_trace() {
@@ -2443,23 +2437,21 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    match &state.win {
-        Win::Headless => {
-            match cmd {
-                Some(WindowCmd::Position(x, y)) => {
-                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
-                        f.0 = x;
-                        f.1 = y;
-                    }
-                }
-                Some(WindowCmd::Size(w, h)) => {
-                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
-                        f.2 = w;
-                        f.3 = h;
-                    }
-                }
-                _ => {}
+    if let Win::Headless { frame } = &mut state.win {
+        match cmd {
+            Some(WindowCmd::Position(x, y)) => {
+                frame.0 = x;
+                frame.1 = y;
             }
+            Some(WindowCmd::Size(w, h)) => {
+                frame.2 = w;
+                frame.3 = h;
+            }
+            _ => {}
+        }
+    }
+    match &state.win {
+        Win::Headless { .. } => {
             if ui_trace() {
                 match cmd {
                     Some(c) => eprintln!("[ui] window {id} {c:?}"),
@@ -2538,7 +2530,7 @@ pub fn popup_menu(id: i64, items: &[String]) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
-        Some(WinState { win: Win::Headless, .. }) => {
+        Some(WinState { win: Win::Headless { .. }, .. }) => {
             let mut tags = headless_menu_tags().lock().unwrap();
             for it in &decoded {
                 if !it.is_separator() {
@@ -2580,7 +2572,7 @@ pub fn focus_window(id: i64) -> Result<(), String> {
     match map.get(&id) {
         None => Err("ui: not an open window".to_string()),
         Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
-        Some(WinState { win: Win::Headless, .. }) => {
+        Some(WinState { win: Win::Headless { .. }, .. }) => {
             if ui_trace() {
                 eprintln!("[ui] focus {id}");
             }
@@ -2630,7 +2622,7 @@ pub fn reset_for_restart() {
             match map.get(&id) {
                 #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
                 Some(WinState { win: Win::Shell, .. }) => true,
-                Some(WinState { win: Win::Headless, .. }) => true,
+                Some(WinState { win: Win::Headless { .. }, .. }) => true,
                 _ => false,
             }
         };
@@ -2655,7 +2647,7 @@ pub fn close_window(id: i64) {
     mark_closed(id);
     let removed = windows().lock().unwrap().remove(&id);
     match removed {
-        None | Some(WinState { win: Win::Headless, .. }) => {}
+        None | Some(WinState { win: Win::Headless { .. }, .. }) => {}
         // §80b: la fila del shell — el evento `closed` ya lo emitió el mark_closed genérico;
         // avisar al shell (esconder su webview) queda para cuando un dogfood lo pida.
         #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]

@@ -196,10 +196,10 @@ fn scheme_char(c: char, first: bool) -> bool {
 }
 
 // El índice del primer carácter de `stops` en `cs` desde `from`, o `cs.len()`.
-fn find_any(cs: [char], from: int, stops: string) -> int {
+fn find_any(cs: [char], from: int, stops: [char]) -> int {
     var i = from;
     while (i < cs.len()) {
-        if (stops.contains(cs[i].to_string())) {
+        if (stops.contains(cs[i])) {
             return i;
         }
         i = i + 1;
@@ -289,7 +289,7 @@ pub fn parse(s: string) -> Result<Url, string> {
     var i = 0;
     var scheme = "";
     // El esquema es lo que va antes del primer ':' si no hay antes un '/', '?' o '#'.
-    let colon = find_any(cs, 0, ":/?#");
+    let colon = find_any(cs, 0, [':', '/', '?', '#']);
     if (colon < cs.len() && cs[colon] == ':') {
         if (colon == 0) {
             return Result.Err("invalid URL: empty scheme");
@@ -308,19 +308,19 @@ pub fn parse(s: string) -> Result<Url, string> {
     var host: Option<string> = Option.None;
     var port: Option<int> = Option.None;
     if (i + 1 < cs.len() && cs[i] == '/' && cs[i + 1] == '/') {
-        let end = find_any(cs, i + 2, "/?#");
+        let end = find_any(cs, i + 2, ['/', '?', '#']);
         let auth = parse_authority(chars_to_string(cs, i + 2, end))?;
         userinfo = auth.0;
         host = Option.Some(auth.1);
         port = auth.2;
         i = end;
     }
-    let path_end = find_any(cs, i, "?#");
+    let path_end = find_any(cs, i, ['?', '#']);
     let path = chars_to_string(cs, i, path_end);
     i = path_end;
     var query: Option<string> = Option.None;
     if (i < cs.len() && cs[i] == '?') {
-        let q_end = find_any(cs, i + 1, "#");
+        let q_end = find_any(cs, i + 1, ['#']);
         query = Option.Some(chars_to_string(cs, i + 1, q_end));
         i = q_end;
     }

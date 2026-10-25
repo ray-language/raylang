@@ -2871,6 +2871,8 @@ impl Transpiler {
                 self.emit_expr(out, eff[13])?; // M260: parent (handle = id en el nativo)
                 out.push_str(", &*");
                 self.emit_expr(out, eff[14])?; // M327: background
+                out.push_str(", &*");
+                self.emit_expr(out, eff[15])?; // #245: placement
                 out.push(')');
             }
             "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {

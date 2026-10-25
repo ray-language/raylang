@@ -2345,15 +2345,15 @@ impl<'a> Interpreter<'a> {
             }
             "__ui_open_with" => {
                 let head = (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7], &values[8], &values[9], &values[10]);
-                let tail = (&values[11], &values[12], &values[13], &values[14]);
+                let tail = (&values[11], &values[12], &values[13], &values[14], &values[15]);
                 let arr = match (head, tail) {
-                    ((Value::Str(t), Value::Str(u), Value::Int(w), Value::Int(h), Value::Int(mw), Value::Int(mh), Value::Bool(r), Value::Bool(c), Value::Str(a), Value::Str(tc), Value::Bool(mi)), (Value::Str(kind), Value::Bool(top), Value::Int(parent), Value::Str(bg))) => {
-                        match crate::builtins::ui_open_with_args(t, u, *w, *h, *mw, *mh, *r, *c, a, tc, *mi, kind, *top, *parent, bg) {
+                    ((Value::Str(t), Value::Str(u), Value::Int(w), Value::Int(h), Value::Int(mw), Value::Int(mh), Value::Bool(r), Value::Bool(c), Value::Str(a), Value::Str(tc), Value::Bool(mi)), (Value::Str(kind), Value::Bool(top), Value::Int(parent), Value::Str(bg), Value::Str(pl))) => {
+                        match crate::builtins::ui_open_with_args(t, u, *w, *h, *mw, *mh, *r, *c, a, tc, *mi, kind, *top, *parent, bg, pl) {
                             Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
                             Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                         }
                     }
-                    _ => unreachable!("the checker guarantees the 15 argument types"),
+                    _ => unreachable!("the checker guarantees the 16 argument types"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -2422,8 +2422,9 @@ impl<'a> Interpreter<'a> {
             }
             "__ui_window" => {
                 let arr = match (&values[0], &values[1], &values[2]) {
-                    (Value::Int(h), Value::Str(op), Value::Str(arg)) => match crate::builtins::ui_window(*h, op, arg) {
-                        Ok(()) => vec![Value::Str("ok".to_string())],
+                    (Value::Int(h), Value::Str(op), Value::Str(arg)) => match crate::builtins::ui_window_value(*h, op, arg) {
+                        Ok(v) if v.is_empty() => vec![Value::Str("ok".to_string())],
+                        Ok(v) => vec![Value::Str("ok".to_string()), Value::Str(v)],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
                     _ => unreachable!("the checker guarantees (int, string, string)"),

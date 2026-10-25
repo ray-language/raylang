@@ -3665,6 +3665,10 @@ impl<'a> Vm<'a> {
                 }
                 // M210/M224/M230: la ventana con opciones (11 argumentos; se sacan en orden inverso).
                 OpCode::UiOpenWith => {
+                    let placement = self.pop(); // #245
+                    let HeapValue::Str(placement) = placement else {
+                        unreachable!("the checker guarantees a string");
+                    };
                     let background = self.pop(); // M327
                     let parent = self.pop();
                     let always_on_top = self.pop();
@@ -3693,7 +3697,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(kind), HeapValue::Bool(always_on_top), HeapValue::Int(parent), HeapValue::Str(background)) = (kind, always_on_top, parent, background) else {
                         unreachable!("the checker guarantees (string, bool, int, string)");
                     };
-                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent, &background) {
+                    let elems = match crate::builtins::ui_open_with_args(&title, &url, width, height, min_w, min_h, resizable, center, &autosave, &titlebar_color, minimizable, &kind, always_on_top, parent, &background, &placement) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(id.to_string().into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
@@ -3822,8 +3826,9 @@ impl<'a> Vm<'a> {
                     let HeapValue::Int(handle) = self.pop() else {
                         unreachable!("the checker guarantees an int");
                     };
-                    let elems = match crate::builtins::ui_window(handle, &op, &arg) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                    let elems = match crate::builtins::ui_window_value(handle, &op, &arg) {
+                        Ok(v) if v.is_empty() => vec![HeapValue::Str("ok".to_string().into())],
+                        Ok(v) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(v.into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

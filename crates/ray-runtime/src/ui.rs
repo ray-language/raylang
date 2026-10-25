@@ -1055,6 +1055,14 @@ pub struct WindowOptions {
     /// (macOS `addChildWindow:`, Windows owner, GTK `transient_for`) — es lo que da un "sheet"
     /// degradado o un panel pegado a su documento.
     pub parent: i64,
+    /// rayreq/ray-sublime #245: dónde se abre. `""` = lo de siempre (`center` decide); `"at"` =
+    /// con la esquina superior izquierda del MARCO en (`x`, `y`), coordenadas de pantalla con
+    /// origen arriba-izquierda como `set_position`, aplicadas ANTES de mostrarla (sin salto);
+    /// `"cascade"` = escalonada 22 px abajo-derecha de la última ventana abierta del proceso
+    /// (centrada si no hay otra). Gana a `center` y a `autosave`.
+    pub place: String,
+    pub x: i64,
+    pub y: i64,
 }
 
 impl WindowOptions {
@@ -1074,6 +1082,74 @@ impl WindowOptions {
             kind: "document".to_string(),
             always_on_top: false,
             parent: 0,
+            place: String::new(),
+            x: 0,
+            y: 0,
+        }
+    }
+}
+
+/// #245: la colocación tal como viaja desde `std/ui` (`""`, `"at:x,y"`, `"cascade"`) →
+/// (`place`, `x`, `y`) de [`WindowOptions`]. Una sola tabla para la VM, el intérprete y el nativo.
+pub fn parse_placement(text: &str) -> Result<(String, i64, i64), String> {
+    if text.is_empty() || text == "cascade" {
+        return Ok((text.to_string(), 0, 0));
+    }
+    if let Some(rest) = text.strip_prefix("at:")
+        && let Some((a, b)) = rest.split_once(',')
+        && let (Ok(x), Ok(y)) = (a.trim().parse::<i64>(), b.trim().parse::<i64>())
+    {
+        return Ok(("at".to_string(), x, y));
+    }
+    Err(format!("ui: unsupported window placement '{text}'"))
+}
+
+/// #245: el paso de `place: "cascade"` respecto a la ventana anterior.
+const CASCADE_STEP: i64 = 22;
+
+/// #245: la última ventana abierta (para `cascade`); 0 = ninguna.
+static LAST_OPENED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// #245: el marco de cada ventana HEADLESS (`x`, `y`, ancho, alto del contenido): lo que abrir,
+/// `set_position` y `set_size` dejarían, para que `frame` responda en pruebas sin backend.
+fn headless_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
+    static FRAMES: OnceLock<Mutex<HashMap<i64, (i64, i64, i64, i64)>>> = OnceLock::new();
+    FRAMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// #245: el marco de una ventana ABIERTA — `(x, y, ancho, alto)`: la esquina superior izquierda
+/// del marco en coordenadas de pantalla con origen arriba-izquierda (las de `set_position`) y el
+/// tamaño del ÁREA DE CONTENIDO (el de `set_size` y de las opciones). `Err` con una ventana
+/// cerrada o desconocida, o en los shells móviles (una sola vista a pantalla completa).
+pub fn window_frame(id: i64) -> Result<(i64, i64, i64, i64), String> {
+    let map = windows().lock().unwrap();
+    let Some(state) = map.get(&id).filter(|w| !w.closed) else {
+        return Err("ui: not an open window".to_string());
+    };
+    match &state.win {
+        Win::Headless => {
+            drop(map);
+            Ok(headless_frames().lock().unwrap().get(&id).copied().unwrap_or((0, 0, 0, 0)))
+        }
+        #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+        Win::Shell => Err("ui: frame is not available in the mobile shells".to_string()),
+        #[cfg(target_os = "macos")]
+        Win::Mac { window, .. } => {
+            let w = *window;
+            drop(map);
+            mac::window_frame(w)
+        }
+        #[cfg(target_os = "linux")]
+        Win::Gtk { window, alive, .. } => {
+            let (w, alive) = (*window, alive.clone());
+            drop(map);
+            gtk::window_frame(w, alive)
+        }
+        #[cfg(windows)]
+        Win::Windows { hwnd, alive } => {
+            let (h, alive) = (*hwnd, alive.clone());
+            drop(map);
+            win::window_frame(h, alive)
         }
     }
 }
@@ -1677,6 +1753,33 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     if opts.parent != 0 && !matches!(windows().lock().unwrap().get(&opts.parent), Some(WinState { closed: false, .. })) {
         return Err("ui: the parent is not an open window".to_string());
     }
+    if !matches!(opts.place.as_str(), "" | "at" | "cascade") {
+        return Err(format!("ui: unsupported window placement '{}' (\"\", at, cascade)", opts.place));
+    }
+    // #245: `cascade` es `at` con la posición de la ventana anterior más un paso; sin ventana
+    // anterior (o si no responde), la de siempre.
+    let mut placed = opts.clone();
+    if placed.place == "cascade" {
+        let last = LAST_OPENED.load(std::sync::atomic::Ordering::SeqCst);
+        match if last != 0 { window_frame(last).ok() } else { None } {
+            Some((px, py, _, _)) => {
+                placed.place = "at".to_string();
+                placed.x = px + CASCADE_STEP;
+                placed.y = py + CASCADE_STEP;
+            }
+            None => placed.place = String::new(),
+        }
+    }
+    let opts = &placed;
+    let r = open_placed(id, title, url, opts);
+    if r.is_ok() {
+        LAST_OPENED.store(id, std::sync::atomic::Ordering::SeqCst);
+    }
+    r
+}
+
+fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<(), String> {
+    let (width, height) = (opts.width, opts.height);
     notify_dev_windowed();
     if headless() {
         start_headless_exit_watchdog();
@@ -1690,6 +1793,11 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
             }
         }
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false, intercept_close: false });
+        let (fx, fy) = if opts.place == "at" { (opts.x, opts.y) } else { (0, 0) };
+        headless_frames().lock().unwrap().insert(id, (fx, fy, width, height));
+        if ui_trace() && opts.place == "at" {
+            eprintln!("[ui] window {id} at {fx},{fy}");
+        }
         // M252 (ray-sublime #76): la ventana recién abierta pasa a ser la clave headless, pero
         // NO emite `focused`: abrir no produce eventos en headless (las pruebas del aparcado
         // cuentan con una cola en silencio tras `open`); `focus(h)` sí lo emite.
@@ -2259,6 +2367,21 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     }
     match &state.win {
         Win::Headless => {
+            match cmd {
+                Some(WindowCmd::Position(x, y)) => {
+                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
+                        f.0 = x;
+                        f.1 = y;
+                    }
+                }
+                Some(WindowCmd::Size(w, h)) => {
+                    if let Some(f) = headless_frames().lock().unwrap().get_mut(&id) {
+                        f.2 = w;
+                        f.3 = h;
+                    }
+                }
+                _ => {}
+            }
             if ui_trace() {
                 match cmd {
                     Some(c) => eprintln!("[ui] window {id} {c:?}"),
@@ -4995,6 +5118,13 @@ mod mac {
                     let set_name: MsgBoolId = std::mem::transmute(msg_send());
                     set_name(window, sel(b"setFrameAutosaveName:\0"), nsstring(&opts.autosave));
                 }
+                // #245: una posición explícita gana al centrado y al frame recordado; antes de
+                // mostrar la ventana, así no salta.
+                if opts.place == "at" {
+                    let screen = CGDisplayBounds(CGMainDisplayID());
+                    let set_point: MsgVoidPoint = std::mem::transmute(msg_send());
+                    set_point(window, sel(b"setFrameTopLeftPoint:\0"), CGPoint { x: opts.x as f64, y: screen.h - opts.y as f64 });
+                }
                 // M327: el fondo bajo la página ANTES de mostrar la ventana — el primer fotograma
                 // ya sale del color del tema. El fondo de la ventana solo si la barra no lo puso.
                 if let Some(rgb) = super::effective_background(&opts) {
@@ -5240,6 +5370,25 @@ mod mac {
                 }
             }
         });
+    }
+
+    /// #245: el marco de la ventana en el hilo principal — esquina superior izquierda del marco
+    /// en coordenadas arriba-izquierda (las de `set_position`) y tamaño del área de contenido.
+    pub(super) fn window_frame(window: usize) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            // SAFETY: mensajes estándar de NSWindow/NSView en el hilo principal.
+            unsafe {
+                let w = window as Id;
+                let rect_of: MsgRect = std::mem::transmute(msg_send());
+                let get_id: MsgId = std::mem::transmute(msg_send());
+                let frame = rect_of(w, sel(b"frame\0"));
+                let content = get_id(w, sel(b"contentView\0"));
+                let size = if content.is_null() { frame } else { rect_of(content, sel(b"frame\0")) };
+                let screen = CGDisplayBounds(CGMainDisplayID());
+                let top = screen.h - (frame.y + frame.h);
+                Ok((frame.x.round() as i64, top.round() as i64, size.w.round() as i64, size.h.round() as i64))
+            }
+        })
     }
 
     /// M257: `setTitle:` en el hilo principal.
@@ -6665,8 +6814,13 @@ mod gtk {
                 if (opts.min_width > 0 || opts.min_height > 0) && let Some(f) = api.set_size_request {
                     f(window, opts.min_width as i32, opts.min_height as i32);
                 }
-                if opts.center && let Some(f) = api.set_position {
+                if opts.center && opts.place != "at" && let Some(f) = api.set_position {
                     f(window, 1); // GTK_WIN_POS_CENTER
+                }
+                // #245: posición explícita antes de mostrar (gtk_window_move sobre una ventana
+                // aún no mapeada fija dónde aparece).
+                if opts.place == "at" && let Some(f) = window_api().move_to {
+                    f(window, opts.x as i32, opts.y as i32);
                 }
                 // M260: tipo de ventana, siempre encima, ventana dueña.
                 let wa = window_api();
@@ -6847,6 +7001,7 @@ mod gtk {
         resize: Option<unsafe extern "C" fn(Widget, i32, i32)>,
         move_to: Option<unsafe extern "C" fn(Widget, i32, i32)>,
         get_size: Option<unsafe extern "C" fn(Widget, *mut i32, *mut i32)>,
+        get_position: Option<unsafe extern "C" fn(Widget, *mut i32, *mut i32)>,
         iconify: Option<FnWidgetOp>,
         maximize: Option<FnWidgetOp>,
         screen_default: Option<unsafe extern "C" fn() -> *mut c_void>,
@@ -6881,6 +7036,7 @@ mod gtk {
                     resize: opt(gtk, c"gtk_window_resize").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
                     move_to: opt(gtk, c"gtk_window_move").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32, i32)>(p)),
                     get_size: opt(gtk, c"gtk_window_get_size").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut i32, *mut i32)>(p)),
+                    get_position: opt(gtk, c"gtk_window_get_position").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *mut i32, *mut i32)>(p)),
                     iconify: opt(gtk, c"gtk_window_iconify").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
                     maximize: opt(gtk, c"gtk_window_maximize").map(|p| std::mem::transmute::<*mut c_void, FnWidgetOp>(p)),
                     screen_default: opt(gdk, c"gdk_screen_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
@@ -6953,6 +7109,27 @@ mod gtk {
             }
         });
         Ok(())
+    }
+
+    /// #245: el marco en el hilo gtk (`gtk_window_get_position` = esquina del marco según el gestor
+    /// de ventanas; `gtk_window_get_size` = el área de la ventana sin decoraciones).
+    pub(super) fn window_frame(window: usize, alive: Arc<AtomicBool>) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            let wa = window_api();
+            let (Some(get_pos), Some(get_size)) = (wa.get_position, wa.get_size) else {
+                return Err("ui: frame needs gtk_window_get_position/get_size".to_string());
+            };
+            let (mut x, mut y, mut w, mut h) = (0i32, 0i32, 0i32, 0i32);
+            // SAFETY: ventana viva en el hilo del loop; firmas C de GTK 3.
+            unsafe {
+                get_pos(window as Widget, &mut x, &mut y);
+                get_size(window as Widget, &mut w, &mut h);
+            }
+            Ok((x as i64, y as i64, w as i64, h as i64))
+        })
     }
 
     /// M260: operaciones de geometría/estado en el hilo gtk. `Center` sobre una ventana ya
@@ -8998,7 +9175,9 @@ mod win {
                     (0, 0)
                 };
                 // M210: centrada en la pantalla principal si se pide; Windows no recuerda el frame solo.
-                let (x, y) = if opts.center {
+                let (x, y) = if opts.place == "at" {
+                    (opts.x as i32, opts.y as i32) // #245: posición explícita, sin salto
+                } else if opts.center {
                     let sw = GetSystemMetrics(SM_CXSCREEN);
                     let sh = GetSystemMetrics(SM_CYSCREEN);
                     (((sw - win_w) / 2).max(0), ((sh - win_h) / 2).max(0))
@@ -9105,6 +9284,23 @@ mod win {
     /// (WS_POPUP) y cubre el monitor de la ventana, guardando estilo y rectángulo en el ctx;
     /// `Fullscreen(false)` los restaura. `Size` es del ÁREA CLIENTE (marco añadido con
     /// AdjustWindowRectEx, como al abrir).
+    /// #245: el marco (`GetWindowRect` para la esquina, `GetClientRect` para el contenido).
+    pub(super) fn window_frame(hwnd: usize, alive: Arc<AtomicBool>) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            // SAFETY: hilo 1, ventana viva (alive).
+            unsafe {
+                let hwnd = HWND(hwnd as *mut _);
+                let (mut outer, mut client) = (RECT::default(), RECT::default());
+                let _ = GetWindowRect(hwnd, &mut outer);
+                let _ = GetClientRect(hwnd, &mut client);
+                Ok((outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64))
+            }
+        })
+    }
+
     pub(super) fn window_command(hwnd: usize, alive: Arc<AtomicBool>, cmd: super::WindowCmd) {
         use super::WindowCmd as C;
         use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};

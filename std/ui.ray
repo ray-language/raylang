@@ -123,7 +123,12 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// a dragging host stays clickable, and the nearest marked element wins. `always_on_top` (M260) keeps the
 /// window above every other window. `parent` (M260) is the handle of the OWNING window (0 =
 /// none): the new one stays above it and follows it — the closest thing to a sheet on every OS.
-/// Build it with `ui.options(width, height)` and tweak the fields you need.
+/// `place` (#245) says where it opens: `""` (the default: `center` decides), `"at"` (the top-left
+/// corner of the window frame at `x`, `y`, screen coordinates with the origin at the top left,
+/// like `set_position` — applied before it shows, so it does not jump; set it with
+/// `place_at(o, x, y)`) or `"cascade"` (22 px down and right of the last window the program
+/// opened, like a document app's new window; centered when there is none). It wins over
+/// `center` and `autosave`. Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,
@@ -138,6 +143,9 @@ pub struct WindowOptions {
     kind: string,
     always_on_top: bool,
     parent: int,
+    place: string,
+    x: int,
+    y: int,
 }
 
 /// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
@@ -156,7 +164,36 @@ pub fn options(width: int, height: int) -> WindowOptions {
         minimizable: true,
         kind: "document",
         always_on_top: false,
-        parent: 0
+        parent: 0,
+        place: "",
+        x: 0,
+        y: 0
+    }
+}
+
+/// `o` opening with the top-left corner of its frame at (`x`, `y`) — screen coordinates with the
+/// origin at the top left, as `set_position` and `frame` use (#245).
+pub fn place_at(o: WindowOptions, x: int, y: int) -> WindowOptions {
+    var p = o;
+    p.place = "at";
+    p.x = x;
+    p.y = y;
+    p
+}
+
+/// `o` opening 22 px down and right of the last window the program opened (#245).
+pub fn cascade(o: WindowOptions) -> WindowOptions {
+    var p = o;
+    p.place = "cascade";
+    p
+}
+
+// La colocación tal como viaja al runtime: "", "at:x,y" o "cascade".
+fn placement_text(o: WindowOptions) -> string {
+    if (o.place == "at") {
+        "at:" + to_string(o.x) + "," + to_string(o.y)
+    } else {
+        o.place
     }
 }
 
@@ -180,7 +217,8 @@ pub fn open_with(title: string, url: string, o: WindowOptions) -> Result<int, st
         o.kind,
         o.always_on_top,
         o.parent,
-        o.background
+        o.background,
+        placement_text(o)
     );
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
@@ -801,6 +839,29 @@ pub fn set_size(h: int, width: int, height: int) -> Result<int, string> {
 pub fn set_position(h: int, x: int, y: int) -> Result<int, string> {
     let r = __ui_window(h, "set_position", to_string(x) + "," + to_string(y));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Where an OPEN window is (#245): `(x, y, width, height)` — the top-left corner of its frame in
+/// screen coordinates with the origin at the top left (what `set_position` takes) and the size
+/// of its content area (what `set_size` and the options take). Err for a closed window, or in
+/// the mobile shells.
+pub fn frame(h: int) -> Result<(int, int, int, int), string> {
+    let r = __ui_window(h, "frame", "");
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    let parts = r[1].split(",");
+    if (parts.len() != 4) {
+        return Result.Err("ui: unexpected frame: " + r[1]);
+    }
+    Result.Ok(
+        (
+            parse_int(parts[0]).unwrap_or(0),
+            parse_int(parts[1]).unwrap_or(0),
+            parse_int(parts[2]).unwrap_or(0),
+            parse_int(parts[3]).unwrap_or(0)
+        )
+    )
 }
 
 /// Centers an OPEN window on its screen (M260).

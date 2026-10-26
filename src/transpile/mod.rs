@@ -25,7 +25,7 @@ mod names;
 mod analysis;
 mod runtime;
 mod types;
-pub(crate) mod emit;
+mod emit;
 mod calls;
 use names::*;
 use analysis::*;

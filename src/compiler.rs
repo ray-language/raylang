@@ -470,36 +470,24 @@ impl<'a> Compiler<'a> {
             return Ok(None);
         }
         let Some((text, sep)) = self.as_split_call(value) else { return Ok(None) };
-        let mut for_uses = 0usize;
-        for st in rest {
-            match &st.kind {
-                StmtKind::For { pat: ForPat::Single(v), iter: ForIter::In(it), body, .. }
-                    if matches!(&it.kind, ExprKind::Ident(n) if n == name) =>
-                {
-                    if v == name || crate::transpile::emit::mentions_name_block(name, body) {
-                        return Ok(None);
-                    }
-                    for_uses += 1;
-                }
-                _ => {
-                    if crate::transpile::emit::mentions_name_stmt(name, st) {
-                        return Ok(None);
-                    }
-                }
-            }
-        }
-        if for_uses != 1 || tail.is_some_and(|t| crate::transpile::emit::mentions_name_expr(name, t)) {
+        if !crate::ast_uses::split_consumed_only_by_for(name, rest, tail) {
             return Ok(None);
         }
-        let (line, col) = (s.line, s.col);
+        let slots = self.emit_split_operands(text, sep, s.line, s.col)?;
+        self.split_for_fused.insert(name.clone(), slots);
+        Ok(Some(name.clone()))
+    }
+
+    /// M433: evalúa el string y el separador de un `split` a dos locales ocultos (en ese orden) y
+    /// devuelve sus slots; lo comparten el `let` fusionado y el `for x in s.split(sep)` inline.
+    fn emit_split_operands(&mut self, text: &Expr, sep: &Expr, line: usize, col: usize) -> Result<(usize, usize), CompileError> {
         self.emit_expr(text)?;
         let text_slot = self.declare_local("$sptext");
         self.emit(OpCode::InitLocal(text_slot), line, col);
         self.emit_expr(sep)?;
         let sep_slot = self.declare_local("$spsep");
         self.emit(OpCode::InitLocal(sep_slot), line, col);
-        self.split_for_fused.insert(name.clone(), (text_slot, sep_slot));
-        Ok(Some(name.clone()))
+        Ok((text_slot, sep_slot))
     }
 
     /// M433: el bucle `for x in <split>` con `SplitNext`: `pos` en un local; cada paso empuja el trozo
@@ -578,12 +566,7 @@ impl<'a> Compiler<'a> {
                         return self.emit_split_for(var, text_slot, sep_slot, body, label, line, col);
                     }
                     if let Some((text, sep)) = self.as_split_call(e) {
-                        self.emit_expr(text)?;
-                        let text_slot = self.declare_local("$sptext");
-                        self.emit(OpCode::InitLocal(text_slot), line, col);
-                        self.emit_expr(sep)?;
-                        let sep_slot = self.declare_local("$spsep");
-                        self.emit(OpCode::InitLocal(sep_slot), line, col);
+                        let (text_slot, sep_slot) = self.emit_split_operands(text, sep, line, col)?;
                         return self.emit_split_for(var, text_slot, sep_slot, body, label, line, col);
                     }
                 }

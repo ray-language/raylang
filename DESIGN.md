@@ -19193,10 +19193,12 @@ quitar el `is_ascii()` del pajar en `index_of`. Lo que sí:
    template anidado nunca lo encuentra prestado) y nada dentro cede la fibra.
 4. **Puerta ASCII sin `RefCell`** (−3,8). `len`/`substring`/`char_range` consultaban la caché de dos
    entradas (M223/rayreq #261: cierre, swap de slots, `borrow_mut`). Ahora `__ray_str_info` guarda
-   (puntero, ASCII, nº de chars) en `Cell` thread-local con el `Rc` PINEADO en otra `Cell` para que la
-   dirección no pueda reutilizarse —sin el pin, una línea nueva en la misma dirección y con la misma
-   longitud heredaría el flag—; la caché de dos entradas sigue para `s[i]` y los tramos no-ASCII. Se
-   midió también un flag por puntero SIN pin (más rápido, incorrecto) y se descartó.
+   (puntero, ASCII, nº de chars) en una `Cell` thread-local; la clave por puntero vale porque la
+   cadena está pineada por el slot 0 de esa misma caché, que invalida la clave en cada fallo suyo —
+   sin eso, una línea nueva en la misma dirección heredaría el flag (medido y descartado)—, y así la
+   puerta no retiene nada que la caché no retuviera ya (la revisión cazó la primera versión, que
+   pineaba por su cuenta y habría dejado vivo un texto de 366 MB ya soltado). El fallo de la puerta
+   calcula (ASCII, chars) una vez vía la entrada, que el tramo no-ASCII reutiliza para el seek.
 
 **Resultado con el nativo real** (fibras, mimalloc): `jsondeserialize` justo 135,9 → **61,8 ms**
 (Rust 49,7, Go 45,0, node 87,3); la variante original de dos subcadenas 77,2 → 71,5. Semántica
@@ -19208,6 +19210,16 @@ modelo (la referencia `.rs` con la línea en `Rc<str>`) está en 47,9: `Rc<str>`
 en el parseo; la otra mitad del hueco es `split`, que materializa un `Rc<str>` por línea (3× el
 `collect` de slices de Rust) y dobla la memoria pico (975 frente a 481 MB). Eso es el modelo de
 valores —las cadenas poseen sus bytes— y queda como la siguiente frontera, no como bug.
+
+Revisión pre-release (regla del 25 oct) sobre la PR #600: ocho observaciones, las ocho aplicadas.
+La grave: `read_file` sondeaba un octeto y, si el tamaño no cuadraba, REABRÍA la ruta — en una
+tubería (`/dev/stdin`, FIFO) `metadata` dice 0 y el primer octeto se perdía; ahora sigue leyendo del
+mismo handle con lo ya leído y el sondeo (golden con `echo hello |` y 3 MB por tubería, igual que
+1.27.84). Las demás: el pin propio de la puerta ASCII (arriba), el buffer `__RAY_FMT` con tope de
+capacidad (un template gigante no deja megas ociosos por hilo), el análisis «`let f = split` consumido
+solo por un `for`» en un módulo compartido (`src/ast_uses.rs`) para que VM y nativo decidan igual,
+un helper único para los operandos del split en el compilador, el doble escaneo no-ASCII, y un
+`subcadena` en un diagnóstico (ahora `substring`, también en `__index_of`).
 
 ## 408. M433 — memoria con archivos grandes: lectura en un buffer y `split` sin arreglo (oct 2026)
 

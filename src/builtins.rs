@@ -3491,11 +3491,17 @@ pub fn read_file_arc_str(path: &str) -> std::io::Result<std::sync::Arc<str>> {
             }
             filled += n;
         }
-        // ¿creció? (hay más octetos de los anunciados) → camino clásico.
+        // ¿Cambió de tamaño (o `metadata` no sabe: tuberías, /dev/stdin, FIFOs)? Se sigue leyendo
+        // desde el MISMO handle —lo ya leído y el octeto de sondeo incluidos—; reabrir perdería lo
+        // consumido en un stream no re-legible.
         let mut probe = [0u8; 1];
-        if filled < len || f.read(&mut probe)? != 0 {
-            let mut s = String::new();
-            std::fs::File::open(path)?.read_to_string(&mut s)?;
+        let more = f.read(&mut probe)?;
+        if filled < len || more != 0 {
+            let mut v = Vec::with_capacity(filled + more + 4096);
+            v.extend_from_slice(&dst[..filled]);
+            v.extend_from_slice(&probe[..more]);
+            f.read_to_end(&mut v)?;
+            let s = String::from_utf8(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8"))?;
             return Ok(std::sync::Arc::from(s));
         }
     }
@@ -4956,14 +4962,14 @@ static BUILTINS: &[Builtin] = &[
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
-        arity(a, 2, "__index_of", " (string, subcadena)")?;
+        arity(a, 2, "__index_of", " (string, substring)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__index_of expects a string as first argument, not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__index_of expects a string as substring, not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
     // __last_index_of(s, sub) -> [int] (M431): [] o [i], la ÚLTIMA ocurrencia. El prelude → Option<int>.
     Builtin { name: "__last_index_of", opcode: OpCode::LastIndexOf, check: |a| {
-        arity(a, 2, "__last_index_of", " (string, subcadena)")?;
+        arity(a, 2, "__last_index_of", " (string, substring)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__last_index_of expects a string as first argument, not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__last_index_of expects a string as substring, not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Int)))

@@ -14,7 +14,7 @@ arco (el detalle y las mediciones, en §3):
 
 | Frente | Dónde estábamos | Dónde estamos |
 |---|---|---|
-| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 2,6–4× la VM (build PGO) en cargas de servicio y 14–28× en cómputo puro; gana a node en 9 de 10 programas, a Go en 5 y a `rustc -O` en 4 (22 sep 2026, `benchmarks/poly/README.md`) |
+| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 3–5× la VM (release plana) en cargas de servicio y 16–25× en cómputo puro; gana a node en 8 de 10 programas, a Go en 6 y a `rustc -O` en 4 (26 oct 2026, 1.27.84, `benchmarks/poly/README.md`) |
 | **VM** | `Map` alocando en el camino caliente, SipHash | aHash + `get_or`/`add_to`, superinstrucciones por histograma (−19/−28%), PGO (−5/−9%), `ConcatN`, fusión de `Option`, fast-paths ASCII, `IntArray` (−68% RSS) |
 | **Concurrencia nativa** | hilo por tarea (~265 KB/conexión) | **fibras M:N** por defecto (corosensei + reactor), ~21 KB/conexión y 350× menos CPU en esperas ociosas |
 | **Web** | servidor propio sin cifra comparable | framework a **~188k req/s** — 93% de axum, p50/p99.9 empatadas, 1,5× Go+chi |
@@ -69,6 +69,11 @@ despacho inlineado (la closure por instrucción que LLVM no fundía)— que junt
   la corrida de sep 10 en cómputo y mejora un 14–27 % en cargas de servicio (`wordcount`,
   `jsonserialize`, `logparse`). La única regresión real que queda es el **arranque de la VM**:
   4.1 ms (1.0.0) → 6.4 ms (desde 1.14), pendiente de arco.
+- **Re-medición del 26 oct 2026 (1.27.84, `benchmarks/poly/results/2026-10-26-v1.27.84.md`)**: todo
+  mejora o se mantiene frente al 22 sep salvo lo que paga el contador de profundidad de M295 (§7,
+  §23): `fibrec` nativo 19,5 → 28,5 ms (43,6 en 1.27.83, antes de M430) y `treealloc` 19,6 → 23,9,
+  que con un node 26 más rápido (21,9 → 17,4) pasa de ganarle a perder 0,73×. Arranque: `empty`
+  nativo 2,06 ms, #3 tras rustc 1,73 y Go 1,83 (toolchains nuevos; en sep era #1). La VM, 6,55 ms.
 
 **Las fibras salen gratis en cómputo** (A/B del mismo programa con y sin `--without fibers`,
 mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — ruido — y el

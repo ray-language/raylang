@@ -597,6 +597,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str("/// no termina el proceso; un `exit()` del programa sí.\n");
         out.push_str("#[unsafe(no_mangle)]\n");
         out.push_str("pub extern \"C\" fn ray_start() -> i32 {\n");
+        out.push_str("    __ray_init_depth_limit();\n");
         // M156 (C6): un cdylib/staticlib NO pasa por el shim de main de Rust, que es quien
         // ignora SIGPIPE — sin esto, un write a un socket cerrado mata el proceso del shell.
         out.push_str("    #[cfg(unix)]\n");
@@ -606,7 +607,11 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str("    }\n");
     } else {
         out.push_str("fn main() {\n");
+        out.push_str("    __ray_init_depth_limit();\n");
     }
+    // M430: `__ray_init_depth_limit()` va como PRIMERA sentencia de ambas entradas — publica
+    // `RAYLANG_MAX_DEPTH` en el `static` que lee cada prólogo `__ray_enter` (runtime.rs) antes de
+    // cualquier hilo, fibra o llamada raylang; el `spawn` posterior da el happens-before.
     // Sube el límite blando de fds al duro (acotado) — espejo de `lib::raise_fd_limit` del host:
     // el default de macOS (256) tumbaba un webserver nativo bajo `wrk -c500` sin culpa del programa.
     out.push_str("    #[cfg(unix)] unsafe {\n");
@@ -631,9 +636,6 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     if fibers && !prog.externs.is_empty() {
         out.push_str("    ray_runtime::fibers::set_default_fiber_stack_kib(1024);\n");
     }
-    // M430: publica el límite de marcos (`RAYLANG_MAX_DEPTH`) en el `static` que lee cada prólogo
-    // `__ray_enter` — una vez por proceso, antes de la primera llamada raylang (runtime.rs).
-    out.push_str("    __RAY_LIMIT.store(__ray_max_depth(), std::sync::atomic::Ordering::Relaxed);\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
     // M97.2: el hook también calla dentro de un `try_call` — el fallo se va a convertir en valor,
     // así que imprimir "thread panicked at …" sería ruido que la VM no emite.

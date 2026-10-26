@@ -1914,8 +1914,9 @@ recursivo: sin cambio (no llevan prólogo). `--fast` lo quita. Si algún día el
 importa en un benchmark de cabecera, la vía es un contador estático por worker con la fibra
 guardando el suyo (0,04 s en el experimento), no quitar la cota.
 
-> **Revisado en M430 (§23, oct 2026)**: al medir por piezas, el TLS valía ~1,4 ns de nada y el
-> coste real era el `OnceLock` del límite consultado en cada llamada. Resuelto sin tocar el modelo.
+> **Revisado en M430 (§23, oct 2026)**: al medir por piezas, el TLS valía ~1,4 ms de los 27 ms de
+> fib(34) (18 M llamadas, <0,1 ns cada una) y el coste real era el `OnceLock` del límite consultado
+> en cada llamada (16 ms). Resuelto sin tocar el modelo.
 
 
 ## 8. M319 (sep 2026): despertar fibras entre hilos en el scheduler nativo
@@ -2611,7 +2612,7 @@ mediana de 7, `--emit-rust` + `rustc` con los flags de `--release`):
 | TLS + límite constante | 27,3 ms |
 | celda `static` (sin TLS) + `OnceLock` | 29,4 ms |
 | celda `static` + límite constante | 25,9 ms |
-| TLS + límite en `static` rellenado al arrancar, camino frío `-> !` (**M430**) | 27,5 ms |
+| TLS + límite en `static` rellenado al arrancar (`__ray_init_depth_limit`), camino frío `-> !` (**M430**) | 27,5 ms |
 | ídem pero inicialización perezosa desde un camino frío que retorna | 44,2 ms |
 | cuenta atrás (comparar con 0) | 27,2 ms |
 | sin contador (`--fast`) | 17,6 ms |

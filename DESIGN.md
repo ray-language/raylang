@@ -19128,9 +19128,13 @@ genera alrededor de la llamada recursiva. Con el camino frío divergente (`-> !`
 build real con fibras** (−36 %). Un contador que cuenta hacia abajo (comparar con 0, sin cargar
 nada) daba lo mismo y obligaba a cambiar la semántica de `Task::depth` en el scheduler; no compensa.
 
-Decisión: `__RAY_LIMIT: AtomicU32` en el Rust emitido, rellenado en el `main`/`ray_start` emitido
-(mod.rs, antes del hook de panic: cubre fibras, hilo-por-tarea, modo lib y el binario de tests);
-`__ray_enter` compara contra su carga relaxed y `__ray_depth_overflow` sigue siendo `-> !`.
+Decisión: `__RAY_LIMIT: AtomicU32` en el Rust emitido, que arranca en el default (1024, nunca 0:
+un prólogo que corriera antes de tiempo degradaría al default en vez de morir en el primer marco)
+y que `__ray_init_depth_limit()` rellena como PRIMERA sentencia del `main`/`ray_start` emitido
+(cubre fibras, hilo-por-tarea, modo lib y el binario de tests); `__ray_enter` compara contra su
+carga relaxed y `__ray_depth_overflow` sigue siendo `-> !` y lee el MISMO `static` para el mensaje.
+La revisión pre-release (regla del 25 oct) pidió esas tres cosas y un test que fije el prólogo
+emitido (`depth_limit_lives_in_a_static_filled_first_thing_at_startup`).
 `RAYLANG_MAX_DEPTH`, el mensaje y `--fast` no cambian; `tests/native_depth_cli.rs` sigue en verde.
 `treealloc` nativo (+20 % en la misma corrida) no se mueve con este cambio: su causa es otra y
 queda anotada en PERFORMANCE §23.

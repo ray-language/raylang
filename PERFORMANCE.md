@@ -1914,6 +1914,9 @@ recursivo: sin cambio (no llevan prólogo). `--fast` lo quita. Si algún día el
 importa en un benchmark de cabecera, la vía es un contador estático por worker con la fibra
 guardando el suyo (0,04 s en el experimento), no quitar la cota.
 
+> **Revisado en M430 (§23, oct 2026)**: al medir por piezas, el TLS valía ~1,4 ns de nada y el
+> coste real era el `OnceLock` del límite consultado en cada llamada. Resuelto sin tocar el modelo.
+
 
 ## 8. M319 (sep 2026): despertar fibras entre hilos en el scheduler nativo
 
@@ -2593,4 +2596,36 @@ pushes de 4 KiB, Mac M-series, `ray run` y `ray build --native`:
 El nativo queda por detrás de la VM por la concatenación `out = out + b` del banco (una copia por
 push sobre `Rc<[u8]>`), no por el decodificador. Sin `deflate` en el build el camino raylang sigue
 siendo el de siempre.
+
+## 23. M430 (oct 2026): el límite del contador de profundidad, fuera del camino caliente
+
+La corrida del banco poliglota con 1.27.83 (`benchmarks/poly/results/2026-10-26-v1.27.83.md`, M3
+Pro, mediana de 10) mejora o mantiene todo frente a la referencia de 1.27.5 salvo dos nativos:
+`fibrec` 19,5 → 43,6 ms y `treealloc` 19,6 → 23,5 ms. El primero es el contador de marcos de M295
+(§7), que la referencia de septiembre no llevaba. Piezas del prólogo en fib(34) (18 M llamadas,
+mediana de 7, `--emit-rust` + `rustc` con los flags de `--release`):
+
+| variante del prólogo | fib(34) |
+|---|---|
+| 1.27.83 (TLS + `OnceLock` del límite en cada llamada) | 43,6 ms |
+| TLS + límite constante | 27,3 ms |
+| celda `static` (sin TLS) + `OnceLock` | 29,4 ms |
+| celda `static` + límite constante | 25,9 ms |
+| TLS + límite en `static` rellenado al arrancar, camino frío `-> !` (**M430**) | 27,5 ms |
+| ídem pero inicialización perezosa desde un camino frío que retorna | 44,2 ms |
+| cuenta atrás (comparar con 0) | 27,2 ms |
+| sin contador (`--fast`) | 17,6 ms |
+
+Lecciones: (1) el thread-local de macOS, señalado en §7, cuesta ~1,4 ms de 27 — el `get_or_init`
+del `OnceLock` en el camino caliente costaba 16; (2) un camino frío que puede VOLVER cuesta lo
+mismo que el `OnceLock` aunque el camino caliente sea instrucción por instrucción el mismo: LLVM
+reorganiza la función alrededor de la llamada recursiva; el camino frío del prólogo debe divergir;
+(3) los ~9 ms que quedan son el contador mismo (incremento, guardado, decremento en el `Drop`) y
+solo se van cambiando de modelo (profundidad como argumento oculto), que no compensa hoy. Build
+real con fibras (`ray build --native --release`): **fibrec 45,5 → 29,2 ms**; frente a Go (15,6) y
+Rust (14,2) el nativo pasa de 2,9× a 1,9× más lento; node (35,2) vuelve a quedar detrás.
+
+`treealloc` (+20 %) no cambia con M430 (23,3 → 24,0 ms): su `make_tree` recurre, así que parte de
+esos 4 ms es el prólogo de M295 que la referencia no llevaba (pero la carga del límite ya no pesa);
+el resto es ruido de máquina (node varía 17,4 ↔ 21,9 ms entre las dos corridas). Sin acción.
 

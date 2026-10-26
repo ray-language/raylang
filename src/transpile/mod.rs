@@ -631,6 +631,9 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     if fibers && !prog.externs.is_empty() {
         out.push_str("    ray_runtime::fibers::set_default_fiber_stack_kib(1024);\n");
     }
+    // M430: publica el límite de marcos (`RAYLANG_MAX_DEPTH`) en el `static` que lee cada prólogo
+    // `__ray_enter` — una vez por proceso, antes de la primera llamada raylang (runtime.rs).
+    out.push_str("    __RAY_LIMIT.store(__ray_max_depth(), std::sync::atomic::Ordering::Relaxed);\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
     // M97.2: el hook también calla dentro de un `try_call` — el fallo se va a convertir en valor,
     // así que imprimir "thread panicked at …" sería ruido que la VM no emite.

@@ -216,10 +216,19 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // buscarla). SAFETY: la celda es thread-local y vive lo que el hilo; el guard se destruye en el
     // MISMO hilo que lo creó — una fibra reanuda siempre en su worker de origen (fibers.rs), y sin
     // fibras cada tarea es un hilo.
+    //
+    // M430: el LÍMITE se compara contra un `static` plano (carga relaxed) que el `main`/`ray_start`
+    // emitido rellena ANTES de la primera llamada raylang (mod.rs), no contra el `OnceLock` de
+    // `__ray_max_depth()`: ese `get_or_init` en el camino caliente costaba más que el propio
+    // thread-local (fib(34) nativo: 43,6 → 27,5 ms; el TLS son ~1,4 ms de esos 27). Medido también:
+    // una inicialización PEREZOSA desde el camino frío (que entonces puede volver, en vez de
+    // divergir) deshace toda la ganancia (44 ms) aunque el camino caliente sea idéntico — el
+    // camino frío tiene que ser `-> !`.
     out.push_str("struct __RayFrame(*const std::cell::Cell<u32>);\n");
     out.push_str("impl Drop for __RayFrame { #[inline(always)] fn drop(&mut self) { let d = unsafe { &*self.0 }; d.set(d.get() - 1); } }\n");
-    out.push_str("#[inline(always)] fn __ray_enter() -> __RayFrame { let p = __ray_depth_cell(); let d = unsafe { &*p }; let n = d.get() + 1; d.set(n); if n > __ray_max_depth() { __ray_depth_overflow(d) } __RayFrame(p) }\n");
-    out.push_str("#[cold] fn __ray_depth_overflow(d: &std::cell::Cell<u32>) -> ! { d.set(d.get() - 1); __ray_rt_err(&format!(\"stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)\", __ray_max_depth())) }\n");
+    out.push_str("static __RAY_LIMIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);\n");
+    out.push_str("#[inline(always)] fn __ray_enter() -> __RayFrame { let p = __ray_depth_cell(); let d = unsafe { &*p }; let n = d.get() + 1; d.set(n); if n > __RAY_LIMIT.load(std::sync::atomic::Ordering::Relaxed) { __ray_depth_overflow(d) } __RayFrame(p) }\n");
+    out.push_str("#[cold] #[inline(never)] fn __ray_depth_overflow(d: &std::cell::Cell<u32>) -> ! { d.set(d.get() - 1); __ray_rt_err(&format!(\"stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)\", __ray_max_depth())) }\n");
     // M130: exit(code) — termina el PROCESO, byte-idéntico a la VM. OJO (M132): el print nativo
     // va por el HILO ESCRITOR de M96f — flushear std::io::stdout() aquí era el buffer equivocado
     // (la salida pendiente se perdía; process::exit no corre destructores): hay que drenar el

@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.84 — 2026-10-26
+
+- **Binario nativo: el contador de profundidad cuesta la mitad** (M430). El prólogo que corta la
+  recursión profunda (M295) comparaba cada llamada contra el `OnceLock` de `RAYLANG_MAX_DEPTH`; ahora
+  el límite se publica una vez al arrancar y el prólogo lo carga de un `static`. `fib(34)`
+  (`benchmarks/poly/fibrec`) pasa de 45 a 29 ms (sin contador: 18); el límite, el mensaje y `--fast`
+  no cambian.
+
 ## 1.27.83 — 2026-10-26
 
 Hallazgos de rayreq con 1.27.82 (M429, #275–#277).

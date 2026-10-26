@@ -55,6 +55,49 @@ pub fn max_depth() -> int {
 
 fn at_end(p: P) -> bool { p.i >= p.n }
 
+// rayreq #276: un BOM UTF-8 inicial (EF BB BF) se salta — muchos editores de Windows lo escriben
+// y RFC 8259 §8.1 pide a los lectores tolerarlo. Devuelve el índice del primer octeto útil.
+fn skip_bom(b: bytes) -> int {
+    if (b.len() >= 3 && b[0] == 239 && b[1] == 187 && b[2] == 191) { 3 } else { 0 }
+}
+
+// rayreq #276: el error con la posición del cursor — `JSON, line L column C: …` (línea y columna
+// desde 1, la columna en caracteres: se saltan los octetos de continuación UTF-8). Con un
+// OpenAPI de varios MB y una coma de más, «expected a number» a secas no dice dónde.
+fn located(p: P, msg: string) -> string {
+    var line = 1;
+    var column = 1;
+    var k = 0;
+    let stop = if (p.i < p.n) { p.i } else { p.n };
+    while (k < stop) {
+        let c = p.b[k];
+        if (c == 10) {
+            line = line + 1;
+            column = 1;
+        } else if (c < 128 || c >= 192) {
+            column = column + 1;
+        }
+        k = k + 1;
+    }
+    "JSON, line " + to_string(line) + " column " + to_string(column) + ": " + msg
+}
+
+// rayreq #276: lo que hay bajo el cursor cuando se esperaba un valor — `unexpected ']'` dice más
+// que «expected a number» ante `[1, 2,]`, y `tru` o `nul` se nombran como literal cortado.
+fn unexpected_here(p: P) -> string {
+    if (at_end(p)) {
+        return "unexpected end of input";
+    }
+    let c = cur(p);
+    if (c == 116 || c == 102 || c == 110) {
+        return "expected 'true', 'false' or 'null'";
+    }
+    if (c >= 33 && c < 127) {
+        return "unexpected '" + from_utf8(p.b.sub_bytes(p.i, p.i + 1)).unwrap_or("?") + "'";
+    }
+    "expected a value"
+}
+
 // El octeto bajo el cursor (JSON es ASCII fuera de los strings: 34 `"`, 92 `\`, 123 `{`, …).
 fn cur(p: P) -> int { p.b[p.i] }
 
@@ -173,7 +216,7 @@ fn scan_number(p: P) -> Result<string, string> {
         }
     }
     if (p.i == start) {
-        return Result.Err("expected a number");
+        return Result.Err(unexpected_here(p));
     }
     // La racha es ASCII (solo caracteres numéricos): `from_utf8` no puede fallar.
     let text = from_utf8(p.b.sub_bytes(start, p.i)).unwrap_or("");
@@ -548,13 +591,17 @@ pub fn parse_relaxed(s: string) -> Result<Json, string> {
 
 fn parse_with(s: string, relaxed: bool) -> Result<Json, string> {
     let b = s.to_bytes();
-    var p: P = P { b: b, i: 0, n: b.len(), relaxed: relaxed, depth: 0 };
+    var p: P = P { b: b, i: skip_bom(b), n: b.len(), relaxed: relaxed, depth: 0 };
     match (parse_value(p)) {
         Result.Ok(j) => {
             skip_ws(p);
-            if (at_end(p)) { Result.Ok(j) } else { Result.Err("trailing text after the JSON") }
+            if (at_end(p)) {
+                Result.Ok(j)
+            } else {
+                Result.Err(located(p, "trailing text after the JSON"))
+            }
         },
-        Result.Err(e) => Result.Err(e),
+        Result.Err(e) => Result.Err(located(p, e)),
     }
 }
 
@@ -1405,10 +1452,15 @@ fn doc_object(p: P) -> Result<Doc, string> {
 
 fn doc_with(s: string, relaxed: bool) -> Result<Doc, string> {
     let b = s.to_bytes();
-    var p: P = P { b: b, i: 0, n: b.len(), relaxed: relaxed, depth: 0 };
-    let d = doc_value(p)?;
+    var p: P = P { b: b, i: skip_bom(b), n: b.len(), relaxed: relaxed, depth: 0 };
+    let d = match (doc_value(p)) {
+        Result.Ok(d) => d,
+        Result.Err(e) => {
+            return Result.Err(located(p, e));
+        },
+    };
     skip_ws(p);
-    if (at_end(p)) { Result.Ok(d) } else { Result.Err("trailing text after the JSON") }
+    if (at_end(p)) { Result.Ok(d) } else { Result.Err(located(p, "trailing text after the JSON")) }
 }
 
 /// Parses JSON into a `Doc`: members in the order written (repeated keys kept), numbers as

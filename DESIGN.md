@@ -19064,3 +19064,31 @@ se habría colapsado a `"…\n…"`), y `source_escapes` pre-escanea el literal 
 de reservar nada; el marco headless va DENTRO de la variante (`Win::Headless { frame }`), no como
 campo de `WinState` que los backends reales rellenarían con ceros. El test del handshake drena el
 ClientHello antes de cerrar: en Linux, cerrar con datos sin leer manda RST, no FIN.
+
+## 404. M429 — rayreq con 1.27.82: errores de JSON con posición, `Content-Length` delimita la petición suelta, cabeceras del llamador (#275–#277, oct 2026)
+
+**#276 — dónde está el error.** `parse`/`parse_doc` devolvían «expected a number» para una coma de
+más, un literal cortado o un BOM, sin línea ni columna; con un OpenAPI de varios MB eso es
+inservible. El cursor `P.i` ya es la posición: `located(p, msg)` cuenta líneas y caracteres hasta
+él (saltando octetos de continuación UTF-8) en los DOS puntos de entrada (`parse_with`,
+`doc_with`), así ninguna rama interna cambia. `skip_bom` salta `EF BB BF` (RFC 8259 §8.1 pide
+tolerarlo; muchos editores de Windows lo escriben). `unexpected_here` sustituye el «expected a
+number» de `scan_number` cuando el cursor no tiene un número: nombra el carácter (`unexpected ']'`)
+o el literal cortado. El prefijo `JSON, ` sigue al de `yaml` (`YAML, line N: …`): el usuario sabe
+qué lector habla cuando la misma app lee ambos. Es un cambio de texto de error: los tests que lo
+aseveraban se actualizaron.
+
+**#275 — la petición suelta leía hasta EOF.** `send_pairs` usaba `read_all` (el diseño original
+de M19: `Connection: close` + EOF). Una `Conn` ya delimitaba por `Content-Length`/chunked/sin-cuerpo
+(`conn_read_response`), así que la petición suelta construye una `Conn` efímera sobre su socket y
+reutiliza ese lector: termina al completar el cuerpo aunque el servidor ignore el `Connection:
+close`; sin longitud declarada cae a EOF como antes. Una sola implementación del encuadre de
+respuesta para ambas formas.
+
+**#277 — dos `Host`.** `build_request_pairs` escribía las cabeceras del cliente y luego TODAS las
+del llamador. Ahora `Host` y `Connection` del llamador SUSTITUYEN a las del cliente (un cliente
+REST que prueba un vhost contra una IP necesita fijar `Host`), y el encuadre del cuerpo sigue
+siendo del cliente: un `Content-Length` que no coincide con `body.len()` y cualquier
+`Transfer-Encoding` son `Err` con la razón, no una petición inválida en el cable (RFC 9112
+§3.2/§6.3; con un proxy, dos `Content-Length` distintos son request smuggling). `Accept-Encoding`
+ya se respetaba.

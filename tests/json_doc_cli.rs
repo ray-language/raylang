@@ -50,14 +50,14 @@ missing None
 json_of {"/k~":7,"a":{"e":1000,"id":9007199254740992,"price":1.5},"list":[true,null,"x\ny"],"z":2}
 doc_of {"a":[1.5,true],"b":2}
 built {"d":{"name":"ada","id":12345678901234567890}}
-bad +1 doc=invalid number: +1 json=invalid number: +1
-bad 01 doc=invalid number: 01 json=invalid number: 01
-bad 1. doc=invalid number: 1. json=invalid number: 1.
-bad .5 doc=invalid number: .5 json=invalid number: .5
-bad - doc=invalid number: - json=invalid number: -
-bad 1e doc=invalid number: 1e json=invalid number: 1e
-bad [1,] doc=expected a number json=expected a number
-bad {"a" 1} doc=expected ':' json=expected ':'
+bad +1 doc=JSON, line 1 column 3: invalid number: +1 json=JSON, line 1 column 3: invalid number: +1
+bad 01 doc=JSON, line 1 column 3: invalid number: 01 json=JSON, line 1 column 3: invalid number: 01
+bad 1. doc=JSON, line 1 column 3: invalid number: 1. json=JSON, line 1 column 3: invalid number: 1.
+bad .5 doc=JSON, line 1 column 3: invalid number: .5 json=JSON, line 1 column 3: invalid number: .5
+bad - doc=JSON, line 1 column 2: invalid number: - json=JSON, line 1 column 2: invalid number: -
+bad 1e doc=JSON, line 1 column 3: invalid number: 1e json=JSON, line 1 column 3: invalid number: 1e
+bad [1,] doc=JSON, line 1 column 4: unexpected ']' json=JSON, line 1 column 4: unexpected ']'
+bad {"a" 1} doc=JSON, line 1 column 6: expected ':' json=JSON, line 1 column 6: expected ':'
 relaxed {"a":1,"b":[2]}
 "##;
 

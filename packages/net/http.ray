@@ -117,6 +117,16 @@ fn pairs_of(m: Map<string, string>) -> [(string, string)] {
     out
 }
 
+// El valor del primer par llamado `name` (case-insensitive), si lo hay.
+fn header_pair_value(extra: [(string, string)], name: string) -> Option<string> {
+    for kv in extra {
+        if (kv.0.to_lower() == name) {
+            return Option.Some(kv.1);
+        }
+    }
+    Option.None
+}
+
 // ¿Los pares ya traen `nombre` (case-insensitive)?
 fn has_header_pair(extra: [(string, string)], name: string) -> bool {
     for kv in extra {
@@ -232,18 +242,50 @@ fn build_request_pairs(
     conn_val: string
 ) -> Result<bytes, string> {
     let _ = check_request_head(method, u.path, extra)?;
+    // rayreq #277: una cabecera del llamador SUSTITUYE a la del cliente (`Host` para un vhost
+    // distinto de la IP, `Connection`); antes salían las dos y la petición era inválida (RFC 9112
+    // §3.2/§6.3, y una puerta al request smuggling tras un proxy). El encuadre del cuerpo lo pone
+    // el cliente: un `Content-Length` que no cuadre o un `Transfer-Encoding` son `Err`.
+    var caller_length: bool = false;
+    for kv in extra {
+        if (kv.0.to_lower() == "content-length") {
+            caller_length = true;
+            if (parse_int(kv.1.trim()) != Option.Some(body.len())) {
+                return Result.Err(
+                    "Content-Length "
+                        + kv.1
+                        + " does not match the body ("
+                        + to_string(body.len())
+                        + " octets); the client sets it from the body"
+                );
+            }
+        }
+    }
+    if (has_header_pair(extra, "transfer-encoding")) {
+        return Result.Err(
+            "Transfer-Encoding is not supported in requests: the client frames the body with Content-Length"
+        );
+    }
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
-    req = req + "Host: " + host_header(u) + "\r\n";
-    req = req + "Connection: " + conn_val + "\r\n";
+    req = req + "Host: " + header_pair_value(extra, "host").unwrap_or(host_header(u)) + "\r\n";
+    req = req
+        + "Connection: "
+        + header_pair_value(extra, "connection").unwrap_or(conn_val)
+        + "\r\n";
     // M58.2: anuncia gzip (el gunzip transparente existía desde M20.10b pero nunca se pedía).
     if (!has_header_pair(extra, "accept-encoding")) {
         req = req + "Accept-Encoding: gzip\r\n";
     }
-    if (body.len() > 0) {
+    // Con cuerpo, siempre; sin cuerpo, solo si el llamador lo pidió (`Content-Length: 0` para un
+    // POST vacío ante servidores que lo exigen: 411).
+    if (body.len() > 0 || caller_length) {
         req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
     for kv in extra {
-        req = req + kv.0 + ": " + kv.1 + "\r\n";
+        let lower = kv.0.to_lower();
+        if (lower != "host" && lower != "connection" && lower != "content-length") {
+            req = req + kv.0 + ": " + kv.1 + "\r\n";
+        }
     }
     req = req + "\r\n";
     Result.Ok(req.to_bytes() + body)
@@ -260,29 +302,6 @@ fn read_with_deadline(h: int, deadline: int) -> Result<bytes, string> {
         net.set_read_timeout(h, remaining);
     }
     net.socket_read_bytes(h)
-}
-
-// Lee del socket hasta que el servidor cierra (o vence el plazo), acumulando bytes (binario intacto).
-fn read_all(h: int, deadline: int) -> Result<bytes, string> {
-    var acc: bytes = b"";
-    var follow: bool = true;
-    var err: string = "";
-    while (follow) {
-        match (read_with_deadline(h, deadline)) {
-            Result.Ok(trozo) => {
-                if (trozo.len() == 0) {
-                    follow = false;
-                } else {
-                    acc = acc + trozo;
-                }
-            },
-            Result.Err(e) => {
-                err = e;
-                follow = false;
-            },
-        }
-    }
-    if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
 }
 
 // El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10);
@@ -665,9 +684,11 @@ fn connect_ms(timeout_millis: int) -> int {
 }
 
 /// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
-/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF, with a
-/// 30 s total read timeout. Err on invalid URL, connection failure, I/O error/timeout, or a
-/// malformed/truncated response.
+/// Supports http:// and https:// (TLS); sends "Connection: close" and reads the response up to its
+/// `Content-Length` or last chunk (to EOF only when the server declares neither), with a 30 s
+/// total read timeout. Err on invalid URL, connection failure, I/O error/timeout, or a
+/// malformed/truncated response. If you override `Connection` with `keep-alive` and the server
+/// answers without a length, the read waits for the timeout: a keep-alive peer never closes.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     request_with(method, url, body, Map.new())
 }
@@ -724,7 +745,10 @@ pub fn fetch_traced(url: string, t: trace.Trace) -> Result<Response, string> {
 /// here with a UTF-8 body and 30 s. Err on invalid URL, connect failure, I/O error/timeout, or a
 /// malformed/truncated response. What the client adds (rayreq #249): `Host`, `Connection: close`,
 /// `Accept-Encoding: gzip` (unless you send your own `Accept-Encoding`) and `Content-Length` when
-/// there is a body. A `Content-Encoding: gzip` response arrives DECODED in `body`, while
+/// there is a body. A `Host` or `Connection` of yours REPLACES the client's (one line, yours); a
+/// `Content-Length` must match the body and `Transfer-Encoding` is an Err — the client frames the
+/// body (rayreq #277). The response ends at its `Content-Length` (or last chunk) even if the
+/// server keeps the connection open (rayreq #275). A `Content-Encoding: gzip` response arrives DECODED in `body`, while
 /// `headers`/`raw_headers` keep what came on the wire (`content-encoding: gzip` and the compressed
 /// `content-length`): check `content-encoding` to know it was decoded, and send
 /// `Accept-Encoding: identity` to get the bytes as sent. HEAD, 1xx, 204 and 304 have no body.
@@ -814,10 +838,32 @@ fn send_pairs(
                             Result.Err("error sending: " + e)
                         },
                         Result.Ok(_) => {
-                            let r = read_all(h, deadline);
-                            close(h);
+                            // rayreq #275: la respuesta se delimita por Content-Length / chunked /
+                            // sin-cuerpo (RFC 9112 §6.3), como en una Conn; solo sin longitud
+                            // declarada se lee hasta EOF. Antes se esperaba SIEMPRE el cierre del
+                            // servidor, y uno que ignora `Connection: close` convertía una
+                            // respuesta completa en «read timeout».
+                            var c: Conn = Conn {
+                                h: h,
+                                buf: b"",
+                                host: u.host,
+                                port: u.port,
+                                tls: u.tls,
+                                open: true,
+                                connect_timeout_ms: 0
+                            };
+                            let r = conn_read_response(c, method, deadline);
+                            conn_close(c);
                             match (r) {
-                                Result.Err(e) => Result.Err("error reading: " + e),
+                                Result.Err(e) => {
+                                    if (e == err_dropped()) {
+                                        Result.Err(
+                                            "error reading: the server closed the connection without a response"
+                                        )
+                                    } else {
+                                        Result.Err(e)
+                                    }
+                                },
                                 Result.Ok(raw) => parse_response(raw, method),
                             }
                         },

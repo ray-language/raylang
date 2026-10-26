@@ -90,7 +90,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "\"café\"\n\"A❤\"\n\"😀\"\nerr: lone surrogate in \\u escape\nerr: incomplete surrogate pair in \\u\nerr: non-hex digit in \\u escape";
+    let expected = "\"café\"\n\"A❤\"\n\"😀\"\nerr: JSON, line 1 column 8: lone surrogate in \\u escape\nerr: JSON, line 1 column 8: incomplete surrogate pair in \\u\nerr: JSON, line 1 column 6: non-hex digit in \\u escape";
     check("unicode", driver, expected);
 }
 
@@ -151,7 +151,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "err: trailing text after the JSON\nerr: unterminated array\nerr: unterminated string";
+    let expected = "err: JSON, line 1 column 10: trailing text after the JSON\nerr: JSON, line 1 column 6: unterminated array\nerr: JSON, line 1 column 2: unterminated string";
     check("errors", driver, expected);
 }
 
@@ -187,7 +187,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "ok 200\nerr 201: nesting too deep (possible DoS): more than 200 levels\nerr 100000: nesting too deep (possible DoS): more than 200 levels\nmixed ok";
+    let expected = "ok 200\nerr 201: JSON, line 1 column 201: nesting too deep (possible DoS): more than 200 levels\nerr 100000: JSON, line 1 column 201: nesting too deep (possible DoS): more than 200 levels\nmixed ok";
     check("depth", driver, expected);
 }
 

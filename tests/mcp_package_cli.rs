@@ -231,7 +231,7 @@ ray_check ray_run ray_test ray_fmt ray_doc
 true
 true
 Result.Err(unknown tool: no_such_tool)
-Result.Err(the arguments of 'ray_run' are not valid JSON: expected a string key)
+Result.Err(the arguments of 'ray_run' are not valid JSON: JSON, line 1 column 2: expected a string key)
 true
 true
 true
@@ -473,7 +473,7 @@ fn main() -> int {
 "##;
 
 const HANDLE_EXPECTED: &str = r##"Result.Err(mcp/serve: tool 'shout' is already registered)
-Result.Err(mcp/serve: the schema of tool 'bad' is not valid JSON: expected a string key)
+Result.Err(mcp/serve: the schema of tool 'bad' is not valid JSON: JSON, line 1 column 2: expected a string key)
 Result.Err(mcp/serve: resource 'demo://greeting' is already registered)
 {"id":1,"jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2025-06-18","serverInfo":{"name":"demo","version":"1.0.0"}}}
 {"id":"a","jsonrpc":"2.0","result":{"capabilities":{"resources":{},"tools":{}},"instructions":"A demo server.","protocolVersion":"2024-11-05","serverInfo":{"name":"demo","version":"1.0.0"}}}
@@ -491,7 +491,7 @@ Result.Err(mcp/serve: resource 'demo://greeting' is already registered)
 {"error":{"code":-32601,"message":"method not found: prompts/list"},"id":12,"jsonrpc":"2.0"}
 {"error":{"code":-32600,"message":"invalid request: no method"},"id":13,"jsonrpc":"2.0"}
 (no reply)
-{"error":{"code":-32700,"message":"parse error: expected 'null'"},"id":null,"jsonrpc":"2.0"}
+{"error":{"code":-32700,"message":"parse error: JSON, line 1 column 1: expected 'true', 'false' or 'null'"},"id":null,"jsonrpc":"2.0"}
 {"id":15,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"bare","version":"0.0.1"}}}
 "##;
 
@@ -667,7 +667,7 @@ true
 403 cross-origin request refused
 200 {"id":9,"jsonrpc":"2.0","result":{}}
 202 
-200 {"error":{"code":-32700,"message":"parse error: expected 'null'"},"id":null,"jsonrpc":"2.0"}
+200 {"error":{"code":-32700,"message":"parse error: JSON, line 1 column 1: expected 'true', 'false' or 'null'"},"id":null,"jsonrpc":"2.0"}
 == http, token
 401 missing or wrong bearer token
 401 missing or wrong bearer token

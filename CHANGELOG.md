@@ -4,6 +4,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.83 — 2026-10-26
+
+Hallazgos de rayreq con 1.27.82 (M429, #275–#277).
+
+- **Los errores de `json.parse`/`parse_doc` dicen dónde** (#276): `JSON, line L column C: …`
+  (columna en caracteres). Un BOM UTF-8 inicial se salta (RFC 8259 §8.1); lo que hay bajo el cursor
+  se nombra — `unexpected ']'` ante `[1, 2,]`, `expected 'true', 'false' or 'null'` ante `tru` —
+  en vez de «expected a number» para todo.
+- **`net` 0.12.1**: la respuesta de `http.request*` termina al completar su `Content-Length` (o el
+  último chunk) aunque el servidor no cierre (#275; antes «read timeout»); una cabecera `Host` o
+  `Connection` del llamador sustituye a la del cliente, y un `Content-Length` que no cuadra con el
+  cuerpo o un `Transfer-Encoding` son `Err` (#277; antes la petición llevaba las dos líneas).
+
 ## 1.27.82 — 2026-10-25
 
 Los pendientes menores de la segunda mirada a 1.27.80/1.27.81 (M428, IDEAS §117).

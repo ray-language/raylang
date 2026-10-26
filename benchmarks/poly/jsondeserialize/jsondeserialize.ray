@@ -7,33 +7,44 @@ import std/time;
 // longitudes) se calculan UNA vez antes del loop en vez de re-evaluarse en
 // las 400 000 iteraciones. Medido: nativo 99.3ms -> 89.3ms (~10%), VM 413ms
 // -> 361ms (~13%), mismo checksum.
+//
+// Variante justa (oct 2026): las otras implementaciones buscan CARACTERES
+// sueltos (`find(':')`, `rfind('}')`, `strings.Index(line, ":")`); esta hacía
+// dos búsquedas de subcadena de 9-10 bytes (`,"name":"` y `","score":`), que
+// no pasan por memchr. Medido en Rust puro con el mismo algoritmo: 12.7 ms de
+// los 37 de diferencia con rustc eran el algoritmo, no el runtime. Ahora busca
+// lo mismo que las demás: ':' y ',' para el id, `"name":"` + '"' para el
+// nombre, y los últimos ':' y '}' para el score.
 fn main() {
     let t0 = time.monotonic_nanos();
     let n = 400000;
     var checksum = 0;
     var total_name_len = 0;
 
-    let id_prefix = "{\"id\":";
-    let mid = ",\"name\":\"";
-    let tail = "\",\"score\":";
-    let id_start = id_prefix.len();
-    let mid_len = mid.len();
-    let tail_len = tail.len();
+    // Las agujas fuera del bucle: un literal dentro del bucle es, en el nativo, un `Rc<str>`
+    // nuevo por iteración (ver PERFORMANCE.md).
+    let colon = ":";
+    let comma = ",";
+    let quote = "\"";
+    let brace = "}";
+    let name_prefix = "\"name\":\"";
+    let name_prefix_len = name_prefix.len();
 
     for i in 0..n {
         let line = `{"id":${i},"name":"user${i}","score":${i % 100}}`;
 
-        let id_end = index_of(line, mid).unwrap_or(0);
+        let id_start = index_of(line, colon).unwrap_or(0) + 1;
+        let id_end = index_of(line, comma).unwrap_or(0);
         let id_val = parse_int(line.substring(id_start, id_end)).unwrap_or(0);
 
-        let name_start = id_end + mid_len;
+        let name_start = index_of(line, name_prefix).unwrap_or(0) + name_prefix_len;
         // N-D2 (jul 2026): el substring va INLINE en el index_of — la forma directa que fusiona el
         // nativo (busca sobre el slice sin materializar la cola) y la que usan Go/Rust/JS (offset).
-        let name_len = index_of(line.substring(name_start, line.len()), tail).unwrap_or(0);
+        let name_len = index_of(line.substring(name_start, line.len()), quote).unwrap_or(0);
         let name_val = line.substring(name_start, name_start + name_len);
 
-        let score_start = name_start + name_len + tail_len;
-        let score_end = line.len() - 1;
+        let score_start = last_index_of(line, colon).unwrap_or(0) + 1;
+        let score_end = last_index_of(line, brace).unwrap_or(0);
         let score_val = parse_int(line.substring(score_start, score_end)).unwrap_or(0);
 
         checksum = (checksum * 31 + id_val + score_val) % 1000000007;

@@ -1845,6 +1845,17 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees two strings"),
             },
+            // M431: la ÚLTIMA ocurrencia → [] o [i].
+            "__last_index_of" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(sub)) => {
+                    let elems = match crate::builtins::char_last_index_of(s, sub) {
+                        Some(i) => vec![Value::Int(i as i64)],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees two strings"),
+            },
             // M11.7a: une un [string] con el separador.
             "join" => match (&values[0], &values[1]) {
                 (Value::Array(rc), Value::Str(sep)) => {
@@ -1894,6 +1905,12 @@ impl<'a> Interpreter<'a> {
             "__index_of_or" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Str(sub), Value::Int(d)) => {
                     Value::Int(crate::builtins::char_index_of(s, sub).map(|i| i as i64).unwrap_or(*d))
+                }
+                _ => unreachable!("the checker guarantees (string, string, int)"),
+            },
+            "__last_index_of_or" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(s), Value::Str(sub), Value::Int(d)) => {
+                    Value::Int(crate::builtins::char_last_index_of(s, sub).map(|i| i as i64).unwrap_or(*d))
                 }
                 _ => unreachable!("the checker guarantees (string, string, int)"),
             },

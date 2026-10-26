@@ -278,11 +278,23 @@ pub enum OpCode {
     /// D3: `parse_int(s).unwrap_or(d)` fusionado — saca `d` y `s`, empuja el int parseado
     /// (`trim().parse::<i64>()`, la misma semántica que el primitivo `__parse_int`) o `d`.
     ParseIntOr,
+    /// M431: `last_index_of(s, sub).unwrap_or(d)` fusionado — espejo de `IndexOfOr` para la ÚLTIMA
+    /// ocurrencia (`__last_index_of_or`). Sin ella la VM pagaba el wrapper del prelude, el arreglo
+    /// etiquetado y el Option en cada llamada (jsondeserialize justo: 475 ms frente a 269).
+    LastIndexOfOr,
     /// Saca un string; empuja el mismo sin espacio en blanco en los extremos. Builtin `trim`.
     Trim,
     /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin
     /// `split`. (El arreglo es un objeto del heap → lo traza el GC.)
     Split,
+    /// M433 (N-D4 en la VM): un paso del iterador de `split` SIN materializar el arreglo. Lee el
+    /// string, el separador y el cursor de los LOCALES `text`/`sep`/`pos` en el sitio (sin clonar
+    /// los `Arc`: eran dos pares de atómicos por trozo), avanza `pos` y empuja el trozo; si no
+    /// quedan, salta a `target` sin empujar nada. Mismos trozos, en el mismo orden, que
+    /// `str::split` (`builtins::split_step`). Lo emite el compilador para `for x in s.split(sep)`
+    /// y para `let f = s.split(sep)` consumido solo por un `for x in f`: un JSONL de 8 M de líneas
+    /// dejaba de ocupar 640 MB de `Arc<str>` + arreglo.
+    SplitNext { text: usize, sep: usize, pos: usize, target: usize },
     /// Saca la subcadena y el string; empuja un `bool`: ¿el string la contiene? Builtin `contains`.
     Contains,
     /// Saca `a`, `de` y el string; empuja el string con **todas** las ocurrencias de `de`
@@ -442,6 +454,10 @@ pub enum OpCode {
     /// Saca la subcadena y el string; empuja un `[int]` con **0 o 1** elementos: el índice de
     /// **carácter** de la primera ocurrencia, o vacío. Primitivo `__index_of`; el prelude → `Option`.
     IndexOf,
+    /// M431: como `IndexOf` pero la ÚLTIMA ocurrencia (`[len]` con subcadena vacía). Primitivo
+    /// `__last_index_of`; el prelude → `Option`. Antes era raylang puro sobre `[char]` (dos `Vec<char>`
+    /// por llamada: 52 ms nativo / 500 ms VM en jsondeserialize).
+    LastIndexOf,
     /// Saca el separador y un arreglo `[string]`; empuja un string con los trozos unidos por el
     /// separador. Builtin `join`. (String nuevo en el heap.)
     Join,

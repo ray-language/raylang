@@ -2720,6 +2720,43 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::SplitNext { text, sep, pos, target } => {
+                    // M433: un paso del iterador de split sobre los locales (sin clonar los Arc). Los
+                    // tres slots son temporales del compilador (`$sptext`/`$spsep`/`$sppos`), nunca
+                    // capturados → siempre `Plain`.
+                    let (text, sep, pos, target) = (*text, *sep, *pos, *target);
+                    let cur = match &self.cur.locals[base + pos] {
+                        Local::Plain(HeapValue::Int(n)) => *n as usize,
+                        _ => unreachable!("the split cursor is a plain int local"),
+                    };
+                    let step = match (&self.cur.locals[base + text], &self.cur.locals[base + sep]) {
+                        (Local::Plain(HeapValue::Str(s)), Local::Plain(HeapValue::Str(sp))) => {
+                            crate::builtins::split_step(s, sp, cur).map(|(a, b, next)| (HeapValue::Str(s[a..b].into()), next))
+                        }
+                        _ => unreachable!("the split operands are plain string locals"),
+                    };
+                    match step {
+                        Some((piece, next)) => {
+                            self.cur.locals[base + pos] = Local::Plain(HeapValue::Int(next as i64));
+                            self.push(piece);
+                        }
+                        None => self.cur.frames[fi].ip = target,
+                    }
+                }
+                OpCode::LastIndexOf => {
+                    // M431: la ÚLTIMA ocurrencia → [] o [i] (índice de carácter). El prelude → Option<int>.
+                    let sub = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
+                        unreachable!("the checker guarantees two strings");
+                    };
+                    let elems = match crate::builtins::char_last_index_of(&s, &sub) {
+                        Some(i) => vec![HeapValue::Int(i as i64)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::Join => {
                     // Orden en la pila: arr, sep → se saca sep primero.
                     let sep = self.pop();
@@ -2820,6 +2857,16 @@ impl<'a> Vm<'a> {
                     let r = crate::builtins::char_index_of(&s, &sub).map(|i| i as i64).unwrap_or(d);
                     self.push(HeapValue::Int(r));
                 }
+                OpCode::LastIndexOfOr => {
+                    // M431: `last_index_of(s, sub).unwrap_or(d)` fusionado — espejo de IndexOfOr.
+                    let d = self.pop_int();
+                    let (sub, s) = (self.pop(), self.pop());
+                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
+                        unreachable!("the checker guarantees two strings");
+                    };
+                    let r = crate::builtins::char_last_index_of(&s, &sub).map(|i| i as i64).unwrap_or(d);
+                    self.push(HeapValue::Int(r));
+                }
                 OpCode::ParseIntOr => {
                     // D3: `parse_int(s).unwrap_or(d)` fusionado. Misma semántica que el primitivo
                     // `__parse_int` (`trim().parse::<i64>()`).
@@ -2887,8 +2934,9 @@ impl<'a> Vm<'a> {
                 OpCode::ReadFile => {
                     // Arreglo etiquetado ["ok", contenido] o ["err", msg]. El prelude → Result.
                     let elems = match self.pop() {
-                        HeapValue::Str(path) => match std::fs::read_to_string(&*path) {
-                            Ok(c) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(c.into())],
+                        // M433: un solo buffer del tamaño del archivo (antes String + copia al Rc).
+                        HeapValue::Str(path) => match crate::builtins::read_file_arc_str(&path) {
+                            Ok(c) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(c)],
                             Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.to_string().into())],
                         },
                         _ => unreachable!("the checker guarantees a string"),

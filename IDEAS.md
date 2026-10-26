@@ -4378,3 +4378,22 @@ la misma PR) y dejó estos pendientes, ninguno bloqueante:
   `"A\u{41}"` sale `"\u{41}\u{41}"`. Indexar por posición dentro del literal.
 - **Una `String` por carácter** en `url.find_any` y en `yaml` (`",[]{}".contains(ch.to_string())`):
   comparar `char` directamente. Rendimiento, no corrección.
+
+## 118. Arranque y memoria del nativo: lo que cuestan los workers (26 oct 2026)
+
+Medido con el programa vacío del banco poliglota (M3 Pro, 11 cores): el binario nativo pasó de
+1,8 MB (hasta 1.27.5) a 3,0 MB de RSS pico (1.27.83) porque `main` corre como fibra del scheduler
+desde M329 y los N workers nacen al arrancar aunque el programa no haga `spawn`: ~86 KB por worker
+(pila de hilo tocada, heap local de mimalloc, el `kqueue` por worker de M399) y 0,33 MB del
+scheduler con un solo worker. `RAYLANG_THREADS=1` → 2,16 MB; `--without fibers` → 1,83;
+`--without fibers,mimalloc,ahash` → 1,41 (= Rust). Arranque: 2,33 ms con 11 workers, 2,09 con uno,
+1,87 Rust, 2,13 Go.
+
+**Workers perezosos (levantarlos en el primer `spawn`/E/S) — evaluado y NO adoptado por ahora**:
+ganaría 0,9 MB y 0,24 ms solo en programas que nunca lanzan tareas ni hacen E/S asíncrona; en los
+demás el coste se mueve al primer `spawn` (p99 peor en el calentamiento) y añade un estado «aún no
+hay workers» a los caminos más delicados de `fibers.rs` (M319, M363–M365, M399–M402, M413). Si
+alguna vez pesa, la vía barata es **adelgazar el worker**, no cambiar cuándo nace: crear el reactor
+`kqueue` en el primer uso del worker y reducir la reserva inicial del heap local. Impacto bajo; sin
+fecha. La memoria y el arranque que sí importan están en la VM (16,6 MB / 6,7 ms por `ray run`,
+regresión anotada en PERFORMANCE desde 1.14).

@@ -514,10 +514,19 @@ impl Transpiler {
         }
         for name in fused_here {
             self.fused_splits.remove(&name);
+            self.split_for_fused.remove(&name);
         }
         self.scopes.pop();
         out.push('}');
         Ok(())
+    }
+
+    /// N-D4c: si `e` es la variable de un `let f = split(…)` fusionado con su `for`, sus temporales.
+    fn split_for_fused_of(&self, e: &Expr) -> Option<(String, String)> {
+        match &e.kind {
+            ExprKind::Ident(n) => self.split_for_fused.get(n).cloned(),
+            _ => None,
+        }
     }
 
     /// N-D4b: si `s` es `let f = <string>.split(sep);` y TODO uso posterior de `f` en el bloque es
@@ -542,6 +551,45 @@ impl Transpiler {
         let Some(sub) = self.as_builtin_call(value, "split") else { return Ok(None) };
         if sub.len() != 2 || !matches!(self.type_of(sub[0]), Ok(Type::String)) {
             return Ok(None);
+        }
+        // N-D4c (M433): el ÚNICO uso posterior es `for x in f { … }` (el cuerpo no menciona `f`, y nada
+        // más en el bloque tampoco) → `f` no se materializa: el `let` deja `s` y `sep` en temporales y
+        // el `for` itera el split directo (N-D4a). `var f` ya quedó fuera arriba (podría reasignarse).
+        {
+            let mut for_uses = 0usize;
+            let mut ok = true;
+            for st in rest {
+                match &st.kind {
+                    StmtKind::For { pat: crate::ast::ForPat::Single(v), iter: crate::ast::ForIter::In(it), body, .. }
+                        if matches!(&it.kind, ExprKind::Ident(n) if n == name) =>
+                    {
+                        if v == name || mentions_name_block(name, body) {
+                            ok = false;
+                            break;
+                        }
+                        for_uses += 1;
+                    }
+                    _ => {
+                        if mentions_name_stmt(name, st) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if ok && for_uses == 1 && !tail.is_some_and(|t| mentions_name_expr(name, t)) {
+                let k = self.match_temp;
+                self.match_temp += 1;
+                let (src, sepv) = (format!("__rt_spsrc{k}"), format!("__rt_spsep{k}"));
+                write!(out, "    let {src} = ").unwrap();
+                self.emit_expr(out, sub[0])?;
+                write!(out, "; let {sepv} = ").unwrap();
+                self.emit_expr(out, sub[1])?;
+                out.push_str(";\n");
+                self.declare(name, Type::Array(Box::new(Type::String)));
+                self.split_for_fused.insert(name.clone(), (src, sepv));
+                return Ok(Some(name.clone()));
+            }
         }
         let mut ks: Vec<i64> = Vec::new();
         for st in rest {
@@ -875,6 +923,17 @@ impl Transpiler {
                             self.declare(&var, ety);
                             self.emit_block(out, body)?;
                             self.scopes.pop();
+                        } else if let Some((src, sepv)) = self.split_for_fused_of(expr) {
+                            // N-D4c (M433): `for w in f` con `f = s.split(sep)` fusionado por el `let`:
+                            // mismo bucle que N-D4a sobre los temporales que dejó el `let`.
+                            write!(out, "{{ {}for __rt_spw in {}.split(&*{}) {{ let ", lbl, src, sepv).unwrap();
+                            out.push_str(&mangle(&var));
+                            out.push_str(" = Rc::<str>::from(__rt_spw); ");
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, Type::String);
+                            self.emit_block(out, body)?;
+                            self.scopes.pop();
+                            out.push_str(" } }");
                         } else if let Some(sub) = self.as_builtin_call(expr, "split") {
                             // N-D4a: `for w in s.split(sep)` itera el iterador de split DIRECTO, sin
                             // materializar el `Vec<Rc<str>>` intermedio (el resultado es un temporal
@@ -2323,14 +2382,15 @@ impl Transpiler {
                 _ => format!("__rt_c{i}.len()"),
             });
         }
-        out.push_str(&format!("let mut __rt_s = String::with_capacity({}); ", caps.join(" + ")));
+        // M432: buffer por hilo reutilizado; `reserve` con la misma estimación que antes tenía `with_capacity`.
+        out.push_str(&format!("__RAY_FMT.with(|__rt_b| {{ let mut __rt_s = __rt_b.borrow_mut(); __rt_s.clear(); __rt_s.reserve({}); ", caps.join(" + ")));
         out.push_str("{ use std::fmt::Write as _; let _ = write!(__rt_s, \"");
         out.push_str(&fmt);
         out.push('"');
         for i in 0..args.len() {
             out.push_str(&format!(", __rt_c{i}"));
         }
-        out.push_str("); } Rc::<str>::from(__rt_s) }");
+        out.push_str("); } Rc::<str>::from(&**__rt_s) }) }");
         Ok(())
     }
 
@@ -2555,6 +2615,21 @@ pub(super) fn binop(op: BinaryOp) -> &'static str {
     }
 }
 
+
+// --- N-D4c (M433): ¿menciona `name` en absoluto? Conservador sobre `split_uses_*`: cualquier uso
+// (índice incluido) o cualquier construcción que pueda ligarlo (`match`, `fn`) cuenta como mención.
+pub(crate) fn mentions_name_expr(name: &str, e: &Expr) -> bool {
+    let mut ks = Vec::new();
+    !split_uses_expr(name, e, &mut ks) || !ks.is_empty()
+}
+pub(crate) fn mentions_name_stmt(name: &str, s: &crate::ast::Stmt) -> bool {
+    let mut ks = Vec::new();
+    !split_uses_stmt(name, s, &mut ks) || !ks.is_empty()
+}
+pub(crate) fn mentions_name_block(name: &str, b: &Block) -> bool {
+    let mut ks = Vec::new();
+    !split_uses_block(name, b, &mut ks) || !ks.is_empty()
+}
 
 // --- N-D4b: análisis de usos de un `let f = split(…)` (funciones libres, sin estado) ---
 

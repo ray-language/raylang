@@ -1501,29 +1501,13 @@ fn index_of(s: string, sub: string) -> Option<int> {
 }
 
 // M304 (IDEAS §97 #26): índice (de carácter) de la ÚLTIMA ocurrencia de `sub` en `s`; None si no
-// aparece. Sobre los arreglos de chars (índice O(1)); `Some(s.len())` con `sub` vacío.
+// aparece; `Some(s.len())` con `sub` vacío. M431: sobre el primitivo `__last_index_of` (rfind en
+// ASCII), como `index_of`; la versión por `[char]` costaba dos `Vec<char>` por llamada.
 /// Returns the character index of the LAST occurrence of `sub` in `s`, or `None` if absent
 /// (`Some(s.len())` for an empty `sub`).
 fn last_index_of(s: string, sub: string) -> Option<int> {
-    let hay = s.chars();
-    let pat = sub.chars();
-    let n = hay.len();
-    let m = pat.len();
-    if (m == 0) {
-        return Option.Some(n);
-    }
-    var i = n - m;
-    while (i >= 0) {
-        var j = 0;
-        while (j < m && hay[i + j] == pat[j]) {
-            j = j + 1;
-        }
-        if (j == m) {
-            return Option.Some(i);
-        }
-        i = i - 1;
-    }
-    Option.None
+    let r = __last_index_of(s, sub);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.

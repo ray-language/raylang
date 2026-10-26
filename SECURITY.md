@@ -316,6 +316,11 @@ documentada:
   El binario nativo emite para `ffi.library_available` un `dlopen`/`dlclose` (unix) o
   `LoadLibraryA`/`FreeLibrary` (Windows) declarados a mano sobre una `CString` propia viva durante la
   llamada (`__ray_ffi_lib_available`).
+- **`src/builtins.rs` (`read_file_arc_str`, M433) y el runtime emitido del nativo (`__ray_read_file`,
+  `__ray_join`)** — un `Arc<[u8]>`/`Rc<[u8]>` nacido a cero (`new_zeroed_slice().assume_init()`: todo
+  octeto a cero es un `u8` válido) y, tras validar UTF-8 con `str::from_utf8`, el cast
+  `from_raw(into_raw(bytes) as *const str)`: `str` y `[u8]` comparten representación y el puntero
+  conserva longitud y asignación. Así `fs.read_file` ocupa el tamaño del archivo y no el doble.
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
   mano para no traer `libc`; y (M119) `poll(2)` con lista **nula** y `nfds = 0` para dormir el hilo
   con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga. En Windows (M174):

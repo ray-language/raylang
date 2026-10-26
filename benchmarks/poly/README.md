@@ -89,6 +89,11 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 
 ## Resultados (22 sep 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
 
+> **Corrida posterior**: [`results/2026-10-26-v1.27.83.md`](results/2026-10-26-v1.27.83.md) (release
+> 1.27.83, build plano, las 10 variantes). Todo mejora o se mantiene frente a la tabla de abajo salvo
+> `fibrec` nativo (19,5 → 43,6 ms): el contador de profundidad de M295 (1.27.11), que esta tabla no
+> llevaba; 1.27.84 (M430, PERFORMANCE.md §23) lo deja en 29 ms.
+
 > Corridas archivadas completas (export de `bench.py --export-md`, todas las tablas y el entorno):
 > [`results/2026-09-22-v1.27.5.md`](results/2026-09-22-v1.27.5.md) — las 10 variantes en las
 > mismas corridas, `ray` = **release 1.27.5 tal como se publica (build plano)** — y

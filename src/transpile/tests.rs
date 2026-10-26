@@ -1715,6 +1715,29 @@ fn fast_mode_emits_no_depth_prologue() {
     assert!(!out.contains("let _f = __ray_enter()"), "sin prólogos con --fast");
 }
 
+/// M430: el prólogo compara contra el `static` `__RAY_LIMIT` (no contra el `OnceLock` de
+/// `__ray_max_depth()`), el camino frío diverge y lee el mismo `static`, y `main`/`ray_start`
+/// lo rellenan como PRIMERA sentencia — en los dos modelos de concurrencia y en modo lib.
+#[test]
+fn depth_limit_lives_in_a_static_filled_first_thing_at_startup() {
+    let src = "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\nfn main() -> int { fib(5) }\n";
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    for (fibers, lib_mode) in [(true, false), (false, false), (true, true)] {
+        let out = super::transpile_entry(&prog, &[], false, fibers, &[], lib_mode).expect("transpile").source;
+        let enter = out.lines().find(|l| l.contains("fn __ray_enter()")).expect("__ray_enter emitido");
+        assert!(enter.contains("__RAY_LIMIT.load(") && !enter.contains("__ray_max_depth()"), "el prólogo compara contra el static: {enter}");
+        let cold = out.lines().find(|l| l.contains("fn __ray_depth_overflow(")).expect("camino frío emitido");
+        assert!(cold.contains("-> !") && cold.contains("__RAY_LIMIT.load("), "el camino frío diverge y lee el mismo static: {cold}");
+        assert!(out.contains("AtomicU32::new(1024)"), "el static arranca en el default, no en 0");
+        let entry = if lib_mode { "fn ray_start() -> i32 {\n" } else { "fn main() {\n" };
+        let i = out.find(entry).unwrap_or_else(|| panic!("{entry} emitida (fibers={fibers}, lib={lib_mode})"));
+        let first = out[i + entry.len()..].lines().next().unwrap().trim();
+        assert_eq!(first, "__ray_init_depth_limit();", "primera sentencia de la entrada (fibers={fibers}, lib={lib_mode})");
+    }
+}
+
 /// M313 (findings #71): genéricos sobre `Channel<Enum<T>>` — el `T` que solo aparece en el retorno
 /// va en turbofish desde el tipo esperado, un struct cuyo `T` solo vive en un canal lleva
 /// PhantomData, y las conversiones Send de tipos con `T` van por el trait `__RaySendConv`.

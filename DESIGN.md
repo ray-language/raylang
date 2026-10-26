@@ -19101,3 +19101,41 @@ para que nadie lo recablee; y la doc de `request` dice que la respuesta termina 
 `Content-Length` (y que un `Connection: keep-alive` del llamador ante una respuesta sin longitud
 espera al timeout). Lección del flujo: `docs_sync.py --update` solo refresca el marcador de
 REFERENCE.en.md — la traducción se escribe a mano ANTES de ejecutarlo.
+
+## 405. M430 — el límite del contador de profundidad, fuera del camino caliente (oct 2026)
+
+Origen: la corrida del banco poliglota con 1.27.83 (`benchmarks/poly/results/2026-10-26-v1.27.83.md`).
+Todo mejora o se mantiene frente a 1.27.5 salvo `fibrec` nativo: 19,5 → 43,6 ms. No es regresión
+nueva sino el contador de marcos de M295 (1.27.11), que la referencia de septiembre aún no llevaba
+y cuya nota de PERFORMANCE §7 dejaba apuntada una vía («un contador estático por worker») si algún
+día pesaba en un benchmark de cabecera. Pesó, y la investigación cambió el diagnóstico.
+
+**Medición por piezas** (fib(34), 18 M llamadas, mediana de 7, M3 Pro; `--emit-rust` + `rustc` con
+los flags de `--release`): prólogo actual 43,6 ms; sin contador 17,6; **TLS sustituido por un
+`static` plano** 29,4; **límite constante en vez del `OnceLock`** 27,3; ambos 25,9. El acceso
+thread-local —el sospechoso de §7— vale ~1,4 ms de esos 27; el `get_or_init` del `OnceLock` que
+`__ray_max_depth()` ejecutaba en CADA llamada valía 16. El contador en sí (sumar, guardar, restar
+en el `Drop`) son los ~9 ms restantes, y no se quitan sin cambiar de modelo (pasar la profundidad
+como argumento oculto en registro; descartado por ahora: toca toda llamada, los valores `fn` y los
+callbacks desde el runtime).
+
+**El detalle que casi se lleva la ganancia.** La primera versión del arreglo inicializaba el
+`static` desde el camino frío (arranca en 0 → la primera llamada entra en `__ray_depth_slow`, que
+lee el mando, lo publica y VUELVE). Mismas instrucciones en el camino caliente que la versión
+final y, sin embargo, 44 ms: que el camino frío pueda retornar cambia la forma del código que LLVM
+genera alrededor de la llamada recursiva. Con el camino frío divergente (`-> !`, solo desborde) y el
+`static` rellenado una vez al arrancar, 27,5 ms en el binario de `rustc` y **45,5 → 29,2 ms en el
+build real con fibras** (−36 %). Un contador que cuenta hacia abajo (comparar con 0, sin cargar
+nada) daba lo mismo y obligaba a cambiar la semántica de `Task::depth` en el scheduler; no compensa.
+
+Decisión: `__RAY_LIMIT: AtomicU32` en el Rust emitido, que arranca en el default (1024, nunca 0:
+un prólogo que corriera antes de tiempo degradaría al default en vez de morir en el primer marco)
+y que `__ray_init_depth_limit()` rellena como PRIMERA sentencia del `main`/`ray_start` emitido
+(cubre fibras, hilo-por-tarea, modo lib y el binario de tests); `__ray_enter` compara contra su
+carga relaxed y `__ray_depth_overflow` sigue siendo `-> !` y lee el MISMO `static` para el mensaje.
+La revisión pre-release (regla del 25 oct) pidió esas tres cosas y un test que fije el prólogo
+emitido (`depth_limit_lives_in_a_static_filled_first_thing_at_startup`).
+`RAYLANG_MAX_DEPTH`, el mensaje y `--fast` no cambian; `tests/native_depth_cli.rs` sigue en verde.
+`treealloc` nativo (+20 % en la misma corrida) no se mueve con este cambio: su causa es otra y
+queda anotada en PERFORMANCE §23.
+

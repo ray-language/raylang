@@ -246,19 +246,20 @@ fn build_request_pairs(
     // distinto de la IP, `Connection`); antes salían las dos y la petición era inválida (RFC 9112
     // §3.2/§6.3, y una puerta al request smuggling tras un proxy). El encuadre del cuerpo lo pone
     // el cliente: un `Content-Length` que no cuadre o un `Transfer-Encoding` son `Err`.
-    match (header_pair_value(extra, "content-length")) {
-        Option.Some(v) => {
-            if (parse_int(v.trim()) != Option.Some(body.len())) {
+    var caller_length: bool = false;
+    for kv in extra {
+        if (kv.0.to_lower() == "content-length") {
+            caller_length = true;
+            if (parse_int(kv.1.trim()) != Option.Some(body.len())) {
                 return Result.Err(
                     "Content-Length "
-                        + v
+                        + kv.1
                         + " does not match the body ("
                         + to_string(body.len())
                         + " octets); the client sets it from the body"
                 );
             }
-        },
-        Option.None => { },
+        }
     }
     if (has_header_pair(extra, "transfer-encoding")) {
         return Result.Err(
@@ -275,7 +276,9 @@ fn build_request_pairs(
     if (!has_header_pair(extra, "accept-encoding")) {
         req = req + "Accept-Encoding: gzip\r\n";
     }
-    if (body.len() > 0) {
+    // Con cuerpo, siempre; sin cuerpo, solo si el llamador lo pidió (`Content-Length: 0` para un
+    // POST vacío ante servidores que lo exigen: 411).
+    if (body.len() > 0 || caller_length) {
         req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
     for kv in extra {
@@ -299,29 +302,6 @@ fn read_with_deadline(h: int, deadline: int) -> Result<bytes, string> {
         net.set_read_timeout(h, remaining);
     }
     net.socket_read_bytes(h)
-}
-
-// Lee del socket hasta que el servidor cierra (o vence el plazo), acumulando bytes (binario intacto).
-fn read_all(h: int, deadline: int) -> Result<bytes, string> {
-    var acc: bytes = b"";
-    var follow: bool = true;
-    var err: string = "";
-    while (follow) {
-        match (read_with_deadline(h, deadline)) {
-            Result.Ok(trozo) => {
-                if (trozo.len() == 0) {
-                    follow = false;
-                } else {
-                    acc = acc + trozo;
-                }
-            },
-            Result.Err(e) => {
-                err = e;
-                follow = false;
-            },
-        }
-    }
-    if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
 }
 
 // El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10);
@@ -704,9 +684,11 @@ fn connect_ms(timeout_millis: int) -> int {
 }
 
 /// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
-/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF, with a
-/// 30 s total read timeout. Err on invalid URL, connection failure, I/O error/timeout, or a
-/// malformed/truncated response.
+/// Supports http:// and https:// (TLS); sends "Connection: close" and reads the response up to its
+/// `Content-Length` or last chunk (to EOF only when the server declares neither), with a 30 s
+/// total read timeout. Err on invalid URL, connection failure, I/O error/timeout, or a
+/// malformed/truncated response. If you override `Connection` with `keep-alive` and the server
+/// answers without a length, the read waits for the timeout: a keep-alive peer never closes.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     request_with(method, url, body, Map.new())
 }

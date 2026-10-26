@@ -19092,3 +19092,12 @@ siendo del cliente: un `Content-Length` que no coincide con `body.len()` y cualq
 `Transfer-Encoding` son `Err` con la razón, no una petición inválida en el cable (RFC 9112
 §3.2/§6.3; con un proxy, dos `Content-Length` distintos son request smuggling). `Accept-Encoding`
 ya se respetaba.
+
+**La revisión de la PR** afinó: se validan TODOS los `Content-Length` del llamador (no solo el
+primero); `Content-Length: 0` dado por el llamador se emite con cuerpo vacío (servidores con 411);
+`located` no cuenta el BOM como columna; `parse` y `parse_doc` dan el MISMO texto ante `tru`/`nul`
+(`unexpected_here` en las ramas de literal de `parse_value`); `read_all` (leer hasta EOF) se borró
+para que nadie lo recablee; y la doc de `request` dice que la respuesta termina en su
+`Content-Length` (y que un `Connection: keep-alive` del llamador ante una respuesta sin longitud
+espera al timeout). Lección del flujo: `docs_sync.py --update` solo refresca el marcador de
+REFERENCE.en.md — la traducción se escribe a mano ANTES de ejecutarlo.

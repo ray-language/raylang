@@ -81,6 +81,8 @@ fn main() {
     print("host " + show(http.request_pairs("POST", base, b"hello", [("Host", "example.com"), ("Connection", "keep-alive"), ("Content-Length", "5")], 5000)));
     print("badlen " + show(http.request_pairs("POST", base, b"hello", [("Content-Length", "7")], 5000)));
     print("te " + show(http.request_pairs("POST", base, b"hello", [("Transfer-Encoding", "chunked")], 5000)));
+    print("twolen " + show(http.request_pairs("POST", base, b"hello", [("Content-Length", "5"), ("Content-Length", "99")], 5000)));
+    print("zero " + show(http.request_pairs("POST", base, b"", [("Content-Length", "0")], 5000)));
 }
 "##;
 
@@ -108,6 +110,14 @@ fn content_length_ends_the_response_and_caller_headers_replace_the_clients() {
         Some("te err Transfer-Encoding is not supported in requests: the client frames the body with Content-Length"),
         "{out}"
     );
+    assert_eq!(
+        out.lines().nth(6),
+        Some("twolen err Content-Length 99 does not match the body (5 octets); the client sets it from the body"),
+        "{out}"
+    );
+    let zero = out.lines().nth(7).unwrap();
+    assert!(zero.starts_with("zero ok 200 POST /x HTTP/1.1|Host: 127.0.0.1:"), "{out}");
+    assert!(zero.ends_with("|Connection: close|Accept-Encoding: gzip|Content-Length: 0"), "{out}");
 }
 
 const JSON: &str = r##"import std/json;
@@ -131,7 +141,7 @@ fn main() {
     print(e("tru"));
     print(e2("tru"));
     print(e("\u{FEFF}{\"a\":1}"));
-    print(e2("\u{FEFF}{\"a\":1}"));
+    print(e2("\u{FEFF}{\"a\" 1}"));
     print(e("{} x"));
     print(e("{\"k\": \"é\", \"j\": }"));
     print(e2("[1,\n 2,]"));
@@ -152,9 +162,9 @@ fn json_errors_say_line_and_column_and_the_bom_is_skipped() {
         "JSON, line 1 column 6: expected ':'\n\
          JSON, line 2 column 4: unexpected ']'\n\
          JSON, line 1 column 1: expected 'true', 'false' or 'null'\n\
-         JSON, line 1 column 1: expected 'true' or 'false'\n\
+         JSON, line 1 column 1: expected 'true', 'false' or 'null'\n\
          ok\n\
-         ok\n\
+         JSON, line 1 column 6: expected ':'\n\
          JSON, line 1 column 4: trailing text after the JSON\n\
          JSON, line 1 column 17: unexpected '}'\n\
          JSON, line 2 column 4: unexpected ']'\n"

@@ -67,7 +67,7 @@ fn skip_bom(b: bytes) -> int {
 fn located(p: P, msg: string) -> string {
     var line = 1;
     var column = 1;
-    var k = 0;
+    var k = skip_bom(p.b);  // el BOM no es una columna: el editor del usuario no lo muestra
     let stop = if (p.i < p.n) { p.i } else { p.n };
     while (k < stop) {
         let c = p.b[k];
@@ -170,7 +170,7 @@ fn parse_value(p: P) -> Result<Json, string> {
     } else if (c == 116 || c == 102) {
         parse_bool(p)
     } else if (c == 110) {
-        if (lit(p, "null")) { Result.Ok(Json.JNull) } else { Result.Err("expected 'null'") }
+        if (lit(p, "null")) { Result.Ok(Json.JNull) } else { Result.Err(unexpected_here(p)) }
     } else {
         parse_number(p)
     }
@@ -182,7 +182,7 @@ fn parse_bool(p: P) -> Result<Json, string> {
     } else if (lit(p, "false")) {
         Result.Ok(Json.JBool(false))
     } else {
-        Result.Err("expected 'true' or 'false'")
+        Result.Err(unexpected_here(p))  // el mismo texto que `parse_doc` para `tru`
     }
 }
 

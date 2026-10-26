@@ -379,7 +379,7 @@ fn main() -> int {
 const LOOP_EXPECTED: &str = r##"== registering tools
 Result.Err(agent: tool 'read_note' is already registered)
 Result.Err(agent: the risk of tool 'odd' must be read, write or exec, not 'maybe')
-Result.Err(llm: the schema of tool 'bad' is not valid JSON: expected a string key)
+Result.Err(llm: the schema of tool 'bad' is not valid JSON: JSON, line 1 column 2: expected a string key)
 read_note:read write_note:write run_command:exec fails:read crashes:read
 true false true false true
 == a plain turn, with events
@@ -436,7 +436,7 @@ auto, exec: done in 2 step(s): results: ran
 err: done in 2 step(s): results: error: disk on fire
 panic: done in 2 step(s): results: error: the tool failed: boom
 unknown: done in 2 step(s): results: error: there is no tool called 'no_such_tool'
-bad arguments: done in 2 step(s): results: error: the arguments are not valid JSON: expected a string key
+bad arguments: done in 2 step(s): results: error: the arguments are not valid JSON: JSON, line 1 column 2: expected a string key
 == two calls in one reply
 two: done in 2 step(s): results: note 1 | note 2
 == the step budget

@@ -373,6 +373,7 @@ pub(super) struct PreludeOrigin {
     pub(super) ord_prims: HashSet<String>,
     /// D3: ¿los wrappers `fn index_of`/`fn parse_int` son los del prelude?
     pub(super) index_of_fn: bool,
+    pub(super) last_index_of_fn: bool,
     pub(super) parse_int_fn: bool,
     /// D3: ¿el `unwrap_or` que resolverá como `Option#unwrap_or` es el del prelude? (el usuario no
     /// redefinió el trait `OptionOps` ni aporta su propio `impl OptionOps for Option`).
@@ -411,6 +412,7 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     let mut origin = PreludeOrigin {
         sort_fn: !defined.contains("sort"),
         index_of_fn: !defined.contains("index_of"),
+        last_index_of_fn: !defined.contains("last_index_of"),
         parse_int_fn: !defined.contains("parse_int"),
         ..Default::default()
     };

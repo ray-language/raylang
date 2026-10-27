@@ -1124,14 +1124,15 @@ fn collect_concat(e: Expr, sites: &std::collections::HashSet<(usize, usize)>, ou
 // - **V5 sort**: tras `lower_dict_calls`, `sort(a, <prim>#less)` (el sort genérico con el
 //   diccionario de un `impl Ord` primitivo) → `__sort_prim(a)` (sort nativo de Rust; el del
 //   prelude paga 2 clones de String por comparación vía `Index`). `float` fuera (NaN).
-// - **D3 unwrap_or**: `index_of(s, sub).unwrap_or(d)` y `parse_int(s).unwrap_or(d)` — que tras
+// - **D3 unwrap_or**: `index_of(s, sub).unwrap_or(d)`, `last_index_of(…)` (M431) y
+//   `parse_int(s).unwrap_or(d)` — que tras
 //   las bajadas son `Option#unwrap_or(index_of(s, sub), d)` — → `__index_of_or(s, sub, d)` /
 //   `__parse_int_or(s, d)`: muere el arreglo etiquetado del primitivo, el Option del wrapper y
 //   los marcos de ambas llamadas (~3 allocs de heap + 2 marcos por uso; patrón P0.2 `get_or`).
 
 pub(super) fn lower_prelude_fusions(program: &mut Program, origin: &PreludeOrigin) {
     let sort_on = origin.sort_fn && !origin.ord_prims.is_empty();
-    let or_on = origin.unwrap_or_impl && (origin.index_of_fn || origin.parse_int_fn);
+    let or_on = origin.unwrap_or_impl && (origin.index_of_fn || origin.last_index_of_fn || origin.parse_int_fn);
     if !sort_on && !or_on {
         return;
     }
@@ -1195,6 +1196,10 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
                     ExprKind::Call { callee: inner, args: iargs } => match &inner.kind {
                         ExprKind::Ident(w) if w == "index_of" && iargs.len() == 2 && origin.index_of_fn => {
                             Some("__index_of_or")
+                        }
+                        // M431: la misma fusión para la ÚLTIMA ocurrencia.
+                        ExprKind::Ident(w) if w == "last_index_of" && iargs.len() == 2 && origin.last_index_of_fn => {
+                            Some("__last_index_of_or")
                         }
                         ExprKind::Ident(w) if w == "parse_int" && iargs.len() == 1 && origin.parse_int_fn => {
                             Some("__parse_int_or")

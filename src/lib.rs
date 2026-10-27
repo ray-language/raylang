@@ -18,6 +18,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod ast;
+pub mod ast_uses;
 pub mod builtins;
 pub mod bundle_android;
 pub mod bundle_ios;

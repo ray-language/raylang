@@ -392,6 +392,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // por su `Rc` para que la dirección no pueda reutilizarse— con ASCII-ness, longitud en caracteres
     // y la última pareja (carácter, byte): ASCII indexa el byte; no-ASCII avanza o retrocede desde la
     // última posición. Sin `yield` dentro: el `RefCell` nunca queda prestado a través de una fibra.
+    // M432: la interpolación formatea en un `String` POR HILO reutilizado y asigna solo el `Rc<str>`
+    // final (antes: `String` nueva + copia al `Rc` = dos asignaciones por template; 5,8 ms de 90 en
+    // jsondeserialize). Los operandos se evalúan ANTES de tomar el préstamo (son locales `__rt_cN`),
+    // así que un template dentro de otro nunca encuentra el buffer prestado; y nada dentro cede la fibra.
+    out.push_str("thread_local! { static __RAY_FMT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }\n");
     out.push_str("struct __RayStrEntry { s: Rc<str>, ascii: bool, chars: usize, last_char: usize, last_byte: usize }\n");
     // rayreq #261: DOS entradas, como la VM (el texto y el token que se acaba de cortar).
     out.push_str("thread_local! { static __RAY_STR_LAST: std::cell::RefCell<[Option<__RayStrEntry>; 2]> = const { std::cell::RefCell::new([None, None]) }; }\n");
@@ -400,6 +405,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("        let mut slots = cell.borrow_mut();\n");
     out.push_str("        let hit = |e: &Option<__RayStrEntry>| matches!(e, Some(e) if Rc::ptr_eq(&e.s, s));\n");
     out.push_str("        if hit(&slots[1]) { slots.swap(0, 1); } else if !hit(&slots[0]) {\n");
+    out.push_str("            __RAY_STR_KEY.with(|c| c.set((0, false, 0))); // M432: la puerta rápida apunta al slot 0\n");
     out.push_str("            let ascii = s.is_ascii();\n");
     out.push_str("            let chars = if ascii { s.len() } else { s.chars().count() };\n");
     out.push_str("            slots[1] = slots[0].take();\n");
@@ -407,7 +413,26 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("        }\n");
     out.push_str("        f(slots[0].as_mut().unwrap())\n");
     out.push_str("    })\n}\n");
-    out.push_str("#[inline] fn __ray_char_len(s: &Rc<str>) -> i64 { __ray_str_entry(s, |e| e.chars as i64) }\n");
+    // M432: puerta RÁPIDA para `len`/`substring`/`substring(…).len()`: (ASCII, nº de chars) de la última
+    // cadena en una `Cell` thread-local (sin `RefCell`, sin cierre, sin swap de slots). La clave es el
+    // puntero, y vale porque la cadena está PINEADA por la caché de dos entradas de arriba (slot 0):
+    // en cada fallo de esa caché la clave se invalida, así que una cadena nueva en la misma dirección
+    // nunca hereda el flag, y no se retiene nada que la caché no retuviera ya. El fallo de la puerta
+    // calcula (ASCII, chars) UNA vez vía la entrada, que el tramo no-ASCII reutiliza para el seek.
+    // Medido (jsondeserialize): la caché `RefCell` costaba 3,8 ms de 90 en tres consultas por línea.
+    out.push_str("thread_local! { static __RAY_STR_KEY: std::cell::Cell<(usize, bool, usize)> = const { std::cell::Cell::new((0, false, 0)) }; }\n");
+    out.push_str("#[inline(always)] fn __ray_str_info(s: &Rc<str>) -> (bool, usize) {\n");
+    out.push_str("    let p = Rc::as_ptr(s) as *const u8 as usize;\n");
+    out.push_str("    let (kp, a, n) = __RAY_STR_KEY.with(|c| c.get());\n");
+    out.push_str("    if kp == p { return (a, n); }\n");
+    out.push_str("    __ray_str_info_miss(s)\n}\n");
+    out.push_str("#[cold] #[inline(never)] fn __ray_str_info_miss(s: &Rc<str>) -> (bool, usize) {\n");
+    out.push_str("    let (a, n) = __ray_str_entry(s, |e| (e.ascii, e.chars));\n");
+    out.push_str("    __RAY_STR_KEY.with(|c| c.set((Rc::as_ptr(s) as *const u8 as usize, a, n)));\n");
+    out.push_str("    (a, n)\n}\n");
+    out.push_str("#[inline(always)] fn __ray_char_len(s: &Rc<str>) -> i64 { __ray_str_info(s).1 as i64 }\n");
+    // M432: `substring(s, i, j).len()` fusionado — solo el clamp por carácter, sin cortar ni asignar.
+    out.push_str("#[inline(always)] fn __ray_substring_len(s: &Rc<str>, i: i64, j: i64) -> i64 { let n = __ray_str_info(s).1 as i64; let lo = i.clamp(0, n); let hi = j.clamp(lo, n); hi - lo }\n");
     // rayreq #261: el cursor de la entrada al carácter `i` (`i <= chars`) → su offset de byte.
     out.push_str("fn __ray_str_seek(e: &mut __RayStrEntry, i: usize) -> usize {\n");
     out.push_str("    if e.ascii { return i; }\n");
@@ -427,9 +452,21 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("    })\n}\n");
     // rayreq #261: los offsets de byte del tramo `[i, j)` por carácter (clamp de `substring`), por
     // la misma caché: ASCII O(1) tras la primera vez, no-ASCII amortizado en un recorrido.
-    out.push_str("fn __ray_char_range(s: &Rc<str>, i: i64, j: i64) -> (usize, usize) {\n");
-    out.push_str("    __ray_str_entry(s, |e| { let n = e.chars as i64; let lo = i.clamp(0, n) as usize; let hi = j.clamp(lo as i64, n) as usize; let blo = __ray_str_seek(e, lo); let bhi = __ray_str_seek(e, hi); (blo, bhi) })\n}\n");
+    // M432: ASCII (byte == carácter) por la puerta rápida, inline; no-ASCII por la caché con seek.
+    out.push_str("#[inline(always)] fn __ray_char_range(s: &Rc<str>, i: i64, j: i64) -> (usize, usize) {\n");
+    out.push_str("    let (a, n) = __ray_str_info(s); let n = n as i64; let lo = i.clamp(0, n) as usize; let hi = j.clamp(lo as i64, n) as usize;\n");
+    out.push_str("    if a { return (lo, hi); }\n");
+    out.push_str("    __ray_str_entry(s, |e| { let blo = __ray_str_seek(e, lo); let bhi = __ray_str_seek(e, hi); (blo, bhi) })\n}\n");
+    // M432: índice de carácter del byte `i` (límite de carácter): `i` si el PREFIJO es ASCII.
+    out.push_str("#[inline] fn __ray_char_index_at(s: &str, i: usize) -> i64 { if s.as_bytes()[..i].is_ascii() { i as i64 } else { s[..i].chars().count() as i64 } }\n");
+    // M431/M432: aguja de UN byte → barrido por bytes. `str::find(&str)` construye el buscador two-way
+    // (`StrSearcher::new`) en cada llamada —lo más caliente del perfil de jsondeserialize— y en líneas
+    // cortas el barrido simple gana incluso a `find(char)` (memchr): 90 → 77 ms solo con esto. En
+    // tramos largos manda memchr (espejo de `builtins::byte_find`/`byte_rfind`, mismo umbral).
+    out.push_str("#[inline] fn __ray_byte_find(h: &str, c: u8) -> Option<usize> { if h.len() <= 128 { h.as_bytes().iter().position(|&b| b == c) } else { h.find(c as char) } }\n");
+    out.push_str("#[inline] fn __ray_byte_rfind(h: &str, c: u8) -> Option<usize> { if h.len() <= 128 { h.as_bytes().iter().rposition(|&b| b == c) } else { h.rfind(c as char) } }\n");
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
+    out.push_str("    if sub.len() == 1 { return __ray_byte_find(s, sub.as_bytes()[0]).map(|i| __ray_char_index_at(s, i)); }\n");
     out.push_str("    if s.is_ascii() { return s.find(sub).map(|i| i as i64); }\n");
     out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");
     out.push_str("    if sub.is_empty() { return Some(0); }\n");
@@ -441,9 +478,36 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // para ambos hashers); los registros internos (sockets/TLS, clave i64) siguen en HashMap std.
     // M394 (rayplay #160): el tramo no-ASCII se corta recorriendo `char_indices` hasta `j`, sin
     // materializar el string por caracteres (espejo de `builtins::substring_slice`).
-    out.push_str("fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
+    out.push_str("fn __ray_last_index_of(s: &str, sub: &str) -> Option<i64> {
+    if sub.len() == 1 { return __ray_byte_rfind(s, sub.as_bytes()[0]).map(|i| __ray_char_index_at(s, i)); }
+    if s.is_ascii() { return s.rfind(sub).map(|i| i as i64); }
+    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();
+    if sub.is_empty() { return Some(chars.len() as i64); }
+    if sub.len() > chars.len() { return None; }
+    (0..=chars.len() - sub.len()).rev().find(|&i| chars[i..i + sub.len()] == sub[..]).map(|i| i as i64)
+}
+fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
     out.push_str("    let (lo, hi) = __ray_char_range(s, i, j);\n");
     out.push_str("    Rc::from(&s[lo..hi])\n}\n");
+    // M433: `fs.read_file` en UNA asignación del tamaño del archivo (espejo de `builtins::read_file_arc_str`):
+    // `read_to_string` + `Rc::from(String)` dejaban dos copias vivas (366 MB → 718 MB de pico). Buffer a
+    // cero (`assume_init` sobre `u8` a cero es válido), lleno con `read`; si el tamaño no cuadra (cambió,
+    // o `metadata` no lo sabe: tuberías), se sigue leyendo del MISMO handle, nunca se reabre. SAFETY del
+    // cast: UTF-8 validado y misma representación que `[u8]` (como `__ray_join`).
+    out.push_str("fn __ray_read_file(path: &str) -> Result<Rc<str>, Rc<str>> {\n");
+    out.push_str("    use std::io::Read;\n");
+    out.push_str("    let r: std::io::Result<Rc<str>> = (|| {\n");
+    out.push_str("        let mut f = std::fs::File::open(path)?;\n");
+    out.push_str("        let len = usize::try_from(f.metadata()?.len()).map_err(|_| std::io::Error::other(\"file too large\"))?;\n");
+    out.push_str("        let mut buf: Rc<[u8]> = unsafe { Rc::new_zeroed_slice(len).assume_init() };\n");
+    out.push_str("        { let dst = Rc::get_mut(&mut buf).unwrap(); let mut filled = 0usize;\n");
+    out.push_str("          while filled < len { let n = f.read(&mut dst[filled..])?; if n == 0 { break; } filled += n; }\n");
+    out.push_str("          let mut probe = [0u8; 1]; let more = f.read(&mut probe)?;\n");
+    out.push_str("          if filled < len || more != 0 { let mut v = Vec::with_capacity(filled + more + 4096); v.extend_from_slice(&dst[..filled]); v.extend_from_slice(&probe[..more]); f.read_to_end(&mut v)?; let s = String::from_utf8(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, \"stream did not contain valid UTF-8\"))?; return Ok(Rc::from(s)); } }\n");
+    out.push_str("        if std::str::from_utf8(&buf).is_err() { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, \"stream did not contain valid UTF-8\")); }\n");
+    out.push_str("        Ok(unsafe { Rc::from_raw(Rc::into_raw(buf) as *const str) })\n");
+    out.push_str("    })();\n");
+    out.push_str("    r.map_err(|e| Rc::<str>::from(e.to_string()))\n}\n");
     if ahash {
         out.push_str("type __RayMap<K, V> = std::collections::HashMap<K, V, ray_runtime::RandomState>;\n");
     } else {

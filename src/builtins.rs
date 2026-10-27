@@ -708,6 +708,14 @@ pub fn fs_test(t: crate::bytecode::FsTest, path: &str) -> bool {
 /// byte), consistente con `len`/`chars`/`s[i]`. `sub` vacío → `Some(0)`. Helper compartido por ambos
 /// motores (`__index_of`).
 pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
+    // M431: aguja de UN byte (`":"`, `","`, `"\n"`…) — `str::find(&str)` construye el buscador two-way
+    // (`StrSearcher::new`) en cada llamada, lo más caliente del perfil de jsondeserialize; un barrido
+    // por bytes gana incluso a `find(char)` (memchr) en líneas cortas, y en cadenas largas memchr
+    // (`find(char)`) gana al barrido escalar, así que el tramo decide (`byte_find`). El índice de
+    // carácter es el de byte si el PREFIJO es ASCII (solo se mira ese tramo, no toda la cadena).
+    if sub.len() == 1 {
+        return byte_find(s, sub.as_bytes()[0]).map(|i| char_index_at(s, i));
+    }
     // D1 (bench políglota, jsondeserialize): fast-path ASCII — índice de byte == índice de carácter,
     // y `str::find` va acelerado con memchr; el camino general materializaba DOS `Vec<char>` por
     // llamada (medido: VM −14% en jsondeserialize). El caso no-ASCII sigue por el camino por carácter.
@@ -723,6 +731,52 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
         return None;
     }
     (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
+}
+
+/// Hasta esta longitud, buscar UN byte por barrido escalar gana a memchr (sin su arranque); por
+/// encima, memchr (`str::find(char)`/`rfind(char)`, SIMD) gana al barrido. Un byte suelto en un `&str`
+/// válido es siempre ASCII, así que `b as char` es exacto. (Revisión de #600: el barrido solo no
+/// escalaba en un `index_of(text, "\n")` sobre cientos de MB.)
+const BYTE_SWEEP_MAX: usize = 128;
+
+/// Primera posición (en bytes) del byte ASCII `c` en `hay` (ver `BYTE_SWEEP_MAX`).
+#[inline]
+pub fn byte_find(hay: &str, c: u8) -> Option<usize> {
+    if hay.len() <= BYTE_SWEEP_MAX { hay.as_bytes().iter().position(|&b| b == c) } else { hay.find(c as char) }
+}
+
+/// Última posición (en bytes) del byte ASCII `c` en `hay` (ver `BYTE_SWEEP_MAX`).
+#[inline]
+pub fn byte_rfind(hay: &str, c: u8) -> Option<usize> {
+    if hay.len() <= BYTE_SWEEP_MAX { hay.as_bytes().iter().rposition(|&b| b == c) } else { hay.rfind(c as char) }
+}
+
+/// Índice de carácter del byte `i` de `s` (que debe caer en un límite de carácter): `i` si el prefijo
+/// es ASCII, si no cuenta los caracteres del prefijo.
+#[inline]
+fn char_index_at(s: &str, i: usize) -> usize {
+    if s.as_bytes()[..i].is_ascii() { i } else { s[..i].chars().count() }
+}
+
+/// M431: índice de **carácter** de la ÚLTIMA ocurrencia de `sub` en `s`; `sub` vacío → `Some(len)`
+/// (lo que daba el prelude). Fast-path ASCII por `rfind` (memrchr); el caso no-ASCII va por carácter.
+/// Helper compartido por ambos motores (`__last_index_of`).
+pub fn char_last_index_of(s: &str, sub: &str) -> Option<usize> {
+    if sub.len() == 1 {
+        return byte_rfind(s, sub.as_bytes()[0]).map(|i| char_index_at(s, i));
+    }
+    if s.is_ascii() {
+        return s.rfind(sub);
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let sub: Vec<char> = sub.chars().collect();
+    if sub.is_empty() {
+        return Some(chars.len());
+    }
+    if sub.len() > chars.len() {
+        return None;
+    }
+    (0..=chars.len() - sub.len()).rev().find(|&i| chars[i..i + sub.len()] == sub[..])
 }
 
 /// Subcadena `[i, j)` por índice de **carácter**, con *clamp* al rango válido (M11.7a): así nunca
@@ -3392,6 +3446,89 @@ pub fn read_file_bytes(path: &str) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// M433: un paso del iterador de `split` sobre `text` con el cursor `pos` (byte). Devuelve
+/// `(inicio, fin, pos_siguiente)` del trozo o `None` al agotarse; la secuencia de trozos es
+/// EXACTAMENTE la de `text.split(sep)` de Rust (incluido el separador vacío: `""`, cada carácter,
+/// `""`). El cursor empieza en 0; `len + 2` es el estado terminal.
+pub fn split_step(text: &str, sep: &str, pos: usize) -> Option<(usize, usize, usize)> {
+    let len = text.len();
+    if pos == len + 2 {
+        return None;
+    }
+    if sep.is_empty() {
+        // `"ab".split("")` → "", "a", "b", "": pos 0 = el "" inicial; pos p ≥ 1 = carácter en el byte p-1.
+        if pos == 0 {
+            return Some((0, 0, 1));
+        }
+        let b = pos - 1;
+        if b >= len {
+            return Some((len, len, len + 2));
+        }
+        let k = text[b..].chars().next().map_or(1, char::len_utf8);
+        return Some((b, b + k, b + k + 1));
+    }
+    if pos > len {
+        return None;
+    }
+    // Aguja de un byte → barrido por bytes (M432: `str::find(&str)` construye el buscador two-way en
+    // cada paso, y aquí hay un paso por trozo).
+    let found = if sep.len() == 1 {
+        byte_find(&text[pos..], sep.as_bytes()[0])
+    } else {
+        text[pos..].find(sep)
+    };
+    match found {
+        Some(i) => Some((pos, pos + i, pos + i + sep.len())),
+        None => Some((pos, len, len + 2)),
+    }
+}
+
+/// M433: lee un archivo de texto entero a un `Arc<str>` (el string de la VM) con UNA sola asignación del
+/// tamaño del archivo.
+/// `read_to_string` + `Arc::from(String)` dejaban DOS copias vivas a la vez (un JSONL de 366 MB
+/// ocupaba 718 MB de pico). El buffer nace puesto a cero (`new_zeroed_slice`) y se
+/// llena con `read` hasta el tamaño anunciado; si el archivo cambió de tamaño entre medias (creció o
+/// encogió) se recurre a `read_to_string` (correcto, solo más memoria). El error de UTF-8 es el mismo
+/// texto que da `read_to_string`.
+pub fn read_file_arc_str(path: &str) -> std::io::Result<std::sync::Arc<str>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let Ok(len) = usize::try_from(len) else { return Err(std::io::Error::other("file too large")) };
+    // SAFETY: `u8` puesto a cero es un valor válido; `assume_init` no lee nada.
+    let mut buf: std::sync::Arc<[u8]> = unsafe { std::sync::Arc::new_zeroed_slice(len).assume_init() };
+    {
+        let dst = std::sync::Arc::get_mut(&mut buf).expect("fresh Arc has a single owner");
+        let mut filled = 0usize;
+        while filled < len {
+            let n = f.read(&mut dst[filled..])?;
+            if n == 0 {
+                break; // encogió entre metadata y lectura
+            }
+            filled += n;
+        }
+        // ¿Cambió de tamaño (o `metadata` no sabe: tuberías, /dev/stdin, FIFOs)? Se sigue leyendo
+        // desde el MISMO handle —lo ya leído y el octeto de sondeo incluidos—; reabrir perdería lo
+        // consumido en un stream no re-legible.
+        let mut probe = [0u8; 1];
+        let more = f.read(&mut probe)?;
+        if filled < len || more != 0 {
+            let mut v = Vec::with_capacity(filled + more + 4096);
+            v.extend_from_slice(&dst[..filled]);
+            v.extend_from_slice(&probe[..more]);
+            f.read_to_end(&mut v)?;
+            let s = String::from_utf8(v).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8"))?;
+            return Ok(std::sync::Arc::from(s));
+        }
+    }
+    if std::str::from_utf8(&buf).is_err() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8"));
+    }
+    // SAFETY: `buf` acaba de validarse como UTF-8 y `str` tiene la misma representación que `[u8]`;
+    // el puntero conserva longitud y asignación (mismo patrón que `__ray_join` del nativo).
+    Ok(unsafe { std::sync::Arc::from_raw(std::sync::Arc::into_raw(buf) as *const str) })
+}
+
 /// Escribe octetos crudos a un archivo (lo crea/sobrescribe). Builtin `write_file_bytes`.
 pub fn write_file_bytes(path: &str, data: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, data)
@@ -4841,9 +4978,16 @@ static BUILTINS: &[Builtin] = &[
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
-        arity(a, 2, "__index_of", " (string, subcadena)")?;
+        arity(a, 2, "__index_of", " (string, substring)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__index_of expects a string as first argument, not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__index_of expects a string as substring, not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    // __last_index_of(s, sub) -> [int] (M431): [] o [i], la ÚLTIMA ocurrencia. El prelude → Option<int>.
+    Builtin { name: "__last_index_of", opcode: OpCode::LastIndexOf, check: |a| {
+        arity(a, 2, "__last_index_of", " (string, substring)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__last_index_of expects a string as first argument, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__last_index_of expects a string as substring, not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
     // join(arr, sep) -> string (M11.7a): une un [string] con el separador `sep`.
@@ -5257,6 +5401,14 @@ static BUILTINS: &[Builtin] = &[
             if *t != Type::String { return Err((Some(i), format!("__index_of_or expects a string, not {t}"))); }
         }
         if a[2] != Type::Int { return Err((Some(2), format!("__index_of_or expects an int default, not {}", a[2]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__last_index_of_or", opcode: OpCode::LastIndexOfOr, check: |a| {
+        arity(a, 3, "__last_index_of_or", "")?;
+        for (i, t) in a.iter().take(2).enumerate() {
+            if *t != Type::String { return Err((Some(i), format!("__last_index_of_or expects a string, not {t}"))); }
+        }
+        if a[2] != Type::Int { return Err((Some(2), format!("__last_index_of_or expects an int default, not {}", a[2]))); }
         Ok(Type::Int)
     } },
     Builtin { name: "__parse_int_or", opcode: OpCode::ParseIntOr, check: |a| {
@@ -7600,6 +7752,28 @@ mod tests {
         assert_eq!(char_index_of("añô€x", "€x"), Some(3));
         assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
         assert_eq!(char_index_of("añô", "z"), None);
+        // M433: el iterador paso a paso reproduce `str::split` exactamente.
+        for (t, sep) in [
+            ("a,b,c", ","), ("a,b,c,", ","), (",a", ","), ("", ","), (",", ","), ("abc", ","),
+            ("uno\ndos\ntres", "\n"), ("x--y--", "--"), ("ab", ""), ("", ""), ("añ€", ""), ("añ,€,ü", ","),
+        ] {
+            let mut got: Vec<&str> = Vec::new();
+            let mut pos = 0usize;
+            while let Some((a, b, next)) = split_step(t, sep, pos) {
+                got.push(&t[a..b]);
+                pos = next;
+            }
+            let want: Vec<&str> = t.split(sep).collect();
+            assert_eq!(got, want, "split_step({t:?}, {sep:?})");
+        }
+        // M431: la última ocurrencia, mismas semánticas (carácter, vacío → len) en ASCII y no-ASCII.
+        assert_eq!(char_last_index_of("{\"id\":7,\"score\":3}", ":"), Some(15));
+        assert_eq!(char_last_index_of("a:b:c", ":"), Some(3));
+        assert_eq!(char_last_index_of("abc", ""), Some(3));
+        assert_eq!(char_last_index_of("abc", "zz"), None);
+        assert_eq!(char_last_index_of("añô€x€y", "€"), Some(5));
+        assert_eq!(char_last_index_of("añô", ""), Some(3));
+        assert_eq!(char_last_index_of("añô", "z"), None);
     }
 
     // M395 (raykv #162, rayplay #161): la concatenación en una reserva y el base64 sobre un tramo con

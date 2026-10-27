@@ -657,13 +657,11 @@ impl Transpiler {
     pub(super) fn emit_fs(&mut self, out: &mut String, ffn: &str, eff: &[&Expr]) -> Result<(), String> {
         match ffn {
             // read_file(path) -> Result<string, string>: lee el archivo entero a un string.
+            // M433: un solo buffer del tamaño del archivo (helper del preámbulo).
             "read_file" => {
-                out.push_str("(match std::fs::read_to_string(&*");
+                out.push_str("__ray_read_file(&*");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(
-                    ") { Ok(__rt_c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__rt_c)), \
-                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
-                );
+                out.push(')');
             }
             // write_file(path, content) -> Result<int, string>: escribe (trunca); Ok(0) como la VM.
             "write_file" => {
@@ -1120,6 +1118,18 @@ impl Transpiler {
     /// N-D (fusiones): si `e` es una llamada al BUILTIN `want` (no a una función de usuario que lo
     /// sombree), devuelve sus argumentos efectivos (receptor UFCS primero). Reconoce las dos formas
     /// (llamada libre y método) con la MISMA resolución que `emit_call`.
+    /// M431: emite una expresión string como `&str`. Un LITERAL va tal cual (`"…"`, un `&'static str`)
+    /// — antes era `&*Rc::<str>::from("…")`, una asignación por evaluación (cinco agujas literales en
+    /// el bucle de jsondeserialize = 5 ms); lo demás, `&*<expr>`.
+    pub(super) fn emit_str_ref(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
+        if let ExprKind::Str(s) = &e.kind {
+            write!(out, "{:?}", s).unwrap();
+            return Ok(());
+        }
+        out.push_str("&*");
+        self.emit_expr(out, e)
+    }
+
     pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
         let ExprKind::Call { callee, args } = &e.kind else { return None };
         let (name, recv) = resolve_callee(callee).ok()?;
@@ -1562,16 +1572,36 @@ impl Transpiler {
                 if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
                     let needle = eff[1];
                     return self.emit_substring_fused(out, &sub, |t, out, recv| {
-                        write!(out, "__ray_index_of({}, &*", recv).unwrap();
-                        t.emit_expr(out, needle)?;
+                        write!(out, "__ray_index_of({}, ", recv).unwrap();
+                        t.emit_str_ref(out, needle)?;
                         out.push(')');
                         Ok(())
                     });
                 }
                 out.push_str("__ray_index_of(&*");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(", &*");
+                out.push_str(", ");
+                self.emit_str_ref(out, eff[1])?;
+                out.push(')');
+            }
+            // M431: `b.last_index_of(needle)` sobre bytes (método de trait del prelude): la última
+            // ventana igual a la aguja; aguja vacía → `Some(len)`, aguja más larga → `None`.
+            "last_index_of" if matches!(self.type_of(eff[0]), Ok(Type::Bytes)) => {
+                out.push_str("{ let __rt_b: &[u8] = &*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_n: &[u8] = &*");
                 self.emit_expr(out, eff[1])?;
+                out.push_str(
+                    "; if __rt_n.is_empty() { Some(__rt_b.len() as i64) } else if __rt_n.len() > __rt_b.len() { None } else { \
+                     __rt_b.windows(__rt_n.len()).rposition(|__w| __w == __rt_n).map(|__i| __i as i64) } }",
+                );
+            }
+            // M431: la ÚLTIMA ocurrencia (helper del preámbulo, rfind en ASCII); misma forma que index_of.
+            "last_index_of" => {
+                out.push_str("__ray_last_index_of(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_str_ref(out, eff[1])?;
                 out.push(')');
             }
             "to_upper" | "to_lower" => {
@@ -1582,8 +1612,8 @@ impl Transpiler {
             }
             "starts_with" | "ends_with" => {
                 self.emit_expr(out, eff[0])?;
-                write!(out, ".{}(&*", method).unwrap();
-                self.emit_expr(out, eff[1])?;
+                write!(out, ".{}(", method).unwrap();
+                self.emit_str_ref(out, eff[1])?;
                 out.push(')');
             }
             // repeat(s, n): n<=0 → "" (como la VM).
@@ -1637,6 +1667,20 @@ impl Transpiler {
                     // M223: la longitud sale de la caché por cadena (`__ray_char_len`): el escaneo se
                     // paga UNA vez por cadena, no en cada `while i < s.len()`.
                     Type::String => {
+                        // M432: `substring(s, i, j).len()` → solo el clamp por carácter, sin cortar ni asignar
+                        // (el `name_val` de jsondeserialize solo se medía: 8,5 ms de 90).
+                        if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
+                            if sub.len() == 3 && matches!(self.type_of(sub[0])?, Type::String) {
+                                out.push_str("__ray_substring_len(&");
+                                self.emit_expr(out, sub[0])?;
+                                out.push_str(", ");
+                                self.emit_expr(out, sub[1])?;
+                                out.push_str(", ");
+                                self.emit_expr(out, sub[2])?;
+                                out.push(')');
+                                return Ok(());
+                            }
+                        }
                         out.push_str("__ray_char_len(&(");
                         self.emit_expr(out, eff[0])?;
                         out.push_str("))");
@@ -1682,8 +1726,8 @@ impl Transpiler {
                 if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
                     let (needle, default) = (eff[1], eff[2]);
                     return self.emit_substring_fused(out, &sub, |t, out, recv| {
-                        write!(out, "__ray_index_of({}, &*", recv).unwrap();
-                        t.emit_expr(out, needle)?;
+                        write!(out, "__ray_index_of({}, ", recv).unwrap();
+                        t.emit_str_ref(out, needle)?;
                         out.push_str(").unwrap_or(");
                         t.emit_expr(out, default)?;
                         out.push(')');
@@ -1692,8 +1736,18 @@ impl Transpiler {
                 }
                 out.push_str("__ray_index_of(&");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(", &");
-                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_str_ref(out, eff[1])?;
+                out.push_str(").unwrap_or(");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            // M431: forma fusionada de `last_index_of(…).unwrap_or(d)`.
+            "last_index_of_or" => {
+                out.push_str("__ray_last_index_of(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_str_ref(out, eff[1])?;
                 out.push_str(").unwrap_or(");
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
@@ -3537,7 +3591,7 @@ impl Transpiler {
                     // tabla son los primitivos `__trim`/…, que no reenvasan pero cambian de nombre).
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
                     "starts_with" | "ends_with" | "contains" => Type::Bool,
-                    "index_of" => opt_of(Type::Int), // índice de subcadena → Option<int>
+                    "index_of" | "last_index_of" => opt_of(Type::Int), // índice de subcadena → Option<int>
 
                     "split" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),

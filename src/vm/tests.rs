@@ -3683,6 +3683,71 @@ fn has_op(src: &str, pred: fn(&OpCode) -> bool) -> bool {
     compiled.functions.iter().any(|f| f.chunk.code.iter().any(|op| pred(op)))
 }
 
+/// M433: `for x in s.split(sep)` y `let f = s.split(sep); for x in f` iteran con `SplitNext` sin
+/// materializar el arreglo (ni `Split`); un segundo uso de `f` conserva el `Split` clásico. Mismo
+/// resultado que el intérprete con `break`/`continue`/etiquetas, separador vacío y texto vacío.
+#[test]
+fn split_loops_iterate_without_materializing_the_array() {
+    // Solo el chunk de `main`: el wrapper `split` del prelude siempre lleva su `Split`.
+    fn main_has(src: &str, pred: fn(&OpCode) -> bool) -> bool {
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let main = compiled.functions.iter().find(|f| f.name == "main").expect("main compilada");
+        main.chunk.code.iter().any(|op| pred(op))
+    }
+    let inline = "fn main() -> int { var n = 0; for p in \"a,b,c\".split(\",\") { n = n + p.len(); } n }";
+    assert!(main_has(inline, |op| matches!(op, OpCode::SplitNext { .. })), "for inline → SplitNext");
+    assert!(!main_has(inline, |op| matches!(op, OpCode::Split)), "for inline: sin Split");
+    let let_form = "fn main() -> int { let parts = \"a,b,c\".split(\",\"); var n = 0; for p in parts { n = n + p.len(); } n }";
+    assert!(main_has(let_form, |op| matches!(op, OpCode::SplitNext { .. })), "let + for único → SplitNext");
+    assert!(!main_has(let_form, |op| matches!(op, OpCode::Split)), "let + for único: sin Split");
+    let two_uses = "fn main() -> int { let parts = \"a,b,c\".split(\",\"); var n = parts.len(); for p in parts { n = n + p.len(); } n }";
+    assert!(main_has(two_uses, |op| matches!(op, OpCode::Split)), "con otro uso se materializa");
+    assert!(!main_has(two_uses, |op| matches!(op, OpCode::SplitNext { .. })), "con otro uso: sin SplitNext");
+    oracle_program(
+        "fn main() -> int {\n\
+             let s = \"uno,dos,,tres,\";\n\
+             let parts = s.split(\",\");\n\
+             var acc = \"\";\n\
+             for p in parts { acc = acc + \"[\" + p + \"]\"; }\n\
+             print(acc);\n\
+             var n = 0;\n\
+             outer: for p in \"a b c d e\".split(\" \") {\n\
+                 if (p == \"b\") { continue; }\n\
+                 for q in \"x,y\".split(\",\") { if (q == \"y\") { continue outer; } n = n + 1; }\n\
+                 if (p == \"d\") { break; }\n\
+             }\n\
+             var e = \"\";\n\
+             for c in \"añ€\".split(\"\") { e = e + \"<\" + c + \">\"; }\n\
+             print(e);\n\
+             var z = 0;\n\
+             for c in \"\".split(\",\") { z = z + 1; }\n\
+             var text = \"1 2 3\";\n\
+             let g = text.split(\" \");\n\
+             text = \"9 9\";\n\
+             var sum = 0;\n\
+             for v in g { sum = sum + parse_int(v).unwrap_or(0); }\n\
+             n * 1000 + z * 100 + sum\n\
+         }",
+    );
+    // Revisión de #600: un ámbito hermano anterior deja marcado como capturado el slot que luego
+    // reciclan los temporales del split (`InitLocal` los boxea) → `SplitNext` debe leerlos por la celda.
+    oracle_program(
+        "fn main() -> int {\n\
+             var total = 0;\n\
+             {\n\
+                 var x = 1;\n\
+                 let g = fn() -> int { x = x + 1; x };\n\
+                 total = total + g();\n\
+             }\n\
+             for p in \"a,b,c\".split(\",\") { total = total + p.len(); }\n\
+             total\n\
+         }",
+    );
+}
+
 /// El for-range con tope en VARIABLE fusiona la guarda (LocalLocalCmpJump) y el cierre
 /// (IncJump); el resultado coincide con el intérprete.
 #[test]

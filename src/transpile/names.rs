@@ -93,7 +93,7 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
         "len" | "push" | "reverse" | "contains" | "trim" | "split" | "replace" | "chars" | "starts_with"
             | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
             | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
-            | "get" | "get_or" | "remove" | "add_to" | "index_of" | "position" | "pop"
+            | "get" | "get_or" | "remove" | "add_to" | "index_of" | "last_index_of" | "position" | "pop"
     );
     builtin_key && prelude_method
 }
@@ -187,7 +187,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         name,
         // --- funciones del prelude (src/prelude.ray) ---
         "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
-            | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "map" | "max" | "min"
+            | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "last_index_of" | "input" | "map" | "max" | "min"
             | "parse_float" | "parse_int" | "pop" | "position" | "read_int" | "recv"
             | "remove" | "select_timeout" | "sort" | "try_join"
         // --- builtins públicos manejados en emit_call que NO son filas de la tabla (bajan a

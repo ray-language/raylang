@@ -195,6 +195,11 @@ struct Transpiler {
     /// nadie lee). Nombre de la variable → prefijo de los temporales (`__rt_spN`); el análisis
     /// (`split_const_index_uses`) garantiza que todo uso es `f[entero literal]` de lectura.
     fused_splits: HashMap<String, String>,
+    /// N-D4c (M433): `let f = s.split(sep)` cuyo ÚNICO uso posterior es `for x in f { … }` → el `let`
+    /// solo evalúa `s` y `sep` a temporales (orden de evaluación intacto) y el `for` itera el split
+    /// directo como N-D4a, sin materializar el `Vec<Rc<str>>` (8 M de líneas = 640 MB menos).
+    /// Nombre de la variable → (temporal del string, temporal del separador).
+    split_for_fused: HashMap<String, (String, String)>,
 }
 
 /// Clave sintética con la que [`Transpiler::declare_cell`] marca en el ámbito que un nombre se
@@ -426,6 +431,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         cells: std::collections::HashSet::new(),
         hoisted_borrows: HashMap::new(),
         fused_splits: HashMap::new(),
+        split_for_fused: HashMap::new(),
         fibers,
     };
 

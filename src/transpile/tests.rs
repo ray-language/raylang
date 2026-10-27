@@ -16,8 +16,8 @@
 /// `cli_cli::build_native_covers_the_array_math_and_fs_surface` (nivel binario, nativo ≡ VM).
 const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Primitivos de string/bytes/map/arreglo (interceptados en emit_call por su nombre pelado).
-    "__chars", "__concat", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of",
-    "__sort_prim", "__index_of_or", "__parse_int_or",
+    "__chars", "__concat", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of", "__last_index_of",
+    "__sort_prim", "__index_of_or", "__last_index_of_or", "__parse_int_or",
     "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
     "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
     "__bytes_index_of", "__bytes_starts_with",
@@ -332,11 +332,12 @@ fn fuses_split_consumed_by_constant_indexes() {
 /// desactivan la fusión y el split se materializa como siempre.
 #[test]
 fn does_not_fuse_split_with_escaping_uses() {
-    // se itera → materializado
+    // se itera Y se indexa → materializado (solo iterarlo es la fusión N-D4c de M433, probada aparte)
     let iterated = transpile_src(
         "fn main() {\n\
              let f = \"a b\".split(\" \");\n\
              for w in f { print(w); }\n\
+             print(f[0]);\n\
          }",
     );
     assert!(iterated.contains("__ray_split(&"), "{}", iterated);
@@ -449,11 +450,11 @@ fn transpiles_string_concat_and_clone() {
         "fn greet(name: string) -> string { \"hi \" + name }\n\
          fn main() -> int { let g = greet(\"bob\"); print(g); g.len() }",
     );
-    // string → Rc<str>; concat vía write! sobre String preasignado (N4); el `g` heap se clona al leer.
+    // string → Rc<str>; concat vía write! sobre el buffer por hilo reservado (N4, M432); el `g` heap se clona al leer.
     assert!(rust.contains("fn greet(mut name: Rc<str>) -> Rc<str>"), "{}", rust);
-    assert!(rust.contains("String::with_capacity("), "{}", rust);
+    assert!(rust.contains("__rt_s.reserve("), "{}", rust);
     assert!(rust.contains("write!(__rt_s, "), "{}", rust);
-    assert!(rust.contains("Rc::<str>::from(__rt_s)"), "{}", rust);
+    assert!(rust.contains("Rc::<str>::from(&**__rt_s)"), "{}", rust);
     assert!(rust.contains("g.clone()"), "{}", rust);
 }
 
@@ -1134,6 +1135,68 @@ fn transpiles_index_of() {
     );
     assert!(rust.contains("__ray_index_of(&*"), "index_of → helper: {}", rust);
     assert!(rust.contains("fn __ray_index_of(s: &str, sub: &str) -> Option<i64>"), "helper por carácter: {}", rust);
+}
+
+/// M431: `last_index_of` va al helper `__ray_last_index_of` (rfind en ASCII) y una aguja LITERAL se
+/// pasa como `&str` sin `Rc::<str>::from` — también en `index_of`, `index_of_or` y `starts_with`.
+#[test]
+fn transpiles_last_index_of_and_literal_needles_without_rc() {
+    let rust = transpile_src(
+        "fn main() -> int { let s = \"a:b:c\"; let n = last_index_of(s, \":\").unwrap_or(0); \
+         let m = index_of(s, \":\").unwrap_or(0); let k = index_of(s.substring(1, 5), \":\").unwrap_or(0); \
+         let p = match (last_index_of(s, \"b\")) { Option.Some(i) => i, Option.None => 0 }; \
+         if (s.starts_with(\"a\")) { n + m + k + p } else { 0 } }",
+    );
+    // Forma fusionada por el checker (`__last_index_of_or`) y forma suelta (`last_index_of`), ambas al helper.
+    assert!(rust.contains("__ray_last_index_of(&s.clone(), \":\").unwrap_or(0i64)"), "fusión last_index_of_or: {rust}");
+    assert!(rust.contains("__ray_last_index_of(&*s.clone(), \"b\")"), "last_index_of suelto → helper con aguja literal &str: {rust}");
+    assert!(rust.contains("fn __ray_last_index_of(s: &str, sub: &str) -> Option<i64>"), "helper por carácter: {rust}");
+    assert!(rust.contains("__ray_index_of(&s.clone(), \":\")"), "index_of con aguja literal &str: {rust}");
+    assert!(rust.contains("__ray_index_of(&__rt_fs[__rt_lo..__rt_hi], \":\")"), "index_of fusionado con substring, aguja literal: {rust}");
+    assert!(rust.contains(".starts_with(\"a\")"), "starts_with con aguja literal &str: {rust}");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    assert!(!rust[main_i..].contains("Rc::<str>::from(\":\")"), "ninguna aguja literal asigna un Rc: {rust}");
+    // El método de trait `bytes.last_index_of` NO va al helper de &str (regresión cazada por el CI de #600).
+    let rust = transpile_src("fn main() -> int { let b = b\"ab\\r\\nab\\r\\n\"; b.last_index_of(b\"\\r\\n\").unwrap_or(0 - 1) }");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    assert!(rust[main_i..].contains(".rposition(|__w| __w == __rt_n)"), "last_index_of sobre bytes busca la última ventana: {rust}");
+    assert!(!rust[main_i..].contains("__ray_last_index_of("), "bytes no pasa por el helper de &str: {rust}");
+}
+
+/// M432: `substring(s, a, b).len()` no corta ni asigna (solo el clamp), y la interpolación formatea en
+/// el buffer por hilo `__RAY_FMT` y asigna solo el `Rc<str>` final.
+#[test]
+fn fuses_substring_len_and_interpolates_through_the_thread_buffer() {
+    let rust = transpile_src(
+        "fn main() -> int { let s = \"hello world\"; let n = s.substring(2, 7).len(); \
+         let t = `n=${n} s=${s}`; n + t.len() }",
+    );
+    assert!(rust.contains("__ray_substring_len(&s.clone(), 2i64, 7i64)"), "substring().len() fusionado: {rust}");
+    assert!(!rust.contains("__ray_char_len(&(__ray_substring("), "sin substring materializado para medirlo: {rust}");
+    assert!(rust.contains("__RAY_FMT.with(|__rt_b| { let mut __rt_s = __rt_b.borrow_mut(); __rt_s.clear(); __rt_s.reserve("), "template por el buffer: {rust}");
+    assert!(rust.contains("let __rt_r = Rc::<str>::from(&**__rt_s); if __rt_s.capacity() > (1 << 20) { __rt_s.clear(); __rt_s.shrink_to(1 << 16); } __rt_r })"), "un solo Rc al final, buffer con tope (vaciado antes de encoger): {rust}");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    assert!(!rust[main_i..].contains("String::with_capacity("), "ningún String nuevo por template: {rust}");
+}
+
+/// N-D4c (M433): `let f = s.split(sep)` consumido SOLO por `for x in f` no materializa el Vec (el `let`
+/// deja temporales y el `for` itera el split directo); un segundo uso (`f.len()`) lo desactiva.
+#[test]
+fn fuses_let_split_consumed_only_by_a_for() {
+    let rust = transpile_src(
+        "fn main() -> int { let s = \"a,b,c\"; let parts = s.split(\",\"); var n = 0; \
+         for p in parts { n = n + p.len(); } n }",
+    );
+    assert!(rust.contains("let __rt_spsrc0 = s.clone(); let __rt_spsep0 = "), "el let deja temporales: {rust}");
+    assert!(rust.contains("for __rt_spw in __rt_spsrc0.split(&*__rt_spsep0) { let p = Rc::<str>::from(__rt_spw);"), "el for itera el split directo: {rust}");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    assert!(!rust[main_i..].contains("__ray_split("), "sin Vec materializado: {rust}");
+    let rust2 = transpile_src(
+        "fn main() -> int { let s = \"a,b,c\"; let parts = s.split(\",\"); var n = parts.len(); \
+         for p in parts { n = n + p.len(); } n }",
+    );
+    let main2 = rust2.find("fn ray_main(").unwrap();
+    assert!(rust2[main2..].contains("__ray_split("), "con otro uso, el Vec se materializa: {rust2}");
 }
 
 #[test]

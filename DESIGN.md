@@ -19139,3 +19139,147 @@ emitido (`depth_limit_lives_in_a_static_filled_first_thing_at_startup`).
 `treealloc` nativo (+20 % en la misma corrida) no se mueve con este cambio: su causa es otra y
 queda anotada en PERFORMANCE §23.
 
+## 406. M431 — `last_index_of` como builtin y agujas literales sin `Rc` (oct 2026)
+
+Origen: la pregunta «¿por qué `jsondeserialize` está tan lejos de rustc?» sobre la corrida de 1.27.84
+(nativo 77,6 ms, Rust 46,8). Medido por piezas sobre el Rust emitido y variantes en Rust puro
+(PERFORMANCE §24): un tercio era el **algoritmo del propio `.ray`** (dos búsquedas de subcadena
+de 9–10 bytes donde las otras nueve variantes buscan caracteres sueltos por `memchr`), un tercio el
+modelo de valores (`String` → `Rc<str>` por línea y el `name_val` materializado solo para medirlo) y
+un tercio la sobrecarga de los helpers (caché de cadenas, `is_ascii` repetido, refcount).
+
+Al hacer justa la variante —buscar `:`/`,`/`"`/`}` como Go y Rust— el nativo pasó de 73 a **135 ms** y
+la VM de 269 a **825**. Dos causas, ninguna del algoritmo: (1) **`last_index_of` era raylang del
+prelude** (M304) sobre `s.chars()` y `sub.chars()`: dos `Vec<char>` por llamada en los tres motores,
+52 ms nativo y ~500 ms VM por dos llamadas por línea; (2) en el nativo, **cada aguja literal dentro
+del bucle** se emitía como `Rc::<str>::from("…")`, una asignación por evaluación (5 ms con cinco).
+
+Decisión. `__last_index_of` es un primitivo con `OpCode::LastIndexOf` (`[]`/`[i]`, el prelude lo
+envuelve en `Option` exactamente como `index_of`), con `char_last_index_of` compartido por VM e
+intérprete (`rfind` en ASCII, recorrido por carácter si no) y `__ray_last_index_of` en el nativo, que
+intercepta `last_index_of` por nombre como `index_of`. La fusión D3 `….unwrap_or(d)` se extiende a
+`__last_index_of_or` (`PreludeOrigin.last_index_of_fn`, `OpCode::LastIndexOfOr`): sin ella la VM se
+quedaba en 475 ms por el wrapper, el arreglo etiquetado y el `Option` por llamada. En el nativo,
+`emit_str_ref` emite un literal como `&'static str` en `index_of`/`index_of_or`/`last_index_of`/
+`starts_with`/`ends_with`. Semántica sin cambio (`Some(len)` con aguja vacía, índices por carácter;
+golden en los tres motores con ASCII y no-ASCII); `selfhost/checker.ray` no conoce `last_index_of`
+como builtin (usa su propio bucle), así que no hay espejo que tocar.
+
+Resultado (jsondeserialize justo): nativo 132 → **81 ms**, VM 843 → **314 ms**; frente al `.ray`
+original (subcadenas) el nativo queda igual (77 → 81) y la VM algo peor (278 → 314: seis despachos de
+builtin en vez de dos). La variante justa se queda en el banco porque mide lo mismo que las demás.
+Lo que sigue separándonos de Rust (81 frente a 49) es el modelo `Rc<str>` con índices por carácter:
+`substring(a, b).len()` sin materializar, la interpolación directa a `Rc<str>` y pasar el flag ASCII
+de la caché a los helpers quedan apuntados en PERFORMANCE §24.
+
+## 407. M432 — las piezas restantes de `jsondeserialize`: aguja de un byte, `substring().len()`, buffer de interpolación, puerta ASCII (oct 2026)
+
+Continuación de §406 a petición del usuario: «sigue investigando, probando opciones y medir cada
+opción». Trece variantes del Rust emitido, cada una aislada (PERFORMANCE §24, tabla «opciones»).
+Lo que no movió nada y queda descartado con dato: la aritmética checked (`--fast` no cambiaría este
+programa), el `trim()` antes de `parse`, los `clone()` del `Rc` al pasar la línea o las agujas, y
+quitar el `is_ascii()` del pajar en `index_of`. Lo que sí:
+
+1. **Aguja de un byte** (−14,4 ms de 90). El perfil con `sample` puso como frame más caliente
+   `StrSearcher::new`: `str::find(&str)` construye el buscador two-way en CADA llamada, también para
+   `":"`. Rust de referencia usa `find(char)` (memchr). Un barrido `iter().position()` por bytes gana
+   incluso a `find(char)` en líneas de 40 bytes (57,6 frente a 67,6 ms). Va en `char_index_of`/
+   `char_last_index_of` (VM e intérprete) y en los helpers del nativo; el índice de carácter es el de
+   byte si el PREFIJO hasta el hallazgo es ASCII (solo se mira ese tramo).
+2. **`substring(s, a, b).len()`** (−8,5). El `name_val` del banco solo se medía; el emisor detecta
+   `len(substring(…))` y emite `__ray_substring_len`: el clamp por carácter, sin cortar ni asignar.
+3. **Interpolación por buffer** (−5,8). Un `String` por hilo (`__RAY_FMT`) reutilizado y una sola
+   asignación, la del `Rc<str>` final. Los operandos ya son locales cuando se toma el préstamo (un
+   template anidado nunca lo encuentra prestado) y nada dentro cede la fibra.
+4. **Puerta ASCII sin `RefCell`** (−3,8). `len`/`substring`/`char_range` consultaban la caché de dos
+   entradas (M223/rayreq #261: cierre, swap de slots, `borrow_mut`). Ahora `__ray_str_info` guarda
+   (puntero, ASCII, nº de chars) en una `Cell` thread-local; la clave por puntero vale porque la
+   cadena está pineada por el slot 0 de esa misma caché, que invalida la clave en cada fallo suyo —
+   sin eso, una línea nueva en la misma dirección heredaría el flag (medido y descartado)—, y así la
+   puerta no retiene nada que la caché no retuviera ya (la revisión cazó la primera versión, que
+   pineaba por su cuenta y habría dejado vivo un texto de 366 MB ya soltado). El fallo de la puerta
+   calcula (ASCII, chars) una vez vía la entrada, que el tramo no-ASCII reutiliza para el seek.
+
+**Resultado con el nativo real** (fibras, mimalloc): `jsondeserialize` justo 135,9 → **61,8 ms**
+(Rust 49,7, Go 45,0, node 87,3); la variante original de dos subcadenas 77,2 → 71,5. Semántica
+comprobada con un golden ASCII/no-ASCII/templates anidados idéntico en VM y nativo; el suelo del
+modelo (la referencia `.rs` con la línea en `Rc<str>`) está en 47,9: `Rc<str>` no es lo que cuesta.
+
+**Escalado con archivo** (JSONL real, `fs.read_file` + `split("\n")` + el mismo parseo; PERFORMANCE
+§24): lineal en los tres motores de 17 a 366 MB; el nativo queda a 1,65× de Rust en total y a 1,4×
+en el parseo; la otra mitad del hueco es `split`, que materializa un `Rc<str>` por línea (3× el
+`collect` de slices de Rust) y dobla la memoria pico (975 frente a 481 MB). Eso es el modelo de
+valores —las cadenas poseen sus bytes— y queda como la siguiente frontera, no como bug.
+
+Revisión pre-release (regla del 25 oct) sobre la PR #600: ocho observaciones, las ocho aplicadas.
+La grave: `read_file` sondeaba un octeto y, si el tamaño no cuadraba, REABRÍA la ruta — en una
+tubería (`/dev/stdin`, FIFO) `metadata` dice 0 y el primer octeto se perdía; ahora sigue leyendo del
+mismo handle con lo ya leído y el sondeo (golden con `echo hello |` y 3 MB por tubería, igual que
+1.27.84). Las demás: el pin propio de la puerta ASCII (arriba), el buffer `__RAY_FMT` con tope de
+capacidad (un template gigante no deja megas ociosos por hilo), el análisis «`let f = split` consumido
+solo por un `for`» en un módulo compartido (`src/ast_uses.rs`) para que VM y nativo decidan igual,
+un helper único para los operandos del split en el compilador, el doble escaneo no-ASCII, y un
+`subcadena` en un diagnóstico (ahora `substring`, también en `__index_of`).
+
+## 408. M433 — memoria con archivos grandes: lectura en un buffer y `split` sin arreglo (oct 2026)
+
+Origen: «investiga a fondo el uso de memoria para optimizarlo para este caso» (el JSONL de 8 M de
+líneas de §407). Medido por fases con `/usr/bin/time -l` (RSS pico, 366 MB de archivo):
+
+| fase | Rust | nativo (M432) | VM (M432) |
+|---|---|---|---|
+| solo `read_file` | 357 MB | 718 MB | 729 MB |
+| + `split("\n")` materializado | 481 MB | 975 MB | 1045 MB |
+| programa completo | 481 MB | 975 MB | 1046 MB |
+
+Dos causas, las dos del runtime y no del programa. (1) **La lectura ocupaba el doble del archivo**:
+`read_to_string` produce un `String` y `Rc::from(String)`/`Arc::from` lo COPIA al string del
+lenguaje; durante la copia viven las dos. (2) **El arreglo de líneas**: 8 M de `Rc<str>` de 64 B (16
+de cabecera + 46 de texto, redondeados por mimalloc) más 128 MB de punteros gordos — 640 MB — donde
+Rust colecciona `&str` que apuntan al texto (128 MB).
+
+Decisión. (1) `read_file` lee en **un solo buffer** del tamaño del archivo: `Rc<[u8]>`/`Arc<[u8]>`
+puesto a cero (`new_zeroed_slice`), llenado con `read` y convertido in place a `str` tras validar
+UTF-8 (`builtins::read_file_arc_str` para la VM, `__ray_read_file` en el nativo; el intérprete
+sigue con `read_to_string`, es el oráculo). Si el archivo cambia de tamaño entre `metadata` y la
+lectura, se recurre al camino clásico. El mensaje de error de UTF-8 es el mismo. Poner a cero 366 MB
+cuesta menos que copiarlos. (2) **El `split` consumido por un `for` no materializa el arreglo**, en
+los dos motores: el nativo ya lo hacía para `for x in s.split(sep)` inline (N-D4a) y ahora también
+para `let f = s.split(sep); for x in f { … }` cuando ese `for` es el ÚNICO uso de `f` (N-D4c:
+análisis de menciones conservador reutilizando el de N-D4b; el `let` deja `s` y `sep` en
+temporales para conservar el orden de evaluación). La VM estrena `OpCode::SplitNext(target)` — un
+paso del iterador: saca `(string, sep, pos)`, empuja el trozo y el `pos` siguiente, o salta al final
+— con operandos en REGISTROS (los tres locales se leen en el sitio: la forma por pila clonaba dos
+`Arc` por trozo y costaba +9 % en `wordcount`; así, −19 %) y con `builtins::split_step`, que
+reproduce la secuencia de `str::split` byte a byte (separador
+vacío incluido: `""`, cada carácter, `""`; test contra `str::split` en doce casos) y la misma
+fusión en el compilador para las dos formas. `SplitNext` lleva destino de salto: los cinco pases de
+superinstrucciones que reubican `Jump`/`JumpIfFalse` lo tratan igual (el primer intento lo omitía y
+el bucle saltaba a un índice viejo: «empty stack: malformed bytecode»).
+
+Resultado (mismo archivo): nativo **363 MB** (Rust 481, porque Rust sí materializa su `Vec<&str>`),
+VM **374 MB** (desde 1759 en 1.27.84). Por tamaños, la VM pasa de 116/272/1046 MB (400 k / 2 M / 8 M
+líneas, con la lectura ya arreglada) a 35/106/374: el texto y poco más. En tiempo no cambia nada
+medible (el `split` se reparte en el bucle). Golden en los tres motores con `break`/`continue`/
+etiquetas, separador vacío, texto vacío, doble uso (sin fusión) y mutación del texto tras el `let`.
+
+Lo que queda y por qué no se toca ahora: si el programa SÍ guarda las líneas (`lines.len()`,
+indexado, pasarlas), cada una es un `Rc<str>` propio — es el modelo de valores (las cadenas poseen
+sus bytes); una vista prestada sobre el texto es una decisión de lenguaje, no una optimización.
+
+
+**La revisión pre-release de la PR (#600)** dejó dos correcciones de fondo y tres de forma. (1) Un
+ICE real en `SplitNext`: los temporales del split (`$sptext`/`$spsep`/`$sppos`) nunca los captura una
+closure, pero `captured` se marca por SLOT y `end_scope` recicla los slots sin borrar las marcas, así
+que un ámbito hermano anterior con una closure (`{ var x = 1; let g = fn() -> int { x = x + 1; x }; … }`
+seguido de `for p in s.split(",")`) hacía que `InitLocal` boxeara esos slots y la VM cayera en el
+`unreachable!` «plain string locals». La VM lee y escribe ahora esos operandos por la celda cuando
+están boxeados, como `GetLocal`; el repro es parte del golden. (2) El barrido escalar de un byte
+(M431/M432) no escalaba en cadenas grandes: umbral de 128 bytes y por encima memchr
+(`PERFORMANCE.md` §24, tabla final). Y de forma: el buffer de interpolación se vacía antes de
+encogerse (si no, `shrink_to` no puede bajar de `len` y el pico se libera un template tarde); la
+guarda del método `last_index_of` sobre bytes no propaga el error de inferencia de tipos del
+receptor (`matches!(…, Ok(Type::Bytes))`, como N-D4b); el análisis de usos ya no clona el callee para
+recorrerlo. Queda apuntado, sin hacer, que `try_fuse_split_let` rescanea la cola del bloque por cada
+`let … = split(…)` (cuadrático en el número de esos `let`; irrelevante hoy, un pre-pase de conteo de
+usos por bloque lo resolvería para N-D4b y N-D4c a la vez).

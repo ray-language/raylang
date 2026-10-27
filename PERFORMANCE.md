@@ -14,7 +14,7 @@ arco (el detalle y las mediciones, en §3):
 
 | Frente | Dónde estábamos | Dónde estamos |
 |---|---|---|
-| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 3–5× la VM (release plana) en cargas de servicio y 16–25× en cómputo puro; gana a node en 8 de 10 programas, a Go en 6 y a `rustc -O` en 4 (26 oct 2026, 1.27.84, `benchmarks/poly/README.md`) |
+| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 3–5× la VM (release plana) en cargas de servicio y 16–25× en cómputo puro; gana a node en 8 de 10 programas, a Go en 7 y a `rustc -O` en 5 (27 oct 2026, 1.27.85, `benchmarks/poly/README.md`) |
 | **VM** | `Map` alocando en el camino caliente, SipHash | aHash + `get_or`/`add_to`, superinstrucciones por histograma (−19/−28%), PGO (−5/−9%), `ConcatN`, fusión de `Option`, fast-paths ASCII, `IntArray` (−68% RSS) |
 | **Concurrencia nativa** | hilo por tarea (~265 KB/conexión) | **fibras M:N** por defecto (corosensei + reactor), ~21 KB/conexión y 350× menos CPU en esperas ociosas |
 | **Web** | servidor propio sin cifra comparable | framework a **~188k req/s** — 93% de axum, p50/p99.9 empatadas, 1,5× Go+chi |
@@ -74,6 +74,12 @@ despacho inlineado (la closure por instrucción que LLVM no fundía)— que junt
   §23): `fibrec` nativo 19,5 → 28,5 ms (43,6 en 1.27.83, antes de M430) y `treealloc` 19,6 → 23,9,
   que con un node 26 más rápido (21,9 → 17,4) pasa de ganarle a perder 0,73×. Arranque: `empty`
   nativo 2,06 ms, #3 tras rustc 1,73 y Go 1,83 (toolchains nuevos; en sep era #1). La VM, 6,55 ms.
+- **Re-medición del 27 oct 2026 (1.27.85, `benchmarks/poly/results/2026-10-27-v1.27.85.md`)**, tras
+  M431–M433 (§24–§25): `jsondeserialize` nativo 77,6 → 62,1 ms (0,57× → 0,70× de Go) con la variante
+  `.ray` que busca como Go/Rust, `jsonserialize` 27,0 → 25,6 (gana a Go y a Rust; antes empate),
+  `logparse` 20,9 → 19,5, `wordcount` 35,4 → 34,7 (VM 173 → 141); el resto ±3 %. Memoria pico del
+  banco sin cambio. Global (media geométrica del score tiempo × memoria sobre 14 programas): Rust
+  1,11, nativo 1,64, Go 1,97; VM 7,82.
 
 **Las fibras salen gratis en cómputo** (A/B del mismo programa con y sin `--without fibers`,
 mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — ruido — y el
@@ -2634,4 +2640,152 @@ Rust (14,2) el nativo pasa de 2,9× a 1,9× más lento; node (35,2) vuelve a que
 `treealloc` (+20 %) no cambia con M430 (23,3 → 24,0 ms): su `make_tree` recurre, así que parte de
 esos 4 ms es el prólogo de M295 que la referencia no llevaba (pero la carga del límite ya no pesa);
 el resto es ruido de máquina (node varía 17,4 ↔ 21,9 ms entre las dos corridas). Sin acción.
+
+## 24. M431/M432 (oct 2026): por qué `jsondeserialize` está lejos de rustc
+
+Pregunta sobre la corrida de 1.27.84: nativo 77,6 ms, rustc -O 46,8, Go 43,6. Medido por piezas
+(mediana de 7–9, M3 Pro; variantes del Rust emitido con `--emit-rust` compiladas con `rustc` y los
+flags de `--release`, SIN mimalloc —el nativo real sale ~9 ms mejor en todas las filas—, y versiones
+en Rust puro):
+
+| Variante | ms | Delta |
+|---|---|---|
+| Rust de referencia (`find(':')`, `rfind`, una `String` por línea) | 46,5 | |
+| Rust puro con el algoritmo del `.ray` original (dos búsquedas de subcadena de 9–10 bytes) | 59,2 | +12,7 |
+| ídem con la línea copiada a `Rc<str>` tras formatearla | 66,2 | +7,0 |
+| ídem con `name_val` materializado en un tercer `Rc<str>` | 73,6 | +7,4 |
+| nativo emitido por 1.27.84 (`.ray` original) | 84,1 | +10,5 |
+
+**La variante justa destapó `last_index_of`** (M431, DESIGN §406). Con `:`/`,`/`"`/`}` como agujas
+(lo que buscan las otras nueve variantes), el nativo subió a 135 ms y la VM a 825: `last_index_of`
+era raylang del prelude sobre `[char]` (dos `Vec<char>` por llamada: 52 ms nativo, ~500 ms VM por dos
+llamadas por línea) y, en el nativo, cada aguja literal dentro del bucle era un `Rc::<str>::from`
+nuevo (5 ms). Builtin `__last_index_of` con `rfind`, fusión `__last_index_of_or`, literales como
+`&str`: justo 132 → 81 ms nativo, 843 → 314 VM. Buscar caracteres sueltos **no** sale más barato que
+buscar subcadenas en raylang (81 frente a 77): cada llamada paga lo mismo.
+
+**Las piezas restantes, una por una** (M432, DESIGN §407; base = justa + M431):
+
+| Opción (aislada sobre la base) | ms | Delta |
+|---|---|---|
+| Base: justa + M431 | 90,5 | |
+| O1 prestar `line` en vez de `clone()` del `Rc` | 89,4 | −1,1 |
+| **O2 `substring(a, b).len()` sin materializar** | 81,9 | **−8,5** |
+| **O3 interpolación en `String` reutilizado, un solo alloc** | 84,7 | **−5,8** |
+| O4 `index_of` sin `is_ascii` del pajar (solo el prefijo) | 89,5 | 0 |
+| **O5 `char_range`/`char_len` sin la caché `RefCell` en ASCII** | 86,7 | **−3,8** |
+| O6 aritmética sin checked (lo que hace `--fast`) | 92,1 | 0 |
+| O7 agujas sin `clone()` (sobre O1–O5) | 72,5 | 0 |
+| O8 `parse` sin `trim` (sobre O1–O5) | 71,8 | 0 |
+| **O9 aguja de 1 byte: barrido por bytes** en `index_of`/`last_index_of` | 77,0 | **−14,4** |
+| O9b ídem con `find(char)` de std (memchr) (sobre O1–O5) | 67,6 | peor que O9 |
+| O1+O2+O3+O5 | 71,7 | −18,8 |
+| O1+O2+O3+O5+O9 | 57,6 | −32,9 |
+| + O10 `char_range` inline + O13 flag ASCII memorizado | 56,4 | −34,1 |
+| Suelo del modelo: la referencia `.rs` con la línea en `Rc<str>` | 47,9 | |
+| Referencia `rustc -O` | 49,5 | |
+
+El frame más caliente del perfil (`sample`) era `StrSearcher::new`: `str::find(&str)` construye el
+buscador two-way en cada llamada aunque la aguja sea `":"`. En líneas de 40 bytes el barrido simple
+por bytes gana incluso a `memchr`. El suelo del modelo dice que `Rc<str>` no es lo que cuesta.
+
+**Nativo real** (`ray build --native --release`, fibras + mimalloc, mediana de 9):
+
+| jsondeserialize | nativo | VM |
+|---|---|---|
+| `.ray` original (dos subcadenas), 1.27.84 | 77,2 ms | 278 ms |
+| `.ray` original, M431+M432 | 71,5 ms | 283 ms |
+| `.ray` justo, 1.27.84 | 135,9 ms | 842 ms |
+| `.ray` justo, M431+M432 | **61,8 ms** | **268 ms** |
+| rustc -O / Go / node | 49,7 / 45,0 / 87,3 | |
+
+**Escalado con archivo grande.** Un programa que lee un JSONL real (`fs.read_file`), lo parte con
+`split("\n")` y parsea cada línea igual que el banco, frente al mismo programa en Rust
+(`read_to_string` + `split('\n').collect()`). Tiempos totales (lectura + split + parseo), mediana
+de 3:
+
+| líneas (MB) | rustc -O | nativo 1.27.84 | nativo M431/432 | VM 1.27.84 | VM M431/432 |
+|---|---|---|---|---|---|
+| 400 k (17) | 35 ms | 139 ms | **58 ms** | 854 ms | **268 ms** |
+| 2 M (88) | 181 ms | 682 ms | **296 ms** | 4,29 s | **1,34 s** |
+| 8 M (366) | 743 ms | 2,74 s | **1,22 s** | 17,4 s | **5,34 s** |
+
+Lineal en los tres motores (×5 de datos → ×5,1; ×4 → ×4,1). Por fases a 8 M: lectura 40 / 61 / 61
+ms; **split 108 / 315 / 324 ms**; parseo 594 / 2362 / **836 ms**. Tras M432 el parseo queda a 1,4× de
+Rust; el `split` a 3×, porque materializa un `Rc<str>` por línea (8 M asignaciones) donde Rust
+colecciona slices del texto. Memoria pico: Rust 481 MB, nativo 975 MB, VM 1046 MB — el texto más la
+copia de cada línea. Esa es la siguiente frontera y es el modelo de valores (las cadenas poseen sus
+bytes), no un bug: una vista `&str` sobre el texto exige cadenas prestadas en el lenguaje.
+
+Lecciones: (1) `str::find(&str)` con aguja corta es una trampa en Rust: construye el searcher cada
+vez; (2) una función «del prelude» que colecciona `chars()` es una trampa en los tres motores a la
+vez — revisar las que quedan (`position`, `reverse`…) con el mismo criterio; (3) en la VM, una fusión
+`_or` que falte se nota tres veces más que en el nativo; (4) el `RefCell` de una caché thread-local
+cuesta más que lo que ahorra en cadenas cortas: la puerta rápida va en `Cell` con el `Rc` pineado.
+
+**Afinado por la revisión de la PR (#600).** El barrido escalar por bytes gana a memchr en líneas
+cortas (sin el arranque del buscador), pero pierde de largo en cadenas grandes: la revisión señaló
+que `index_of(text, "\n")` sobre el JSONL de 373 MB recién leído recorría cientos de MB byte a byte.
+Ahora manda el tramo (`builtins::byte_find`/`byte_rfind` y sus espejos `__ray_byte_find`/`_rfind` en
+el nativo): hasta 128 bytes barrido escalar, por encima `str::find(char)`/`rfind(char)` (memchr).
+Medido con un programa que lee el JSONL de 373 MB y hace `index_of("#")`, `last_index_of("#")`
+(aguja ausente: barrido completo) y `last_index_of("\n")`:
+
+| | nativo | VM |
+|---|---|---|
+| 1.27.84 (`find(&str)`; `last_index_of` del prelude sobre `[char]` en la VM) | 896 ms | 51,2 s |
+| 1.27.85 (umbral 128 → memchr) | **33 ms** | **32 ms** |
+
+`jsondeserialize` no se mueve (líneas < 128 bytes: 62,3 → 63,6 ms, ruido de ±2 %).
+
+## 25. M433 (oct 2026): memoria con archivos grandes
+
+El JSONL de 8 M de líneas (366 MB) de §24, RSS pico por fases (`/usr/bin/time -l`):
+
+| | Rust | nativo 1.27.84 | nativo M433 | VM 1.27.84 | VM M433 |
+|---|---|---|---|---|---|
+| solo `read_file` | 357 MB | 718 MB | **363 MB** | 729 MB | **373 MB** |
+| `let lines = split; for line in lines` (completo) | 481 MB | 975 MB | **363 MB** | 1759 MB | **374 MB** |
+| `split` guardado y usado (`lines.len()`) | 481 MB | 975 MB | 975 MB | 1045 MB | 1045 MB |
+
+Las dos palancas (DESIGN §408): la lectura en un solo buffer (−366 MB: `read_to_string` + copia al
+`Rc`/`Arc` tenía las dos copias vivas) y el `split` consumido por un `for` sin materializar el
+arreglo (−612 MB: 8 M de `Rc<str>` de 64 B + 128 MB de punteros; en la VM, `OpCode::SplitNext`). Por
+tamaños, la VM: 400 k líneas 116 → 35 MB; 2 M 272 → 106; 8 M 1046 → 374. El tiempo no cambia
+(400 k / 2 M / 8 M: nativo 60 / 322 / 1237 ms, VM 281 / 1393 / 6103, Rust 36 / 198 / 764): el
+coste del `split` se reparte en el bucle. Lo que sigue por encima de Rust (1,6× en tiempo) es el
+parseo (§24) — en memoria ya estamos por debajo.
+
+Cuando las líneas SÍ se guardan, el arreglo cuesta lo mismo que antes: 64 B por línea de `Rc<str>`
+frente a los 16 B del `&str` de Rust. Es el modelo de valores; una representación de subcadena
+compartida (puntero al texto + offset + longitud) sería un cambio de lenguaje, no de runtime.
+
+**Memoria en el banco poliglota** (misma corrida de M433, `ru_maxrss` del arnés, mediana de 10; los
+programas del banco no leen archivos ni guardan splits grandes, así que M433 no los mueve — esta es
+la foto de dónde estamos):
+
+| programa | rustc -O | go | nativo | VM | node |
+|---|---|---|---|---|---|
+| `empty` | 1.4 MB | 3.0 | 3.1 | 16.6 | 38.2 |
+| `wordcount` | 1.8 | 9.1 | 3.5 | 18.2 | 46.2 |
+| `jsonserialize` | 52.1 | 48.4 | 50.8 | 84.1 | 217.2 |
+| `jsondeserialize` | 1.6 | 8.9 | 3.2 | 17.9 | 61.7 |
+| `logparse` | 1.7 | 8.6 | 3.4 | 17.9 | 46.4 |
+| `treealloc` | 2.6 | 9.9 | 6.3 | 43.4 | 54.3 |
+| `sortnums` | 16.8 | 11.9 | 26.6 | 40.8 | 100.4 |
+| `matrixmul` | 2.6 | 4.7 | 4.8 | 19.3 | 47.2 |
+| `regex` | 1.5 | 9.4 | 4.1 | 21.4 | 54.5 |
+
+El nativo arranca en 3 MB (Rust 1,4; Go 3,0) y queda por debajo de Go en todo salvo `sortnums` y
+`matrixmul`. Las dos excepciones frente a Rust: `sortnums` (26,6 frente a 16,8): el arreglo crece por
+`push` (capacidad doblada, 16 MB para 1 M de ints) y `arr.sort()` devuelve una COPIA ordenada — Rust
+ordena in place sobre un `with_capacity`; `treealloc` (6,3 frente a 2,6): cada nodo es
+`Rc<RefCell<struct>>` (48 B con cabecera y flag) donde Rust usa `Box` (16 B). Ninguna es un bug: son
+el `sort` funcional y el modelo de valores. La VM parte de ~17 MB de runtime (bytecode, prelude,
+heap inicial) y en `treealloc` paga el slot del heap por objeto (43 MB).
+
+**`SplitNext` con operandos en registros.** La primera forma del opcode (pila: string, sep, pos)
+clonaba dos `Arc` por trozo (cuatro atómicos) y costaba a `wordcount` en la VM +9 % (173 → 188 ms).
+Leyendo los tres locales en el sitio y escribiendo el cursor sin pasar por la pila, `wordcount` queda
+en **140 ms (−19 %)** y `jsondeserialize` en 303; el resto de la VM, dentro del ruido (±2 %).
 

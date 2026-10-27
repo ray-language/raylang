@@ -4,6 +4,41 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.85 — 2026-10-27
+
+- **`last_index_of` es un builtin** (M431): antes era raylang del prelude sobre `[char]` (dos
+  `Vec<char>` por llamada en los tres motores); ahora va por `rfind` en el camino ASCII, con la
+  misma fusión `….unwrap_or(d)` que `index_of`. Medido en el banco `jsondeserialize` con la variante
+  que busca como Go/Rust (`last_index_of` dos veces por línea): nativo 132 → 81 ms, VM 843 → 314 ms.
+  Semántica idéntica (`Some(len)` con aguja vacía; índices por carácter).
+- **Nativo: una aguja literal no asigna** — `index_of(s, ":")`, `last_index_of`, `starts_with`,
+  `ends_with` pasan el literal como `&str` en vez de construir un `Rc<str>` por evaluación (5 ms por
+  cada 400 000 iteraciones con cinco agujas).
+- **Búsqueda de un carácter 14 ms más rápida por cada 400 000 líneas** (M432): `index_of`/
+  `last_index_of` con aguja de un byte barren por bytes en vez de construir el buscador two-way de
+  `str::find(&str)` en cada llamada, en los tres motores.
+- **Nativo: strings más baratos** (M432): `substring(s, a, b).len()` solo calcula el recorte (sin
+  cortar ni asignar); la interpolación formatea en un buffer por hilo y asigna solo el `Rc<str>`
+  final; `len`/`substring` de una cadena ASCII pasan por una puerta rápida sin `RefCell`. Banco
+  `jsondeserialize` (variante que busca como Go/Rust): nativo 136 → 62 ms (Rust 50), VM 842 → 268;
+  con un JSONL de 8 M de líneas (366 MB): nativo 2,74 → 1,22 s (Rust 0,74), VM 17,4 → 5,3 s.
+- **Memoria de archivos grandes: la mitad, y luego un tercio** (M433). `fs.read_file` lee en UN solo
+  buffer del tamaño del archivo en la VM y en el nativo (antes `String` + copia al `Rc`/`Arc`: un
+  JSONL de 366 MB ocupaba 718 MB de pico; ahora 363). Y `for x in s.split(sep)` —también con
+  `let f = s.split(sep)` consumido solo por ese `for`— itera los trozos sin materializar el arreglo,
+  en la VM (opcode `SplitNext`) y en el nativo: el mismo programa que parsea las 8 M de líneas pasa de
+  975 MB a **363 MB** en nativo (Rust: 481) y de 1759 MB a **374 MB** en la VM. Semántica idéntica
+  (misma secuencia de trozos que antes, separador vacío incluido). De paso, `wordcount` en la VM baja
+  un 19 % (172 → 140 ms).
+- Banco poliglota completo re-medido con este árbol
+  (`benchmarks/poly/results/2026-10-27-v1.27.85.md`): frente a 1.27.84, `jsondeserialize` nativo
+  77,6 → 62,1 ms (0,57× → 0,70× de Go), `jsonserialize` 27,0 → 25,6 (pasa de empatar a ganar a Go y
+  a Rust), `logparse`/`wordcount` −4/−7 %; el resto dentro del ruido. Memoria pico sin cambio en el
+  banco (entradas pequeñas); el ranking combinado deja al nativo #1 en `jsonserialize`, #2 en ocho
+  programas de cómputo y #3 en los tres recursivos.
+- Banco poliglota: `jsondeserialize.ray` busca ahora lo mismo que las otras nueve variantes
+  (caracteres sueltos con `index_of`/`last_index_of`), no dos subcadenas largas.
+
 ## 1.27.84 — 2026-10-26
 
 - **Binario nativo: el contador de profundidad cuesta la mitad** (M430). El prólogo que corta la

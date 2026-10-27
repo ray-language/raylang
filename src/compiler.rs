@@ -137,6 +137,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     }
 
     let mut c = Compiler {
+        split_for_fused: HashMap::new(),
         indices: &indices,
         structs: &struct_defs,
         enums: &enum_defs,
@@ -165,7 +166,7 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let structs = HashMap::new();
     let enums = HashMap::new();
     let extern_indices = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), readonly: std::collections::HashSet::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
+    let mut c = Compiler { split_for_fused: HashMap::new(), indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), readonly: std::collections::HashSet::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -225,6 +226,10 @@ impl FnScope {
 /// El compilador: una pila de ámbitos de función (el último es el que se compila
 /// ahora) y la tabla de funciones que va llenando.
 struct Compiler<'a> {
+    /// M433 (N-D4c en la VM): `let f = s.split(sep)` cuyo ÚNICO uso posterior es `for x in f` → el
+    /// `let` deja el string y el separador en dos locales ocultos y el `for` itera con `SplitNext`
+    /// sin materializar el arreglo. Nombre → (slot del string, slot del separador).
+    split_for_fused: HashMap<String, (usize, usize)>,
     indices: &'a HashMap<String, usize>,
     structs: &'a StructDefs,
     enums: &'a EnumDefs,
@@ -441,6 +446,70 @@ impl<'a> Compiler<'a> {
 
     /// Compila el cuerpo de un `for` (M27.2). El escrutinio ya está en un ámbito (`begin_scope`). Casos:
     /// rango `a..b`, y `in` sobre arreglo/string (por índice) o `Map` (por keys/values ordenados).
+    /// M433: ¿es `e` la llamada al builtin `split(s, sep)` (también la forma UFCS ya bajada)? Una
+    /// función de usuario homónima o una variable `split` lo descartan.
+    fn as_split_call<'e>(&self, e: &'e Expr) -> Option<(&'e Expr, &'e Expr)> {
+        let ExprKind::Call { callee, args } = &e.kind else { return None };
+        let ExprKind::Ident(name) = &callee.kind else { return None };
+        // El wrapper `split` del prelude ya llegó bajado al primitivo `__split` (y una llamada UFCS
+        // manglada, `string#split`): el nombre pelado es el que cuenta, como en el transpilador.
+        let base = name.strip_suffix("#prelude").unwrap_or(name);
+        let base = base.rsplit('#').next().unwrap_or(base).trim_start_matches("__");
+        if base != "split" || args.len() != 2 || self.indices.contains_key(name.as_str()) || self.name_is_variable(name) {
+            return None;
+        }
+        Some((&args[0], &args[1]))
+    }
+
+    /// M433 (N-D4c en la VM): si `s` es `let f = <string>.split(sep);` y el ÚNICO uso posterior de `f`
+    /// en el bloque es un `for x in f { … }` (cuyo cuerpo no menciona `f`), emite el string y el
+    /// separador a dos locales ocultos y registra `f`; el `for` lo recoge en `emit_for`.
+    fn try_fuse_split_let(&mut self, s: &Stmt, rest: &[Stmt], tail: Option<&Expr>) -> Result<Option<String>, CompileError> {
+        let StmtKind::Let { name, value, mutable, .. } = &s.kind else { return Ok(None) };
+        if *mutable {
+            return Ok(None);
+        }
+        let Some((text, sep)) = self.as_split_call(value) else { return Ok(None) };
+        if !crate::ast_uses::split_consumed_only_by_for(name, rest, tail) {
+            return Ok(None);
+        }
+        let slots = self.emit_split_operands(text, sep, s.line, s.col)?;
+        self.split_for_fused.insert(name.clone(), slots);
+        Ok(Some(name.clone()))
+    }
+
+    /// M433: evalúa el string y el separador de un `split` a dos locales ocultos (en ese orden) y
+    /// devuelve sus slots; lo comparten el `let` fusionado y el `for x in s.split(sep)` inline.
+    fn emit_split_operands(&mut self, text: &Expr, sep: &Expr, line: usize, col: usize) -> Result<(usize, usize), CompileError> {
+        self.emit_expr(text)?;
+        let text_slot = self.declare_local("$sptext");
+        self.emit(OpCode::InitLocal(text_slot), line, col);
+        self.emit_expr(sep)?;
+        let sep_slot = self.declare_local("$spsep");
+        self.emit(OpCode::InitLocal(sep_slot), line, col);
+        Ok((text_slot, sep_slot))
+    }
+
+    /// M433: el bucle `for x in <split>` con `SplitNext`: `pos` en un local; cada paso empuja el trozo
+    /// y el `pos` siguiente, o salta al final al agotarse.
+    fn emit_split_for(&mut self, var: &str, text_slot: usize, sep_slot: usize, body: &Block, label: Option<&str>, line: usize, col: usize) -> Result<(), CompileError> {
+        self.emit_int(0, line, col);
+        let pos_slot = self.declare_local("$sppos");
+        self.emit(OpCode::InitLocal(pos_slot), line, col);
+        let var_slot = self.declare_local(var);
+        let loop_start = self.cur().chunk.code.len();
+        let exit = self.emit(OpCode::SplitNext { text: text_slot, sep: sep_slot, pos: pos_slot, target: 0 }, line, col);
+        self.emit(OpCode::InitLocal(var_slot), line, col);
+        self.begin_loop(label);
+        self.emit_block(body)?;
+        self.emit(OpCode::Pop, line, col);
+        self.continue_here();
+        self.emit(OpCode::Jump(loop_start), line, col);
+        self.patch_jump(exit);
+        self.end_loop();
+        Ok(())
+    }
+
     fn emit_for(&mut self, pat: &ForPat, iter: &ForIter, body: &Block, label: Option<&str>, line: usize, col: usize) -> Result<(), CompileError> {
         // Emite: idx (en `idx_slot`) recorre 0..len; cada iteración liga la(s) variable(s) y ejecuta el
         // cuerpo. `bind` genera el código que, dado `idx` en la pila NO, liga la(s) variable(s).
@@ -486,6 +555,21 @@ impl<'a> Compiler<'a> {
                 }
             }
             ForIter::In(e) => {
+                // M433: `for x in f` con `f = s.split(sep)` fusionado, o `for x in s.split(sep)` inline →
+                // iterador de split sin materializar el arreglo.
+                if let ForPat::Single(var) = pat {
+                    let fused = match &e.kind {
+                        ExprKind::Ident(n) => self.split_for_fused.get(n).copied(),
+                        _ => None,
+                    };
+                    if let Some((text_slot, sep_slot)) = fused {
+                        return self.emit_split_for(var, text_slot, sep_slot, body, label, line, col);
+                    }
+                    if let Some((text, sep)) = self.as_split_call(e) {
+                        let (text_slot, sep_slot) = self.emit_split_operands(text, sep, line, col)?;
+                        return self.emit_split_for(var, text_slot, sep_slot, body, label, line, col);
+                    }
+                }
                 // El valor a iterar. Para arreglo/string se recorre por índice; para Map, keys+values.
                 self.emit_expr(e)?;
                 let is_map = matches!(pat, ForPat::Tuple(_));
@@ -722,6 +806,7 @@ impl<'a> Compiler<'a> {
         s.chunk.code[at] = match s.chunk.code[at] {
             OpCode::Jump(_) => OpCode::Jump(target),
             OpCode::JumpIfFalse(_) => OpCode::JumpIfFalse(target),
+            OpCode::SplitNext { text, sep, pos, .. } => OpCode::SplitNext { text, sep, pos, target },
             _ => unreachable!("patch_jump about one instrucción what no es salto"),
         };
     }
@@ -730,8 +815,17 @@ impl<'a> Compiler<'a> {
 
     fn emit_block(&mut self, block: &Block) -> Result<(), CompileError> {
         let saved = self.begin_scope();
-        for stmt in &block.statements {
+        let mut fused_here: Vec<String> = Vec::new();
+        for (i, stmt) in block.statements.iter().enumerate() {
+            // M433: `let f = s.split(sep)` consumido SOLO por `for x in f` → sin arreglo.
+            if let Some(name) = self.try_fuse_split_let(stmt, &block.statements[i + 1..], block.tail.as_deref())? {
+                fused_here.push(name);
+                continue;
+            }
             self.emit_stmt(stmt)?;
+        }
+        for name in fused_here {
+            self.split_for_fused.remove(&name);
         }
         match &block.tail {
             Some(e) => self.emit_expr(e)?,
@@ -1387,7 +1481,7 @@ fn fuse_loop_round5(chunk: &mut Chunk) {
     let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t) => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
@@ -1430,6 +1524,7 @@ fn fuse_loop_round5(chunk: &mut Chunk) {
         match op {
             OpCode::Jump(t)
             | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
             | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t)
@@ -1488,7 +1583,7 @@ fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
 /// - `GetLocal(s); Constant(c)` → `GetLocalConst(s, c)` (operandos de `x op <literal>`, `i < N`, …).
 ///
 /// Fusionar acorta el vector de código, lo que **desplaza los índices** → hay que **remapear los destinos
-/// de salto** (`Jump`/`JumpIfFalse`, los únicos opcodes con destino de código). Un par NO se fusiona si su
+/// de salto** (`Jump`/`JumpIfFalse`/`SplitNext`, los opcodes con destino de código). Un par NO se fusiona si su
 /// segundo opcode es **destino de un salto** (algo aterrizaría entre medias). Corre tras el TCO (no fusiona
 /// a través de una llamada). El resultado es equivalente: mismos empujes, mismos saltos → oráculo intacto.
 /// Opt.12: evalúa en COMPILACIÓN una expresión hecha solo de literales `int`/`float`/
@@ -1597,7 +1692,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
@@ -1630,7 +1725,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     // (3) Remapea los destinos de salto a las nuevas posiciones.
     for op in &mut code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = old_a_new[*t],
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } => *t = old_a_new[*t],
             OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
@@ -1656,7 +1751,7 @@ fn fuse_round2(chunk: &mut Chunk) {
     let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
@@ -1721,7 +1816,7 @@ fn fuse_round2(chunk: &mut Chunk) {
     old_a_new[n] = code.len();
     for op in &mut code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } | OpCode::CmpJump(_, t) => {
                 *t = old_a_new[*t]
             }
             OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
@@ -1764,7 +1859,7 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
     let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => is_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } | OpCode::CmpJump(_, t) => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
@@ -1806,6 +1901,7 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
         match op {
             OpCode::Jump(t)
             | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
             | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t)
@@ -1835,7 +1931,7 @@ fn fuse_index_round4(chunk: &mut Chunk) {
     let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::SplitNext { target: t, .. } | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t) => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
@@ -1874,6 +1970,7 @@ fn fuse_index_round4(chunk: &mut Chunk) {
         match op {
             OpCode::Jump(t)
             | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
             | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t)

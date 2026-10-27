@@ -1584,6 +1584,18 @@ impl Transpiler {
                 self.emit_str_ref(out, eff[1])?;
                 out.push(')');
             }
+            // M431: `b.last_index_of(needle)` sobre bytes (método de trait del prelude): la última
+            // ventana igual a la aguja; aguja vacía → `Some(len)`, aguja más larga → `None`.
+            "last_index_of" if matches!(self.type_of(eff[0])?, Type::Bytes) => {
+                out.push_str("{ let __rt_b: &[u8] = &*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_n: &[u8] = &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(
+                    "; if __rt_n.is_empty() { Some(__rt_b.len() as i64) } else if __rt_n.len() > __rt_b.len() { None } else { \
+                     __rt_b.windows(__rt_n.len()).rposition(|__w| __w == __rt_n).map(|__i| __i as i64) } }",
+                );
+            }
             // M431: la ÚLTIMA ocurrencia (helper del preámbulo, rfind en ASCII); misma forma que index_of.
             "last_index_of" => {
                 out.push_str("__ray_last_index_of(&*");

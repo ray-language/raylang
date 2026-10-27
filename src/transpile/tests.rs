@@ -1156,6 +1156,11 @@ fn transpiles_last_index_of_and_literal_needles_without_rc() {
     assert!(rust.contains(".starts_with(\"a\")"), "starts_with con aguja literal &str: {rust}");
     let main_i = rust.find("fn ray_main(").unwrap();
     assert!(!rust[main_i..].contains("Rc::<str>::from(\":\")"), "ninguna aguja literal asigna un Rc: {rust}");
+    // El método de trait `bytes.last_index_of` NO va al helper de &str (regresión cazada por el CI de #600).
+    let rust = transpile_src("fn main() -> int { let b = b\"ab\\r\\nab\\r\\n\"; b.last_index_of(b\"\\r\\n\").unwrap_or(0 - 1) }");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    assert!(rust[main_i..].contains(".rposition(|__w| __w == __rt_n)"), "last_index_of sobre bytes busca la última ventana: {rust}");
+    assert!(!rust[main_i..].contains("__ray_last_index_of("), "bytes no pasa por el helper de &str: {rust}");
 }
 
 /// M432: `substring(s, a, b).len()` no corta ni asigna (solo el clamp), y la interpolación formatea en

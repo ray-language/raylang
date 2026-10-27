@@ -82,10 +82,7 @@ pub fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
             let callee_ok = match &callee.kind {
                 ExprKind::Ident(_) => true,
                 ExprKind::Field { object, .. } => split_uses_expr(name, object, ks),
-                other_callee => {
-                    let fake = Expr { kind: other_callee.clone(), line: e.line, col: e.col };
-                    split_uses_expr(name, &fake, ks)
-                }
+                _ => split_uses_expr(name, callee, ks),
             };
             callee_ok && args.iter().all(|a| split_uses_expr(name, a, ks))
         }

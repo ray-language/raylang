@@ -710,11 +710,11 @@ pub fn fs_test(t: crate::bytecode::FsTest, path: &str) -> bool {
 pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
     // M431: aguja de UN byte (`":"`, `","`, `"\n"`…) — `str::find(&str)` construye el buscador two-way
     // (`StrSearcher::new`) en cada llamada, lo más caliente del perfil de jsondeserialize; un barrido
-    // por bytes gana incluso a `find(char)` (memchr) en líneas cortas. El índice de carácter es el de
-    // byte si el PREFIJO es ASCII (solo se mira ese tramo, no toda la cadena).
+    // por bytes gana incluso a `find(char)` (memchr) en líneas cortas, y en cadenas largas memchr
+    // (`find(char)`) gana al barrido escalar, así que el tramo decide (`byte_find`). El índice de
+    // carácter es el de byte si el PREFIJO es ASCII (solo se mira ese tramo, no toda la cadena).
     if sub.len() == 1 {
-        let c = sub.as_bytes()[0];
-        return s.as_bytes().iter().position(|&b| b == c).map(|i| char_index_at(s, i));
+        return byte_find(s, sub.as_bytes()[0]).map(|i| char_index_at(s, i));
     }
     // D1 (bench políglota, jsondeserialize): fast-path ASCII — índice de byte == índice de carácter,
     // y `str::find` va acelerado con memchr; el camino general materializaba DOS `Vec<char>` por
@@ -733,6 +733,24 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
     (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
 }
 
+/// Hasta esta longitud, buscar UN byte por barrido escalar gana a memchr (sin su arranque); por
+/// encima, memchr (`str::find(char)`/`rfind(char)`, SIMD) gana al barrido. Un byte suelto en un `&str`
+/// válido es siempre ASCII, así que `b as char` es exacto. (Revisión de #600: el barrido solo no
+/// escalaba en un `index_of(text, "\n")` sobre cientos de MB.)
+const BYTE_SWEEP_MAX: usize = 128;
+
+/// Primera posición (en bytes) del byte ASCII `c` en `hay` (ver `BYTE_SWEEP_MAX`).
+#[inline]
+pub fn byte_find(hay: &str, c: u8) -> Option<usize> {
+    if hay.len() <= BYTE_SWEEP_MAX { hay.as_bytes().iter().position(|&b| b == c) } else { hay.find(c as char) }
+}
+
+/// Última posición (en bytes) del byte ASCII `c` en `hay` (ver `BYTE_SWEEP_MAX`).
+#[inline]
+pub fn byte_rfind(hay: &str, c: u8) -> Option<usize> {
+    if hay.len() <= BYTE_SWEEP_MAX { hay.as_bytes().iter().rposition(|&b| b == c) } else { hay.rfind(c as char) }
+}
+
 /// Índice de carácter del byte `i` de `s` (que debe caer en un límite de carácter): `i` si el prefijo
 /// es ASCII, si no cuenta los caracteres del prefijo.
 #[inline]
@@ -745,8 +763,7 @@ fn char_index_at(s: &str, i: usize) -> usize {
 /// Helper compartido por ambos motores (`__last_index_of`).
 pub fn char_last_index_of(s: &str, sub: &str) -> Option<usize> {
     if sub.len() == 1 {
-        let c = sub.as_bytes()[0];
-        return s.as_bytes().iter().rposition(|&b| b == c).map(|i| char_index_at(s, i));
+        return byte_rfind(s, sub.as_bytes()[0]).map(|i| char_index_at(s, i));
     }
     if s.is_ascii() {
         return s.rfind(sub);
@@ -3456,8 +3473,7 @@ pub fn split_step(text: &str, sep: &str, pos: usize) -> Option<(usize, usize, us
     // Aguja de un byte → barrido por bytes (M432: `str::find(&str)` construye el buscador two-way en
     // cada paso, y aquí hay un paso por trozo).
     let found = if sep.len() == 1 {
-        let c = sep.as_bytes()[0];
-        text.as_bytes()[pos..].iter().position(|&b| b == c)
+        byte_find(&text[pos..], sep.as_bytes()[0])
     } else {
         text[pos..].find(sep)
     };

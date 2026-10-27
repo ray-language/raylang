@@ -3732,6 +3732,20 @@ fn split_loops_iterate_without_materializing_the_array() {
              n * 1000 + z * 100 + sum\n\
          }",
     );
+    // Revisión de #600: un ámbito hermano anterior deja marcado como capturado el slot que luego
+    // reciclan los temporales del split (`InitLocal` los boxea) → `SplitNext` debe leerlos por la celda.
+    oracle_program(
+        "fn main() -> int {\n\
+             var total = 0;\n\
+             {\n\
+                 var x = 1;\n\
+                 let g = fn() -> int { x = x + 1; x };\n\
+                 total = total + g();\n\
+             }\n\
+             for p in \"a,b,c\".split(\",\") { total = total + p.len(); }\n\
+             total\n\
+         }",
+    );
 }
 
 /// El for-range con tope en VARIABLE fusiona la guarda (LocalLocalCmpJump) y el cierre

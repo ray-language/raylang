@@ -2721,23 +2721,42 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::SplitNext { text, sep, pos, target } => {
-                    // M433: un paso del iterador de split sobre los locales (sin clonar los Arc). Los
-                    // tres slots son temporales del compilador (`$sptext`/`$spsep`/`$sppos`), nunca
-                    // capturados → siempre `Plain`.
+                    // M433: un paso del iterador de split sobre los locales (sin clonar los Arc en el
+                    // camino normal). Los tres slots son temporales del compilador (`$sptext`/`$spsep`/
+                    // `$sppos`) que ninguna closure captura, pero `captured` se marca por SLOT y un
+                    // ámbito hermano anterior pudo dejar ese slot marcado (`end_scope` recicla los
+                    // slots, no las marcas): entonces `InitLocal` los boxea y hay que leerlos por la
+                    // celda, como hace `GetLocal`.
                     let (text, sep, pos, target) = (*text, *sep, *pos, *target);
                     let cur = match &self.cur.locals[base + pos] {
                         Local::Plain(HeapValue::Int(n)) => *n as usize,
-                        _ => unreachable!("the split cursor is a plain int local"),
+                        Local::Boxed(h) => match self.cell_get(*h) {
+                            HeapValue::Int(n) => n as usize,
+                            _ => unreachable!("the split cursor is an int local"),
+                        },
+                        _ => unreachable!("the split cursor is an int local"),
                     };
                     let step = match (&self.cur.locals[base + text], &self.cur.locals[base + sep]) {
                         (Local::Plain(HeapValue::Str(s)), Local::Plain(HeapValue::Str(sp))) => {
                             crate::builtins::split_step(s, sp, cur).map(|(a, b, next)| (HeapValue::Str(s[a..b].into()), next))
                         }
-                        _ => unreachable!("the split operands are plain string locals"),
+                        _ => {
+                            let (HeapValue::Str(s), HeapValue::Str(sp)) = (self.get_local(base, text), self.get_local(base, sep)) else {
+                                unreachable!("the split operands are string locals")
+                            };
+                            crate::builtins::split_step(&s, &sp, cur).map(|(a, b, next)| (HeapValue::Str(s[a..b].into()), next))
+                        }
                     };
                     match step {
                         Some((piece, next)) => {
-                            self.cur.locals[base + pos] = Local::Plain(HeapValue::Int(next as i64));
+                            let next = HeapValue::Int(next as i64);
+                            match &self.cur.locals[base + pos] {
+                                Local::Boxed(h) => {
+                                    let h = *h;
+                                    self.cell_set(h, next);
+                                }
+                                _ => self.cur.locals[base + pos] = Local::Plain(next),
+                            }
                             self.push(piece);
                         }
                         None => self.cur.frames[fi].ip = target,

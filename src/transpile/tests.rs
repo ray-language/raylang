@@ -1174,7 +1174,7 @@ fn fuses_substring_len_and_interpolates_through_the_thread_buffer() {
     assert!(rust.contains("__ray_substring_len(&s.clone(), 2i64, 7i64)"), "substring().len() fusionado: {rust}");
     assert!(!rust.contains("__ray_char_len(&(__ray_substring("), "sin substring materializado para medirlo: {rust}");
     assert!(rust.contains("__RAY_FMT.with(|__rt_b| { let mut __rt_s = __rt_b.borrow_mut(); __rt_s.clear(); __rt_s.reserve("), "template por el buffer: {rust}");
-    assert!(rust.contains("let __rt_r = Rc::<str>::from(&**__rt_s); if __rt_s.capacity() > (1 << 20) { __rt_s.shrink_to(1 << 16); } __rt_r })"), "un solo Rc al final, buffer con tope: {rust}");
+    assert!(rust.contains("let __rt_r = Rc::<str>::from(&**__rt_s); if __rt_s.capacity() > (1 << 20) { __rt_s.clear(); __rt_s.shrink_to(1 << 16); } __rt_r })"), "un solo Rc al final, buffer con tope (vaciado antes de encoger): {rust}");
     let main_i = rust.find("fn ray_main(").unwrap();
     assert!(!rust[main_i..].contains("String::with_capacity("), "ningún String nuevo por template: {rust}");
 }

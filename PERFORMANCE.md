@@ -2723,6 +2723,21 @@ vez — revisar las que quedan (`position`, `reverse`…) con el mismo criterio;
 `_or` que falte se nota tres veces más que en el nativo; (4) el `RefCell` de una caché thread-local
 cuesta más que lo que ahorra en cadenas cortas: la puerta rápida va en `Cell` con el `Rc` pineado.
 
+**Afinado por la revisión de la PR (#600).** El barrido escalar por bytes gana a memchr en líneas
+cortas (sin el arranque del buscador), pero pierde de largo en cadenas grandes: la revisión señaló
+que `index_of(text, "\n")` sobre el JSONL de 373 MB recién leído recorría cientos de MB byte a byte.
+Ahora manda el tramo (`builtins::byte_find`/`byte_rfind` y sus espejos `__ray_byte_find`/`_rfind` en
+el nativo): hasta 128 bytes barrido escalar, por encima `str::find(char)`/`rfind(char)` (memchr).
+Medido con un programa que lee el JSONL de 373 MB y hace `index_of("#")`, `last_index_of("#")`
+(aguja ausente: barrido completo) y `last_index_of("\n")`:
+
+| | nativo | VM |
+|---|---|---|
+| 1.27.84 (`find(&str)`; `last_index_of` del prelude sobre `[char]` en la VM) | 896 ms | 51,2 s |
+| 1.27.85 (umbral 128 → memchr) | **33 ms** | **32 ms** |
+
+`jsondeserialize` no se mueve (líneas < 128 bytes: 62,3 → 63,6 ms, ruido de ±2 %).
+
 ## 25. M433 (oct 2026): memoria con archivos grandes
 
 El JSONL de 8 M de líneas (366 MB) de §24, RSS pico por fases (`/usr/bin/time -l`):

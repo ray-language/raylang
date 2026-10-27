@@ -461,9 +461,12 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("#[inline] fn __ray_char_index_at(s: &str, i: usize) -> i64 { if s.as_bytes()[..i].is_ascii() { i as i64 } else { s[..i].chars().count() as i64 } }\n");
     // M431/M432: aguja de UN byte → barrido por bytes. `str::find(&str)` construye el buscador two-way
     // (`StrSearcher::new`) en cada llamada —lo más caliente del perfil de jsondeserialize— y en líneas
-    // cortas el barrido simple gana incluso a `find(char)` (memchr): 90 → 77 ms solo con esto.
+    // cortas el barrido simple gana incluso a `find(char)` (memchr): 90 → 77 ms solo con esto. En
+    // tramos largos manda memchr (espejo de `builtins::byte_find`/`byte_rfind`, mismo umbral).
+    out.push_str("#[inline] fn __ray_byte_find(h: &str, c: u8) -> Option<usize> { if h.len() <= 128 { h.as_bytes().iter().position(|&b| b == c) } else { h.find(c as char) } }\n");
+    out.push_str("#[inline] fn __ray_byte_rfind(h: &str, c: u8) -> Option<usize> { if h.len() <= 128 { h.as_bytes().iter().rposition(|&b| b == c) } else { h.rfind(c as char) } }\n");
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
-    out.push_str("    if sub.len() == 1 { let c = sub.as_bytes()[0]; return s.as_bytes().iter().position(|&b| b == c).map(|i| __ray_char_index_at(s, i)); }\n");
+    out.push_str("    if sub.len() == 1 { return __ray_byte_find(s, sub.as_bytes()[0]).map(|i| __ray_char_index_at(s, i)); }\n");
     out.push_str("    if s.is_ascii() { return s.find(sub).map(|i| i as i64); }\n");
     out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");
     out.push_str("    if sub.is_empty() { return Some(0); }\n");
@@ -476,7 +479,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // M394 (rayplay #160): el tramo no-ASCII se corta recorriendo `char_indices` hasta `j`, sin
     // materializar el string por caracteres (espejo de `builtins::substring_slice`).
     out.push_str("fn __ray_last_index_of(s: &str, sub: &str) -> Option<i64> {
-    if sub.len() == 1 { let c = sub.as_bytes()[0]; return s.as_bytes().iter().rposition(|&b| b == c).map(|i| __ray_char_index_at(s, i)); }
+    if sub.len() == 1 { return __ray_byte_rfind(s, sub.as_bytes()[0]).map(|i| __ray_char_index_at(s, i)); }
     if s.is_ascii() { return s.rfind(sub).map(|i| i as i64); }
     let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();
     if sub.is_empty() { return Some(chars.len() as i64); }

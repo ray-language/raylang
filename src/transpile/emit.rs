@@ -2371,7 +2371,7 @@ impl Transpiler {
             out.push_str(&format!(", __rt_c{i}"));
         }
         // Tope: un template gigante no deja 50 MB de capacidad ociosa por hilo para siempre.
-        out.push_str("); } let __rt_r = Rc::<str>::from(&**__rt_s); if __rt_s.capacity() > (1 << 20) { __rt_s.shrink_to(1 << 16); } __rt_r }) }");
+        out.push_str("); } let __rt_r = Rc::<str>::from(&**__rt_s); if __rt_s.capacity() > (1 << 20) { __rt_s.clear(); __rt_s.shrink_to(1 << 16); } __rt_r }) }");
         Ok(())
     }
 

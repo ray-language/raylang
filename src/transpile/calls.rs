@@ -1586,7 +1586,7 @@ impl Transpiler {
             }
             // M431: `b.last_index_of(needle)` sobre bytes (método de trait del prelude): la última
             // ventana igual a la aguja; aguja vacía → `Some(len)`, aguja más larga → `None`.
-            "last_index_of" if matches!(self.type_of(eff[0])?, Type::Bytes) => {
+            "last_index_of" if matches!(self.type_of(eff[0]), Ok(Type::Bytes)) => {
                 out.push_str("{ let __rt_b: &[u8] = &*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_n: &[u8] = &*");

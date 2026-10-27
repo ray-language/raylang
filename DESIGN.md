@@ -19267,3 +19267,19 @@ Lo que queda y por qué no se toca ahora: si el programa SÍ guarda las líneas 
 indexado, pasarlas), cada una es un `Rc<str>` propio — es el modelo de valores (las cadenas poseen
 sus bytes); una vista prestada sobre el texto es una decisión de lenguaje, no una optimización.
 
+
+**La revisión pre-release de la PR (#600)** dejó dos correcciones de fondo y tres de forma. (1) Un
+ICE real en `SplitNext`: los temporales del split (`$sptext`/`$spsep`/`$sppos`) nunca los captura una
+closure, pero `captured` se marca por SLOT y `end_scope` recicla los slots sin borrar las marcas, así
+que un ámbito hermano anterior con una closure (`{ var x = 1; let g = fn() -> int { x = x + 1; x }; … }`
+seguido de `for p in s.split(",")`) hacía que `InitLocal` boxeara esos slots y la VM cayera en el
+`unreachable!` «plain string locals». La VM lee y escribe ahora esos operandos por la celda cuando
+están boxeados, como `GetLocal`; el repro es parte del golden. (2) El barrido escalar de un byte
+(M431/M432) no escalaba en cadenas grandes: umbral de 128 bytes y por encima memchr
+(`PERFORMANCE.md` §24, tabla final). Y de forma: el buffer de interpolación se vacía antes de
+encogerse (si no, `shrink_to` no puede bajar de `len` y el pico se libera un template tarde); la
+guarda del método `last_index_of` sobre bytes no propaga el error de inferencia de tipos del
+receptor (`matches!(…, Ok(Type::Bytes))`, como N-D4b); el análisis de usos ya no clona el callee para
+recorrerlo. Queda apuntado, sin hacer, que `try_fuse_split_let` rescanea la cola del bloque por cada
+`let … = split(…)` (cuadrático en el número de esos `let`; irrelevante hoy, un pre-pase de conteo de
+usos por bloque lo resolvería para N-D4b y N-D4c a la vez).

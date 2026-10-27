@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.85 — 2026-10-27
 
 - **`last_index_of` es un builtin** (M431): antes era raylang del prelude sobre `[char]` (dos
   `Vec<char>` por llamada en los tres motores); ahora va por `rfind` en el camino ASCII, con la
@@ -30,6 +30,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   975 MB a **363 MB** en nativo (Rust: 481) y de 1759 MB a **374 MB** en la VM. Semántica idéntica
   (misma secuencia de trozos que antes, separador vacío incluido). De paso, `wordcount` en la VM baja
   un 19 % (172 → 140 ms).
+- Banco poliglota completo re-medido con este árbol
+  (`benchmarks/poly/results/2026-10-27-v1.27.85.md`): frente a 1.27.84, `jsondeserialize` nativo
+  77,6 → 62,1 ms (0,57× → 0,70× de Go), `jsonserialize` 27,0 → 25,6 (pasa de empatar a ganar a Go y
+  a Rust), `logparse`/`wordcount` −4/−7 %; el resto dentro del ruido. Memoria pico sin cambio en el
+  banco (entradas pequeñas); el ranking combinado deja al nativo #1 en `jsonserialize`, #2 en ocho
+  programas de cómputo y #3 en los tres recursivos.
 - Banco poliglota: `jsondeserialize.ray` busca ahora lo mismo que las otras nueve variantes
   (caracteres sueltos con `index_of`/`last_index_of`), no dos subcadenas largas.
 

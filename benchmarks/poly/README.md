@@ -52,7 +52,7 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 |---|---|---|
 | **`wordcount`** | Crunch de datos: contar frecuencias sobre líneas sintéticas | `split` + hash map `get`/`insert` + `sort` (agregación) |
 | **`jsonserialize`** | Ruta de **salida**: serializar N registros a JSON | `to_string` + concatenación + `push`/`join` (construcción de strings) |
-| **`jsondeserialize`** | Ruta de **entrada**, contraparte de `jsonserialize`: parsear los registros | búsqueda de substrings (`index_of`/`substring`) + `parse_int`, sin librería de JSON |
+| **`jsondeserialize`** | Ruta de **entrada**, contraparte de `jsonserialize`: parsear los registros | búsqueda de caracteres (`index_of`/`last_index_of`) + `substring` + `parse_int`, sin librería de JSON; las diez variantes buscan lo mismo |
 | **`logparse`** | Ruta de **entrada**: parsear N líneas de log | `split` + `parse_int` + agregación en **dos** maps |
 
 - `wordcount`: 120 000 líneas, ~1 000 claves distintas, checksum sobre claves ordenadas.
@@ -87,12 +87,14 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 > variante compite motor contra motor. La Pike VM escrita en raylang (la implementación de
 > referencia) sigue siendo el motor del intérprete (`--interp`) y de los builds slim.
 
-## Resultados (26 oct 2026 — M3 Pro, release 1.27.84, mediana de 10 corridas, 5 de calentamiento)
+## Resultados (27 oct 2026 — M3 Pro, 1.27.85, mediana de 10 corridas, 5 de calentamiento)
 
 > Corrida archivada completa (export de `bench.py --export-md`, todas las tablas y el entorno):
-> [`results/2026-10-26-v1.27.84.md`](results/2026-10-26-v1.27.84.md) — las 10 variantes en las
-> mismas corridas, `ray` = **release 1.27.84 tal como se publica (build plano)**, node 26, go 1.23,
-> rustc 1.96. Referencias anteriores: [`results/2026-10-26-v1.27.83.md`](results/2026-10-26-v1.27.83.md)
+> [`results/2026-10-27-v1.27.85.md`](results/2026-10-27-v1.27.85.md) — las 10 variantes en las
+> mismas corridas, `ray` = **el árbol de 1.27.85 (build plano, `cargo build --release` del commit
+> `b0c0a5d0`, idéntico al de la release salvo el número de versión)**, node 26, go 1.23, rustc 1.96.
+> Referencias anteriores: [`results/2026-10-26-v1.27.84.md`](results/2026-10-26-v1.27.84.md) (la
+> release anterior, misma tarde), [`results/2026-10-26-v1.27.83.md`](results/2026-10-26-v1.27.83.md)
 > (la corrida que destapó el coste del contador de profundidad, M430),
 > [`results/2026-09-22-v1.27.5.md`](results/2026-09-22-v1.27.5.md) y
 > [`results/2026-09-22-v1.27.5-pgo.md`](results/2026-09-22-v1.27.5-pgo.md) (VM con build PGO),
@@ -109,16 +111,16 @@ arco F enlaza **fibras M:N** por defecto.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 8.87× | 1.00× (empate) | 1.00× (empate) | 16.2× |
-| `fibrec` | 28.5 ms | **1.24×** | 0.55× | 0.49× | 23.6× |
-| `wordcount` | **35.4 ms** 🥇 | 3.24× | **1.24×** | **1.71×** | 4.9× |
-| `jsonserialize` | 27.0 ms | **1.89×** | 1.00× (empate) | 0.95× | 3.1× |
-| `jsondeserialize` | 77.6 ms | **1.09×** | 0.57× | 0.63× | 3.6× |
-| `logparse` | **20.9 ms** 🥇 | 2.13× | **1.05×** | **1.53×** | 3.3× |
-| `treealloc` | 23.9 ms | 0.73× | **1.19×** | **1.13×** | 24.7× |
-| `sortnums` | **17.4 ms** 🥇 | 21.3× | **3.46×** | **1.12×** | 7.8× |
-| `matrixmul` | **5.8 ms** 🥇 | **3.44×** | **1.37×** | 1.01× (empate) | 3.2× |
-| `regex` | 62.0 ms | 0.82× | **1.21×** | 0.42× | 4.8× |
+| `loopsum` | **27.3 ms** 🥇 | 8.87× | 1.00× (empate) | 1.00× (empate) | 16.4× |
+| `fibrec` | 28.6 ms | **1.23×** | 0.56× | 0.49× | 22.5× |
+| `wordcount` | **34.7 ms** 🥇 | 3.30× | **1.27×** | **1.74×** | 4.0× |
+| `jsonserialize` | **25.6 ms** 🥇 | **2.03×** | **1.06×** | **1.04×** | 3.4× |
+| `jsondeserialize` | 62.1 ms | **1.36×** | 0.70× | 0.78× | 4.9× |
+| `logparse` | **19.5 ms** 🥇 | 2.29× | **1.15×** | **1.64×** | 3.7× |
+| `treealloc` | 23.9 ms | 0.73× | **1.18×** | **1.15×** | 24.9× |
+| `sortnums` | **17.9 ms** 🥇 | 20.8× | **3.47×** | **1.11×** | 7.6× |
+| `matrixmul` | **5.7 ms** 🥇 | **3.45×** | **1.38×** | 1.03× (empate) | 3.2× |
+| `regex` | 59.4 ms | 0.85× | **1.26×** | 0.43× | 5.0× |
 
 > **Con qué build se mide la VM.** La columna **VM ÷ native** sale aquí de la **release plana**,
 > la que instala cualquiera. Un build **PGO** de `ray` (`make pgo`; guía en
@@ -127,30 +129,42 @@ arco F enlaza **fibras M:N** por defecto.
 > `fibrec` 721 → 532 ms, `sortnums` 157 → 118 ms). El binario **nativo** no depende del build de la
 > toolchain: lo compila `rustc` con su propio LTO.
 
-- **Le gana a node en 8 de los 10** programas de cómputo (de 1.1× a 21×). Los dos restantes:
+- **Le gana a node en 8 de los 10** programas de cómputo (de 1.2× a 21×). Los dos restantes:
   `regex` (0.82×; node corre su motor C++ y la variante `.ray` usa `std/regex` con el crate `regex`,
   R5 — ojo con el 0.42× de la columna rust: `regex.rs` parsea **a mano**, ver la nota de arriba;
   con el crate, Rust puro cuesta ~49 ms, no 26) y `treealloc` (0.73×: node 26 bajó de 21.9 a
   17.4 ms entre las dos corridas y el nativo subió de 19.6 a 23.9 — en parte el contador de
   profundidad de M295, que `make_tree` paga en cada marco; en septiembre lo ganábamos 1.12×).
-- **Le gana a Go en seis** (`sortnums` 3.46×, `matrixmul` 1.37×, `wordcount` 1.24×, `regex` 1.21×,
-  `treealloc` 1.19×, `logparse` 1.05×) **y empata en dos** (`loopsum`, `jsonserialize`); **a
-  `rustc -O` en cuatro** (`wordcount` 1.71×, `logparse` 1.53×, `treealloc` 1.13×, `sortnums`
-  1.12×) **y empata en dos** (`loopsum`, `matrixmul`). Donde pierde contra ambos es en
-  `jsondeserialize` y `fibrec`; en `jsonserialize` queda a un 5 % de Rust.
+- **Le gana a Go en siete** (`sortnums` 3.47×, `matrixmul` 1.38×, `wordcount` 1.27×, `regex` 1.26×,
+  `treealloc` 1.18×, `logparse` 1.15×, `jsonserialize` 1.06×) **y empata en uno** (`loopsum`); **a
+  `rustc -O` en cinco** (`wordcount` 1.74×, `logparse` 1.64×, `treealloc` 1.15×, `sortnums` 1.11×,
+  `jsonserialize` 1.04×) **y empata en dos** (`loopsum`, `matrixmul`). Donde pierde contra ambos es
+  en `jsondeserialize` y `fibrec`.
+- **Qué movió 1.27.85** (M431–M433, frente a la corrida de 1.27.84 de la víspera, misma máquina):
+  `jsondeserialize` 77.6 → 62.1 ms (de 0.57× a 0.70× de Go) **con una variante `.ray` más exigente**
+  —ahora busca los mismos caracteres sueltos que Go y Rust (`index_of`/`last_index_of`), en vez de
+  dos subcadenas largas; con esa variante 1.27.84 daba 136 ms—, `jsonserialize` 27.0 → 25.6 (el
+  buffer de interpolación: pasa de empatar a ganar a Go y Rust), `logparse` −7 % y `wordcount` −2 %;
+  en la VM, `wordcount` 173 → 141 ms (`for` sobre `split` sin materializar el arreglo). El resto
+  queda dentro del ±3 % de ruido entre corridas. La memoria pico del banco no se mueve (entradas
+  pequeñas; la ganancia de M433 es con archivos grandes, PERFORMANCE.md §25).
 - **`fibrec`** es el único programa que cambió de categoría desde septiembre: 19.5 → 43.6 ms con el
   contador de marcos de M295 (1.27.11; la tabla de septiembre no lo llevaba) → **28.5 ms** en
   1.27.84 (M430 sacó el límite del camino caliente, PERFORMANCE.md §23). Los ~9 ms que quedan sobre
   los 17.6 de `--fast` son el contador en sí (incremento, guardado y decremento por llamada): es lo
   que cuesta cortar la recursión profunda con el mismo error que la VM en vez de con un SIGBUS.
-- **Arranque** (proceso completo, sin auto-medición): `empty` **2.06 ms, #3 de 10** — tras
-  `rustc -O` (1.73 ms) y Go (1.83 ms) y por delante de lua (2.97), con 1.8 MB de RSS; la VM
-  arranca en 6.55 ms. Las fibras no lo penalizan.
+- **Arranque** (proceso completo, sin auto-medición): `empty` **2.07 ms, #3 de 10** — tras
+  `rustc -O` (1.73 ms) y Go (1.78 ms) y por delante de lua (2.41 ms), con 3.0 MB de RSS pico (los
+  workers del scheduler de fibras, M329; IDEAS §118); la VM arranca en 6.70 ms con 16.6 MB.
 
-**Ranking combinado (tiempo × memoria, media geométrica)**: el binario nativo queda **#2 en 7 de
-los 12 programas de cómputo** (`loopsum`, `wordcount`, `jsondeserialize`, `logparse`, `treealloc`,
-`sortnums`, `matrixmul`) **y #3 en los otros 5** — nunca por debajo del tercer puesto, contra 9
-lenguajes.
+**Ranking combinado (tiempo × memoria, media geométrica)**: de los 12 programas de cómputo, el
+binario nativo queda **#1 en `jsonserialize`, #2 en ocho** (`loopsum`, `wordcount`,
+`jsondeserialize`, `logparse`, `treealloc`, `sortnums`, `matrixmul`, `regex`) **y #3 en los tres
+recursivos** (`factorial`, `fibonacci`, `fibrec`) — nunca por debajo del tercer puesto, contra 9
+lenguajes; en `empty` y `print` es #4, tras Lua, que arranca con menos memoria. En el global de los 14 programas (media geométrica
+del score): Rust 1.11, **nativo 1.64**, Go 1.97, Lua 2.57, Perl 4.73, Python 7.06, **VM 7.82**,
+PHP 7.93, Ruby 9.13, Node 13.15. Lo que separa al nativo de Rust es la memoria base (2.06× frente a
+1.03×: 3 MB del runtime con fibras contra 1.4), no el tiempo (1.31× frente a 1.20×).
 
 ### Lectura
 
@@ -166,9 +180,9 @@ lenguajes.
   dentro del ruido — y el arranque de `empty` incluso mejora (1.57 vs 1.97 ms, porque el modelo de
   fibras no levanta el hilo worker que sí crea el de hilo-por-tarea). Su beneficio está en
   concurrencia e I/O, y no se paga en los programas secuenciales.
-- **Dónde queda trabajo**: `jsondeserialize` (0.57× de Go tras las fusiones N-D) sigue siendo el
-  hueco — lo restante es la construcción de la línea (`Rc<str>` desde `String` = doble alloc) y
-  que Go/Rust rebanan sin copiar; `fibrec` y `treealloc` pagan el contador de profundidad
+- **Dónde queda trabajo**: `jsondeserialize` (0.70× de Go tras M431–M432) sigue siendo el hueco —
+  lo restante es el `Rc<str>` por campo extraído (Go/Rust rebanan sin copiar) y el `Option<int>`
+  por búsqueda; `fibrec` y `treealloc` pagan el contador de profundidad
   (PERFORMANCE.md §7 y §23: quitarlo del todo exige pasar la profundidad como argumento oculto, un
   cambio de modelo que hoy no compensa); `matrixmul` lo cerró N6 y `logparse`/`wordcount` las
   fusiones de split (Fases 67–68). Plan en `raylang/PERFORMANCE.md`.

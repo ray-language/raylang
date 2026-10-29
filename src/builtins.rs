@@ -733,66 +733,19 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
     (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
 }
 
-/// raysql #299: formateo de un float con modo y precisión, como `printf` — `"f"` (posicional con
-/// `precision` decimales), `"e"` (mantisa con `precision` decimales y exponente con signo y al menos
-/// dos dígitos: `1.5e+20`), `"g"` (el más corto de los dos según las reglas de C: exponente si
-/// `x < -4` o `x >= precision`, sin ceros finales) y `"shortest"` (los dígitos más cortos que se
-/// releen igual, como `to_string`, pero en exponente cuando `x < -4` o `x >= 15`, que es lo que
-/// imprime PostgreSQL para un float8). `precision` se ignora en `shortest`; negativa cuenta como 0.
-/// Helper compartido por la VM y el intérprete; el nativo lleva un espejo byte a byte
-/// (`__ray_format_float` en `transpile/runtime.rs`). ⚠️ Cambiar aquí = cambiar allí.
+/// raysql #299: formateo de un float con modo y precisión (`e` | `f` | `g` | `shortest`); la
+/// implementación vive en `ray-runtime/src/float_fmt.rs`, la misma que pega el transpilador en el
+/// runtime nativo (una sola fuente, byte-idéntica en los tres motores).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn format_float(f: f64, mode: &str, precision: i64) -> Result<String, String> {
-    fn exp_of(e: &str) -> i64 {
-        e.rsplit_once('e').map(|(_, x)| x.parse().unwrap_or(0)).unwrap_or(0)
-    }
-    fn exp_style(e: &str) -> String {
-        let (m, x) = e.rsplit_once('e').unwrap_or((e, "0"));
-        let x: i64 = x.parse().unwrap_or(0);
-        format!("{m}e{}{:02}", if x < 0 { '-' } else { '+' }, x.abs())
-    }
-    fn strip_zeros(s: &str) -> String {
-        if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s.to_string() }
-    }
-    fn positional(e: &str) -> String {
-        let (m, x) = e.rsplit_once('e').unwrap_or((e, "0"));
-        let x: i64 = x.parse().unwrap_or(0);
-        let neg = m.starts_with('-');
-        let digits: String = m.trim_start_matches('-').chars().filter(|c| *c != '.').collect();
-        let point = 1 + x;
-        let s = if point <= 0 {
-            format!("0.{}{}", "0".repeat((-point) as usize), digits)
-        } else if point as usize >= digits.len() {
-            format!("{}{}", digits, "0".repeat(point as usize - digits.len()))
-        } else {
-            format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
-        };
-        if neg { format!("-{s}") } else { s }
-    }
-    if !f.is_finite() {
-        return Ok(if f.is_nan() { "NaN" } else if f > 0.0 { "inf" } else { "-inf" }.to_string());
-    }
-    let p = precision.max(0) as usize;
-    match mode {
-        "f" => Ok(format!("{:.*}", p, f)),
-        "e" => Ok(exp_style(&format!("{:.*e}", p, f))),
-        "g" => {
-            let p = p.max(1);
-            let e = format!("{:.*e}", p - 1, f);
-            let x = exp_of(&e);
-            if x < -4 || x >= p as i64 {
-                let (m, _) = e.rsplit_once('e').unwrap_or((&e, "0"));
-                Ok(exp_style(&format!("{}e{}", strip_zeros(m), x)))
-            } else {
-                Ok(strip_zeros(&format!("{:.*}", (p as i64 - 1 - x).max(0) as usize, f)))
-            }
-        }
-        "shortest" => {
-            let e = format!("{:e}", f);
-            let x = exp_of(&e);
-            if x < -4 || x >= 15 { Ok(exp_style(&e)) } else { Ok(positional(&e)) }
-        }
-        other => Err(format!("format_float: unknown mode '{other}' (e | f | g | shortest)")),
-    }
+    ray_runtime::float_fmt::format_float(f, mode, precision)
+}
+#[cfg(target_arch = "wasm32")]
+#[path = "../crates/ray-runtime/src/float_fmt.rs"]
+mod float_fmt_impl;
+#[cfg(target_arch = "wasm32")]
+pub fn format_float(f: f64, mode: &str, precision: i64) -> Result<String, String> {
+    float_fmt_impl::format_float(f, mode, precision)
 }
 
 /// rayblob #282: MD5 de una pasada (16 octetos). La implementación vive en `ray-runtime` (Rust
@@ -3285,18 +3238,6 @@ pub fn tls_connect_h2(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_
 
 /// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
 /// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
-/// raysql #301: `tls_accept(h, cert, key)` toma el TEXTO PEM; quien pasa la RUTA del archivo recibía
-/// «the PEM contains no certificate». Si el argumento no empieza por `-----BEGIN`, es una sola línea
-/// corta y existe como archivo, el error lo dice.
-fn pem_path_hint(what: &str, pem: &str) -> Option<String> {
-    let t = pem.trim();
-    if !t.starts_with("-----BEGIN") && !t.contains('\n') && !t.is_empty() && t.len() < 4096 && std::path::Path::new(t).is_file() {
-        Some(format!("the {what} argument looks like a file path ('{t}'): pass the PEM text (fs.read_file), not the path"))
-    } else {
-        None
-    }
-}
-
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
     use rustls::pki_types::pem::PemObject;
@@ -3305,10 +3246,10 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
             .collect::<Result<_, _>>()
             .map_err(|e| format!("invalid certificate: {e}"))?;
     if certs.is_empty() {
-        return Err(pem_path_hint("certificate", cert_pem).unwrap_or_else(|| "the PEM contains no certificate".to_string()));
+        return Err(ray_runtime::tls::pem_path_hint("certificate", cert_pem).unwrap_or_else(|| "the PEM contains no certificate".to_string()));
     }
     let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-        .map_err(|e| pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
+        .map_err(|e| ray_runtime::tls::pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
     let cfg = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)

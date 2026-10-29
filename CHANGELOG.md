@@ -33,7 +33,8 @@ Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, ra
 - **MD5 en Rust, incremental y sin copiar la entrada** (#282): `md5.md5(bytes)` pasa de raylang
   puro a `ray-runtime/src/md5.rs` (64 MiB: nativo 512 → 179 ms y 1715 → 137 MB de pico; la VM 166
   ms) y `md5.md5_init()` abre un hasher para `crypto.hash_update`/`hash_final` como `sha256_init`
-  (`__hasher_new("md5")`, sin depender de ring).
+  (`__hasher_new("md5")`, sin depender de ring). En el nativo el MD5 se pega al programa como módulo:
+  vale con `--without crypto` y en el `rustc` pelado.
 - **`ray test --native`: un `assert`/`assert_eq`/`panic` que falla dice dónde** (#297), `at
   módulo:línea:columna` como la VM; un binario suelto imprime la misma segunda línea.
 - **Diagnósticos**: la función de un módulo que tapa un builtin (`lib::join` de 3 args frente al
@@ -50,7 +51,7 @@ Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, ra
 - **Paquetes**: `net` 0.13.0 — un `Content-Length`/`Transfer-Encoding` puesto por el handler ya no
   sale repetido (el encuadre lo pone el servidor, #283), `dns.query_a`/`query_aaaa` devuelven solo
   direcciones (el destino de un CNAME ya no se cuela, #286) y `log.emit` estampa milisegundos
-  (`2026-10-28T22:55:45.123Z`, #293); `db` 0.7.0 — `postgres.query_opt`/`exec_opt` distinguen `NULL`
+  (`2026-10-28T22:55:45.123Z`, #293, con el nuevo `time.to_iso8601_millis(ms)` de `std/time`); `db` 0.7.0 — `postgres.query_opt`/`exec_opt` distinguen `NULL`
   de `""` como en sqlite y la documentación del módulo va en inglés (#300); `oidc` 0.2.0 —
   `tokens.verify_access_token_for(p, token, audience, required, now_ms)` exige la audiencia (RFC
   9068 §4; `verify_access_token` documenta que no la comprueba, #289).

@@ -2081,22 +2081,23 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow_mut().pop())");
             }
-            // raysql #303: quitar/insertar por índice con los bounds (y el texto) de la indexación. El
-            // índice y el valor se evalúan ANTES del borrow (pueden leer del mismo arreglo).
+            // raysql #303: quitar/insertar por índice con los bounds (y el texto) de la indexación. Los
+            // operandos se evalúan en el orden del fuente (receptor, índice, valor), como la VM, y el
+            // borrow mutable llega después de los tres (el índice puede leer del mismo arreglo).
             "remove_at" | "array_remove_at" => {
-                out.push_str("{ let __rt_i: i64 = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; let __rt_a = ");
+                out.push_str("{ let __rt_a = ");
                 self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_i: i64 = ");
+                self.emit_expr(out, eff[1])?;
                 out.push_str("; let __rt_n = __rt_a.borrow().len() as i64; if __rt_i < 0 || __rt_i >= __rt_n { __ray_rt_err(&format!(\"index {} out of range (length {})\", __rt_i, __rt_n)) } let __rt_v = __rt_a.borrow_mut().remove(__rt_i as usize); __rt_v }");
             }
             "insert_at" | "array_insert_at" => {
-                out.push_str("{ let __rt_i: i64 = ");
+                out.push_str("{ let __rt_a = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_i: i64 = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; let __rt_x = ");
                 self.emit_expr(out, eff[2])?;
-                out.push_str("; let __rt_a = ");
-                self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_n = __rt_a.borrow().len() as i64; if __rt_i < 0 || __rt_i > __rt_n { __ray_rt_err(&format!(\"index {} out of range (length {})\", __rt_i, __rt_n)) } __rt_a.borrow_mut().insert(__rt_i as usize, __rt_x) }");
             }
             // position(a, x) -> Option<int>: índice de la 1ª ocurrencia. Igualdad estructural con `==`,
@@ -2685,10 +2686,11 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(") { Ok(__rt_id) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(__rt_id.to_string())])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e)])) } }");
             }
-            // rayblob #282: MD5 en Rust puro dentro de ray-runtime (no es ring, pero va con el crate).
-            "md5" if name.starts_with("__") && !self.exclude.contains("crypto") => {
-                self.needs_rt_crypto = true;
-                out.push_str("Rc::<[u8]>::from(ray_runtime::md5::digest(&");
+            // rayblob #282: MD5 en Rust puro pegado al programa (`__ray_md5`): sin ring, sin feature,
+            // también con `--without crypto` y en el `rustc` pelado.
+            "md5" if name.starts_with("__") => {
+                self.needs_md5 = true;
+                out.push_str("Rc::<[u8]>::from(__ray_md5::digest(&");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").to_vec())");
             }

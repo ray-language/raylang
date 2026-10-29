@@ -505,7 +505,7 @@ pub use stub::{accept, connect, connect_h2, upgrade, upgrade_insecure, TlsStream
 /// raysql #301: `tls_accept(h, cert, key)` toma el TEXTO PEM; quien pasa la RUTA del archivo recibía
 /// «the PEM contains no certificate». Si el argumento no empieza por `-----BEGIN`, es una sola línea
 /// corta y existe como archivo, el error lo dice.
-pub(crate) fn pem_path_hint(what: &str, pem: &str) -> Option<String> {
+pub fn pem_path_hint(what: &str, pem: &str) -> Option<String> {
     let t = pem.trim();
     if !t.starts_with("-----BEGIN") && !t.contains('\n') && !t.is_empty() && t.len() < 4096 && std::path::Path::new(t).is_file() {
         Some(format!("the {what} argument looks like a file path ('{t}'): pass the PEM text (fs.read_file), not the path"))

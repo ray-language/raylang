@@ -5,7 +5,7 @@
 //
 // API encadenable por UFCS (cross-module): `info(lg, "login").field("user", "ada").field_int("n", 3).emit();`
 // Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
-from net/time import from_epoch_millis, to_iso8601;
+from net/time import to_iso8601, to_iso8601_millis;
 import std/time;
 
 /// A structured JSON logger: a service name, a minimum level, and an optional trace id
@@ -191,15 +191,6 @@ pub fn render(e: LogEntry, ts: string) -> string {
 /// for deterministic output.
 pub fn emit(e: LogEntry) {
     if (e.level >= e.lg.min_level) {
-        print(render(e, now_iso8601_millis()));
+        print(render(e, to_iso8601_millis(time.now())));
     }
-}
-
-// `YYYY-MM-DDTHH:MM:SS.mmmZ` del reloj actual.
-fn now_iso8601_millis() -> string {
-    let ms = time.now();
-    let s = to_iso8601(from_epoch_millis(ms));
-    let frac = ms % 1000;
-    let pad = if (frac < 10) { "00" } else if (frac < 100) { "0" } else { "" };
-    s.substring(0, s.len() - 1) + "." + pad + to_string(frac) + "Z"
 }

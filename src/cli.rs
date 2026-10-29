@@ -4277,6 +4277,7 @@ const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); 
 const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M380
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
+const RT_FLOAT_FMT_RS: &str = include_str!("../crates/ray-runtime/src/float_fmt.rs"); // raysql #299
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
@@ -4415,6 +4416,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/b64.rs", RT_B64_RS),
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/md5.rs", RT_MD5_RS),
+        ("ray-runtime/src/float_fmt.rs", RT_FLOAT_FMT_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),

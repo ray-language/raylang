@@ -19339,3 +19339,18 @@ no se reprodujo aislado. Mover en vez de copiar la captura de `spawn` (#302) es 
 escape sobre el AST que no cabe en esta ronda; se documenta la receta (construir el estado dentro
 de la fibra) y la vía queda en IDEAS §119, junto con las tres piezas grandes de `net` (#284 cuerpo
 en streaming, #285 sigv4 de servidor, #287 `dns/message`).
+
+**La revisión pre-release de la PR (#608)** afinó ocho cosas, una de ellas un bug: el filtro de
+`Content-Length` del handler (#283) estaba en `user_headers`, que también escribe el
+`Content-Length` que `stream_response_len`/`file_response_len` guardan en `r.headers` — un archivo
+servido o un stream de tamaño conocido salían sin encuadre en keep-alive. Ahora se filtra solo en
+el camino del cuerpo bufferizado. Además: `format_float` y MD5 viven en `ray-runtime`
+(`float_fmt.rs`, `md5.rs`) y el transpilador los PEGA al programa por `include_str!` como módulos
+(`__ray_float_fmt`, `__ray_md5`): una sola fuente para los tres motores en vez de un espejo en
+cadena, y sin depender de ring ni del crate (vale con `--without crypto` y en el `rustc` pelado);
+el runtime de canales se decide mirando lo emitido (`__RayChan<`/`__RayTask<`), que cubre `let`,
+closures y alias además de structs y firmas; `remove_at`/`insert_at` evalúan receptor, índice y
+valor en el orden del fuente; `ray doc Tipo.método` documenta el método del trait del impl que
+cuadra (no el primer homónimo del módulo); `pem_path_hint` tiene una sola copia (pública en
+`ray-runtime::tls`); y la marca de tiempo con milisegundos es `time.to_iso8601_millis(ms)` en
+`std/time`, no un recorte local en `net/log`.

@@ -998,25 +998,20 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // claves llegan ya ORDENADAS del walker compartido (builtins::embed_walk) → el listado es
     // byte-idéntico al de la VM. Tabla vacía (built sin --embed ni [native] embed) → el MISMO
     // mensaje de sin-config que la VM.
-    // raysql #299: espejo byte a byte de `builtins::format_float` (⚠️ cambiar allí = cambiar aquí).
+    // raysql #299: la MISMA fuente que la VM (`ray-runtime/src/float_fmt.rs`), pegada como módulo
+    // del programa: no hay espejo que mantener. Solo si el programa la usa.
     if t.needs_format_float {
-        out.push_str(concat!(
-            "fn __ray_format_float(f: f64, mode: &str, precision: i64) -> Rc<str> {\n",
-            "    fn exp_of(e: &str) -> i64 { e.rsplit_once('e').map(|(_, x)| x.parse().unwrap_or(0)).unwrap_or(0) }\n",
-            "    fn exp_style(e: &str) -> String { let (m, x) = e.rsplit_once('e').unwrap_or((e, \"0\")); let x: i64 = x.parse().unwrap_or(0); format!(\"{m}e{}{:02}\", if x < 0 { '-' } else { '+' }, x.abs()) }\n",
-            "    fn strip_zeros(s: &str) -> String { if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s.to_string() } }\n",
-            "    fn positional(e: &str) -> String { let (m, x) = e.rsplit_once('e').unwrap_or((e, \"0\")); let x: i64 = x.parse().unwrap_or(0); let neg = m.starts_with('-'); let digits: String = m.trim_start_matches('-').chars().filter(|c| *c != '.').collect(); let point = 1 + x; let s = if point <= 0 { format!(\"0.{}{}\", \"0\".repeat((-point) as usize), digits) } else if point as usize >= digits.len() { format!(\"{}{}\", digits, \"0\".repeat(point as usize - digits.len())) } else { format!(\"{}.{}\", &digits[..point as usize], &digits[point as usize..]) }; if neg { format!(\"-{s}\") } else { s } }\n",
-            "    if !f.is_finite() { return Rc::from(if f.is_nan() { \"NaN\" } else if f > 0.0 { \"inf\" } else { \"-inf\" }); }\n",
-            "    let p = precision.max(0) as usize;\n",
-            "    let s = match mode {\n",
-            "        \"f\" => format!(\"{:.*}\", p, f),\n",
-            "        \"e\" => exp_style(&format!(\"{:.*e}\", p, f)),\n",
-            "        \"g\" => { let p = p.max(1); let e = format!(\"{:.*e}\", p - 1, f); let x = exp_of(&e); if x < -4 || x >= p as i64 { let (m, _) = e.rsplit_once('e').unwrap_or((&e, \"0\")); exp_style(&format!(\"{}e{}\", strip_zeros(m), x)) } else { strip_zeros(&format!(\"{:.*}\", (p as i64 - 1 - x).max(0) as usize, f)) } }\n",
-            "        \"shortest\" => { let e = format!(\"{:e}\", f); let x = exp_of(&e); if x < -4 || x >= 15 { exp_style(&e) } else { positional(&e) } }\n",
-            "        other => __ray_rt_err(&format!(\"format_float: unknown mode '{other}' (e | f | g | shortest)\")),\n",
-            "    };\n",
-            "    Rc::from(s)\n}\n",
-        ));
+        out.push_str("mod __ray_float_fmt {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/float_fmt.rs"));
+        out.push_str("}\n");
+        out.push_str("fn __ray_format_float(f: f64, mode: &str, precision: i64) -> Rc<str> { match __ray_float_fmt::format_float(f, mode, precision) { Ok(s) => Rc::from(s), Err(e) => __ray_rt_err(&e) } }\n");
+    }
+    // rayblob #282: MD5 en Rust puro pegado como módulo (no depende de ring ni del crate ray-runtime:
+    // vale también con `--without crypto` y en el `rustc` pelado).
+    if t.needs_md5 {
+        out.push_str("mod __ray_md5 {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/md5.rs"));
+        out.push_str("}\n");
     }
     if t.needs_b64 {
         // M380: una sola fuente de verdad — el módulo del runtime, sin depender del crate.

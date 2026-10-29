@@ -152,6 +152,8 @@ struct Transpiler {
     needs_rt_crypto: bool,
     /// raysql #299: emite `__ray_format_float` solo si el programa lo usa.
     needs_format_float: bool,
+    /// rayblob #282: emite el módulo MD5 solo si el programa lo usa.
+    needs_md5: bool,
     /// ¿Usa TLS (`__tls_connect`/`__tls_connect_h2`/`__tls_accept`/`__tls_upgrade`)? El binario transpilado
     /// hace I/O TLS **bloqueante** (hilos reales; `ray_runtime::tls::TlsStream` sobre `StreamOwned`). Añade
     /// la variante `Tls` al registro de handles inline y el despacho en `socket_read/write`. Implica
@@ -427,7 +429,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
         needs_handles: false,
-        needs_concurrency: program_mentions_channels(prog),
+        needs_concurrency: false,
         needs_signals: false,
         needs_stdin: false,
         needs_term: false,
@@ -445,6 +447,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_net: false,
         needs_rt_crypto: false,
         needs_format_float: false,
+        needs_md5: false,
         needs_rt_bigint: false,
         needs_rt_keychain: false,
         needs_rt_deflate: false,
@@ -881,6 +884,12 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
     t.emit_send_conv_impls(&mut out, prog)?; // M313: antes, porque registra conversores concretos
     t.emit_send_convs(&mut out)?;
+    // rayobs #292: el runtime de canales también cuando un TIPO lo menciona (campo de struct, `let`,
+    // closure, alias…) sin que haya ninguna OPERACIÓN de canal: se mira lo ya emitido, que es donde
+    // `rust_ty` escribió `__RayChan<`/`__RayTask<` — cubre todos los sitios de una vez.
+    if !t.needs_concurrency && (out.contains("__RayChan<") || out.contains("__RayTask<")) {
+        t.needs_concurrency = true;
+    }
     emit_runtime_features(&mut out, &mut t);
     // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.
     let mut rt_features = Vec::new();
@@ -1015,25 +1024,4 @@ fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
             return ok;
         }
     }
-}
-
-/// rayobs #292: ¿algún tipo del programa (campo de struct, payload de enum, firma de función) menciona
-/// `Channel<T>`/`Task<T>`? El runtime de canales (`__RayChan`) se emite solo bajo demanda y antes se
-/// activaba únicamente con una OPERACIÓN de canal: un `webserver.Response` (campo `stream:
-/// [Channel<bytes>]`) en un programa sin `send`/`recv` no compilaba (`cannot find type __RayChan`).
-fn program_mentions_channels(prog: &Program) -> bool {
-    fn ty(t: &Type) -> bool {
-        // Los tipos del AST llegan sin reclasificar (`Struct("Channel", [T])`): se normalizan antes.
-        match &types::normalize_type(t) {
-            Type::Channel(_) | Type::Task(_) => true,
-            Type::Array(e) => ty(e),
-            Type::Map(k, v) => ty(k) || ty(v),
-            Type::Tuple(ts) | Type::Struct(_, ts) | Type::Enum(_, ts) => ts.iter().any(ty),
-            Type::Fn(ps, r) => ps.iter().any(ty) || ty(r),
-            _ => false,
-        }
-    }
-    prog.structs.iter().any(|s| s.fields.iter().any(|(_, t)| ty(t)))
-        || prog.enums.iter().any(|e| e.variants.iter().any(|v| v.payload.iter().any(ty)))
-        || prog.functions.iter().any(|f| f.params.iter().any(|p| ty(&p.ty)) || ty(&f.return_type))
 }

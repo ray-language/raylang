@@ -467,15 +467,39 @@ fn std_trait_method_doc(symbol: &str) -> Option<String> {
         let Some(src) = crate::stdlib::embedded(mod_name) else { continue };
         let Ok(tokens) = crate::lexer::lex(src) else { continue };
         let Ok(prog) = crate::parser::parse(tokens) else { continue };
-        let hit = prog.impls.iter().any(|i| {
+        let hit = prog.impls.iter().find(|i| {
             let target = match &i.target {
                 crate::ast::Type::Struct(n, _) | crate::ast::Type::Enum(n, _) => n.as_str(),
                 other => return format!("{other}") == type_name,
             };
             target == type_name && i.methods.iter().any(|f| f.name == method)
         });
-        if hit && let Some(text) = source_symbol_doc(mod_name, src, method) {
-            return Some(text);
+        // La firma y las `///` salen del TRAIT del impl que cuadra (un `fn kill` libre u otro trait
+        // con un método homónimo no se cuelan): se busca la declaración del método DESPUÉS de la
+        // línea `pub trait Nombre`.
+        if let Some(i) = hit
+            && let Some(t) = prog.traits.iter().find(|t| t.is_pub && t.name == i.trait_name)
+            && let Some(m) = t.methods.iter().find(|m| m.name == method)
+        {
+            let lines: Vec<&str> = src.lines().collect();
+            let trait_at = lines.iter().position(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name))
+            }).unwrap_or(0);
+            let head = format!("fn {method}(");
+            let mut doc_lines: Vec<&str> = Vec::new();
+            if let Some(k) = lines[trait_at..].iter().position(|l| l.trim_start().starts_with(&head)) {
+                let mut j = trait_at + k;
+                while j > 0 && (lines[j - 1].trim_start().starts_with("///") || lines[j - 1].trim_start().starts_with("//")) {
+                    j -= 1;
+                    let l = lines[j].trim_start();
+                    if l.starts_with("///") {
+                        doc_lines.insert(0, l.trim_start_matches("///").trim());
+                    }
+                }
+            }
+            let text = format!("{mod_name}: {}", trait_method_signature(&t.name, m));
+            return Some(if doc_lines.is_empty() { text } else { format!("{text}\n{}", doc_lines.join(" ")) });
         }
     }
     None

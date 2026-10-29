@@ -1918,5 +1918,6 @@ fn remove_at_and_insert_at_are_intercepted() {
     assert!(rust.contains(".borrow_mut().insert(__rt_i as usize, __rt_x)"), "{rust}");
     assert!(rust.contains(".borrow_mut().remove(__rt_i as usize)"), "{rust}");
     assert!(rust.contains("index {} out of range (length {})"), "{rust}");
-    assert!(!transpile_src("fn main() -> int { 0 }").contains("fn __ray_format_float"), "solo si se usa");
+    assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_float_fmt"), "solo si se usa");
+    assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_md5"), "md5 solo si se usa");
 }

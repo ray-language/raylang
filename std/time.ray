@@ -186,6 +186,16 @@ pub fn to_iso8601(dt: DateTime) -> string {
         + "Z"
 }
 
+// rayobs #293: la forma con milisegundos (la que `parse_iso8601_millis` lee), desde un instante en ms.
+/// Formats an instant (ms since the epoch, UTC) as ISO 8601 with milliseconds:
+/// `YYYY-MM-DDTHH:MM:SS.mmmZ` — what `parse_iso8601_millis` reads back. Timestamps that must
+/// order events within a second (logs, spans) want this one; `to_iso8601` has second resolution.
+pub fn to_iso8601_millis(ms: int) -> string {
+    let s = to_iso8601(from_epoch_millis(ms));
+    let frac = (ms % 1000 + 1000) % 1000;
+    s.substring(0, s.len() - 1) + "." + pad(frac, 3) + "Z"
+}
+
 // Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
 /// Formats a DateTime as "basic" ISO 8601 (no separators): `YYYYMMDDTHHMMSSZ`.
 /// This is the `X-Amz-Date` format used by AWS Signature V4.

@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.85** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.86** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -389,7 +389,8 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 - **`if let patrón = expr bloque [else (bloque | if …)]`** (M40.1b) es azúcar de **`match (expr) {
   patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
-- **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
+- **`match (expr) { patrón [if guarda] => (expr | bloque | for …), … }`** es expresión (un `for`
+  como brazo baja a un bloque `{ for … }` de valor `unit`, como la asignación de M344); brazos convergentes
   (misma regla de divergencia; todos divergentes → unit). Un brazo cuyo valor no determina sus
   parámetros de tipo (`Result.Err(e)` sin tipo esperado) toma el tipo que fijan los demás brazos,
   vaya antes o después (M204); si ninguno lo fija, es error de inferencia. **Exhaustivo**. El escrutinio
@@ -648,8 +649,9 @@ sobre el que se escriben las capas 1 y 2.
 - **Caracteres**: `char_code(c) -> int` (code point Unicode) y `char_from_code(n) -> Option<char>`
   (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
   replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes
-  parse_int parse_float` · **Arreglos**: `push pop reverse contains position sort map filter fold
-  any all iter` (+ `a + b` concatena) · `chars_to_string(cs: [char], i, j) -> string` (el tramo
+  parse_int parse_float` · **Arreglos**: `push pop remove_at insert_at reverse contains position sort map filter fold
+  any all iter` (+ `a + b` concatena; `remove_at(i) -> T` e `insert_at(i, x)` mutan en el sitio y
+  fuera de rango son error de ejecución como `a[i]`) · `chars_to_string(cs: [char], i, j) -> string` (el tramo
   `[i, j)` de un `[char]`, con clamp; la vuelta de `chars`) · **Bytes**: `bytes_of bytes_concat sub_bytes index_of starts_with from_utf8` (+ `b1 + b2`,
   `to_string` → hex).
 - **Entrada/entorno**: `args() -> [string]` (argumentos del programa), `env(name) ->

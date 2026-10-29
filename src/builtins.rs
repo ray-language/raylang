@@ -733,6 +733,36 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
     (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
 }
 
+/// raysql #299: formateo de un float con modo y precisión (`e` | `f` | `g` | `shortest`); la
+/// implementación vive en `ray-runtime/src/float_fmt.rs`, la misma que pega el transpilador en el
+/// runtime nativo (una sola fuente, byte-idéntica en los tres motores).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn format_float(f: f64, mode: &str, precision: i64) -> Result<String, String> {
+    ray_runtime::float_fmt::format_float(f, mode, precision)
+}
+#[cfg(target_arch = "wasm32")]
+#[path = "../crates/ray-runtime/src/float_fmt.rs"]
+mod float_fmt_impl;
+#[cfg(target_arch = "wasm32")]
+pub fn format_float(f: f64, mode: &str, precision: i64) -> Result<String, String> {
+    float_fmt_impl::format_float(f, mode, precision)
+}
+
+/// rayblob #282: MD5 de una pasada (16 octetos). La implementación vive en `ray-runtime` (Rust
+/// puro, sin ring); el build wasm32 del playground, que no enlaza ese crate, incluye el MISMO
+/// archivo por `#[path]`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn md5(data: &[u8]) -> Vec<u8> {
+    ray_runtime::md5::digest(data).to_vec()
+}
+#[cfg(target_arch = "wasm32")]
+#[path = "../crates/ray-runtime/src/md5.rs"]
+mod md5_impl;
+#[cfg(target_arch = "wasm32")]
+pub fn md5(data: &[u8]) -> Vec<u8> {
+    md5_impl::digest(data).to_vec()
+}
+
 /// Hasta esta longitud, buscar UN byte por barrido escalar gana a memchr (sin su arranque); por
 /// encima, memchr (`str::find(char)`/`rfind(char)`, SIMD) gana al barrido. Un byte suelto en un `&str`
 /// válido es siempre ASCII, así que `b as char` es exacto. (Revisión de #600: el barrido solo no
@@ -3216,10 +3246,10 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
             .collect::<Result<_, _>>()
             .map_err(|e| format!("invalid certificate: {e}"))?;
     if certs.is_empty() {
-        return Err("the PEM contains no certificate".to_string());
+        return Err(ray_runtime::tls::pem_path_hint("certificate", cert_pem).unwrap_or_else(|| "the PEM contains no certificate".to_string()));
     }
     let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-        .map_err(|e| format!("invalid private key: {e}"))?;
+        .map_err(|e| ray_runtime::tls::pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
     let cfg = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -4636,6 +4666,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__hasher_clone expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // rayblob #282: MD5 de una pasada en Rust (antes raylang puro con una copia a `[int]`: ~23× la
+    // entrada en memoria). El incremental va por `__hasher_new("md5")`.
+    Builtin { name: "__md5", opcode: OpCode::Md5, check: |a| {
+        arity(a, 1, "md5", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("md5 expects bytes, not {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
     Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 expects bytes, not {}", a[0]))); }
@@ -4753,6 +4790,16 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__float_bits", " (the float)")?;
         if a[0] != Type::Float { return Err((Some(0), format!("__float_bits expects a float, not {}", a[0]))); }
         Ok(Type::Int)
+    } },
+    // raysql #299: formateo de float con modo (`e` | `f` | `g` | `shortest`) y precisión; `std/math`
+    // → `format_float`. El trabajo lo hace `builtins::format_float` (compartido con el intérprete; el
+    // nativo lleva un espejo byte a byte en su runtime).
+    Builtin { name: "__format_float", opcode: OpCode::FormatFloat, check: |a| {
+        arity(a, 3, "__format_float", " (float, mode, precision)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("__format_float expects a float, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__format_float expects a string mode (e | f | g | shortest), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__format_float expects an int precision, not {}", a[2]))); }
+        Ok(Type::String)
     } },
     Builtin { name: "__float_from_bits", opcode: OpCode::FloatFromBits, check: |a| {
         arity(a, 1, "__float_from_bits", " (the 64 bits as int)")?;
@@ -5024,6 +5071,26 @@ static BUILTINS: &[Builtin] = &[
             Type::Array(elem) => Ok(Type::Array(elem.clone())),
             other => Err((Some(0), format!("__pop expects an array, not {}", other))),
         }
+    } },
+    // raysql #303: quitar/insertar por índice (mutan el arreglo). Prelude → remove_at/insert_at.
+    Builtin { name: "__array_remove_at", opcode: OpCode::ArrayRemoveAt, check: |a| {
+        arity(a, 2, "__array_remove_at", " (array, index)")?;
+        let elem = match &a[0] {
+            Type::Array(elem) => (**elem).clone(),
+            other => return Err((Some(0), format!("__array_remove_at expects an array, not {}", other))),
+        };
+        if a[1] != Type::Int { return Err((Some(1), format!("__array_remove_at expects an int index, not {}", a[1]))); }
+        Ok(elem)
+    } },
+    Builtin { name: "__array_insert_at", opcode: OpCode::ArrayInsertAt, check: |a| {
+        arity(a, 3, "__array_insert_at", " (array, index, value)")?;
+        let elem = match &a[0] {
+            Type::Array(elem) => (**elem).clone(),
+            other => return Err((Some(0), format!("__array_insert_at expects an array, not {}", other))),
+        };
+        if a[1] != Type::Int { return Err((Some(1), format!("__array_insert_at expects an int index, not {}", a[1]))); }
+        if a[2] != elem { return Err((Some(2), format!("__array_insert_at expects a {} (the element type), not {}", elem, a[2]))); }
+        Ok(Type::Unit)
     } },
     // __position(a, x) -> [int] (M11.7b): [] o [i] (índice de la 1ª ocurrencia). Prelude → Option<int>.
     Builtin { name: "__position", opcode: OpCode::Position, check: |a| {

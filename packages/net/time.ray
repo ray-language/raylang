@@ -8,6 +8,7 @@ pub from std/time import
     now_utc,
     to_epoch_millis,
     to_iso8601,
+    to_iso8601_millis,
     to_iso8601_basic,
     date_stamp,
     to_rfc1123,

@@ -2059,6 +2059,27 @@ impl<'a> Vm<'a> {
                     HeapValue::Bytes(b) => self.push(HeapValue::bytes(crate::builtins::sha256(&b))),
                     _ => unreachable!("the checker guarantees bytes"),
                 },
+                // rayblob #282: MD5 en Rust (antes raylang puro con una copia a `[int]`).
+                OpCode::Md5 => match self.pop() {
+                    HeapValue::Bytes(b) => self.push(HeapValue::bytes(crate::builtins::md5(&b))),
+                    _ => unreachable!("the checker guarantees bytes"),
+                },
+                // raysql #299: formateo de float con modo; un modo desconocido es error de ejecución.
+                OpCode::FormatFloat => {
+                    let prec = self.pop_int();
+                    let mode = self.pop();
+                    let f = self.pop();
+                    let (HeapValue::Float(f), HeapValue::Str(mode)) = (f, mode) else {
+                        unreachable!("the checker guarantees (float, string)")
+                    };
+                    match crate::builtins::format_float(f, &mode, prec) {
+                        Ok(s) => self.push(HeapValue::Str(s.into())),
+                        Err(e) => {
+                            let (l, c) = pos!();
+                            return Err(runtime_error(l, c, &e));
+                        }
+                    }
+                }
                 // M126: hasher incremental — el estado vive en ray_runtime::crypto (compartido con
                 // el nativo). Arreglos etiquetados; std/crypto los envuelve en Result.
                 OpCode::PkOp => {
@@ -2813,6 +2834,56 @@ impl<'a> Vm<'a> {
                     elems.reverse();
                     let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
+                }
+                // raysql #303: quitar/insertar por índice, con bounds como la indexación. Caminos nativos
+                // de IntArray/FloatArray como `Push`/`ArrayPop`; lo demás degrada al arreglo genérico.
+                OpCode::ArrayRemoveAt => {
+                    let i = self.pop_int();
+                    let h = self.pop_obj();
+                    let len = match self.cur.heap.get_mut(h) {
+                        Obj::IntArray(xs) => xs.len(),
+                        Obj::FloatArray(xs) => xs.len(),
+                        Obj::Array(xs) => xs.len(),
+                        _ => unreachable!("the checker guarantees an array"),
+                    };
+                    if i < 0 || i as usize >= len {
+                        let (l, c) = pos!();
+                        return Err(runtime_error(l, c, &format!("index {} out of range (length {})", i, len)));
+                    }
+                    let v = match self.cur.heap.get_mut(h) {
+                        Obj::IntArray(xs) => HeapValue::Int(xs.remove(i as usize)),
+                        Obj::FloatArray(xs) => HeapValue::Float(xs.remove(i as usize)),
+                        _ => self.as_array_mut(h).remove(i as usize),
+                    };
+                    self.push(v);
+                }
+                OpCode::ArrayInsertAt => {
+                    let v = self.pop();
+                    let i = self.pop_int();
+                    let h = self.pop_obj();
+                    let len = match self.cur.heap.get_mut(h) {
+                        Obj::IntArray(xs) => xs.len(),
+                        Obj::FloatArray(xs) => xs.len(),
+                        Obj::Array(xs) => xs.len(),
+                        _ => unreachable!("the checker guarantees an array"),
+                    };
+                    if i < 0 || i as usize > len {
+                        let (l, c) = pos!();
+                        return Err(runtime_error(l, c, &format!("index {} out of range (length {})", i, len)));
+                    }
+                    let i = i as usize;
+                    match (self.cur.heap.get_mut(h), &v) {
+                        (Obj::IntArray(xs), HeapValue::Int(n)) => xs.insert(i, *n),
+                        (Obj::Array(xs), HeapValue::Int(n)) if xs.is_empty() => {
+                            *self.cur.heap.get_mut(h) = Obj::IntArray(vec![*n]);
+                        }
+                        (Obj::FloatArray(xs), HeapValue::Float(f)) => xs.insert(i, *f),
+                        (Obj::Array(xs), HeapValue::Float(f)) if xs.is_empty() => {
+                            *self.cur.heap.get_mut(h) = Obj::FloatArray(vec![*f]);
+                        }
+                        _ => self.as_array_mut(h).insert(i, v),
+                    }
+                    self.push(HeapValue::Unit);
                 }
                 OpCode::ArrayPop => {
                     // Muta el arreglo quitando el último; devuelve [] o [x]. Prelude → Option<T>.

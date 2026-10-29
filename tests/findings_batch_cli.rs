@@ -578,8 +578,9 @@ fn ray_test_native_runs_each_suite_as_a_binary() {
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(out.contains("running 6 test(s) — native binaries"), "{out}");
     assert!(out.contains("hello from test\nok    prints_and_passes ("), "{out}");
-    assert!(out.contains("FAIL  asserts_fail\n        assert_eq failed: 6 != 7\n"), "{out}");
-    assert!(out.contains("FAIL  panics\n        boom\n"), "{out}");
+    // raybus #297: el nativo dice DÓNDE falló (`módulo:línea:col`), como la VM.
+    assert!(out.contains("FAIL  asserts_fail\n        assert_eq failed: 6 != 7\n        at main:5:21\n"), "{out}");
+    assert!(out.contains("FAIL  panics\n        boom\n        at main:7:15\n"), "{out}");
     assert!(out.contains("FAIL  math.double_fails\n        the test returned false\n"), "{out}");
     assert!(out.contains("-- tests/extra.ray\nok    extra_ok ("), "{out}");
     assert!(out.contains("result: 3 of 6 test(s) failed ✗"), "{out}");
@@ -1190,4 +1191,119 @@ fn main() -> int {
     std::fs::write(d.join("bad2.ray"), "fn f() -> int { 1 }\nconst Z: int = f() + 1;\nfn main() -> int { print(Z); 0 }\n").unwrap();
     let (_o, err, _c) = ray(&d, &["run", "bad2.ray"]);
     assert!(err.contains("the value of constant 'Z' must be a constant expression"), "{err}");
+}
+
+/// Hallazgos de la tanda 1.27.85 (rayblob/raybus/raydns/rayobs/raysql): #280 `send(ch, Result.Ok(0))`,
+/// #281 `unwrap` con un error struct, #292 un campo `[Channel<T>]` sin operaciones de canal, #294 un
+/// `for` como brazo de `match`, #298 `0.0`/`-0.0`, #303 `remove_at`/`insert_at` y #299 `format_float`
+/// — mismo resultado en los tres motores.
+#[test]
+fn findings_1_27_85_run_on_all_engines() {
+    let d = tmp("findings_1_27_85");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/math;
+struct Fail { code: string, }
+struct Box { chs: [Channel<int>], }
+fn half(n: int) -> Result<int, Fail> {
+    if (n % 2 == 0) { Result.Ok(n / 2) } else { Result.Err(Fail { code: "odd" }) }
+}
+fn main() -> int {
+    print(half(4).unwrap());
+    let b = Box { chs: [] };
+    print(b.chs.len());
+    let names: Result<[string], string> = Result.Ok(["x", "y"]);
+    match (names) {
+        Result.Ok(ns) => for n in ns { print(n) },
+        Result.Err(e) => print(e),
+    }
+    print(to_string(0.0) + " " + to_string(-0.0));
+    var xs = [1, 2, 3, 4];
+    let r = xs.remove_at(1);
+    xs.insert_at(0, 10);
+    insert_at(xs, xs.len(), 99);
+    print("${r} ${xs[0]} ${xs[xs.len() - 1]} ${xs.len()}");
+    print(math.format_float(1e100, "shortest", 0) + " " + math.format_float(1e-5, "shortest", 0) + " " + math.format_float(123.456, "e", 3) + " " + math.format_float(100.0, "g", 6) + " " + math.format_float(-2.5, "f", 2));
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "2\n0\nx\ny\n0 -0\n2 10 99 5\n1e+100 1e-05 1.235e+02 100 -2.50\n");
+    // #280: el literal de enum enviado por un canal (VM y nativo: el intérprete no tiene canales).
+    let d = tmp("findings_280");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() -> int {
+    let ch: Channel<Result<int, string>> = Channel.bounded(1);
+    send(ch, Result.Ok(0));
+    match (recv(ch)) {
+        Option.Some(Result.Ok(n)) => print("ok ${n}"),
+        _ => print("other"),
+    }
+    let oc: Channel<Option<int>> = Channel.bounded(1);
+    send(oc, Option.None);
+    match (recv(oc)) {
+        Option.Some(Option.None) => print("none"),
+        _ => print("other"),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    vm_and_native(&d, "ok 0\nnone\n");
+}
+
+/// raybus #296: una función de módulo que tapa un builtin (`lib::join` de 3 args) lo dice en el
+/// error de aridad, con la vía para llamar al builtin.
+#[test]
+fn a_module_function_that_shadows_a_builtin_says_so_on_arity_errors() {
+    let d = tmp("findings_296");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"p296\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n").unwrap();
+    std::fs::write(
+        d.join("src/lib.ray"),
+        "pub fn first() -> string { join([\"a\", \"b\"], \",\") }\nfn join(group: string, member: string, n: int) -> string { \"${group}/${member}/${n}\" }\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("src/main.ray"), "import lib;\nfn main() { print(lib.first()); }\n").unwrap();
+    let (_out, err, code) = ray(&d, &["run", "src/main.ray"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(
+        err.contains("'lib::join' expects 3 argument(s), received 2 (the module's own 'join' shadows the builtin here; call builtin.join(…) for the builtin)"),
+        "{err}"
+    );
+}
+
+/// raydns #288: una clave entre comillas vale en cualquier parte de la ruta, también en una cabecera
+/// de tabla (`[record."db.legacy"]`, `[record."@"]`).
+#[test]
+fn quoted_keys_are_accepted_in_toml_table_headers() {
+    let d = tmp("findings_288");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/toml;
+fn main() -> int {
+    let src = "[record.\"db.legacy\"]\nttl = 1\n[record.\"@\"]\nttl = 2\n[plain.sub]\n\"a.b\" = 3\n";
+    match (toml.parse_toml(src)) {
+        Result.Ok(es) => {
+            print(es.len());
+            for k in ["record.\"db.legacy\".ttl", "record.\"@\".ttl", "plain.sub.\"a.b\""] {
+                match (toml.toml_get(es, k)) {
+                    Option.Some(v) => print(toml.toml_show(v)),
+                    Option.None => print("missing " + k),
+                }
+            }
+        },
+        Result.Err(e) => print("err " + e),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let (out, err, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "3\n1\n2\n3\n", "{out}");
 }

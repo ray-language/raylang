@@ -397,6 +397,7 @@ fn doc_text_raw(symbol: &str, path: Option<&str>) -> String {
         (None, Some(d)) => format!("{symbol}: {d}"),
         (None, None) => prelude_doc_text(symbol)
             .or_else(|| std_doc_text(symbol))
+            .or_else(|| std_trait_method_doc(symbol))
             .or_else(|| std_module_listing(symbol))
             .or_else(|| path.and_then(|p| project_doc_text(symbol, p)))
             .or_else(|| path.and_then(|p| project_module_listing(symbol, p)))
@@ -438,6 +439,67 @@ fn std_doc_text(symbol: &str) -> Option<String> {
     for (mod_name, src) in candidates {
         if let Some(text) = source_symbol_doc(&mod_name, src, &func) {
             return Some(text);
+        }
+    }
+    None
+}
+
+/// rayobs #295: `Tipo.método` para un método que un tipo de la stdlib recibe de un TRAIT del módulo
+/// (`Proc.kill` → `ProcOps.kill` de `std/process`; también `process.Proc.kill`). `std_doc_text`
+/// busca `módulo.función`, así que `Proc.kill` caía en «no es un builtin»: aquí se recorren los
+/// `impl Trait for Tipo` de cada módulo embebido y se documenta el método del trait que cuadra.
+fn std_trait_method_doc(symbol: &str) -> Option<String> {
+    let (type_part, method) = symbol.rsplit_once('.')?;
+    if method.is_empty() || type_part.is_empty() || symbol.contains('/') {
+        return None;
+    }
+    // `process.Proc` acota al módulo; `Proc` busca en todos.
+    let (module, type_name) = match type_part.rsplit_once('.') {
+        Some((m, t)) => (Some(m), t),
+        None => (None, type_part),
+    };
+    for mod_name in crate::stdlib::names() {
+        if let Some(m) = module
+            && mod_name.rsplit('/').next() != Some(m)
+        {
+            continue;
+        }
+        let Some(src) = crate::stdlib::embedded(mod_name) else { continue };
+        let Ok(tokens) = crate::lexer::lex(src) else { continue };
+        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let hit = prog.impls.iter().find(|i| {
+            let target = match &i.target {
+                crate::ast::Type::Struct(n, _) | crate::ast::Type::Enum(n, _) => n.as_str(),
+                other => return format!("{other}") == type_name,
+            };
+            target == type_name && i.methods.iter().any(|f| f.name == method)
+        });
+        // La firma y las `///` salen del TRAIT del impl que cuadra (un `fn kill` libre u otro trait
+        // con un método homónimo no se cuelan): se busca la declaración del método DESPUÉS de la
+        // línea `pub trait Nombre`.
+        if let Some(i) = hit
+            && let Some(t) = prog.traits.iter().find(|t| t.is_pub && t.name == i.trait_name)
+            && let Some(m) = t.methods.iter().find(|m| m.name == method)
+        {
+            let lines: Vec<&str> = src.lines().collect();
+            let trait_at = lines.iter().position(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name))
+            }).unwrap_or(0);
+            let head = format!("fn {method}(");
+            let mut doc_lines: Vec<&str> = Vec::new();
+            if let Some(k) = lines[trait_at..].iter().position(|l| l.trim_start().starts_with(&head)) {
+                let mut j = trait_at + k;
+                while j > 0 && (lines[j - 1].trim_start().starts_with("///") || lines[j - 1].trim_start().starts_with("//")) {
+                    j -= 1;
+                    let l = lines[j].trim_start();
+                    if l.starts_with("///") {
+                        doc_lines.insert(0, l.trim_start_matches("///").trim());
+                    }
+                }
+            }
+            let text = format!("{mod_name}: {}", trait_method_signature(&t.name, m));
+            return Some(if doc_lines.is_empty() { text } else { format!("{text}\n{}", doc_lines.join(" ")) });
         }
     }
     None
@@ -1236,6 +1298,11 @@ mod tests {
         let all = doc_text("last_index_of");
         assert!(all.contains("last_index_of(s: string") && all.contains("bytes.last_index_of(self"), "{all}");
         assert!(doc_text("bytes.no_such_method").contains("is not a builtin"));
+        // rayobs #295: un método que el tipo recibe de un TRAIT del módulo (`impl ProcOps for Proc`).
+        let k = doc_text("Proc.kill");
+        assert!(k.starts_with("std/process: kill(self, force: bool)") && k.contains("trait ProcOps"), "{k}");
+        assert!(doc_text("process.Proc.kill").contains("trait ProcOps"));
+        assert!(doc_text("Proc.no_such").contains("is not a builtin"));
     }
 
     /// M354 (rayauth R29): un alias de tipo público es superficie — firma `type X = …` con sus `///`

@@ -33,6 +33,9 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   int or both float"), and there is no `n.to_float()`/`float(n)`. Convert with `as`: `n as float`,
   `x as int` (truncates toward zero, saturating), `c as int` (code point), `n as char`, `n as u8`.
   `std/math` (`floor`/`round`/`trunc`) returns `float` — `math.round(x) as int` for an integer.
+  `to_string(f)`/`print(f)` give the shortest round-trip digits, always positional (`3.0` prints
+  `3`, `1e100` is 101 chars); `math.format_float(f, "e"|"f"|"g"|"shortest", precision)` picks the
+  format (`"shortest"` = exponent when x < -4 or x >= 15, as PostgreSQL prints a float8).
 - `int` is 64-bit signed and OVERFLOW IS A RUNTIME ERROR (`+ - *`, `abs`, `/` of `MIN` by -1; exit
   70), never a silent wrap — so bound what a peer controls (a size, a count) before doing
   arithmetic on it. `math.checked_add/checked_sub/checked_mul(a, b) -> Option<int>` (None on
@@ -221,6 +224,9 @@ above the file; a stray file compiled from inside another project gets that proj
 ```raylang
 let ch: Channel<int> = Channel.new();            // annotate; Channel.bounded(n) = bounded
 spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
+// What the closure CAPTURES is deep-copied into the new fiber when it starts (O(n)), and the
+//   original stays alive in the parent: build a big state INSIDE the fiber that owns it
+//   (`spawn(fn() { let db = load(); serve(db); })`), not before the spawn.
 // A task that FAILS (runtime error, panic) and is never joined ends SILENTLY: no message, main
 //   goes on. `join(t)` re-raises the failure, `try_join(t) -> Result<T, string>` returns it: join
 //   (or try_join and log) every task whose failure matters, or wrap its body and eprint the error.
@@ -290,7 +296,7 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    `s.substring(i, j)` are O(1) on ASCII text and amortized O(1) when walking non-ASCII text in
    order, O(distance) on random jumps — VM and native; `cs.chars_to_string(i, j)` cuts a
    `[char]` from `s.chars()` in O(j − i)) · arrays `xs.len()
-   xs.push(v) xs.pop() xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
+   xs.push(v) xs.pop() xs.remove_at(i) -> T xs.insert_at(i, v) xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
    `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
    m.values()`; reading is `m.get(k) -> Option<V>` (also the free `get(m, k)`) and
@@ -301,7 +307,8 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    `b[i] = v` is a type error — build it with `bytes_of([…])` or a `bytesbuilder`.
    (`sort(xs)` is free, so `xs.sort()` also works.)
    Return types that surprise: `s.index_of(x) -> Option<int>`, `xs.position(v) -> Option<int>`,
-   `xs.pop() -> Option<T>`, `parse_int(s) -> Option<int>`, `parse_float(s) -> Option<float>`,
+   `xs.pop() -> Option<T>` (`xs.remove_at(i) -> T` is by index and a runtime error out of range,
+   like `xs[i]`; arrays have no `remove(key)`), `parse_int(s) -> Option<int>`, `parse_float(s) -> Option<float>`,
    `from_utf8(b) -> Result<string, string>`, `s.chars() -> [char]`, `s.split(sep) -> [string]`,
    `fs.read_file(p) -> Result<string, string>`, `fs.read_file_bytes(p) -> Result<bytes, string>`,
    `char_code(c) -> int`, `char_from_code(n) -> Option<char>`. When in doubt, `ray_doc <name>` gives the
@@ -351,7 +358,7 @@ then `{% import site/model %}` for types of other modules (not `from … import`
 (`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
 `ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
 std/markdown std/inflate std/deflate std/zip (read-only, in memory, no ZIP64; the `zip` package reads and WRITES on disk, ZIP64, streaming) std/update std/huffman (only HPACK's static code, RFC 7541 — not for DEFLATE) std/image std/audio std/media std/ui std/embed
-std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
+std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} (`md5.md5(b)` one pass in Rust; `md5.md5_init()` + `crypto.hash_update/hash_final` incremental) std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
 then `login.begin(p, client)` gives a `Pending` (code + PKCE + nonce; redirect the browser to `pending.url`)

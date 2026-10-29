@@ -5,7 +5,8 @@
 //
 // API encadenable por UFCS (cross-module): `info(lg, "login").field("user", "ada").field_int("n", 3).emit();`
 // Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
-from net/time import now_utc, to_iso8601;
+from net/time import to_iso8601, to_iso8601_millis;
+import std/time;
 
 /// A structured JSON logger: a service name, a minimum level, and an optional trace id
 /// (M88.3: "" = none; set it with `with_trace` so every entry carries a `trace_id` field).
@@ -182,11 +183,14 @@ pub fn render(e: LogEntry, ts: string) -> string {
 }
 
 // Emite la entrada (a stdout) si su nivel alcanza el mínimo del logger. La marca de tiempo es la actual
-// en UTC (ISO 8601). Para una salida determinista (tests), usa `render(e, ts)` con un `ts` fijo.
+// en UTC (ISO 8601 con milisegundos — rayobs #293: con segundos, tres `emit` seguidos compartían `ts`
+// y no se podían ordenar ni casar con un span). Para una salida determinista (tests), `render(e, ts)`.
 /// Prints the entry as a JSON line to stdout if its level reaches the logger's minimum.
-/// The timestamp is the current UTC time in ISO 8601; use `render(e, ts)` for deterministic output.
+/// The timestamp is the current UTC time in ISO 8601 with milliseconds
+/// (`2026-10-28T22:55:45.123Z`; `time.parse_iso8601_millis` reads it back); use `render(e, ts)`
+/// for deterministic output.
 pub fn emit(e: LogEntry) {
     if (e.level >= e.lg.min_level) {
-        print(render(e, to_iso8601(now_utc())));
+        print(render(e, to_iso8601_millis(time.now())));
     }
 }

@@ -12,6 +12,8 @@ pub mod audio;
 pub mod b64;
 pub mod bigint;
 pub mod keychain;
+pub mod md5;
+pub mod float_fmt;
 pub mod media;
 pub mod deflate;
 pub mod qr;

@@ -422,6 +422,8 @@ print(xs.len());               // 4
 print(xs.contains(4));         // true
 print(xs.position(99));        // Some(0)
 print(xs.pop());               // Some(4) — y xs queda [99, 2, 3]
+xs.insert_at(0, 5);            // inserta en el índice (desplaza el resto): [5, 99, 2, 3]
+print(xs.remove_at(1));        // 99 — quita por índice; fuera de rango es error, como xs[i]
 let ys = xs + [7, 8];          // concatenación (copia nueva)
 let z = xs.sort();             // copia ordenada (T: Ord)
 let rest = xs.slice(1, xs.len());          // copia de [1, len): sin el primero
@@ -483,6 +485,12 @@ fn area(f: Figura) -> float {
     }
 }
 ```
+
+Un `float` se imprime con los dígitos más cortos que se releen igual, siempre en posicional
+(`3.0` → `3`, `1e100` → un 1 y cien ceros). Para elegir el formato está
+`math.format_float(f, mode, precision)`: `"f"` (decimales fijos), `"e"` (exponente, `1.235e+02`),
+`"g"` (el más corto de los dos, como `printf`) y `"shortest"` (los dígitos más cortos, con
+exponente cuando es menor que -4 o al menos 15: `1e+15`, `1e-05`, lo que imprime PostgreSQL).
 
 Los enums pueden ser **recursivos** (a través de payloads con arreglos u otros enums) y **genéricos**
 (`enum Arbol<T> { Hoja, Nodo(T, [Arbol<T>]) }`).
@@ -1960,8 +1968,10 @@ exp, m)`, `modinv`, `mul`…; una exponenciación de 4096 bits tarda milisegundo
 constante: vale para el lado cliente.
 
 Para hablar con un protocolo que exige MD5, DES/3DES o AES en ECB/CBC (VNC, Apple Remote Desktop,
-Kerberos, digest auth) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des`: raylang
-puro, sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo.
+Kerberos, digest auth, el ETag de S3) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des`:
+sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo. `md5.md5(bytes)`
+hace una pasada en Rust sin copiar la entrada, y `md5.md5_init()` abre un hasher incremental que se
+alimenta con `crypto.hash_update` y se cierra con `crypto.hash_final`, igual que `sha256_init`.
 
 `std/crypto` es criptografía de **producción** (tiempo constante, respaldada por `ring` y
 `x25519-dalek`), no una demostración. Tiene cuatro familias, y hacen falta las cuatro para montar un
@@ -2597,6 +2607,14 @@ como cerrados— y las suyas quedan invisibles fuera; las tareas que ella lance 
 Es la pieza para correr un plugin o código de menos confianza dentro del proceso: los valores y
 los canales cruzan con normalidad, los handles no. En el día a día no hace falta: `spawn` hereda
 el dominio del padre, así que un servidor sigue repartiendo conexiones a sus fibras.
+
+**Lo que captura `spawn` se copia.** La closure que pasas a `spawn` recibe una **copia profunda** de
+cada variable que captura, hecha al arrancar la fibra (O(n) en el tamaño del valor), y el original
+sigue vivo en la fibra que lo creó mientras ella lo tenga en ámbito. Un estado grande construido
+ANTES del `spawn` ocupa el doble: construye ese estado **dentro** de la fibra que lo va a poseer
+(`spawn(fn() { let db = load(); serve(db); })`), o pásalo por un canal justo cuando deje de usarse.
+Medido en raysql con un millón de filas: 1161 MiB capturándolo, 653 construyéndolo dentro (y el
+arranque de 1,54 a 0,93 s).
 
 `spawn_local` es `spawn` con afinidad: en el binario nativo la fibra queda en el **mismo worker**
 que la lanza, así que corre en cuanto la madre cede y nadie tiene que despertar a otro hilo (en la

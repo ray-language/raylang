@@ -152,11 +152,11 @@ fn error_text(payload: bytes) -> string {
 // ── DataRow ────────────────────────────────────────────────────────────────────────────────
 // Parsea un DataRow ('D'): `[nº columnas:2]` y por columna `[longitud:4][valor]` (-1 = NULL → "").
 // Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
-fn parse_datarow(payload: bytes) -> Result<[string], string> {
+fn parse_datarow(payload: bytes) -> Result<[Option<string>], string> {
     if (payload.len() < 2) {
         return Result.Err("postgres: truncated DataRow (no column count)");
     }
-    var cols: [string] = [];
+    var cols: [Option<string>] = [];
     let ncol = payload[0] << 8 | payload[1];
     var pos = 2;
     var i = 0;
@@ -173,16 +173,16 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
         }
         pos = pos + 4;
         if (vlen < 0) {
-            cols.push("");  // NULL
+            cols.push(Option.None);  // NULL (raysql #300: distinguible de "" en query_opt)
         } else {
             if (pos + vlen > payload.len()) {
                 return Result.Err("postgres: DataRow with column length out of range");
             }
             let v = payload.sub_bytes(pos, pos + vlen);
-            cols.push(match (from_utf8(v)) {
+            cols.push(Option.Some(match (from_utf8(v)) {
                 Result.Ok(s) => s,
                 Result.Err(_) => "",
-            });
+            }));
             pos = pos + vlen;
         }
         i = i + 1;
@@ -325,17 +325,35 @@ fn startup_and_auth(
 // Manda la secuencia extendida para `sql` con `params` (formato texto). El nombre de sentencia y
 // portal quedan vacíos (anónimos): una consulta por ronda, sin estado de sentencia preparada.
 fn send_extended(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+    var ps: [Option<string>] = [];
+    var i = 0;
+    while (i < params.len()) {
+        ps.push(Option.Some(params[i]));
+        i = i + 1;
+    }
+    send_extended_opt(c, sql, ps)
+}
+
+// raysql #300: `Option.None` viaja como NULL (longitud -1 en el Bind).
+fn send_extended_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, string> {
     // Parse ('P'): [nombre NUL][query NUL][nº tipos param:2 = 0].
     let parse_pl = cstr("") + cstr(sql) + be16_bytes(0);
     let _ = send(c, 80, parse_pl)?;
 
     // Bind ('B'): [portal NUL][sentencia NUL][nº formatos:2 = 0 (todos texto)]
-    //             [nº params:2][por param: longitud:4 + valor][nº formatos de resultado:2 = 0].
+    //             [nº params:2][por param: longitud:4 + valor (-1 = NULL)][nº formatos de resultado:2 = 0].
     var bind_pl = cstr("") + cstr("") + be16_bytes(0) + be16_bytes(params.len());
     var i = 0;
     while (i < params.len()) {
-        let pb = params[i].to_bytes();
-        bind_pl = bind_pl + be32_bytes(pb.len()) + bytes_to_ints(pb);
+        match (params[i]) {
+            Option.Some(p) => {
+                let pb = p.to_bytes();
+                bind_pl = bind_pl + be32_bytes(pb.len()) + bytes_to_ints(pb);
+            },
+            Option.None => {
+                bind_pl = bind_pl + [255, 255, 255, 255];
+            },
+        }
         i = i + 1;
     }
     bind_pl = bind_pl + be16_bytes(0);
@@ -374,7 +392,25 @@ fn affected_from_tag(payload: bytes) -> int {
 // Recorre la respuesta a una consulta extendida hasta ReadyForQuery, recogiendo filas y el tag.
 // Devuelve (filas, filas_afectadas).
 fn collect_response(c: Conn) -> Result<([[string]], int), string> {
+    let r = collect_response_opt(c)?;
     var rows: [[string]] = [];
+    var i = 0;
+    while (i < r.0.len()) {
+        var row: [string] = [];
+        var j = 0;
+        while (j < r.0[i].len()) {
+            row.push(r.0[i][j].unwrap_or(""));
+            j = j + 1;
+        }
+        rows.push(row);
+        i = i + 1;
+    }
+    Result.Ok((rows, r.1))
+}
+
+// Las filas con NULL distinguible (raysql #300); `collect_response` las aplana a `""`.
+fn collect_response_opt(c: Conn) -> Result<([[Option<string>]], int), string> {
+    var rows: [[Option<string>]] = [];
     var affected = 0;
     while (true) {
         let msg = read_msg(c)?;
@@ -415,23 +451,41 @@ fn drain_until_ready(c: Conn) -> Result<int, string> {
 }
 
 // ── API pública de consulta ─────────────────────────────────────────────────────────────────
-/// Ejecuta una consulta con filas (SELECT…) y parámetros (`$1`, `$2`, … enlazados aparte, en
-/// formato texto → anti-inyección). Devuelve **todas** las filas; un NULL llega como "".
+/// Runs a query that returns rows (SELECT…) with parameters (`$1`, `$2`, … bound apart from the
+/// SQL, in text format → no injection). Returns **all** the rows as text; a `NULL` arrives as `""`
+/// (use `query_opt` to tell them apart).
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
     let _ = send_extended(c, sql, params)?;
     let r = collect_response(c)?;
     Result.Ok(r.0)
 }
 
-/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DELETE/DDL, o BEGIN/COMMIT/ROLLBACK) con
-/// parámetros, y devuelve las filas afectadas (0 para DDL/transacciones).
+/// Like `query`, but every cell is an `Option<string>`: `None` for SQL `NULL`, `Some(text)`
+/// otherwise — the way to tell a `NULL` from an empty string (raysql #300; same shape as
+/// `db/sqlite.query_opt`). Needs db 0.7.
+pub fn query_opt(c: Conn, sql: string, params: [string]) -> Result<[[Option<string>]], string> {
+    let _ = send_extended(c, sql, params)?;
+    let r = collect_response_opt(c)?;
+    Result.Ok(r.0)
+}
+
+/// Runs a statement without rows (INSERT/UPDATE/DELETE/DDL, or BEGIN/COMMIT/ROLLBACK) with
+/// parameters, and returns the affected rows (0 for DDL/transactions).
 pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
     let _ = send_extended(c, sql, params)?;
     let r = collect_response(c)?;
     Result.Ok(r.1)
 }
 
-/// Cierra la sesión (Terminate 'X') y el socket.
+/// Like `exec`, with parameters that may be SQL `NULL`: `Option.None` binds `NULL`,
+/// `Option.Some(text)` binds the text (same shape as `db/sqlite.exec_opt`). Needs db 0.7.
+pub fn exec_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, string> {
+    let _ = send_extended_opt(c, sql, params)?;
+    let r = collect_response(c)?;
+    Result.Ok(r.1)
+}
+
+/// Closes the session (Terminate 'X') and the socket.
 pub fn disconnect(c: Conn) {
     let _ = send(c, 88, []);  // 'X' Terminate
     close(c.handle);

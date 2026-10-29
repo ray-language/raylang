@@ -96,20 +96,43 @@ fn parse_key(t: TS) -> string {
     // escapes, o literal). Si no podría escribirse desnuda (lleva `.`, espacios, está vacía…) se
     // conserva ENTRECOMILLADA en la ruta aplanada —`s."a.b"`— para que nunca choque con la clave `b`
     // de la tabla `[s.a]`; una que sí podría (`"0"`) se aplana como `0`.
-    if (!ts_end(t) && (ts_peek(t) == '"' || ts_peek(t) == '\'')) {
-        let quoted = if (ts_peek(t) == '"') { parse_string(t) } else { parse_literal_string(t) };
-        return match (quoted) {
-            Result.Ok(s) => if (s != "" && all_key_chars(s)) {
-                s
-            } else {
-                "\"" + s.replace("\"", "\\\"") + "\""
-            },
-            Result.Err(_) => "",
-        };
-    }
+    // raydns #288: la clave es una RUTA de partes separadas por `.`, y cada parte puede ir desnuda o
+    // entre comillas (`record."db.legacy"`, también en una cabecera de tabla); antes solo la primera
+    // parte podía ir entrecomillada y `[record."db.legacy"]` daba «missing ']' in table header».
     var k = "";
-    while (!ts_end(t) && is_key(ts_peek(t))) {
-        k = k + to_string(ts_adv(t));
+    var first = true;
+    while (true) {
+        if (!first) {
+            if (ts_end(t) || ts_peek(t) != '.') {
+                break;
+            }
+            ts_adv(t);
+            k = k + ".";
+        }
+        first = false;
+        if (!ts_end(t) && (ts_peek(t) == '"' || ts_peek(t) == '\'')) {
+            let quoted = if (ts_peek(t) == '"') {
+                parse_string(t)
+            } else {
+                parse_literal_string(t)
+            };
+            let part = match (quoted) {
+                Result.Ok(s) => if (s != "" && all_key_chars(s)) {
+                    s
+                } else {
+                    "\"" + s.replace("\"", "\\\"") + "\""
+                },
+                Result.Err(_) => "",
+            };
+            if (part == "") {
+                return "";
+            }
+            k = k + part;
+        } else {
+            while (!ts_end(t) && is_key(ts_peek(t)) && ts_peek(t) != '.') {
+                k = k + to_string(ts_adv(t));
+            }
+        }
     }
     k
 }

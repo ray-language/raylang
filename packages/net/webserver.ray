@@ -1229,13 +1229,24 @@ fn valid_header_value(value: string) -> bool {
 // Serializa las cabeceras del usuario y las Set-Cookie de una respuesta, validando nombre y valor
 // (raysec #243). `Err` = una cabecera inválida; el que llama responde 500 y cierra, nunca la
 // escribe tal cual.
-fn user_headers(r: Response) -> Result<string, string> {
+// `strip_framing`: en el camino del cuerpo BUFFERIZADO el `Content-Length` lo escribe el servidor
+// (rayblob #283: una copia puesta por el handler salía repetida — `Content-Length: 5` dos veces,
+// respuesta ambigua, RFC 9112 §6.3; aws-cli fallaba con «'6, 6'»), así que la del handler se ignora
+// (para HEAD el servidor ya anuncia el tamaño que tendría el cuerpo). En los caminos de fichero y
+// stream el `Content-Length` viaja EN `r.headers` (`stream_response_len`/`file_response_len`) y debe
+// salir: ahí no se filtra (la revisión de la PR cazó que filtrarlo siempre los dejaba sin encuadre).
+fn user_headers(r: Response, strip_framing: bool) -> Result<string, string> {
     var head: string = "";
     let ks: [string] = r.headers.keys();
     var i: int = 0;
     while (i < ks.len()) {
         if (!valid_header_name(ks[i])) {
             return Result.Err("invalid response header name: " + ks[i]);
+        }
+        let lk = ks[i].to_lower();
+        if (strip_framing && (lk == "content-length" || lk == "transfer-encoding")) {
+            i = i + 1;
+            continue;
         }
         match (get(r.headers, ks[i])) {
             Option.Some(v) => {
@@ -1950,7 +1961,7 @@ fn send_response_keep(
     head = head + "Date: " + http_date(cx) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista) y Set-Cookie, validadas
     // (raysec #243).
-    match (user_headers(r)) {
+    match (user_headers(r, true)) {
         Result.Ok(extra) => {
             head = head + extra;
         },
@@ -1986,7 +1997,7 @@ fn send_file_response(
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     head = head + "Date: " + http_date(cx) + "\r\n";
-    match (user_headers(r)) {
+    match (user_headers(r, false)) {
         Result.Ok(extra) => {
             head = head + extra;
         },
@@ -2083,7 +2094,7 @@ fn send_stream_response(
         head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     }
     head = head + "Date: " + http_date(cx) + "\r\n";
-    match (user_headers(r)) {
+    match (user_headers(r, false)) {
         Result.Ok(extra) => {
             head = head + extra;
         },

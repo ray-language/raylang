@@ -414,6 +414,21 @@ fn check_all_with_broken_early_pass_gives_one_error() {
     assert_eq!(errs.len(), 2, "{errs:?}");
 }
 
+/// Fuzz (CI, oct 2026): en `check_all` un tipo DESCONOCIDO en una firma se acumula y el chequeo
+/// sigue; un acceso o una asignación de campo (y un patrón de struct) sobre un valor de ese tipo
+/// daba la ICE «the struct 'ui.FileDialogOptions' is not in the checker table». Ahora es un error
+/// más de la lista.
+#[test]
+fn a_field_access_on_an_undeclared_struct_type_is_an_error_not_an_ice() {
+    let src = "fn text_files() -> ui.FileDialogOptions { ui.file_options() }\n\
+               fn main() { var o = text_files(); o.title = \"x\"; print(o.title); }";
+    let toks = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(toks).expect("parse ok");
+    let errs = check_all(&mut prog);
+    assert!(!errs.is_empty());
+    assert!(errs.iter().all(|e| e.msg.contains("not declared") || e.msg.contains("unknown")), "{errs:?}");
+}
+
     #[test]
 fn type_error_underlines_the_whole_expression() {
     // M33a-2: la extensión del error sale de la tabla de spans del parser.
@@ -572,6 +587,17 @@ fn print_builtin() {
         "'min' expects 1 argument(s), received 2 (min is the iterator terminal; for the smaller of two values use math.min after import std/math)",
     );
     err_contains("fn main() -> int { max(3, 5) }", "for the larger of two values use math.max");
+}
+
+/// raysql #303: `remove` sobre un arreglo nombra `remove_at`/`insert_at`; y los dos tipan.
+#[test]
+fn remove_on_an_array_points_to_remove_at_and_insert_at() {
+    err_contains(
+        "fn main() { var xs = [1, 2]; xs.remove(0); }",
+        "argument 1 of 'remove': expected Map<K, V>, got [int] (arrays have no remove(key): remove_at(xs, i) removes by index and insert_at(xs, i, x) inserts)",
+    );
+    assert!(check_src("fn main() -> int { var xs = [1, 2]; xs.insert_at(0, 9); let v: int = xs.remove_at(2); insert_at(xs, xs.len(), v); remove_at(xs, 0) }").is_ok());
+    err_contains("fn main() { var xs = [1, 2]; xs.insert_at(0, \"a\"); }", "argument 3 of 'insert_at': 'T' cannot be int and string at the same time");
 }
 
 #[test]

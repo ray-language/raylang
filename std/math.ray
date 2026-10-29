@@ -250,6 +250,16 @@ pub fn is_prime(n: int) -> bool {
 /// that carry doubles (BSON, protobuf).
 pub fn float_bits(f: float) -> int { __float_bits(f) }
 
+// raysql #299: `to_string(f)` da los dígitos más cortos pero SIEMPRE en posicional (`1e100` son 101
+// caracteres) y no había forma de pedir exponente ni precisión.
+/// Formats `f` like `printf`: mode `"f"` (positional with `precision` decimals), `"e"` (mantissa
+/// with `precision` decimals and a signed two-digit exponent, `1.5e+20`), `"g"` (the shorter of
+/// the two by the C rules, no trailing zeros) or `"shortest"` (the shortest digits that read back
+/// to the same value, in exponent form when the exponent is < -4 or >= 15 — what PostgreSQL
+/// prints for a float8; `precision` is ignored). `to_string(f)` is the shortest form always
+/// positional (`3.0` prints as `3`). An unknown mode is a runtime error.
+pub fn format_float(f: float, mode: string, precision: int) -> string { __format_float(f, mode, precision) }
+
 /// Builds a float from its raw IEEE 754 bits. Total: any bit pattern is a valid f64
 /// (including NaN and the infinities).
 pub fn float_from_bits(n: int) -> float { __float_from_bits(n) }

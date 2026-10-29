@@ -174,6 +174,11 @@ fn build_native_covers_the_array_math_and_fs_surface() {
          \x20   print(math.atan2(1.0, 1.0));\n\
          \x20   print(math.float_bits(1.0));\n\
          \x20   print(math.float_from_bits(4607182418800017408));\n\
+         \x20   var c: [int] = [5, 6];\n\
+         \x20   c.insert_at(1, 7);\n\
+         \x20   print(c.remove_at(0));\n\
+         \x20   print(c.len());\n\
+         \x20   print(math.format_float(1.5e20, \"shortest\", 0));\n\
          \x20   fs.write_file(\"{log}\", \"a\");\n\
          \x20   match (fs.append_file(\"{log}\", \"bc\")) {{ Result.Ok(n) => print(n), Result.Err(e) => print(e) }}\n\
          \x20   match (fs.read_file(\"{log}\")) {{ Result.Ok(t) => print(t), Result.Err(e) => print(e) }}\n\
@@ -193,7 +198,8 @@ fn build_native_covers_the_array_math_and_fs_surface() {
     assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
-    assert_eq!(native_out, vm_out, "nativo ≡ VM en reverse/position/pop/atan2/float_bits/append_file");
+    assert_eq!(native_out, vm_out, "nativo ≡ VM en reverse/position/pop/insert_at/remove_at/format_float/atan2/float_bits/append_file");
+    assert!(vm_out.contains("\n5\n2\n1.5e+20\n"), "insert_at/remove_at/format_float\n{vm_out}");
     // Y el resultado es el esperado (no dos motores coincidiendo en el mismo error).
     assert!(vm_out.contains("\n2\n"), "append_file devuelve el nº de caracteres escritos\n{vm_out}");
     assert!(vm_out.trim_end().ends_with("abc"), "el append concatena\n{vm_out}");

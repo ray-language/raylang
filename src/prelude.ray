@@ -1517,6 +1517,20 @@ fn pop<T>(a: [T]) -> Option<T> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// raysql #303: quitar e insertar POR ÍNDICE (mutan el arreglo; fuera de rango = error de ejecución,
+// como la indexación). `insert_at(a, a.len(), x)` equivale a `push`.
+/// Removes and returns the element at index `i`, shifting the rest left (mutating the array).
+/// Runtime error if `i` is out of range, like `a[i]`.
+fn remove_at<T>(a: [T], i: int) -> T {
+    __array_remove_at(a, i)
+}
+
+/// Inserts `x` at index `i`, shifting the rest right (mutating the array); `i == a.len()` appends.
+/// Runtime error if `i` is out of range.
+fn insert_at<T>(a: [T], i: int, x: T) {
+    __array_insert_at(a, i, x)
+}
+
 // M11.7b: índice de la primera ocurrencia de `x` en el arreglo; None si no aparece.
 /// Returns the index of the first occurrence of `x` in the array, or `None` if absent.
 fn position<T>(a: [T], x: T) -> Option<int> {

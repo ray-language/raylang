@@ -114,7 +114,9 @@ pub fn verify_id_token(
 
 /// Verifies a JWT access token (RFC 9068: header `typ: at+jwt`, so an ID token is never accepted
 /// as one) that carries every scope in `required`. What a resource server calls on the bearer
-/// token of each request.
+/// token of each request. ⚠️ It does NOT check the audience: a token the issuer minted for
+/// another API passes — use `verify_access_token_for(p, token, audience, required, now_ms)` when
+/// your API has an audience (RFC 9068 §4 asks the resource server to check it).
 pub fn verify_access_token(
     p: Provider,
     token: string,
@@ -130,6 +132,28 @@ pub fn verify_access_token(
         if (!claims.scope.contains(s)) {
             return Result.Err("missing scope " + s);
         }
+    }
+    Result.Ok(claims)
+}
+
+/// `verify_access_token` that also requires `audience` to be in the token's `aud` (string or
+/// array) — rejects an access token the issuer minted for another API (token confusion,
+/// rayvault #289). An empty `audience` is a programming error (`Err`), not a pass.
+pub fn verify_access_token_for(
+    p: Provider,
+    token: string,
+    audience: string,
+    required: [string],
+    now_ms: int
+) -> Result<Claims, string> {
+    if (audience == "") {
+        return Result.Err(
+            "verify_access_token_for needs an audience (use verify_access_token to skip the check)"
+        );
+    }
+    let claims = verify_access_token(p, token, required, now_ms)?;
+    if (!audience_has(claims.raw, audience)) {
+        return Result.Err("access token for another audience");
     }
     Result.Ok(claims)
 }

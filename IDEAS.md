@@ -4397,3 +4397,43 @@ alguna vez pesa, la vía barata es **adelgazar el worker**, no cambiar cuándo n
 `kqueue` en el primer uso del worker y reducir la reserva inicial del heap local. Impacto bajo; sin
 fecha. La memoria y el arranque que sí importan están en la VM (16,6 MB / 6,7 ms por `ray run`,
 regresión anotada en PERFORMANCE desde 1.14).
+
+## 119. Lo que dejó abierto la tanda de apps nuevas (#280–#303; oct 2026)
+
+Lo pequeño y lo roto se hizo en M434 (DESIGN §409). Quedan cuatro piezas que cambian una API o
+piden un análisis nuevo; ninguna bloquea a las apps (todas tienen rodeo en su repo):
+
+1. **`webserver`: cuerpo de petición en streaming y 413 propio (#284).** `Request.body` llega
+   entero (un PUT de 64 MiB = 316–351 MiB de RSS, ~5× el cuerpo) y un cuerpo mayor que
+   `max_body_bytes` responde 413 en texto plano antes del handler (rayblob no puede contestar el
+   `EntityTooLarge` en XML de S3; además escribe en stderr con `no_stdout`). Propuesta: un
+   `Request` con el cuerpo como `Channel<bytes>` (o `read_body(req, max)` por trozos con
+   contrapresión) y un gancho para la respuesta de 413. Impacto: medio-alto (toca el lector de
+   peticiones y el contrato de `serve_raw`); la copia 4,5× es la misma pieza que el `read_bytes`
+   + copia por canal de PERFORMANCE/raystream.
+2. **`net/sigv4` como servidor (#285).** Solo firma como cliente y hashea siempre el cuerpo. Un
+   servidor compatible con S3 necesita verificar con el hash que declaró el cliente
+   (`UNSIGNED-PAYLOAD`, `STREAMING-…`), URLs prefirmadas (`X-Amz-*` en la query) y chunks
+   firmados. Propuesta: exponer `canonical_request` (con el hash dado), `signing_key`,
+   `string_to_sign`, más `presign` y `verify`; rayblob lleva ~300 líneas propias verificadas contra
+   los siete ejemplos de la doc de S3 — candidatas a volver al paquete.
+3. **`dns/message` de lectura y escritura (#287).** `net/dns` es cliente: `build_query`,
+   `parse_records`, `query_*`. Un servidor necesita leer la pregunta (punteros, EDNS OPT), escribir
+   las cuatro secciones con compresión, AA/TC/RCODE y truncar a `udp_limit`; `parse_records` no
+   expone authority/additional ni el rcode y `Record` no tiene SOA. raydns lleva `src/wire.ray`
+   (~400 líneas) probado en los dos sentidos contra `net/dns` y `dig`. Propuesta: `Message {
+   header, question, answers, authority, additional }` + `parse`/`render` que use también el
+   cliente.
+4. **Mover la captura de `spawn` cuando no se usa después (#302).** Hoy se copia entera al heap de
+   la fibra nueva (O(n) antes de arrancar) y el original sigue vivo: un estado de un millón de
+   filas construido antes del `spawn` ocupa el doble (1161 vs 653 MiB en raysql). Documentada la
+   receta (construirlo dentro de la fibra). Mover exige saber que la variable no se lee después del
+   `spawn` en la fibra madre: un análisis de último uso sobre el AST (el de `split_consumed_only_by_for`
+   es un primo pequeño) y, en la VM, trasladar el objeto entre heaps sin copiar. Impacto medio;
+   ganancia solo en ese patrón.
+
+Y una nota de #296 que no es del lenguaje sino de `ray check`: un módulo chequeado SUELTO (`ray
+check` en `packages/db`, «module without main») resuelve `send(c, 112, pl)` contra el builtin
+`send` y falla, mientras cargado por el loader resuelve a `postgres.send` y pasa. Es la regla de
+M196 vista desde el otro lado; `ray check` de un paquete debería chequear sus módulos como los
+carga el loader. Bajo impacto (los tests de los paquetes van por el loader).

@@ -4,6 +4,66 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.86 — 2026-10-29
+
+Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, rayobs, raysql y rayvault
+(#280–#303; M434; issues #601–#607 para los de tipo B).
+
+- **Nativo: cuatro programas que la VM corría y `ray build --native` no compilaba.** `send(ch,
+  Result.Ok(0))` a un `Channel<Result<int, string>>` (E0282, #280: el valor se liga ya con el tipo del
+  canal); `.unwrap()` sobre un `Result` cuyo error es un struct propio (E0277 «falta Debug», #281:
+  el nativo ya no pasa por `Result::unwrap` de Rust, falla con el mismo texto que la VM, «unwrap of
+  a Result.Err»); un brazo de `match` con guarda en una función con llamada de cola (E0382 «_f
+  movido», #291: la guarda no es posición de cola); y un struct con un campo `[Channel<T>]` en un
+  programa sin operaciones de canal (`cannot find type __RayChan`, #292 — le pasaba a cualquier
+  programa sin canales que nombrara `webserver.Response`).
+- **VM: `0.0` y `-0.0` son constantes distintas** (#298): el pool deduplicaba por `==` y la segunda
+  salía con el signo de la primera (`fmt_float(-0.0)` daba `"0"` en la VM y `"-0"` en el nativo).
+  Ahora por bits; NaN también se deduplica.
+- **Arreglos: `remove_at(i) -> T` e `insert_at(i, x)`** (#303), por índice y mutando en el sitio
+  (`insert_at(len, x)` = `push`; fuera de rango = error como `a[i]`), en los tres motores; y
+  `xs.remove(0)` sobre un arreglo ya nombra las dos en su error.
+- **`for` como cuerpo de un brazo de `match`** (#294): `Result.Ok(xs) => for x in xs { … },` vale
+  sin llaves (baja a un bloque `unit`, como la asignación de M344); antes «expected an expression,
+  found For».
+- **`math.format_float(f, mode, precision)`** (#299): `"e"`, `"f"`, `"g"` como `printf` y
+  `"shortest"` (los dígitos más cortos con exponente cuando `x < -4` o `x >= 15`, lo que imprime
+  PostgreSQL); `to_string(f)` sigue siendo el más corto en posicional (`3.0` → `3`, `1e100` → 101
+  caracteres), ahora documentado en `llms.txt`.
+- **MD5 en Rust, incremental y sin copiar la entrada** (#282): `md5.md5(bytes)` pasa de raylang
+  puro a `ray-runtime/src/md5.rs` (64 MiB: nativo 512 → 179 ms y 1715 → 137 MB de pico; la VM 166
+  ms) y `md5.md5_init()` abre un hasher para `crypto.hash_update`/`hash_final` como `sha256_init`
+  (`__hasher_new("md5")`, sin depender de ring). En el nativo el MD5 se pega al programa como módulo:
+  vale con `--without crypto` y en el `rustc` pelado.
+- **`ray test --native`: un `assert`/`assert_eq`/`panic` que falla dice dónde** (#297), `at
+  módulo:línea:columna` como la VM; un binario suelto imprime la misma segunda línea.
+- **Diagnósticos**: la función de un módulo que tapa un builtin (`lib::join` de 3 args frente al
+  `join` del lenguaje) lo dice también en el error de aridad, con `builtin.join(…)` como vía (#296;
+  antes solo en el de tipo); `net.tls_accept` documenta que `cert`/`key` son el TEXTO PEM y, si
+  recibe una ruta que existe, el error lo dice (#301).
+- **`ray doc Tipo.método` encuentra los métodos que vienen de un trait del módulo** (#295):
+  `ray doc Proc.kill` (y `process.Proc.kill`) muestra `ProcOps.kill`.
+- **`std/toml`: claves entre comillas en cualquier parte de la ruta**, también en una cabecera de
+  tabla (`[record."db.legacy"]`, `[record."@"]`, #288).
+- **Documentado** (#302): lo que captura `spawn` se copia entero al heap de la nueva fibra y el
+  original sigue vivo en la que lo creó — un estado grande se construye DENTRO de la fibra que lo
+  va a poseer (MANUAL §15, `llms.txt`); mover en vez de copiar queda en IDEAS §119.
+- **Paquetes**: `net` 0.13.0 — un `Content-Length`/`Transfer-Encoding` puesto por el handler ya no
+  sale repetido (el encuadre lo pone el servidor, #283), `dns.query_a`/`query_aaaa` devuelven solo
+  direcciones (el destino de un CNAME ya no se cuela, #286) y `log.emit` estampa milisegundos
+  (`2026-10-28T22:55:45.123Z`, #293, con el nuevo `time.to_iso8601_millis(ms)` de `std/time`); `db` 0.7.0 — `postgres.query_opt`/`exec_opt` distinguen `NULL`
+  de `""` como en sqlite y la documentación del módulo va en inglés (#300); `oidc` 0.2.0 —
+  `tokens.verify_access_token_for(p, token, audience, required, now_ms)` exige la audiencia (RFC
+  9068 §4; `verify_access_token` documenta que no la comprueba, #289).
+- **Checker: un tipo desconocido en una firma ya no es una ICE más adelante.** El fuzzer del CI
+  (desde el 28 de octubre en `main`) cazó que, en el modo multi-error de `check_all` (LSP, `ray
+  check`), `fn f() -> ui.Opts` sin importar `ui` seguido de `f().title` abortaba con «the struct
+  'ui.Opts' is not in the checker table»; ahora es un error normal («unknown type … not declared»),
+  también en un patrón de struct.
+- Quedan en IDEAS §119, pendientes de decisión: cuerpo de petición en streaming y 413 propio en
+  `webserver` (#284), piezas de servidor para `net/sigv4` (#285) y un `dns/message` de lectura y
+  escritura (#287).
+
 ## 1.27.85 — 2026-10-27
 
 - **`last_index_of` es un builtin** (M431): antes era raylang del prelude sobre `[char]` (dos

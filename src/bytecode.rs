@@ -378,6 +378,10 @@ pub enum OpCode {
     /// complemento). Primitivo `__float_bits`; `std/math` → `float_bits`. Lo pide el `double` de
     /// BSON (y serviría a protobuf).
     FloatBits,
+    /// raysql #299: `__format_float(f, mode, precision)` → string.
+    FormatFloat,
+    /// rayblob #282: `__md5(bytes)` → bytes (16).
+    Md5,
     /// M54.1: el inverso — saca un `int` (los 64 bits) y empuja el `float`. Total (cualquier patrón
     /// de bits es un f64 válido, incl. NaN/Inf). Primitivo `__float_from_bits`.
     FloatFromBits,
@@ -466,6 +470,9 @@ pub enum OpCode {
     /// Saca un arreglo; **lo muta** quitando el último elemento y empuja un `[T]` con **0 o 1**
     /// elementos (el quitado). Primitivo `__pop`; el prelude → `Option<T>`.
     ArrayPop,
+    /// raysql #303: `__array_remove_at(a, i)` → T / `__array_insert_at(a, i, x)` → unit (mutan).
+    ArrayRemoveAt,
+    ArrayInsertAt,
     /// Saca un arreglo; empuja uno nuevo con los elementos en orden inverso. Builtin `reverse`.
     /// (El arreglo es un objeto del heap → lo traza el GC.)
     Reverse,
@@ -1045,7 +1052,13 @@ impl Chunk {
     /// repiten muchísimo (los enteros pequeños `0`/`1`/`2`, strings, nombres de campo), así que el
     /// pool encoge notablemente. La búsqueda es lineal, pero solo ocurre en **compilación** (una vez).
     pub fn add_constant(&mut self, value: Value) -> usize {
-        if let Some(i) = self.constants.iter().position(|c| c == &value) {
+        // raysql #298: los float se deduplican por sus BITS, no por `==` (`0.0 == -0.0` juntaba las
+        // dos constantes y la segunda salía con el signo de la primera; NaN nunca es igual a sí mismo).
+        let same = |c: &Value| match (c, &value) {
+            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
+            _ => c == &value,
+        };
+        if let Some(i) = self.constants.iter().position(same) {
             return i;
         }
         self.constants.push(value);
@@ -1186,5 +1199,19 @@ mod tests {
         assert_ne!(i0, i2);
         assert_eq!(i3, i4);
         assert_eq!(c.constants.len(), 3); // 7, 9, "a" — sin duplicados
+    }
+
+    /// raysql #298: `0.0` y `-0.0` son constantes DISTINTAS (antes `==` las juntaba y la segunda salía
+    /// con el signo de la primera); dos `NaN` sí comparten entrada (mismos bits).
+    #[test]
+    fn float_constants_deduplicate_by_bits() {
+        let mut c = Chunk::new();
+        let pos = c.add_constant(Value::Float(0.0));
+        let neg = c.add_constant(Value::Float(-0.0));
+        assert_ne!(pos, neg);
+        assert_eq!(c.add_constant(Value::Float(-0.0)), neg);
+        let nan = c.add_constant(Value::Float(f64::NAN));
+        assert_eq!(c.add_constant(Value::Float(f64::NAN)), nan);
+        assert_eq!(c.constants.len(), 3);
     }
 }

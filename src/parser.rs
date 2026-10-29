@@ -1844,6 +1844,19 @@ impl Parser {
             None
         };
         self.expect(&TokenKind::FatArrow, "'=>' after the pattern")?;
+        // rayobs #294: un `for` como cuerpo de brazo (`Ok(xs) => for x in xs { … },`). El `for` es una
+        // SENTENCIA, no una expresión (`while` sí lo es): se envuelve en un bloque `{ for … }` de valor
+        // `unit`, como la asignación de M344. Sin esto el error era «expected an expression, found For».
+        if self.check(&TokenKind::For) {
+            let st = self.for_stmt()?;
+            let (bl, bc) = (st.line, st.col);
+            let body = Expr {
+                kind: ExprKind::Block(Block { statements: vec![st], tail: None, line: bl, col: bc, end_line: bl }),
+                line: bl,
+                col: bc,
+            };
+            return Ok(MatchArm { pattern, guard, body, line, col });
+        }
         let body = self.expression()?;
         // M344 (rayauth R25): `patrón => lugar = valor,` — una asignación como brazo. Azúcar: baja a
         // un bloque `{ lugar = valor; }` (valor `unit`) que comparte la posición del lugar, para que
@@ -2249,6 +2262,17 @@ mod tests {
         assert!(matches!(&subs2[0].kind, PatternKind::Literal(Expr { kind: ExprKind::Unary { .. }, .. })));
         let err = parse(crate::lexer::lex("fn f(t: (int, int)) -> int { match (t) { (1) => 1, _ => 0 } }").unwrap()).unwrap_err();
         assert!(err.msg.contains("at least two elements"), "{}", err.msg);
+    }
+
+    /// rayobs #294: un `for` como cuerpo de un brazo de `match` (sin llaves) baja a un bloque `{ for … }`.
+    #[test]
+    fn a_for_loop_can_be_a_match_arm_body() {
+        let src = "fn f(r: Result<[string], string>) { match (r) { Result.Ok(xs) => for x in xs { print(x) }, Result.Err(e) => print(e), } }";
+        let prog = parse(crate::lexer::lex(src).unwrap()).expect("parse");
+        let ExprKind::Match { arms, .. } = &prog.functions[0].body.tail.as_ref().unwrap().kind else { panic!("match") };
+        let ExprKind::Block(b) = &arms[0].body.kind else { panic!("el brazo baja a un bloque") };
+        assert!(matches!(b.statements[0].kind, StmtKind::For { .. }) && b.tail.is_none(), "bloque {{ for … }} de valor unit");
+        assert!(matches!(arms[1].body.kind, ExprKind::Call { .. }), "el otro brazo sigue siendo una expresión");
     }
 
     /// M217 (ray-sublime #22): un tipo primitivo como nombre de función dice que está reservado.

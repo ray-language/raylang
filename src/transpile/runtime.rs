@@ -183,8 +183,13 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // muere cuando el fallo llega a `main` sin observarse. El hook de panic calla los `__RayErr` (el
     // mensaje limpio lo imprime quien lo observa); los panics ajenos (índice fuera de rango…) siguen
     // con el hook de Rust.
-    out.push_str("struct __RayErr(String);\n");
-    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // raybus #297: el segundo campo es la posición del usuario (`módulo:L:C`) de un assert/panic. Va
+    // APARTE del mensaje — `try_call`/`try_join` entregan el mensaje limpio, como la VM — y solo la
+    // imprime el proceso al morir, en una segunda línea `  at …` que `ray test --native` muestra igual
+    // que la de la VM.
+    out.push_str("struct __RayErr(String, Option<String>);\n");
+    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), None)) }\n");
+    out.push_str("#[cold] fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }\n");
     // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM
     // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
     // sin signo (un índice negativo cae también) en el camino caliente y llama al emisor frío fuera.
@@ -993,6 +998,21 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // claves llegan ya ORDENADAS del walker compartido (builtins::embed_walk) → el listado es
     // byte-idéntico al de la VM. Tabla vacía (built sin --embed ni [native] embed) → el MISMO
     // mensaje de sin-config que la VM.
+    // raysql #299: la MISMA fuente que la VM (`ray-runtime/src/float_fmt.rs`), pegada como módulo
+    // del programa: no hay espejo que mantener. Solo si el programa la usa.
+    if t.needs_format_float {
+        out.push_str("mod __ray_float_fmt {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/float_fmt.rs"));
+        out.push_str("}\n");
+        out.push_str("fn __ray_format_float(f: f64, mode: &str, precision: i64) -> Rc<str> { match __ray_float_fmt::format_float(f, mode, precision) { Ok(s) => Rc::from(s), Err(e) => __ray_rt_err(&e) } }\n");
+    }
+    // rayblob #282: MD5 en Rust puro pegado como módulo (no depende de ring ni del crate ray-runtime:
+    // vale también con `--without crypto` y en el `rustc` pelado).
+    if t.needs_md5 {
+        out.push_str("mod __ray_md5 {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/md5.rs"));
+        out.push_str("}\n");
+    }
     if t.needs_b64 {
         // M380: una sola fuente de verdad — el módulo del runtime, sin depender del crate.
         out.push_str("#[allow(dead_code)]\nmod __ray_b64 {\n");

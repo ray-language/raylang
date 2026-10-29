@@ -414,6 +414,21 @@ fn check_all_with_broken_early_pass_gives_one_error() {
     assert_eq!(errs.len(), 2, "{errs:?}");
 }
 
+/// Fuzz (CI, oct 2026): en `check_all` un tipo DESCONOCIDO en una firma se acumula y el chequeo
+/// sigue; un acceso o una asignación de campo (y un patrón de struct) sobre un valor de ese tipo
+/// daba la ICE «the struct 'ui.FileDialogOptions' is not in the checker table». Ahora es un error
+/// más de la lista.
+#[test]
+fn a_field_access_on_an_undeclared_struct_type_is_an_error_not_an_ice() {
+    let src = "fn text_files() -> ui.FileDialogOptions { ui.file_options() }\n\
+               fn main() { var o = text_files(); o.title = \"x\"; print(o.title); }";
+    let toks = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(toks).expect("parse ok");
+    let errs = check_all(&mut prog);
+    assert!(!errs.is_empty());
+    assert!(errs.iter().all(|e| e.msg.contains("not declared") || e.msg.contains("unknown")), "{errs:?}");
+}
+
     #[test]
 fn type_error_underlines_the_whole_expression() {
     // M33a-2: la extensión del error sale de la tabla de spans del parser.

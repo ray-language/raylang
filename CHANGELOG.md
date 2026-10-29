@@ -55,6 +55,11 @@ Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, ra
   de `""` como en sqlite y la documentación del módulo va en inglés (#300); `oidc` 0.2.0 —
   `tokens.verify_access_token_for(p, token, audience, required, now_ms)` exige la audiencia (RFC
   9068 §4; `verify_access_token` documenta que no la comprueba, #289).
+- **Checker: un tipo desconocido en una firma ya no es una ICE más adelante.** El fuzzer del CI
+  (desde el 28 de octubre en `main`) cazó que, en el modo multi-error de `check_all` (LSP, `ray
+  check`), `fn f() -> ui.Opts` sin importar `ui` seguido de `f().title` abortaba con «the struct
+  'ui.Opts' is not in the checker table»; ahora es un error normal («unknown type … not declared»),
+  también en un patrón de struct.
 - Quedan en IDEAS §119, pendientes de decisión: cuerpo de petición en streaming y 413 propio en
   `webserver` (#284), piezas de servidor para `net/sigv4` (#285) y un `dns/message` de lectura y
   escritura (#287).

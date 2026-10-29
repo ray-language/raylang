@@ -150,6 +150,8 @@ struct Transpiler {
     /// interceptan a `ray_runtime::crypto::*` → el binario nativo llama al MISMO código que la VM (ring).
     /// Activa la feature `crypto` de `ray-runtime` → `build_native` genera un proyecto Cargo (no rustc pelado).
     needs_rt_crypto: bool,
+    /// raysql #299: emite `__ray_format_float` solo si el programa lo usa.
+    needs_format_float: bool,
     /// ¿Usa TLS (`__tls_connect`/`__tls_connect_h2`/`__tls_accept`/`__tls_upgrade`)? El binario transpilado
     /// hace I/O TLS **bloqueante** (hilos reales; `ray_runtime::tls::TlsStream` sobre `StreamOwned`). Añade
     /// la variante `Tls` al registro de handles inline y el despacho en `socket_read/write`. Implica
@@ -282,6 +284,30 @@ pub fn set_native_devtools(on: bool) {
 /// tanto `launch_mode() == "test"`), la misma forma que `ray test` en la VM.
 static NATIVE_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+thread_local! {
+    /// raybus #297: las bandas de líneas de los módulos del programa fusionado (`start_line`, nombre),
+    /// para que el nativo rotule los `assert`/`assert_eq`/`panic` con `módulo:línea:columna` del
+    /// archivo del usuario (lo que `ray test` muestra en la VM). Las pone el CLI/test runner al cargar;
+    /// sin bandas, la etiqueta es la posición fusionada `línea:columna`.
+    static POSITION_BANDS: std::cell::RefCell<Vec<(usize, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Fija las bandas de módulo (ordenadas por `start_line`) para rotular posiciones en el nativo.
+pub fn set_position_bands(bands: Vec<(usize, String)>) {
+    POSITION_BANDS.with(|b| *b.borrow_mut() = bands);
+}
+
+/// `módulo:línea_local:col` de una posición del programa fusionado (o `línea:col` sin bandas).
+pub(crate) fn position_label(line: usize, col: usize) -> String {
+    POSITION_BANDS.with(|b| {
+        let b = b.borrow();
+        match b.iter().rev().find(|(start, _)| *start <= line) {
+            Some((start, name)) => format!("{}:{}:{}", name, line.saturating_sub(*start) + 1, col),
+            None => format!("{line}:{col}"),
+        }
+    })
+}
+
 pub fn set_native_test_mode(on: bool) {
     NATIVE_TEST_MODE.store(on, std::sync::atomic::Ordering::SeqCst);
 }
@@ -401,7 +427,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
         needs_handles: false,
-        needs_concurrency: false,
+        needs_concurrency: program_mentions_channels(prog),
         needs_signals: false,
         needs_stdin: false,
         needs_term: false,
@@ -418,6 +444,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         embed: embed.to_vec(),
         needs_net: false,
         needs_rt_crypto: false,
+        needs_format_float: false,
         needs_rt_bigint: false,
         needs_rt_keychain: false,
         needs_rt_deflate: false,
@@ -657,7 +684,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             run_body.push_str("        Ok(_) => { __ray_flush_prints(); },\n");
         }
         run_body.push_str("        Err(e) => {\n");
-        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); if let Some(at) = &r.1 { eprintln!(\"  at {at}\"); } }\n");
         run_body.push_str("            __ray_flush_prints();\n");
         run_body.push_str("        }\n");
         run_body.push_str("    }\n");
@@ -668,7 +695,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             run_body.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
         }
         run_body.push_str("        Err(e) => {\n");
-        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); if let Some(at) = &r.1 { eprintln!(\"  at {at}\"); } }\n");
         run_body.push_str("            __ray_flush_prints();\n");
         run_body.push_str("            std::process::exit(70)\n");
         run_body.push_str("        }\n");
@@ -988,4 +1015,25 @@ fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
             return ok;
         }
     }
+}
+
+/// rayobs #292: ¿algún tipo del programa (campo de struct, payload de enum, firma de función) menciona
+/// `Channel<T>`/`Task<T>`? El runtime de canales (`__RayChan`) se emite solo bajo demanda y antes se
+/// activaba únicamente con una OPERACIÓN de canal: un `webserver.Response` (campo `stream:
+/// [Channel<bytes>]`) en un programa sin `send`/`recv` no compilaba (`cannot find type __RayChan`).
+fn program_mentions_channels(prog: &Program) -> bool {
+    fn ty(t: &Type) -> bool {
+        // Los tipos del AST llegan sin reclasificar (`Struct("Channel", [T])`): se normalizan antes.
+        match &types::normalize_type(t) {
+            Type::Channel(_) | Type::Task(_) => true,
+            Type::Array(e) => ty(e),
+            Type::Map(k, v) => ty(k) || ty(v),
+            Type::Tuple(ts) | Type::Struct(_, ts) | Type::Enum(_, ts) => ts.iter().any(ty),
+            Type::Fn(ps, r) => ps.iter().any(ty) || ty(r),
+            _ => false,
+        }
+    }
+    prog.structs.iter().any(|s| s.fields.iter().any(|(_, t)| ty(t)))
+        || prog.enums.iter().any(|e| e.variants.iter().any(|v| v.payload.iter().any(ty)))
+        || prog.functions.iter().any(|f| f.params.iter().any(|p| ty(&p.ty)) || ty(&f.return_type))
 }

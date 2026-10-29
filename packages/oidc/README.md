@@ -56,6 +56,10 @@ import oidc/tokens;
 // En cada petición, sobre el bearer token (RFC 9068: `typ: at+jwt`; un ID token nunca pasa).
 let claims = tokens.verify_access_token(p, bearer, ["read"], tokens.now())?;
 // claims.sub, claims.client_id, claims.scope, claims.raw (el payload entero)
+
+// 0.2.0 (rayvault #289): si tu API tiene audiencia, exígela — `verify_access_token` NO la comprueba
+// y aceptaría un token que el emisor acuñó para otro API (RFC 9068 §4).
+let claims = tokens.verify_access_token_for(p, bearer, "https://vault.example", ["read"], tokens.now())?;
 ```
 
 `tokens.verify_id_token(p, client_id, token, nonce, now_ms)` verifica un ID token (firma, `iss`,
@@ -79,7 +83,7 @@ el bloque común para otros JWT que firme el proveedor (logout tokens, asercione
 |---|---|
 | `oidc/provider` | `Provider` (issuer, endpoints, JWKS) · `discover(issuer)` · `with_keys(…)` (a mano, sin red) · `refresh_keys(p)` · `key_of(p, kid)` · `get_text(url)` · `TIMEOUT_MS` |
 | `oidc/login` | `Client`, `Pending`, `Tokens` · `begin`/`begin_with` · `finish`/`finish_at` · `refresh`/`refresh_at` · `userinfo` · `logout_url` · `challenge_of` (PKCE S256) |
-| `oidc/tokens` | `Claims` · `verify_id_token` · `verify_access_token` · `verify_jwt` · `claims_of` · `audience_has` · `now` · `LEEWAY_S` |
+| `oidc/tokens` | `Claims` · `verify_id_token` · `verify_access_token` · `verify_access_token_for` (0.2.0, con audiencia) · `verify_jwt` · `claims_of` · `audience_has` · `now` · `LEEWAY_S` |
 | `oidc/jose` | JWS compacto contra una JWK: `verify(token, jwk)` · `header_of` · `payload_unverified` · `key_in(jwks, kid)` |
 
 La prueba de punta a punta (`tests/oidc_cli.rs`) levanta un proveedor de juguete en raylang y

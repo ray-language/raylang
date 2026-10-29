@@ -144,7 +144,10 @@ fn main() -> int {
 ### Transporte y servicios (dependen de sockets)
 
 - **`net/udp`** — sockets UDP: `bind`/`send_to`/`recv_from`. Hoja.
-- **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
+- **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`. 0.13.0: `query_a`/`query_aaaa`
+  devuelven SOLO direcciones (la sección de respuesta puede traer el CNAME que precede a las A, y
+  su destino salía mezclado con las IPs — raydns #286; `query(…, tipo)` sigue dando los `Record`
+  completos).
 - **`net/ntp`** — cliente SNTP v4 (RFC 4330): `query(host, port)` → hora del servidor + offset/delay
   del reloj local (ms Unix) + stratum. Sobre `net/udp` (M90.7).
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
@@ -166,6 +169,10 @@ fn main() -> int {
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Sobre `std/url`.
+  0.13.0: el ENCUADRE del cuerpo lo pone el servidor — un `Content-Length` o `Transfer-Encoding`
+  que el handler meta en `r.headers` se ignora en vez de salir repetido (rayblob #283: dos
+  `Content-Length` hacen la respuesta ambigua, RFC 9112 §6.3; para HEAD el servidor ya anuncia el
+  tamaño que tendría el cuerpo).
   Con límites de seguridad por defecto (M56.1/M56.4: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones
   simultáneas, 10 s para leer una petición — anti-slowloris — y, desde 0.11.1, 30 s para que cada
   escritura de la respuesta avance: `Limits.write_timeout_millis`, un cliente que deja de leer ya
@@ -242,7 +249,9 @@ fn main() -> int {
   reexporta (`now_utc`, `from_epoch_millis`, `to_iso8601`, `date_stamp`, …). Para código nuevo,
   importa `std/time`. (`now_utc` no
   es determinista; el formateo sí.)
-- **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`. M88.3:
+- **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`. 0.13.0: `emit`
+  estampa `ts` con milisegundos (`2026-10-28T22:55:45.123Z`; `time.parse_iso8601_millis` lo lee —
+  rayobs #293: con segundos no se podía ordenar lo que pasa dentro de un segundo). M88.3:
   `with_trace(lg, trace_id)` estampa un campo `trace_id` en cada línea (correlación distribuida).
 - **`net/trace`** (M88.3) — tracing distribuido W3C Trace Context (`traceparent`): `Trace`
   (`trace_id`/`span_id`/`flags`), `new_trace`, `child`, `traceparent`/`parse_traceparent`,

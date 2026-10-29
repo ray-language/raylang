@@ -391,6 +391,8 @@ fn build_suite_binary(suite: &Suite, idx: usize, dir: &Path, opts: &crate::cli::
     let stem = suite.path.file_stem().and_then(|s| s.to_str()).unwrap_or("suite");
     let out = dir.join(format!("{stem}_{idx}"));
     let entry = suite.path.to_string_lossy().into_owned();
+    // raybus #297: las bandas de la suite, para que un assert fallido diga `módulo:línea:col`.
+    crate::transpile::set_position_bands(suite.loaded.modules.iter().map(|m| (m.start_line, m.name.clone())).collect());
     let built = crate::cli::build_native_test_binary(&program, &entry, &out.to_string_lossy(), opts);
     PathBuf::from(built)
 }

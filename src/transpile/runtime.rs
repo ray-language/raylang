@@ -183,8 +183,13 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // muere cuando el fallo llega a `main` sin observarse. El hook de panic calla los `__RayErr` (el
     // mensaje limpio lo imprime quien lo observa); los panics ajenos (índice fuera de rango…) siguen
     // con el hook de Rust.
-    out.push_str("struct __RayErr(String);\n");
-    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // raybus #297: el segundo campo es la posición del usuario (`módulo:L:C`) de un assert/panic. Va
+    // APARTE del mensaje — `try_call`/`try_join` entregan el mensaje limpio, como la VM — y solo la
+    // imprime el proceso al morir, en una segunda línea `  at …` que `ray test --native` muestra igual
+    // que la de la VM.
+    out.push_str("struct __RayErr(String, Option<String>);\n");
+    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), None)) }\n");
+    out.push_str("#[cold] fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }\n");
     // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM
     // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
     // sin signo (un índice negativo cae también) en el camino caliente y llama al emisor frío fuera.
@@ -993,6 +998,26 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // claves llegan ya ORDENADAS del walker compartido (builtins::embed_walk) → el listado es
     // byte-idéntico al de la VM. Tabla vacía (built sin --embed ni [native] embed) → el MISMO
     // mensaje de sin-config que la VM.
+    // raysql #299: espejo byte a byte de `builtins::format_float` (⚠️ cambiar allí = cambiar aquí).
+    if t.needs_format_float {
+        out.push_str(concat!(
+            "fn __ray_format_float(f: f64, mode: &str, precision: i64) -> Rc<str> {\n",
+            "    fn exp_of(e: &str) -> i64 { e.rsplit_once('e').map(|(_, x)| x.parse().unwrap_or(0)).unwrap_or(0) }\n",
+            "    fn exp_style(e: &str) -> String { let (m, x) = e.rsplit_once('e').unwrap_or((e, \"0\")); let x: i64 = x.parse().unwrap_or(0); format!(\"{m}e{}{:02}\", if x < 0 { '-' } else { '+' }, x.abs()) }\n",
+            "    fn strip_zeros(s: &str) -> String { if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s.to_string() } }\n",
+            "    fn positional(e: &str) -> String { let (m, x) = e.rsplit_once('e').unwrap_or((e, \"0\")); let x: i64 = x.parse().unwrap_or(0); let neg = m.starts_with('-'); let digits: String = m.trim_start_matches('-').chars().filter(|c| *c != '.').collect(); let point = 1 + x; let s = if point <= 0 { format!(\"0.{}{}\", \"0\".repeat((-point) as usize), digits) } else if point as usize >= digits.len() { format!(\"{}{}\", digits, \"0\".repeat(point as usize - digits.len())) } else { format!(\"{}.{}\", &digits[..point as usize], &digits[point as usize..]) }; if neg { format!(\"-{s}\") } else { s } }\n",
+            "    if !f.is_finite() { return Rc::from(if f.is_nan() { \"NaN\" } else if f > 0.0 { \"inf\" } else { \"-inf\" }); }\n",
+            "    let p = precision.max(0) as usize;\n",
+            "    let s = match mode {\n",
+            "        \"f\" => format!(\"{:.*}\", p, f),\n",
+            "        \"e\" => exp_style(&format!(\"{:.*e}\", p, f)),\n",
+            "        \"g\" => { let p = p.max(1); let e = format!(\"{:.*e}\", p - 1, f); let x = exp_of(&e); if x < -4 || x >= p as i64 { let (m, _) = e.rsplit_once('e').unwrap_or((&e, \"0\")); exp_style(&format!(\"{}e{}\", strip_zeros(m), x)) } else { strip_zeros(&format!(\"{:.*}\", (p as i64 - 1 - x).max(0) as usize, f)) } }\n",
+            "        \"shortest\" => { let e = format!(\"{:e}\", f); let x = exp_of(&e); if x < -4 || x >= 15 { exp_style(&e) } else { positional(&e) } }\n",
+            "        other => __ray_rt_err(&format!(\"format_float: unknown mode '{other}' (e | f | g | shortest)\")),\n",
+            "    };\n",
+            "    Rc::from(s)\n}\n",
+        ));
+    }
     if t.needs_b64 {
         // M380: una sola fuente de verdad — el módulo del runtime, sin depender del crate.
         out.push_str("#[allow(dead_code)]\nmod __ray_b64 {\n");

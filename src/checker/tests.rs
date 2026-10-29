@@ -574,6 +574,17 @@ fn print_builtin() {
     err_contains("fn main() -> int { max(3, 5) }", "for the larger of two values use math.max");
 }
 
+/// raysql #303: `remove` sobre un arreglo nombra `remove_at`/`insert_at`; y los dos tipan.
+#[test]
+fn remove_on_an_array_points_to_remove_at_and_insert_at() {
+    err_contains(
+        "fn main() { var xs = [1, 2]; xs.remove(0); }",
+        "argument 1 of 'remove': expected Map<K, V>, got [int] (arrays have no remove(key): remove_at(xs, i) removes by index and insert_at(xs, i, x) inserts)",
+    );
+    assert!(check_src("fn main() -> int { var xs = [1, 2]; xs.insert_at(0, 9); let v: int = xs.remove_at(2); insert_at(xs, xs.len(), v); remove_at(xs, 0) }").is_ok());
+    err_contains("fn main() { var xs = [1, 2]; xs.insert_at(0, \"a\"); }", "argument 3 of 'insert_at': 'T' cannot be int and string at the same time");
+}
+
 #[test]
 fn main_is_mandatory_and_well_formed() {
     err_contains("fn other() -> int { 0 }", "missing entry function 'main'");

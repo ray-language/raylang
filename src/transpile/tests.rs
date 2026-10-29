@@ -19,12 +19,13 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__chars", "__concat", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of", "__last_index_of",
     "__sort_prim", "__index_of_or", "__last_index_of_or", "__parse_int_or",
     "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
+    "__array_remove_at", "__array_insert_at",
     "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
     "__bytes_index_of", "__bytes_starts_with",
     "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",
     // Math (interceptados vía `std::math::*` en el sitio del wrapper).
     "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",
-    "__float_from_bits", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
+    "__float_from_bits", "__format_float", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
     "__trunc", "__unicode_normalize",
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
@@ -48,7 +49,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
     "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",
     "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hasher_clone", "__hasher_final", "__hasher_new", "__hasher_update", "__hmac_sha256", "__hmac", "__pk_op", "__qr_matrix", "__sha1",
-    "__sha256", "__sha512", "__sqlite_exec", "__sqlite_exec_opt", "__sqlite_open", "__sqlite_query", "__sqlite_query_nulls", "__tls_accept",
+    "__md5", "__sha256", "__sha512", "__sqlite_exec", "__sqlite_exec_opt", "__sqlite_open", "__sqlite_query", "__sqlite_query_nulls", "__tls_accept",
     "__tls_connect", "__tls_connect_h2", "__tls_peer_cert", "__tls_upgrade", "__tls_upgrade_insecure",
     // M114: acuerdo de claves X25519 + HKDF + comparación en tiempo constante.
     "__constant_time_eq", "__hkdf_sha256", "__x25519_public_key", "__x25519_shared_secret",
@@ -1839,3 +1840,83 @@ fn tuple_and_literal_patterns_transpile() {
 }
 
 
+
+/// rayblob #280: `send(ch, Result.Ok(0))` liga el valor con el tipo Rust del canal antes de convertirlo
+/// (`Ok(0i64)` suelto no fija `E`: E0282).
+#[test]
+fn sending_an_enum_literal_annotates_the_channel_type() {
+    let rust = transpile_src(
+        "fn main() -> int { let ch: Channel<Result<int, string>> = Channel.bounded(1); send(ch, Result.Ok(0)); \
+         let oc: Channel<Option<int>> = Channel.bounded(1); send(oc, Option.None); 0 }",
+    );
+    assert!(rust.contains("let __sv: Result<i64, Rc<str>> = Ok(0i64); match __sv {"), "Result anotado: {rust}");
+    assert!(rust.contains("let __sv: Option<i64> = None; match __sv {"), "Option anotado: {rust}");
+}
+
+/// rayblob #281: `unwrap` no pasa por `Result::unwrap` de Rust (exige `E: Debug`, que un struct de
+/// usuario no deriva) sino por el camino de error con el mensaje del prelude; igual para Option.
+#[test]
+fn unwrap_does_not_require_debug_on_the_error_type() {
+    let rust = transpile_src(
+        "struct Fail { code: string, }\n\
+         fn half(n: int) -> Result<int, Fail> { if (n % 2 == 0) { Result.Ok(n / 2) } else { Result.Err(Fail { code: \"odd\" }) } }\n\
+         fn main() -> int { let o: Option<int> = Option.Some(1); half(4).unwrap() + o.unwrap() }",
+    );
+    assert!(rust.contains(".unwrap_or_else(|_| __ray_rt_err(\"unwrap of a Result.Err\"))"), "{rust}");
+    assert!(rust.contains(".unwrap_or_else(|| __ray_rt_err(\"unwrap of an Option.None\"))"), "{rust}");
+    let main_i = rust.find("fn ray_main(").unwrap();
+    let main_end = rust[main_i..].find("\n}\n").map(|i| main_i + i).unwrap_or(rust.len());
+    assert!(!rust[main_i..main_end].contains(".unwrap()"), "ningún unwrap de Rust en main: {}", &rust[main_i..main_end]);
+}
+
+/// rayobs #291: la GUARDA de un brazo no es posición de cola — solo el cuerpo suelta el marco `_f`
+/// (soltarlo también en la guarda era E0382 «use of moved value: _f»).
+#[test]
+fn a_match_guard_is_not_a_tail_call_site() {
+    let rust = transpile_src(
+        "fn g(p: string) -> int { p.len() }\n\
+         fn h(a: int, p: string) -> int { match (a) { 1 if p.starts_with(\"x\") => g(p), _ => 0 } }\n\
+         fn main() -> int { h(1, \"xy\") }",
+    );
+    let start = rust.find("fn h(").expect("fn h");
+    let end = rust[start..].find("\nfn ").map(|i| start + i).unwrap_or(rust.len());
+    let body = &rust[start..end];
+    assert!(!body.contains("drop(_f); p.clone().starts_with"), "la guarda no suelta el marco: {body}");
+    assert_eq!(body.matches("std::mem::drop(_f)").count(), 1, "solo la llamada de cola del cuerpo: {body}");
+}
+
+/// rayobs #292: un TIPO que menciona `Channel<T>` (campo de struct) trae el runtime de canales aunque
+/// el programa no haga ninguna operación de canal (`cannot find type __RayChan`).
+#[test]
+fn types_that_mention_channels_pull_the_channel_runtime() {
+    let rust = transpile_src("struct Box { chs: [Channel<int>], }\nfn main() -> int { let b = Box { chs: [] }; b.chs.len() }");
+    assert!(rust.contains("struct __RayChan<T>"), "{rust}");
+}
+
+/// raybus #297: `assert`/`assert_eq`/`panic` llevan la posición del usuario (`módulo:línea:col` con las
+/// bandas del loader; `línea:col` sin ellas), en una segunda línea `  at …` del error.
+#[test]
+fn asserts_and_panics_carry_the_user_position() {
+    let rust = transpile_src("fn main() { assert(1 == 2); assert_eq(1, 2); panic(\"boom\"); }");
+    assert!(rust.contains("__ray_rt_err_at(\"assertion failed\", \"1:13\")"), "{rust}");
+    assert!(rust.contains("__ray_rt_err_at(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show()), \"1:29\")"), "{rust}");
+    assert!(rust.contains("__ray_rt_err_at(&*(Rc::<str>::from(\"boom\")), \"1:46\")"), "{rust}");
+    assert!(rust.contains("fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }"), "{rust}");
+    crate::transpile::set_position_bands(vec![(1, "m".into())]);
+    let labeled = transpile_src("fn main() {\n    assert(1 == 2);\n}");
+    crate::transpile::set_position_bands(Vec::new());
+    assert!(labeled.contains("__ray_rt_err_at(\"assertion failed\", \"m:2:5\")"), "{labeled}");
+}
+
+/// raysql #303: `remove_at`/`insert_at` van sobre el `Vec` con los bounds de la indexación (y el índice
+/// y el valor se evalúan antes del borrow). `math.format_float` (#299) llega por el wrapper de
+/// `std/math`, que este arnés de un solo archivo no resuelve: lo cubren `cli_cli` (surface) y el golden
+/// de `findings_batch_cli` en los tres motores.
+#[test]
+fn remove_at_and_insert_at_are_intercepted() {
+    let rust = transpile_src("fn main() -> int { var xs = [1, 2]; xs.insert_at(0, 9); let v = xs.remove_at(1); insert_at(xs, xs.len(), v); remove_at(xs, 0) }");
+    assert!(rust.contains(".borrow_mut().insert(__rt_i as usize, __rt_x)"), "{rust}");
+    assert!(rust.contains(".borrow_mut().remove(__rt_i as usize)"), "{rust}");
+    assert!(rust.contains("index {} out of range (length {})"), "{rust}");
+    assert!(!transpile_src("fn main() -> int { 0 }").contains("fn __ray_format_float"), "solo si se usa");
+}

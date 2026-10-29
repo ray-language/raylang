@@ -485,9 +485,29 @@ pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Rec
 /// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_a(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 1)) {
-        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Ok(recs) => Result.Ok(format_records(only_type(recs, 1))),
         Result.Err(e) => Result.Err(e),
     }
+}
+
+// raydns #286: la sección de respuesta de una consulta A/AAAA puede traer el CNAME que la precede
+// (`www → api`, y luego las A de `api`); `query_a` devolvía el destino del CNAME mezclado con las
+// direcciones. Solo los registros del tipo pedido.
+fn only_type(recs: [Record], rtype: int) -> [Record] {
+    var out: [Record] = [];
+    var i = 0;
+    while (i < recs.len()) {
+        let keep = match (recs[i]) {
+            Record.A(_) => rtype == 1,
+            Record.Aaaa(_) => rtype == 28,
+            _ => false,
+        };
+        if (keep) {
+            out.push(recs[i]);
+        }
+        i = i + 1;
+    }
+    out
 }
 
 // Resuelve registros AAAA (IPv6) → la dirección canónica.
@@ -495,7 +515,7 @@ pub fn query_a(server: string, port: int, name: string) -> Result<[string], stri
 /// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 28)) {
-        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Ok(recs) => Result.Ok(format_records(only_type(recs, 28))),
         Result.Err(e) => Result.Err(e),
     }
 }

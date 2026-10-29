@@ -170,8 +170,9 @@ pub fn tls_connect_h2(host: string, port: int) -> Result<int, string> {
 // el certificado y la clave en PEM; Ok(handle) u Err. Reusa el handle. VM y nativo (el servidor
 // concurrente necesita fibras; el intérprete no las tiene).
 /// Wraps an already-accepted TCP socket in a server-side TLS session, using a PEM certificate
-/// and private key; `Ok(handle)` or `Err(message)`. VM and native (a concurrent server needs
-/// fibers, which the interpreter lacks).
+/// and private key — `cert` and `key` are the PEM TEXT (`fs.read_file(path)?`), not file paths;
+/// `Ok(handle)` or `Err(message)`. VM and native (a concurrent server needs fibers, which the
+/// interpreter lacks).
 pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string> {
     let r = __tls_accept(handle, cert, key);
     if (r[0] == "ok") {

@@ -7,6 +7,7 @@ use std::io::Write;
 use std::process::Command;
 
 const PROGRAM: &str = r#"
+import std/crypto;
 import std/crypto/md5;
 import std/crypto/aes;
 import std/crypto/des;
@@ -39,10 +40,15 @@ fn main() -> int {
     print(show(des.encrypt_cbc(dk, h("1234567890abcdef"), "Now is the time for all ".to_bytes())));
     print(show(des.decrypt_cbc(dk, h("1234567890abcdef"), des.encrypt_cbc(dk, h("1234567890abcdef"), "Now is the time for all ".to_bytes()).unwrap_or(b""))) == hexed("Now is the time for all ".to_bytes()));
     print(show(aes.encrypt_ecb(h("00"), pt)));
+    let hm = md5.md5_init().unwrap_or(0 - 1);
+    let _ = crypto.hash_update(hm, "message ".to_bytes());
+    let _ = crypto.hash_update(hm, "digest".to_bytes());
+    print(show(crypto.hash_final(hm)));
+    print(hexed(md5.md5("a".repeat(100000).to_bytes())));
     0
 }"#;
 
-const WANT: &str = "d41d8cd98f00b204e9800998ecf8427e\nf96b697d7cb7938d525a2f31aaf161d0\n69c4e0d86a7b0430d8cdb78070b4c55a\n00112233445566778899aabbccddeeff\n8ea2b7ca516745bfeafc49904b496089\n00112233445566778899aabbccddeeff\ndda97ca4864cdfe06eaf70a0ec0d7191\n7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2\ntrue\n85e813540f0ab405\n0123456789abcdef\na826fd8ce53b855fcce21c8112256fe668d5c05dd9b6b900\ntrue\nc363c8b3565c0e19a531404ecf092c12ca9543be7f2033c4\ntrue\nerr: aes: the key must be 16, 24 or 32 bytes, got 1\n";
+const WANT: &str = "d41d8cd98f00b204e9800998ecf8427e\nf96b697d7cb7938d525a2f31aaf161d0\n69c4e0d86a7b0430d8cdb78070b4c55a\n00112233445566778899aabbccddeeff\n8ea2b7ca516745bfeafc49904b496089\n00112233445566778899aabbccddeeff\ndda97ca4864cdfe06eaf70a0ec0d7191\n7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2\ntrue\n85e813540f0ab405\n0123456789abcdef\na826fd8ce53b855fcce21c8112256fe668d5c05dd9b6b900\ntrue\nc363c8b3565c0e19a531404ecf092c12ca9543be7f2033c4\ntrue\nerr: aes: the key must be 16, 24 or 32 bytes, got 1\nf96b697d7cb7938d525a2f31aaf161d0\n1af6d6f2f682f76f80e606aeaaee1680\n";
 
 fn write_program(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("ray_crypto_legacy_{name}"));

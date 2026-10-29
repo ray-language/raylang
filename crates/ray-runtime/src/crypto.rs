@@ -267,32 +267,59 @@ pub fn constant_time_eq(_a: &[u8], _b: &[u8]) -> bool { false }
 // compartido por la VM y el binario nativo (mismo código → mismos digests por construcción).
 // `final` CONSUME el handle (un digest no se reanuda); no hay `close` — el ciclo es new→update*→final.
 
-#[cfg(feature = "crypto")]
-fn hasher_registry() -> &'static std::sync::Mutex<(i64, std::collections::HashMap<i64, ring::digest::Context>)> {
-    static REG: std::sync::OnceLock<std::sync::Mutex<(i64, std::collections::HashMap<i64, ring::digest::Context>)>> =
+/// El estado de un hasher incremental: ring para SHA-2 (feature `crypto`) o el MD5 propio
+/// (rayblob #282: siempre disponible, no depende de ring).
+#[derive(Clone)]
+enum HasherCtx {
+    #[cfg(feature = "crypto")]
+    Ring(ring::digest::Context),
+    Md5(crate::md5::Md5),
+}
+
+impl HasherCtx {
+    fn update(&mut self, chunk: &[u8]) {
+        match self {
+            #[cfg(feature = "crypto")]
+            HasherCtx::Ring(ctx) => ctx.update(chunk),
+            HasherCtx::Md5(ctx) => ctx.update(chunk),
+        }
+    }
+    fn finish(self) -> Vec<u8> {
+        match self {
+            #[cfg(feature = "crypto")]
+            HasherCtx::Ring(ctx) => ctx.finish().as_ref().to_vec(),
+            HasherCtx::Md5(ctx) => ctx.finalize().to_vec(),
+        }
+    }
+}
+
+fn hasher_registry() -> &'static std::sync::Mutex<(i64, std::collections::HashMap<i64, HasherCtx>)> {
+    static REG: std::sync::OnceLock<std::sync::Mutex<(i64, std::collections::HashMap<i64, HasherCtx>)>> =
         std::sync::OnceLock::new();
     REG.get_or_init(|| std::sync::Mutex::new((1, std::collections::HashMap::new())))
 }
 
-/// Abre un hasher incremental del algoritmo dado (`"sha256"` | `"sha512"`) y devuelve su handle.
-#[cfg(feature = "crypto")]
+/// Abre un hasher incremental del algoritmo dado (`"md5"` | `"sha256"` | `"sha512"`) y devuelve su
+/// handle. SHA-2 exige la feature `crypto` (ring); MD5 va en Rust puro y está siempre.
 pub fn hasher_new(alg: &str) -> Result<i64, String> {
-    let a = match alg {
-        "sha256" => &ring::digest::SHA256,
-        "sha512" => &ring::digest::SHA512,
-        _ => return Err(format!("unknown hash algorithm '{alg}' (sha256 | sha512)")),
+    let ctx = match alg {
+        "md5" => HasherCtx::Md5(crate::md5::Md5::new()),
+        #[cfg(feature = "crypto")]
+        "sha256" => HasherCtx::Ring(ring::digest::Context::new(&ring::digest::SHA256)),
+        #[cfg(feature = "crypto")]
+        "sha512" => HasherCtx::Ring(ring::digest::Context::new(&ring::digest::SHA512)),
+        #[cfg(not(feature = "crypto"))]
+        "sha256" | "sha512" => return Err("crypto is not compiled in".to_string()),
+        _ => return Err(format!("unknown hash algorithm '{alg}' (md5 | sha256 | sha512)")),
     };
     let mut reg = hasher_registry().lock().unwrap();
     let id = reg.0;
     reg.0 += 1;
-    reg.1.insert(id, ring::digest::Context::new(a));
+    reg.1.insert(id, ctx);
     Ok(id)
 }
-#[cfg(not(feature = "crypto"))]
-pub fn hasher_new(_alg: &str) -> Result<i64, String> { Err("crypto is not compiled in".to_string()) }
 
 /// Alimenta un trozo al hasher `h` (tantas veces como haga falta, en orden).
-#[cfg(feature = "crypto")]
 pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
     match hasher_registry().lock().unwrap().1.get_mut(&h) {
         Some(ctx) => {
@@ -302,23 +329,17 @@ pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
         None => Err(format!("invalid hasher handle: {h}")),
     }
 }
-#[cfg(not(feature = "crypto"))]
-pub fn hasher_update(_h: i64, _chunk: &[u8]) -> Result<(), String> { Err("crypto is not compiled in".to_string()) }
 
 /// Cierra el hasher `h` y devuelve el digest. CONSUME el handle (un segundo `final` es Err).
-#[cfg(feature = "crypto")]
 pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
     match hasher_registry().lock().unwrap().1.remove(&h) {
-        Some(ctx) => Ok(ctx.finish().as_ref().to_vec()),
+        Some(ctx) => Ok(ctx.finish()),
         None => Err(format!("invalid hasher handle: {h}")),
     }
 }
-#[cfg(not(feature = "crypto"))]
-pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> { Err("crypto is not compiled in".to_string()) }
 
 /// takeit #179: bifurca el hasher `h` — un handle NUEVO con el mismo estado (ring `Context` es
 /// `Clone`). El original sigue vivo: el digest de un prefijo y el del total en una sola pasada.
-#[cfg(feature = "crypto")]
 pub fn hasher_clone(h: i64) -> Result<i64, String> {
     let mut reg = hasher_registry().lock().unwrap();
     let ctx = match reg.1.get(&h) {
@@ -330,8 +351,6 @@ pub fn hasher_clone(h: i64) -> Result<i64, String> {
     reg.1.insert(id, ctx);
     Ok(id)
 }
-#[cfg(not(feature = "crypto"))]
-pub fn hasher_clone(_h: i64) -> Result<i64, String> { Err("crypto is not compiled in".to_string()) }
 
 // --- M347 (rayauth R1): clave pública — ECDSA P-256 y RSA (PKCS#1 v1.5 y PSS), sobre ring ---
 //

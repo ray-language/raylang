@@ -1237,6 +1237,15 @@ fn user_headers(r: Response) -> Result<string, string> {
         if (!valid_header_name(ks[i])) {
             return Result.Err("invalid response header name: " + ks[i]);
         }
+        // rayblob #283: el ENCUADRE del cuerpo lo pone el servidor (`Content-Length` del cuerpo real,
+        // o `Transfer-Encoding: chunked` en streaming); una copia puesta por el handler salía repetida
+        // (`Content-Length: 5` dos veces → respuesta ambigua, RFC 9112 §6.3; aws-cli fallaba con
+        // «'6, 6'»). Se ignora: para HEAD el servidor ya anuncia el tamaño que tendría el cuerpo.
+        let lk = ks[i].to_lower();
+        if (lk == "content-length" || lk == "transfer-encoding") {
+            i = i + 1;
+            continue;
+        }
         match (get(r.headers, ks[i])) {
             Option.Some(v) => {
                 if (!valid_header_value(v)) {

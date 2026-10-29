@@ -303,14 +303,18 @@ impl Transpiler {
             }
             // Option/Result: repr nativa de Rust → E(0/1, payload) (índices propios; solo han de
             // cuadrar entre to y from, no con la VM).
+            // rayblob #280: el valor se liga con su tipo Rust anotado — `send(ch, Result.Ok(0))` emite
+            // `Ok(0i64)`, que por sí solo no fija `E` (E0282); el tipo del canal sí lo conoce.
             Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
                 let inner = self.to_send_expr(&args[0], "__sx")?;
-                format!("match {expr} {{ Some(__sx) => __RaySend::E(0, vec![{inner}]), None => __RaySend::E(1, vec![]) }}")
+                let ty = rust_ty(&Type::Enum(n.clone(), args.clone()), &self.enums, &self.tparams)?;
+                format!("{{ let __sv: {ty} = {expr}; match __sv {{ Some(__sx) => __RaySend::E(0, vec![{inner}]), None => __RaySend::E(1, vec![]) }} }}")
             }
             Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
                 let iok = self.to_send_expr(&args[0], "__sx")?;
                 let ierr = self.to_send_expr(&args[1], "__sx")?;
-                format!("match {expr} {{ Ok(__sx) => __RaySend::E(0, vec![{iok}]), Err(__sx) => __RaySend::E(1, vec![{ierr}]) }}")
+                let ty = rust_ty(&Type::Enum(n.clone(), args.clone()), &self.enums, &self.tparams)?;
+                format!("{{ let __sv: {ty} = {expr}; match __sv {{ Ok(__sx) => __RaySend::E(0, vec![{iok}]), Err(__sx) => __RaySend::E(1, vec![{ierr}]) }} }}")
             }
             t @ (Type::Struct(..) | Type::Enum(..)) => {
                 let id = self.send_conv_id(&t)?;
@@ -1098,6 +1102,17 @@ impl Transpiler {
                 out.push(')');
             }
             // Reinterpretación bit a bit IEEE-754 (misma impl que la VM: `to_bits`/`from_bits`).
+            // raysql #299: `math.format_float(f, mode, precision)` → helper del preámbulo.
+            "format_float" => {
+                self.needs_format_float = true;
+                out.push_str("__ray_format_float(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
             "float_bits" => {
                 // Los paréntesis EXTERNOS son obligatorios: el `as` es la última operación y el sitio
                 // de llamada puede encadenar un método (`.ray_show()`), que Rust no admite tras un cast.
@@ -2066,6 +2081,24 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow_mut().pop())");
             }
+            // raysql #303: quitar/insertar por índice con los bounds (y el texto) de la indexación. El
+            // índice y el valor se evalúan ANTES del borrow (pueden leer del mismo arreglo).
+            "remove_at" | "array_remove_at" => {
+                out.push_str("{ let __rt_i: i64 = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_a = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_n = __rt_a.borrow().len() as i64; if __rt_i < 0 || __rt_i >= __rt_n { __ray_rt_err(&format!(\"index {} out of range (length {})\", __rt_i, __rt_n)) } let __rt_v = __rt_a.borrow_mut().remove(__rt_i as usize); __rt_v }");
+            }
+            "insert_at" | "array_insert_at" => {
+                out.push_str("{ let __rt_i: i64 = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_x = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; let __rt_a = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_n = __rt_a.borrow().len() as i64; if __rt_i < 0 || __rt_i > __rt_n { __ray_rt_err(&format!(\"index {} out of range (length {})\", __rt_i, __rt_n)) } __rt_a.borrow_mut().insert(__rt_i as usize, __rt_x) }");
+            }
             // position(a, x) -> Option<int>: índice de la 1ª ocurrencia. Igualdad estructural con `==`,
             // como `contains`. El valor buscado se iza ANTES del borrow (puede leer del mismo arreglo).
             "position" => {
@@ -2430,9 +2463,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // rayblob #281: `Result::unwrap` de Rust exige `E: Debug` (un struct de usuario no lo
+            // deriva) y su panic no es el de la VM; se emite el camino de error con el MISMO mensaje
+            // que el prelude (`expect("unwrap of …")`), sin pedirle nada al tipo del error.
             "unwrap" => {
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".unwrap()");
+                match self.type_of(eff[0]) {
+                    Ok(Type::Enum(n, _)) if n == "Result" => out.push_str(".unwrap_or_else(|_| __ray_rt_err(\"unwrap of a Result.Err\"))"),
+                    Ok(Type::Enum(n, _)) if n == "Option" => out.push_str(".unwrap_or_else(|| __ray_rt_err(\"unwrap of an Option.None\"))"),
+                    _ => out.push_str(".unwrap()"),
+                }
             }
             // `.less()` (Ord) → `<` nativo. `.eq()`/`.show()` NO se interceptan: fluyen como llamada normal
             // al impl (`Tipo#eq`/`Tipo#show`, que se emiten) o al diccionario del bound — así un `impl Show`
@@ -2446,10 +2486,14 @@ impl Transpiler {
             }
             // H6: panic/assert abortan como la VM — `runtime error: <msg>` + exit 70 (antes: panic de
             // Rust, texto distinto y exit 101).
+            // raybus #297: `panic`/`assert*` llevan la posición del usuario (`módulo:L:C`), rotulada en
+            // tiempo de transpilación con las bandas del loader — es lo que `ray test` muestra en la VM
+            // y lo que faltaba en `ray test --native` para saber QUÉ assert falló.
             "panic" => {
-                out.push_str("__ray_rt_err(&*(");
+                let at = crate::transpile::position_label(callee.line, callee.col);
+                out.push_str("__ray_rt_err_at(&*(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str("))");
+                write!(out, "), {:?})", at).unwrap();
             }
             // M130: exit(code) — termina el proceso (flushea salida); diverge como panic.
             "exit" => {
@@ -2459,9 +2503,10 @@ impl Transpiler {
             }
             // Aserciones (prelude): mismos MENSAJES que los cuerpos de src/prelude.ray (que la VM ejecuta).
             "assert" => {
+                let at = crate::transpile::position_label(callee.line, callee.col);
                 out.push_str("if !(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(") { __ray_rt_err(\"assertion failed\") }");
+                write!(out, ") {{ __ray_rt_err_at(\"assertion failed\", {:?}) }}", at).unwrap();
             }
             // raydata #206: sobre un tipo de usuario, `assert_eq` compara con su `impl Eq` y muestra con
             // su `impl Show` — los diccionarios que el lowering añade como args 3 y 4 — como la VM
@@ -2478,14 +2523,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; let __rt_sh = ");
                 self.emit_expr(out, eff[3])?;
-                out.push_str("; if !__rt_eq(__rt_a.clone(), __rt_b.clone()) { __ray_rt_err(&format!(\"assert_eq failed: {} != {}\", __rt_sh(__rt_a), __rt_sh(__rt_b))) } }");
+                let at = crate::transpile::position_label(callee.line, callee.col);
+                write!(out, "; if !__rt_eq(__rt_a.clone(), __rt_b.clone()) {{ __ray_rt_err_at(&format!(\"assert_eq failed: {{}} != {{}}\", __rt_sh(__rt_a), __rt_sh(__rt_b)), {:?}) }} }}", at).unwrap();
             }
             "assert_eq" => {
                 out.push_str("{ let __rt_a = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_b = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str("; if !(__rt_a == __rt_b) { __ray_rt_err(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show())) } }");
+                let at = crate::transpile::position_label(callee.line, callee.col);
+                write!(out, "; if !(__rt_a == __rt_b) {{ __ray_rt_err_at(&format!(\"assert_eq failed: {{}} != {{}}\", __rt_a.ray_show(), __rt_b.ray_show()), {:?}) }} }}", at).unwrap();
             }
             // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__rt_f` liga la
             // closure una vez; `__rt_x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
@@ -2637,6 +2684,13 @@ impl Transpiler {
                 out.push_str("{ match ray_runtime::crypto::hasher_clone(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(") { Ok(__rt_id) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(__rt_id.to_string())])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e)])) } }");
+            }
+            // rayblob #282: MD5 en Rust puro dentro de ray-runtime (no es ring, pero va con el crate).
+            "md5" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("Rc::<[u8]>::from(ray_runtime::md5::digest(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").to_vec())");
             }
             "sha256" | "sha512" | "sha1" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
@@ -3457,6 +3511,7 @@ impl Transpiler {
                     return Ok(match mfn {
                         "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
                         "float_bits" => Type::Int, // la reinterpretación bit a bit devuelve el patrón como int
+                        "format_float" => Type::String,
                         _ => Type::Float,
                     });
                 }
@@ -3620,6 +3675,11 @@ impl Transpiler {
                         Type::Array(elem) => opt_of((*elem).clone()),
                         other => return Err(format!("pop on {:?} is not supported", other)),
                     },
+                    "remove_at" => match self.type_of(recv0.ok_or("remove_at without a receiver")?)? {
+                        Type::Array(elem) => (*elem).clone(),
+                        other => return Err(format!("remove_at on {:?} is not supported", other)),
+                    },
+                    "insert_at" => Type::Unit,
                     "position" => opt_of(Type::Int),
                     // (Cripto/TLS/SQLite/UDP: sus sitios llegan con el nombre primitivo `__sha256`/… y
                     // los tipa la tabla en el fast-path de arriba.)

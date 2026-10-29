@@ -3643,7 +3643,9 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check_args_recv(&mut self, params: &[Type], ret: Type, args: &[Expr], label: &str, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
         if args.len() != params.len() {
-            return Err(self.err(line, col, arity_message(label, params.len(), args.len())));
+            // raybus #296: si la función que ganó es la del módulo y tapa un builtin (`lib::join` de
+            // 3 args frente al `join` del lenguaje), decirlo — el error de aridad solo no orienta.
+            return Err(self.err(line, col, format!("{}{}", arity_message(label, params.len(), args.len()), self.shadow_hint(label))));
         }
         for (i, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
             // El tipo del parámetro es el esperado del argumento (propaga a `None`,
@@ -3681,7 +3683,7 @@ impl Checker {
         recv: Option<&Type>,
     ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
-            return Err(self.err(line, col, arity_message(label, params.len(), args.len())));
+            return Err(self.err(line, col, format!("{}{}", arity_message(label, params.len(), args.len()), self.shadow_hint(label))));
         }
         // σ: parámetro de tipo → tipo concreto inferido.
         let mut sigma: HashMap<String, Type> = HashMap::new();
@@ -3696,7 +3698,7 @@ impl Checker {
                 self.check_value_against(arg, param, &sigma)?
             };
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
-                "argument {} of {}: {}{}", i + 1, label, reason, self.shadow_hint(label)
+                "argument {} of {}: {}{}{}", i + 1, label, reason, self.shadow_hint(label), array_remove_hint(label, &at)
             )))?;
         }
         // M40.3b: los argumentos mandan; si algún parámetro de tipo NO aparece en ellos (p. ej. un
@@ -4160,6 +4162,16 @@ fn builtin_fixed_param(name: &str, i: usize) -> Option<Type> {
         ("chars_to_string", 0) => Some(Type::Array(Box::new(Type::Char))), // rayreq #261
         ("join", 0) => Some(Type::Array(Box::new(Type::String))),
         _ => None,
+    }
+}
+
+/// raysql #303: `xs.remove(0)` sobre un ARREGLO cae en el `remove` de `Map` («expected Map<K, V>, got
+/// [int]») sin decir qué usar: los arreglos quitan e insertan por índice con `remove_at`/`insert_at`.
+fn array_remove_hint(label: &str, at: &Type) -> String {
+    if label == "'remove'" && matches!(at, Type::Array(_)) {
+        " (arrays have no remove(key): remove_at(xs, i) removes by index and insert_at(xs, i, x) inserts)".to_string()
+    } else {
+        String::new()
     }
 }
 

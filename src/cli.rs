@@ -4276,6 +4276,7 @@ const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); // M195
 const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M380
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
+const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
@@ -4413,6 +4414,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/bigint.rs", RT_BIGINT_RS),
         ("ray-runtime/src/b64.rs", RT_B64_RS),
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
+        ("ray-runtime/src/md5.rs", RT_MD5_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),
@@ -6293,6 +6295,8 @@ fn load_and_locate(path: &str) -> (crate::ast::Program, Locate, bool) {
 
 /// Separa un programa cargado en (programa, localizador de posiciones, ¿multi-módulo?).
 fn locate_of(loaded: loader::Loaded) -> (crate::ast::Program, Locate, bool) {
+    // raybus #297: el nativo rotula asserts/panics con el módulo y la línea del usuario.
+    crate::transpile::set_position_bands(loaded.modules.iter().map(|m| (m.start_line, m.name.clone())).collect());
     let modules = loaded.modules;
     let multi = modules.len() > 1;
     let locate: Locate = Box::new(move |gline: usize, col: usize, len: usize| {

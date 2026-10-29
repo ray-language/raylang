@@ -331,10 +331,10 @@ mod imp {
                 .collect::<Result<_, _>>()
                 .map_err(|e| format!("invalid certificate: {e}"))?;
         if certs.is_empty() {
-            return Err("the PEM contains no certificate".to_string());
+            return Err(crate::tls::pem_path_hint("certificate", cert_pem).unwrap_or_else(|| "the PEM contains no certificate".to_string()));
         }
         let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-            .map_err(|e| format!("invalid private key: {e}"))?;
+            .map_err(|e| crate::tls::pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
         let cfg = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key)
@@ -501,3 +501,15 @@ mod stub {
 
 #[cfg(not(feature = "tls"))]
 pub use stub::{accept, connect, connect_h2, upgrade, upgrade_insecure, TlsStream};
+
+/// raysql #301: `tls_accept(h, cert, key)` toma el TEXTO PEM; quien pasa la RUTA del archivo recibía
+/// «the PEM contains no certificate». Si el argumento no empieza por `-----BEGIN`, es una sola línea
+/// corta y existe como archivo, el error lo dice.
+pub(crate) fn pem_path_hint(what: &str, pem: &str) -> Option<String> {
+    let t = pem.trim();
+    if !t.starts_with("-----BEGIN") && !t.contains('\n') && !t.is_empty() && t.len() < 4096 && std::path::Path::new(t).is_file() {
+        Some(format!("the {what} argument looks like a file path ('{t}'): pass the PEM text (fs.read_file), not the path"))
+    } else {
+        None
+    }
+}

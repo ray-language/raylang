@@ -19283,3 +19283,59 @@ receptor (`matches!(…, Ok(Type::Bytes))`, como N-D4b); el análisis de usos ya
 recorrerlo. Queda apuntado, sin hacer, que `try_fuse_split_let` rescanea la cola del bloque por cada
 `let … = split(…)` (cuadrático en el número de esos `let`; irrelevante hoy, un pre-pase de conteo de
 usos por bloque lo resolvería para N-D4b y N-D4c a la vez).
+
+## 409. M434 — la tanda de apps nuevas con 1.27.85: rayblob, raybus, raydns, rayobs, raysql, rayvault (oct 2026)
+
+Seis apps escritas de cero contra 1.27.85 (un almacén S3, un bus, un DNS autoritativo, un
+colector de trazas, un servidor PostgreSQL y una bóveda OIDC) dejaron 24 hallazgos (#280–#303).
+Lo que toca al lenguaje, por qué pasaba y qué se decidió:
+
+**Cuatro programas que la VM corría y el nativo no compilaba (tipo B).** (1) `send(ch,
+Result.Ok(0))` (#280): la conversión a `__RaySend` hacía `match Ok(0i64) { … }` y rustc no podía
+fijar `E`; el emisor conoce el tipo del canal, así que el valor se liga primero (`let __sv:
+Result<i64, Rc<str>> = …`). (2) `.unwrap()` de un `Result<T, Fail>` (#281): se emitía el `unwrap`
+de Rust, que exige `E: Debug`, y los structs de usuario no lo derivan; además su panic no era el de
+la VM. Ahora `unwrap_or_else(|_| __ray_rt_err("unwrap of a Result.Err"))` (y el gemelo de Option),
+sin pedirle nada al tipo del error y con el texto del prelude. (3) Un brazo con guarda en una
+función cuyo cuerpo acababa en llamada de cola (#291): `tail_call_sites` marcaba la GUARDA como
+posición de cola (lo añadió #262 por simetría con el cuerpo), así que el marco `_f` del contador
+de profundidad se soltaba en la guarda y otra vez en el brazo (E0382). Una guarda nunca es cola.
+(4) Un struct con un campo `[Channel<T>]` sin operaciones de canal (#292): el runtime de canales
+se emitía solo cuando una llamada lo pedía; los TIPOS no contaban, y `webserver.Response` lleva
+`stream: [Channel<bytes>]`. Ahora un prescan de structs, enums y firmas lo activa.
+
+**La VM juntaba `0.0` y `-0.0` (#298).** El pool de constantes deduplicaba con `==`, y en IEEE
+`0.0 == -0.0`: la segunda constante del programa salía con el signo de la primera. Por bits
+(`to_bits`), que además deduplica NaN. El nativo nunca lo tuvo (literales de Rust).
+
+**Superficie nueva, pequeña y pedida dos veces.** `remove_at`/`insert_at` (#303): raysql las
+necesitó para la cola del WAL y para el top-N de `ORDER BY … LIMIT`; son dos primitivos
+(`__array_remove_at`/`__array_insert_at`) con los caminos de IntArray/FloatArray de `Push`/`Pop`
+y los bounds de la indexación, envueltos en el prelude. `math.format_float` (#299): `to_string(f)`
+da los dígitos más cortos pero siempre en posicional, y PostgreSQL (y cualquier formato tabular)
+necesita exponente y precisión; los modos son los de `printf` más `shortest` con la regla de
+PostgreSQL (exponente si `x < -4` o `x >= 15`), implementados una vez en `builtins::format_float`
+y espejados byte a byte en el runtime nativo. `for` como brazo de `match` (#294): pasó cinco veces
+en cuatro apps; el `for` es sentencia, así que se envuelve en un bloque `unit` como la asignación
+de M344 (`while` ya era expresión).
+
+**MD5 en Rust (#282).** El módulo en raylang puro copiaba la entrada a `[int]` (~23× en memoria,
+1715 MB de pico para 64 MiB, 512 ms) y no tenía forma incremental. Ahora `ray-runtime/src/md5.rs`
+(Rust puro, sin ring, una sola fuente: el build wasm32 lo incluye por `#[path]`), `md5.md5` en una
+pasada (179 ms, 137 MB) y `md5_init` sobre el mismo registro de hashers que `sha256_init` — el
+registro deja de depender de la feature `crypto`: ring para SHA-2 cuando está, MD5 siempre.
+
+**`ray test --native` sin línea (#297).** La VM reposiciona el error al primer marco de usuario;
+el nativo solo tenía el mensaje. El transpilador rotula ahora `assert`/`assert_eq`/`panic` con
+`módulo:línea:col` — las bandas de módulo del loader las fija el CLI/test runner en un
+thread-local antes de transpilar (`set_position_bands`) — y el runtime imprime una segunda línea
+`  at …` que el runner muestra igual que la de la VM. Sin bandas (`--emit-rust`), `línea:col`.
+
+**Lo que se decidió NO hacer.** Prohibir que un submódulo defina una función con nombre de
+builtin (#296) rompería el uso legítimo de M196 (`websocket.close`, `pool.close`, el propio
+`db/postgres.send`): el error de aridad dice ahora lo que ya decía el de tipo (quién tapa a quién
+y cómo llamar al builtin). El caso UFCS de `get` sobre un `Map` dentro del módulo que define `get`
+no se reprodujo aislado. Mover en vez de copiar la captura de `spawn` (#302) es un análisis de
+escape sobre el AST que no cabe en esta ronda; se documenta la receta (construir el estado dentro
+de la fibra) y la vía queda en IDEAS §119, junto con las tres piezas grandes de `net` (#284 cuerpo
+en streaming, #285 sigv4 de servidor, #287 `dns/message`).

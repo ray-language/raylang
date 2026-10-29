@@ -107,8 +107,11 @@ fn main() -> int {
 ```
 
 - **API**: `connect(host, port, user, password, database, nonce) -> Result<Conn, string>` ·
-  `query(c, sql, params) -> Result<[[string]], string>` · `exec(c, sql, params) -> Result<int, string>`
-  (filas afectadas) · `disconnect(c)` · **Pool** (M318): `pool`/`pool_tls(host, port, user, password,
+  `query(c, sql, params) -> Result<[[string]], string>` (un `NULL` llega como `""`) ·
+  `query_opt(c, sql, params) -> Result<[[Option<string>]], string>` (0.7.0, raysql #300: `None` =
+  `NULL`, la forma de distinguirlo de la cadena vacía, como en sqlite) · `exec(c, sql, params) ->
+  Result<int, string>` (filas afectadas) · `exec_opt(c, sql, [Option<string>])` (0.7.0:
+  `Option.None` enlaza `NULL`) · `disconnect(c)` · **Pool** (M318): `pool`/`pool_tls(host, port, user, password,
   database, size)`, `pool_query` (reintento único si la conexión reutilizada falla por el cable),
   `pool_exec`, `pool_with(p, f)`, `pool_with_retry(p, f)`, `pool_tx(p, f)` (reintenta el `BEGIN` sobre
   una conexión fresca si falló por el cable), `pool_close` — el pool genera el `nonce` SCRAM de cada

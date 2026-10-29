@@ -597,12 +597,9 @@ pub(super) fn tail_call_sites(body: &Block) -> std::collections::HashSet<(usize,
                     expr(eb, out);
                 }
             }
-            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| {
-                if let Some(g) = &a.guard {
-                    expr(g, out);
-                }
-                expr(&a.body, out);
-            }),
+            // rayobs #291: la GUARDA no es posición de cola (tras ella aún corre el cuerpo del
+            // brazo): marcarla soltaba `_f` dos veces (E0382) cuando el cuerpo también era de cola.
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| expr(&a.body, out)),
             ExprKind::Block(b) => block(b, out),
             _ => {}
         }

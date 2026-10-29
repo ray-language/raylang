@@ -3748,6 +3748,33 @@ fn split_loops_iterate_without_materializing_the_array() {
     );
 }
 
+/// raysql #298/#299/#303: `0.0` y `-0.0` son constantes distintas (la VM juntaba las dos por `==`),
+/// `format_float` y `remove_at`/`insert_at` dan lo mismo que el intérprete (también sobre arreglos
+/// tipados de int/float y sobre el arreglo vacío).
+#[test]
+fn float_zero_sign_format_float_and_index_edits_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            let a = to_string(0.0);
+            let b = to_string(-0.0);
+            let f = __format_float(1.5e20, "shortest", 0) + __format_float(123.456, "e", 2)
+                + __format_float(0.001, "g", 6) + __format_float(-2.5, "f", 3) + __format_float(1e-5, "shortest", 0);
+            var xs = [1, 2, 3];
+            xs.insert_at(1, 10);
+            let r = xs.remove_at(0);
+            var fs: [float] = [];
+            fs.insert_at(0, 2.5);
+            fs.insert_at(0, 1.5);
+            var ss = ["a"];
+            ss.insert_at(1, "b");
+            let g = ss.remove_at(0);
+            a.len() * 1000000 + b.len() * 100000 + f.len() * 1000 + r * 100 + xs[0] * 10 + (fs.remove_at(1) as int) + g.len()
+        }
+        "#,
+    );
+}
+
 /// El for-range con tope en VARIABLE fusiona la guarda (LocalLocalCmpJump) y el cierre
 /// (IncJump); el resultado coincide con el intérprete.
 #[test]

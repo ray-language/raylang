@@ -1044,6 +1044,23 @@ impl<'a> Interpreter<'a> {
                         return Err(runtime_error(callee.line, callee.col,
                             crate::builtins::NET_TLS_UNAVAILABLE));
                     }
+                    // raysql #303/#299: los fallos con POSICIÓN de los primitivos nuevos (eval_builtin
+                    // no puede fallar): bounds de remove_at/insert_at y el modo de format_float.
+                    if name == "__array_remove_at" || name == "__array_insert_at" {
+                        if let (Value::Array(rc), Value::Int(i)) = (&values[0], &values[1]) {
+                            let len = rc.borrow().len();
+                            let ok = *i >= 0 && if name == "__array_remove_at" { (*i as usize) < len } else { (*i as usize) <= len };
+                            if !ok {
+                                return Err(runtime_error(callee.line, callee.col, &format!("index {} out of range (length {})", i, len)));
+                            }
+                        }
+                    }
+                    if name == "__format_float"
+                        && let (Value::Float(f), Value::Str(m), Value::Int(p)) = (&values[0], &values[1], &values[2])
+                        && let Err(e) = crate::builtins::format_float(*f, m, *p)
+                    {
+                        return Err(runtime_error(callee.line, callee.col, &e));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // M41: función externa (FFI). Se despacha a la librería C vía `ffi::call`. La frontera
@@ -1352,6 +1369,26 @@ impl<'a> Interpreter<'a> {
             "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("the checker guarantees bytes"),
+            },
+            "__md5" => match &values[0] {
+                Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::md5(b))),
+                _ => unreachable!("the checker guarantees bytes"),
+            },
+            "__format_float" => match (&values[0], &values[1], &values[2]) {
+                (Value::Float(f), Value::Str(m), Value::Int(p)) => Value::Str(crate::builtins::format_float(*f, m, *p).unwrap_or_default()),
+                _ => unreachable!("the checker guarantees (float, string, int)"),
+            },
+            // raysql #303: los bounds ya se comprobaron (con posición) antes de llegar aquí.
+            "__array_remove_at" => match (&values[0], &values[1]) {
+                (Value::Array(rc), Value::Int(i)) => rc.borrow_mut().remove(*i as usize),
+                _ => unreachable!("the checker guarantees (array, int)"),
+            },
+            "__array_insert_at" => match (&values[0], &values[1]) {
+                (Value::Array(rc), Value::Int(i)) => {
+                    rc.borrow_mut().insert(*i as usize, values[2].clone());
+                    Value::Unit
+                }
+                _ => unreachable!("the checker guarantees (array, int, value)"),
             },
             "__sha512" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha512(b))),

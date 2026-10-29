@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.86 — 2026-10-29
 
 Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, rayobs, raysql y rayvault
 (#280–#303; M434; issues #601–#607 para los de tipo B).

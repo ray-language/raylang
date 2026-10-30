@@ -21,7 +21,7 @@ const SALT: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const ITERATIONS: i64 = 64;
 
 /// El `r=…` de un mensaje SCRAM (client-first-bare `n=user,r=nonce`).
-fn scram_attr<'a>(message: &'a str, key: char) -> &'a str {
+fn scram_attr(message: &str, key: char) -> &str {
     message
         .split(',')
         .find_map(|part| part.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))

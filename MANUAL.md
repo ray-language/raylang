@@ -1971,7 +1971,8 @@ Para hablar con un protocolo que exige MD5, DES/3DES o AES en ECB/CBC (VNC, Appl
 Kerberos, digest auth, el ETag de S3) están `std/crypto/md5`, `std/crypto/aes` y `std/crypto/des`:
 sin tiempo constante, y solo para eso — no elijas esos algoritmos para nada nuevo. `md5.md5(bytes)`
 hace una pasada en Rust sin copiar la entrada, y `md5.md5_init()` abre un hasher incremental que se
-alimenta con `crypto.hash_update` y se cierra con `crypto.hash_final`, igual que `sha256_init`.
+alimenta con `crypto.hash_update` y se cierra con `crypto.hash_final`, igual que `sha256_init`
+(el incremental vive en `ray-runtime`: un nativo con `--without crypto` conserva solo `md5.md5`).
 
 `std/crypto` es criptografía de **producción** (tiempo constante, respaldada por `ring` y
 `x25519-dalek`), no una demostración. Tiene cuatro familias, y hacen falta las cuatro para montar un

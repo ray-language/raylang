@@ -424,14 +424,11 @@ fn std_doc_text(symbol: &str) -> Option<String> {
         Some((m, f)) => (Some(m.to_string()), f.to_string()),
         None => (None, symbol.to_string()),
     };
+    // rayblob #282: el módulo se resuelve contra TODOS los embebidos por su último segmento —
+    // `md5.md5_init` es `std/crypto/md5`, no solo `std/<m>` o `std/collections/<m>` (antes la API
+    // incremental de MD5 existía pero `ray doc`/el MCP decían «no es una función pública de std»).
     let candidates: Vec<(String, &'static str)> = match &module {
-        Some(m) => ["std/", "std/collections/"]
-            .iter()
-            .filter_map(|p| {
-                let name = format!("{p}{m}");
-                crate::stdlib::embedded(&name).map(|src| (name, src))
-            })
-            .collect(),
+        Some(m) => std_modules_named(m),
         None => crate::stdlib::names().iter().filter_map(|n| {
             crate::stdlib::embedded(n).map(|src| (n.to_string(), src))
         }).collect(),
@@ -693,15 +690,16 @@ fn trait_method_signature(trait_name: &str, m: &crate::ast::MethodSig) -> String
 fn std_module_listing(symbol: &str) -> Option<String> {
     // M305 (IDEAS §97 #34): también `std/collections/deque` y `collections/deque` (antes el `/`
     // interior lo descartaba y solo valía `deque` a secas).
-    let bare = symbol.strip_prefix("std/").unwrap_or(symbol);
-    let bare = bare.strip_prefix("collections/").unwrap_or(bare);
-    if bare.contains('.') || bare.contains('/') {
+    // rayblob #282: también `std/crypto/md5`, `crypto/md5` y `md5` a secas — cualquier módulo
+    // embebido por su ruta completa o por su último segmento (antes solo `std/` y `std/collections/`).
+    if symbol.contains('.') {
         return None;
     }
-    let (name, src) = ["std/", "std/collections/"].iter().find_map(|p| {
-        let n = format!("{p}{bare}");
-        crate::stdlib::embedded(&n).map(|s| (n, s))
-    })?;
+    let bare = symbol.rsplit('/').next().unwrap_or(symbol);
+    let full = if symbol.starts_with("std/") { symbol.to_string() } else { format!("std/{symbol}") };
+    let (name, src) = crate::stdlib::embedded(&full)
+        .map(|s| (full.clone(), s))
+        .or_else(|| std_modules_named(bare).into_iter().next())?;
     let import_path = name.clone();
     let lines = module_surface(src)?;
     // M376 (ray-ds #126): la doc de módulo (`//!`) va delante — es lo que dice QUÉ es el módulo
@@ -720,6 +718,16 @@ fn std_module_listing(symbol: &str) -> Option<String> {
         lines.join("\n"),
         bare
     ))
+}
+
+/// Los módulos embebidos cuyo ÚLTIMO segmento es `name` (`md5` → `std/crypto/md5`), con su fuente,
+/// en el orden de la tabla (`std/<name>` va antes que los anidados, así que gana ante un homónimo).
+fn std_modules_named(name: &str) -> Vec<(String, &'static str)> {
+    crate::stdlib::names()
+        .iter()
+        .filter(|n| n.rsplit('/').next() == Some(name))
+        .filter_map(|n| crate::stdlib::embedded(n).map(|src| (n.to_string(), src)))
+        .collect()
 }
 
 /// Las firmas de la superficie PÚBLICA de un fuente raylang: structs, enums, constantes,
@@ -1303,6 +1311,31 @@ mod tests {
         assert!(k.starts_with("std/process: kill(self, force: bool)") && k.contains("trait ProcOps"), "{k}");
         assert!(doc_text("process.Proc.kill").contains("trait ProcOps"));
         assert!(doc_text("Proc.no_such").contains("is not a builtin"));
+    }
+
+    /// rayblob #282: los módulos `std/` anidados fuera de `collections/` (`std/crypto/md5`,
+    /// `std/crypto/aes`…) eran invisibles para `ray doc`: la API incremental de MD5 existía desde
+    /// 1.27.86 y la app concluyó que no. Resuelven por ruta completa, por `crypto/md5` y por `md5`.
+    #[test]
+    fn ray_doc_resolves_nested_std_modules_beyond_collections() {
+        let d = doc_text("md5.md5_init");
+        assert!(d.starts_with("std/crypto/md5: md5_init() -> Result<int, string>"), "{d}");
+        assert!(doc_text("md5.md5").starts_with("std/crypto/md5: md5(data: bytes) -> bytes"));
+        assert!(doc_text("aes.encrypt_cbc").starts_with("std/crypto/aes: encrypt_cbc("));
+        for m in ["std/crypto/md5", "crypto/md5", "des"] {
+            let l = doc_text(m);
+            let full = if m == "des" { "std/crypto/des" } else { "std/crypto/md5" };
+            assert!(l.starts_with(&format!("{full} — public surface")), "{m}: {l}");
+            assert!(l.contains(&format!("With `import {full};` call them qualified:")), "{m}: {l}");
+        }
+        // `md5` a secas es ANTES una función (`md5.md5`, la búsqueda sin módulo de siempre) que el
+        // módulo; el listado del módulo se pide con su ruta.
+        assert!(doc_text("md5").starts_with("std/crypto/md5: md5(data: bytes) -> bytes"));
+        // Los de siempre siguen igual (y `std/` plano gana al anidado ante un homónimo).
+        assert!(doc_text("std/collections/deque").starts_with("std/collections/deque — public surface"));
+        assert!(doc_text("deque").starts_with("std/collections/deque — public surface"));
+        assert!(doc_text("json.parse").starts_with("std/json: parse("));
+        assert!(doc_text("no_such_module").contains("is not a builtin"));
     }
 
     /// M354 (rayauth R29): un alias de tipo público es superficie — firma `type X = …` con sus `///`

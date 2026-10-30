@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray doc` y el MCP ven los módulos `std/` anidados fuera de `collections/`.** `ray doc
+  md5.md5_init`, `ray doc std/crypto/md5` (y `crypto/md5`, `aes.encrypt_cbc`, `std/crypto/des`…)
+  respondían «is not a builtin, a prelude function, nor a public std/* function»: la resolución solo
+  probaba `std/<m>` y `std/collections/<m>`. Ahora cualquier módulo embebido resuelve por su ruta
+  completa o por su último segmento (rayblob #282: la API incremental de MD5 existía desde 1.27.86 y
+  la app concluyó que no por esta respuesta). Un nombre a secas sigue siendo antes una función que
+  un módulo (`ray doc md5` es `md5.md5`).
+- **Documentado**: en el nativo el hasher incremental vive en `ray-runtime`, así que `--without
+  crypto` conserva `md5.md5` (pegado al programa) pero no `md5.md5_init`.
+- **Paquete `db` 0.7.1**: los `///` que quedaban en español en `postgres.ray` (`Conn`, `connect`) y
+  `mysql.ray` (`Conn`, `connect`, `quit`, el búfer) pasan a inglés (raysql #300, segunda vuelta).
+
 ## 1.27.86 — 2026-10-29
 
 Hallazgos de la tanda de apps nuevas con 1.27.85 — rayblob, raybus, raydns, rayobs, raysql y rayvault

@@ -13,16 +13,39 @@ use std::thread;
 
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
-// server-first/server-final PRECOMPUTADOS para user=raylang, pw=secret, nonce=clientnonce123456, i=64.
-const SERVER_FIRST: &[u8] = &[
-    114, 61, 99, 108, 105, 101, 110, 116, 110, 111, 110, 99, 101, 49, 50, 51, 52, 53, 54, 115, 101,
-    114, 118, 101, 114, 110, 111, 110, 99, 101, 55, 56, 57, 44, 115, 61, 65, 81, 73, 68, 66, 65, 85,
-    71, 66, 119, 103, 74, 67, 103, 115, 77, 68, 81, 52, 80, 69, 65, 61, 61, 44, 105, 61, 54, 52,
-];
-const SERVER_FINAL: &[u8] = &[
-    118, 61, 80, 87, 88, 53, 71, 72, 119, 87, 43, 66, 120, 108, 101, 99, 70, 122, 79, 56, 116, 105,
-    79, 81, 69, 86, 111, 98, 86, 117, 43, 54, 80, 66, 103, 56, 55, 49, 110, 109, 121, 101, 81, 51, 52, 61,
-];
+// SCRAM-SHA-256 calculado en vivo (user=raylang, pw=secret, i=64, sal fija) con las MISMAS
+// primitivas de `ray_runtime::crypto` que usa el cliente: antes server-first/server-final iban
+// precomputados para el nonce `clientnonce123456`, y el pool (db 0.7.2, `pool_query_opt`) marca con
+// un nonce aleatorio por conexión, así que el servidor de prueba tiene que seguir cualquier nonce.
+const SALT: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+const ITERATIONS: i64 = 64;
+
+/// El `r=…` de un mensaje SCRAM (client-first-bare `n=user,r=nonce`).
+fn scram_attr<'a>(message: &'a str, key: char) -> &'a str {
+    message
+        .split(',')
+        .find_map(|part| part.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))
+        .unwrap_or("")
+}
+
+/// Server-first para el client-first recibido, y la server-signature (`v=…`) que corresponde al
+/// client-final (sin el `p=`), como RFC 5802 §3.
+fn scram_server(client_first_bare: &str) -> (String, impl Fn(&str) -> String) {
+    let client_nonce = scram_attr(client_first_bare, 'r').to_string();
+    let server_first = format!(
+        "r={client_nonce}servernonce789,s={},i={ITERATIONS}",
+        ray_runtime::b64::encode(SALT, false)
+    );
+    let salted = ray_runtime::crypto::pbkdf2_hmac_sha256(b"secret", SALT, ITERATIONS, 32).unwrap();
+    let server_key = ray_runtime::crypto::hmac_sha256(&salted, b"Server Key");
+    let bare = client_first_bare.to_string();
+    let sf = server_first.clone();
+    let signature = move |client_final_without_proof: &str| {
+        let auth = format!("{bare},{sf},{client_final_without_proof}");
+        format!("v={}", ray_runtime::b64::encode(&ray_runtime::crypto::hmac_sha256(&server_key, auth.as_bytes()), false))
+    };
+    (server_first, signature)
+}
 
 /// Un mensaje con octeto de tipo: `[tipo][longitud=4+len][carga]`.
 fn msg(t: u8, payload: &[u8]) -> Vec<u8> {
@@ -159,13 +182,21 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
     scram_body.extend_from_slice(b"SCRAM-SHA-256\0");
     scram_body.push(0);
     s.write_all(&msg(b'R', &scram_body)).unwrap();
-    read_typed(&mut *s); // SASLInitialResponse
+    // SASLInitialResponse: [mecanismo NUL][longitud:4][client-first = "n,,n=user,r=nonce"].
+    let (_, initial) = read_typed(&mut *s);
+    let mech_end = initial.iter().position(|&b| b == 0).unwrap();
+    let client_first = String::from_utf8_lossy(&initial[mech_end + 5..]).into_owned();
+    let client_first_bare = client_first.strip_prefix("n,,").unwrap_or(&client_first).to_string();
+    let (server_first, signature) = scram_server(&client_first_bare);
     let mut cont = vec![0u8, 0, 0, 11];
-    cont.extend_from_slice(SERVER_FIRST);
+    cont.extend_from_slice(server_first.as_bytes());
     s.write_all(&msg(b'R', &cont)).unwrap();
-    read_typed(&mut *s); // SASLResponse
+    // SASLResponse: client-final "c=biws,r=…,p=proof" → la firma se calcula sobre lo anterior al `,p=`.
+    let (_, final_msg) = read_typed(&mut *s);
+    let client_final = String::from_utf8_lossy(&final_msg).into_owned();
+    let without_proof = client_final.rsplit_once(",p=").map(|(a, _)| a).unwrap_or(&client_final);
     let mut fin = vec![0u8, 0, 0, 12];
-    fin.extend_from_slice(SERVER_FINAL);
+    fin.extend_from_slice(signature(without_proof).as_bytes());
     s.write_all(&msg(b'R', &fin)).unwrap();
     s.write_all(&msg(b'R', &[0, 0, 0, 0])).unwrap(); // AuthenticationOk
     s.write_all(&msg(b'Z', b"I")).unwrap(); // ReadyForQuery
@@ -317,6 +348,46 @@ fn main() -> int {{
     app
 }
 
+/// raysql #300 (db 0.7.2): `pool_query_opt`/`pool_exec_opt` — las variantes con `Option` a través
+/// del pool. Programa aparte porque el pool va por canales (solo VM/nativo, no intérprete).
+fn project_pool(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app_pool");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app_pool\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/postgres;
+
+fn main() -> int {{
+    let p = postgres.pool("127.0.0.1", {port}, "raylang", "secret", "test", 1);
+    match (postgres.pool_query_opt(p, "NULLTEST", [])) {{
+        Result.Ok(rows) => {{
+            let a = match (rows[0][0]) {{ Option.Some(s) => s, Option.None => "NULL" }};
+            let b = match (rows[0][1]) {{ Option.Some(s) => s, Option.None => "NULL" }};
+            print("pool null: " + a + "|" + b);
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    match (postgres.pool_exec_opt(p, "INSERT INTO t VALUES ($1)", [Option.None])) {{
+        Result.Ok(n) => {{ print("pool insert: " + to_string(n)); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    postgres.pool_close(p);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
 fn run(app: &std::path::Path, flags: &[&str]) -> String {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
@@ -343,6 +414,16 @@ fn postgres_v2_extended_params_and_transaction() {
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
     assert_eq!(run(&app, &[]), EXPECTED, "VM");
     assert_eq!(run(&app, &["--interp"]), EXPECTED, "intérprete");
+}
+
+#[test]
+fn postgres_pool_opt_variants_tell_null_apart_and_bind_null() {
+    let base = std::env::temp_dir().join("ray_pg_pool_opt_cli");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = launch_server();
+    let app = project_pool(&base, port);
+    assert_eq!(run(&app, &[]), "pool null: hello|NULL\npool insert: 5\n", "VM");
 }
 
 // --- TLS: connect_tls (sslRequest → 'S' → tls_upgrade → misma sesión cifrada) ---

@@ -19354,3 +19354,15 @@ valor en el orden del fuente; `ray doc Tipo.método` documenta el método del tr
 cuadra (no el primer homónimo del módulo); `pem_path_hint` tiene una sola copia (pública en
 `ray-runtime::tls`); y la marca de tiempo con milisegundos es `time.to_iso8601_millis(ms)` en
 `std/time`, no un recorte local en `net/log`.
+
+**Segunda vuelta (30 oct).** Las apps re-midieron con 1.27.86 y dejaron dos «parcial» que no eran
+del lenguaje sino de cómo se descubre: rayblob (#282) concluyó que seguía sin API incremental de MD5
+porque `ray doc md5.md5_init` y `ray doc std/crypto/md5` respondían «no es una función pública de
+std» — la resolución de módulos de raydoc solo probaba `std/<m>` y `std/collections/<m>`, y los tres
+módulos de `std/crypto/*` eran invisibles para el CLI y para el MCP (la función existía y daba el
+digest correcto troceando a 1, 4, 7, 64 y 1000 octetos en VM y nativo). Ahora un módulo embebido
+resuelve por su ruta completa o por su último segmento; un nombre a secas sigue siendo antes función
+que módulo. Y raysql (#300) señaló los `///` en español que quedaban en `postgres.ray` y
+`mysql.ray` → db 0.7.1, solo documentación. Lección: cuando una app verifica un hallazgo con el MCP,
+lo que no se puede *descubrir* cuenta como inexistente — la superficie nueva se comprueba también con
+`ray doc` antes de cerrar.

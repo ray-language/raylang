@@ -19,8 +19,8 @@ import std/net;
 import std/crypto;
 import net/pool;
 
-/// Una conexión abierta y autenticada, con su búfer de lectura (un mensaje puede partirse entre
-/// lecturas del socket, o venir varios juntos).
+/// An open, authenticated connection with its read buffer (a message can be split across socket
+/// reads, or several can arrive together).
 pub struct Conn {
     handle: int,
     buf: bytes,
@@ -191,8 +191,8 @@ fn parse_datarow(payload: bytes) -> Result<[Option<string>], string> {
 }
 
 // ── Conexión + autenticación SCRAM ─────────────────────────────────────────────────────────
-/// Abre una conexión, autentica con SCRAM-SHA-256 y la deja lista para consultas. `nonce` es el
-/// nonce del cliente (usa uno aleatorio en producción).
+/// Opens a connection, authenticates with SCRAM-SHA-256 and leaves it ready for queries. `nonce` is
+/// the client nonce (use a random one in production).
 pub fn connect(
     host: string,
     port: int,

@@ -23,19 +23,19 @@ import net/pool;
 import std/bigint;
 import std/math;
 
-/// Una conexión abierta: el socket, la secuencia de paquete en curso y el búfer de lectura
-/// (los sockets entregan trozos arbitrarios; el framing exige leer cantidades exactas).
+/// An open connection: the socket, the current packet sequence and the read buffer (sockets
+/// deliver arbitrary chunks; the framing requires reading exact amounts).
 pub struct Conn {
     sock: int,
     seq: int,
-    /// Octetos leídos del socket aún no consumidos, como `bytes` (compartido, `+` amortizado):
-    /// un `[int]` costaba 8 bytes por octeto y nunca se compactaba (findings #72: una conexión
-    /// reutilizada por un pool crecía sin límite — 1,7 GiB en un minuto).
+    /// Octets read from the socket and not yet consumed, as `bytes` (shared, amortized `+`): an
+    /// `[int]` cost 8 bytes per octet and was never compacted (findings #72: a connection reused by
+    /// a pool grew without bound — 1.7 GiB in a minute).
     buf: bytes,
     pos: int,
 }
 
-/// Umbral de compactación del búfer: consumido más de esto, se recorta lo ya leído.
+/// Compaction threshold of the buffer: once more than this is consumed, the read part is trimmed.
 const COMPACT_AT: int = 65536;
 
 // ── Búfer de lectura: cantidades exactas sobre trozos arbitrarios ─────────────────────
@@ -403,7 +403,7 @@ fn err_msg(p: [int]) -> string {
 }
 
 // ── Conexión ───────────────────────────────────────────────────────────────────────────
-/// Abre una conexión y autentica. `database` puede ser "" (sin esquema por defecto).
+/// Opens a connection and authenticates. `database` may be "" (no default schema).
 pub fn connect(
     host: string,
     port: int,
@@ -1076,8 +1076,8 @@ fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> 
     Result.Ok(af.0)
 }
 
-/// Despide la sesión (COM_QUIT) y cierra el socket. (No se llama `close` para no tapar,
-/// dentro del módulo, al builtin global que cierra el socket.)
+/// Ends the session (COM_QUIT) and closes the socket. (Not named `close` so it does not shadow,
+/// inside the module, the global builtin that closes the socket.)
 pub fn disconnect(c: Conn) {
     c.seq = 0;
     let _ = write_packet(c, [1]);  // COM_QUIT (el servidor no responde)
